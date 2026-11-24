@@ -23,7 +23,7 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   const FIELDS = ROUTE_WRITABLE_FIELDS;
 
   it('the field list this scans is real, and is the routing record\'s own list', () => {
-    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10; the pool set (Overlord W1) `poolset`, `acctorder`: 10 -> 12').toBe(12);
+    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10; the pool set (Overlord W1) `poolset`, `acctorder`: 10 -> 12; the W1 sandbox `profiledigest`: 12 -> 13; the mid-turn mail hold `mailhold`: 13 -> 14; the coordinator advisor `advisor`: 14 -> 15').toBe(15);
     expect(FIELDS).toContain('class');
   });
 
@@ -54,7 +54,14 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   // The exemption is the ARRAY LITERAL, not the file, in case a real second
   // copy of the routing list ever lands beside it.
   const EXEMPT_BUILTINS = /export const BUILTINS: SlashCommand\[\] = \[[\s\S]*?\n\];/;
-  const scannable = (src: string): string => src.replace(EXEMPT_BUILTINS, '');
+  // A SECOND EXEMPTION, BY NAME, ALSO A DIFFERENT VOCABULARY (the Overlord W1 sandbox A2). `poolSetLossLane.ts`'s
+  // `CAP_FLOOR_FACTS` is the twin of `ccd/ccrc#CAP_FLOOR_ROWS`: each row pairs a standing FACT with the `ccd caps` WORD a
+  // build must advertise while it stands. Its facts are route fields (`RouteField`, typed, so a fact off the list does
+  // not compile), and with its second row (`profiledigest`, beside `poolset`) the literal names two of them, which trips
+  // the raw scan. It is not a restatement of the writable-field list: it names only the fields a capability floor
+  // guards, each with its word, and the list does not derive from it nor it from the list.
+  const EXEMPT_CAP_FLOOR_FACTS = /export const CAP_FLOOR_FACTS: readonly CapFloorRow\[\] = \[[\s\S]*?\n\];/;
+  const scannable = (src: string): string => src.replace(EXEMPT_BUILTINS, '').replace(EXEMPT_CAP_FLOOR_FACTS, '');
   const enumeratesAsArray = (src: string): boolean => {
     for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
       const hits = FIELDS.filter((w) => new RegExp(`['"]${w}['"]`).test(m[0]));
@@ -73,6 +80,14 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
       'BUILTINS no longer trips this scan — delete the exemption above it').toBe(true);
     expect(enumeratesAsArray(scannable(commands)),
       'server/src/commands.ts enumerates route fields somewhere OTHER than BUILTINS').toBe(false);
+  });
+
+  it('the CAP_FLOOR_FACTS exemption is live: poolSetLossLane.ts trips the raw scan and not the exempted one', () => {
+    const lane = readFileSync(path.join(ccrcRoot, 'server/src/poolSetLossLane.ts'), 'utf8');
+    expect(enumeratesAsArray(lane),
+      'CAP_FLOOR_FACTS no longer trips this scan: delete the exemption above it').toBe(true);
+    expect(enumeratesAsArray(scannable(lane)),
+      'server/src/poolSetLossLane.ts enumerates route fields somewhere OTHER than CAP_FLOOR_FACTS').toBe(false);
   });
 
   it('no source file under the four roots restates the five fields as an array literal, except shared/api.ts', () => {
@@ -831,6 +846,8 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
   //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
   //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
+  //   - the dependency shed's refusal word `run-open` (`server/src/depsShed.ts`, ccd's `_ws_shed_refused` words, D-8955) —
+  //     the shed's seam, not the door's;
   //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`, `pwa/src/docs/docsText.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
   // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
@@ -857,7 +874,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'server/src/depsShed.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });

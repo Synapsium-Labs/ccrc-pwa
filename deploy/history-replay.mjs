@@ -44,6 +44,8 @@ import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
 import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, spendBudgetInForce, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
+import { decideLimits, parseLimitsRow } from './history-limits.mjs';
+export { decideLimits, parseLimitsRow };   // the limits reading's pure rules, moved out by run 3538; every importer keeps this path
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
 /** Every word the driver refuses with, in one frozen list. The first sixteen are W2-D59's, in its order (each owner
@@ -296,7 +298,7 @@ export function paneRefusal(env) {
 const liveChildren = new Map();
 /** The signal that stopped the driver (its name), or null. main resets it at entry. */
 let stopping = null;
-const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+export const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 const STOP_GRACE_MS = 5_000;
 
 /** Signal a child's whole group. ESRCH (already gone) is the expected answer and any other failure leaves nothing more
@@ -312,7 +314,7 @@ function signalGroup(pid, sig) {
 
 /** main's handler for SIGINT, SIGTERM and SIGHUP: the first signal names the stop; every group gets SIGTERM; the groups
  *  still registered after the grace get SIGKILL (read at that moment, not a snapshot). */
-function onStopSignal(sig) {
+export function onStopSignal(sig) {
   if (stopping === null) stopping = sig;
   for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGTERM');
   setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
@@ -341,7 +343,7 @@ async function yieldToSignals() {
  *  recorded (its run.json is written), and the subcommand then refuses at its next check. A signal that arrives after
  *  runBatch's last check is not answered (the post-last-check window, named in the header above). A run stopped in
  *  flight is still charged once, by its spend line. */
-function refuseIfStopping() {
+export function refuseIfStopping() {
   if (stopping !== null) refuse('interrupted', `${stopping} received; no spawn starts after this, and no run.json, step0a.json or probe.json is written`);
 }
 
@@ -891,7 +893,7 @@ export function spendTokens(facts) {
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
 /** The largest run.json, or --step0a input, the driver reads. */
-const OUT_JSON_CAP = 16 * 1024 * 1024;
+export const OUT_JSON_CAP = 16 * 1024 * 1024;
 
 /** Read the regular file at `p`, whole and no larger than `cap` bytes.
  *  - `{state: 'absent'}` when nothing is there (ENOENT at the lstat, or at the open if it went in between);
@@ -902,7 +904,7 @@ const OUT_JSON_CAP = 16 * 1024 * 1024;
  *  Nothing but a regular file is ever opened for read.
  *  @param {string} p  @param {number} cap  @param {boolean} [follow] W2-D69: follow a link to what it names, as Claude Code reads a CLAUDE.md, still opening nothing but a regular file and never blocking on a FIFO (O_NONBLOCK). Every --out read leaves it false.
  *  @returns {{state: 'absent'} | {state: 'bytes', bytes: Buffer} | {state: 'bad', why: 'not-regular' | 'over-cap' | 'unreadable', code?: string}} */
-function readPlain(p, cap, follow = false) {
+export function readPlain(p, cap, follow = false) {
   const unreadable = (e) => ({ state: 'bad', why: 'unreadable', code: String(e?.code ?? 'EUNKNOWN') });
   let st;
   try {
@@ -1051,7 +1053,7 @@ function writeWhole(fd, bytes, tmp, rel) {
 /** Write `bytes` to `<out>/<rel>` whole: a target that exists and is not a regular file refuses `out-refused`; the bytes
  *  go to a tmp file `<rel>.tmp-<pid>` created exclusively, mode `mode`, then a rename, so no write follows a link.
  *  @param {string} out  @param {string} rel  @param {string | Buffer} bytes  @param {number} [mode] */
-function writePlain(out, rel, bytes, mode = 0o600) {
+export function writePlain(out, rel, bytes, mode = 0o600) {
   const p = path.join(out, rel);
   const have = lstatOrNull(out, rel);
   if (have !== null && !have.isFile()) refuse('out-refused', `${rel} is not a regular file`);
@@ -1072,7 +1074,7 @@ function writePlain(out, rel, bytes, mode = 0o600) {
  *  0700, non-recursively; a mkdir that fails (a directory nobody may write into) refuses `out-refused`
  *  `<path so far> unwritable <code>`.
  *  @param {string} out  @param {string} rel */
-function ensurePlainDir(out, rel) {
+export function ensurePlainDir(out, rel) {
   let cur = out;
   let sofar = '';
   for (const seg of rel.split('/')) {
@@ -1264,14 +1266,20 @@ export function allowedToolSpellings(home) {
 }
 
 /** The argv of one spawn: the settings argv, the fixed flags, the model, then the tools by mode. Input is never
- *  an argument: it goes on stdin. Pure.
- *  @param {{mode: string, model: string, settingsMode: string, home: string}} spec
+ *  an argument: it goes on stdin. `settings`, when given (quiz pilot stage B, B3: a plugins-off map), is one settings value:
+ *  merged under the mode's own `--settings` value, which wins on a shared key, or passed as `--settings` after the mode's
+ *  flags when the mode has none. Absent, the argv is exactly the mode's. Pure.
+ *  @param {{mode: string, model: string, settingsMode: string, home: string, settings?: object}} spec
  *  @returns {string[]} */
-export function spawnArgv({ mode, model, settingsMode, home }) {
+export function spawnArgv({ mode, model, settingsMode, home, settings }) {
   if (!SPAWN_MODES.includes(mode)) throw new TypeError(`spawnArgv: mode ${JSON.stringify(mode)} is not one of ${SPAWN_MODES.join(', ')}`);
   if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`spawnArgv: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
   if (typeof model !== 'string' || !MODEL_RE.test(model)) throw new TypeError(`spawnArgv: model ${JSON.stringify(model)} is not a model id`);
-  const argv = [...SETTINGS_ARGV[settingsMode], '-p', '--no-session-persistence', '--strict-mcp-config',
+  if (settings !== undefined && !plainObject(settings)) throw new TypeError('spawnArgv: settings is a settings object when given');
+  const head = [...SETTINGS_ARGV[settingsMode]];
+  const at = head.indexOf('--settings');
+  if (settings !== undefined) at < 0 ? head.push('--settings', canonicalJson(settings)) : (head[at + 1] = canonicalJson({ ...settings, ...JSON.parse(head[at + 1]) }));
+  const argv = [...head, '-p', '--no-session-persistence', '--strict-mcp-config',
     '--output-format', 'stream-json', '--verbose', '--max-turns', String(MAX_TURNS), '--model', model];
   if (mode === 'arm' || mode === 'box') argv.push('--tools', 'Bash,Agent', '--allowedTools', ...allowedToolSpellings(home));
   else argv.push('--tools', '');
@@ -1467,7 +1475,7 @@ function writePidRecord(out, name, pid) {
 /** lstat `<out>/<rel>`, answering null for ENOENT. Every caller is under --out, so any other failure (unmeasured never
  *  reads as absent) refuses `out-refused` `<rel> unreadable <code>`, never a raw errno (D-5986).
  *  @param {string} out  @param {string} rel */
-function lstatOrNull(out, rel) {
+export function lstatOrNull(out, rel) {
   try {
     return lstatSync(path.join(out, rel));
   } catch (e) {
@@ -1695,7 +1703,7 @@ function requireClaim(who, opts, outs) {
 /** The outcome of a job whose run.json exists (resume), or null when it has none. A run.json that does not
  *  parse, one recorded for another account, mode, model or settings mode, or a stream whose bytes changed since,
  *  refuses: a resumed batch builds on what was recorded, and only for the job that recorded it. */
-function finishedOutcome(job) {
+export function finishedOutcome(job) {
   const { streamPath, runJsonPath } = runPaths(job.out, job.name);
   refuseLinkedDirs(job.out, job.name);   // D-5986: before run.json or the stream is read
   const runJson = readPlain(runJsonPath, OUT_JSON_CAP);   // D-5986: a FIFO or a link there refuses, never blocks or follows
@@ -1830,13 +1838,14 @@ export async function launchRun(job, opts = {}) {
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
   const { streamPath, partPath, pidPath } = runPaths(out, name);
   const home = runHomeOf(launch);
-  const argv = spawnArgv({ mode, model, settingsMode, home });
+  const argv = spawnArgv({ mode, model, settingsMode, home, settings: job.settings });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
   if (path.dirname(name) !== '.') ensurePlainDir(out, path.dirname(name));   // D-5986: a run subdirectory is a real directory, never a link
   const cwd = makeRunCwd();
   const t0 = Date.now();
   let res;
   try {
+    if (job.stage !== undefined) job.stage.write(cwd);   // quiz pilot stage B, B1: files the run should find, removed with its cwd
     refuseIfStopping();
     res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs });
   } finally {
@@ -1868,6 +1877,7 @@ export async function launchRun(job, opts = {}) {
     // W2-5b1 Task 1 (Q7): both readings the charge took the larger of, beside it.
     usage_result_tokens: facts.resultUsage === null ? null : usageTokens(facts.resultUsage), usage_assistant_tokens: usageTokens(facts.assistantUsage),
     unknown_options: unknownOptions,
+    ...(job.settings === undefined ? {} : { settings: job.settings }), ...(job.stage === undefined ? {} : { staged_sha256: job.stage.sha256 }),
   };
   writePlain(out, `${name}.run.json`, canonicalJson(rec) + '\n');
   return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
@@ -1946,13 +1956,9 @@ export async function runBatch(jobs, opts = {}) {
 // ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2 "stops at a stated threshold", erratum E18) ──
 // Before each batch and before each spawn the driver reads ONE limits row, `$HOME/.cc-limits/<account id>.json`,
 // read-only: the one `~/.cc-limits` read in the spec (§5.2). lstat first, so a symlink, a directory or a FIFO is never
-// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row
-// is parsed by readLimits' rules (server/src/limits.ts), term for term: a lapsed resetAt is a FACT and writes 0; only
-// then does the age fallback infer a 0 for a value older than its own window. readLimits folds both into one
-// `*RolledOver` flag; the driver keeps the provenance beside it (`*Inferred`), because here the two answer differently:
-// a resetAt 0 is a measured reset and may admit a batch, an age-inferred 0 measured nothing and stops it as stale.
-// A parity case in history-replay.test.ts holds parseLimitsRow to readLimits over rolloverCases' bytes, so the two
-// spellings of these rules cannot drift (a .mjs operator script cannot import server/src/*.ts). The budget is the
+// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row's
+// pure rules, parseLimitsRow and decideLimits, live in deploy/history-limits.mjs (moved there by run 3538) and are
+// re-exported here; their header says how a row is read. The budget is the
 // cumulative spend ledger under --out (Task 4); a stop throws DriverRefusal (exit 2), and a re-run resumes, since
 // runBatch skips every finished job (Task 5). Before part 1 the values are LIMITS_DEFAULTS and a required --budget;
 // W2-5a and W2-5b pass part 1's or part 2's values through the same parameters.
@@ -1964,37 +1970,8 @@ export const LIMITS_DEFAULTS = Object.freeze({
   threshold_pct: 70, max_age_ms: 3_600_000, batch_max: BATCH_MAX, concurrency: CONCURRENCY_MAX,
 });
 
-const LIMITS_FIVE_WINDOW_S = 18000;     // readLimits' FIVE_WINDOW: a five sample older than its own 5h window has rolled over
-const LIMITS_SEVEN_WINDOW_S = 604800;   // readLimits' SEVEN_WINDOW, the same for seven
 const LIMITS_ROW_CAP = 65536;           // a limits row is about 150 bytes; a file past 64 KiB is not one, and is malformed
-const LIMITS_FUTURE_SKEW_MS = 60_000;   // a ts at most a minute ahead of the clock is skew; further ahead measured nothing
 const LIMITS_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;   // one path segment, never `..`-led or hidden
-const limitsNum = (v) => (typeof v === 'number' ? v : null);   // readLimits' numOrNull
-
-/** One limits row's text, by readLimits' rules, keeping the provenance it folds. Throws on non-JSON or a non-object. */
-export function parseLimitsRow(text, nowS) {
-  const raw = JSON.parse(text);
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('a limits row is one JSON object');
-  const ts = limitsNum(raw.ts);
-  const fiveResetAt = limitsNum(raw.fiveResetAt);
-  const sevenResetAt = limitsNum(raw.sevenResetAt);
-  let five = limitsNum(raw.five);
-  let seven = limitsNum(raw.seven);
-  // The FACT first: a lapsed resetAt comes straight from the API, so its 0 is a measured reset.
-  let fiveRolledOver = five !== null && fiveResetAt !== null && nowS >= fiveResetAt;
-  let sevenRolledOver = seven !== null && sevenResetAt !== null && nowS >= sevenResetAt;
-  if (fiveRolledOver) five = 0;
-  if (sevenRolledOver) seven = 0;
-  // Then the INFERENCE, which may not re-derive what the fact already said (readLimits' `!fiveRolledOver` guards).
-  // readLimits sets only *RolledOver here; the driver also says the 0 was inferred, because that 0 measured nothing.
-  let fiveInferred = false;
-  let sevenInferred = false;
-  if (ts !== null) {
-    if (!fiveRolledOver && five !== null && nowS - ts > LIMITS_FIVE_WINDOW_S) { five = 0; fiveRolledOver = true; fiveInferred = true; }
-    if (!sevenRolledOver && seven !== null && nowS - ts > LIMITS_SEVEN_WINDOW_S) { seven = 0; sevenRolledOver = true; sevenInferred = true; }
-  }
-  return { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver, fiveInferred, sevenInferred };
-}
 
 /** `$HOME/.cc-limits/<accountId>.json`, read-only, through readPlain (D-5986): lstat first (only a regular file is
  *  opened), then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. Every
@@ -2010,33 +1987,6 @@ export function readLimitsRow(home, accountId, nowS) {
     return { state: 'unreadable', code: read.code };
   }
   try { return { state: 'row', row: parseLimitsRow(read.bytes.toString('utf8'), nowS) }; } catch { return { state: 'malformed' }; }
-}
-
-/** The limits stop (W2-D55): null admits the batch; otherwise the word and detail it stops with. */
-export function decideLimits(read, { nowMs, thresholdPct, maxAgeMs }) {
-  const stale = (detail) => ({ word: 'limits-stale', detail });
-  switch (read.state) {
-    case 'absent': return stale('absent');
-    case 'not-regular': return stale('not-regular');
-    case 'unreadable': return stale(`unreadable ${read.code}`);
-    case 'malformed': return stale('malformed');
-    case 'row': break;
-    default: throw new TypeError(`not a limits read: ${JSON.stringify(read.state)}`);
-  }
-  const r = read.row;
-  if (r.five === null) return stale('five-null');
-  if (r.seven === null) return stale('seven-null');
-  if (!(r.five >= 0 && r.five <= 100) || !(r.seven >= 0 && r.seven <= 100)) return stale('percent-out-of-range');
-  if (r.fiveInferred || r.sevenInferred) return stale('inferred-by-age');
-  if (r.ts === null) return stale('ts-null');
-  const aheadMs = r.ts * 1000 - nowMs;
-  if (aheadMs > LIMITS_FUTURE_SKEW_MS) return stale(`ts-future ${aheadMs}`);
-  const ageMs = nowMs - r.ts * 1000;
-  if (ageMs > maxAgeMs) return stale(`old ${ageMs}`);
-  if (Math.max(r.five, r.seven) >= thresholdPct) {
-    return { word: 'limits-threshold', detail: `five ${r.five} seven ${r.seven} at or over ${thresholdPct}` };
-  }
-  return null;
 }
 
 /** The spend budget (W2-D55): the cumulative ledger at or over the budget stops. */
@@ -2090,8 +2040,9 @@ function refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, nowMs) {
 /** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from: the gate's
  *  own GATE_CODE_FILES, so the four paths are spelled once (W2-5a Task 1, closing decisions §7's double spelling). The
  *  driver's other ccd/history imports (store.mjs, derive.mjs, recall.mjs, cli.mjs) and the modules they load (sweep.mjs,
- *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not hashed: the release_tag comparison and the tree-moved
- *  preflight cover them (W2-D24, W2-D56). */
+ *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not in gate_code: within a round the release_tag comparison and
+ *  the tree-moved preflight cover them (W2-D24, W2-D56). Across rounds, the quiz's re-pilot decision no longer reads the
+ *  release (stage B, B0): its key hashes them as the quiz's pilot files instead (PILOT_CODE_FILES, history-quiz-pilot.mjs). */
 export const CODE_SHA_FILES = GATE_CODE_FILES;
 /** The tree this file was loaded from: the installed release on a node, the checkout in a test. */
 export const TREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -2103,11 +2054,11 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const VERSION_TIMEOUT_MS = 60_000;
 const VERSION_STDOUT_MAX = 65_536;
 
-/** The sha256 of each CODE_SHA_FILES member's bytes under `root`, or the first one that cannot be measured. An
- *  absent file is `absent`; any other read failure is `unreadable`. */
-export function codeShas(root = TREE_ROOT) {
+/** The sha256 of each CODE_SHA_FILES member's bytes under `root` (or of each of `list`, the quiz's pilot files: one
+ *  hasher), or the first one that cannot be measured. An absent file is `absent`; any other read failure is `unreadable`. */
+export function codeShas(root = TREE_ROOT, list = CODE_SHA_FILES) {
   const files = {};
-  for (const rel of CODE_SHA_FILES) {
+  for (const rel of list) {
     let bytes;
     try {
       bytes = readFileSync(path.join(root, rel));
@@ -2368,7 +2319,7 @@ const STEP0A_REQUIRED = Object.freeze(['out', 'account', 'budget', 'writer-model
  *  that does while the spelling given did not, and the realpath is what spawnEnv receives. Called right after prepareOut,
  *  before any roster read or spawn.
  *  @param {string} out prepareOut's answer */
-function refuseColonInRealOut(out) {
+export function refuseColonInRealOut(out) {
   if (out.includes(':')) refuse('args-invalid', "out contains ':'");
 }
 
@@ -2379,7 +2330,7 @@ function refuseColonInRealOut(out) {
  *  runs. The TypeErrors stay as defence.
  *  @param {string} home  @param {string} outArg
  *  @param {ReadonlyArray<readonly [string, unknown]>} models flag name and value */
-function refuseUnusableInputs(home, outArg, models) {
+export function refuseUnusableInputs(home, outArg, models) {
   if (home.includes(':')) refuse('args-invalid', "HOME contains ':'");
   if (path.resolve(outArg).includes(':')) refuse('args-invalid', "out contains ':'");
   for (const [flag, value] of models) {
@@ -2577,7 +2528,7 @@ const bashCommandOf = (input) => (input !== null && typeof input === 'object' &&
  *  permission denial names one of them, by tool_use_id or by its input (`denied`), and whether any of their
  *  tool_results is an error (`tool_error`, null when none came back). `result_seen` says whether the stream
  *  holds a result event carrying `permission_denials` at all: without one, `denied: false` measured nothing. */
-function probeFindingOf(facts, command) {
+export function probeFindingOf(facts, command) {
   const calls = facts.toolPairs.filter((p) => p.name === 'Bash' && bashCommandOf(p.input) === command);
   const ids = new Set(calls.map((p) => p.id));
   const denials = Array.isArray(facts.permissionDenials) ? facts.permissionDenials : [];
@@ -2600,7 +2551,7 @@ function writeProbeJson(out, value) {
 }
 
 /** The sha256 of the bytes `<out>/<rel>` holds now, read back through readPlain (D-5986). */
-function shaOfPlain(out, rel) {
+export function shaOfPlain(out, rel) {
   const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
   if (read.state !== 'bytes') refuse('out-refused', `${rel} is not a regular file`);
   return sha256Hex(read.bytes);
@@ -2741,13 +2692,51 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
   return { left: sessionId === null || projectDir || transcripts.length > 0, transcripts, projectDir };
 }
 
+/** The most entries leftoverShapeOf walks in one call; past it the shape says `truncated`. */
+export const LEFTOVER_SHAPE_MAX_ENTRIES = 1000;
+/** The levels below each leftover root whose entries the shape names (quiz-pilot-checks ruling 3: two levels down; quiz pilot
+ *  stage B, B4: three, so a file inside the `subagents` folder is named). */
+export const LEFTOVER_SHAPE_NAMED_DEPTH = 3;
+/** The kind word of an lstat, for the shape: dir, file, link or other. */
+const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : st.isFile() ? 'file' : 'other');
+/** The shape of what a run left under `projects` (quiz-pilot-checks ruling 3), measured BEFORE anything removes it: each root
+ *  (a path relative to `projects`) and every entry up to LEFTOVER_SHAPE_NAMED_DEPTH levels below it, as `{path, kind, size}`
+ *  (the lstat size; a link is never followed); whether a directory named `subagents` stands anywhere in the walk; whether any
+ *  file named `*.jsonl` (a transcript) does; `files`, the path of every regular file the walk found at any depth (stage B,
+ *  B4's proof asks the sweep about each); and `links`, the path of every link it found at any depth (stage B fix round 1: B4's
+ *  own-folder condition fails on any). The walk goes past the named depth only to answer those four, and stops at
+ *  LEFTOVER_SHAPE_MAX_ENTRIES (`truncated`). Names and sizes only: no file is opened. A read failure is recorded as
+ *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
+ *  @param {string} projects  @param {readonly string[]} roots  */
+export function leftoverShapeOf(projects, roots) {
+  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false, files: [], links: [] };
+  let seen = 0;
+  const read = (fn) => { try { return fn(); } catch (e) { o.unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return null; } };
+  const walk = (rel, depth) => {
+    if (seen >= LEFTOVER_SHAPE_MAX_ENTRIES) { o.truncated = true; return; }
+    const st = read(() => lstatSync(path.join(projects, rel)));
+    if (st === null) return;
+    seen += 1;
+    o.subagents_dir ||= st.isDirectory() && path.basename(rel) === 'subagents';
+    o.transcript_file ||= st.isFile() && rel.endsWith('.jsonl');
+    if (st.isFile()) o.files.push(rel);
+    if (st.isSymbolicLink()) o.links.push(rel);
+    if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) o.entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
+    if (st.isDirectory()) for (const n of read(() => readdirSync(path.join(projects, rel)).sort()) ?? []) walk(`${rel}/${n}`, depth + 1);
+  };
+  for (const r of [...new Set(roots)].sort().filter((r, _i, all) => !all.some((x) => x !== r && r.startsWith(`${x}/`)))) walk(r, 0);
+  return o;
+}
+
 /** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
  *  under projects/ (an errno, which persistenceLeft throws so it never reads as clean) is answered as left, with the errno
  *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). So is a run
  *  whose stream gave no session id (`unmeasured: 'no-session-id'`) or one that is none (`'session-id-malformed'`: empty,
  *  holding a slash, or starting with a dot): that id is the spawned run's own data, so no transcript half was read and
  *  neither a clean `left: false` nor a `fail` for a leak that was never measured. Any other throw (a TypeError for a bad
- *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)).
+ *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)). A measured `left`
+ *  run also carries `shape`, leftoverShapeOf's description of what it left (quiz-pilot-checks ruling 3); a clean run and an
+ *  unmeasured one carry none.
  *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
 export function persistenceMeasured(o) {
   persistenceConfigDirOk(o.configDir);
@@ -2760,7 +2749,12 @@ export function persistenceMeasured(o) {
     if (e instanceof TypeError || typeof e?.code !== 'string') throw e;
     return { left: true, transcripts: [], project_dir: null, unmeasured: e.code };
   }
-  return { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  const measured = { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  if (!l.left) return measured;
+  // quiz-pilot-checks ruling 3: what was left is described here, at the driver's one reading of it, before anything removes it
+  // (the driver removes nothing under projects/). The verdict above is not touched by it.
+  const roots = [...(l.projectDir ? [projectSlugOf(o.cwd)] : []), ...l.transcripts];
+  return { ...measured, shape: leftoverShapeOf(path.join(o.configDir, 'projects'), roots) };
 }
 
 /** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
@@ -4686,7 +4680,7 @@ function pinWriterInput(out, rel, text) {
  *  input, nor reads an id as another pair); a path that is not a regular file refuses as every read under --out does
  *  (D-5986). One function, so the three pins are one spelling.
  *  @param {string} out  @param {string} rel  @param {string} text  @param {string} what */
-function pinOutBytes(out, rel, text, what) {
+export function pinOutBytes(out, rel, text, what) {
   const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
   if (read.state === 'absent') { writePlain(out, rel, text); return; }
   if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);
@@ -4697,7 +4691,7 @@ function pinOutBytes(out, rel, text, what) {
  *  part 1 no validator has read it yet. One function, so the sourcing subcommands can ask it before prepareOut makes
  *  --out, and a refused model leaves no --out (R10); openWriter asks it again, for every other caller.
  *  @param {unknown} model */
-function refuseWriterModel(model) {
+export function refuseWriterModel(model) {
   refuseOpusModel('writer-model', model);
 }
 
@@ -4705,7 +4699,7 @@ function refuseWriterModel(model) {
  *  EXACT_MODEL_ID_RE and OPUS_MODEL_RE), refused `args-invalid` under the flag that names the role, before admission and
  *  any spawn. One function, so the writer's check and the judge's are one spelling.
  *  @param {string} flag  @param {unknown} model */
-function refuseOpusModel(flag, model) {
+export function refuseOpusModel(flag, model) {
   if (typeof model !== 'string' || !EXACT_MODEL_ID_RE.test(model) || !OPUS_MODEL_RE.test(model)) {
     refuse('args-invalid', `${flag} ${JSON.stringify(model)} is not an exact Opus model id`);
   }
@@ -5324,7 +5318,7 @@ function loadInputs(flags, name, cap = OUT_JSON_CAP) {
 /** A frozen list (the quiz's by default; W2-5b1 Task 4 reads the pilot's) (W2-D73) through Task 6's one reader, loadFrozenList (its sha checked before a byte is parsed,
  *  quiz-sha-mismatch; its bytes the canonical list their own fields give, input-invalid), after loadInput's git-tree
  *  rule (W2-D25); and its families. */
-function loadFrozen(p, sha256, section = 'quiz') {
+export function loadFrozen(p, sha256, section = 'quiz') {
   if (typeof p !== 'string' || p === '') refuse('args-invalid', '--frozen names no path');
   const g = insideGitTree(path.dirname(path.resolve(p)));
   if (g.state === 'inside') refuse('input-invalid', `frozen in-git-tree ${g.at}`);
@@ -5397,7 +5391,7 @@ export function recheckCode(record, root = TREE_ROOT, opts = {}) {
   return v.stamps;
 }
 
-function subcommandHome(env) {
+export function subcommandHome(env) {
   if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
   return path.resolve(env.HOME);
 }
@@ -5416,12 +5410,12 @@ function requireNamedNode(record, storeId) {
   if (!record.nodes.some((n) => n.store_id === storeId)) refuse('input-invalid', `store ${storeId} is not one of the record's nodes`);
 }
 /** A sourced entry as the frozen list takes it: its eleven W2-D73 fields, its rank left behind. */
-const frozenEntryOf = (e) => Object.fromEntries(FROZEN_ENTRY_KEYS.map((k) => [k, e[k]]));
+export const frozenEntryOf = (e) => Object.fromEntries(FROZEN_ENTRY_KEYS.map((k) => [k, e[k]]));
 /** The pilot's caps: part 1's quiz caps as the open record's defaults give them (the pilot runs before part 1; W2-D71). */
 const pilotCaps = () => Object.fromEntries(['family', 'boundary', 'kind_per_family'].map((k) => [k, DRAFT_SPEC.quiz.fields.caps.fields[k].value]));
 /** One warning line when any writer run failed (R6): a non-zero exit, a signal or no result event. Each such run's
  *  candidate is counted writer-malformed, so a failing account would otherwise drain the population quietly. */
-function warnFailedRuns(counts) {
+export function warnFailedRuns(counts) {
   const n = counts?.writer?.failed_runs ?? 0;
   if (n > 0) process.stderr.write(`ccrc history-replay: warning: ${n} writer run(s) failed (a non-zero exit, a signal or no result event); each is counted writer-malformed\n`);
 }
@@ -5944,7 +5938,7 @@ function refuseWriterAdmission({ home, accountId, budget, limits, quotas, settin
  *  as a stamp, as the batch preflight does; the writer passes none, so its words and order are unchanged. Writes nothing.
  *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number }, expected: object,
  *    allowCodeChange?: boolean }} o */
-function refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false }) {
+export function refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false }) {
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);
   const wrapperSha256 = wrapperSha(launch);
@@ -7048,15 +7042,16 @@ export function armNodeOf(run, storeId) {
   return { questions, nAll, account: r.account, expected, budget, spendBudget, limits: r.limits, settingsMode: run.settingsMode };
 }
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
-function armJob(ctx, q, arm, attempt, stdin, move = null) {
+export function armJob(ctx, q, arm, attempt, stdin, move = null) {
   const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
-    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang };
+    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang,
+    ...(ctx.settings === undefined ? {} : { settings: ctx.settings }), ...(ctx.stage === undefined ? {} : { stage: ctx.stage }) };   // quiz stage B, B1 and B3
   return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
 }
 /** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
  *  A recorded run is W2-4's finishedOutcome, which refuses a run recorded for another account, model or settings mode,
  *  or a changed stream; its exit code must be an integer or null, or classifyRun would throw (D-6309's rule). */
-function armAttemptsOf(ctx, q, arm, move = null) {
+export function armAttemptsOf(ctx, q, arm, move = null) {
   const attempts = [];
   for (let n = 1; n <= ARM_ATTEMPTS_MAX; n += 1) {
     const job = armJob(ctx, q, arm, n, '', move);
@@ -7140,7 +7135,7 @@ async function maskingAgreementOf(snapshots, site, build, agree) {
  *        quiz-unanswerable `<qid> payload <word>`, never dropping the question (D-6469);
  *  then preflightSpawn (R26): the wrapper's sha, the gate (W2-D55: the budget, then the limits row), and the one spawn,
  *  `--version`, with W2-D56's preflight against ctx.expected. Answers each pending (qid, arm)'s stdin and the version. */
-async function armBatchPreflight(ctx, pending) {
+export async function armBatchPreflight(ctx, pending) {
   const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   const qs = pending.map((s) => s.q);
   requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
@@ -7231,7 +7226,7 @@ function excludeOwedArms(ctx, s) {
  *  `tree-moved`, `wrapper-moved`, `code-changed` and the four unmeasured words; a measured code change is a stamp under
  *  `allowCodeChange`). Answers the measured version and the stamps.
  *  @returns {Promise<{ version: string, stamps: string[] }>} */
-async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }) {
+export async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }) {
   const wrapperSha256 = wrapperSha(launch);   // wrapper-unmeasured before any spawn
   gate();
   const version = await measureClaudeVersion(launch, out, lang);
@@ -7241,7 +7236,7 @@ async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCo
   return { version: version.version, stamps: verdict.stamps };
 }
 /** How many batch manifests the section holds (Q14): 0 before its first. */
-function armBatchCount(ctx) {
+export function armBatchCount(ctx) {
   const rel = armBatchDir(ctx.section);
   const st = lstatOrNull(ctx.out, rel);
   if (st === null) return 0;
@@ -7257,7 +7252,7 @@ function armBatchCount(ctx) {
 /** Q14: the batch's manifest, written after its preflight and before its first spawn, never replaced: the version the
  *  preflight measured, the stamps in force, and each planned run with its stdin's sha. A run's version is the last
  *  manifest that names it (a recorded run is never planned again). */
-function writeArmManifest(ctx, version, planned) {
+export function writeArmManifest(ctx, version, planned) {
   const n = armBatchCount(ctx) + 1;
   ensurePlainDir(ctx.out, armBatchDir(ctx.section));
   const rel = `${armBatchDir(ctx.section)}/${String(n).padStart(4, '0')}.json`;
@@ -7286,7 +7281,7 @@ function answerRecordOf(ctx, s, a) {
 }
 /** Every settled question's two records, written once: a settled question's runs never change, so a record already there
  *  is left as it is; anything there that is not a regular file refuses out-refused (D-5986). */
-function settleAnswers(ctx, states) {
+export function settleAnswers(ctx, states) {
   for (const s of states) {
     if (s.state !== 'answered' && s.state !== 'run-failed') continue;
     ensurePlainDir(ctx.out, `${ctx.section}/answers`);
@@ -7707,7 +7702,8 @@ export async function openJudge(o) {
       for (let i = 0; i < due.length; i += BATCH_MAX) {
         const batch = due.slice(i, i + BATCH_MAX);
         await preflightNow();   // W2-D56: before every judge batch
-        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang }));
+        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang,
+          ...(o.settings === undefined ? {} : { settings: o.settings }) }));   // quiz stage B, B3: the week's plugins-off map
         const done = await runBatch(runs, { gate, claim });
         done.forEach((d, k) => attempts.get(batch[k].id).push(judgeAttemptOf(d)));
       }
@@ -7868,10 +7864,12 @@ export function turnBoundCheckOf(tb) {
   const state = tb.held === true ? 'pass' : tb.held === false ? 'fail' : 'unmeasured';
   return { state, held: tb.held, turns: tb.turns, num_turns: tb.num_turns, subtype: tb.subtype };
 }
-/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it; one whose
- *  check could not be measured (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
+/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it, unless its row
+ *  carries a `proof` that passed (quiz pilot stage B, B4: the quiz's caller proves that what was left cannot reach the history
+ *  store; the gate's caller proves nothing, so its rows fail as before); one whose check could not be measured
+ *  (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
 export function persistenceCheckOf(runs) {
-  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left ? 'fail' : 'pass'))) };
+  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left && p.proof?.passed !== true ? 'fail' : 'pass'))) };
 }
 /** A taught spelling's run (W2-D58), from W2-4's probeFindingOf: admitted when the stream's result event carries
  *  permission_denials (result_seen), the call was made (ran) and no denial names it. A denial fails it; no result event,
@@ -7888,17 +7886,46 @@ export function denialCheckOf(f) {
 }
 const skillNamed = (s) => s === HISTORY_SKILL || (plainObject(s) && s.name === HISTORY_SKILL);
 const sameSet = (got, want) => got.length === want.length && [...got].sort().join('\n') === [...want].sort().join('\n');
+/** The tool names a build reports on the wire under another name than the one `--tools` grants, one row per name: the
+ *  reported name, then the granted name it stands for (quiz-pilot-checks ruling 1: Claude Code 2.1.330 reports the Agent tool
+ *  as `Task`). The table is applied to what an init event REPORTS, never to what the argv grants (armToolsOf), and a name not
+ *  in it is never aliased, so the set comparison stays exact. */
+export const WIRE_TOOL_ALIASES = Object.freeze({ Task: 'Agent' });
+/** A reported tool list in the granted vocabulary: each name the table holds becomes its granted name, every other name is
+ *  kept as it is; a repeat stays a repeat, so `Task` beside `Agent` is two Agents and never the set. Pure.
+ *  @param {readonly unknown[]} reported  @returns {unknown[]} */
+export function grantedToolNamesOf(reported) {
+  return reported.map((t) => (typeof t === 'string' && Object.hasOwn(WIRE_TOOL_ALIASES, t) ? WIRE_TOOL_ALIASES[t] : t));
+}
+/** A plugins entry's class (quiz-pilot-checks ruling 2): `build` only when the entry says by BOTH fields that it ships with
+ *  the build, its `source` a string of one name and one `@` before `builtin` (`x@builtin`, never `x@market@builtin`) and its
+ *  `path` the word `builtin`; any other entry, one with a field
+ *  missing or not a string, and an entry that is not an object, is `other`. Pure.  @param {unknown} entry */
+export function pluginClassOf(entry) {
+  return plainObject(entry) && typeof entry.source === 'string' && /^[^@]+@builtin$/.test(entry.source) && entry.path === 'builtin' ? 'build' : 'other';
+}
+/** What one run's plugins list loaded, as the result records it: the count of each class, and each refused (`other`) entry's
+ *  name and source, each the reported string or null when the entry carries no string there. null for a run with no init
+ *  event or no plugins list. Pure.  @param {StreamInit | null} init */
+export function pluginsLoadedOf(init) {
+  if (init === null || init.plugins === null) return null;
+  const str = (p, k) => (plainObject(p) && typeof p[k] === 'string' ? p[k] : null);
+  const refused = init.plugins.filter((p) => pluginClassOf(p) === 'other');
+  return { build: init.plugins.length - refused.length, other: refused.length, refused: refused.map((p) => ({ name: str(p, 'name'), source: str(p, 'source') })) };
+}
 /** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
- *  exactly `want` (the arm argv's, armToolsOf), no MCP server, no plugin, the ccrc-history skill listed (a string, or an
- *  object with that name). A run with no init event, or a field that is not a list, leaves that check unmeasured on that
- *  run (foldStates). Pure.
+ *  exactly `want` (the arm argv's, armToolsOf) once the reported names, every one a string, pass through WIRE_TOOL_ALIASES, no MCP server, no
+ *  plugin but the build's own (pluginClassOf), the ccrc-history skill listed (a string, or an object with that name). A run
+ *  with no init event, or a field that is not a list, leaves that check unmeasured on that run (foldStates). The plugins
+ *  check also records, per run in `inits` order, what loaded (pluginsLoadedOf). Pure.
  *  @param {Array<StreamInit | null>} inits  @param {readonly string[]} want */
 export function initChecksOf(inits, want) {
   const over = (read) => ({ state: foldStates(inits.map((i) => (i === null ? 'unmeasured' : read(i)))) });
   return {
-    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(i.tools, want) ? 'pass' : 'fail')),
+    tools: over((i) => (i.tools === null ? 'unmeasured' : i.tools.every((t) => typeof t === 'string') && sameSet(grantedToolNamesOf(i.tools), want) ? 'pass' : 'fail')),
     mcp: over((i) => (i.mcpServers === null ? 'unmeasured' : i.mcpServers.length === 0 ? 'pass' : 'fail')),
-    plugins: over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.length === 0 ? 'pass' : 'fail')),
+    plugins: { ...over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.every((p) => pluginClassOf(p) === 'build') ? 'pass' : 'fail')),
+      loaded: inits.map(pluginsLoadedOf) },
     skill: over((i) => (i.skills === null ? 'unmeasured' : i.skills.some(skillNamed) ? 'pass' : 'fail')),
   };
 }
@@ -7976,7 +8003,7 @@ export function step0bStdinOf(card, p) {
 // ── measuring and acting ──
 /** Q11: the synthetic transcript path does not exist, measured before --out. A path that exists, or one whose lstat
  *  fails for another reason, refuses input-invalid: the denial probes would name a real file. */
-function refuseSyntheticPresent(p) {
+export function refuseSyntheticPresent(p) {
   try {
     lstatSync(p);
   } catch (e) {
@@ -7992,7 +8019,7 @@ function refuseSyntheticPresent(p) {
  *  card lines must agree (maskingAgreementOf, site step0b), or the preflight refuses input-invalid
  *  `masking-snapshots-disagree step0b` before any spawn or persistence, never masking with the newest reading. Answers
  *  the agreed card line. Called before --out and before every arm batch, for the pilot and the quiz section alike. */
-async function step0bCardOf(ctx) {
+export async function step0bCardOf(ctx) {
   const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   requireListed(ctx.home, ctx.storeId, familiesOf([ctx.q]));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [ctx.q.ccrc_id]);   // W2-D78 (ii)
@@ -8006,7 +8033,7 @@ async function step0bCardOf(ctx) {
 }
 /** One run as the result records it: its outcome's code, signal and charge, its init session, its result subtype, its
  *  main-thread and total messages (R1), and every error field its events carried (Q31; W2-5b1 Task 4's errorFieldsOf). */
-function step0bRunOf(mode, o) {
+export function step0bRunOf(mode, o) {
   const read = readPlain(o.streamPath, OUT_STREAM_CAP);
   if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${o.name}`);
   const f = o.facts;

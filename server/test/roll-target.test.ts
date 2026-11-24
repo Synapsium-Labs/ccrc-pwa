@@ -5,13 +5,18 @@
 // or opted-out session, or one hibernation will take within 30 minutes, is skipped by name; the setting off rolls
 // nothing. Pure: no fixture HOME, no process, no network.
 import { describe, expect, it } from 'vitest';
+import * as rollTargetModule from '../src/coord/rollTarget.js';
+import { rollHandoffCases } from './sim/handoffSets.js';
 import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
 import {
-  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, rollTargetsOf,
-  rollTargetVerdict, type AutoRollInput,
+  AUTO_ROLL_SKIPS, ENTRY_PENDING_ROLL_MS, ENTRY_PENDING_SPAWN_GRACE_MS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, longLivedOf, modelCandidateOf,
+  modelFactOf, rollTargetsOf, rollTargetVerdict, type AutoRollInput,
 } from '../src/coord/rollTarget.js';
+import type { EntryPendingEpisode } from '../src/cleanupHeldBy.js';
+import { CLASSES, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../shared/models.js';
+import type { FleetSession } from '../../shared/api.js';
 import { HIBERNATE_AFTER_MS_DEFAULT, hibernateVerdict, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
 
 const NONE: ChildMark = { kind: 'none' };
@@ -33,6 +38,7 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
     id: 'project-a', status: 'idle', archivedAt: null, bucket: 'idle', held: null, unmeasured: [], statusUnmeasured: false,
     dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null, substrate: null,
   },
+  overlord: false,
   optedOut: false,
   store: o.store ?? { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: o.viewer ?? false,
@@ -44,10 +50,16 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
 const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => ({
   targets: CLAUDE_ROLL_TARGETS_DEFAULT,
   role: 'coordinator',
+  longLived: false,
+  continuityLive: false,
+  overlord: false,
   release: INSTALLED,
   startedAt: PANE_START,
   build: { kind: 'unmeasured' },
   rolledFor: null,
+  model: { kind: 'none' },
+  rolledModelFor: null,
+  entryPending: null,
   optedOut: { roll: false, hibernate: false },
   hibernation: { armed: false, afterMs: HIBERNATE_AFTER_MS_DEFAULT },
   statusUpdatedAt: NOW - ageMs,
@@ -86,6 +98,33 @@ describe('the setting (D-7453; D-8276)', () => {
 
   it('a setting that could not be read rolls nothing', () => {
     expect(autoRollVerdict(input(2 * HOUR, { targets: null }))).toEqual({ act: 'skip', reason: 'setting-unreadable' });
+  });
+});
+
+describe('the Overlord hold and the unread designation (Overlord W1 designation A, Task 3)', () => {
+  it('a bound or pending body is skipped overlord, right after the setting checks, whatever its idle state', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, sleep: sleep(2 * HOUR, { unread: true }) }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, release: null }))).toEqual({ act: 'skip', reason: 'overlord' });
+  });
+
+  it('an unmeasured designation skips every row designation-unreadable, and is not the Overlord skip', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured', role: 'child' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+  });
+
+  it('any other row is rolled as before', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { overlord: false }))).toEqual({ act: 'roll', idleMs: ROLL_QUIET_MS + MIN });
+  });
+
+  it('the idle gate of an ordinary session never reads unmeasured: its sleep input carries a real overlord value', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: false } }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: null } }))).toEqual({ act: 'skip', reason: 'idle-gate', hold: 'unmeasured' });
+  });
+
+  it('the words are in the skip list', () => {
+    expect(AUTO_ROLL_SKIPS).toEqual(expect.arrayContaining(['overlord', 'designation-unreadable']));
   });
 });
 
@@ -148,14 +187,39 @@ describe('the role (D-8276): every idle session under all, coordinators only und
   });
 
   it('rollTargetVerdict is the filter: setting first, then the role, which only coordinators reads', () => {
-    expect(rollTargetVerdict('coordinators', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'coordinator')).toEqual({ take: false, skip: 'setting-off' });
-    expect(rollTargetVerdict('coordinators', 'child')).toEqual({ take: false, skip: 'not-coordinator' });
-    expect(rollTargetVerdict('coordinators', null)).toEqual({ take: false, skip: 'role-unknown' });
-    expect(rollTargetVerdict('all', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', 'child')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', null)).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'child')).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'coordinator', false, false)).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'child', false, false)).toEqual({ take: false, skip: 'not-coordinator' });
+    expect(rollTargetVerdict('coordinators', null, false, false)).toEqual({ take: false, skip: 'role-unknown' });
+    expect(rollTargetVerdict('all', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', 'child', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', null, false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'child', false, false)).toEqual({ take: false, skip: 'setting-off' });
+  });
+});
+
+describe('the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  // The decider's cases live once in `sim/handoffSets.ts` (its mutation floor runs them against each mutant).
+  for (const [name, run] of Object.entries(rollHandoffCases(rollTargetModule))) it(name, run);
+
+  it('autoRollVerdict carries it: an idle coordinator behind on release is renewal-owns while live, and rolled while shadow', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true }))).toEqual({ act: 'skip', reason: 'renewal-owns' });
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: false }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'coordinator', longLived: false, continuityLive: true }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    // Before anything is measured: the hand-off is decided on the frame's facts alone.
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true, sleep: sleep(2 * HOUR, { unread: true }) })))
+      .toEqual({ act: 'skip', reason: 'renewal-owns' });
+  });
+
+  it('longLivedOf: a decided role by its column; agreeing ambiguities decide; coordinator-or-plain reads the live generation', () => {
+    expect(longLivedOf({ kind: 'role', role: 'coordinator' }, false)).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'overlord' }, 'unmeasured')).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'worker' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'role', role: 'plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'worker-or-reviewer' }, 'unmeasured')).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, true)).toBe(true);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, 'unmeasured')).toBeNull();
   });
 });
 
@@ -350,8 +414,185 @@ describe('claimed runs and claims do not hold a roll (D-7562)', () => {
 describe('the vocabulary', () => {
   it('every skip is named, in the order the ladder tests them', () => {
     expect([...AUTO_ROLL_SKIPS]).toEqual([
-      'setting-unreadable', 'setting-off', 'role-unknown', 'not-coordinator', 'release-unmeasured', 'start-unmeasured',
+      'setting-unreadable', 'setting-off', 'role-unknown', 'renewal-owns', 'not-coordinator', 'designation-unreadable', 'overlord',
+      'release-unmeasured', 'start-unmeasured',
       'no-roll', 'idle-gate', 'hibernation-due', 'compacting',
     ]);
+  });
+});
+
+// ── behind its class's model (model-class follow-up typed-repick) ─────────────────────────────────────────────────────
+// An Anthropic lane's session that runs a model its class has left is behind, as on the release or the build. The lane's
+// models are read only for a session past every other gate and behind on nothing else (`read-models`).
+describe('the model term (typed-repick)', () => {
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const X0 = 'claude-opus-9-0';
+  const S1 = 'claude-sonnet-9-1';
+  /** Not behind on the release (its pane started after the install) nor on the build. */
+  const after = INSTALLED + MIN;
+  const behindX2 = { kind: 'behind', class: 'opus', from: X1, to: X2 } as const;
+
+  const cm = (o: Partial<LaneClassModel> = {}): LaneClassModel => ({ model: null, label: null, efforts: null, ...o } as LaneClassModel);
+  const ca = (o: Partial<LaneClassAdvance> = {}): LaneClassAdvance =>
+    ({ family: null, hold: null, previous: null, revertable: false, lastMove: null, ...o });
+  /** An Anthropic lane's read: opus's alias on X2, a launch seen on it; sonnet on S1. */
+  const read = (opus: Partial<LaneClassModel> = {}, opusAdv: Partial<LaneClassAdvance> = {}): LaneModelsRead => {
+    const classes = {} as Record<ModelClass, LaneClassModel>;
+    const adv = {} as Record<ModelClass, LaneClassAdvance>;
+    for (const c of CLASSES) { classes[c] = cm(); adv[c] = ca(); }
+    classes.opus = cm({ model: X2, seenId: X2, ...opus });
+    classes.sonnet = cm({ model: S1, seenId: S1 });
+    adv.opus = ca(opusAdv);
+    return { kind: 'read', classes, advance: { state: 'ok', detail: null, pending: null, classes: adv } };
+  };
+  const cand = { cls: 'opus' as const, model: X1 };
+
+  /** The pane started three hours ago; its last render, a minute after the turn it ended, 100 minutes ago. */
+  const START = NOW - 3 * HOUR;
+  const RENDER_S = Math.floor((NOW - 100 * MIN) / 1000);
+  const r = (cls: string | undefined, model: string | null, o: { unreadable?: string[]; route?: null; ts?: number; stale?: boolean } = {}) => ({
+    route: o.route === null ? null : { fields: cls === undefined ? {} : { class: cls }, degraded: null, inert: [], unreadable: o.unreadable ?? [] },
+    usage: model === null ? null : { ts: o.ts ?? RENDER_S, model, class: model.includes('-opus-') ? 'opus' : model.includes('-sonnet-') ? 'sonnet' : null,
+      effort: null, ctxPct: null, cost: null, stale: o.stale ?? false },
+  }) as unknown as Pick<FleetSession, 'route' | 'usage'>;
+
+  it('the session side: an Anthropic lane, a routed class, a main-loop model of its family; anything else is none', () => {
+    expect(modelCandidateOf(r('opus', X1), true, START)).toEqual({ cls: 'opus', model: X1 });
+    expect(modelCandidateOf(r('opus', X1), false, START), 'not an Anthropic lane').toBeNull();
+    expect(modelCandidateOf(r('default', X1), true, START), 'default is no class').toBeNull();
+    expect(modelCandidateOf(r(undefined, X1), true, START), 'unrouted').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { route: null }), true, START), 'never routed').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { unreadable: ['class'] }), true, START), 'class unreadable').toBeNull();
+    expect(modelCandidateOf(r('opus', null), true, START), 'no usage reading').toBeNull();
+    expect(modelCandidateOf(r('opus', S1), true, START), 'a hand pick of another class').toBeNull();
+  });
+
+  it('only a reading rendered after the current pane started is a candidate; an unknown start is none (fix round 1)', () => {
+    // A session relaunched by another path (a build roll, a swap, a wake) keeps its old reading until it renders again.
+    expect(modelCandidateOf(r('opus', X1, { ts: Math.floor((START - MIN) / 1000) }), true, START), 'rendered before the start').toBeNull();
+    expect(modelCandidateOf(r('opus', X1, { ts: Math.floor(START / 1000) }), true, START), 'rendered at the start').toBeNull();
+    expect(modelCandidateOf(r('opus', X1), true, null), 'start unknown').toBeNull();
+    // An idle session's status line does not render again, so a reading the roll could act on is past the freshness
+    // window: stale after its start is still a candidate.
+    expect(modelCandidateOf(r('opus', X1, { stale: true }), true, START)).toEqual({ cls: 'opus', model: X1 });
+  });
+
+  it('the lane side: on the old id after a move is behind; on the new id, unlaunchable or unseen it is not', () => {
+    expect(modelFactOf(cand, read())).toEqual(behindX2);
+    expect(modelFactOf({ cls: 'opus', model: X2 }, read())).toEqual({ kind: 'current' });
+    expect(modelFactOf({ cls: 'opus', model: `${X2}[1m]` }, read())).toEqual({ kind: 'current' });
+    // `show` nulls an unlaunchable id and names its need.
+    expect(modelFactOf(cand, read({ model: null, unlaunchable: { needs: '9.9.9', laneVersion: '1.0.0' } }))).toEqual({ kind: 'current' });
+    expect(modelFactOf(cand, read({ seenId: X1 })), 'no launch seen on X2 yet').toEqual({ kind: 'current' });
+    expect(modelFactOf(cand, read({ seenId: undefined })), 'an op too old to say').toEqual({ kind: 'current' });
+    expect(modelFactOf(null, read())).toEqual({ kind: 'none' });
+  });
+
+  it('while a hold stands its id is the target, seen or not; a session at the held id is current', () => {
+    const held = read({ model: X0, aliasId: X2, seenId: X2 }, { hold: { at: '2026-11-20T00:00:00Z', by: 'hand', model: X0 } });
+    expect(modelFactOf(cand, held)).toEqual({ kind: 'behind', class: 'opus', from: X1, to: X0 });
+    expect(modelFactOf({ cls: 'opus', model: X0 }, held)).toEqual({ kind: 'current' });
+    // The alias's own id is no hand pick of another class: a session on X2 under the hold is behind the held id.
+    expect(modelFactOf({ cls: 'opus', model: X2 }, held)).toEqual({ kind: 'behind', class: 'opus', from: X2, to: X0 });
+  });
+
+  it('an unread read is unread; a read that gave no answer, or whose holds are unknown, is unmeasured', () => {
+    expect(modelFactOf(cand, undefined)).toEqual({ kind: 'unread' });
+    for (const r of [{ kind: 'unreadable' }, { kind: 'busy' }, { kind: 'absent', laneKind: 'anthropic' }, { kind: 'unsupported' }] as LaneModelsRead[]) {
+      expect(modelFactOf(cand, r)).toEqual({ kind: 'unmeasured' });
+    }
+    const r = read() as Extract<LaneModelsRead, { kind: 'read' }>;
+    expect(modelFactOf(cand, { ...r, advance: { state: 'unreadable', detail: 'x', pending: null, classes: null } })).toEqual({ kind: 'unmeasured' });
+    expect(modelFactOf(cand, { ...r, advance: undefined })).toEqual({ kind: 'unmeasured' });
+    expect(modelFactOf(cand, { ...r, advance: { state: 'absent', detail: null, pending: null, classes: null } })).toEqual(behindX2);
+  });
+
+  it('behind on its model alone, an idle session is rolled, the target named', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2 })))
+      .toEqual({ act: 'roll', idleMs: 2 * HOUR, model: { class: 'opus', from: X1, to: X2 } });
+  });
+
+  it('a session already rolled for that target is not rolled again; a newer target asks again', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, rolledModelFor: X2 }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, rolledModelFor: X0 })).act).toBe('roll');
+    // Behind on the release as well: rolled for the release, with no model target named.
+    expect(autoRollVerdict(input(2 * HOUR, { model: behindX2, rolledModelFor: X2 }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+  });
+
+  it('current, unmeasured or none on its model is not behind', () => {
+    for (const model of [{ kind: 'current' }, { kind: 'unmeasured' }, { kind: 'none' }] as const) {
+      expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model }))).toEqual({ act: 'current' });
+    }
+  });
+
+  it('unread: past every gate it asks for the lane read; held at a gate it is current, never a skip', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: { kind: 'unread' } }))).toEqual({ act: 'read-models' });
+    expect(autoRollVerdict(input(ROLL_QUIET_MS - MIN, { startedAt: after, model: { kind: 'unread' } }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: { kind: 'unread' }, optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: { kind: 'unread' }, statusUpdatedAt: NOW - MIN }))).toEqual({ act: 'current' });
+    // Before the live reads the verdict measures first, as for every row.
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: { kind: 'unread' }, sleep: sleep(2 * HOUR, { unread: true }) })))
+      .toEqual({ act: 'measure' });
+    // Behind on the release already: no lane read is asked for.
+    expect(autoRollVerdict(input(2 * HOUR, { model: { kind: 'unread' } }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+  });
+
+  it('the gates still hold a session behind on its model, by name', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+  });
+});
+
+describe('an entry identity that stays pending (D-8955)', () => {
+  // A pane that started after the install, so it is behind on nothing else; its spawn's entry line was first named pending
+  // by the cleanup lanes 30 minutes ago, and a read taken well after it started named it too.
+  const after = INSTALLED + MIN;
+  const since = NOW - 30 * MIN;
+  const ep = (o: Partial<EntryPendingEpisode> = {}): EntryPendingEpisode => ({ since, holds: 3, freshAfter: since - 5 * MIN, ...o });
+
+  it('ten minutes, the window: an idle session whose entry has stood pending that long is rolled, and says why', () => {
+    expect(ENTRY_PENDING_ROLL_MS).toBe(10 * MIN);
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep() })))
+      .toEqual({ act: 'roll', idleMs: 2 * HOUR, entryPending: true });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ since: NOW - ENTRY_PENDING_ROLL_MS }) })).act).toBe('roll');
+  });
+
+  it('pending for less than ten minutes, or not pending, is current: a spawn in progress is not rolled', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ since: NOW - ENTRY_PENDING_ROLL_MS + 1 }) }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: null }))).toEqual({ act: 'current' });
+  });
+
+  it('a naming no read after the spawn window repeated is current: it may be the spawn\'s own few seconds (review 3)', () => {
+    // A spawn writes `pending` before its pane exists; an audit in that window names the row, and the naming stands until
+    // that child is asked again, however long that is. Only a read taken after the window shows the entry stayed pending.
+    expect(ENTRY_PENDING_SPAWN_GRACE_MS).toBe(2 * MIN);
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: null }) }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: after + ENTRY_PENDING_SPAWN_GRACE_MS - 1 }) })))
+      .toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: after + ENTRY_PENDING_SPAWN_GRACE_MS }) })).act).toBe('roll');
+  });
+
+  it('a process that started after the pending was first named is current: at most one roll for one pending episode', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: since + 1, entryPending: ep({ freshAfter: since + ENTRY_PENDING_SPAWN_GRACE_MS + 1 }) })))
+      .toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: since - ENTRY_PENDING_SPAWN_GRACE_MS, entryPending: ep({ freshAfter: since }) })).act).toBe('roll');
+  });
+
+  it('the gates still hold it, by name: busy, opted out, the Overlord, the setting off', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS - MIN, { startedAt: after, entryPending: ep() })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'recent' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+  });
+
+  it('behind on the release as well: rolled, and the line still says the entry stayed pending', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { entryPending: ep({ since: since - 2 * HOUR, freshAfter: since - HOUR }) })))
+      .toEqual({ act: 'roll', idleMs: 2 * HOUR, entryPending: true });
   });
 });

@@ -21,6 +21,7 @@ const FIXTURE: Readonly<Record<CcrcOpName, string>> = {
   changedInitiatives: 'read-changed-initiatives', changedProjects: 'read-changed-projects-constructed',
   changedMilestones: 'read-changed-milestones-constructed', changedIssues: 'read-changed-issues-constructed',
   teamOpenIssues: 'read-team-open-issues-constructed', issueOwned: 'read-issue-owned',
+  attachmentsForUrl: 'read-attachments-for-url-constructed',
   initiativeCreate: 'mutation-initiative-create', initiativeUpdate: 'mutation-initiative-update-status-canceled',
   initiativeToProjectCreate: 'mutation-initiative-to-project-create',
   initiativeToProjectDelete: 'mutation-initiative-to-project-delete-constructed',
@@ -29,7 +30,8 @@ const FIXTURE: Readonly<Record<CcrcOpName, string>> = {
   projectMilestoneUpdate: 'mutation-project-milestone-update',
   issueRelationCreate: 'mutation-issue-relation-create',
   issueCreate: 'mutation-issue-create', issueUpdate: 'mutation-issue-update',
-  issueComment: 'mutation-comment-create', issueLink: 'mutation-attachment-link-url-constructed',
+  issueComment: 'mutation-comment-create', initiativeComment: 'mutation-comment-create-on-initiative',
+  projectComment: 'mutation-comment-create-on-project', issueLink: 'mutation-attachment-link-url-constructed',
 };
 
 describe('the hierarchy documents (D-8180)', () => {
@@ -63,9 +65,9 @@ describe('the hierarchy documents (D-8180)', () => {
     expect(Object.keys(LINEAR_HIERARCHY_DOCUMENTS).filter((k) => /Delete$/.test(k))).toEqual(['initiativeToProjectDelete']);
   });
 
-  it('the rows are the hierarchy documents plus the four issue rows, each journalling under the one list', () => {
+  it('the rows are the hierarchy documents plus the four issue rows and the two comment rows, each journalling under the one list', () => {
     expect(Object.keys(LINEAR_CCRC_OPS).sort()).toEqual(
-      [...Object.keys(LINEAR_HIERARCHY_DOCUMENTS), 'issueCreate', 'issueUpdate', 'issueComment', 'issueLink'].sort());
+      [...Object.keys(LINEAR_HIERARCHY_DOCUMENTS), 'issueCreate', 'issueUpdate', 'issueComment', 'issueLink', 'initiativeComment', 'projectComment'].sort());
     const writes = Object.values(LINEAR_CCRC_OPS).filter((r) => r.class === 'write');
     for (const r of writes) expect(r.journalOp, r.op).not.toBeNull();
     for (const r of Object.values(LINEAR_CCRC_OPS).filter((x) => x.class === 'read')) expect(r.journalOp, r.op).toBeNull();
@@ -78,6 +80,41 @@ describe('the rows shape their answers', () => {
     const r = linearRecord(FIXTURE[op as CcrcOpName]);
     expect(r.document, op).toBe(LINEAR_CCRC_OPS[op as CcrcOpName].document);
     expect(LINEAR_CCRC_OPS[op as CcrcOpName].shape(r.body).ok).toBe(true);
+  });
+
+  it('attachmentsForUrl (D-8808) reads each attached issue as its id, identifier and team key only, and an answer out of shape is malformed', () => {
+    const r = linearRecord(FIXTURE.attachmentsForUrl);
+    expect(r.variables).toEqual({ url: 'https://github.com/owner/repo/pull/1' });
+    const shaped = LINEAR_CCRC_OPS.attachmentsForUrl.shape(r.body);
+    expect(shaped).toEqual({
+      ok: true, created: null,
+      value: { nodes: [
+        { issueId: '00000000-0006-4000-8000-000000000001', identifier: 'AAA-1', teamKey: 'AAA' },
+        { issueId: '00000000-0006-4000-8000-000000000002', identifier: 'BBB-1', teamKey: 'BBB' },
+      ] },
+    });
+    expect(LINEAR_CCRC_OPS.attachmentsForUrl.variables({ url: 'u', extra: 'x' })).toEqual({ url: 'u' });
+    expect(LINEAR_HIERARCHY_DOCUMENTS.attachmentsForUrl).not.toMatch(/title|description|body/);
+    for (const bad of [
+      { data: { attachmentsForURL: { nodes: [{ issue: { id: 'nope', identifier: 'AAA-1', team: { key: 'AAA' } } }] } } },
+      { data: { attachmentsForURL: { nodes: [{ issue: null }] } } },
+      { data: { attachmentsForURL: { nodes: [{ issue: { id: '00000000-0006-4000-8000-000000000001', identifier: 'AAA-1', team: null } }] } } },
+      { data: { attachmentsForURL: null } }, { data: {} },
+    ]) expect(LINEAR_CCRC_OPS.attachmentsForUrl.shape(bad)).toEqual({ ok: false, word: 'malformed' });
+  });
+
+  it('the recorded comment on an initiative and on a project shape ok through the new rows (D-8183)', () => {
+    for (const [op, file, key] of [['initiativeComment', 'mutation-comment-create-on-initiative', 'initiativeId'],
+      ['projectComment', 'mutation-comment-create-on-project', 'projectId']] as const) {
+      const r = linearRecord(file);
+      const row = LINEAR_CCRC_OPS[op];
+      expect(row.document, op).toBe(LINEAR_DOCUMENTS.comment);
+      expect(row.class).toBe('write');
+      expect(row.journalOp).toBe('comment');
+      expect(row.shape(r.body), op).toMatchObject({ ok: true, created: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+      // The requestId rides as the comment's own id, and only this row's own object key is sent.
+      expect(row.variables({ requestId: 'r-1', [key]: 'o-1', body: 'b', other: 'x' })).toEqual({ input: { id: 'r-1', [key]: 'o-1', body: 'b' } });
+    }
   });
 
   it('a shaper refuses an answer outside its grammar as malformed', () => {
@@ -168,5 +205,24 @@ describe('the initiatives probe and the provenance line', () => {
   it('withCcrcProvenance appends the line once', () => {
     expect(withCcrcProvenance(withCcrcProvenance('a'))).toBe(`a\n\n${LINEAR_CCRC_PROVENANCE_LINE}`);
     expect(withCcrcProvenance('')).toBe(LINEAR_CCRC_PROVENANCE_LINE);
+  });
+});
+
+describe('the retry-guard answers (C1, D-8407)', () => {
+  it.each([
+    ['initiativeCreate', 'mutation-initiative-create-same-id', 'conflict'],
+    ['projectCreate', 'mutation-project-create-same-id', 'conflict'],
+    ['projectMilestoneCreate', 'mutation-project-milestone-create-same-id', 'name-taken'],
+    ['issueCreate', 'extra-issue-create-caller-id-retry', 'conflict'],
+  ] as const)('%s reads %s as linear-invalid with detail %s', (op, fixture, detail) => {
+    expect(LINEAR_CCRC_OPS[op].shape(linearRecord(fixture).body)).toEqual({ ok: false, word: 'linear-invalid', detail });
+  });
+
+  it('name not unique is a conflict for a milestone only, and any other INPUT_ERROR carries no detail', () => {
+    const body = linearRecord('mutation-project-milestone-create-same-id').body;
+    expect(LINEAR_CCRC_OPS['projectCreate'].shape(body)).toMatchObject({ ok: false });
+    expect((LINEAR_CCRC_OPS['projectCreate'].shape(body) as { detail?: string }).detail).toBeUndefined();
+    const other = linearRecord('error-linear-invalid-state').body;
+    expect((LINEAR_CCRC_OPS['issueCreate'].shape(other) as { detail?: string }).detail).toBeUndefined();
   });
 });

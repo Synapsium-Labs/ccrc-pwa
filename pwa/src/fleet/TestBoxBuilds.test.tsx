@@ -10,10 +10,10 @@ import { TESTBOX_UNANSWERED } from './testboxFailure';
 const T = TESTBOX_BUILDS_TEXT;
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
   build, source: 'fleet', capture: 'queued', cwd: false, seenAt: Date.now() - 3_600_000, attempts: 0, lastAttemptAt: null,
-  notSent: null, verdictAt: null, output: null, ...over,
+  notSent: null, verdictAt: null, output: null, fails: 0, ...over,
 });
 const BUILDS: ClaudeBuildRecord[] = [
-  rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, output: 'replay: 1 failed\nStop: the field background is missing' }),
+  rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, fails: 3, output: 'replay: 1 failed\nStop: the field background is missing' }),
   rec('2.1.320', { attempts: 2 }),
   rec('2.1.310', { capture: 'pass', cwd: false, attempts: 1 }),
   rec('2.1.302', { source: 'rig', capture: 'pass', cwd: true, seenAt: 0, verdictAt: 0 }),
@@ -166,6 +166,31 @@ describe('the build list (D-8289)', () => {
   it('buildVerdict: amber only for a failure', () => {
     expect(BUILDS.map((b) => buildVerdict(b).amber)).toEqual([true, false, false, false]);
     expect(buildVerdict(rec('2.1.330')).text).toBe(T.queued);
+  });
+
+  it('a failure ccrc tries again by itself says so, with its count, and is not amber; at the ceiling it is (slug capture-retry-ceiling)', async () => {
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 1 }))).toEqual({ text: 'Capture failed (1 of 3): ccrc tries again by itself while a session runs it', amber: false });
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 2 })).amber).toBe(false);
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 3 }))).toEqual({ text: T.failed, amber: true });
+    stub(() => json({ ok: true, claudeBuilds: [rec('2.1.321', { capture: 'fail', attempts: 1, verdictAt: 1, fails: 1, output: 'x' })] }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    expect(rowOf('2.1.321')).toHaveTextContent(T.failedRetrying(1));
+    expect(within(rowOf('2.1.321')).getByRole('button', { name: T.again }), 'Capture again stays as a manual option').toBeInTheDocument();
+  });
+
+  it('a failed row with no count (an older server) says only that it failed, amber, and never that ccrc stopped retrying (review 3234 F15)', () => {
+    expect(buildVerdict(rec('2.1.321', { capture: 'fail', verdictAt: 1, fails: 0 }))).toEqual({ text: T.failedUncounted, amber: true });
+    expect(T.failedUncounted).not.toContain('retrying');
+  });
+
+  it('a row queued again by itself keeps its last replay output behind the disclosure, with no Capture again (review 3234 F12)', async () => {
+    stub(() => json({ ok: true, claudeBuilds: [rec('2.1.321', { attempts: 1, verdictAt: 1, fails: 1, output: 'replay: 1 failed' }), rec('2.1.320')] }));
+    render(<TestBoxBuilds band="laptop" />);
+    await settle();
+    expect(rowOf('2.1.321')).toHaveTextContent('replay: 1 failed');
+    expect(within(rowOf('2.1.321')).queryByRole('button', { name: T.again })).toBeNull();
+    expect(rowOf('2.1.320')).not.toHaveTextContent(T.output);
   });
 
   it('a build the queue could not send says so, never "sent N times", and the card says no build can be captured', async () => {

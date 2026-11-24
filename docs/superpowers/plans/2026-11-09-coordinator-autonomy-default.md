@@ -56,6 +56,18 @@ Python 3 (the read-only census under `deploy/`); React, `@ccrc/ui`, vitest + jsd
     not operator-only (C2, the O1 line). (4) Not yet answered: whether D-8126 supersedes the 2026-09-22 debugging
     ceiling; row 49 stays as the operator's instruction stands (the third attempt is a rung a human chooses), its
     change is not built, and the question stays open in the spec's §15.
+- **D-8807 (2026-11-20)** — wave A5 lands clause 21 without the rewrites of clauses 4, 11, 19 and 20.
+  - **Why:** `server/test/coordinator-skill.test.ts` and `README.md`, which pin the contract, are held by another
+    programme's frozen run. Under the operator's answer to that run's item 486 (2026-11-19), its holder takes additive
+    packets only. A5's packet appends clause 21 and the count it forces (`twenty-one`, the length pin, hyphen-aware
+    count harvests). The rewrites of the CONTRACT entries for clauses 4, 11, 19 and 20, and of the clause-19 row pin,
+    would rewrite existing pinned text, so they are deferred until that freeze ends. The plan's A5-2 row pins go with them.
+  - **Meanwhile:** three passages stay inside the clauses as they stand. The skill's `paused` entry and the dispatch
+    reference's `paused` row keep the split by cause, but both causes are a report, never a retry (clause 4 today).
+    `references/decision-procedure.md` rules a child's question under clause 11, and `wave-lifecycle-asks.md` keeps
+    clause 11's own two sentences, so a NEW decision is still released to the operator. The deferred packet restores
+    the rebuilt words and these three passages together, with 5b's `changes-requested` dialog wording and the stale
+    "twenty" in the held test text (`docs/superpowers/programs/overlord/d8126-a5-notes.md` lists them).
 
 ### The plan's own calls (under D-8126; each wave's PR body repeats the ones it builds)
 

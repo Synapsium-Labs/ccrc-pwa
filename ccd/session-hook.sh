@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. FIVE declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. SIX declared exceptions, five OFF the hot path and the sixth on a door tool's PreToolUse alone:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -14,6 +14,12 @@
 # (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside at most 4 s, and since the anchor piece inside what the invocation's one network budget has left (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
 # (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
 # that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context).
+# The SIXTH (Overlord W1 door process B1): the hook's reports, a session with a door's side sends through `_hook_door_report`
+# (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
+# witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
+# retried never, and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
+# Since door process B2 the same sender also runs from the main case block: one `model-switch` report on PostModelSwitch from EVERY
+# main-thread, non-child session with a registry row (door or not), and one on a typed `/model` refused in a session with a door.
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
 # worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
@@ -108,7 +114,7 @@ _hook_net_bound() {   # <max ms> -> NET_LEFT_MS, and NET_B (seconds, for `_hook_
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both, and a typed /model's block answer on UserPromptSubmit in a session with a door (Overlord W1 door process B2), printed from its own arm, which then exits. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
@@ -178,6 +184,9 @@ _hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could
 # is `additionalContext` and the call proceeds. A `Read` is never denied, which
 # is the ruling itself — `Edit` requires a prior `Read`, so a deny here would
 # charge every session told to fix a named file one denial before its edit.
+# The PROMPT's block answer (door process B2, Task 8: "the hook's builders gain" a UserPromptSubmit envelope): the event's own
+# `decision: block` shape, which stops the prompt and shows `reason` to whoever typed it. Called only by `_hook_typed_model`.
+_hook_prompt_block_json() { jq -cn --arg r "$1" '{decision: "block", reason: $r}' 2>/dev/null; }   # <reason> -> one line; 1 when it could not be built
 _hook_nudge_json() {   # <nudge> -> the nudge envelope, one line; 1 when it could not be built
   local j=""
   j=$(jq -cn --arg c "$1" \
@@ -3118,8 +3127,11 @@ fi
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
+# An approval envelope's summary (code points, `.[0:200]`): ONE expression for the PermissionRequest's envelope and a subagent
+# call's key in the prefilter below, so the approvals list removes an entry by its own call (approvals PR 2, Task 2.1).
+APR_SUMMARY_JQ='(.tool_input.command // .tool_input.file_path // .tool_input.path // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200]'
 DSP_DEFS='def maxline: dspcap; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def lrwc: (. >= 48 and . <= 57) or (. >= 65 and . <= 90) or (. >= 97 and . <= 122) or . == 46 or . == 45 or . == 95; def lrbyte: lrwc or . == 47 or . == 64 or . == 43; def lrdrop($t; $y): {v: 1, t: $t, k: "drop", why: $y} | tojson; def lrpath($tp; $cs): if type == "string" and ($tp | type) == "string" and ($tp | startswith("/")) and ($tp | endswith("/" + $cs + ".jsonl")) then (($tp | .[:-6]) + "/workflows/scripts/") as $pre | if fits(maxpath) and startswith($pre) and endswith(".js") and (explode | all(lrbyte)) and (split("/") | .[1:] | all(. != "" and . != "." and . != "..")) and (.[($pre | length):-3] | explode | (length >= 1 and length <= 128 and (.[0] | idch) and (.[1:] | all(lrwc)))) then . else null end else null end; def lrec: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_input | obj) as $ti | ($p.tool_response | obj) as $o | ($o.status | outcome) as $oc | ($p.session_id | if isid then . else null end) as $cs | (now * 1000 | floor) as $t | (if $wr != "" and ($wr | length) <= 64 and ($wr | explode | all(lrwc)) then $wr else null end) as $w | ($ti.resumeFromRunId) as $rr | (if $ev != "PostToolUse" then null elif $tn == "Workflow" then (if $rr != null and $oc != "async-launched" then {shape: true} elif $oc != "async-launched" then null elif $rr != null then {k: "resume", ids: [$rr, $o.taskId], b: {run: $rr, task: $o.taskId}, ws: true} else {k: "workflow", ids: [$o.runId, $o.taskId], b: {run: $o.runId, task: $o.taskId}, ws: true} end) elif $tn == "Agent" or $tn == "Task" then (if $oc == "async-launched" and ($o.isAsync | if type == "boolean" then . else true end) then {k: "agent", ids: [$o.agentId], b: {agent: $o.agentId}} else null end) elif $tn == "SendMessage" then ($ti.to | if isid then {k: "send", ids: [.], b: {agent: .}} else null end) else null end) as $d | if $d == null then "" elif $d.shape == true then lrdrop($t; "shape") elif $cs == null or ($d.ids | all(isid) | not) then lrdrop($t; "id") else ($o.scriptPath | lrpath($p.transcript_path; $cs)) as $sc | ({v: 1, t: $t, k: $d.k, w: $w, uuid: $cs} + $d.b + (if $d.ws == true then {script: $sc} else {} end) | tojson) as $row | if $d.ws == true and $sc == null then lrdrop($t; "path") + "\t" + $row else $row end end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""' lrc_out=', ""' lrc_w="" lrc_ok="" dsp_sp=""; DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; [[ -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" ]] && dsp_sp=1; [[ ! -e "$REG/$id.deleg" || ( ! -L "$REG/$id.deleg" && -f "$REG/$id.deleg" ) ]] && lrc_ok=1; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*|*'"SendMessage"'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; lrc_c=""; if [[ -n "$dsp_sp" ]]; then lrc_c=1; elif [[ -n "$lrc_ok" ]]; then case "$payload" in *'"PostToolUse"'*) case "$payload" in *'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SendMessage"'*) lrc_c=1 ;; esac ;; esac; fi; if [[ -n "$lrc_c" ]]; then dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS"; [[ -z "$dsp_sp" ]] || dsp_out=', ((try spool catch ["", "", "", ""]) | .[])'; if [[ -n "$lrc_ok" ]]; then lrc_out=', ([try lrec catch ""] | if length == 1 and (.[0] | type) == "string" then .[0] else "" end)'; [[ ! -L "$REG/$id.wrapper" && -f "$REG/$id.wrapper" ]] && { IFS= read -r -N 65 lrc_w < "$REG/$id.wrapper"; } 2>/dev/null; lrc_w="${lrc_w%$'\n'}"; fi; fi ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): a sound, unchanged-so-far incarnation must exist (read without the spool directory since session-continuity 6b, D-8363: `dsp_sp` keeps the directory as the spool's own condition, `lrc_ok` says `.deleg` may be appended), else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
-{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out$lrc_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; lines 5 to 8 of 9 are the delegation spool's (bucket, prune cutoff, listing cwd and line, all empty when no line is due); the ninth is the launch record's row (a string, always exactly one line: the parse ends `|| exit 0`, so a missing line would drop the whole event), empty when no row is due
+{ read -r event; read -r psid; read -r paid; read -r aid; read -r ap_call; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end), (try (if (.agent_id | type) == "string" and .agent_id != "" then {t: (.tool_name // "unknown"), s: ('"$APR_SUMMARY_JQ"')} | tojson else "" end) catch "")'"$dsp_out$lrc_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; the fifth is a subagent call's key for the approvals list (`ap_call`, one JSON line: its tool and summary, as the envelope writes them; empty when a `tool_input` it cannot index makes it throw); lines 6 to 9 of 10 are the delegation spool's (bucket, prune cutoff, listing cwd and line, all empty when no line is due); the tenth is the launch record's row (a string, always exactly one line: the parse ends `|| exit 0`, so a missing line would drop the whole event), empty when no row is due
 [[ -n "$event" ]] || exit 0
 
 # ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
@@ -3309,9 +3321,34 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
   return 0
 }
 
+# ── THE MODEL EVENTS AND THE TYPED /model (Overlord W1 door process B2, Task 8; spec §3.6 H1, §3.4 Table 3.4b, W0-12) ───
+# Both model events are REPORT-ONLY (ruled, F11). `PreModelSwitch` refuses nothing and sends nothing: Claude Code's own switch
+# on a flagged request is pinned on, and a refusal there could stop it. `PostModelSwitch` sends one `model-switch` report,
+# `how: switched`, `from` and `to` read from the payload's `from_model` and `to_model` (W0-12), for every session the start
+# report covers (main thread, a registry row, not a child: plan question 11, so a coordinator's switch is measured too). The
+# one refusal is on the PROMPT path: in a session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a
+# fact, never a role's name), a prompt that begins `/model` is blocked with the prompt event's own block answer and reported
+# `typed-refused`, which changed nothing and is never drift (slug `typed-model-refused-on-the-prompt-path`). Each arm EXITS in
+# the case block below, before every writer (ruled, F14): the state file, the turn marker and the spools never see a model
+# event or a refused prompt. The report rides the door's one sender, `_hook_door_report` (B1), defined here so these arms reach
+# it. Whether the pinned build passes a typed `/model` through UserPromptSubmit at all is the pull request's live step.
+REPORT_TIMEOUT_S=3
+_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'
+_hook_model_report() {   # <how> -> one model-switch report from a main-thread, non-child session with a registry row; silent on every failure
+  local b; [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0   # the start report's own id, marker and child tests (`_hook_start_report`)
+  b=$(jq -c --arg id "$id" --arg how "$1" --argjson at "$(_hook_epoch_ms)" "$MODEL_REPORT_JQ"'{kind: "model-switch", how: $how, from: (if $how == "switched" then .from_model | mdl else null end), to: (if $how == "switched" then .to_model else typed | .[6:] | (split("\n")[0] // "") | split("\t") | join(" ") | split(" ") | map(select(. != "")) | .[0] end | mdl), fromId: $id, fromUuid: (.session_id // "" | tostring), at: $at}' <<<"$payload" 2>/dev/null) && _hook_door_report "$b"
+}
+_hook_typed_model() {   # -> 0 when this prompt is a typed /model in a session with a door: reported, and its block answer printed
+  local j; [[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$payload" == *'/model'* ]] || return 1
+  jq -e "$MODEL_REPORT_JQ"'typed | startswith("/model") and (.[6:7] | IN("", " ", "\t", "\n", "\r"))' <<<"$payload" >/dev/null 2>&1 || return 1
+  j=$(_hook_prompt_block_json "ccrc: a typed /model is refused in this session. Its model is the designation's, set at each start; a change inside a generation reads as model drift. Change the designated model in the Overlord's Settings: it takes effect at the next generation.") || return 1
+  _hook_model_report typed-refused; printf '%s\n' "$j"
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
-  UserPromptSubmit) state="working" ;;
+  UserPromptSubmit) state="working"; _hook_typed_model && exit 0 ;;
   PostToolUse)
     state="working"
     # ONE payload read for the counter, on the one event that can carry a
@@ -3363,9 +3400,7 @@ case "$event" in
       # paths must keep producing the same {questions:…} envelope shape.
       ask_json=$(jq -c '{questions: (.tool_input.questions // [])}' <<<"$payload" 2>/dev/null) || ask_json="null"
     else apr=1   # the flag the tail's approval wait reads (plan Task 14, D-5297); on this line so no anchor below moves
-      ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"),
-        summary: ((.tool_input.command // .tool_input.file_path // .tool_input.path
-                   // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
+      ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"), summary: ('"$APR_SUMMARY_JQ"')}}' \
         <<<"$payload" 2>/dev/null) || ask_json="null"
     fi ;;
   SessionStart)
@@ -3436,8 +3471,10 @@ case "$event" in
     # clear, compact and a source-less start are fresh or rebuilt contexts and are told to load the `ccrc-coordinator` skill NOW
     # and to read their programme's goals; a `resume` or `fork` carries a transcript that already received the fresh text, so it
     # gets a SHORTER reminder (load the skill only if this context lacks it). No "shown" marker exists or is added. Both texts
-    # keep the same last sentence ("your own go to the operator"), so a rebase over the autonomy plan's edit replaces one
-    # sentence. Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
+    # keep the same last clause, which D-8126 (autonomy plan A9-2, spec §9.2) turned from "your own go to the operator" into
+    # coordinator clause 21's rule: a coordinator works its own questions out from the programme's goals first, and only
+    # operator-only decisions go to the operator. Both are fixed literals here, no registry or server byte in them.
+    # Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
     # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
     # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
@@ -3449,8 +3486,8 @@ case "$event" in
       [ -e "$REG/$id.hold" ] && return 0
       case "$src" in
         # compact keeps the short reminder: Claude Code re-attaches skills already invoked, so reloading would only spend tokens.
-        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
-        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
+        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own you work out from the programme's goals first; only operator-only decisions go to the operator." ;;
       esac
       return 0
     }
@@ -3509,6 +3546,8 @@ case "$event" in
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
+  PreModelSwitch) exit 0 ;;   # report-only, and it refuses nothing (the model events' block above)
+  PostModelSwitch) _hook_model_report switched; exit 0 ;;
   *) exit 0 ;;
 esac
 # THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
@@ -3524,7 +3563,11 @@ esac
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
 # reaches this line (all but SessionStart `compact`, which this test leaves out, and an
 # unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
-# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# registry. NOT CAPTURED: PreModelSwitch, PostModelSwitch and a typed `/model` refused
+# in a session with a door exit in the case block above, before every writer (door
+# process B2, ruled F11 and F14), so they skip this arm and the start report's resend
+# pass too; their real payloads stay unmeasured here (the build capture records them).
+# Each file's line 1 is a meta line naming this pane's own session id, sanitised; the
 # rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
 # in it reaches the exit status. Raw files never leave the box:
 # deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
@@ -4019,10 +4062,62 @@ _hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, the
 # so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
 # this hook's exit code or stdout.
 START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000 START_STALE_BACKOFF_MS=5000 START_BUDGET_MS=4000
-_hook_start_send() {   # <report JSON> <deadline ms> -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
+# THE LOADS REPORT'S PENDING FILE (Overlord W1 sandbox, Task 4): at a `startup` or `resume` SessionStart of a session ccd
+# launched under a surface (`CCRC_LAUNCH_PROFILE`), `$REG/<id>.loadpending` holds the tries, the start report's `reportId`,
+# the transcript's byte size now (the window's start), the source and the transcript's path. Written without the registry
+# lock, like `startpending`, so `_reg_purge` takes it a second time after `generation`; looked at again here.
+_hook_loads_pend() {   # <reportId> -> 0 always
+  local tp sz=0; tp=$(jq -r '.transcript_path | strings' <<<"$payload" 2>/dev/null); [[ "$tp" == /* ]] || return 0; [[ -f "$tp" ]] && sz=$(wc -c < "$tp" 2>/dev/null | tr -d ' ')
+  printf '0\t%s\t%s\t%s\t%s\n' "$1" "${sz:-0}" "$src" "$tp" > "$REG/$id.loadpending" 2>/dev/null; [[ -e "$REG/$id.generation" ]] || rm -f -- "$REG/$id.loadpending" 2>/dev/null
+}
+# ── THE LOADS REPORT (Overlord W1 sandbox, Task 4; spec §3.6 H4; slugs loaded-sets-read-from-the-transcript,
+# start-loads-is-its-own-report, resume-carries-its-own-start, tools-read-from-the-prompt-snapshot) ─────────────────────
+# At each main-thread `Stop` while `loadpending` stands, `start_loads` (ccd/lib/transcript.jq) reads the transcript, at
+# most LOADS_MAX_BYTES: the window from the recorded offset to the first-request marker and the tool-bearing prompt
+# snapshot after it, and what came before it for the listings. Until the window holds them the file is kept and a try
+# counted; the last try sends without waiting for the snapshot, and a try past LOADS_TRIES drops the file (the start then
+# reads not engaged). One deadline, LOADS_BUDGET_MS, bounds the arm: the read, each hash and the send (review 2135 F6).
+# The body is computed once; a send that does not take it spools it as the file's second line, after the window's end,
+# so every resend is the same bytes with the same `reportId`. Instruction files are hashed where they stand (a regular
+# file of at most LOADS_FILE_MAX bytes, else the kind reads unmeasured) and hook commands by their text, never sent. At a
+# resume, instructions and hooks are carried from the newest reported `startup` of the same transcript only when its
+# digest and build equal this session's (`loadlast`, written on its 202), named `carriedFrom`, and only from that
+# start's own window, its begin offset to its first request (`loadlast` keeps both), so a compaction or `/clear` between
+# adds nothing (review 2135 F4). A Stop with no `CCRC_LAUNCH_PROFILE` (a respawn the route no longer surfaces) removes a
+# stale file and sends nothing (F1). Sent through `_hook_start_send`: a 202 removes the file, a 404 (an older server, or
+# `unknown-start`), 401, 5xx, no answer or `stale-uuid` keeps it and counts a try, any other 4xx drops it. Every path,
+# the wait included, ends at the generation re-check, so a purge during the arm orphans nothing (F3). Prints nothing;
+# never changes the exit code.
+LOADS_TRIES=5 LOADS_MAX_BYTES=16777216 LOADS_FILE_MAX=1048576 LOADS_BUDGET_MS=3000
+_hook_left() { local l=$(( $1 - $(_hook_epoch_ms) )); (( l > 100 )) || l=100; printf '%d.%d' "$(( l / 1000 ))" "$(( l % 1000 / 100 ))"; }   # deadline ms -> seconds left for `_hook_timeout`, at least 0.1
+_hook_start_loads() {   # 0 on every path
+  local f="$REG/$id.loadpending" lp="${CCRC_LAUNCH_PROFILE:-}" dl t rid off sc tp we="" body="" out="" c="" lr="" ld="" lb="" lo="" le="" lt="" ver wd="" e h hs=() r=6
+  [[ "$event" == Stop && -z "$paid" && -f "$f" && ! -L "$f" ]] || return 0
+  [[ -n "$lp" ]] || { rm -f -- "$f"; return 0; }; dl=$(( $(_hook_epoch_ms) + LOADS_BUDGET_MS ))
+  { IFS=$'\t' read -r t rid off sc tp; IFS=$'\t' read -r we body; } 2>/dev/null < "$f"
+  [[ "$t" =~ ^[0-9]+$ && "$off" =~ ^[0-9]+$ && "$tp" == /* ]] || { rm -f -- "$f"; return 0; }
+  ver="${CLAUDE_CODE_EXECPATH:-}"; ver="${ver##*/}"; [[ "$ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || ver=""
+  if [[ -z "$body" ]]; then
+    [[ "$sc" == resume && -f "$REG/$id.loadlast" ]] && IFS=$'\t' read -r lr ld lb lo le lt 2>/dev/null < "$REG/$id.loadlast" && [[ "$lt" == "$tp" && "$ld" == "${lp#*:}" && -n "$ver" && "$lb" == "$ver" && "$lo" =~ ^[0-9]+$ && "$le" =~ ^[0-9]+$ ]] && (( lo <= le && le <= off )) && c=1
+    [[ -f "$tp" ]] && (( $(wc -c 2>/dev/null < "$tp" || echo "$LOADS_MAX_BYTES"1) <= LOADS_MAX_BYTES )) && out=$(_hook_timeout "$(_hook_left "$dl")" jq -L "$ROSTER_CARD_LIB" -nc --rawfile h <(head -c "$off" "$tp") --rawfile w <(tail -c "+$(( off + 1 ))" "$tp") --rawfile c <([[ -z "$c" ]] || { tail -c "+$(( lo + 1 ))" "$tp" | head -c "$(( le - lo ))"; }) --arg s "$sc" --argjson last "$(( t + 1 >= LOADS_TRIES ))" 'include "transcript"; start_loads($h; $w; $c; $s; $last == 1)' 2>/dev/null)
+    if [[ "$out" =~ ^\{\"state\":\"ready\",\"end\":([0-9]+), ]]; then
+      we=$(( off + BASH_REMATCH[1] ))
+      while IFS= read -r -d '' e; do if [[ "$e" == F* ]]; then [[ -f "${e#F}" ]] && (( $(wc -c 2>/dev/null < "${e#F}" || echo 0) <= LOADS_FILE_MAX )) && h=$(_hook_timeout "$(_hook_left "$dl")" cat -- "${e#F}" | _apr_sha256) || h=x; hs+=("$h"); else hs+=("$(printf '%s' "${e#C}" | _apr_sha256 || echo x)"); fi; done < <(jq -L "$ROSTER_CARD_LIB" -j 'include "transcript"; loads_hash_items' <<<"$out" 2>/dev/null)
+      [[ -f "$REG/$id.workdir" ]] && IFS= read -r wd < "$REG/$id.workdir"
+      body=$(jq -L "$ROSTER_CARD_LIB" -c --argjson o "$out" --arg id "$id" --arg rid "$rid" --arg lp "$lp" --arg rc "${CCRC_LAUNCH_RC:-}" --arg ver "$ver" --arg wd "$wd" --arg cf "${c:+$lr}" --argjson at "$(_hook_epoch_ms)" 'include "transcript"; loads_body($o; $ARGS.positional; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at)' --args ${hs[@]+"${hs[@]}"} <<<"$payload" 2>/dev/null) || body=""
+    fi
+  fi
+  [[ -n "$body" && "$we" =~ ^[0-9]+$ ]] && { _hook_start_send "$body" "$dl" loads; r=$?; }
+  if (( r == 0 )); then rm -f -- "$f"; [[ "$sc" == startup ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rid" "${lp#*:}" "$ver" "$off" "$we" "$tp" > "$REG/$id.loadlast"
+  elif (( r == 3 || t + 1 >= LOADS_TRIES )); then rm -f -- "$f"
+  else printf '%s\t%s\t%s\t%s\t%s\n%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" "${body:+$we$'\t'$body}" > "$f"; fi
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$REG/$id.loadlast" 2>/dev/null
+  return 0
+}
+_hook_start_send() {   # <report JSON> <deadline ms> [<verb>, default start] -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
   local out left=$(( $2 - $(_hook_epoch_ms) ))
   (( left >= 1000 )) || return 5
-  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions start "$id" --json - 2>&1)
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions "${3:-start}" "$id" --json - 2>&1)
   case "$?" in 0) ;; 2) return 4 ;; 124) HOOK_NET_HUNG=1; return 2 ;; *) return 2 ;; esac
   case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
 }
@@ -4033,7 +4128,7 @@ _hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under
   (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
 }
 _hook_start_report() {
-  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=()
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=() rid dns=""
   case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
   [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
@@ -4045,11 +4140,15 @@ _hook_start_report() {
   if [[ "$event" == SessionStart && "$src" != fork ]]; then
     # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
     [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
-    body=$(jq -c --arg id "$id" --arg rid "$now-$$-$RANDOM" --arg inc "$inc" --argjson at "$now" \
+    # The launch nonce's sha256 the spawn put in this environment (the door process, Overlord W1 A1), sent only in its shape.
+    [[ "${CCRC_DOOR_NONCE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] && dns="$CCRC_DOOR_NONCE_SHA256"
+    rid="$now-$$-$RANDOM"; [[ -n "${CCRC_LAUNCH_PROFILE:-}" && ( "$src" == startup || "$src" == resume ) ]] && _hook_loads_pend "$rid"
+    body=$(jq -c --arg id "$id" --arg rid "$rid" --arg inc "$inc" --arg dns "$dns" --argjson at "$now" \
       '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
         source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
         model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
-        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at} + (if $dns == "" then {} else {doorNonceSha256: $dns} end)' \
+      <<<"$payload" 2>/dev/null) || body=""
     [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
     [[ "$rc" == [1245] ]] && pass=0
   fi
@@ -4109,13 +4208,17 @@ f="$REG/$id.hookstate.json"
 # degrade it already had (D-1613 measures that failure separately for the gate,
 # just below: for the WRITE the degrade is unchanged). This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
-subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
-{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r subs; } < <(jq -r \
+subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""; apl=""
+# `apl` (approvals plan 2026-11-18, Task 2.1): the per-agent approval envelopes, `approvals`, carried by every write (see
+# the write's `approvals` key). An array's `tostring` holds no newline, and anything else prints `[]`, so it sits before
+# `subs` without the positional risk D-1249 describes.
+{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r apl; read -r subs; } < <(jq -r \
   '(.state // ""),
    (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
    (if (.graphGateDenials | type) == "number" then (.graphGateDenials | floor) else 0 end),
    (if (.ccrcPeerReads | type) == "number" then (.ccrcPeerReads | floor) else 0 end),
    (if (.ccrcClaims | type) == "number" then (.ccrcClaims | floor) else 0 end),
+   (.approvals | if type == "array" then map(select(type == "object")) | tostring else "[]" end),
    (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
 # A HOOKSTATE THAT EXISTS AND WILL NOT PARSE IS NOT A SESSION THAT COUNTED ZERO
@@ -4128,6 +4231,7 @@ subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
 hs_unreadable=0
 [[ -f "$f" && -z "$gq" ]] && hs_unreadable=1
 [[ "$subs" == \[* ]] || subs="[]"
+[[ "$apl" == \[* ]] || apl="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
 [[ "$gd" =~ ^[0-9]+$ ]] || gd=0
 [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
@@ -4170,7 +4274,7 @@ if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; cp=0; cc
 # (2.1.280 to 2.1.292, `server/test/fixtures/delegation/*/agent-iso-bg.json` [M]), and no capture shows a teammate's,
 # a cloud session's or an unseen kind's, while a workflow's agents are not listed one by one. Anything else (`bg` -1
 # included) leaves it alone. Entries with no `id` (an older hook's) do not survive a prune.
-if [[ "$event" == SessionStart ]]; then subs="[]"; fi
+if [[ "$event" == SessionStart ]]; then subs="[]" apl="[]"; fi   # a subagent's standing prompt dies with it too (Task 2.1)
 if [[ "$event" == Stop && -z "$paid" && "$subs" != "[]" && "$bg" =~ ^[0-9]+$ ]]; then
   if (( bg == 0 )); then
     subs="[]"
@@ -4196,6 +4300,71 @@ fi
 # prescribes next, and it is the one with a durable server-side arbiter.
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
+
+# ── THE MAIL HOLD (mid-turn mail spec 2026-11-19 §3.5; plan Tasks 5.1 and 5.2, calls P5 to P9, P14, P15) ─────────────
+# The `mailhold` route field (`$REG/<id>.mailhold`, written by the server's projection lane alone, `ccd route` its only
+# carrier) says urgent mail waits for this session: `<until>:<role>.<delivery>[,…]`. While it is live (`now < until <=
+# now + 360`, MAILHOLD_REACH_S), `_hook_mail_hold` refuses the session's gated acts (A: `git push`, `git commit`, a sync
+# of main, `gh pr merge`, `ccd pr-admin-merge`) and adds one fixed line to every other main-thread tool call (E). It is
+# CALLED ONCE, AFTER THE LAST DENY ARM (P5, slug last-deny-arm), and only while no deny is built: a deny already built is
+# kept byte for byte, and both arms overwrite advice (the graph arm's Read nudge, the landing advisory's nudge). It is
+# defined here, above the child deny arm, because the growth check's counter reads that arm's jq string `"<<_"` as a
+# heredoc that never closes and counts every line after it (slug growth-counter-false-heredoc). Its marker read is the
+# precompact read's kind: builtins only, one `[[ -f ]]`, a
+# bounded `read` refusing a symlink, the grammar's regular expression (MAILHOLD_RE_BODY in shared/mailHold.ts, copied
+# character for character; mailhold-parity.test.ts holds the three readers equal) and the inline clock, compared with
+# `10#` (P14). A call that finds no marker pays the `[[ -f ]]` and nothing more.
+# The matcher, the texts and the log's decision live in `ccd/lib/mail-hold.jq` (its header says how), so this function
+# keeps the read, the strip (its own MERGE_STRIP_JQ call with the merge deny's arguments, after the module's `mh_prep`
+# in the same jq, on a Bash call whose `tool_input.command` holds a gated word, read with builtins from the payload's
+# text: from `"command":"` to the next `","`, which no JSON string holds; the merge deny's call site stays as it is,
+# so the strip may run twice, P6) and the writes. The
+# module returns text, and `_hook_deny_json` or `_hook_nudge_json` builds the envelope (P15).
+# FAIL OPEN (D3): an unreadable or malformed marker, a lapsed or far one, a missing module (logged `module-missing`
+# once a hold), a failing jq and `$REG/mail-disabled` hold nothing. SHADOW until armed (P7): `$REG/mailhold-notice-live`
+# arms E and `$REG/mailhold-refuse-live` arms A; nothing in the tree writes either, and unarmed the arms log `would`.
+# THE SHADOW LOG (P8): `~/.ccrc/mail-hold-shadow.log`, one tab-separated line per hold, arm, act and outcome
+# (`<epoch> <id> <arm> <outcome> <delivery> <act>`), kept to one line a key by the seen file
+# `~/.ccrc/mail-hold-shadow.d/<id>` (the pairs, then the keys logged for them; written to a temporary file in that
+# directory and moved over), rotated to `.1` past 1 MiB, its size tested only when a line is appended. A `Stop` while
+# a marker file stands appends one `stop` line (P9): the turn end the B trigger's read compares with `ackedAt`.
+_hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker, but a joined subagent's ack
+  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" c="" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log" m="" k=""
+  [[ -f "$f" && ! -L "$f" ]] && m=1
+  # THE SUBAGENT'S ACK REFUSAL (Task 6.1), the one arm that needs no marker: a joined subagent's Bash call whose command
+  # holds `mail`, and `ack` or `inbox`, read with builtins (`k`); the module decides the form, on the raw command text.
+  [[ -n "${tmsub:-}" && "$event" == PreToolUse && "${tool:-}" == Bash ]] && c=${payload#*\"command\":\"} c=${c%%\",\"*} && [[ "$c" == *mail* && ( "$c" == *ack* || "$c" == *inbox* ) ]] && k=1
+  [[ ( -n "$m" || -n "$k" ) && ! -e "$REG/mail-disabled" ]] || return 0
+  [[ -z "$m" ]] || { IFS= read -r -d '' -n 256 v < "$f"; } 2>/dev/null   # the bytes as ccd wrote them, no trim, past a newline (195 at most)
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  if [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ && "$now" =~ ^[0123456789]+$ ]]; then
+    p="${v#*:}" dl="${v#*:}" dl="${dl%%,*}" dl="${dl#*.}"
+    if (( 10#${v%%:*} <= now )); then st=lapsed; elif (( 10#${v%%:*} > now + 360 )); then st=far; else st=live; fi
+  fi
+  if [[ "$event" == Stop ]]; then l="$now"$'\t'"$id"$'\tstop\t-\t'"$dl"$'\t-\n'
+  elif [[ -n "$st" || -n "$k" ]]; then
+    c=${payload#*\"command\":\"} c=${c%%\",\"*}   # the command, and at most the payload's tail after it (F7)
+    if [[ -n "$st" && "${tool:-}" == Bash && ( "$c" == *push* || "$c" == *commit* || "$c" == *merge* || "$c" == *pull* || "$c" == *rebase* ) ]]; then
+      ran=1 strip=$(jq -L "$ROSTER_CARD_LIB" -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "include \"mail-hold\"; mh_prep | $MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || strip=""
+    fi
+    [[ "$st" == live || -n "$ran" || -n "$k" ]] || return 0
+    [[ -f "$d/$id" && ! -L "$d/$id" ]] && { IFS= read -r -d '' -n 4096 seen < "$d/$id"; } 2>/dev/null
+    if [[ -f "$ROSTER_CARD_LIB/mail-hold.jq" ]]; then
+      [[ -e "$REG/mailhold-notice-live" ]] && a=notice; [[ -e "$REG/mailhold-refuse-live" ]] && a+=,refuse
+      { IFS=$'\x1f' read -r -d '' o t l s; } < <(jq -L "$ROSTER_CARD_LIB" -j --arg strip "$strip" --arg ran "$ran" --arg cap "$MERGE_PARSE_CAP" --arg thread "${tmsub:+sub}" \
+        --arg pairs "$p" --arg state "$st" --arg armed "$a" --arg sid "$id" --arg now "$now" --arg seen "$seen" --arg ack "$k" 'include "mail-hold"; mail_hold($ARGS.named)' <<<"$payload" 2>/dev/null) 2>/dev/null
+    elif [[ "${seen%%$'\n'*}" != "$p" || $'\n'"$seen" != *$'\n'module-missing$'\n'* ]]; then   # the hook's one key: the module cannot decide it
+      [[ -n "$seen" && "${seen%%$'\n'*}" == "$p" ]] || seen="$p"$'\n'   # a seen text, even for no pairs, opens with its pairs line
+      s="${seen}module-missing"$'\n' l="$now"$'\t'"$id"$'\t-\tmodule-missing\t'"$dl"$'\t-\n'
+    fi
+  fi
+  if [[ "$o" == deny ]] && j=$(_hook_deny_json "$t"); then pre_json=$j
+  elif [[ "$o" == notice ]] && j=$(_hook_nudge_json "$t"); then pre_json=$j; fi
+  [[ -n "$l" ]] && mkdir -p "$d" 2>/dev/null || return 0
+  if [[ -n "$s" ]]; then { printf '%s' "$s" > "$d/.$id.$$" && mv -f "$d/.$id.$$" "$d/$id"; } 2>/dev/null || rm -f "$d/.$id.$$"; fi
+  [[ -n "$(find "$log" -size +1024k 2>/dev/null)" ]] && mv -f "$log" "$log.1" 2>/dev/null
+  { printf '%s' "$l" >> "$log"; } 2>/dev/null
+}
 
 # ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
 # An automatic compaction can fire PreCompact with no PostCompact after it, so
@@ -4752,6 +4921,22 @@ fi
 # programme wave or the child marker is refused with wave 2's reason, byte for
 # byte), and the bypass reasons name the door as the way for a coordinator.
 #
+# THE CHILD'S WORKSPACE DENY (D-8978, D-8979). A session whose workspace carries the child marker never runs `ccd
+# ws-add`: a workspace a worker makes itself belongs to no run (no `--child`, and no run row names it), so the console
+# lists it as "Not in a programme" and its coordinator never sees it, a scope escape (measured once in 1215 creates on a
+# live fleet). It rides THIS arm's strip, so it reads what the merge question reads: CCD_WSADD_RE (the head grammar, cut
+# where CCD_DOOR_RE is) asked of the stripped text, so a commit message, a PR body, a grep pattern or a heredoc that
+# names `ccd ws-add` passes, as a merge mention does, and a `ccd ws-addx` is another word. The prefilter wakes the strip
+# for `ws-add` only in a child (`wchild`: the marker's existence, a dangling link included, never its contents), so no
+# other session forks for it. The marker asks it, never the hold: a held session without one is not asked. The server's
+# own dispatch (`ws-add --no-rc --child <run>`) is an agent exec through `CcdArgv`, never a session's tool call, so no
+# hook sees it; a top-level session, a coordinator and the operator are never asked. It is one of two layers: the deny
+# file's `Bash(ccd ws-add:*)` (`childDenyRules` in shared/api.ts, and the installer's loop) is the other, at Claude
+# Code's own matcher. AN ACCIDENT GUARD, NOT A WALL: it passes unparsed every form the merge head passes (the list
+# above: `bash -c "…"`, a quoted or variable command word, a quoted verb, `xargs`, `eval`, an unlisted or path-spelled
+# wrapper, a leading redirection), a command over MERGE_PARSE_CAP, a verb split so that `ws-add` is not in the payload
+# (`ws\-add`), a script file and another interpreter.
+#
 # THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
 # in every session, by the same single jq and with the same reason prefix. Once the
 # STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
@@ -4992,6 +5177,9 @@ GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
 # the wrapper prefix, so cutting there leaves the head alone and the door's own command word and verb follow it.
 CCD_DOOR_CUT=$'([^[:space:];&|()]*/)?gh('
 CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-admin-merge([[:space:];&|()<>]|$)'
+# CCD_WSADD_RE (D-8978): the same head grammar with `ccd ws-add`, cut at the same place as CCD_DOOR_RE, so the four never
+# drift. Asked of a child only, by THE CHILD'S WORKSPACE DENY below.
+CCD_WSADD_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+ws-add([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -5064,8 +5252,11 @@ def capped(f): (.tool_input.command // "") as $c
     then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
     else "=" + ($c | vflags) + "\u001f" + f end;
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
+wchild=""
+if [[ -n "$id" ]] && { [[ -e "$REG/$id.child" ]] || [[ -L "$REG/$id.child" ]]; }; then wchild=1; fi
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
-      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
+      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* \
+           || ( -n "$wchild" && "$payload" == *ws-add* ) ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
   mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
@@ -5145,6 +5336,12 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
   fi
+  # THE CHILD'S WORKSPACE DENY (D-8978), asked after the merge questions and only when they set no deny.
+  if [[ -n "$wchild" && -n "$mcmd" && "$pre_json" != *'"permissionDecision":"deny"'* && "$mcmd" =~ $CCD_WSADD_RE ]]; then
+    wreason="ccrc: this workspace carries the child marker — a dispatched child — and a child never creates a workspace (\`ccd ws-add\`): one it makes belongs to no run, so the console lists it as \"Not in a programme\" and your coordinator never sees it (D-8978)."
+    wreason+=" If your task needs another worktree or a second session, ask your coordinator; for scratch files use \`\$TMPDIR\`."
+    pre_json=$(_hook_deny_json "$wreason") || pre_json=""
+  fi
 fi
 
 # ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
@@ -5186,8 +5383,9 @@ fi
 # rename turns that suite red rather than silently disarming this deny.
 # ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
 # `paid` are already in memory, so a non-Skill event, and the main thread's
-# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
-# jq for the skill's name.
+# Skill call, pay no fork in this arm, and only a subagent's Skill call pays its
+# one jq for the skill's name. A session under a launch profile pays one more jq
+# on every PreToolUse, in the surface arm below, which reads the name too.
 # A deny already set is never replaced (the merge deny's own guard, copied
 # whole). Today it cannot be set on a Skill call, because every other deny here
 # fires on another tool, and the guard is written for the day one does.
@@ -5197,17 +5395,18 @@ fi
 # `pre_json` as it was. This arm prints nothing itself: the one print site at
 # the end of the file emits the envelope, after the hookstate rename.
 ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
-if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  rsk=$(jq -r '
-    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+# The skill's name, read the way Claude Code reads it (above); the surface arm below reads it with this one definition too.
+SKILL_NAME_JQ='def skillname: def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
       or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
       or . == 8287 or . == 12288 or . == 65279;
     .tool_input.skill? // "" | tostring | explode
     | until(length == 0 or (.[0] | ws | not); .[1:])
     | until(length == 0 or (.[-1] | ws | not); .[:-1])
     | if .[0] == 47 then .[1:] else . end
-    | implode' <<<"$payload" 2>/dev/null) || rsk=""
+    | implode;'
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r "$SKILL_NAME_JQ skillname" <<<"$payload" 2>/dev/null) || rsk=""
   rbare=${rsk#*:}
   for rname in $ROLE_SKILLS; do
     if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
@@ -5219,13 +5418,46 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
   done
 fi
 
+# ── THE SURFACE ARM (Overlord W1 sandbox PR B, Task 8; spec §3.6 H1, H4; slug surface-arm-refuses-what-the-profile-lacks) ──
+# A session launched under a surfaced profile carries `CCRC_LAUNCH_PROFILE=<role>:<digest>` (ccd's spawn composes it). Here
+# the hook reads that role's row from the INSTALLED `lib/launch-profiles.json` (beside this file, else `~/.cc-sessions/lib`,
+# as `_hook_role_compact_text` finds it) and denies, on the main thread and in a subagent alike: a tool the row does not list
+# (its `--tools`, or a tool `mcp__<server>__…` of a server its reader types name: the door's); an `Agent` or `Task` call (one
+# tool, as the row lists `Agent`) whose `subagent_type` is not a declared reader type (`--agents`'s keys), one naming none
+# included; and a `Skill` call whose name, read by SKILL_NAME_JQ and compared WHOLE, the row does not stage (`stagedSkills`),
+# so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
+# session's argv is the row it was spawned with, so this can only be stricter.
+# FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
+# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
+# enforcement is Claude Code's own (`--tools` and the deny rules).
+SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
+  | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
+  | if $ti == null or $ai == null then error("row") else . end
+  | ($row.flags[$ti + 1] | split(",")) as $tools | ($row.flags[$ai + 1] | fromjson) as $ag
+  | if ($row.stagedSkills | type) != "object" or ($ag | type) != "object" then error("row") else . end
+  | ([$ag[].tools[]? | strings | select(startswith("mcp__")) | "mcp__" + split("__")[1] + "__"] | unique) as $srv
+  | if (($tools | index(if $t == "Task" then "Agent" else $t end)) == null and ([$srv[] as $p | $t | startswith($p)] | any | not)) then "the tool `" + $t + "`"
+    elif ($t == "Agent" or $t == "Task") and ($ag | has($at) | not) then "the agent type `" + (if $at == "" then "(none)" else $at end) + "`"
+    elif $t == "Skill" and ($row.stagedSkills | has($sk) | not) then "the skill `" + $sk + "`"
+    else "" end'
+if [[ "$event" == PreToolUse && -n "${CCRC_LAUNCH_PROFILE:-}" && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  srole=${CCRC_LAUNCH_PROFILE%%:*} sf="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"; [[ -f "$sf" ]] || sf="$HOME/.cc-sessions/lib/launch-profiles.json"
+  sout="" sok=""; [[ "$srole" =~ ^[a-z]{1,16}$ ]] && sout=$(jq -r --arg r "$srole" --slurpfile rows "$sf" "$SKILL_NAME_JQ $SURFACE_ARM_JQ" <<<"$payload" 2>/dev/null) && sok=1
+  if [[ -z "$sok" ]]; then sreason="ccrc: this session runs under a launch profile (\`${CCRC_LAUNCH_PROFILE%%:*}\`) whose row could not be read, so every tool call is refused until it can be (W1 sandbox, the surface arm)."
+  elif [[ -n "$sout" ]]; then sreason="ccrc: this session runs under the \`$srole\` launch profile, which does not list $sout, so the call is refused (W1 sandbox, the surface arm). Use the tools, reader type and skill the profile gives you."
+  else sreason=""; fi
+  if [[ -n "$sreason" ]] && sjson=$(_hook_deny_json "$sreason"); then pre_json=$sjson; fi
+fi
+
 # ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
 # A dispatched child (its row carries `$REG/<id>.child`), on the main thread AND in a subagent, never reaches the
-# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `ccrc rollback`, in any invocation form:
+# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `rollback` / `rollout`, in any invocation form:
 # bare, through a path ending `/ccd` or `/ccrc`, env-prefixed, anywhere in an `&&`, `;`, `||` or `|` chain, or inside
 # a `bash -c` / `sh -c` string. In this arm the command is read twice, as written and as bash runs it (`norm`: quotes,
 # backslashes and line continuations removed, which only ever denies more), and a verb or `approvals` after a `$VAR`,
-# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback` only when the command also names
+# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback`/`rollout` only when the command also names
 # `ccrc`): the security review of Task 14 ran `ccd 'ws-rm' x`, `ccd ws\-rm x`, `C=ccd; $C ws-rm x` and `"${API:?}"
 # approvals` past the plain match. A verb run from a script file, stdin or another interpreter is past any lexical
 # match, an accepted limit (spec §6.1); the classifier escalates it. Children run with permissions bypassed, so no prompt and no classifier sees these
@@ -5244,7 +5476,7 @@ fi
 # `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
 # `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
-# verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
+# verb, `ccrc update`, `rollback` or `rollout`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
 # 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
 # write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
 # `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
@@ -5274,7 +5506,8 @@ fi
 # tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
-# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# deny file `$REG/child-deny.settings.json`, which the arm below reads, and its digest history `$REG/child-deny.digests`,
+# which the approval wait reads (approvals PR 0, the coordinator's ruling F6)) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
@@ -5311,13 +5544,26 @@ fi
 # `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
 # `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`, D-7675's Linear slot store `~/.ccrc/linear/` and legacy key
 # `~/.ccrc/linear.key`, and plan PL6's operator-secret slots `~/.ccrc/operator-secrets/`), a write under
-# `~/.cc-sessions/.auth` or `.accounts`, and a
+# `~/.cc-sessions/.auth` or `.accounts`, a write of the roster `~/.ccrc/accounts.json` or its mirror `accounts.sh`
+# (`ARF`, `APRF` for the edit tools; reads stay open), a direct run of `account-op.mjs` (`AOPRUN`: the script as a
+# segment's program, bare or after a runtime, by any path; a read of it passes), and a
 # bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
 # `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
 # category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
 # It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
 # `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
 # guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE QUIZ ROW ON EVERY SESSION (review 3232 F1; the operator's ruling of 2026-11-22). `qzmatch` answers the category
+# `quiz`, in `deny` (a child) and `account` (every other session) only, never in `class` (so the classifier needs no twin
+# row): the box client `ccrc-api` (bare, path-qualified, quoted or a `$VAR` program, as written and as `norm` reads it)
+# followed by `quiz` and then `record`, `confirm`, `status` or an act in a variable; and the shell verb that posts them,
+# `ccrc quiz-record` and its script `ccrc-quiz-record` (bare, quoted, `$VAR`, after `env` and its `-u` prefixes, and by
+# path where it is run, so a `cat` or `git add` of the script's path passes; review 3254 F1). Those are the weekly
+# timer's acts, never a session's. `quiz live`, the Overlord coordinator's door, stays OPEN (the server's ownership check
+# guards it). Text that only names one is refused too, as the account arm's is. An accident guard, not a wall: `bash -c`
+# with an assembled string, another interpreter or a script file runs past it. The prefilter of both branches reads
+# `quiz` followed by a blank, a stripped tab or newline (`t`, `n`) or a backslash, or `quiz-record`, never `quiz` alone,
+# so a session whose working directory or transcript path names `quiz` forks no jq on every call.
 # THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
 # `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
 # those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
@@ -5369,13 +5615,13 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
   (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
   (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
-  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
   (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
   (select(test(AAUTH)) | "account\tccd-account-auth"),
@@ -5474,13 +5720,23 @@ def pmatch: select(any(split("[;&|]"; null)[]; test(PANC) and test(WANC))) | sel
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
-  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
   (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
+def QZV: "record", "confirm", "status";
+def QZP: "(?:" + WB + "ccrc-api[" + $q + "\"]?" + SP + "+" + FLAGS + "|" + EXPV + ")quiz" + SP + "+" + FLAGS;
+def QZR: "quiz-record(?![A-Za-z0-9_.-])";
+def QZH: "ccrc-quiz-record(?![A-Za-z0-9_.-])";
+def QZCMD: "(?:^|[\n;&|(`]|\\$\\()" + SP + "*(?:env(?:" + SP + "+(?:-" + NS + "+(?:" + SP + "+[A-Za-z_][A-Za-z0-9_]*)?|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*))*" + SP + "+)?(?:(?:bash|sh)" + SP + "+" + FLAGS + ")?[" + $q + "\"]?";
+def qzmatch:
+  (QZV as $v | select(test(QZP + $v + NW)) | "quiz\tccrc-api quiz \($v)"),
+  (select(test(QZP + EXP)) | "quiz\tccrc-api quiz with its act in a variable"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + QZR) or (test(WB + "ccrc" + NW) and test(EXPV + QZR))) | "quiz\tccrc quiz-record"),
+  (select(test("(?:^|[" + WS + ";&|()`" + $q + "\"=]|/\\.local/bin/)" + QZH) or test(QZCMD + "[^" + WS + ";&|()`" + $q + "\"]*/" + QZH)) | "quiz\tccrc-quiz-record");
 ([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
 | ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
     | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
@@ -5524,7 +5780,7 @@ def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
 def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
 def TNC: "claude-" + TCH + "{1,64}";
-def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json|child-deny\\.digests)" + BT;
 def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
 def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
 def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
@@ -5579,20 +5835,39 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
-def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
-def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.cc-sessions" + SEPP + "\\.door(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|operator-model\\.db|privacy-journal\\.log(?![A-Za-z0-9_.-])|privacy-journal\\.torn(?![A-Za-z0-9_.-])|coordination-restore\\.(?:stage|foreign)" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-]))|" + DANC + "ccrc-backups" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db)";
+def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts|door)(?![A-Za-z0-9_.-])";
 def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
 def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`]";
 def BSHC: "^" + SP + "*(?:" + NS + "*/)?(?:bash|sh)" + SP + "+-c" + SP + "+";
+def ARF: DANC + "\\.ccrc" + SEPP + "accounts\\.(?:json|sh)" + BT;
+def AOPRUN: "^" + SP + "*(?:[(`{]" + SP + "*){0,4}(?:(?:then|do|else|if|while|!)" + SP + "+){0,2}(?:[A-Za-z_][A-Za-z0-9_]*=" + NS + "*" + SP + "+){0,8}(?:(?:exec|env|time|nohup|command)" + SP + "+){0,2}(?:(?:" + NS + "*/)?(?:node|nodejs|bun|deno)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8})?(?:" + NS + "*/)?account-op\\.mjs" + BT;
+def PMN: "(?:operator-model\\.db|privacy-journal\\.(?:log|torn)" + BT + ")";
+def PMNS: ["operator-model.db", "operator-model.db-wal", "operator-model.db-shm", "privacy-journal.log", "privacy-journal.torn"];
+def g2re: gsub("(?<c>[.+^$()|\\\\])"; "\\\(.c)") | gsub("\\[!"; "[^") | gsub("\\*"; "[^/]*") | gsub("\\?"; "[^/]")
+  | gsub("\\{(?<x>[^{}]*)\\}"; "(?:" + (.x | gsub(","; "|")) + ")");
+def pmglob: [match(DANC + "\\.ccrc" + SEPP + "(?<g>" + GLOBW + "[*?\\[{]" + GLOBW + ")(?=$|[" + WS + META + "])"; "g") | .captures[0].string]
+  | any(.[]; g2re as $r | any(PMNS[]; try test("^(?:" + $r + ")$") catch true));
+def PMEX: "^" + SP + "*(?:ls|rm)" + NW;
+def PMBULK: NB + "(?:tar|zip|grep|rg)" + NA;
+def PMCOPY: NB + "(?:cp|rsync|scp)" + NA;
+def PMCPT: NB + "cp" + NA + "[^\n]*(?:^|" + SP + ")(?:--target-directory|-[A-Za-z]*t[A-Za-z]*)(?=$|[=" + WS + "])";
 def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
+  (select(test(PMN) and cdthen(CDT("\\.ccrc"); PMN; test("(?:^|[" + WS + "/=])" + PMN))) | "account\tthe private store or its journal, after a cd into ~/.ccrc"),
+  (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMEX) | not) and pmglob)) | "account\ta glob under ~/.ccrc that can match the private store or its journal"),
+  (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMBULK) and test(PDIR("\\.ccrc")))
+     or (test(PMCOPY) and test(PDIR("\\.ccrc") + SP + "+[^" + WS + META + "]")) or (test(PMCPT) and test(PDIR("\\.ccrc"))))) | "account\ta copy or recursive read of ~/.ccrc, which holds the private store"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
+  (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
+  (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
-def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)";
-def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.cc-sessions/\\.door(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)|/\\.ccrc/operator-model\\.db|/\\.ccrc/privacy-journal\\.log$|/\\.ccrc/privacy-journal\\.torn(?:/|$)|/ccrc-backups/[^/]+/operator-model\\.db|/\\.ccrc/coordination-restore\\.(?:stage|foreign)/[^/]+/operator-model\\.db";
+def APWD: "/\\.cc-sessions/\\.(?:auth|accounts|door)(?:/|$)";
+def APRF: "/\\.ccrc/accounts\\.(?:json|sh)$";
 def acctpath($t; $i):
-  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD)) | "account\ta write to an account path")
+  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD) or test(APRF)) | "account\ta write to an account path")
   elif $t == "Read" or $t == "Grep" or $t == "Glob" then first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string") | pnorm | select(test(APSEC)) | "account\ta read of a secret or scratch path of a fleet account")
   else empty end;
 def pathwhy($t):
@@ -5605,12 +5880,12 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | qzmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"
@@ -5636,13 +5911,15 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *account-op* || "$apf" == *accounts.json* \
+       || "$apf" == *accounts.sh* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
-       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* || "$apf" == *.door* \
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *quiz[[:space:]tn\\]* || "$apf" == *quiz-record* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5680,6 +5957,8 @@ if [[ -n "$apf" ]]; then
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        quiz$'\t'*)
+          areason="ccrc: this call runs \`${afw#*$'\t'}\`: the replay quiz's record, confirmation and status are the weekly timer's acts (\`ccd-quiz-weekly.timer\`), never a session's, in any form (the operator's ruling of 2026-11-22; review 3232 F1). A session reads the quiz on the Shadow lanes card; the Overlord coordinator's Live (\`ccrc-api quiz live\`) stays open. Text that only names it is refused too; reword it or write it through a file (\`git commit -F <file>\`)." ;;
         prune$'\t'*)
           areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
           areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed."
@@ -5753,6 +6032,24 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
     fi
     if [[ -n "$treason" ]] && tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
   fi
+fi
+
+# THE READER ARMS (Overlord W1 door process B2, Task 8; spec §3.3.10 C55), each keyed on a fact, never a role's name; a denied door call
+# sends no witness. SCOPE: a reader (a recorded join, or an `agent_type`) calling a door tool but `mcp__door__read`. THREE READERS: a fourth
+# main-thread Agent or Task call with a door. MODEL: under the pin, a named model that is not the pin. Residuals: w1-door-process-b2-notes.md.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rd=""
+  case "${tool:-}" in
+    mcp__door__read) ;;
+    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+      && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
+    Agent|Task)
+      [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
+        && rd="ccrc: three readers already run (C55's bound): wait for one to finish before starting another."
+      [[ -z "$rd" && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && rmod=$(jq -r '.tool_input.model | strings' <<<"$payload" 2>/dev/null) \
+        && [[ -n "$rmod" && "$rmod" != "$CLAUDE_CODE_SUBAGENT_MODEL" ]] && rd="ccrc: a subagent here runs on the pinned model, $CLAUDE_CODE_SUBAGENT_MODEL; this call names $rmod. Leave the model out, or name the pinned one." ;;
+  esac
+  [[ -n "$rd" ]] && rj=$(_hook_deny_json "$rd") && pre_json=$rj
 fi
 
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
@@ -5853,12 +6150,16 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
           end
       else "" end' <<<"$payload" 2>/dev/null) || fo=""
   fi
+  [[ "$fo" == agent && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && fo=""   # THE PIN (W1 sandbox, question 14; slug no-model-arm-reads-the-pin): under FORCE the payload carries no model even when the call named one (W0-11), and the call runs on the pinned model, so an Agent or Task call is not judged; a Workflow call is judged as before
   if [[ "$fo" == agent || "$fo" == workflow ]]; then
     if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
     foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
     if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
   fi
 fi
+
+# THE MAIL HOLD (`_hook_mail_hold`, defined beside the precompact read): after the last deny arm, while no deny is built.
+if [[ ( "$event" == PreToolUse || "$event" == Stop ) && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then _hook_mail_hold || true; fi
 
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
@@ -6088,6 +6389,93 @@ if [[ -n "$hms" && "$waitby" == subagent && -n "$prev_state" ]]; then
   if [[ -n "$fr_bgd" ]]; then hcarry=1 bgd="$fr_bgd" bgdk="$fr_bgdk"; fi
 fi
 
+# ── THE APPROVAL GATE (approvals plan 2026-11-18, §3.1 and Task 1.2: the census's route word) ─────────────────────
+# A PermissionRequest that set `apr` (any tool but AskUserQuestion) runs the approval wait's PRE-SEND gates here, BEFORE
+# the hookstate write, so the envelope the write stores says where this prompt went: `ask.approval.route`, one additive
+# field whose one writer is this hook (the census, `server/src/coord/questions.ts`, records it; `hookstate.ts` is its
+# one reader). The word is `sent` when every gate passed and the wait below will send the request, else the FIRST gate
+# that stopped it (every `apr_route=<word>` below, held equal to `APPROVAL_ROUTE_SKIP_WORDS` in `shared/approval-census.ts`
+# by `session-hook-approval-route.test.ts`). The gates are the wait's own, in its order, moved here unchanged: a gate that
+# fails still sends nothing and prints nothing. What only the request can tell (`request-refused:<word>`,
+# `request-failed`) the wait patches into the envelope afterwards (`_hook_approval_route_patch`). The cost: on a child's
+# PermissionRequest the gate's forks (the deny digest, the forbidden match, the canonical form and its digest, the
+# nonce) now run before the `waiting` write instead of after it; on any other session's, one file test.
+APPROVAL_REQUEST_MAX_BYTES=65536
+APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
+apr_route="" apr_digest="" apr_nonce="" apr_body="" apr_api="" apr_ti="" apr_dd=""
+# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
+# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
+_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
+  local s=""
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
+# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
+# the current-digest path gains no fork and no read. A symlink at the name is never read.
+_apr_deny_history() {   # <digest>
+  local f="$REG/child-deny.digests" l
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
+  done < "$f"
+  return 1
+}
+_hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest, apr_nonce, apr_body, apr_api, apr_ti
+  local sum managed uuid fb canon
+  # A session with no `.child` mark is no dispatched child: its prompt is the operator's (Table 2a, path 7).
+  [[ -n "$id" && -e "$REG/$id.child" ]] || { apr_route=not-a-child; return 0; }
+  [[ ! -e "$REG/approvals-disabled" ]] || { apr_route=kill-switch; return 0; }
+  # The deny stamp: absent, unreadable or not a digest, or a managed file that cannot be read, is `deny-unreadable`; a
+  # stamp in no digest history and not current is `deny-unknown`; one in the history goes on with `denyDigest` (PR 0).
+  _ct_read "$REG/$id.deny-settings" || { apr_route=deny-unreadable; return 0; }
+  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { apr_route=deny-unreadable; return 0; }
+  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || { apr_route=deny-unreadable; return 0; }
+  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || { apr_route=deny-unreadable; return 0; }
+  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || { apr_route=deny-unknown; return 0; }; apr_dd="$sum"; fi
+  command -v node >/dev/null 2>&1 || { apr_route=no-node; return 0; }
+  [[ -f "$REG/approval-verify.mjs" ]] || { apr_route=no-verifier; return 0; }
+  [[ -f "$HOME/.ccrc/approval-signing.pub" ]] || { apr_route=no-key; return 0; }
+  apr_api="$HOME/.local/bin/ccrc-api"; [[ -x "$apr_api" ]] || { apr_route=no-client; return 0; }
+  _ct_read "$REG/$id.uuid" || { apr_route=no-uuid; return 0; }
+  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || { apr_route=no-uuid; return 0; }
+  # A forbidden match that could not run reads as a match (fail closed): nothing is sent either way.
+  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) && [[ -z "$fb" ]] || { apr_route=forbidden; return 0; }
+  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) && [[ "$canon" == '['* ]] || { apr_route=canonical-failed; return 0; }
+  apr_digest=$(printf '%s' "$canon" | _apr_sha256) || { apr_route=canonical-failed; return 0; }
+  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
+  # Past `APPROVAL_REQUEST_MAX_BYTES` the body carries `truncated` in place of the canonical form (`-a` keeps it ASCII,
+  # so jq's length is its byte count).
+  apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --arg dd "$apr_dd" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
+    '{v: 1, sessionId: $s, sessionUuid: $u} + (if length > $max then {truncated: true} else {canonical: .} end) + {digest: $d, nonce: $n}
+    + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) \
+    || { apr_route=canonical-failed; return 0; }
+  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
+  apr_route=sent
+}
+if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate || true; fi
+# ── THE HOOK'S REPORTS (Overlord W1 door process B1, Task 7; spec §3.6 H1, §3.3.10 C55, §3.8, §7.4) ────────────────────
+# A session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a fact, never a role's name), never a child, tells
+# the server what it really saw through ONE sender and ONE door, `ccrc-api sessions report <id> --json -`, a body to a kind (`HOOK_REPORT_KINDS`,
+# shared/continuity-reports.ts): the WITNESS of a door tool call, after every deny arm above has let it through (the sha256 of the tool's
+# full name, one newline and `jq -cS` of its input, `{}` when absent: plan question 6, which the door process computes the same way);
+# a subagent's start and stop (`aid`, the roster's id); `readers-clear` on a main-turn Stop with no background work (where the roster
+# empties, so one lost stop heals at the next quiet turn end); and "picked up", each prompt line that is EXACTLY the private store's nudge line
+# (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
+# SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
+# header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
+# REPORT_TIMEOUT_S and the sender are defined above the main case block, whose model arms (door process B2) send through it too, from every non-child registry session.
+DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
+_hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
+  local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1
+  while IFS= read -r l; do _hook_door_report "$l"; done < <(jq -c --arg id "$id" --arg k "$k" --arg a "$aid" --arg j "${tmsub:+1}" --arg q "$q" --argjson at "$(_hook_epoch_ms)" "$DOOR_NUDGE_JQ"'(.session_id // "" | tostring) as $u | (.hook_event_name // "") as $e | (if $e == "PreToolUse" and $k != "" then {kind: "witness", key: $k, tool: .tool_name, agentId: (if $a != "" and ($j == "1" or ((.agent_type | type) == "string" and .agent_type != "")) then $a else null end)} elif $e == "SubagentStart" and $a != "" then {kind: "reader-start", agentId: $a, agentType: (.agent_type | if type == "string" then .[0:128] else null end)} elif $e == "SubagentStop" and $a != "" then {kind: "reader-stop", agentId: $a} elif $e == "Stop" and $q == "1" then {kind: "readers-clear"} elif $e == "UserPromptSubmit" then (.prompt | strings | split("\n")[] | nudge | {kind: "picked-up", messageId: .}) else empty end) + {fromId: $id, fromUuid: $u, at: $at}' <<<"$payload" 2>/dev/null)
+}
+[[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] && { _hook_door_arms || true; }
+
 # Transitions to working/done clear the ask: an answered question must not
 # stay sticky on the sheet. (A carried write keeps the ask it carried, D-5232.)
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || ask_json="null"; }
@@ -6110,27 +6498,46 @@ bgd="${bgd:-}" bgdk="${bgdk:-}"
 # (Task 2's no-file agent event sets it too, above; it is initialised there, so it is not reset here).
 if [[ "$event" == PreCompact || "$event" == PostCompact ]] && _hook_server_cap dispatch-live-gate-v1; then hs_skip=1; fi
 
+# THE PER-AGENT APPROVAL ENVELOPES (approvals plan 2026-11-18, §3.2.2 and Task 2.1; Table 2a, path 6). `approvals` holds one
+# entry per subagent whose permission prompt stands: `{agentId, tool, summary, route, at}`, `at` being this write's own
+# stamp. A subagent's PermissionRequest (not AskUserQuestion) adds its entry, replacing that agent's entry for the same call;
+# that agent's own tool event for the same call (`ap_call`: tool and summary, as no PermissionRequest carries a
+# `tool_use_id`) or its SubagentStop removes it (`ap_drop`), and so does the transcript tie (`_hook_approvals_drop`, by
+# agent and stamp). A parallel call's events and every other event carry the list as they read it: the main thread's and a
+# sibling's never erase a subagent's prompt, whatever they do to `ask` and with or without a `waitPrev`, so a menu painted
+# after its hook returned keeps its envelope. A SessionStart empties it (above). Newest 16 kept; no key when empty.
+# `hookstate.ts` is its one reader, and the server ignores an entry older than 15 minutes (`approvalEnvelope.ts`).
+ap_drop="" ap_add="" ap_at="${w_upd:-${hts:-$(_hook_epoch_ms)}}"
+case "$event" in PreToolUse|PostToolUse|PermissionRequest) ap_drop="$aid" ;; SubagentStop) ap_drop="$aid" ap_call="" ;; esac
+[[ "$event" == PermissionRequest && -n "$apr" && -n "$aid" ]] && ap_add=1
 if [[ -z "$hs_skip" ]]; then
   out=$(jq -cn \
     --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
     --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-    --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
+    --argjson apl "$apl" --arg apDrop "$ap_drop" --arg apCall "${ap_call:-}" --arg apAdd "$ap_add" \
+    --argjson updatedAt "$ap_at" --argjson interrupted "$interrupted" \
     --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
     --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
     --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
-    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" \
+    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" --arg route "$apr_route" \
     '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-      updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
+      updatedAt:$updatedAt,
+      ask:(if $route != "" and ($ask | type) == "object" and ($ask | has("approval")) then ($ask | .approval.route = $route) else $ask end),
+      subagents:$subagents, graphQueries:$graphQueries,
       graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
       ccrcClaims:$ccrcClaims}
      + (if $interrupted then {interrupted:true} else {} end)
      + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
      + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
      + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)
-     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)') || exit 0
+     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)
+     + (((try ($apCall | fromjson) catch null) as $c | $apl | map(select(.agentId != $apDrop
+        or ($c | type) == "object" and (.tool != $c.t or .summary != $c.s))) + (if $apAdd != "" and ($ask | type) == "object" and ($ask | has("approval")) then [{agentId: $apDrop,
+        tool: $ask.approval.tool, summary: $ask.approval.summary, at: $updatedAt} + (if $route != "" then {route: $route} else {} end)] else [] end)
+        | .[-16:]) as $ap | if $ap == [] then {} else {approvals: $ap} end)') || exit 0
 
   # 64KB cap: drop the questions envelope before anything else — a truncated
-  # envelope is worse than none.
+  # envelope is worse than none. (The approvals list stays: at most 16 entries of 200-character summaries.)
   if (( ${#out} > 65536 )); then
     out=$(jq -c '.ask = null | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
     (( ${#out} <= 65536 )) || exit 0
@@ -6148,6 +6555,31 @@ fi   # hs_skip
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# ── THE DOOR PROCESS'S DELTA (Overlord W1 door process A2, Task 6; spec §3.3.3 C38 "A delta on every prompt") ─────────
+# A session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a fact, never a role's name) gets one
+# short line on every prompt, which the door process keeps fresh in `$REG/.door/<id>/delta` (first line `v=1 at=<ms>
+# until=<ms>`, then the text). This read makes NO network call: a regular file, never a link or a FIFO, read under a bound,
+# its first line parsed with `LC_ALL=C`. While `until` is ahead of now it yields the text (an empty text, the anchor slot
+# still shadow, yields nothing); anything else yields the unknown line. The line joins the one envelope this event prints:
+# the roster wake's or the owed anchor's, through DOOR_DELTA, or an envelope of its own when neither prints (ruled, F14).
+DOOR_DELTA_UNKNOWN="ccrc-delta: unknown (the door process's cache is stale)"
+DOOR_DELTA_MAX_BYTES=300
+DOOR_DELTA=""
+_hook_door_delta() {   # -> DOOR_DELTA: the cache's line while its lease holds, empty for an empty one, else the unknown line
+  local LC_ALL=C IFS=' ' f="$REG/.door/$id/delta" raw="" head1="" until="" now=""
+  DOOR_DELTA="$DOOR_DELTA_UNKNOWN"
+  [[ ! -L "$REG/.door" && ! -L "$REG/.door/$id" && ! -L "$f" && -f "$f" ]] || return 0
+  raw=$(_hook_timeout 2 head -c 1024 -- "$f" 2>/dev/null) || return 0
+  head1="${raw%%$'\n'*}"
+  [[ "$head1" =~ ^v=1\ at=[0-9]{1,16}\ until=([0-9]{1,16})$ ]] || return 0
+  until="${BASH_REMATCH[1]}"; now=$(_hook_epoch_ms 2>/dev/null)
+  [[ "$now" =~ ^[0-9]{1,16}$ ]] && (( 10#$until > 10#$now )) || return 0
+  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"; head1="$raw"   # the body line, kept before the strips below
+  # No control byte reaches the model, nor U+0085, U+2028 to U+202E or U+2066 to U+2069 (line and bidi marks; review 2756 F5).
+  raw="${raw//[[:cntrl:]]/}"; raw="${raw//$'\xc2\x85'/}"; raw="${raw//$'\xe2\x80'[$'\xa8'-$'\xae']/}"; raw="${raw//$'\xe2\x81'[$'\xa6'-$'\xa9']/}"
+  [[ -z "$head1" || "$raw" == 'ccrc-delta: '* ]] && DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"   # dark, the server's prefix, or unknown
+}
+[[ "$event" == UserPromptSubmit && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && { _hook_door_delta || true; }
 # ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────
 # Claude Code's idle compaction (about 55 minutes after a turn ends, D-5373) starts no turn and fires none of the card's
 # three SessionStart events, so a coordinator next wakes on the server's mail nudge, or on its idle-compaction nudge,
@@ -6177,7 +6609,7 @@ _hook_roster_wake() {   # UserPromptSubmit: prints at most one envelope carrying
   [[ "$open" == true ]] || return 0
   _hook_roster_card wake || return 0
   [ -n "$CARD_ROSTER" ] || return 0
-  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}" \
+  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}${DOOR_DELTA:+$'\n'$DOOR_DELTA}" \
     '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) || return 0
   printf '%s\n' "$j" && ROSTER_WOKE=1
 }
@@ -6198,14 +6630,19 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
   { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
   _hook_anchor_fetch prompt || return 0
   case "$ANCHOR_WORD" in
-    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
-      && printf '%s\n' "$j" && rm -f -- "$m" ;;
+    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}${DOOR_DELTA:+$'\n'$DOOR_DELTA}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
+      && printf '%s\n' "$j" && rm -f -- "$m" && ANCHOR_PRINTED=1 ;;
     dark) rm -f -- "$m" ;;
     *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; [[ -e "$REG/$id.generation" ]] || rm -f -- "$m"; fi ;;
   esac 2>/dev/null
   return 0
 }
+ANCHOR_PRINTED=""
 [[ "$event" == UserPromptSubmit && -z "$ROSTER_WOKE" && -f "$REG/$id.anchor-owed" && ! -L "$REG/$id.anchor-owed" ]] && { _hook_anchor_owed || true; }
+# The delta's own envelope, only when neither the roster wake nor the owed anchor printed one (one envelope an event).
+if [[ -n "$DOOR_DELTA" && -z "$ROSTER_WOKE" && -z "$ANCHOR_PRINTED" ]]; then
+  jq -cn --arg c "$DOOR_DELTA" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null || true
+fi
 # ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
 # A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
 # coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after
@@ -6213,9 +6650,15 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # before the wait begins, and nothing above changes for any other event. It is the one declared WAIT in this file
 # (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
 # on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
+#   Steps 1 to 3 run in `_hook_approval_gate`, ABOVE the hookstate write (approvals plan Task 1.2), so the envelope
+#   carries the first step that stopped the prompt as `ask.approval.route`; the wait below starts at the request.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
-#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
-#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned with no
+#      deny rules the box ever installed never gets rulings) or named by the installer's digest history
+#      `$REG/child-deny.digests` (approvals PR 0: a child spawned under an older deny file, which a running Claude Code
+#      never re-reads; the request then carries `denyDigest`, and the server holds it, its row `denyCurrent: false`, its
+#      allow refused `deny-not-current` at the rule door; this wait never prints an allow for it, a deny it prints), and only when it can VERIFY a
+#      ruling: `node` on PATH, the verifier beside this
 #      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
 #      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
 #   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
@@ -6232,7 +6675,10 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 #   5. A ruling is verified by `approval-verify.mjs`: the Ed25519 signature against the pinned key, this session,
 #      agent, digest, nonce and row, not expired, and for an allow class `ordinary`.
 #   6. A verified allow prints the allow decision, with no `updatedInput` and no `updatedPermissions`, ever; a
-#      verified deny prints the deny with "denied by your coordinator: <reason>".
+#      verified deny prints the deny with "denied by your coordinator: <reason>", or, for a v2 record (approvals PR 3),
+#      by the record's authority ("the operator", "the Overlord").
+#   6a. THE PARK (approvals PR 3): on the `201`'s exact `park: live`, the window's end prints the park deny instead of
+#      nothing, and so does a `parked` answer from the ruling read; the retry meets a ruling recorded on the park.
 #   7. Every other path prints NOTHING and the menu stays with the operator. It never prints two envelopes.
 # THE RESOLUTION SIGNAL (D-5439; Task 13's Linux re-check record, "The resolution signal"): no PermissionRequest
 # carries `tool_use_id`, so the request is tied to the LAST open assistant `tool_use` row of its transcript with the
@@ -6252,19 +6698,18 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # `server/test/fixtures/approvals/digest-corpus.json`.
 APPROVAL_HOOK_WAIT_S=540
 APPROVAL_HOOK_STOP_STATES="declined released operator stale"
-APPROVAL_REQUEST_MAX_BYTES=65536
-APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
-# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
-# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
-_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
-  local s=""
-  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
-  elif command -v node >/dev/null 2>&1; then
-    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
-  else return 1; fi
-  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
-  printf '%s' "$s"
+# THE PARK (approvals PR 3, plan 2026-11-18 §3.3): the `201` carries `park`, the word the server decided and stored at mint.
+# On an exact `live` (never `shadow`, `capped` or an absent field) the wait prints the park deny at its deadline, and on a
+# `parked` answer from the ruling read at once: the command did not run, and the model waits for the mail. `parked` is no
+# stop state. The text after `approval <n> ` is `shared/api.ts#approvalParkDenyText`'s, held equal by its suite.
+APPROVAL_PARK_DENY_TAIL="is parked for a ruling. Do not run this command again now: wait for the mail that says it was ruled, then run the same command again, unchanged."
+_apr_park_print() {   # <row id> -> prints the park deny
+  local t
+  t=$(jq -cn --arg m "approval $1 $APPROVAL_PARK_DENY_TAIL" \
+    '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny", message: $m}}}' 2>/dev/null) && printf '%s\n' "$t"
 }
+# `APPROVAL_REQUEST_MAX_BYTES`, `APPROVAL_DIGEST_JQ` and `_apr_sha256` are defined with THE APPROVAL GATE, above the
+# hookstate write, because the gate reads them before this block runs (approvals plan Task 1.2).
 _apr_call() {   # <args...> -> APR_BODY, APR_CODE from ccrc-api (body on stdout, `http <code>` last on stderr); rc 1 no answer
   local out
   APR_BODY="" APR_CODE=""
@@ -6322,35 +6767,36 @@ _apr_scan() {   # -> rc 0 when the transcript shows this request resolved
   [[ "$ids" == *R* ]]
 }
 _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
+# THE ROUTE AFTER THE REQUEST (approvals plan Task 1.2). The gate wrote `sent` before the request was made; a request that
+# got no answer is patched to `request-failed`, and one answered with anything but a `201` to `request-refused:<word>`
+# (the refusal's own `error` word when it is a kebab word, else `http-<code>`). Patched ONLY over this run's own bytes:
+# the file must still hold what the write above stored (`$out`): a write before the compare wins and the word is lost; one
+# inside the compare-to-`mv` window (one jq fork) is overwritten, as hook writes race (no lock). On the failure arms only.
+_hook_approval_route_patch() {   # <word> -> rc 0 always
+  local cur="" new="" tmp
+  [[ -z "$hs_skip" && -n "${out:-}" && -f "$f" && ! -L "$f" ]] || return 0
+  { IFS= read -r -d '' cur < "$f"; } 2>/dev/null; [[ "$cur" == "$out"$'\n' ]] || return 0
+  new=$(jq -c --arg r "$1" --arg a "$aid" --argjson t "$ap_at" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r
+    | if (.approvals | type) == "array" then .approvals |= map(if .agentId == $a and .at == $t then .route = $r else . end) else . end else empty end' <<<"$out" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
+}
+# THE TIE'S DROP (approvals plan Task 2.1): the wait saw this subagent prompt's tool_result (a pane Yes or No, the
+# auto-deny, a hook decision) or printed its park deny (its dialog goes with it, review 3037 F1), so its entry in
+# `approvals` goes: this agent's id and this write's stamp, read from the file as it stands NOW (later events have
+# written since), never another agent's; only when it is there, and a write in the one-jq-fork window is lost (no lock).
+_hook_approvals_drop() {   # -> rc 0 always
+  local new="" tmp
+  [[ -n "$aid" && -z "$hs_skip" && -f "$f" && ! -L "$f" ]] || return 0
+  new=$(jq -c --arg a "$aid" --argjson t "$ap_at" 'if (.approvals | type) == "array" and any(.approvals[]; .agentId == $a and .at == $t)
+    then .approvals |= map(select(.agentId != $a or .at != $t)) | if .approvals == [] then del(.approvals) else . end else empty end' "$f" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
+}
 _hook_approval_wait() {
-  local sum managed uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
-  [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
-  _ct_read "$REG/$id.deny-settings" || return 0
-  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
-  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
-  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
-  [[ "$managed" == "$sum" ]] || return 0
-  command -v node >/dev/null 2>&1 || return 0
-  [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
-  apr_api="$HOME/.local/bin/ccrc-api"
-  [[ -x "$apr_api" ]] || return 0
-  _ct_read "$REG/$id.uuid" || return 0
-  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
-  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || return 0
-  [[ -z "$fb" ]] || return 0
-  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || return 0
-  [[ "$canon" == '['* ]] || return 0
-  digest=$(printf '%s' "$canon" | _apr_sha256) || return 0
-  nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
-  nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
-  if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
-    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || return 0
-  else
-    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || return 0
-  fi
-  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
+  local rid waits pk="" ceil deadline now tick=0 st verdict reason who state j t w
+  # Every pre-send gate ran above the hookstate write (`_hook_approval_gate`); only `sent` goes on.
+  [[ "$apr_route" == sent ]] || return 0
   # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
   apr_tick=0.5; [[ "${CCRC_APPROVAL_TICK_S:-}" =~ ^(0\.[0-9]{1,3}|[1-9])$ ]] && apr_tick="$CCRC_APPROVAL_TICK_S"
   [[ "$apr_tick" =~ ^0\.0[0-4] ]] && apr_tick=0.05
@@ -6358,10 +6804,11 @@ _hook_approval_wait() {
   ceil=$APPROVAL_HOOK_WAIT_S
   [[ "${CCRC_APPROVAL_CEILING_S:-}" =~ ^[0-9]{1,3}$ ]] && (( CCRC_APPROVAL_CEILING_S < ceil )) && ceil=$CCRC_APPROVAL_CEILING_S
   trap 'exit 0' TERM INT HUP
-  _apr_call approvals request --json - <<<"$body" || return 0
-  [[ "$APR_CODE" == 201 ]] || return 0
-  { read -r rid; read -r waits; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end)' <<<"$APR_BODY" 2>/dev/null)
-  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || return 0
+  _apr_call approvals request --json - <<<"$apr_body" || { _hook_approval_route_patch request-failed; return 0; }
+  [[ "$APR_CODE" == 201 ]] || { w=$(jq -r '.error // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || w=""
+    [[ "$w" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || w="http-$APR_CODE"; _hook_approval_route_patch "request-refused:$w"; return 0; }
+  { read -r rid; read -r waits; IFS= read -r pk; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end), (.park | if type == "string" then . else "" end)' <<<"$APR_BODY" 2>/dev/null)
+  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || { _hook_approval_route_patch request-failed; return 0; }
   (( waits < ceil )) && ceil=$waits
   deadline=$(( $(_hook_epoch_ms) + ceil * 1000 ))
   # The transcript this request lives in (main thread, or the subagent's own file).
@@ -6373,24 +6820,31 @@ _hook_approval_wait() {
   apr_tie="" apr_off=0 apr_seen=-1
   while :; do
     now=$(_hook_epoch_ms)
-    (( now < deadline )) || return 0
-    if _apr_scan; then return 0; fi
+    (( now < deadline )) || { [[ "$pk" == live ]] && { _apr_park_print "$rid"; _hook_approvals_drop; }; return 0; }
+    if _apr_scan; then _hook_approvals_drop; return 0; fi
     if (( tick % apr_poll == 0 )); then
-      if _apr_call approvals ruling "$rid" --nonce "$nonce"; then
+      if _apr_call approvals ruling "$rid" --nonce "$apr_nonce"; then
         case "$APR_CODE" in
           200)
             state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
             for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
+            [[ "$state" == parked ]] && { _apr_park_print "$rid"; _hook_approvals_drop; return 0; }
             j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
             if [[ -n "$j" ]]; then
-              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$digest" "$nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
-              reason="${verdict#* }"
+              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$apr_digest" "$apr_nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
+              reason="${verdict#* }"; who="${verdict%% *}"
               case "$verdict" in
-                'allow '*)
+                'allow '*|'allow:operator '*)
+                  # Approvals PR 0, the second gate: a child whose digest only the history names never prints a v1 (its
+                  # coordinator's) allow, whatever the record says; the server's rule door refuses it `deny-not-current` too.
+                  # A deny prints, and so does the operator's v2 allow (approvals PR 3, Table 3b: any deny currency).
+                  [[ -z "$apr_dd" || "$who" == allow:operator ]] || return 0
                   t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
-                'deny '*)
-                  t=$(jq -cn --arg m "denied by your coordinator: $reason" \
+                'deny '*|'deny:operator '*|'deny:overlord '*)
+                  # The deny names its ruler (T3-4): a v2 record's authority, else (v1) the coordinator.
+                  case "$who" in deny:operator) who="the operator" ;; deny:overlord) who="the Overlord" ;; *) who="your coordinator" ;; esac
+                  t=$(jq -cn --arg m "denied by $who: $reason" \
                     '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny", message: $m}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
               esac
@@ -6404,6 +6858,7 @@ _hook_approval_wait() {
   done
 }
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
+_hook_start_loads || true
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints except one PreCompact payload: the refusal arm's block decision (`_hook_compact_refuse`, dark until the route says refuse; Overlord C39),

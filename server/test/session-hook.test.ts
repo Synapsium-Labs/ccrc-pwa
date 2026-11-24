@@ -441,7 +441,9 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls -la' } });
     const s = readState();
     expect(s.state).toBe('waiting');
-    expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
+    // The route word (approvals plan Task 1.2): this fixture session carries no `.child` mark, so the prompt is a root
+    // session's, path 7.
+    expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la', route: 'not-a-child' } });
     expect(s.ask.questions).toBeUndefined();
   });
   // F1 (build4 dogfood, docs/superpowers/programs/build4.md): a virgin
@@ -5115,7 +5117,7 @@ describe('the compaction card — the two documents say what the code does (spec
       .filter((e) => e.isFile())
       .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
   };
-  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh'];   // the second and third libraries' comments too (D-7463)
+  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'lib/model-aliases.sh'];   // the second and third libraries' comments too (D-7463)
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
    *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but

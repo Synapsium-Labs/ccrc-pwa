@@ -118,6 +118,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
   **`delegation-adopt` is forbidden to every session too** (D-8112): it is the SERVER's act on the delegation lane's adoption switch only (`ccd delegation-adopt --state on|off`, the one writer of `$REG/delegation-adopt`), composed by `POST /api/coord/delegation-adopt`, the operator's session-gated door, behind the installed direct entry, past its refusal rule (D-8113), which refuses `on` without a signed-in operator — never a session's verb, coordinators and workers included, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
+  **`keep-awake` is forbidden to every session too** (Overlord W1 ccd arms): it is the SERVER's act on one session's two sleep markers (`ccd keep-awake --session <id> --state on|off`, the one writer of `$REG/<id>.no-hibernate` and `$REG/<id>.no-roll` in the tree), composed by the designation's doors, behind the installed direct entry. It removes only markers holding its own stamp, and it stops no session — never a session's verb, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`limit-watchdog` and `limit-wait` are no session's verbs either** (D-8123): `ccd limit-watchdog` is the fleet limit watchdog's one pass, run once a minute by `ccd-limit-watchdog.timer` (its own timer, never a supervisor tick), and `ccd limit-wait <id>` records the operator's "Wait until reset" choice behind the session-gated route beside the swap route. Neither is run by hand against the live host from a shell or a test, and neither ever sends a key: the rescue ends the session and resumes it on another account, and the rate-limit menu ("What do you want to do?") is never typed into, because an Enter or a digit there can pick "Switch to usage credits" (`ccd-limit-no-keys.test.ts` cuts the function bodies out of `ccd/ccd` and refuses a key sender in any of them).
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
@@ -149,12 +150,16 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
   `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
-  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714), or the Overlord's private store and every copy of it (`~/.ccrc/operator-model.db*`, `~/.ccrc/privacy-journal.log`, `~/.ccrc/privacy-journal.torn/`, `~/ccrc-backups/*/operator-model.db*`, `~/.ccrc/coordination-restore.stage/*/operator-model.db*`, `~/.ccrc/coordination-restore.foreign/*/operator-model.db*`); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
-  the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  the PWA's Accounts screen or their own shell. `~/.cc-sessions/.door/` is the Overlord's door process directory (its
+  tool-server config holds the launch nonce): no session reads or writes it. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
-  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. **Switching
+  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
+  layers refuse a write of the roster `~/.ccrc/accounts.json` or its mirror `~/.ccrc/accounts.sh` and a direct run of
+  `deploy/account-op.mjs` (matched by the script's name, in any path; reads of all three stay open), because they carry the
+  billing and continuity facts that relax a serviceability gate; it is an accident guard there too. **Switching
   accounts and the auto-swap are never refused** (the operator's ruling of 2026-10-19): `ccd swap-self`, `ccd prefer`,
   `ccd swap` in every form, `POST /api/sessions/:id/swap`, `ccrc account roster`, `printenv <NAME>` and the reads
   around a move stay open (`server/test/fixtures/account-deny/must-allow.json`).
@@ -231,13 +236,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
   under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
   real `timeout`-wrapped child process, so a badly loaded box can still starve it. The collector suites shell the real
-  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-resume`, `-move` and `-verb` (four walks
+  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-move` and `-verb` (four walks
   a case at step 5, thirteen in the verb's one-JSON-line case) and, in a few cases each, `ccd-collect-audit-rungs`,
   `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
   <n>ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
   finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
-  at load 11, so re-run the file alone. `ccd-collect-race-spawn-late` (path-identity W2) forces a recycled spawn
-  through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with `mv --no-copy` only; it stubs
+  at load 11, so re-run the file alone. `ccd-ws-collect-resume` walks for real in three cases only (the resume from
+  `moved`, the resume from an empty slot then a fresh pass, and the order resumed from `removed`: eight, six and four
+  walks) and stubs the walk in the rest. Each case runs under its own measured budget, 12 s per ccd run plus 10 s per
+  real walk, and fails when its measured run or walk count leaves its plan. So it no longer times out at the suite's
+  20 s beside a fork-heavy file (CI's shard 10 packs it beside `session-hook-append-race`). A red there is a real
+  break, or a plan to update after ccd's walk count changed. `ccd-collect-race-spawn-late` (path-identity W2)
+  forces a recycled spawn through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with
+  `mv --no-copy` only; it stubs
   the in-use probe, so it fails under load in one shape only: vitest's `Test timed out in <n>ms`. Any other red is a
   real break. Re-run the file alone first. `ccd-reclaim-tail-mounts` (path-identity W2) runs the real reclaim and
   expire verbs end to end on git fixtures (its expire cases with the expiry ladder's real `/proc` walk), at about 10 s
@@ -287,6 +298,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
   verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first. `ccd-collect-device-gone` (D-8948)
+  runs the real audit and verb end to end on Linux over a copied mount table and a planted block listing; its case C
+  audits a present leaf through the fresh rungs with the real in-use probe (`_ws_path_users`, a real `/proc` walk), one
+  of them with a real process standing in the leaf, at up to 120 s a case. Under load those cases fail as vitest's
+  `Test timed out in <n>ms`, or as an unmeasured `in-use` answer (`the walk of /proc did not finish within 10s`); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing
@@ -377,7 +393,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
   the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
   `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
-  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. None of `ccrc update`, `rollback` or `rollout` is a session's: the classifier's forbidden row, the hook's child deny and the child
+  deny file name all three heads, and `--below-cap` (the capability floor's override) refuses inside a Claude Code session
+  (`CLAUDECODE` set) — both accident guards, which `env -u`, a script file or another interpreter runs past. A box's tree is the symlink
   `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
   passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
   `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
@@ -427,7 +445,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
   timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
   modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
-  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  `pwa/src` file has one ring and one of contexts C1–C9, C11 or K, decided by the spec's "Deciding a file's ring and
   context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
@@ -445,6 +463,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
   push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
   merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
+- **Follow the review judge's standard** (the operator's rulings of 2026-11-17). Every PR here carries the `horkos`
+  check: Horkos is this repo's review judge, and its name is not secret. We follow its standard: a new spec or plan
+  takes its dated layout, directly in `docs/superpowers/specs/` or `docs/superpowers/plans/`, a task note goes under
+  `docs/superpowers/programs/<programme>/`, and a spec's images and mockup pages go under
+  `docs/design/<spec file name less its extension>/`, linked from the spec by relative path. A blocking reason it posts is fixed in that PR where the PR can fix
+  it. It is not a required check, so landing still gates on the required checks. The ledger guard's layout arm
+  (`.github/ci/ledger-guard.mjs`, D-8719) mirrors its layout rule in this repo, so CI catches a misplaced file first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
@@ -519,6 +544,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
   `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
   service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  The privacy journal, `~/.ccrc/privacy-journal.log` (the Overlord's private store, `operator-model.db`, which every backup
+  snapshots and every restore puts back with coord.db as one set), is never copied into a snapshot or restored with one
+  either: leave it in place, so a restored store never reissues a message id.
   Replay never fabricates a measured pin, landed state or current run association. Missing projections and
   contradictory surviving binding observations remain visible as unmeasured and hold their project's line;
   identity conflicts hold every affected project without deleting or rekeying either identity. Only a verified
@@ -541,7 +569,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
   files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
   `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
-  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a top-level session that runs it itself.
+  `keep-awake` acts on one session's sleep markers, not on coordination state, so the rule does not cover it either.
+- **A dispatched child never runs `ccd ws-add`, in any form** (D-8978). This is a child-only rule, not a SAFETY verb:
+  the operator, a top-level session and the server's dispatch (an agent exec through `CcdArgv`, which no hook sees)
+  still run it. A workspace a worker makes itself belongs to no run, so the console lists it under "Not in a
+  programme" and its coordinator never sees it; a child that needs another tree asks its coordinator. The child deny
+  file (`childDenyRules`, `shared/api.ts`) and the hook's `CCD_WSADD_RE` refuse it, as an accident guard (D-8979),
+  and they cannot tell a fixture `HOME` from the live one, so a child's `HOME=<fixture> ./ccd/ccd ws-add` is refused
+  too: a worker exercises `ws-add` through the test harness (`makeCcdHarness`), whose calls no hook sees.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
@@ -568,10 +604,16 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
   `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) and the coordinator call record's one route
   `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
-  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) all call
+  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) and the remaining-work door
+  `POST /api/coord/programmes/:slug/remaining` (Overlord W2; its handler is in `server/src/coord/programmeRemainingRoute.ts`,
+  a lane source of its own, checked the same way and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
-  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
+  caller holds the token and has no cookie). The Overlord's inbox doors, `GET /api/overlord/inbox`,
+  `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge` (Overlord W1 inbox; their handlers are in
+  `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
+  `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
+  confirm. The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
@@ -586,7 +628,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
   operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/plain-auto-memory` (Overlord W1a,
-  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/coordinator-advisor` (D-8967, the
+  operator's Settings row for the coordinator advisor and its daily cap, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
   on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
@@ -597,7 +640,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other seventeen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other eighteen are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -611,11 +654,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. So does `POST /api/sessions/:id/prompt` (Overlord W1 private store B): for the designated session it records the operator's message in the private store, then queues the nudge as system mail and writes the `@overlord` operator mark in one `coord.db` transaction, and types nothing; it consults no box token, is session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal as well. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
   the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
-  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), consult no box token
+  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
+  and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
+  and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
+  which work while sign-in is dark and record `flag-off` then), and `POST /api/programmes/:slug/goals/ratify` (Overlord W1
+  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
@@ -624,9 +671,43 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
-  and `POST /api/sessions/:id/timers/:timerId/cancel`, consult no box token either and are session-gated when armed; they register
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, the operator's daily backstop setting (Overlord W1, the renewal readings),
+  `GET` and `POST /api/continuity/renewal-backstop`, the operator's Renew now, `POST /api/sessions/:id/renew`, and the Setting
+  "when soft renewals happen", `GET`/`POST /api/coord/renewal-mode` (the renewal hand-offs), consult no box token either and are
+  session-gated when armed; they register
   from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
-  door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The operator's private-name list doors (Overlord W2, private names B),
+  `PUT /api/overlord/private-names` (the upload, which replaces the list, behind the account gate's step-up, so it refuses while
+  sign-in is dark) and `GET /api/overlord/private-names` (whether a list is stored, never what is in it), consult no box token
+  either and are session-gated when armed; they register from `server/src/operatorModel/nameListRoutes.ts`, which the census
+  reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The Overlord's designation doors
+  (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
+  its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
+  coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
+  session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
+  takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and
+  `POST /api/overlord/restore/confirm` (behind the step-up), consults no box token either and is session-gated when armed, and
+  refuses `auth-off` dark. All three sets of doors register from `server/src/coord/overlordRoutes.ts`
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The Models sheet's write door, `POST /api/models/:lane` (Revert of a class only, behind a fresh read that the fleet box ends a revert's hold by itself; the answer re-read, never inferred), consults no box token either and is session-gated when armed, its audit line naming the device; it registers from `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The approval census's read, `GET /api/approvals/census` (approvals PR 1: counts by path, state, class, thread, deny currency, programme and authority, M38 and the redacted rows, never an input), consults no box token either and is session-gated when armed; it registers from `server/src/coord/approvalCensusRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `APPROVAL_CENSUS_DOORS` in both directions. The door of the one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874), `GET /api/coord/delegation-backfill` (the dry run, which writes nothing) and `POST /api/coord/delegation-backfill` (the pass, which carries the dry run's count and refuses `count-changed` on any other, or its undo), consults no box token either and is session-gated when armed: the pass refuses `sign-in-unarmed` while sign-in is dark or the caller holds no session; it registers from `server/src/coord/delegationBackfillRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DELEGATION_BACKFILL_DOORS` in both directions. The replay quiz's
+rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
+run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
+either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is
+the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and it records a run as pending only. The
+weekly unattended run (`ccd-quiz-weekly.timer`, `deploy/history-quiz-unattended.mjs`) adds three box-token lanes beside it:
+`POST /api/continuity/quiz-runs/:id/confirm` (`ccrc quiz-record --confirm`: the server confirms the recorded run, through the one
+ruler, when the single-use key its unattended record was answered and the sha its report printed both match, and refuses, leaving
+it pending, otherwise), `POST /api/continuity/quiz-status` (each tick's word and trace, which the Shadow lanes card shows and which
+mails the coordinator once per week and stop word) and `POST /api/continuity/quiz-baseline/live` (the programme coordinator's Live
+on a W1a lane once a confirmed baseline exists, attributed and ownership-checked). The record, confirm and status rows of
+`ccrc-api` are the timer's, never a session's: the session hook's quiz arm refuses them, and `ccrc quiz-record` (its script too),
+on every session, an accident guard as the account arm is (a script file, `bash -c` with an assembled string or another
+interpreter runs past it); `quiz live` stays open. The operator's
+`POST /api/continuity/quiz-runs/:id/withdraw` (a wrong baseline undone, behind the account gate without a step-up, so it refuses
+while sign-in is dark) consults no box token and is session-gated when armed. All six register from
+`server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept
+`QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
@@ -669,7 +750,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its twenty clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twenty-two clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by

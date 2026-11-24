@@ -1,7 +1,8 @@
 // L1, context C3 (Session Conversation): `compactThresholdFor`, the auto-compact point of a long-lived role, from its
 // launch profile and its measured window (Overlord spec §3.3.4, C39; the plan is
 // `docs/superpowers/plans/2026-11-10-overlord/w1a-launch-profiles.md`, Task 4). Pure: the profile and the window arrive
-// as arguments.
+// as arguments. It also holds `launchRowOf` and `launchDigestOf` (Overlord W1 sandbox, plan
+// `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox.md`, Task 2): the row ccd reads and its digest, below.
 //
 // C39: compaction is lowered so that renewal fires first. The hard cap is `hardCapTokens(windowTokens)` (Table 3.3.11b,
 // the renewal deciders' one definition); the compact point sits `aboveHardCapPts` points of the window above it,
@@ -15,7 +16,10 @@
 // Claude Code before the compact point (for the shipped 10-point profile, `LONG_LIVED_COMPACTION`, outside 85,000 to
 // 6,900,000 tokens; a profile with another step has its own band) answers `null`. For a role that has a compaction column,
 // the lane then writes no compaction field and leaves the route's earlier ones (review 2031 F4).
-import type { LaunchProfile } from '../../../shared/fleetRoles.js';
+import { createHash } from 'node:crypto';
+import { FLEET_ROLES, type FleetRole, type LaunchProfile } from '../../../shared/fleetRoles.js';
+import { HOOK_EVENTS } from '../../../shared/hook-events.js';
+import { compactInstructionsFor } from './compaction.js';
 import { hardCapTokens } from './renewalDue.js';
 
 /** The compact point is never later than this percent of the window. */
@@ -47,4 +51,64 @@ export function compactThresholdFor(profile: LaunchProfile, windowTokens: number
   // is written (review 2024 F4).
   if (Math.min(tokens, windowTokens) - AUTO_COMPACT_BUFFER_TOKENS < point) return null;
   return { pct, windowTokens: tokens };
+}
+
+// ── The row ccd reads (Overlord W1 sandbox, Task 2; spec §3.6 H1, index question 12) ──────────────────────────────────
+//
+// `launchRowOf` is the ONE projection of a role's launch profile into the row ccd reads from `ccd/lib/launch-profiles.json`:
+// the JSON file's test, the digest, the route field `profiledigest` and the sandbox check all call it (Review Focus 4). A row
+// with no surface keeps W1a's five keys and `longLived`; a surfaced row adds `flags`, `surfaceSettings`, `stagedSkills`,
+// `memory` and `remoteControl`, which ccd renders whole or not at all while the route carries `profiledigest`.
+// `longLived` is `FLEET_ROLES`'s column of that name, the one definition ccd reads it from (Overlord W1 ccd arms, Task 4,
+// slug long-lived-is-projected): `_role_long_lived` asks it for the hold-down and the `/model` skip, and no role-name list
+// in ccd restates it. Adding it changed every row's digest, the same on both sides.
+
+/** ccrc's own hook command, as `ccd/install-session-hooks.sh` registers it (`HOOK_CMD`). Pinned setting sources drop the
+ *  account's settings, so the surfaced profile registers the hook itself (proposal 4); `launch-surface-installer.test.ts`
+ *  holds the two equal by running the installer. */
+export const LAUNCH_HOOK_COMMAND = 'bash "$HOME/.cc-sessions/session-hook.sh"';
+/** The installer's `HOOK_TIMEOUT_S`, on every event but `SessionEnd`. */
+export const LAUNCH_HOOK_TIMEOUT_S = 600;
+/** ccrc's status line, as the installer registers it (`STATUSLINE_CMD`), so the context sidecar keeps its writer (slug
+ *  `statusline-registered-by-the-profile`). */
+export const LAUNCH_STATUSLINE_COMMAND = 'bash "$HOME/.claude/statusline-command.sh"';
+
+/** A JSON value with every object's keys sorted, recursively: `JSON.stringify` of it is `jq -cS`'s spelling of the same
+ *  value for the strings and numbers the row holds (printable ASCII, integers; the JSON file's test holds both). */
+function sortedJson(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortedJson);
+  if (v === null || typeof v !== 'object') return v;
+  return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedJson((v as Record<string, unknown>)[k])]));
+}
+
+/** ccrc's hook on every event the hook handles, with the installer's timeout and matcher rules, and its status line. */
+function surfaceHooks(): Record<string, unknown> {
+  return Object.fromEntries(HOOK_EVENTS.map((ev) => {
+    const hook = { type: 'command', command: LAUNCH_HOOK_COMMAND, ...(ev === 'SessionEnd' ? {} : { timeout: LAUNCH_HOOK_TIMEOUT_S }) };
+    return [ev, [ev === 'PreToolUse' ? { matcher: '*', hooks: [hook] } : { hooks: [hook] }]];
+  }));
+}
+
+/** The row ccd reads for `role`, keys sorted. */
+export function launchRowOf(role: FleetRole): Record<string, unknown> {
+  const p = FLEET_ROLES[role].launchProfile;
+  const base = { env: p.env, settings: p.settings, autoMemory: p.autoMemory, compactionSettings: p.compaction?.settings ?? {},
+    compactText: compactInstructionsFor(role), longLived: FLEET_ROLES[role].longLived };
+  const s = p.surface;
+  if (s === null) return sortedJson(base) as Record<string, unknown>;
+  return sortedJson({
+    ...base,
+    flags: ['--setting-sources', s.settingSources.join(','), '--tools', s.tools.join(','), '--strict-mcp-config',
+      '--agents', JSON.stringify(sortedJson(s.readerTypes))],
+    surfaceSettings: { permissions: { deny: s.deny }, hooks: surfaceHooks(),
+      statusLine: { type: 'command', command: LAUNCH_STATUSLINE_COMMAND } },
+    stagedSkills: s.stagedSkills,
+    memory: s.memory,
+    remoteControl: 'off',
+  }) as Record<string, unknown>;
+}
+
+/** The sha256 of the bytes `jq -cS ".[\"$role\"]"` prints for the role's row, its trailing newline included. */
+export function launchDigestOf(role: FleetRole): string {
+  return createHash('sha256').update(`${JSON.stringify(launchRowOf(role))}\n`, 'utf8').digest('hex');
 }

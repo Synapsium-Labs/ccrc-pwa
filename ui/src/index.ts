@@ -54,6 +54,8 @@ export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
 export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
+// A session's role as a picture with its accessible name, where the word stood (desktop polish C50, D-8817).
+export { RoleBadge, ROLE_BADGE, type RoleBadgeProps } from './primitives/role-badge';
 export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // A link inside a line of text, opening another site (D-5550).
 export { TextLink, TEXT_LINK, type TextLinkProps } from './primitives/text-link';
@@ -93,7 +95,9 @@ export { TaskCard } from './components/task-card';
 export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
 export {
   ToolCard,
+  NO_RESULT_WORD,
   askCardLines,
+  askQuestions,
   askState,
   ASK_WORD,
   ASK_GLYPH,
@@ -102,7 +106,10 @@ export {
   type ToolResultEvent,
 } from './components/tool-card';
 export { TaskStrip, orderTasks, summarize } from './components/task-strip';
-export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHeadline } from './components/workflow-strip';
+export {
+  HelpersList, HelpersPanel, HelpersStrip, activityWords, finishedFacts, formatElapsed, formatTokens, mainFacts,
+  type HelperItem, type HelperReportView, type HelpersView,
+} from './components/workflow-strip';
 // `BuildLine` knows that a box whose version it cannot vouch for is the thing
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';

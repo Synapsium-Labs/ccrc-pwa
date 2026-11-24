@@ -136,6 +136,9 @@ export const OWNED = [
   ...CHARACTER_CLASSES,
   // The wordmark's typed entrance (`wordmark.css`): the word's width animation and the underscore's blink.
   'wordmark-type', 'wordmark-cursor',
+  // The Helpers section's line 2 (WorkflowStrip's STATE_GROUP): a fact, and the state with its times, as one
+  // group that breaks only between its words, selected by `workflow-strip.css`.
+  'helper-fact',
 ];
 
 /** Tokens the derivation finds that are NOT vocabulary, each with the reason.

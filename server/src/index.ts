@@ -13,6 +13,10 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { codeRootOf, measureServerFacts, realPeerSeams } from './isolationFacts.js';
+import { wireIsolation } from './isolationLog.js';
+import { bootPushOutbox } from './pushSender.js';
+import { responseStampNow } from './responses/stamp.js';
 import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { recordCcdVerbs } from './fleetstate.js';
@@ -22,13 +26,20 @@ import { NotifyLog } from './notifylog.js';
 import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
+import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
+import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { OverlordRestoreState, preWitnessFacts } from './coord/overlordRestoreState.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
+import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { MAIL_HOLD_LANE_ROW } from './coord/mailHoldLane.js';
 import { createLandingJournal } from './coord/landingJournal.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -37,21 +48,38 @@ import { operatorSecretRows, withOperatorSecretRows } from './coord/ledgersSecre
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
+import { coordinatorPresenceIn } from '../../shared/ledgers.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
+import { COORDINATOR_SKILL_REVISION } from './coord/skillRollout.js';
+import { quizLanePortOf } from './continuity/quizStore.js';
+import { QUIZ_RECORD_READY } from './continuity/quiz.js';
+import { canonicalJson } from '../../shared/api.js';
+import { DECISION_QUESTIONS, type DecisionHostKind } from '../../shared/decisionModel.js';
+import { decisionEgressOf, isPrivateAddress } from './coord/decisionModel.js';
+import { createHttpDecisionModel, readDecisionModelKey } from './coord/decisionModelHttp.js';
+import { decisionArmingStore, decisionAskStore, releaseDecisionReservations } from './coord/decisionModelStore.js';
+import type { DecisionEgress, DecisionFetch, DecisionStateReads, LabelledCases } from './coord/decisionModelPort.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
+import { planSyncFor } from './linear/planSync.js';
+import { driftPassFor } from './linear/driftPass.js';
+import { linearMigrationFor } from './linear/migration.js';
+import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
-import { testboxCaptureTransport } from './buildCaptureLane.js';
+import { testboxCaptureTransport } from './testboxCapture.js';
+import { testboxBuildCopy } from './testboxBuildCopy.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const cfg = loadConfig();
 
@@ -103,6 +131,10 @@ if (restoreRefusal !== null) {
 // ccrc.service` (added this build) is what turns it into a failed deploy with
 // the journal tail attached, rather than a green deploy in front of a
 // three-second crash loop.
+// The process's ONE set of time ports (Overlord spec §11.5): both modes and every consumer get the same object, through
+// `Deps.time`. Nothing else builds the system adapters (`single-definition/time-ports.test.ts`). Built before the store,
+// whose boot pass below reads its clock; it takes no argument and reads nothing the store builds.
+const time = systemTimePorts();
 const coordDb = openCoordDb(cfg.coordDbPath);
 // Landing order wave 5f (shared contract §6): the store owns ONE authority journal, `landing.log` inside `cfg.ccrcDir`
 // (made here, because the adapter never creates a directory), and its landing entrances start fenced. The replay below
@@ -119,6 +151,39 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
+// its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
+// the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
+// I8, once, with both stores open and before the watcher: re-derive what a crash left (counts only, never a text).
+{ const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord, citations: w1Citations, now: () => time.clock.wall() });
+  console.warn(`ccrc-server: ${bootPassSummary(bp.counts)}`); for (const line of bp.lines) console.warn(`ccrc-server: ${line}`); }
+// The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
+// connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
+// belongs to a process that died.
+bootPushOutbox(coord, time.clock);
+// The response record's boot (Overlord W1, question 17): one `response_boots` row, before anything can push, so every
+// response row this process writes carries this boot's epoch (or `unmeasured` when the row could not be written).
+const responseBoot = coord.recordResponseBoot(build?.sha ?? null, time.clock.wall());
+if (!responseBoot.ok) console.warn(`ccrc-server: response record: ${responseBoot.detail}; this process's response rows are stamped unmeasured`);
+// The Overlord authority journal (Overlord W1, `coord/overlordAuthorityJournal.ts`, spec §7.6): built once, its guard
+// passed to the writer as its port, and its boot coherence (Table 7.6a, after the torn-tail heal) run before the fleet link,
+// the HTTP server, the watchers and every timer. A detected rollback fences the doors, never the boot: the server starts
+// whatever the verdict, and the boot step logs it.
+const overlordAuthorityPort: AuthorityBootPort = {
+  healTornTail: () => overlordAuthority.healTornTail(coordDb), measure: () => overlordAuthority.measure(coordDb),
+};
+const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
+const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
+  overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
+// Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`): one
+// instance over the same `coord.db`, journal and guard. Its witness facts are `preWitnessFacts` until the witness exchange
+// (authority journal B) lands; whichever of the two lands second puts B's exchange here.
+const overlordRestore = new OverlordRestoreState({
+  db: coordDb, journal: overlordAuthority, guard: overlordAuthorityGuard, witness: preWitnessFacts(overlordAuthority),
+});
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -170,10 +235,6 @@ const collectLane: CollectLaneDeps = {
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
 // call only against itself.
 const queue = new KeyedQueue();
-// The process's ONE set of time ports (Overlord spec §11.5), built here beside the queue for the same reason: both
-// modes and every consumer get the same object, through `Deps.time`. Nothing else builds the system adapters
-// (`single-definition/time-ports.test.ts`).
-const time = systemTimePorts();
 
 // The one agent connection, hoisted out of the remote arm so the `ready`
 // hook below can reach it once the watcher exists. Null in local mode.
@@ -185,7 +246,7 @@ if (cfg.fleetMode === 'remote') {
     console.error('ccrc-server: CCRC_FLEET=remote requires CCRC_AGENT_URL and CCRC_AGENT_TOKEN');
     process.exit(1);
   }
-  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms) });
+  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms), peerSeams: realPeerSeams() });
   fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
@@ -274,6 +335,12 @@ if (cfg.fleetMode === 'remote') {
   };
 }
 
+// The isolation word (Overlord W1, §7.4, H28): the server's own facts measured once, here, over every path it holds; the
+// reader reads them with the live fleet state on each call. The log holder logs the reading at boot and after each change
+// of the link, by word and cause only.
+deps.isolation = wireIsolation(cfg.fleetMode, measureServerFacts(cfg, codeRootOf(fileURLToPath(import.meta.url))),
+  cfg.agentToken, cfg.fleetMode === 'remote' ? fleetClient : null, (line) => console.warn(line));
+
 // Loaded before anything that could touch it (the watcher's first tick can
 // fire a push the instant it starts) — a load racing a record would let a
 // freshly-minted epoch silently supersede the one events were just recorded
@@ -282,6 +349,8 @@ await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
+// Mid-turn mail (plan Task 4.4): a landed ack kicks the mailhold projection, so a released hold clears at the next tick.
+deps.onMailAcked = () => watcher.kick(MAIL_HOLD_LANE_ROW);
 
 // Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
 // handshake is when an agent that just restarted — a self-update among the
@@ -327,15 +396,88 @@ deps.accountAudit = accountAudit;
 const testboxAudit = new TestboxAudit(coord.db);
 deps.testboxAudit = testboxAudit;
 deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
-// D-8289: the capture queue's transport, over the test box lane's connection (`watcher.testboxLane`).
-deps.buildCapture = testboxCaptureTransport(() => watcher.testboxLane.block());
+// D-8289: the capture queue's transport, over the fleet connection's `testbox-capture` op (build capture runner spec §2.5).
+deps.buildCapture = testboxCaptureTransport(() => deps.io);
+// Spec §2.2: the copy the lane asks for after a `build-absent`, over the same one admin lane arm.
+deps.buildCopy = testboxBuildCopy(() => deps.testboxAdmin);
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
 deps.linearJournal = linearJournal;
 // The plan tables through their port (D-8181), built once beside the journal: the plan routes' only door to them.
 deps.plan = planStorePort(coord.db);
+// The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
+deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
+// The forecast lane's port (Overlord W2 forecasts A): the store's own delegates, over the same coord.db.
+deps.forecasts = coord;
+// The decision model's anchor-set lane and its ports (Overlord W2, plan `w2-decision-model.md` Task 9), over the same coord.db and
+// authority journal. Every row ships `off`, so the lane asks nothing until the operator switches one on.
+/** The hosted egress screen (question 9; review 2418 F2): the private-name list through its one reader. */
+const egressScreen: DecisionEgress['screen'] = (texts) => decisionEgressOf(texts, readPrivateNameList(operatorModel.store, cfg.ccrcDir));
+/** Every address a host name resolves to, built once (review 2418 F9): the key door and the adapter use it. */
+const decisionResolve = async (name: string): Promise<readonly string[]> => (await lookup(name, { all: true })).map((a) => a.address);
+/** The labelled cases (question 8): none, until the label queue fills the port, so no line is admitted and every row stays in shadow. */
+const noLabelsYet: LabelledCases = { casesFor: () => [] };
+/** State reads over inline fields and `programme` refs (a slug is its own text) only: a `message`, `goals-version` or `mail` ref
+ *  would need a reader that arrives with the label queue, the first producer of labelled cases, so it reads `unresolvable`. */
+const inlineStateReads: DecisionStateReads = {
+  fieldsOf: (row, refs, inline) => {
+    const kindOf = (name: string): string | undefined => DECISION_QUESTIONS[row].fields.find((f) => f.name === name)?.refKind;
+    if (Object.keys(refs).some((name) => kindOf(name) !== 'programme')) return 'unresolvable';
+    return { ...refs, ...inline };
+  },
+};
+const decisionFetch: DecisionFetch = async (url, init) => { const r = await fetch(url, init); return { status: r.status, body: r.body as AsyncIterable<Uint8Array> | null }; };
+const decisionArming = decisionArmingStore(coordDb, overlordAuthority);
+const decisionHostNow = (): { kind: DecisionHostKind; endpoint: string; origin: string; modelId: string } | null => {
+  const h = decisionArming.hostRead();
+  return h.kind === 'host' ? { kind: h.host.kind, endpoint: h.host.endpoint, origin: h.host.origin, modelId: h.host.modelId } : null;
+};
+deps.decisions = {
+  store: decisionArming, labels: noLabelsYet, states: inlineStateReads, resolve: decisionResolve,
+  ask: {
+    store: decisionAskStore(coordDb), time,
+    arming: (row) => decisionArming.rowSide(row),
+    currentLine: (row, h) => {
+      const l = decisionArming.currentLine(row, { hostKind: h.kind, origin: h.origin, modelId: h.modelId, revision: DECISION_QUESTIONS[row].revision });
+      return l === null ? null : { id: l.id, line: l.line };
+    },
+    host: decisionHostNow,
+    keySet: (origin) => readDecisionModelKey(cfg.ccrcDir, origin).kind === 'value',
+    modelFor: (h) => createHttpDecisionModel(h, (origin) => readDecisionModelKey(cfg.ccrcDir, origin), {
+      fetch: decisionFetch, resolve: decisionResolve, time, isPrivateAddress,
+    }),
+    egress: egressScreen,
+    stateHash: (state) => createHash('sha256').update(canonicalJson(state) ?? JSON.stringify(state)).digest('hex'),
+  },
+};
+// A crash's unsettled reservations are released at boot, counted as maintenance (spend is over-counted, never under-counted).
+try {
+  const released = releaseDecisionReservations(coordDb);
+  if (released > 0) console.warn(`ccrc-server: decision model: released ${released} reserved call(s) a crash left unsettled`);
+} catch (err) {
+  console.warn(`ccrc-server: decision model: the boot release of stale reservations failed: ${err instanceof Error ? err.message : String(err)}`);
+}
 deps.linearPolicy = allowAll;
+deps.skillRolloutRevision = COORDINATOR_SKILL_REVISION;   // D-8126 (A9-3): the watcher's `skillRollout` lane runs only where this is set
+// The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
+deps.planSync = planSyncFor({
+  coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
+  privateTrackerKeys: cfg.privateTrackerKeys, readLinearStore: () => readLinearStore(cfg.ccrcDir),
+  currentFleet: () => watcher.currentFleet(), presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
+});
+// The Linear drift pass (D-8183): reads a managed team's changes and has the sync put the plan's values back; ticked by the watcher's `linearDrift` lane.
+deps.driftPass = driftPassFor({
+  coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
+  readLinearStore: () => readLinearStore(cfg.ccrcDir), currentFleet: () => watcher.currentFleet(), viaFleet: (ids) => linearJournal.viaFleet(ids),
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), directory: linearRefresher.directory,
+});
+// The per-team migration (D-8186): ticked by the watcher's `linearMigration` lane; `plan map-propose` and the hierarchy doors reach it.
+deps.linearMigration = linearMigrationFor({
+  coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
+  readLinearStore: () => readLinearStore(cfg.ccrcDir), directory: linearRefresher.directory,
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), privateTrackerKeys: cfg.privateTrackerKeys,
+});
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
@@ -386,7 +528,9 @@ const masker = new SecretMasker({
   },
 });
 deps.masker = masker;
+deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 push?.setMasker(masker);
+deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
 // ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
 // lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).
@@ -395,6 +539,9 @@ testboxAudit.sweep(Date.now());
 linearJournal.sweep(Date.now());
 setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
+deps.overlordAuthority = overlordAuthority;
+deps.overlordAuthorityGuard = overlordAuthorityGuard;
+deps.overlordRestore = overlordRestore;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

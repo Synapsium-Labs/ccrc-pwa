@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-two clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -146,7 +146,7 @@ const CONTRACT = [
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124). It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing passes `--admin` outside that door or updates the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/programs/<programme>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124). It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing passes `--admin` outside that door or updates the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -160,10 +160,16 @@ const CONTRACT = [
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
   // double quotes are escaped here and typed straight in SKILL.md.
   "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
+  // Coordinator autonomy default, clause 21 (D-8126; the operator approved these words 2026-11-09). Its one apostrophe is
+  // straight, in `programme's`; it names the SAFETY rule class, never a destructive verb, and the client verbs, never a route.
+  "This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.",
+  // Linear hierarchy wave 6 (D-8185, plan Task 6.1 as amended; D-8739's follow-up): the plan clause, with the console rule
+  // review 2580 ruled into it. Its one apostrophe is straight, in `programme's`; no quote.
+  "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty clauses verbatim', () => {
+  it('carries all twenty-two clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -233,7 +239,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -258,7 +264,7 @@ describe('the coordinator skill: its contract', () => {
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
     // 5 discussion) from counting as a hit.
-    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+    const stated = [...skill.matchAll(/\b([a-z]+(?:-[a-z]+)?) (?:clauses|lines|sentences)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
       .toBeGreaterThanOrEqual(1);
@@ -274,7 +280,7 @@ describe('the coordinator skill: its contract', () => {
       const text = readFileSync(path.join(root, rel), 'utf8');
       let hits = 0;
       for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
-        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        const m = /\b([a-z]+(?:-[a-z]+)?)\s+clauses\b/.exec(text.slice(i, i + 160));
         expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
         expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
           .toBe(COUNT_WORD);
@@ -648,7 +654,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(20);
+    expect(CONTRACT).toHaveLength(22);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
@@ -850,6 +856,10 @@ describe('the coordinator skill: linkage', () => {
       // sessions that are not coordinators, which no coordinator has a reason to read or set.
       'GET /api/coord/plain-auto-memory',
       'POST /api/coord/plain-auto-memory',
+      // THE COORDINATOR ADVISOR (D-8967) — the operator-dial shape: the operator's Settings row over coordinators' own
+      // launches and their daily cap, which a coordinator must not read as an invitation to set for itself.
+      'GET /api/coord/coordinator-advisor',
+      'POST /api/coord/coordinator-advisor',
       // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
       // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
       'GET /api/coord/review-cap/:id',
@@ -2048,6 +2058,11 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // never fires for it; the convention, this row and the door's sign-in rule are what hold. The verb and the route alike.
     expect(`${allSkillText}\nPOST /api/coord/delegation-adopt\n`, 'CONTROL: a planted mention is seen').toContain('delegation-adopt');
     expect(allSkillText).not.toContain('delegation-adopt');
+  });
+
+  it('never names keep-awake — the sleep markers\' writer is the server\'s, and a coordinator is a top-level session the forbidden-verb guard does not reach (Overlord W1 ccd arms)', () => {
+    expect(`${allSkillText}\nccd keep-awake\n`, 'CONTROL: a planted mention is seen').toContain('keep-awake');
+    expect(allSkillText).not.toContain('keep-awake');
   });
 
   it('never names the Shadow lanes door — a door that would tell a coordinator how to arm a shadow lane in the operator\'s name (D-8274)', () => {
@@ -4596,11 +4611,27 @@ describe('the plan reference (D-8181)', () => {
     expect(plan(), 'plan.md names a raw /api/ path').not.toMatch(/\/api\//);
   });
 
-  it('names the five run refusals the plan adds, each with its recovery', () => {
-    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']) {
+  it('names the six run refusals the plan adds, each with its recovery', () => {
+    // `ticket-required` is programme work map WM6's (D-8780), carried here from #3088 (review 2885).
+    for (const code of ['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed', 'ticket-required']) {
       expect(plan(), `plan.md does not name ${code}`).toContain(`\`${code}\``);
       expect(refs('api.md'), `api.md does not name ${code}`).toContain(`\`${code}\``);
     }
+  });
+});
+
+// Linear hierarchy wave 6 (D-8185, plan Task 6.1; the follow-up of D-8739): clause 22, the plan clause. What the plan
+// reference, the open step and the ledger template say is pinned in `coordinator-plan-reference.test.ts`.
+describe('the coordinator skill: clause 22, the plan (D-8185)', () => {
+  const CLAUSE_22 = CONTRACT[21]!;
+
+  it('is the twenty-second clause, SKILL.md numbers it so, and every verb it names has a client row', () => {
+    expect(skill).toContain(`\n22. ${CLAUSE_22}\n`);
+    const keys = clientRoutes().map((r) => r.key);
+    for (const verb of ['plan.put', 'plan.met', 'plan.close', 'linear.create']) expect(keys, verb).toContain(verb);
+    for (const word of ['drift', 'inbound', 'initiatives', 'owner', 'map', 'report']) expect(CLAUSE_22).toContain(word);
+    expect(CLAUSE_22).toContain('in the console');
+    expect(CLAUSE_22).toContain('never asks for those approvals in its turn text');
   });
 });
 

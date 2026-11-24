@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly nineteen import lines: sixteen types, and three values from import-free L0 siblings (D-3021)', () => {
+  it('shared/api.ts has exactly twenty-four import lines: twenty-one types, and three values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -175,18 +175,34 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // The list of what ccrc types (Overlord W1, the vocabulary piece) a nineteenth, `IDLE_COMPACT_NUDGE_PROMPT` and
     // `RESUME_PROMPT_PREFIX`, values from the import-free injected-prompts.mjs, which `shared/api.ts` re-exports so no
     // importer changes (`single-definition/injected-prompts.test.ts` and `time-ports.test.ts` hold that it reads nothing).
+    // The account facts (Overlord W1 serviceability A) a twentieth, `RosterFactsWire`, a type from the import-free
+    // rosterFacts.ts, which `RosterWire` extends as it extends `RosterKindWire`.
+    // The park (approvals PR 3) a twenty-first, its word and the v2 record's authority and family, types from the
+    // import-free approval-park.ts (it imports nothing), beside the record they type.
+    // The team-link vocabulary (linear-hierarchy wave 8, D-8635) a twenty-second, a type-only import from linking.ts, which
+    // imports from api.ts: erased at compile, so no cycle forms.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
       "import type { Hue, RosterKindWire } from './roster.js';",
+      "import type { RosterFactsWire } from './rosterFacts.js';",
       "import type { AccountPoolWire } from './poolrule.js';",
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
       "import type { ReadFailure } from './agent-protocol.js';",
       "import type { PerfHealth } from './perf.js';",
-      "import type { WorkflowView } from './workflows.js';",
+      "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+      // The coordinator advisor (D-8967), a twenty-first type: `shared/coordinatorAdvisor.ts` holds the vocabulary because
+      // this file is growth-capped. Type-only, so erased at compile; its one import is `isRegistryId` from this file, so
+      // nothing cycles at run time.
+      "import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';",
+      // The cap in force (D-8920), a twentieth type: `shared/runCap.ts` holds the vocabulary because this file is
+      // growth-capped. Type-only, so erased at compile, and its own imports are L0 (a type from this file, and
+      // `pressure.ts`'s list of reasons).
+      "import type { CoordCapNow } from './runCap.js';",
+      "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",
       "import type { LandingWrite } from './landingLine.js';",
       "import { hookEventIs, type HookEvent } from './hook-events.js';",
       "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
@@ -198,6 +214,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { HostPressureHealth } from './pressure.js';",
       "import type { BackupHealth } from './backup.js';",
       "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
+      "import type { TeamCandidateWire, TeamLinkWire } from './linking.js';",
     ]);
   });
 });

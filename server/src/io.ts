@@ -1,16 +1,19 @@
 import { constants as fsConstants, createReadStream, watch, type FSWatcher } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ReadFailure, TestboxAdminAsked, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
+import type { ModelsAction, ModelsAsked, ReadFailure, TestboxAdminAsked, TestboxCaptureReply, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
-import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
+import { measurePressure, measureSessions } from '../../agent/src/pressure.js';
 import { measureBackup } from '../../agent/src/backup.js';
+import { readIdentOf } from '../../agent/src/fileops.js';
 import type { BackupRead } from '../../shared/backup.js';
-import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
-import type { HostPsi } from '../../shared/pressure.js';
+import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
+import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
+import type { ModelClass } from '../../shared/models.js';
+import { readHostMachine, type HostMachineReading, type HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
@@ -127,9 +130,17 @@ export type MeasuredDirectoryRead =
  *  complete lines — and an answer that cannot prove those bytes (an older
  *  peer's decoded `data`, malformed or non-canonical base64, a length that
  *  disagrees with `size`, a size that has regressed below `offset`) is
- *  `unreadable`, never reconstructed. */
+ *  `unreadable`, never reconstructed.
+ *
+ *  `ident`, ADDITIVE and server-internal: an opaque token naming the regular
+ *  file whose bytes these are, measured on the handle that read them
+ *  (`agent/src/fileops.ts#readIdentOf`, on both adapters), for equality
+ *  between reads through one adapter only; never sent to a browser. Only an
+ *  answer that carries bytes may have one (never EOF). Absent is UNMEASURED
+ *  (EOF, an older agent, a failed fstat, no usable birth time, a malformed
+ *  token), never "the same file". */
 export type MeasuredByteRangeRead =
-  | { ok: true; bytes: Uint8Array; size: number }
+  | { ok: true; bytes: Uint8Array; size: number; ident?: string }
   | { ok: false; reason: ReadFailure };
 
 /**
@@ -279,6 +290,14 @@ export interface FleetIO {
   /** The `testbox-tools-sync` op, the `testbox` op's one write: the box is sent the fleet host's own release and
    *  versions. Takes nothing. Failure contract: as `testboxMeasured`. */
   testboxToolsSync(): Promise<TestboxSyncAsked>;
+  /** The `testbox-capture` op (build capture runner spec 2026-11-22 §2.5): one capture job for `build`, a Claude Code
+   *  version the caller has already read, sent to the test box, answered with the op's outcome. The adapter does not read
+   *  the outcome: `server/src/testboxCapture.ts` maps it onto the capture lane's port.
+   *  Failure contract: never rejects. Three answers say no job went out: `no-op` is an agent too old to list the op (never
+   *  sent it), `not-started` a frame that never left (the link was down), and `busy` the agent's one capture gate held by
+   *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
+   *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. */
+  testboxCapture(build: string): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
    *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
@@ -286,6 +305,13 @@ export interface FleetIO {
    *  (the outcome is UNKNOWN: the caller says so and never retries). A local fleet's adapter answers `unsupported`: the
    *  server's local arm (`testboxAdmin.ts`) spawns the verb itself there and never asks this member. */
   testboxAdmin(sub: TestboxAdminSub, fields: TestboxAdminFields): Promise<TestboxAdminAsked>;
+  /** The `models` op (auto-advance spec 2026-10-13 §2.7; plan W4 as re-planned, D-8687, D-8693):
+   *  runs `ccrc models <lane> show`, or `hold|release|revert <class>`, on ITS box, and answers how it ended.
+   *  Failure contract: never rejects. The builder's refusal is `refused` (nothing ran or was sent); an agent that does not
+   *  list the op, an older agent answering `bad-request`, and the bare `localIO` (no configured home) are `unsupported`;
+   *  a frame that never left, or a launcher that could not start, is `not-started`; a held agent gate is `busy`; a fault
+   *  after the send, the deadline, or a reply off `readModelsOpAnswer`'s grammar is `lost` (UNKNOWN). */
+  models(lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked>;
 }
 
 /** The `testbox` op as a seam answers it, or why there is none (D-7411). */
@@ -298,15 +324,25 @@ export type TestboxSyncAsked =
   | { ok: true; reply: TestboxToolsSyncReply }
   | { ok: false; reason: 'no-op' | 'unanswered' };
 
+/** The `testbox-capture` op as a seam answers it, or why there is none (build capture runner spec §2.5). */
+export type CaptureAsked =
+  | { readonly ok: true; readonly reply: TestboxCaptureReply }
+  | { readonly ok: false; readonly reason: 'no-op' | 'not-started' | 'busy' | 'unanswered' };
+
 /** The `backup` read as a seam answers it (D-7858), or why there is none. */
 export type MeasuredBackup =
   | { ok: true; read: BackupRead }
   | { ok: false; reason: 'unsupported' | 'unanswered' };
 
-/** The `pressure` reading as a seam answers it (#1170), or why there is none. */
+/** The `pressure` reading as a seam answers it (#1170), or why there is none. `machine` is the host's size
+ *  (D-8920) as its one reader answered it: measured, or unmeasured WITH ITS REASON, which an adapter
+ *  keeps (no ready frame yet, an agent with no size to give, a read that failed). It rides BOTH members, because a size
+ *  does not depend on the PSI: a box with no PSI (a local server on a Mac, an old kernel) still has memory and cores.
+ *  ABSENT is one condition only, an answerer that knows no size (a double written before the field): `agent-older` to
+ *  the lane, its one reader (`pressure.ts#machineAfter`). */
 export type MeasuredPressure =
-  | { ok: true; psi: HostPsi; headroomBytes?: number | null }
-  | { ok: false; reason: 'unsupported' | 'unanswered' };
+  | { ok: true; psi: HostPsi; headroomBytes?: number | null; machine?: HostMachineReading }
+  | { ok: false; reason: 'unsupported' | 'unanswered'; machine?: HostMachineReading };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -391,13 +427,38 @@ export const localIO: FleetIO = {
     if (offset > size) return { ok: false, reason: 'unreadable' };
     const owed = Math.min(maxBytes, size - offset);
     if (owed === 0) return { ok: true, bytes: new Uint8Array(0), size };   // EOF: a measurement, not a miss
+    // Bytes are owed: ONE handle for the size, the identity and the bytes, as the agent reads. The path stat above only
+    // decided that a read is owed; nothing it measured stamps these bytes. O_NONBLOCK, so a FIFO the stat raced cannot
+    // hang the open, and a regular file on the handle is required before a byte is read (the path stat's directory or
+    // device would have failed at its read, or been read, before).
+    let fh: FileHandle;
+    try { fh = await open(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK); } catch (err) { return { ok: false, reason: failureFor(err) }; }
     try {
-      const bytes = await readRange(p, offset, offset + owed);
-      // Fewer bytes than the size promised means the file shrank between the
-      // stat and the read: not a measurement of this range.
-      if (bytes.length !== owed) return { ok: false, reason: 'unreadable' };
-      return { ok: true, bytes: new Uint8Array(bytes), size };   // a copy: a plain Uint8Array, not a pooled Buffer view
-    } catch (err) { return { ok: false, reason: failureFor(err) }; }
+      const st = await fh.stat({ bigint: true });
+      if (!st.isFile()) return { ok: false, reason: 'unreadable' };
+      const now = Number(st.size);
+      // Shrank since the path stat, so the bytes it promised are not all there: `unreadable`, never the short bytes (R99).
+      // A file that grew answers the handle's size and its bytes, `min(maxBytes, size − offset)` exactly.
+      if (now < offset + owed) return { ok: false, reason: 'unreadable' };
+      const due = Math.min(maxBytes, now - offset);
+      const ident = readIdentOf(st);
+      const buf = Buffer.alloc(due);
+      let got = 0;
+      while (got < due) {
+        const { bytesRead } = await fh.read(buf, got, due - got, offset + got);
+        if (bytesRead === 0) break;
+        got += bytesRead;
+      }
+      // Fewer bytes than the handle's size promised means the file shrank between the
+      // fstat and the read: not a measurement of this range.
+      if (got !== due) return { ok: false, reason: 'unreadable' };
+      // a copy: a plain Uint8Array, not a pooled Buffer view
+      return { ok: true, bytes: new Uint8Array(buf), size: now, ...(ident !== undefined ? { ident } : {}) };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    } finally {
+      await fh.close().catch(() => {});
+    }
   },
 
   async readFileB64Measured(p) {
@@ -532,8 +593,13 @@ export const localIO: FleetIO = {
 
   // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
   // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
+  // D-8920: in local mode this box IS the fleet host, so its own size is the machine's. Measured outside
+  // the PSI's `try` (it never throws), so the `unsupported` member carries it too; a size that could not be measured
+  // is `read-failed`, through the wire's own reader.
   pressureMeasured: async () => {
-    try { return { ok: true, psi: measurePressure(), headroomBytes: measureHeadroom() }; } catch { return { ok: false, reason: 'unsupported' }; }
+    const sessions = measureSessions();
+    const machine = readHostMachine({ machine: sessions.machine });
+    try { return { ok: true, psi: measurePressure(), headroomBytes: sessions.headroomBytes, machine }; } catch { return { ok: false, reason: 'unsupported', machine }; }
   },
 
   // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.
@@ -544,8 +610,12 @@ export const localIO: FleetIO = {
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
   testboxMeasured: () => localTestbox(os.homedir()),
   testboxToolsSync: () => localTestboxSync(os.homedir()),
+  testboxCapture: (build) => localTestboxCapture(build, os.homedir()),
   // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
   testboxAdmin: async () => ({ kind: 'unsupported' }),
+  // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
+  // the process home.
+  models: async () => ({ kind: 'unsupported' }),
 };
 
 /** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */
@@ -555,6 +625,22 @@ export async function localTestbox(home: string): Promise<MeasuredTestbox> {
 /** The `testbox-tools-sync` op's body on `home` (D-7411). */
 export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> {
   try { return { ok: true, reply: await syncTestboxTools(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+
+/** The `testbox-capture` op's body on `home` (build capture runner spec §2.5): the agent's own `captureTestbox` with the
+ *  real seams, as `localTestbox` runs the `testbox` op's; it reads the host's settings through `home`'s launcher. No gate
+ *  here: the capture lane sends one job at a time. */
+export async function localTestboxCapture(build: string, home: string): Promise<CaptureAsked> {
+  try { return { ok: true, reply: await captureTestbox(build, realTestboxSeams(), home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+
+/** The `models` op's local arm on `home` (D-8687, D-8693): the agent's own body (`runModelsOp`, the builder again, the
+ *  absolute `<home>/.local/bin/ccrc`, the bounded port with `{HOME, PATH, LANG}` and no stdin), as `localTestbox` runs
+ *  the `testbox` op's. `modelsEnv` copies PATH and LANG only, so the server's own environment (its tokens) never reaches
+ *  the child. No gate here: the lane-files lock guards every writer, and `readLaneModels` coalesces a lane's concurrent
+ *  reads. Never rejects: a throw answers `not-started`. */
+export async function localModels(home: string, lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked> {
+  try { return await runModelsOp(makeModelsSpawn(modelsEnv(home)), home, lane, action, cls); } catch { return { kind: 'not-started' }; }
 }
 
 /** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
@@ -570,5 +656,7 @@ export function localIOFor(home: string): FleetIO {
   return {
     ...localIO, statfsMeasured: () => measureLocalDisk(home),
     testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
+    testboxCapture: (build) => localTestboxCapture(build, home),
+    models: (lane, action, cls) => localModels(home, lane, action, cls),
   };
 }

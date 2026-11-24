@@ -22,20 +22,31 @@ export interface Route {
   readonly accepts?: (param: string) => boolean;
 }
 
-/** Settings' five sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
- *  list: the route entries below, the index rows and the section pages all read it. */
+/** Settings' six sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
+ *  list: the route entries below, the index rows and the section pages all read it. Integrations is the last
+ *  (D-8932): Linear, project linking and GitHub, which sat on Security. */
 export const SETTINGS_SECTIONS = [
   { id: 'updates', title: 'Updates' },
   { id: 'appearance', title: 'Appearance' },
   { id: 'notifications', title: 'Notifications' },
   { id: 'automation', title: 'Automation' },
   { id: 'security', title: 'Security' },
+  { id: 'integrations', title: 'Integrations' },
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
 
 export const ROUTES: readonly Route[] = [
-  { id: 'fleet', pattern: /^\/$/, title: 'Fleet', top: true, path: '/' },
+  // The console's root (Overlord W1 home, Task 2; plan question 1, slug `home-root-replaces-to-the-place`): not a place but the
+  // home, whose screen asks `homePlace` and replaces the address with the answered place's path, so `/` never stays in history
+  // and every reader of the path (`topRouteOf`, `shellViewOf`, `phoneBarShown`) keeps reading the path alone. Not `top`, so
+  // "Go to" offers no row for it; "Go home" is its own command.
+  { id: 'home', pattern: /^\/$/, title: 'Home', top: false, path: '/' },
+  // The Overlord's place (spec 2026-11-09 §4, C8): drawn only while the server advertises `overlord-v1`; without the word the
+  // route replaces to the Fleet (`OverlordRoute`).
+  { id: 'overlord', pattern: /^\/overlord\/?$/, title: 'Overlord', top: true, path: '/overlord' },
+  // The Fleet keeps a path of its own (slug `fleet-and-place-take-paths`): every go-fleet door names `FLEET_PATH`, below.
+  { id: 'fleet', pattern: /^\/fleet\/?$/, title: 'Fleet', top: true, path: '/fleet' },
   { id: 'session', pattern: /^\/s\/([^/]+)\/?$/, title: 'Session', top: false, path: null },
   { id: 'inbox', pattern: /^\/mail\/?$/, title: 'Inbox', top: true, path: '/mail' },
   { id: 'runs', pattern: /^\/runs\/?$/, title: 'Runs', top: true, path: '/runs' },
@@ -52,7 +63,7 @@ export const ROUTES: readonly Route[] = [
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
   { id: 'archive', pattern: /^\/archive\/?$/, title: 'Archive', top: true, path: '/archive' },
   { id: 'settings', pattern: /^\/settings\/?$/, title: 'Settings', top: true, path: '/settings' },
-  // The five section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
+  // The six section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
   // "Go to Settings › Updates" and the others (`command/commands.ts`).
   ...SETTINGS_SECTIONS.map((s): Route => ({
     id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,
@@ -80,7 +91,26 @@ export const ROUTES: readonly Route[] = [
   // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no current door (only `session` is
   // carried under Fleet, `topRouteOf`), no "Go to" row.
   { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
+  // One epic of a programme's plan (Linear hierarchy §11.2, D-8184): the slug is the owner's grammar (`isProgrammeSlug`); the
+  // epic key is the page's to judge, so a key the plan lacks says "No such epic in this programme", never the fleet. Two
+  // captures: the second rides `RouteMatch.rest`.
+  { id: 'epic', pattern: /^\/programmes\/([^/]+)\/epics\/([^/]+)\/?$/, title: 'Epic', top: false, path: null, accepts: isProgrammeSlug },
+  // A project's Upkeep epic (§7.6, §11.2), reached from the project linking card. Any project segment: the page's read answers
+  // a project the box does not know.
+  { id: 'upkeep', pattern: /^\/projects\/([^/]+)\/upkeep\/?$/, title: 'Upkeep', top: false, path: null },
 ];
+
+/** The path of a `top` row, read off `ROUTES` so no door spells a place's path of its own. Throws for an id that is no `top`
+ *  row with a path: a caller names a place, and a place is a `top` row (`places.test.ts`). */
+export function placePath(id: string): string {
+  const path = ROUTES.find((r) => r.id === id && r.top)?.path ?? null;
+  if (path === null) throw new Error(`${id} is no place of the route table`);
+  return path;
+}
+
+/** The Fleet's path (slug `fleet-and-place-take-paths`): the one spelling of it in `pwa/src`, which every go-fleet door, the
+ *  page backs, a reap and the render boundary navigate to (`go-fleet-census.test.ts`). */
+export const FLEET_PATH: string = placePath('fleet');
 
 /** Whether a string is a run's number as a path carries it: plain decimal digits, no leading zero, a positive safe
  *  integer. What the `run` row's `accepts` asks, and what the page asks before it reads. */
@@ -168,8 +198,25 @@ export const PROGRAMME_FILTER_QUERY = 'programme';
  *  as its query (`null`: every programme). THERE IS ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the
  *  navigation, a programme box's chip and the programme's Goals page all open it, the last two filtered to the programme. */
 export function waitingPath(programme: string | null = null): string {
-  const path = ROUTES.find((r) => r.id === 'waiting')?.path ?? '/';
+  const path = ROUTES.find((r) => r.id === 'waiting')?.path ?? FLEET_PATH;
   return programme === null ? path : `${path}?${new URLSearchParams({ [PROGRAMME_FILTER_QUERY]: programme })}`;
+}
+
+/** The Waiting on you list's other query, a call (`?call=<id>`, D-8808, D-8809): a call made for the operator has no page of its
+ *  own, it is a place in the list, so its address rides the list's route the way the side rail's filter does. It rides the URL, so
+ *  a reload and a cold start keep it. */
+export const CALL_QUERY = 'call';
+
+/** The one builder of a call's address: the list's path (`waitingPath`, never spelled again here) with `?call=<id>`. */
+export function callPath(id: number): string {
+  return `${waitingPath()}?${new URLSearchParams({ [CALL_QUERY]: String(id) })}`;
+}
+
+/** The call a `location.search`-shaped string names, or `null`: plain decimal digits, no leading zero, a positive safe integer
+ *  (`isRunId`'s grammar, the one grammar of a positive row id). Anything else names no call. */
+export function callParamOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(CALL_QUERY);
+  return v !== null && isRunId(v) ? Number(v) : null;
 }
 
 /** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,
@@ -187,6 +234,16 @@ export function programmeIsOpenable(slug: string): boolean {
   if (!isProgrammeSlug(slug)) return false;
   const at = matchRoute(programmePath(slug));
   return at !== null && at.route.id === 'programme' && at.param === slug;
+}
+
+/** The one builder of an epic's path, `/programmes/<slug>/epics/<key>`, which the `epic` row parses. Both segments are encoded. */
+export function epicPath(slug: string, key: string): string {
+  return `/programmes/${encodeURIComponent(slug)}/epics/${encodeURIComponent(key)}`;
+}
+
+/** The one builder of a project's Upkeep path, `/projects/<project>/upkeep`, which the `upkeep` row parses. */
+export function upkeepPath(project: string): string {
+  return `/projects/${encodeURIComponent(project)}/upkeep`;
 }
 
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
@@ -244,6 +301,9 @@ export interface RouteMatch {
   readonly route: Route;
   /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */
   readonly param: string | null;
+  /** The pattern's LATER captures, decoded, in order: the epic key on `/programmes/:slug/epics/:key`. Empty for a row with one
+   *  capture or none. */
+  readonly rest: readonly string[];
 }
 
 /** The decoded capture, or `undefined` for a malformed percent escape (`/s/%zz`), which `decodeURIComponent` throws on. */
@@ -262,11 +322,17 @@ export function matchRoute(path: string): RouteMatch | null {
   for (const route of ROUTES) {
     const m = route.pattern.exec(path);
     if (m === null) continue;
-    if (m[1] === undefined) return { route, param: null };
+    if (m[1] === undefined) return { route, param: null, rest: [] };
     const param = decodeParam(m[1]);
     if (param === undefined) return null;
+    const rest: string[] = [];
+    for (const raw of m.slice(2)) {
+      const later = decodeParam(raw);
+      if (later === undefined) return null;
+      rest.push(later);
+    }
     if (route.accepts !== undefined && !route.accepts(param)) continue;
-    return { route, param };
+    return { route, param, rest };
   }
   return null;
 }
@@ -306,17 +372,18 @@ export function routedHref(text: string): string | null {
   return `${path}${m[2] ?? ''}`;
 }
 
-/** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the
- *  table (its placeholder), `session` for anything the detail pane shows. `app.tsx` hands it to the frame, and the
- *  resume banner reads it to place its one instance (accounts plan Task A23, D-7871 (3)). */
+/** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route, on the home (`/`, which shows the
+ *  Fleet while the home is decided, plan question 1) and on a path outside the table (its placeholder), `session` for anything
+ *  the detail pane shows. `app.tsx` hands it to the frame, and the resume banner reads it to place its one instance (accounts
+ *  plan Task A23, D-7871 (3)). */
 export function shellViewOf(path: string): 'fleet' | 'session' {
   const id = matchRoute(path)?.route.id ?? null;
-  return id === null || id === 'fleet' ? 'fleet' : 'session';
+  return id === null || id === 'fleet' || id === 'home' ? 'fleet' : 'session';
 }
 
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
  *  under Fleet (Instrument's wordmark door is current there). Null for a path outside the table and for a route that is no
- *  place's page (the digest). Read by the current door of Instrument's top bar doors and by the phone's bottom bar (W2 Task
+ *  place's page (the digest, the home). Read by the current door of Instrument's top bar doors and by the phone's bottom bar (W2 Task
  *  S9, D-5472; desk-nav Task A, D-8100), so they never disagree about where a page sits. A path outside the table is under
  *  no place, whatever it starts with (`/waiting/abc`, `/runs/x`), and so is one with a malformed escape, which `matchRoute` places outside it: the pane
  *  draws the placeholder there, and no door says the page is there (review 1437 F2, review 1466 F14). */

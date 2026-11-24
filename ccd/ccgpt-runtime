@@ -313,7 +313,19 @@ _rt_timeout() {   # <seconds> <cmd> [args...]
   # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
   stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
-  "$@" &
+  # `<&0` ON THE COMMAND, AND IT IS WHAT GIVES THIS ARM THE BINARY'S STDIN
+  # (D-8658). A shell without job control gives a background job /dev/null for
+  # stdin unless the job carries a stdin redirection of its own, so the command
+  # here used to read nothing where the binary arm's read the caller's stdin:
+  # C28 found it on the sign-in mint, whose pasted code never arrived. `<&0` is
+  # a redirection of the job's own, and it names the caller's fd 0, so the
+  # command now reads what it would under `timeout`: a redirect on the call, a
+  # here-string, the shell's inherited stdin, the rest of a read loop's input.
+  # Not a copy through a spare descriptor: with fd 0 closed that copy fails and
+  # the command never runs, while `<&0` runs it with fd 0 closed, as the binary
+  # does. MEASURED on bash 5.3, `--posix` too; `ccd-plat-timeout.test.ts` pins
+  # all four copies. The watcher below keeps its /dev/null: it reads nothing.
+  "$@" <&0 &
   pid=$!
   # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
@@ -616,7 +628,9 @@ _rt_build() {   # <force: 0|1>
   # redirection of its OWN; a `< probe.py` on the function call is not its own.
   # MEASURED at 68beba7e: on such a PATH the probe read 0 bytes and every build
   # failed at `probe`. So a child shell opens the file and execs the generation's
-  # python with the same `-I -` argv, whichever arm of the bound runs it.
+  # python with the same `-I -` argv, whichever arm of the bound runs it. Since
+  # D-8658 that arm passes the caller's stdin through (`"$@" <&0 &`); the probe
+  # keeps binding its own, which changes nothing here.
   _rt_probe_source > "$gen/.ccrc-probe.py" \
     || { _rt_fail probe "$gen" "could not write the probe into the new generation"; return 2; }
   out="$(_rt_timeout "$probe_s" "$BASH" -c 'exec "$1" -I - < "$2"' _ "$py" "$gen/.ccrc-probe.py" 2>"$gen/.ccrc-probe.stderr")"; rc=$?

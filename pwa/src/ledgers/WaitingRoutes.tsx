@@ -31,17 +31,19 @@ import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
 import type { ItemView as ItemWire, WaitingView } from '../../../shared/ledgers';
+import type { MigrationView } from '../../../shared/plan';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { useHeard } from '../fleet/useHeard';
 import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../lib/refusalWords';
 import { navigate, useLocation } from '../lib/router';
-import { PROGRAMME_FILTER_QUERY, ROUTES, programmeIsOpenable, programmePath, sessionPath, waitingPath } from '../lib/routes';
+import { PROGRAMME_FILTER_QUERY, ROUTES, callParamOf, programmeIsOpenable, programmePath, sessionPath, waitingPath } from '../lib/routes';
 import { FleetBanners } from '../screens/FleetScreen';
 import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
+import { MIGRATION_BODY_TEXT } from './migrationWords';
 import { homeProjectOf, itemRefIds, programmeSpecHref } from './ledgerLinks';
 import { useItemRead, useItemRefs } from './itemReads';
 import {
@@ -115,6 +117,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const unavailable = useUnavailable(store, view !== null);
   const { search } = useLocation();
   const programme = new URLSearchParams(search).get(PROGRAMME_FILTER_QUERY);
+  const call = callParamOf(search);
   const now = Date.now();
   // Figure 8: live as today; else a box with no coordination database says so; else the copy, marked; else the waiting line.
   const source = unavailable === null ? listSource({ view, sessions }, saved, deviceRows) : null;
@@ -124,9 +127,10 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const itemHref = useItemHref(listed === null ? [] : listed.items.flatMap(itemTexts), listed, null);
   return (
     <WaitingScreen view={listed} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
-                   programme={programme} {...notCurrent} itemHref={itemHref}
+                   programme={programme} call={call} {...notCurrent} {...(drawn?.kind === 'saved-list' ? { listSaved: true } : {})} itemHref={itemHref}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
-                   onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
+                   onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))}
+                   onSeen={(id) => api.markCallSeen(id)} onOverturn={(body) => api.correctDigest(body)} />
   );
 }
 
@@ -332,6 +336,28 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
   );
 }
 
+/** The migration a map or report item shows (D-8186, D-8737's handover): read once per item from `GET /api/migrations/:id`. Four
+ *  conditions apart: not a map or report item (`none`), the read in flight, the view, and a read that failed (the item then draws as
+ *  before, its why, how and controls, with a quiet note). Keyed by the migration, so a stale answer never lands on the next item. */
+type MigrationRead = { kind: 'none' | 'loading' | 'failed' } | { kind: 'read'; view: MigrationView };
+function useMigrationRead(item: ItemWire | null): MigrationRead {
+  const verb = item?.action?.verb;
+  const id = item?.action !== undefined && item.action !== null && (verb === 'linear-map' || verb === 'linear-report') ? item.action.migrationId : null;
+  const [got, setGot] = useState<{ id: number; read: MigrationRead } | null>(null);
+  useEffect(() => {
+    if (id === null) return undefined;
+    let live = true;
+    api.migration(id).then(
+      // An answer with no counts or entries is not a migration (an older or confused server): a failed read, never a body that throws.
+      (view) => { if (live) setGot({ id, read: Array.isArray(view?.entries) && typeof view.counts === 'object' && view.counts !== null ? { kind: 'read', view } : { kind: 'failed' } }); },
+      () => { if (live) setGot({ id, read: { kind: 'failed' } }); },
+    );
+    return () => { live = false; };
+  }, [id]);
+  if (id === null) return { kind: 'none' };
+  return got !== null && got.id === id ? got.read : { kind: 'loading' };
+}
+
 /** `/waiting/<id>`: an item of the list, or of the recently cleared, found by its id; `null` for a parameter that names none.
  *  The list its URL names is settled against the groups once (`resolveList`), for every branch, the gone item's included, so
  *  every way back is the same one (fix round 1, F7). */
@@ -352,6 +378,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   // The live list heard and not holding it: read it by its id (D-8194), so an item past the trail's window still opens.
   const fetched = useItemRead(id, id !== null && view !== null && listed === null);
   const item = listed ?? fetched;
+  const migration = useMigrationRead(item);
   const itemHref = useItemHref(item === null ? [] : itemTexts(item), drawnList, id);
   const now = Date.now();
   const back = place?.list ?? list;
@@ -376,6 +403,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
     body = (
       <ItemView key={item.id} item={item} now={now} programmeLive={programmeIsLive(item.program, runs)} current={actsOpen(source)}
                 runs={runs} sessions={sessions} itemHref={itemHref}
+                {...(migration.kind === 'read' ? { migration: migration.view } : {})}
                 onActed={() => { void refetchWaiting(store); navigate(way.to); }}
                 programme={{
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
@@ -401,6 +429,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
       <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
       {/* In `.wl`, as the route's other notes are, so it takes the list's meta size, ink and padding (review 1556 R3). */}
       {source.kind === 'saved' && item !== null && <div className="wl"><NotCurrentLine words={savedListWords(source.savedAt, now)} /></div>}
+      {migration.kind === 'failed' && <div className="wl"><p className="wl-note">{MIGRATION_BODY_TEXT.unread}</p></div>}
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

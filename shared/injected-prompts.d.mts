@@ -3,7 +3,8 @@
 // type derived from it; `single-definition/injected-prompts.test.ts` holds the tuple equal to the list's own keys.
 
 export declare const INJECTED_PROMPT_KEYS: readonly [
-  'mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model',
+  'mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model', 'renewal-first-prompt',
+  'overlord-first-prompt',
 ];
 export type InjectedPromptKey = (typeof INJECTED_PROMPT_KEYS)[number];
 

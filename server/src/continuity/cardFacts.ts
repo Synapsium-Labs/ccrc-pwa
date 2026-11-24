@@ -18,29 +18,30 @@
  * ruling F4 on review 2023), the items (`itemsFor`, all programmes, once, the hold disregarded: the session's raised items,
  * each programme's open items, and the held items of the runs it claims), each programme's goals and modifications
  * (`goalsFor`), and the outstanding mail (`outstandingMailFor`). The notes piece adds the identity's live notes
- * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: the handover
- * note of the generation the identity's live one replaced (`liveGenerations`, then `handoverBefore`, which finds that
- * generation by its place in the line and reads no state column). The timers piece adds the session's own pending timers
+ * (`liveNotes`, each key measured now through `noteKeyReader`, the note door's own reader) and the checkpoint: what the generation
+ * the identity's live one replaced stored at its renewal (`liveGenerations`, then `checkpointBefore`, which finds that
+ * generation by its place in the line, reads no state column and answers its outcome; read only at `renewed`). The timers piece adds the session's own pending timers
  * (`pendingTimersOf`, oldest due first), each carried with `timerPreview`'s cut of its note and never the note itself.
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
 import {
-  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail,
+  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardGoal, type CardHistory, type CardItem, type CardMail,
   type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
+import { ratificationOf, type Ratification } from '../../../shared/ledgers.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
-import { roleFactsOf } from '../roleOf.js';
+import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
-import { noteKeyReader } from './noteKeys.js';
+import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { noteKeyFact } from './notes.js';
 import { timerPreview } from './timers.js';
 
 /** The store reads the gatherer makes, declared by this consumer. */
 export type CardFactsCoord = Pick<CoordStore, 'bindingsOf' | 'bindingRunsOf' | 'openCoordinatorIds' | 'run' | 'activeClaims'
   | 'outstandingMailFor' | 'itemsFor' | 'goalsFor' | 'liveNotes' | 'claimsProgramme' | 'itemById' | 'liveGenerations'
-  | 'handoverBefore' | 'pendingTimersOf'>;
+  | 'checkpointBefore' | 'pendingTimersOf' | 'designationRead'>;
 
 export interface CardFactsDeps {
   readonly coord: CardFactsCoord;
@@ -52,6 +53,9 @@ export interface CardFactsDeps {
   /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`intentOfCheckpoint`, the one reader,
    *  `declaredIntent.ts`), or `not-ready` while the delegation lane has no ready checkpoint. */
   declaredIntent(id: string, incarnation: string): boolean | 'not-ready';
+  /** The private store's text-free message read (a `miss` note's key), resolved when the card is gathered; absent or null on a
+   *  server without the store, where a `message` key reads `unmeasured`. */
+  readonly messages?: () => NoteKeysMessages | null | undefined;
 }
 
 /** The history line's verb (C52). No read names a session's newest node yet (slug history-line-without-a-node). */
@@ -79,10 +83,14 @@ const cardItemOf = (i: ItemRow, held: boolean): CardItem => ({
 });
 
 /** The role read's ports: the store's two reads it makes, and the registry reads the card takes (`CardFactsDeps`). */
-export type RoleReadDeps = Omit<CardFactsDeps, 'coord'> & { readonly coord: Pick<CoordStore, 'run' | 'openCoordinatorIds'> };
+export type RoleReadDeps = Omit<CardFactsDeps, 'coord'> & { readonly coord: Pick<CoordStore, 'run' | 'openCoordinatorIds' | 'designationRead'> };
 /** One session's role, its reason, the renderer it is drawn by, and the declared-intent fact, which is both a role input
  *  and a card field. */
-export interface SessionRoleRead extends CardRole { readonly intent: Fact<boolean> }
+export interface SessionRoleRead extends CardRole {
+  readonly intent: Fact<boolean>;
+  /** The designation this read made, for the identity of the generation lookups after it; `unmeasured` fails them closed. */
+  readonly designation: DesignationFact | 'unmeasured';
+}
 
 /**
  * ONE ROLE READ (plan `w1a-timers.md` Task 4, slug one-role-read): the card and the timer set door (its cap by role) both
@@ -114,10 +122,13 @@ export async function sessionRoleRead(deps: RoleReadDeps, id: string): Promise<S
   })();
   let openCoordinators: ReadonlySet<string> | 'unmeasured';
   try { openCoordinators = new Set(coord.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
-  const role = cardRoleOf(child === CARD_REGISTRY_UNREAD ? CARD_REGISTRY_UNREAD : roleFactsOf(id, {
-    child, childRunKind, openCoordinators, intentDeclared: intent.kind === 'read' ? intent.value : 'unmeasured',
+  // The designation: an unmeasured read leaves the role unread, as an unlistable registry does (the card's unread arm).
+  let designation: DesignationFact | 'unmeasured';
+  try { designation = designationFactFrom(coord.designationRead()); } catch { designation = 'unmeasured'; }
+  const role = cardRoleOf(child === CARD_REGISTRY_UNREAD || designation === 'unmeasured' ? CARD_REGISTRY_UNREAD : roleFactsOf(id, {
+    child, childRunKind, openCoordinators, intentDeclared: intent.kind === 'read' ? intent.value : 'unmeasured', designation,
   }));
-  return { ...role, intent };
+  return { ...role, intent, designation };
 }
 
 /** One session's card facts, and the renderer its role is drawn by. `now` is the server's time of rendering: it is
@@ -127,7 +138,7 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   Promise<{ readonly facts: CardFacts; readonly renderer: CardRenderer }> {
   const { coord } = deps;
   const role = await sessionRoleRead(deps, id);
-  const { intent } = role;
+  const { intent, designation } = role;
 
   // The runs: the open runs it claims and the open runs it works, each read whole by its id for its state and kind.
   const bindings = coord.bindingsOf(id);
@@ -178,8 +189,12 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
       }
       return read([...slugs].sort().map((slug): CardProgramme => {
         const g = coord.goalsFor(slug);
-        // No goals version carries `ratifiedBy` yet, so every goal is rendered as not ratified (slug goals-unratified).
-        const goals = [...(g.inShort === null ? [] : [g.inShort]), ...(g.doneWhen ?? [])].map((text) => ({ text, ratified: false }));
+        // Each goal's `ratified` is its version's verdict (Overlord W1, portfolio B): the In short goal's is the pin's, each
+        // definition-of-done line's the version that wrote the list (`doneWhenBy`), read through `ratificationOf`, with who
+        // ratified it (review 2240 F8).
+        const goalOf = (text: string, r: Ratification): CardGoal => (r.ratified ? { text, ratified: true, ratifiedBy: r.source.kind } : { text, ratified: false });
+        const pinR = ratificationOf(g.pinRatification), doneR = ratificationOf(g.doneWhenRatification);
+        const goals = [...(g.inShort === null ? [] : [goalOf(g.inShort, pinR)]), ...(g.doneWhen ?? []).map((text) => goalOf(text, doneR))];
         const decisions = g.modifications.map((m) => ({ at: m.at, text: m.ruling === null ? m.text : `${m.text} (ruling: ${m.ruling})` }));
         return { slug, goals, decisions, openItems: openItems.value.filter((i) => i.programme === slug) };
       }));
@@ -194,31 +209,39 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
     .slice(0, CARD_MAIL_MAX).map((m) => ({ deliveryId: m.deliveryId, fromId: m.fromId, at: m.at, subject: m.subject, parked: !OUTSTANDING.has(m.state) })));
   const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
 
-  // The notes: the identity's live ones (the identity is the session id), each with what its key's row is now.
-  const keyOf = noteKeyReader(coord, id);
+  // The notes: the identity's live ones (the identity is the session id: notes stay keyed by it, slug notes-keyed-by-session-id), each with what its key's row is now.
+  const keyOf = noteKeyReader(coord, id, deps.messages?.() ?? undefined);
   const notes = attempt<readonly CardNote[]>('the notes', () => {
     const r = coord.liveNotes(id);
     return !r.ok ? null : r.notes.map((n) => ({
       id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), keyFact: noteKeyFact(keyOf(n.key), id), waitsOn: n.waitsOn, next: n.next,
     }));
   });
-  // The checkpoint: the handover note of the generation the live one replaced, or null when it wrote none.
-  // A read that failed is `unmeasured`; no live generation, or one whose predecessor wrote no note, is a read null.
+  // The checkpoint: what the generation the live one replaced stored when the lane renewed it (the renewal act), read only
+  // when that generation ended by a renewal (its outcome is `renewed`); a crash, a swap or a wake carries none. A read that
+  // failed is `unmeasured`; no live generation, no stored checkpoint or another outcome is a read null.
   const checkpoint = ((): Fact<CardCheckpoint | null> => {
-    const what = 'the checkpoint (the handover note)';
+    const what = 'the checkpoint';
     try {
+      if (designation === 'unmeasured') return unmeasured(what);
+      const identity = identityOf(id, designation);
       const gens = coord.liveGenerations();
       if (!gens.ok) return unmeasured(what);
-      const live = gens.rows.find((g) => g.identity === id);
+      const live = gens.rows.find((g) => g.identity === identity);
       if (live === undefined) return read(null);
-      const h = coord.handoverBefore(id, live.id);
-      if (!h.ok) return unmeasured(what);
-      if (h.handover === null) return read(null);
-      const { n, at, dropped, note } = h.handover;
-      return read({ at, handover: {
-        generation: n, dropped, cautions: note.cautions, tone: note.tone,
-        threads: note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
-      } });
+      const c = coord.checkpointBefore(identity, live.id);
+      if (!c.ok) return unmeasured(what);
+      if (c.checkpoint === null || c.checkpoint.outcome !== 'renewed') return read(null);
+      const { at, handover, notes: held, rulings } = c.checkpoint;
+      return read({
+        at,
+        handover: handover === null ? null : {
+          generation: handover.n, dropped: handover.dropped, cautions: handover.note.cautions, tone: handover.note.tone,
+          threads: handover.note.threads.map((t) => ({ ref: noteKeyText(t.ref), waitsOn: t.waitsOn, next: t.next })),
+        },
+        notes: held.map((n) => ({ id: n.id, at: n.at, kind: n.kind, key: noteKeyText(n.key), waitsOn: n.waitsOn, next: n.next })),
+        rulings: rulings.map((r) => ({ at: r.at, source: r.source, subject: r.subject, text: r.text })),
+      });
     } catch {
       return unmeasured(what);
     }

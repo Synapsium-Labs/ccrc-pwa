@@ -19,6 +19,7 @@ import type { CcdResult } from '../src/coord/ports.js';
 import type { LaneArmRead } from '../src/coord/laneArm.js';
 import type { PlainAutoMemoryRead } from '../src/continuity/profileFor.js';
 import type { UsageRead } from '../src/usage.js';
+import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { profileForCases } from './sim/launchProfileSets.js';
 import { declaredIntentOf } from '../src/continuity/profileFor.js';
 import { intentOfCheckpoint } from '../src/continuity/declaredIntent.js';
@@ -65,6 +66,10 @@ interface World {
   fail?: Set<string>;
   notRan?: Set<string>;
   openGate?: boolean;
+  /** The fleet node's build against the server's (W1 sandbox: `profiledigest` waits for `agreed`); `agreed` when unnamed. */
+  builds?: 'agreed' | 'skewed' | 'unknown';
+  /** The designation read (Overlord W1 designation A, Task 3); no row when unnamed; `throws` makes the read throw. */
+  designation?: DesignationRead | 'throws';
 }
 
 function harness(w: World = {}) {
@@ -77,18 +82,28 @@ function harness(w: World = {}) {
     openCoordinatorIds: () => w.coordinators ?? [],
     run: ((id: number) => ({ ok: true, run: w.runKinds?.[id] === undefined ? null : { kind: w.runKinds[id] } })) as unknown as ProfileCoord['run'],
     plainAutoMemorySettings: () => w.memory ?? { kind: 'row', choice: 'off' },
+    designationRead: () => {
+      if (w.designation === 'throws') throw new Error('locked');
+      return w.designation ?? { kind: 'not-designated', row: null };
+    },
+    // The coordinator advisor's reads (D-8967): read only when the fleet ccd advertises its caps word, which no case here does.
+    coordinatorAdvisorSettings: () => { throw new Error('read without route-advisor-v1'); },
+    advisorDayCounts: () => { throw new Error('read without route-advisor-v1'); },
+    advisorReadState: () => null,
   };
   const deps: ProfileLaneDeps = {
-    coord,
+    coord, now: () => 0,
     reads: {
       usage: async (id): Promise<UsageRead> => {
         usageAsked.push(id);
         const win = w.windows?.[id];
         return win === undefined ? { kind: 'absent' }
-          : { kind: 'reading', usage: { stale: w.stale?.has(id) === true, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
+          : { kind: 'reading', uuid: null, usage: { stale: w.stale?.has(id) === true, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
       },
       steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
       declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },
+      buildAgreement: () => w.builds ?? 'agreed',
+      anthropicLane: () => 'unmeasured',
     },
     act: {
       runCcd: async (argv: CcdArgv): Promise<CcdResult> => {
@@ -132,6 +147,75 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.sent.map(sets)).toEqual([['automem=off'], ['profile=plain', 'automem=on']]);
     expect(h.sent[0]!.slice(0, 3)).toEqual(['route', '--session', 'lane-a-project-a']);
     expect(h.sent[0]!.join(' ')).toContain('launch-profile lane');
+  });
+
+  it('profiledigest (W1 sandbox): a role with no surface has a standing digest cleared, whatever the builds, and no other row is sent it', async () => {
+    let asked = 0;
+    const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a', 'lane-a-project-b'], builds: 'skewed' });
+    const reads = h.deps.reads;
+    const deps = { ...h.deps, reads: { ...reads, buildAgreement: () => { asked += 1; return reads.buildAgreement(); } } };
+    const D = 'd'.repeat(64);
+    const r = await profilePass(deps, [
+      row('lane-a-project-a', { profile: 'coordinator', automem: 'off', profiledigest: D }),   // a coordinator carries no surface
+      row('lane-a-project-b', { profile: 'coordinator', automem: 'off' }),                    // settled, and no digest ever stood
+    ]);
+    expect(h.sent.map(sets)).toEqual([['profiledigest=']]);
+    expect(r.byField.profiledigest).toBe(1);
+    // No surfaced reading reaches the lane before designation A (roleOf reads `overlord` only from a designation), so the
+    // builds are never asked: the write-at-agreement and hold-under-skew rules are `profileDigestWriteOf`'s cases.
+    expect(asked).toBe(0);
+  });
+
+  describe('the designation (Overlord W1 designation A, Task 3)', () => {
+    const PENDING_ID = 'overlord-quiet-otter';
+    const VIEW = { bound: null, term: 1, designatedTerm: 1, model: 'opus' as const, accountPools: { pools: ['pool-a'], untagged: false },
+      pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] };
+    const pendingRead = (kind: 'designate' | 'rebind'): DesignationRead => ({ kind: 'not-designated', row: { ...VIEW,
+      pending: { sessionId: PENDING_ID, kind, deadlineAt: 9, since: 1, actor: 'op', generation: null } } });
+    const boundRead: DesignationRead = { kind: 'designated', sessionId: PENDING_ID, term: 2,
+      row: { ...VIEW, term: 2, bound: { sessionId: PENDING_ID, generation: 'g1' }, pending: null } };
+
+    it('a pending body is read as the Overlord: its route is written profile=overlord, never a plain or coordinator profile', async () => {
+      for (const kind of ['designate', 'rebind'] as const) {
+        const h = harness({ lanes: LIVE, designation: pendingRead(kind) });
+        await profilePass(h.deps, [row(PENDING_ID, null)]);
+        expect(h.sent.map(sets).flat(), kind).toContain('profile=overlord');
+        expect(h.sent.map(sets).flat().filter((x) => x.startsWith('profile=') && x !== 'profile=overlord'), kind).toEqual([]);
+      }
+    });
+    it('a bound body is the Overlord too, and an ordinary row beside it keeps its own profile', async () => {
+      const h = harness({ lanes: LIVE, designation: boundRead, coordinators: ['lane-a-project-a'] });
+      await profilePass(h.deps, [row(PENDING_ID, null), row('lane-a-project-a', null)]);
+      expect(h.sent.map((a) => [a[a.indexOf('--session') + 1], sets(a).find((x) => x.startsWith('profile='))]))
+        .toEqual([[PENDING_ID, 'profile=overlord'], ['lane-a-project-a', 'profile=coordinator']]);
+    });
+    it('under skewed builds a pending body is sent the profile overlord and no profiledigest (sandbox A review F8)', async () => {
+      const h = harness({ lanes: LIVE, designation: pendingRead('designate'), builds: 'skewed' });
+      const r = await profilePass(h.deps, [row(PENDING_ID, null)]);
+      const all = h.sent.map(sets).flat();
+      expect(all).toContain('profile=overlord');
+      expect(all.filter((x) => x.startsWith('profiledigest'))).toEqual([]);
+      expect(r.byField.profiledigest).toBe(0);
+    });
+    it('an unmeasured designation writes nothing this pass on any row, counts every row with roleUnread, and journals once', async () => {
+      for (const designation of [{ kind: 'unmeasured', why: 'the row is unreadable' } as DesignationRead, 'throws' as const]) {
+        const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a'], designation });
+        const rows = [row('lane-a-project-a', null), row('lane-a-project-b', null, { child: { kind: 'child', runId: 7 } })];
+        const r = await profilePass(h.deps, rows);
+        expect(h.sent).toEqual([]);
+        expect(r).toMatchObject({ would: 0, written: 0, roleUnread: 2 });
+        await profilePass(h.deps, rows);
+        expect(h.logs.filter((l) => l.includes('whose role could not be decided'))).toHaveLength(1);
+      }
+    });
+    it('a designation that reads again after an unmeasured pass writes as before', async () => {
+      const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a'], designation: { kind: 'unmeasured', why: 'x' } });
+      await profilePass(h.deps, [row('lane-a-project-a', null)]);
+      expect(h.sent).toEqual([]);
+      h.deps.coord.designationRead = () => ({ kind: 'not-designated', row: null });
+      await profilePass(h.deps, [row('lane-a-project-a', null)]);
+      expect(h.sent).toHaveLength(1);
+    });
   });
 
   it('a route field it could not read is skipped and counted, never written blind', async () => {
@@ -187,7 +271,7 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.usageAsked).toEqual([]);
   });
 
-  it('with continuity live (its gate opened as the renewal act will), a coordinator gets compact and compactwindow from its window', async () => {
+  it('with continuity live (the gate opened, as the renewal act has done), a coordinator gets compact and compactwindow from its window', async () => {
     const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true, coordinators: ['lane-a-project-a', 'lane-a-project-b'],
       windows: { 'lane-a-project-a': 200_000 } });
     const r = await profilePass(h.deps, [row('lane-a-project-a', null), row('lane-a-project-b', null), row('lane-a-project-c', null)]);
@@ -200,11 +284,11 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(r.continuityLive).toBe(true);
   });
 
-  it('continuity stored live while its gate stands is not live: no compaction field (review 2006 N1)', async () => {
+  it('the renewal act lifted the continuity row\'s gate: stored live is live with the real gate, so the compaction fields are written (review 2006 N1)', async () => {
     const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, coordinators: ['lane-a-project-a'], windows: { 'lane-a-project-a': 200_000 } });
     const r = await profilePass(h.deps, [row('lane-a-project-a', null)]);
-    expect(r.continuityLive).toBe(false);
-    expect(h.sent.map(sets)).toEqual([['profile=coordinator', 'automem=off']]);
+    expect(r.continuityLive).toBe(true);
+    expect(h.sent.map(sets)).toEqual([['compact=60', 'profile=coordinator', 'automem=off', 'compactwindow=154000']]);
   });
 
   it('a session carrying the history W3 steer marker, or whose marker cannot be read, is left alone; the others are written', async () => {
@@ -297,5 +381,54 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.sent).toEqual([]);
     expect(r.unsupported).toBe(1);
     expect(h.logs[0]).toContain('1 not written: ccd here has no route verb');
+  });
+});
+
+// ── The skew notice (W1 sandbox B, Task 9, question 5): a dead Overlord under build skew raises one notice per build pair ──
+describe('the skew notice in the lane pass (W1 sandbox B)', () => {
+  const OV = 'overlord-quiet-otter';
+  const VIEW = { bound: { sessionId: OV, generation: 'g1' }, pending: null, term: 2, designatedTerm: 2, model: 'opus' as const,
+    accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] };
+  const bound: DesignationRead = { kind: 'designated', sessionId: OV, term: 2, row: VIEW };
+  const D = 'a'.repeat(64);
+  function skewed(over: { running?: boolean | 'unmeasured'; builds?: 'agreed' | 'skewed' | 'unknown'; digest?: boolean; designation?: DesignationRead } = {}) {
+    const h = harness({ builds: over.builds ?? 'skewed', designation: over.designation ?? bound });
+    const keys = new Set<string>();
+    const raised: { id: string; key: string; body: string }[] = [];
+    const deps: ProfileLaneDeps = { ...h.deps, skew: {
+      running: () => over.running ?? false, builds: () => ({ fleet: 'v0.9.1', server: 'v0.9.2' }),
+      noticed: (_id, key) => keys.has(key), raise: (id, key, body) => { keys.add(key); raised.push({ id, key, body }); },
+    } };
+    const rows = [row(OV, over.digest === false ? { profile: 'overlord' } : { profile: 'overlord', profiledigest: D })];
+    return { deps, rows, raised };
+  }
+  it('a dead designated body whose route carries profiledigest, under skew, raises one notice naming both builds, once', async () => {
+    const s = skewed();
+    await profilePass(s.deps, s.rows);
+    await profilePass(s.deps, s.rows);
+    expect(s.raised).toHaveLength(1);
+    expect(s.raised[0]).toMatchObject({ id: OV, key: `${OV}:v0.9.1:v0.9.2` });
+    expect(s.raised[0]!.body).toContain('v0.9.1');
+    expect(s.raised[0]!.body).toContain('v0.9.2');
+    expect(s.raised[0]!.body).toContain('can keep it from respawning');
+    expect(s.raised[0]!.body).not.toMatch(/refused|stays down/);
+  });
+  it('a pending attempt is not judged, dead or not: the notice is the designated body\'s alone (the plan; review 3346 F5)', async () => {
+    const pending = { kind: 'not-designated', row: { ...VIEW, bound: null,
+      pending: { sessionId: OV, kind: 'designate', deadlineAt: 9e12, since: 1, actor: 'op', generation: 'g1' } } } as unknown as DesignationRead;
+    const s = skewed({ designation: pending });
+    await profilePass(s.deps, s.rows);
+    expect(s.raised).toEqual([]);
+    const control = skewed();
+    await profilePass(control.deps, control.rows);
+    expect(control.raised).toHaveLength(1);
+  });
+  it('a running or unmeasured body, agreed builds, no digest and no designation raise none', async () => {
+    for (const over of [{ running: true }, { running: 'unmeasured' as const }, { builds: 'agreed' as const }, { digest: false },
+      { designation: { kind: 'not-designated', row: null } as DesignationRead }]) {
+      const s = skewed(over);
+      await profilePass(s.deps, s.rows);
+      expect(s.raised, JSON.stringify(over)).toEqual([]);
+    }
   });
 });

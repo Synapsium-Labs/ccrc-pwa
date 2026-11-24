@@ -56,6 +56,12 @@ export interface ExportProvenance {
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
+/** The closed label of the worktree whose drafts the page may carry: the one owner of it for Export. The provenance's
+ *  banner, its Source fact and the `ccrc:worktree` meta write it, and the sheet's draft confirm says it too. */
+export function exportWorktreeLabel(tree: DocsTreeOk): string {
+  return tree.drafts.state === 'holder' ? closedWorktreeLabel(tree.drafts.worktree) : DOCS_HEAD_TEXT.worktreeOther;
+}
+
 export function exportProvenance(p: ProvenanceInput): ExportProvenance {
   const { tree, page, pin } = p;
   const ref = tree.ref;
@@ -63,7 +69,7 @@ export function exportProvenance(p: ProvenanceInput): ExportProvenance {
   const entry = tree.entries.find((e) => e.section === page.section && e.path === page.path);
   const view = entry === undefined ? null : entryView(entry, drafts, page.ref === null ? 'default' : 'ref');
   const badge = view === null || view.badge === null ? DOCS_HEAD_TEXT.sourceDraftUnbadged : ENTRY_BADGE_TEXT[view.badge];
-  const label = drafts.state === 'holder' ? closedWorktreeLabel(drafts.worktree) : DOCS_HEAD_TEXT.worktreeOther;
+  const label = exportWorktreeLabel(tree);
   const commit = pin.kind === 'committed' ? pin.commit : ref.commit;
   const repoPath = docRepoPath(page.section, page.path);
   const via = fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested });
@@ -111,7 +117,9 @@ export function exportProvenance(p: ProvenanceInput): ExportProvenance {
   }
   const banner = pin.kind === 'draft'
     ? fillSentence(EXPORT_TEXT.banner, {
-      label, branch: pin.branch, commit, served: ref.served, fp: pin.fp.slice(0, 12), time: iso(p.readAt),
+      // An opened pin always carries its bytes' sha256 (a stat-pinned draft's is its snapshot digest, X2 P1); a pin with
+      // `fp: null` names bytes not yet read, so it names no fingerprint here rather than a guessed one.
+      label, branch: pin.branch, commit, served: ref.served, fp: pin.fp === null ? '' : pin.fp.slice(0, 12), time: iso(p.readAt),
     })
     : null;
   return { commit, draft: pin.kind === 'draft', facts, notes, metas, banner };

@@ -27,7 +27,7 @@ vi.mock('../src/lib/routes', async (importOriginal) => {
   const matchRoute = (p: string): ReturnType<typeof real.matchRoute> => {
     for (const route of ROUTES) {
       const m = route.pattern.exec(p);
-      if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]) };
+      if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]), rest: m.slice(2).map(decodeURIComponent) };
     }
     return null;
   };

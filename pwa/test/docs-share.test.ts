@@ -26,7 +26,7 @@ const SHORT_A = 'a'.repeat(8);
 
 describe('the Share words (spec 4.7, 4.16; M4.SH6)', () => {
   const REFUSALS: ShareRefusal[] =
-    ['bad-slug', 'bad-target', 'new-draft', 'new-withheld', 'no-github-origin', 'not-on-origin', 'unmeasured'];
+    ['bad-slug', 'bad-target', 'new-draft', 'new-withheld', 'no-github-origin', 'not-on-origin', 'unmeasured', 'version-unmeasured'];
   const NOTES = ['access', 'admitted-committed', 'dir-drafts', 'drafts-excluded', 'html-source', 'onRef-not-contained',
     'onRef-unmeasured', 'view-committed'];
   const FIELDS = { short: SHORT_A, withheld: 'The draft is too large for Docs to read' };
@@ -40,9 +40,9 @@ describe('the Share words (spec 4.7, 4.16; M4.SH6)', () => {
     for (const why of REFUSALS) expect(shareRefusalSentence(why, FIELDS, false), why).not.toContain('Export makes');
   });
 
-  it('the Export seam: a page that offers Export adds the clause to exactly the four refusals the spec gives it', () => {
+  it("the Export seam: a page that offers Export adds the clause to exactly the five refusals it gives (spec 4.16's four, and version-unmeasured)", () => {
     const takers = REFUSALS.filter((why) => shareRefusalSentence(why, FIELDS, true).endsWith(' ' + SHARE_EXPORT_CLAUSE));
-    expect(takers).toEqual(['bad-slug', 'bad-target', 'new-draft', 'no-github-origin']);
+    expect(takers).toEqual(['bad-slug', 'bad-target', 'new-draft', 'no-github-origin', 'version-unmeasured']);
     expect([...SHARE_EXPORT_CLAUSE_FOR].sort()).toEqual(takers);
   });
 
@@ -109,7 +109,7 @@ function drafted(path: string, draft = draftOf('modified'),
 /** The pin the tree implies for `url`'s leaf; throws when it opens nothing (a fixture defect). */
 function pinOf(tree: DocsTreeOk, url: string): DocPin {
   const pin = pinFor(tree, pageAt(url));
-  if (pin === null) throw new Error(`fixture: ${url} opens no file`);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error(`fixture: ${url} opens no file`);
   return pin;
 }
 
@@ -355,6 +355,96 @@ describe('shareTargetFor: which commit (spec 4.16; M4.EX12, refinement (a))', ()
     const t = linkOf(shareTargetFor(treeOk({ commit: COMMIT_B }), pageAt('/docs/demo/specs/a.md'), o));
     expect(t.commit).toBe(COMMIT_B);
     expect(noteWords(t)).toEqual(['access']);
+  });
+});
+
+describe('a version view (base spec 4.13; rich-docs G6)', () => {
+  const V = '9'.repeat(40);
+  const SHORT_V = '9'.repeat(8);
+  const url = `/docs/demo/specs/a.md?at=${V}`;
+  const atV = (tree: DocsTreeOk, onRef: DocsShowOk['onRef'] = 'contains'): ShareTarget | null =>
+    shareTargetFor(tree, pageAt(url), opened(committedPin(V), showAt(V, { onRef })));
+  const unmeasured = { ok: false, why: 'version-unmeasured', fields: { short: SHORT_V } };
+
+  it('origin served, onRef contains: the permalink names V', () => {
+    const t = linkOf(atV(treeOk()));
+    expect(t.commit).toBe(V);
+    expect(t.url).toBe(`${GH}/blob/${V}/docs/superpowers/specs/a.md`);
+    expect(noteWords(t)).toEqual(['access']);
+  });
+
+  it('local equal, onRef contains: links', () => {
+    const t = linkOf(atV(withRef(treeOk(), { side: 'local', relation: 'equal', via: 'local' })));
+    expect(t.url).toBe(`${GH}/blob/${V}/docs/superpowers/specs/a.md`);
+  });
+
+  it('local-ahead, onRef contains: version-unmeasured', () => {
+    const t = refusalOf(atV(withRef(treeOk(), { side: 'local', relation: 'local-ahead', via: 'local' })));
+    expect(t).toMatchObject(unmeasured);
+    expect(noteWords(t)).toEqual(['access']);
+  });
+
+  it('onRef not-contained: version-unmeasured', () => {
+    expect(refusalOf(atV(treeOk(), 'not-contained'))).toMatchObject(unmeasured);
+  });
+
+  it('onRef unmeasured: version-unmeasured', () => {
+    expect(refusalOf(atV(treeOk(), 'unmeasured'))).toMatchObject(unmeasured);
+  });
+
+  it('a raster version (no show answer): version-unmeasured', () => {
+    const tree = treeOk({ entries: [entry('specs', 'x.png')] });
+    const t = shareTargetFor(tree, pageAt(`/docs/demo/specs/x.png?at=${V}`), opened(committedPin(V, 'x.png')));
+    expect(refusalOf(t)).toMatchObject(unmeasured);
+  });
+
+  it('no GitHub origin: no-github-origin', () => {
+    const none: DocsTreeOk = { ...treeOk(), github: { state: 'none' } };
+    expect(refusalOf(atV(none))).toMatchObject({ why: 'no-github-origin', notes: [] });
+  });
+
+  it('a version carries no draft notes in a ref view with an admitted draft', () => {
+    const tree = treeOk({ entries: [drafted('a.md')], drafts: holder() });
+    const ref = `/docs/demo/specs/a.md?ref=main&at=${V}`;
+    const t = linkOf(shareTargetFor(tree, pageAt(ref), opened(committedPin(V), showAt(V))));
+    expect(t.commit).toBe(V);
+    expect(noteWords(t)).toEqual(['access']);
+  });
+
+  it('a version page that opens nothing names the version, not the tip', () => {
+    const tree = treeOk({ entries: [entry('specs', 'l.md', { committed: { kind: 'symlink', blob: BLOB_1, size: 10 } })] });
+    const t = shareTargetFor(tree, pageAt(`/docs/demo/specs/l.md?at=${V}`), NONE);
+    expect(refusalOf(t)).toMatchObject(unmeasured);
+    expect(SHORT_V).not.toBe(SHORT_A);
+  });
+
+  it('the version rule needs a leaf: a directory named without its slash keeps its own link at a version', () => {
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md')] });
+    const withAt = shareTargetFor(tree, pageAt(`/docs/demo/specs/d?at=${V}`), NONE);
+    const without = shareTargetFor(tree, pageAt('/docs/demo/specs/d'), NONE);
+    expect(linkOf(withAt)).toMatchObject({ commit: COMMIT_A });
+    expect(withAt).toEqual(without);
+  });
+
+  it("another read's onRef does not vouch for the version", () => {
+    const o = opened(committedPin(V), showAt(COMMIT_B, { onRef: 'contains' }));
+    expect(refusalOf(shareTargetFor(treeOk(), pageAt(url), o))).toMatchObject(unmeasured);
+  });
+
+  it('bad-slug and bad-target keep their own words on a version', () => {
+    const badSlug: DocsTreeOk = { ...treeOk(), github: { state: 'named', slug: '../x' } };
+    expect(refusalOf(atV(badSlug))).toMatchObject({ why: 'bad-slug', notes: [] });
+    const short39 = '9'.repeat(39);
+    const o = opened(committedPin(short39), showAt(short39));
+    expect(refusalOf(shareTargetFor(treeOk(), pageAt(url), o)).why).toBe('bad-target');
+  });
+
+  it("version-unmeasured carries Export's clause on a leaf", () => {
+    expect(shareRefusalSentence('version-unmeasured', { short: SHORT_V }, false))
+      .toBe(`Docs cannot tell whether origin has ${SHORT_V}, so it gives no link to this version.`);
+    expect(shareRefusalSentence('version-unmeasured', { short: SHORT_V }, true))
+      .toBe(`Docs cannot tell whether origin has ${SHORT_V}, so it gives no link to this version. ${SHARE_EXPORT_CLAUSE}`);
+    expect(SHARE_EXPORT_CLAUSE_FOR.has('version-unmeasured')).toBe(true);
   });
 });
 

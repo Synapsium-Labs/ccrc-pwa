@@ -14,7 +14,8 @@ import { isAccountLaneId, isAccountStdin } from '../../../shared/account-argv.js
 import { PROVIDERS, PROVIDER_IDS, type ConnectMethod, type ProviderId } from '../../../shared/providers.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
-import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
+import { ACCOUNT_ID_RE, ORG_CLEAR_WORD, orgLabelVerdict } from '../../../shared/roster.js';
+import { FABLE_BILLINGS, factsChangeWidens, type RosterFactsChange } from '../../../shared/rosterFacts.js';
 import { refuseRoute } from '../refuse.js';
 import { actorOf, type AccountAudit, type AccountEventInput } from './audit.js';
 import { authAnswerMasked, authStatusVerdictOf, newAttemptId, type AuthAttempt, type AuthAttempts } from './attempts.js';
@@ -130,7 +131,7 @@ const sessionIdsOf = (v: unknown): string[] =>
 /** The verb codes that cross as a route word of the same spelling (D-7739), with nothing but the word. */
 const SAME_WORD = new Set<string>([
   'lane-busy', 'last-enabled-home', 'key-charset', 'key-rejected', 'token-unverified', 'upstream', 'last-home-able',
-  'auth-in-progress', 'not-discardable', 'not-a-token-lane', 'bad-stated', 'duplicate-id',
+  'auth-in-progress', 'not-discardable', 'not-a-token-lane', 'bad-stated', 'duplicate-id', 'org-looks-like-an-id',
   // The sign-in verbs' (A21, D-7793).
   'bad-code', 'code-already-sent', 'no-auth-attempt', 'not-a-sign-in-lane',
 ] satisfies RouteRefusal[]);
@@ -353,9 +354,14 @@ const KIND_PROVIDER: Readonly<Record<AtProviderKind, ProviderId>> = {
  *    account add`, answering `{ok, roster, lane, fleetIdentity}`. An id the server's roster already holds answers
  *    `lane-exists` with that lane, so a retry after an outcome-unknown add finds the lane rather than `duplicate-id`.
  *  - `POST /api/accounts/:id/credential` (step-up): `{credential}` → `ccrc account credential`, answering `{ok, lane}`.
- *  - `POST /api/accounts/:id/set`: `{stated?, placement?}` → `ccrc account set`, answering `{ok, roster, lane}`. No
- *    step-up: neither changes a method nor raises a minted key's commitment, the only `set`s spec §3.2 steps up, and
- *    neither is a later wave's (`limit`, `limitReset` are A32's and refused here). The stated account rides stdin.
+ *  - `POST /api/accounts/:id/set`: `{stated?, placement?, fableBilling?, continuity?, org?}` → `ccrc account set`, answering
+ *    `{ok, roster, lane}`. No step-up for the stated account or a placement: neither changes a method nor raises a
+ *    minted key's commitment, the `set`s spec §3.2 steps up. A WIDENING fact, `fableBilling: 'included'` or
+ *    `continuity: 'on'`, takes the step-up whatever the stored value (F10, a third kind beside those two; the Overlord
+ *    spec's Table 11.1d, "behind the step-up where the change widens authority"), decided by `factsChangeWidens`; a
+ *    narrowing one (`credits`, `off`) needs none. `org` (a label, or `none` to clear it) never steps up: a preference that
+ *    widens no authority, and a label shaped like an organization id is refused `org-looks-like-an-id` before any op
+ *    (account organization A3). `limit` and `limitReset` are A32's and refused here. The stated account rides stdin.
  *  - `POST /api/accounts/:id/remove`: `{mode:'remove', confirmId}` (step-up; the typed id must equal the lane's,
  *    `confirm-mismatch`), `{mode:'discard'}` (step-up, no typed confirm, checked here before the op and by the verb), or
  *    `{mode:'check'}`, which changes nothing, so needs no step-up: `remove --dry-run`'s measurements with `fleetIdentity`.
@@ -491,18 +497,40 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
     const row = (o: Pick<AccountEventInput, 'outcome' | 'code'>): boolean =>
       audit({ act: 'set', laneId: id, provider: lane.provider, ...o, actor: g.actor });
     const b = bodyOf(req);
-    if (b === null || !onlyKeys(b, ['stated', 'placement']) || (b['stated'] === undefined && b['placement'] === undefined)
-        || (b['placement'] !== undefined && typeof b['placement'] !== 'string')) {
+    const facts: RosterFactsChange = {
+      ...(oneOf(FABLE_BILLINGS, b?.['fableBilling']) ? { fableBilling: b?.['fableBilling'] } : {}),
+      ...(b?.['continuity'] === 'on' || b?.['continuity'] === 'off' ? { continuity: b['continuity'] } : {}),
+      ...(typeof b?.['org'] === 'string' ? { org: b['org'] } : {}),
+    };
+    const orgWord = facts.org === undefined || facts.org === ORG_CLEAR_WORD ? 'ok' : orgLabelVerdict(facts.org);
+    if (b === null || !onlyKeys(b, ['stated', 'placement', 'fableBilling', 'continuity', 'org'])
+        || ['stated', 'placement', 'fableBilling', 'continuity', 'org'].every((k) => b[k] === undefined)
+        || (b['org'] !== undefined && (facts.org === undefined || orgWord === 'off-shape'))
+        || (b['placement'] !== undefined && typeof b['placement'] !== 'string')
+        || (b['fableBilling'] !== undefined && facts.fableBilling === undefined)
+        || (b['continuity'] !== undefined && facts.continuity === undefined)) {
       row({ outcome: 'refused', code: 'bad-request' });
       return refuseRoute(reply, 'bad-request');
+    }
+    // A label shaped like an organization id is refused by name, so no real id is ever stored (account organization A3).
+    if (orgWord === 'looks-like-an-id') {
+      row({ outcome: 'refused', code: 'org-looks-like-an-id' });
+      return refuseRoute(reply, 'org-looks-like-an-id');
     }
     // The stated account names a person: held to the lane-state file's identity grammar, carried on stdin, never argv.
     if (b['stated'] !== undefined && !isLaneIdentity(b['stated'])) {
       row({ outcome: 'refused', code: 'bad-stated' });
       return refuseRoute(reply, 'bad-stated');
     }
+    // A widening fact takes the step-up the plain gate above did not (F10), before any op.
+    if (factsChangeWidens(facts) && !deps.gate(req, reply, { cap, stepUp: true }).pass) return reply;
     const stated = typeof b['stated'] === 'string' ? Buffer.from(b['stated'], 'utf8') : undefined;
-    const fields: Record<string, string> = typeof b['placement'] === 'string' ? { placement: b['placement'] } : {};
+    const fields: Record<string, string> = {
+      ...(typeof b['placement'] === 'string' ? { placement: b['placement'] } : {}),
+      ...(facts.fableBilling !== undefined ? { fableBilling: facts.fableBilling } : {}),
+      ...(facts.continuity !== undefined ? { continuity: facts.continuity } : {}),
+      ...(facts.org !== undefined ? { org: facts.org } : {}),
+    };
     const outcome = routeOutcomeOf(await runHolding('set', id, fields, stated));
     row(ended(outcome));
     if (outcome.kind === 'refuse') return refuseRoute(reply, outcome.word, outcome.extra);

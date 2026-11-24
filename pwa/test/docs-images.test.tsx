@@ -4,6 +4,8 @@
 // replacement) or an SVG's `data:image/svg+xml;base64,` URL (never a `blob:`), loaded through the page's queue
 // (concurrency 2) from an image the pin rule admits. Everything else is a refused span with its reason. Every page is
 // a placeholder (`demo`, `main`, `example-org/example-repo`, `https://evil.example`, `https://a.example`).
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -16,7 +18,10 @@ import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
-import { DocImage, DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { DocImage, DocsAssetContext, planImageRef, rasterDataUrl, svgDataUrl, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { planMockupAssets } from '../src/docs/mockup/plan';
+import type { MockupContext } from '../src/docs/mockup/ports';
+import { pinFor } from '../src/docs/useDocsVisit';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
 import {
   detachUrls, docsLocation, imagePinFor, type ImagePin,
@@ -123,7 +128,7 @@ function docUi(src: string | HastRoot, o: DocOpts = {}) {
   const d = detachUrls(typeof src === 'string' ? treeOf(src) : src);
   const assets = o.assets ?? fakeAssets();
   const ctx: DocLinkContextValue = {
-    project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
+    project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
     pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
   };
   const page$ = (
@@ -248,6 +253,58 @@ describe('imagePinFor: the one pin rule (spec 4.11; M4.U2, row 66)', () => {
   });
 });
 
+describe('a version page reads its images at the version (refinement (n))', () => {
+  const SHA = 'c'.repeat(40);
+  const VERSION_URL = `/docs/demo/specs/a.md?ref=main&at=${SHA}`;
+  const VERSION = leafAt(VERSION_URL);
+
+  it('an image on a version page is pinned at the version', async () => {
+    const t = withImage();
+    expect(imagePinFor(t.entries[1], t, VERSION)).toEqual({
+      ok: true, pin: committedPin('i.png', SHA), draft: false, uncommittedNotShown: false });
+    const { container, assets } = renderDoc('![i](i.png)', { tree: t, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(assets.raster.mock.calls[0]?.slice(0, 2)).toEqual(['demo', committedPin('i.png', SHA)]);
+  });
+
+  it("a loaded image on a version page opens its own leaf at the page's ref and version", async () => {
+    const { container } = renderDoc('![i](i.png)', { tree: withImage(), url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    fireEvent.click(container.querySelector('button.doc-img-link')!);
+    expect(location.pathname + location.search).toBe(`/docs/demo/specs/i.png?ref=main&at=${SHA}`);
+  });
+
+  it('it is never marked uncommittedNotShown', async () => {
+    const t = withImage({ draft: draftOf('modified', { fp: FP_2 }) });
+    expect(imagePinFor(t.entries[1], t, VERSION)).toMatchObject({ ok: true, uncommittedNotShown: false, draft: false });
+    expect(imagePinFor(t.entries[1], t, leafAt('/docs/demo/specs/a.md?ref=main')))
+      .toMatchObject({ ok: true, uncommittedNotShown: true });
+    const { container, assets } = renderDoc('![i](i.png)', { tree: t, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(chips(container)).toEqual([]);
+    expect(assets.onDraftAsset).not.toHaveBeenCalled();
+  });
+
+  it("on a version page an image whose listed size is over its class cap still requests, and ccd's class cap answers", async () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const tree = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } });
+    const { container, assets } = renderDoc('![i](i.png)', { tree, url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(assets.raster).toHaveBeenCalledTimes(1);
+    expect(assets.raster.mock.calls[0]?.slice(0, 2)).toEqual(['demo', committedPin('i.png', SHA)]);
+    expect(container.querySelector('span.doc-img-refused')).toBeNull();
+  });
+
+  it('on a version page an image the served listing does not hold is absent, with no request', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+    const { container, assets } = renderDoc('![i](i.png)', { tree, url: VERSION_URL });
+    await act(async () => {});
+    expect(container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('absent'));
+    expect(assets.raster).not.toHaveBeenCalled();
+    expect(assets.file).not.toHaveBeenCalled();
+  });
+});
+
 describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', () => {
   const CASES: readonly (readonly [string, string, DocImageRefusal])[] = [
     ['a root-relative API path', '/api/example/x', 'root-relative'],
@@ -332,6 +389,40 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     expect(imgs(container)).toHaveLength(0);
   });
 
+  it('an image past its class cap keeps its chip, and the chip opens the image\'s own page (X2 P1, review F5)', async () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const url = '/docs/demo/specs/a.md?ref=main';
+    const committed = renderDoc('![i](i.png)', { tree: withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } }), url });
+    await act(async () => {});
+    expect(committed.container.querySelector('span.doc-img-refused')?.textContent)
+      .toBe(refusedText('too-large', { size: kib(cap + 1), cap: kib(cap) }));
+    fireEvent.click(committed.getByRole('button', { name: DOC_IMAGE_TEXT.openViewer }));
+    expect(location.pathname + location.search).toBe('/docs/demo/specs/i.png?ref=main');
+    expect(committed.assets.raster).not.toHaveBeenCalled();
+    cleanup();
+    const drafted = renderDoc('![i](i.png)', {
+      tree: withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: 10 }, draft: draftOf('modified', { fp: FP_2, size: cap + 1 }) },
+        { draft: draftOf('modified') }),
+      url,
+    });
+    await act(async () => {});
+    expect(drafted.queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer })).toHaveLength(1);
+    // The committed case's tap moved the location already: put it back so this tap alone can reach the assertion.
+    window.history.replaceState(null, '', '/docs/demo/specs/a.md?ref=main');
+    fireEvent.click(drafted.getByRole('button', { name: DOC_IMAGE_TEXT.openViewer }));
+    expect(location.pathname + location.search).toBe('/docs/demo/specs/i.png?ref=main');
+  });
+
+  it('an SVG past its class cap keeps the refusal with no action: its page offers Download alone (X2 P1, review F5)', async () => {
+    const cap = DOCS_CLASS_CAP.svg;
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'i.svg', { committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } })] });
+    const { container, queryAllByRole } = renderDoc('![i](i.svg)', { tree, url: '/docs/demo/specs/a.md?ref=main' });
+    await act(async () => {});
+    expect(container.querySelector('span.doc-img-refused')?.textContent)
+      .toBe(refusedText('too-large', { size: kib(cap + 1), cap: kib(cap) }));
+    expect(queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer })).toHaveLength(0);
+  });
+
   it('outside a Docs page every image is refused, and nothing is fetched', () => {
     const d = detachUrls(treeOf('![i](i.png)'));
     const bare = render(<>{renderHast(d.tree, { components: { ...SHARED_COMPONENTS, img: DocImage } })}</>);
@@ -339,7 +430,7 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     cleanup();
     const page = leafAt('/docs/demo/specs/a.md');
     const ctx: DocLinkContextValue = {
-      project: 'demo', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
+      project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
       pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
     };
     const noAssets = render(
@@ -398,6 +489,48 @@ describe('M4.U2 and row 66: each page loads exactly the pin the rule gives', () 
       [refusedText('deleted-in-worktree'), refusedText('draft-withheld')]);
     expect(assets.raster).not.toHaveBeenCalled();
     expect(imgs(container)).toHaveLength(0);
+  });
+
+  it('a draft image with no fingerprint but a stat pin is withheld here and its chip opens its page, which reads it by range (X2 P1, review F5)', async () => {
+    const stat = { fp: null, size: 5 * 1048576, mtimeNs: '1700000000000000000' };
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [
+        entry('specs', 'a.md', { draft: draftOf('modified') }),
+        entry('specs', 'big.png', { draft: draftOf('modified', stat) }),
+        entry('specs', 'old.png', { draft: draftOf('modified', { fp: null }) }),
+      ],
+    });
+    const { container, getByRole, queryAllByRole, assets } = renderDoc('![b](big.png) ![o](old.png)',
+      { tree, url: '/docs/demo/specs/a.md?ref=main' });
+    await act(async () => {});
+    expect([...container.querySelectorAll('span.doc-img-refused')].map((s) => s.textContent))
+      .toEqual([refusedText('draft-unhashed'), refusedText('draft-withheld')]);
+    expect(queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer }), 'the draft with no stat pin offers nothing').toHaveLength(1);
+    fireEvent.click(getByRole('button', { name: DOC_IMAGE_TEXT.openViewer }));
+    expect(location.pathname + location.search).toBe('/docs/demo/specs/big.png?ref=main');
+    expect(assets.raster).not.toHaveBeenCalled();
+    expect(assets.file).not.toHaveBeenCalled();
+  });
+
+  it('imagePinFor answers draft-unhashed for a stat-pinned draft, and an SVG of one says the same, with no action', async () => {
+    const stat = { fp: null, size: 5 * 1048576, mtimeNs: '1700000000000000000' };
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [
+        entry('specs', 'a.md', { draft: draftOf('modified') }),
+        entry('specs', 'big.png', { draft: draftOf('modified', stat) }),
+        entry('specs', 'big.svg', { draft: draftOf('modified', stat) }),
+        entry('specs', 'old.png', { draft: draftOf('modified', { fp: null }) }),
+      ],
+    });
+    const page = leafAt('/docs/demo/specs/a.md?ref=main');
+    expect(imagePinFor(tree.entries[1], tree, page)).toEqual({ ok: false, why: 'draft-unhashed' });
+    expect(imagePinFor(tree.entries[3], tree, page), 'no mtimeNs: nothing opens').toEqual({ ok: false, why: 'draft-withheld' });
+    const { container, queryAllByRole } = renderDoc('![s](big.svg)', { tree, url: '/docs/demo/specs/a.md?ref=main' });
+    await act(async () => {});
+    expect(container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('draft-unhashed'));
+    expect(queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer })).toHaveLength(0);
   });
 
   it('tapping a loaded image opens its own leaf in-app at the page ref, never /api/', async () => {
@@ -912,5 +1045,121 @@ describe('T13 review 3-4: an image that answered 401 loads again once sign-in re
     act(() => clearAuthLost());
     await new Promise((r) => setTimeout(r, 30));
     expect(assets.raster).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the plain view, the reader and the mockup planner share one pin rule and one size basis (completion plan Task 6)', () => {
+  const REF_URL = '/docs/demo/specs/a.md?ref=main';
+
+  function linkCtx(url: string, tree: DocsTreeOk): DocLinkContextValue {
+    const page = leafAt(url);
+    return {
+      project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
+      pageSource: 'committed', urls: new WeakMap(), onFragment: vi.fn(),
+    };
+  }
+
+  /** The mockup attempt's context for the same page: its own pin is what the tree opens for it. */
+  function mockupCtx(url: string, tree: DocsTreeOk): MockupContext {
+    const pin = pinFor(tree, leafAt(url));
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture page does not open');
+    return { project: 'demo', pin, tree };
+  }
+
+  const ONE = { key: 'k', raw: 'i.png', basePath: 'specs/a.md', kind: 'image', depth: 0 } as const;
+  const draftPage = { draft: draftOf('modified') };
+  const cases: { name: string; url: string; tree: DocsTreeOk }[] = [
+    { name: 'a committed page and an asset with a modified draft', url: '/docs/demo/specs/a.md',
+      tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a committed page in a ref view whose leaf opens committed', url: '/docs/demo/specs/a.md?ref=main&view=committed',
+      tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a modified asset', url: REF_URL, tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and an added asset', url: REF_URL,
+      tree: withImage({ committed: null, draft: draftOf('added', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and an untracked asset', url: REF_URL,
+      tree: withImage({ committed: null, draft: draftOf('untracked', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a conflicted asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('conflicted', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a deleted asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('deleted', { kind: 'absent', fp: null, size: null }) }, draftPage) },
+    { name: 'a draft page and a withheld asset', url: REF_URL, tree: withImage({ draft: draftOf('modified', { fp: null }) }, draftPage) },
+    { name: 'a draft page and a type-changed asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('typechange', { kind: 'symlink', fp: null }) }, draftPage) },
+    { name: 'a draft page and an asset with no draft', url: REF_URL, tree: withImage({}, draftPage) },
+    { name: 'an asset the listing does not hold', url: '/docs/demo/specs/a.md', tree: treeOk({ entries: [entry('specs', 'a.md')] }) },
+    { name: 'an asset committed as a symlink', url: '/docs/demo/specs/a.md',
+      tree: withImage({ committed: { kind: 'symlink', blob: '1'.repeat(40), size: 5 } }) },
+  ];
+
+  for (const c of cases) {
+    it(`makes the same pin decision: ${c.name}`, () => {
+      const plain = planImageRef(linkCtx(c.url, c.tree), 'i.png', 0);
+      const row = planMockupAssets([ONE], mockupCtx(c.url, c.tree)).rows[0]!;
+      if (plain.kind === 'pinned') {
+        expect(row.verdict).toMatchObject({ v: 'inline', pin: plain.pin, draft: plain.draft });
+      } else {
+        expect(plain.kind).toBe('refused');
+        const why = plain.kind === 'refused' ? plain.why : '';
+        expect(row.verdict).toEqual({ v: 'missing', why: why === 'absent' ? 'absent-at-commit' : why });
+      }
+    });
+  }
+
+  it('makes the same size decision on a non-version page: over the class cap is refused by one and skipped by the other', () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    for (const [url, img] of [
+      ['/docs/demo/specs/a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } }],
+      [REF_URL, { draft: draftOf('modified', { fp: FP_2, size: cap + 1 }) }],
+    ] as const) {
+      const tree = withImage(img as Partial<DocsEntry>, draftPage);
+      expect(planImageRef(linkCtx(url, tree), 'i.png', 0).kind).toBe('refused');
+      const row = planMockupAssets([ONE], mockupCtx(url, tree)).rows[0]!;
+      expect(row.verdict).toEqual({ v: 'skipped', why: 'too-large' });
+    }
+    const atCap = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap } });
+    expect(planImageRef(linkCtx('/docs/demo/specs/a.md', atCap), 'i.png', 0).kind).toBe('pinned');
+    expect(planMockupAssets([ONE], mockupCtx('/docs/demo/specs/a.md', atCap)).rows[0]!.size).toEqual({ kind: 'listed', bytes: cap });
+  });
+
+  it('keeps the plain view\'s version-page rule: no listed-size check on a version page, even at the listing\'s own commit', () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const tree = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } });
+    const plan = planImageRef(linkCtx(`/docs/demo/specs/a.md?at=${COMMIT_A}`, tree), 'i.png', 0);
+    expect(plan).toMatchObject({ kind: 'pinned', pin: committedPin('i.png', COMMIT_A) });
+  });
+
+  it('differs where the seed limits differ: the plain view defers the image at the per-page limit, the planner admits it', () => {
+    const tree = withImage();
+    const plain = planImageRef(linkCtx('/docs/demo/specs/a.md', tree), 'i.png', DOCS_MAX_IMAGES_PER_PAGE);
+    expect(plain).toMatchObject({ kind: 'pinned', deferred: true });
+    const row = planMockupAssets([ONE], mockupCtx('/docs/demo/specs/a.md', tree)).rows[0]!;
+    expect(row.verdict.v).toBe('inline');
+    expect(plain.kind === 'pinned' && row.verdict.v === 'inline' ? plain.pin : null).toEqual(row.verdict.v === 'inline' ? row.verdict.pin : undefined);
+  });
+});
+
+// C2's known duplicate, closed at D2's first item: the base64 of an image's bytes has one owner, `mockup/load.ts`'s
+// `base64Of` (C2's ruling that load.ts exports it rather than a caller copying it), and DocImage's two data: URL
+// builders take it from there. Characterised against the old copy first: each builder's output is exactly the bytes'
+// base64, at and around the 32 768-byte chunk the encoder spreads into `String.fromCharCode`.
+describe('the data: URL builders take their base64 from its one owner (D2 first item)', () => {
+  const bytesOf = (n: number): Uint8Array => Uint8Array.from({ length: n }, (_, i) => (i * 131 + 7) & 0xff);
+
+  it.each([0, 1, 2, 3, 0x7fff, 0x8000, 0x8001, 0x10003])('%i bytes: svgDataUrl and rasterDataUrl hold exactly their base64', (n) => {
+    const bytes = bytesOf(n);
+    const want = Buffer.from(bytes).toString('base64');
+    expect(svgDataUrl(bytes)).toBe(`data:image/svg+xml;base64,${want}`);
+    expect(rasterDataUrl(bytes, 'image/png')).toBe(`data:image/png;base64,${want}`);
+  });
+
+  it('under src/docs only mockup/load.ts encodes base64, and DocImage imports base64Of from it', () => {
+    const root = path.join(import.meta.dirname, '..', 'src', 'docs');
+    const files = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f)).map((f) => f.split(path.sep).join('/')).sort();
+    expect(files.length).toBeGreaterThan(40);
+    const encoders = files.filter((f) => /\bbtoa\(/.test(readFileSync(path.join(root, f), 'utf8')));
+    expect(encoders).toEqual(['mockup/load.ts']);
+    expect(readFileSync(path.join(root, 'DocImage.tsx'), 'utf8'))
+      .toMatch(/^import \{[^}]*\bbase64Of\b[^}]*\} from '\.\/mockup\/load';$/m);
   });
 });

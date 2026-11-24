@@ -62,6 +62,26 @@ describe('the simulator world, on the time-ports fake', () => {
     expect(n).toBe(50);
     expect(w.time.warnings[0]).toMatch(/more than 50 scheduled calls/);
   });
+  it('runSteps lets an awaiting call resume between steps, at the step\'s grain, instead of after the last timer', async () => {
+    const w = world(); const at: number[] = [];
+    w.server.scheduler.after(30_000, async () => {
+      await new Promise<void>((res) => { w.envAfter(5_000, () => { res(); }); });
+      at.push(w.server.clock.mono());
+    });
+    await w.runSteps(120_000, { idleMs: 30_000, busyMs: 1_000 });
+    await w.settle();
+    // Called at 30 s, woken by the world's timer at 35 s, resumed as the 1 s step that ran it ends: 35 s, not 120 s.
+    expect(at).toEqual([35_000]);
+    // A plain runUntil leaves the continuation to the end of the run.
+    const v = world(); const late: number[] = [];
+    v.server.scheduler.after(30_000, async () => {
+      await new Promise<void>((res) => { v.envAfter(5_000, () => { res(); }); });
+      late.push(v.server.clock.mono());
+    });
+    v.runUntil(120_000);
+    await v.settle();
+    expect(late).toEqual([120_000]);
+  });
   it('the server is handed the fake\'s one seeded chance', () => {
     const w = world();
     expect(w.server.entropy).toBe(w.time.ports.entropy);

@@ -140,10 +140,12 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) copyFileSync(path.join(REPO, 'ccd', f), path.join(tree, 'ccd', f));
   // The libraries the body pins (D-6913, D-7463): the installer renders their digests into the body, then stamps it.
   mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
-  for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+  for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh', 'door.sh', 'model-aliases.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   mkdirSync(path.join(tree, 'shared'), { recursive: true });
   for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
+  // The door program, which the installer publishes beside the body and pins in it.
+  copyFileSync(path.join(REPO, 'ccd', 'door-process.mjs'), path.join(tree, 'ccd', 'door-process.mjs'));
   const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
     { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
   const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';

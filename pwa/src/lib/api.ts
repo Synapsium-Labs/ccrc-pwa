@@ -3,17 +3,21 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
-import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { CoordCapsWrite } from '../../../shared/runCap';
+import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
 import type { OverridesView } from '../../../shared/overrides';
+import type { ApprovalCensusWire } from '../../../shared/approval-census';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
+import type { RosterFactsChange } from '../../../shared/rosterFacts';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
@@ -26,18 +30,35 @@ import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import { READER_LAB_RUNS_PATH, readerLabClosePath, readerLabProbePath, readerLabRunPath } from '../../../shared/readerLab';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
-  type DocsRefreshResponse, type DocsTreeResponse,
+  type DocsHistoryResponse, type DocsRefreshResponse, type DocsTreeResponse,
 } from '../../../shared/docs';
 import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
+  type DocsHistoryLoader,
 } from '../docs/failures';
+import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../shared/docs';
+import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { CoordinatorAdvisorSetting, CoordinatorAdvisorView } from '../../../shared/coordinatorAdvisor';
+import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+import type { DesignationView } from '../../../shared/overlord-designation';
+import type { LadderWire } from '../../../shared/overlord-ladder';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
+import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
+import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
+/** `GET /api/projects/:project/upkeep`'s answer (`hierarchyRoutes.ts`): the Upkeep epic (null before first use) and the inbound closes Linear refused (`at` is the server's `actedAt`, which may be null). */
+export interface UpkeepClose { readonly identifier: string; readonly teamKey: string; readonly word: string; readonly at: number | null }
+export interface UpkeepAnswer { readonly ok: true; readonly epic: EpicView | null; readonly notClosed: readonly UpkeepClose[] }
+
+/** The operator's ruling on one pending replay quiz run (`POST /api/continuity/quiz-runs/:id/rule`'s body word). */
+export type QuizRuleAction = 'confirm' | 'discard';
+/** That door's 200: the run's new state and whether it became the baseline (a ruling that is refused rejects instead). */
+export interface QuizRuleAnswer { readonly ok: true; readonly id: number; readonly state: string; readonly baseline: boolean }
 /** `GET`/`POST /api/face`'s answer. */
 export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
@@ -122,6 +143,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
   const getJson = async <T>(path: string, opts?: ReadOpts): Promise<T> =>
     (await request(path, undefined, opts)).json() as Promise<T>;
+
+  /** `getJson`, with a 404 from the read's own path answered as `{ absent: true }`: only an older server, which has no such
+   *  read, sends one (Overlord W1 home, plan question 3). Every other failure throws exactly as `getJson` does. */
+  const getJsonOrAbsent = async <T>(path: string, opts?: ReadOpts): Promise<T | { readonly absent: true }> =>
+    getJson<T>(path, opts).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 404) return { absent: true } as const;
+      throw err;
+    });
 
   const postInit = (body?: unknown): RequestInit =>
     body === undefined
@@ -311,6 +340,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
+    /** The Overlord's reads (Overlord W1 home, Task 2), each read only by `stores/overlord.ts`: the designation row, the ladder,
+     *  and `GET /health`'s capability words (an older server's body has no `caps`). */
+    overlordDesignation: (opts?: ReadOpts) => getJsonOrAbsent<{ readonly designation: DesignationView | null }>('/api/overlord/designation', opts),
+    overlordLadder: (opts?: ReadOpts) => getJsonOrAbsent<LadderWire>('/api/overlord/ladder', opts),
+    serverCaps: (opts?: ReadOpts) => getJson<{ readonly caps?: readonly string[] }>('/health', opts),
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
@@ -462,7 +496,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
     accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
-    accountSet: (id: string, body: AccountSetBody) =>
+    /** `org` is the organization label, or `none` to clear it (account organization B1): the facts door's own field. */
+    accountSet: (id: string, body: AccountSetBody & Pick<RosterFactsChange, 'org'>) =>
       postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
     accountSignOut: (id: string) =>
       postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
@@ -545,6 +580,24 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  clears each). The answer is the stored row, read back after the write, and is what the card shows. */
     saveLinking: (project: string, body: LinkingWriteBody) =>
       postJson<{ ok: true; linking: ProjectLinkingWire }>(`/api/projects/${encodeURIComponent(project)}/linking`, body),
+    /** The hierarchy settings (D-8184): `GET /api/hierarchy`, `POST /api/projects/:project/hierarchy` (the stored settings), and
+     *  `POST /api/hierarchy/owner` (one coordinator for every project). */
+    hierarchy: () => getJson<HierarchyAnswer>('/api/hierarchy'),
+    saveHierarchy: (project: string, body: Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>) =>
+      postJson<{ ok: true; settings: typeof body }>(`/api/projects/${encodeURIComponent(project)}/hierarchy`, body),
+    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused.
+     *  `work` is the work map beside the plan (WM2, D-8823): absent from an older server, which draws no Work card. */
+    plan: (slug: string) => getJson<{ ok: true; plan: PlanView; work?: WorkAnswer }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
+    upkeep: (project: string) => getJson<UpkeepAnswer>(`/api/projects/${encodeURIComponent(project)}/upkeep`),
+    /** `POST /api/items/:id/linear` (D-8184): one act on a hierarchy item (map, report, drift, initiatives, owner). */
+    linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
+      postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
+    ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
+    /** The migration (D-8186): `POST /api/projects/:project/hierarchy/migrate` (no body; asks the team's Linear owner for the map) and
+     *  `GET /api/migrations/:id` (a map's or report's body). */
+    migrate: (project: string) =>
+      postJson<{ ok: true; migrationId: number }>(`/api/projects/${encodeURIComponent(project)}/hierarchy/migrate`),
+    migration: (id: number) => getJson<MigrationView>(`/api/migrations/${id}`),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>
@@ -591,6 +644,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
      *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
     limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
+    /** Overlord W1a hand-offs: the operator's "Renew now" for a long-lived session. `POST /api/sessions/:id/renew`, body
+     *  `{}`; `409 renew-not-long-lived` / `409 renew-pending` raise `ApiError` with the word. Session-gated. Its answer says
+     *  whether the press was made while continuity was shadow (`shadow`, review 2312 F1); an unreadable answer is `unreadable`. */
+    renewNow: (id: string) => postRead<{ readonly ok: true; readonly id: number; readonly shadow?: boolean } | 'unreadable'>(
+      `${sid(id)}/renew`, 'unreadable', {}),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -910,8 +968,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  — the first may well have stored the value — and the control says
      *  "unconfirmed" for the one rather than reporting the other. The safe
      *  reading of "no answer" is stated here, at the call, as that helper's own
-     *  docstring requires. */
-    setCoordCaps: (next: Partial<CoordCaps>) =>
+     *  docstring requires.
+     *
+     *  D-8920: `{ maxConcurrentWorkers }` is the operator's OVERRIDE of the cap the server derives from
+     *  the fleet host, and `{ mode: 'automatic' }` clears it. The second is sent only to a server whose view carried
+     *  `capNow`: an older one knows no `mode` and would refuse the body as asking for nothing. */
+    setCoordCaps: (next: CoordCapsWrite) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
     /** `GET /api/coord/review-cap/:id` (D-6910): a work run's review-cap ask, composed by the refusal's own helper, with
      *  when it was raised and lifted. `LiftCapSheet` reads it on open. Session-gated when armed; no box token. */
@@ -990,10 +1052,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
      *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
     fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** The approval census read (approvals plan 2026-11-18, §3.1, M38): prompts by path and the per-programme-day counter over
+     *  the last `days` (the server defaults to 14). Session-gated; a store failure is 503 `unavailable` and no store is 501, and
+     *  both reject like every non-2xx, so a failed read is never told from an empty one by a value. The M38 card reads it. */
+    getApprovalCensus: (days?: number, opts?: ReadOpts) =>
+      getJson<ApprovalCensusWire>(days === undefined ? '/api/approvals/census' : `/api/approvals/census?days=${encodeURIComponent(String(days))}`, opts),
     /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
     laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
+    /** `POST /api/models/:lane` (model-class-advance R4; revert-holds-until-newer, D-8757): Revert one class on the lane, and
+     *  nothing else: the server refuses a hold or a release (`bad-action`), and refuses a revert where its own fresh read of
+     *  the lane does not prove the fleet box ends the hold by itself. Unknown on purpose: the Models sheet's readers
+     *  (`accounts/modelsSheetWords.ts`) read the 200 and a refusal's body. `postJson`, so a non-2xx rejects with `ApiError` and
+     *  the sheet never moves a row before the server's answer. */
+    laneModelsAct: (lane: string, body: { action: 'revert'; class: string }) =>
+      postJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, body),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
@@ -1016,6 +1090,17 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
     setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
       postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET`/`POST /api/coord/coordinator-advisor` (D-8967): Settings › Automation › Coordinator advisor (`setting` null when
+     *  the server could not read its row). Session-gated when armed; no box token. `postJsonOr`, for `setCoordCaps`' reason. */
+    coordinatorAdvisor: () => getJson<CoordinatorAdvisorView & { readonly ok: true }>('/api/coord/coordinator-advisor'),
+    setCoordinatorAdvisor: (setting: CoordinatorAdvisorSetting) =>
+      postJsonOr<(CoordinatorAdvisorView & { readonly ok: true }) | 'unreadable'>('/api/coord/coordinator-advisor', 'unreadable', setting),
+    /** `GET /api/coord/renewal-mode` (Overlord W1a hand-offs): Settings › Automation › When soft renewals happen, `when-away`
+     *  or `on-schedule` (`mode` null when the stored word could not be read). Session-gated when armed; no box token. */
+    renewalMode: () => getJson<RenewalModeView & { readonly ok: true }>('/api/coord/renewal-mode'),
+    /** `POST /api/coord/renewal-mode`: `{mode}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setRenewalMode: (mode: RenewalMode) =>
+      postJsonOr<(RenewalModeView & { readonly ok: true }) | 'unreadable'>('/api/coord/renewal-mode', 'unreadable', { mode }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
@@ -1064,6 +1149,31 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** The operator's ruling on a parked permission prompt (approvals PR 3), posted to the questions answer door as
+     *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
+     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, or a guard's word from the door's approval arm) rejects with an
+     *  `ApiError` like every non-2xx. */
+    ruleParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
+      (await request(`/api/questions/approval-${id}/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ kind: 'approval', verdict }),
+      })).json().catch(() => ({})),
+    /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
+     *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
+     *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */
+    ruleQuizRun: async (id: number, action: QuizRuleAction): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/rule`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ action }),
+      })).json() as Promise<QuizRuleAnswer>,
+    /** `POST /api/continuity/quiz-runs/:id/withdraw` (review 3232 F1e): the operator withdraws the confirmed baseline. Session-gated
+     *  when armed, no step-up (it only narrows); dark it answers `auth-off`. A refusal rejects with an `ApiError`. */
+    withdrawQuizBaseline: async (id: number): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/withdraw`, {
+        method: 'POST', headers: { accept: 'application/json' },
+      })).json() as Promise<QuizRuleAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
@@ -1072,16 +1182,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
      *  no item has, or one the operator was never shown. Session-gated when armed. */
     item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
-    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
-     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
-     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides for a `decide` or a `value` item,
+     *  and for a `do` item ticked with its optional note (D-8931); a `do` item ticked with none sends no body at
+     *  all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an `ApiError` like every non-2xx, and the
+     *  item is unchanged. */
     tickItem: (id: number, answer?: string) =>
       postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `POST /api/calls/:id/seen` (D-8126): the operator's Seen on a big call, idempotent. A refusal (`not-big`, `unknown-call`)
+     *  rejects with an `ApiError` like every non-2xx. Session-gated when armed. */
+    markCallSeen: (id: number) => postJson<{ readonly ok: true; readonly call: CallView | null }>(`/api/calls/${id}/seen`),
     /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
      *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
      *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
     goals: (slug: string) =>
       getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `POST /api/programmes/:slug/goals/ratify` (Overlord W1, portfolio B): the operator ratifies the pin (at the stamp the panel
+     *  rendered) or one modification. 409 `goals-changed`, 501 `auth-off`/`not-configured`, and an older server's 404 reject with
+     *  `ApiError`; the screen reads the last two as not available on this server. Session-gated. */
+    ratifyGoals: (slug: string, version: GoalsVersion) =>
+      postJson<{ readonly ok: true; readonly changed: boolean; readonly goals: GoalsView }>(
+        `/api/programmes/${encodeURIComponent(slug)}/goals/ratify`, version),
     /** `GET /api/programmes/:slug/secrets` (the PL6 follow-up, programme item 9): the programme's stored secrets by slot name,
      *  with when each was saved and the item that asked for it, never any part of a value. `secrets-unreadable` (a store the
      *  box could not read) rejects with an `ApiError`, never an empty list. Session-gated when armed. */
@@ -1095,11 +1215,30 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `POST /api/answer-marks` (Overlord W1, §9.2.1): one of the operator's two marks on a row, ticked or not; it answers the
+     *  mark's new value. `not-markable` (the row left the list) rejects with an `ApiError` like every non-2xx. Session-gated when
+     *  armed; it works dark too. */
+    setAnswerMark: (kind: AnswerMarkKind, id: number, mark: AnswerMarkName, value: boolean) =>
+      postJson<{ readonly ok: true; readonly mark: AnswerMarkName; readonly answerMark: AnswerMarkView }>('/api/answer-marks', { kind, id, mark, value }),
+    /** `POST /api/responses/receipts` (Overlord W1, C67): the console's `opened` receipts, at most `RECEIPTS_MAX_PER_BODY` a body. */
+    postResponseReceipts: (receipts: readonly ReceiptIn[]) => postJson<{ readonly ok: true; readonly kept: number; readonly dropped: unknown }>('/api/responses/receipts', { v: 1, receipts }),
+    /** `GET /api/responses?ref=` (C69): the response rows of one message, `ref` as `item:<id>` or `digest:<key>`. A failure rejects, never an empty list. */
+    responsesFor: (ref: string) => getJson<{ readonly ok: true; readonly rows: readonly ResponseRowBrief[] }>(`/api/responses?ref=${encodeURIComponent(ref)}`),
+    /** `POST /api/responses/:id/handled` (C69): the operator handled that message elsewhere; no body, no undo. */
+    markResponseHandled: (id: number) => postJson<{ readonly ok: true; readonly id: number; readonly handledAt: number | null; readonly changed: boolean }>(`/api/responses/${id}/handled`),
+    /** `GET /api/responses/retention`: the retention in days, `days: null` with `unreadable` when the setting cannot be read (for a later Settings row). */
+    responseRetention: () => getJson<ResponseRetentionView>('/api/responses/retention'),
+    /** `POST /api/responses/retention`: sets the days; lowering takes a step-up, a refusal rejects with its `ApiError`. */
+    setResponseRetention: (days: number) => postJson<ResponseRetentionView>('/api/responses/retention', { days }),
     /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
      *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
     /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
     cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
+    /** `GET /api/overlord/restore` (authority journal C): the authority guard's state; `RestoreBanner`'s `readAuthority` reads it. */
+    overlordRestore: () => getJson<unknown>('/api/overlord/restore'),
+    /** `POST /api/overlord/restore/confirm`: Confirm the restore, behind the step-up; a refusal rejects with its `ApiError`. */
+    confirmRestore: () => postJson<unknown>('/api/overlord/restore/confirm'),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
@@ -1115,11 +1254,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
-      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 30 s, after a
       // read lane's wait of at most 10 s).
       const unlimited: ReadOpts = { timeoutMs: null };
       const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
@@ -1156,6 +1295,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           headers: { ...marker, 'content-type': 'application/json' },
           body: JSON.stringify({ ref: body.ref, reason: body.reason }),
         }),
+        history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),
+        // X2 P1.3: the range read's loader (`docs/range/readRange.ts`'s `RangeLoader`), beside `DocsLoaders` and not in it,
+        // as `history` is: each call resolves the answer's inner value (`prepared`, `frame`), with the same union.
+        range: {
+          prepare: async (target, signal) => {
+            const got = await read<DocsRangePrepareResponse>(
+              docsApi.rangePrepare(target.project, target.pin, target.range), ['prepared'], { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.prepared } : got;
+          },
+          frame: async (target, snapshot, offset, length, signal) => {
+            const got = await read<DocsRangeFrameResponse>(
+              docsApi.rangeFrame(target.project, target.pin, target.range, snapshot, offset, length), ['frame'],
+              { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.frame } : got;
+          },
+        },
       };
     })(),
     /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a

@@ -26,6 +26,7 @@ import {
   DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, RUNS_EXPIRE_NEVER_STARTED_MARKER, RUNS_EXPIRE_COORDINATOR_GONE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, STALL_WATCH_DISABLED_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, ccrcFileSwitchNames, markerSwitchNames, overrideSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 import { PLAIN_AUTO_MEMORY_DEFAULT } from '../../shared/plainAutoMemory.js';
+import { ADVISOR_DEFAULT } from '../../shared/coordinatorAdvisor.js';
 import { STALL_MARKERS, stallArmingOf } from '../src/coord/stall.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -125,6 +126,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-claimant-crashed-choice': 'run_close_settings.claimantCrashed',
       'run-close-claimant-gone-choice': 'run_close_settings.claimantGone',
       'plain-auto-memory': 'plain_memory_settings.choice',
+      'coordinator-advisor': 'advisor_settings.choice',
+      'overlord-rung': 'overlord_ladder.operatorRung',
     });
   });
 
@@ -137,7 +140,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, six settings routes, the rest by hand (the sixth, delegation-adopt, D-8112; the sixth settings route, plain-auto-memory, Overlord W1a)', () => {
+  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, eight settings routes, the rest by hand (the sixth, delegation-adopt, D-8112; the sixth settings route, plain-auto-memory, Overlord W1a; the seventh, overlord-rung, Overlord W1 ladder; the eighth, coordinator-advisor, D-8967)', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -154,6 +157,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'run-close-claimant-crashed-choice': 'POST /api/coord/run-close',
       'run-close-claimant-gone-choice': 'POST /api/coord/run-close',
       'plain-auto-memory': 'POST /api/coord/plain-auto-memory',
+      'coordinator-advisor': 'POST /api/coord/coordinator-advisor',
+      'overlord-rung': 'POST /api/overlord/rung and POST /api/overlord/pause; Confirm the restore writes its stricter value',
     });
   });
 
@@ -206,9 +211,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 48 rows: 37 markers, 8 settings and 3 ~/.ccrc files (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339; autocompact-disabled and the three ~/.ccrc off switches, D-8382; plain-auto-memory the eighth setting, Overlord W1a)', () => {
+  it('the table has 50 rows: 37 markers, 10 settings and 3 ~/.ccrc files (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7; runs-expire-never-started, D-8077; the two run-close choices, D-8077; runs-expire-coordinator-gone and its choice, D-8078; stall-watch-disabled, D-8339; autocompact-disabled and the three ~/.ccrc off switches, D-8382; plain-auto-memory the eighth setting, Overlord W1a; overlord-rung the ninth, Overlord W1 ladder; coordinator-advisor the tenth, D-8967)', () => {
     const fileRows = rows.filter(([, r]) => 'ccrcFile' in r.storage);
-    expect([rows.length, markerRows.length, settingRows.length, fileRows.length]).toEqual([48, 37, 8, 3]);
+    expect([rows.length, markerRows.length, settingRows.length, fileRows.length]).toEqual([50, 37, 10, 3]);
   });
 
   it('D-8339: stall-watch-disabled is C5\'s, hand-only, absent means the watch runs, and the stall lane reads the same constant', () => {
@@ -275,6 +280,25 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     const keys = Object.keys(SWITCHES);
     expect(keys.indexOf('dispatch-abandon-choice')).toBe(keys.indexOf('roll-idle-targets') + 1);
     expect(keys.at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
+  });
+
+  it('the coordinator advisor (D-8967) is Session Conversation\'s settings row, seeded off, written by its route and read by the store alone', () => {
+    expect(SWITCHES['coordinator-advisor']).toEqual({
+      storage: { setting: 'advisor_settings.choice' }, default: ADVISOR_DEFAULT, owner: 'C3',
+      meaning: expect.stringMatching(/advisor/), writer: 'POST /api/coord/coordinator-advisor',
+    });
+    expect(ADVISOR_DEFAULT).toBe('off');
+    const store = 'server/src/coord/advisorStore.ts';
+    expect(sqlStatementsIn(symbolOf(store, 'coordinatorAdvisorSettings')).map((q) => [q.verb, q.table])).toEqual([['SELECT', 'advisor_settings']]);
+    expect(sqlStatementsIn(symbolOf(store, 'setCoordinatorAdvisor')).map((q) => [q.verb, q.table]))
+      .toEqual([['INSERT', 'advisor_settings'], ['UPDATE', 'advisor_settings']]);
+    const ddl = sqlStatementsInFile('server/src/coord/schema.ts').filter((q) => /\badvisor_settings\b/.test(q.text));
+    expect(ddl.map((q) => q.verb)).toEqual(['CREATE', 'INSERT']);
+    expect(ddl[1]!.text).toContain("VALUES (1, 'off', 12,");
+    const routesSrc = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+    expect(routesSrc.includes("app.post('/api/coord/coordinator-advisor'"), 'its writer is the route').toBe(true);
+    const keys = Object.keys(SWITCHES);
+    expect(keys.indexOf('coordinator-advisor')).toBe(keys.indexOf('plain-auto-memory') + 1);
   });
 
   it('Overlord W1a: auto memory for plain sessions is Session Conversation\'s settings row, seeded off, written by its route and read by the store alone', () => {

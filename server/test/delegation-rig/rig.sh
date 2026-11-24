@@ -38,7 +38,7 @@ SESSION=cc-rig-hookcap
 VERBS='waitReady type keys waitLabels probeLabels answerDialog sleep kill9 swapConfig relaunch snapshot sessionsSnap paneSnap'
 # The Overlord's W0 launch block (plan 2026-11-10-overlord/w0-spike.md, Task 2): the ONLY flags a scenario's launch.args may
 # carry, and the ONLY env names its launch.env may set. Each flag is in Claude Code's CLI reference (W0 Task 1 Step 2).
-RIG_LAUNCH_FLAGS='--setting-sources --settings --mcp-config --strict-mcp-config --agents --allowedTools --disallowedTools --permission-mode --dangerously-skip-permissions --model --tools --autocompact --append-system-prompt --disable-slash-commands'
+RIG_LAUNCH_FLAGS='--setting-sources --settings --mcp-config --strict-mcp-config --agents --allowedTools --disallowedTools --permission-mode --dangerously-skip-permissions --model --tools --autocompact --append-system-prompt --disable-slash-commands --remote-control'
 # Of those, the ones that take no value (CLI reference, W0 Task 1); every other one takes exactly one, the next argument.
 RIG_LAUNCH_BARE_FLAGS='--strict-mcp-config --dangerously-skip-permissions --disable-slash-commands'
 RIG_LAUNCH_ENV='RIG_EMIT_LOG RIG_STATUS_LOG DOOR_LOG DOOR_NONCE CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_FORK_SUBAGENT CLAUDE_CODE_DISABLE_AGENT_VIEW CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_AUTO_COMPACT_WINDOW CLAUDE_AUTOCOMPACT_PCT_OVERRIDE DISABLE_AUTO_COMPACT CLAUDE_CODE_DISABLE_CRON CLAUDE_CODE_DISABLE_BACKGROUND_TASKS CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK'
@@ -206,10 +206,13 @@ check_launch() {
          and ((.env // {}) | type == "object" and all(keys[]; test($reserved) | not))
          and ((.hooks // {}) | type == "object" and all(.[]; type == "array")))
     and ((.launch.files // []) as $fs | ($fs | type == "array") and all($fs[]; type == "object"
-         and (.in == "cfg" or .in == "repo" or .in == "cfg2")
+         and (.in == "cfg" or .in == "repo" or .in == "cfg2" or .in == "root")
          and (.path | type == "string" and (gsub("@RIG_PROJECT@"; "p") | test("^[A-Za-z0-9._/-]{1,200}$"))
               and (startswith("/") | not) and ((split("/") | index("..")) == null))
-         and (.text | type == "string") and ((.exec // false) | type == "boolean")))
+         and (if has("link") then (has("text") | not) and ((.exec // false) == false)
+                and (.link | type == "string" and startswith("@RIG_ROOT@/") and test("^@RIG_ROOT@(/[A-Za-z0-9._-]+)+$")
+                     and ((split("/") | index("..")) == null))
+              else (.text | type == "string") and ((.exec // false) | type == "boolean") end)))
     and (if has("capS") then (.capS | type == "number" and . == floor and . >= 60 and . <= 5400) else true end)
     and (if has("timing") then (.timing | type == "boolean") else true end)
     and (if has("requests") then (.requests | type == "boolean") else true end)
@@ -304,7 +307,7 @@ cmd_setup() {
       projects: {($repo): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true,
                            projectOnboardingSeenCount: 5, allowedTools: []}}}' > "$H/cfg/.claude.json"
   # A scenario's launch.files (W0), last, so a file may stand in for anything above. `cfg2` files wait for swapConfig.
-  if [[ -n ${SCEN-} ]]; then apply_launch_files "$R" cfg "$H/cfg"; apply_launch_files "$R" repo "$R/repo"; fi
+  if [[ -n ${SCEN-} ]]; then apply_launch_files "$R" cfg "$H/cfg"; apply_launch_files "$R" repo "$R/repo"; apply_launch_files "$R" root "$R"; fi
 }
 # The launch.files entries whose `in` is <in>, written under <base>: each by a path check_launch already held to relative
 # and `..`-free, `@RIG_PROJECT@` in it replaced by the project directory name Claude Code derives from the fixture repo
@@ -320,6 +323,10 @@ apply_launch_files() {
     path=$(jq -r --argjson i "$i" '.launch.files[$i].path' "$SCEN")
     dest=$base/${path//@RIG_PROJECT@/$project}
     mkdir -p "$(dirname "$dest")"
+    # A `link` entry (sandbox Task 1) is a symlink to a path under the run root, which check_launch held to `@RIG_ROOT@/…`.
+    if jq -e --argjson i "$i" '.launch.files[$i] | has("link")' "$SCEN" >/dev/null; then
+      ln -sfn -- "$(jq --argjson i "$i" '.launch.files[$i].link' "$SCEN" | launch_subst "$R" | jq -r .)" "$dest"; continue
+    fi
     jq --argjson i "$i" '.launch.files[$i].text' "$SCEN" | launch_subst "$R" | jq -j . > "$dest"
     if jq -e --argjson i "$i" '.launch.files[$i].exec == true' "$SCEN" >/dev/null; then chmod 0755 "$dest"; fi
   done

@@ -14,13 +14,16 @@ import type { ReaderCommand } from './reader/policy';
 import type { ImagePin } from './docsLinks';
 import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
 import type { ExportMissing, ExportPlain, ExportWait } from './export/policy';
+import type { MockupRefVerdict } from './mockup/ports';
+import type { MockupPrescan } from './mockup/prescan';
+import { MOCKUP_MAX_CSS_DEPTH } from './mockup/policy';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'bad-project': 'That project name is not one Docs can address.',
   'bad-ref': 'That ref is not a branch name Docs can read.',
   'bad-commit': 'That commit id is not a full 40- or 64-character hex id.',
-  'bad-section': 'That section is not one of the four Docs sections.',
+  'bad-section': 'That section is not one of the Docs sections.',
   'bad-path': 'That path is not one Docs can address.',
   'bad-fingerprint': 'That draft fingerprint is not a 64-character hex hash.',
   'unknown-project': "There is no project by that name under the fleet box's projects folder ({root}).",
@@ -46,6 +49,9 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'untrusted-worktree': 'The worktree holding this draft failed the ownership check ({why}).',
   'worktree-moved': 'The worktree moved to another commit while Docs read it.',
   'draft-changed': 'The draft changed while Docs read it.',
+  'snapshot-gone': 'The saved copy Docs was reading this file from went away twice, so Docs stopped; read it again in a moment.',
+  'range-too-large': 'This file is {size}; Docs reads files up to {cap}.',
+  'prepare-busy': 'The fleet box is busy preparing other large files right now; try again in a moment.',
   'remote-absent': 'This repository has no origin remote to fetch from.',
   'remote-branch-absent': 'Origin has no branch by this name.',
   'fetch-auth-failed': "Fetching from origin was refused: the fleet box's credentials were not accepted.",
@@ -98,6 +104,10 @@ export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonl
     'This file is {size}, over the limit for files of this kind.',
     'This file is larger than Docs shows files of this kind.',
   ],
+  'range-too-large': [
+    'This file is {size}, over what Docs reads.',
+    'This file is larger than Docs reads.',
+  ],
   'too-many-entries': ['This repository has more entries than Docs lists at once.'],
   'unreadable-path': ['That path could not be read on the fleet box.'],
   'untrusted-worktree': ['The worktree holding this draft failed the ownership check.'],
@@ -123,15 +133,16 @@ export const HELPER_UNAVAILABLE_DETAIL_SENTENCE: Readonly<Record<string, string>
 export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = {
   'not-docs': 'This address is not a Docs page.',
   'bad-project': 'This address names a project Docs cannot address.',
-  'bad-section': 'This address names a section that is not one of the four Docs sections.',
+  'bad-section': 'This address names a section that is not one of the Docs sections.',
   'bad-path': 'This address holds a path Docs cannot address.',
   'bad-ref': "This address's ref is not a branch name Docs can read.",
   'bad-view': "This address's view is not one Docs knows; only view=committed is.",
   'bad-frame': "This address's frame is not one Docs knows; only frame=full is.",
+  'bad-at': "This address's at= is not a full 40- or 64-character lower-case commit id.",
   'bad-escape': 'This address holds a percent-escape that does not decode.',
   'encoded-slash': 'This address hides a slash inside one path segment (%2F).',
   'commit-in-page':
-    'A Docs page address never names a commit; open the page without it, or use a GitHub link for one exact commit.',
+    'A Docs page address names a commit only as at=; open the page without the other key, or use a GitHub link for one exact commit.',
   'unknown-param': 'This address carries a query key Docs pages do not use.',
   'repeated-param': 'This address carries the same query key twice.',
   'reserved-node': 'This address names a fleet node, which Docs does not serve yet.',
@@ -261,6 +272,37 @@ export function kib(bytes: number): string {
   return `${Math.ceil(bytes / 1024)} KiB`;
 }
 
+/** A byte count in MiB, a whole number when it is one, else to one decimal rounded up (X2 P1: the range read's sizes,
+ *  so "64 MiB" reads as the ceiling it is and a file one byte over it never reads as the ceiling). */
+export function mib(bytes: number): string {
+  const whole = bytes / 1048576;
+  return Number.isInteger(whole) ? `${whole} MiB` : `${(Math.ceil(whole * 10) / 10).toFixed(1)} MiB`;
+}
+
+/** The words of a range read and of Markdown in parts (X2 P1, spec 4.3). */
+export const DOCS_RANGE_TEXT = {
+  reading: 'Reading {done} of {total}…',
+  cancel: 'Cancel',
+  cancelled: 'Reading stopped. Nothing was kept.',
+  readAgain: 'Read it',
+  overCeiling: 'This file is {size}; Docs reads files up to {cap}.',
+  noDigest: 'Docs can read this file only over a secure connection (HTTPS): it checks every part it reads, and this page cannot.',
+  mismatch: 'Docs stopped reading this file: a part it received was not the one it asked for.',
+  threw: 'Docs could not finish reading this file: the read failed in this page. Try again, or Download it.',
+  imageNoHeader: 'Docs could not read this image’s size from its header, so it does not show it here; Download it instead.',
+  imageSide: 'This image is {w} × {h} pixels; Docs shows images up to {side} pixels a side here. Download it instead.',
+  imagePixels: 'This image is {w} × {h} pixels; Docs shows images up to {px} megapixels here. Download it instead.',
+  imageMismatch: 'This file is not the image type its name says, so Docs does not show it.',
+  downloadOnly: 'This file is {size}; Docs offers it as a Download.',
+  partBar: 'Part {k} of {n}',
+  partPrevious: 'Previous part',
+  partNext: 'Next part',
+  partContinued: 'This part continues the one before it.',
+  sourceParts: 'This file is {size}; it is shown as source in parts of at most {part}.',
+  partPreparing: 'Preparing the parts of this document ({k} of {n})…',
+  fragmentUnknown: 'The place this link names may be in a part Docs could not prepare, so the first part is shown.',
+} as const;
+
 /** A commit's short form: its first 8 hex characters, everywhere (refinement (s)). */
 export function shortCommit(sha: string): string {
   return sha.slice(0, 8);
@@ -301,7 +343,7 @@ export const DOCS_RELIST_WORDS: ReadonlySet<DocsFailure> =
 
 /** Why a Markdown link on a Docs page is inert (spec 4.11, the `DocLink` arm "everything else"): a `resolveDocRef`
  *  refusal, a self-contained scheme (`data`, `blob`), or the reason `githubBlobUrl` gives no link for an in-repo
- *  file outside the four sections. */
+ *  file outside the Docs sections. */
 export type DocLinkInertReason =
   | Extract<DocRefResolution, { kind: 'refused' }>['why']
   | Extract<DocRefResolution, { kind: 'self-contained' }>['scheme']
@@ -331,7 +373,7 @@ export const DOC_LINK_OUTSIDE_PAGE = 'Links open only inside a Docs page';
 /** Why `DocImage` draws no image (spec 4.11: "Image not loaded: {reason}"): rendered outside a Docs page;
  *  `imagePinFor`'s three refusals; a document that is not a raster or an SVG (`not-image`); an http or https image
  *  (`external`: Docs never loads one); a listed size over its class cap (`too-large`, spec 5.5); an anchor; an
- *  in-repo file outside the four sections (`repo`); a self-contained scheme; or a `resolveDocRef` refusal. A
+ *  in-repo file outside the Docs sections (`repo`); a self-contained scheme; or a `resolveDocRef` refusal. A
  *  `mailto:` source is `scheme`. */
 export type DocImageRefusal =
   | 'outside-page'
@@ -349,6 +391,7 @@ export const DOC_IMAGE_REFUSED_SENTENCE: Record<DocImageRefusal, string> = {
   'not-image': 'it is not an image Docs shows (PNG, JPEG, GIF, WebP or SVG)',
   'external': 'it is on another site, and Docs never loads images from other sites',
   'too-large': 'it is {size}; Docs shows images up to {cap}',
+  'draft-unhashed': 'Docs could not check its draft in this page',
   'fragment': 'it names a place in this page, not an image',
   'repo': 'it is outside the Docs sections',
   'data': 'it carries its own bytes, which Docs does not load',
@@ -403,15 +446,17 @@ export const DOCS_VIEW_TEXT = {
   opaque: 'Drafts inside nested repositories are not shown: {dirs}.',
   emptyListing: 'Nothing is listed here.',
   missing: 'Not in this listing at {short}.',
+  sectionUnserved: "The fleet box does not serve this section yet; it appears once that box's ccrc is updated.",
+  versionUnknownCommit: "This box's copy of the repository has no commit {short}.",
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',
-  htmlStandIn: 'HTML mockups open in a later release; Source shows the file and Download saves it.',
-  size: 'Size: {size}',
   symlink: 'This is a symbolic link in the repository; Docs does not follow it.',
   submodule: 'This is a git submodule; Docs does not open it.',
   nothingToShow: 'There is no committed version of this file to show here.',
   changing: 'The listing changed while Docs read this file.',
+  /** After `changing`, for a Download a re-list interrupted: it is never saved on its own. */
+  tapDownloadAgain: 'Tap Download again.',
   source: 'Source',
   download: 'Download',
   downloadFailed: 'Download failed: {sentence}',
@@ -448,6 +493,8 @@ export const DOCS_HEAD_TEXT = {
   sourceDraft: '{badge} in {label}',
   sourceDraftUnbadged: 'draft',
   sourceNone: 'nothing opened',
+  sourceVersion: 'version {short}',
+  backToLatest: 'Back to the latest',
   updatedTo: 'Updated to {short}',
   github: 'View on GitHub',
   /** The full head's row shows this word beside its icon; the link's name stays `github` (desk-nav Part B, D-8101). */
@@ -527,6 +574,8 @@ export const DOCS_BANNER_TEXT = {
   draftAssets: 'This draft page embeds {k} uncommitted asset{s}.',
   viewCommitted: 'Showing the committed version at {short}.',
   backToDraft: 'Back to the draft',
+  version: 'Showing the version at {short}, not the latest on {served}.',
+  notContainedVersion: 'Commit {short} is not on {served}; it comes from another branch.',
 } as const;
 
 /** The served ref as the truth line and the banners name it (spec 4.5): `origin/<b>` when the origin side is served,
@@ -586,6 +635,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
   'unmeasured': 'Docs could not measure whether origin has {short}; Refresh, then share.',
   'new-draft': 'Not committed yet, so GitHub has nothing to show.',
   'new-withheld': 'Not committed yet, and Docs did not read it ({withheld}); nothing to share or export.',
+  'version-unmeasured': 'Docs cannot tell whether origin has {short}, so it gives no link to this version.',
 };
 
 /** Export's clause (spec 4.16), and the refusals that take it on a page that offers Export. THE SEAM FOR EXPORT
@@ -593,7 +643,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
  *  sentence carries the clause. Export's run passes its own availability and changes no sentence here. */
 export const SHARE_EXPORT_CLAUSE = 'Export makes a file you can send.';
 export const SHARE_EXPORT_CLAUSE_FOR: ReadonlySet<ShareRefusal> =
-  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft']);
+  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft', 'version-unmeasured']);
 
 /** A refusal's sentence, filled from its fields, with Export's clause when the page offers Export. */
 export function shareRefusalSentence(why: ShareRefusal, fields: ShareFields, exportOffered: boolean): string {
@@ -666,6 +716,26 @@ export const EXPORT_TEXT = {
   banner: 'Draft, not committed. This copy includes uncommitted changes from {label} on {branch}. Based on commit '
     + '{commit} ({served}). It is not on GitHub. Content fingerprint sha256:{fp}. Read {time}.',
   bannerImages: 'It embeds {k} uncommitted image{s}.',
+  // A mockup's export (spec 5.6.9; completion plan Task 9). `{k}`/`{s}` count; `{label}` is the closed worktree label.
+  /** The sheet's confirm before Save, when the file inlines uncommitted files. */
+  draftConfirm: 'This file includes {k} uncommitted file{s} from {label}.',
+  /** A page the pre-scan refused: the file holds its source as text, and says so. */
+  mockupRefused: 'This page was too complex to render, so this file holds its source as text.',
+  /** The title of the frame that holds the snapshot, `{name}` the file's name. */
+  mockupFrame: 'Snapshot of {name}',
+  mockupInlined: 'Files inlined in this copy',
+  mockupOmitted: 'Files not inlined in this copy',
+  mockupLinks: 'Links in this page',
+  /** One inlined file: `{path}` its repo path, `{size}` its size, `{source}` one of `fileCommitted` and `fileDraft`. */
+  inlinedFile: '{path} ({size}, {source})',
+  fileCommitted: 'committed',
+  fileDraft: 'uncommitted draft',
+  /** The provenance's count of diagram blocks that stay as source (base 5.6.9's table): `{m}` the count, `{s}` its plural and
+   *  `{es}` the verb's (`1 diagram appears`, `2 diagrams appear`). */
+  mockupDiagrams: '{m} diagram{s} appear{es} as source',
+  /** What rests on the file's content-security policy and is not rewritten by the snapshot (spec 5.6.9, M5.B10). */
+  mockupCss: 'Styles that use image-set() or escapes inside url() are not rewritten in this copy; the content-security '
+    + 'policy in this file stops them loading anything.',
 } as const;
 
 /** The provenance block's labels (spec 4.17 "Provenance"); the same facts are written as `ccrc:*` metas. */
@@ -709,4 +779,119 @@ export const EXPORT_WAIT_TEXT: Record<ExportWait, string> = {
   'highlighting': 'Highlighting…',
   'gate': 'Choose Format or Show as text first',
   'image-failed': 'Image not loaded',
+  'render-first': 'Render the mockup first',
+  'preparing': 'Preparing…',
 };
+
+// ===== Mockup viewer (spec 4.7, 5.6.7, 5.6.8; native Docs reader C2, Task 8) =====
+// The viewer's words, in ONE block so it can be reviewed and revised as one. The quoted phrases are the spec's own; the
+// rest say only what the viewer shows or does, and nothing it does not (no promise and no control the spec leaves out).
+// `{field}`s are filled by `fillSentence`; `{s}` is `pluralS`'s.
+
+/** The viewer's own words. `Source` and `Download` are `DOCS_VIEW_TEXT`'s. */
+export const MOCKUP_TEXT = {
+  tooComplex: 'Too complex to render — shown as source',
+  /** Why a page is not rendered: `{reason}` is `MOCKUP_REFUSAL_SENTENCE`'s. */
+  refusal: 'Not rendered: {reason}.',
+  /** The pre-scan's measured counts, and the limits it held them to (`policy.ts`'s values). */
+  measured: 'Measured: depth {depth}, {tags} tags, {formatting} formatting elements open. '
+    + 'Limits: depth {maxDepth}, {maxTags} tags, {maxFormatting} formatting elements open, {maxAttributes} attributes on one tag.',
+  render: 'Render mockup · {size}',
+  tooLarge: 'Too large to render; use Download.',
+  embeds: 'embeds {k} uncommitted asset{s}',
+  scriptsOff: 'scripts off',
+  notLoaded: '{n} not loaded',
+  runScripts: 'Run scripts',
+  stopScripts: 'Stop scripts',
+  loadExternal: 'Load external ({n})',
+  fullScreen: 'Full screen',
+  newTab: 'New tab',
+  close: 'Close',
+  frameTitle: 'Mockup: {name}',
+  census: 'Assets and references · {loaded} loaded · {notLoaded} not loaded',
+  links: 'Links · {n}',
+  /** The line closing a fold that lists only its first rows (`MOCKUP_CENSUS_ROW_CAP`): how many more it does not list. */
+  moreNotListed: '{n} more not listed',
+  upTo: 'up to {size}',
+  /** Spec 5.6.4's hint, shown after an external reference's sentence. */
+  vendor: 'or vendor it next to the mockup',
+  namedInScript: 'named in script text',
+  conservative: 'Some assets reserved room for the largest file of their kind, because their size at this commit is not known; '
+    + 'assets that came after may have been kept out for lack of room.',
+  externalTitle: 'Load external',
+  externalNote: 'Those sites will see that you opened this.',
+  externalLoad: 'Load',
+  externalCancel: 'Cancel',
+  navigatedAway: 'This mockup tried to navigate away; links inside mockups do not open.',
+  reload: 'Reload mockup',
+  /** After a second movement in one view, when the automatic re-list is spent (the register of `DOCS_VIEW_TEXT.changing`). */
+  changing: "The listing changed while Docs read this mockup's files.",
+  retry: 'Retry',
+} as const;
+
+/** What the pre-scan's `why` says, after "Not rendered: " (base 5.6.2). Keyed over the pre-scan's own union, so a reason added
+ *  there is a compile error here. */
+export const MOCKUP_REFUSAL_SENTENCE: Record<Extract<MockupPrescan, { ok: false }>['why'], string> = {
+  'too-deep': 'its elements nest too deeply',
+  'too-many-tags': 'it has too many tags',
+  'too-many-formatting': 'it keeps too many formatting elements open at once',
+  'foreign-markup': 'it puts markup inside SVG or MathML content',
+  'too-many-attributes': 'a tag carries too many attributes',
+};
+
+/** One census sentence per verdict, exhaustive over `MockupRefVerdict` (every `v` and every `why`; a refused
+ *  `why` and a missing one are `DOC_IMAGE_REFUSED_SENTENCE`'s). `external` ends in a comma: `MOCKUP_TEXT.vendor` follows it.
+ *  `refusedOrigin` is an origin that is never offered. `unsupported.element` is an element the policy blocks, listed by
+ *  its own row; `dropped` is a `srcset` candidate that could not be read. */
+export const MOCKUP_VERDICT_SENTENCE = {
+  inline: 'loaded into the page',
+  kept: { 'fragment': 'kept as written: it names a place in the page', 'self-contained': 'kept as written: it carries its own bytes' },
+  external: 'on another site; blocked until Load external is chosen,',
+  refusedOrigin: 'on another site; not offered to load',
+  unsupported: {
+    'kind': 'its file type does not fit what the page uses it for',
+    'element': 'an element the policy blocks',
+    'css-depth': 'it is nested more than {n} stylesheets deep',
+  },
+  skipped: {
+    'too-large': 'its listed size is over the limit for its kind',
+    'over-budget': 'kept out by an asset or page size limit',
+  },
+  failed: 'failed: {sentence}',
+  dropped: 'a srcset candidate that could not be read',
+} as const;
+
+/** A `failed` row's reason: a client slot's or docs word's own sentence, else the two words only the viewer raises. */
+export const MOCKUP_FAILED_SENTENCE: Record<'size-mismatch' | 'unexpected-response', string> = {
+  'size-mismatch': 'the file is larger than the room reserved for it',
+  'unexpected-response': 'the server answered something that was not a Docs answer',
+};
+
+/** The sentence for `failure`, a word `loadMockupAssets` kept whole. */
+export function mockupFailedSentence(failure: string): string {
+  if (failure === 'auth' || failure === 'unreachable' || failure === 'no-docs-route') return DOCS_SLOT_SENTENCE[failure];
+  if (failure === 'size-mismatch' || failure === 'unexpected-response') return MOCKUP_FAILED_SENTENCE[failure];
+  return isDocsFailureWord(failure) ? failureSentence({ ok: false, failure }) : unknownWordSentence(failure);
+}
+
+/** The census sentence of one verdict. `offered`: an `external` verdict's origin is one `Load external` lists. */
+export function mockupVerdictSentence(v: MockupRefVerdict, offered: boolean): string {
+  switch (v.v) {
+    case 'inline':
+      return MOCKUP_VERDICT_SENTENCE.inline;
+    case 'kept':
+      return MOCKUP_VERDICT_SENTENCE.kept[v.why];
+    case 'external':
+      return offered ? MOCKUP_VERDICT_SENTENCE.external : MOCKUP_VERDICT_SENTENCE.refusedOrigin;
+    case 'refused':
+      return DOC_IMAGE_REFUSED_SENTENCE[v.why];
+    case 'missing':
+      return DOC_IMAGE_REFUSED_SENTENCE[v.why === 'absent-at-commit' ? 'absent' : v.why];
+    case 'unsupported':
+      return fillSentence(MOCKUP_VERDICT_SENTENCE.unsupported[v.why], { n: MOCKUP_MAX_CSS_DEPTH });
+    case 'skipped':
+      return MOCKUP_VERDICT_SENTENCE.skipped[v.why];
+    case 'failed':
+      return fillSentence(MOCKUP_VERDICT_SENTENCE.failed, { sentence: mockupFailedSentence(v.failure) });
+  }
+}

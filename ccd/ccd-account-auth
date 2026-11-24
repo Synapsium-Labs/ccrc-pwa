@@ -219,7 +219,19 @@ _auth_timeout() {   # <seconds> <cmd> [args...]
   # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
   stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
-  "$@" &
+  # `<&0` ON THE COMMAND, AND IT IS WHAT GIVES THIS ARM THE BINARY'S STDIN
+  # (D-8658). A shell without job control gives a background job /dev/null for
+  # stdin unless the job carries a stdin redirection of its own, so the command
+  # here used to read nothing where the binary arm's read the caller's stdin:
+  # C28 found it on the sign-in mint, whose pasted code never arrived. `<&0` is
+  # a redirection of the job's own, and it names the caller's fd 0, so the
+  # command now reads what it would under `timeout`: a redirect on the call, a
+  # here-string, the shell's inherited stdin, the rest of a read loop's input.
+  # Not a copy through a spare descriptor: with fd 0 closed that copy fails and
+  # the command never runs, while `<&0` runs it with fd 0 closed, as the binary
+  # does. MEASURED on bash 5.3, `--posix` too; `ccd-plat-timeout.test.ts` pins
+  # all four copies. The watcher below keeps its /dev/null: it reads nothing.
+  "$@" <&0 &
   pid=$!
   # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
@@ -581,6 +593,10 @@ AUTH_CHILD=''
 # `exec`s the mint, so the pid the shim signals is still the mint's. `-p` so no
 # BASH_ENV runs in a shell whose stdout is the stream the pump parses. Both arms
 # of the shim go through it, so the mint sees one shape everywhere.
+# SINCE D-8658 THE SHIM ITSELF PASSES STDIN THROUGH (`"$@" <&0 &`, in all four
+# copies), so the pure-bash arm no longer hands the mint /dev/null. This fd-5
+# handover stays exactly as it is, by the same programme's ruling: it changes
+# nothing at these spawns, and it keeps the mint's stdin independent of the shim.
 AUTH_KEEP_STDIN=("$BASH" -p -c 'exec 0<&5 5<&-; exec "$@"' auth-mint)
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
@@ -902,7 +918,8 @@ _auth_drain_read() {   # <seconds> -> one line from fd 8 with NO select(), into 
   # as `"$@" &`, and bash gives an asynchronous command /dev/null for stdin, which
   # would read as an instant EOF while a descendant still writes. MEASURED, bash
   # 5.3: `f(){ "$@" & wait; }; f cat <&8` prints nothing, while a command that
-  # reads `-u 8` gets the bytes. `7<&- 9<&-` so
+  # reads `-u 8` gets the bytes. That arm passes stdin through since D-8658, and
+  # this read keeps `-u 8` regardless: it changes nothing here. `7<&- 9<&-` so
   # the reader holds neither the code channel nor a write end on `in.child`.
   #
   # `-p`, so the reader's bash runs no BASH_ENV or ENV and imports no exported

@@ -568,10 +568,12 @@ if [ "$TARGET" = "agent" ]; then
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
-    && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } \
-    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/delegation-lease.sh ] || cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/pool-set.sh ] || cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
+    && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } && { [ ! -f ~/.local/libexec/ccrc/door-process.mjs ] || cp -a ~/.local/libexec/ccrc/door-process.mjs ~/ccrc-backups/$TS/ccd-door-process.mjs; } \
+    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/delegation-lease.sh ] || cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/pool-set.sh ] || cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/long-lived.sh ] || cp -a ~/.local/libexec/ccrc/lib/long-lived.sh ~/ccrc-backups/$TS/ccd-lib-long-lived.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/door.sh ] || cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/model-aliases.sh ] || cp -a ~/.local/libexec/ccrc/lib/model-aliases.sh ~/ccrc-backups/$TS/ccd-lib-model-aliases.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/lib/launch-profiles.json ] || cp -a ~/.cc-sessions/lib/launch-profiles.json ~/ccrc-backups/$TS/launch-profiles.json; } \
+    && { [ ! -f ~/.cc-sessions/lib/overlord-constitution.md ] || cp -a ~/.cc-sessions/lib/overlord-constitution.md ~/ccrc-backups/$TS/overlord-constitution.md; } \
+    && { [ ! -f ~/.cc-sessions/lib/mail-hold.jq ] || cp -a ~/.cc-sessions/lib/mail-hold.jq ~/ccrc-backups/$TS/mail-hold.jq; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } && { [ ! -f ~/.cc-sessions/lib/roster-card.jq ] || cp -a ~/.cc-sessions/lib/roster-card.jq ~/ccrc-backups/$TS/roster-card.jq; } && { [ ! -f ~/.cc-sessions/lib/carry-dedupe.py ] || cp -a ~/.cc-sessions/lib/carry-dedupe.py ~/ccrc-backups/$TS/carry-dedupe.py; } && { [ ! -f ~/.cc-sessions/lib/inflight-manifest.py ] || cp -a ~/.cc-sessions/lib/inflight-manifest.py ~/ccrc-backups/$TS/inflight-manifest.py; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
@@ -639,8 +641,13 @@ if [ "$TARGET" = "agent" ]; then
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 644: data for jq, loaded by the hook with `jq -L`.
   # BEFORE the hook that loads it; a missing file only costs the card.
   install_atomic ccd/lib/roster-card.jq .cc-sessions/lib/roster-card.jq 644
+  # The mail hold's matcher, texts and log decision (mid-turn mail, plan Task 5.2), 644: data for jq, loaded by the hook
+  # with `jq -L`. BEFORE the hook that loads it; a missing file holds nothing (fail open, D3).
+  install_atomic ccd/lib/mail-hold.jq .cc-sessions/lib/mail-hold.jq 644
   # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a), 644: data for jq.
   install_atomic ccd/lib/launch-profiles.json .cc-sessions/lib/launch-profiles.json 644
+  # The Overlord's constitution (W1 sandbox), 644: ccd links it into the Overlord's workspace as its CLAUDE.md.
+  install_atomic ccd/lib/overlord-constitution.md .cc-sessions/lib/overlord-constitution.md 644
   # `ccd carry-dedupe`'s program (#317), 644: a script python3 runs, never executed directly.
   install_atomic ccd/lib/carry-dedupe.py .cc-sessions/lib/carry-dedupe.py 644
   # the in-flight manifest's program (session-continuity 6b, D-8368), 644.
@@ -887,6 +894,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.timer ~/.config/systemd/user/ccd-limit-watchdog.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.service ~/.config/systemd/user/ccd-quiz-weekly.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-quiz-weekly.timer ~/.config/systemd/user/ccd-quiz-weekly.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-carry-dedupe.service ~/.config/systemd/user/ccd-carry-dedupe.service \
@@ -1066,6 +1075,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user enable --now ccd-limit-watchdog.timer \
     && systemctl --user enable --now ccd-land-probe.timer \
+    && systemctl --user enable --now ccd-quiz-weekly.timer \
     && systemctl --user enable --now ccd-testbox-times.timer \
     && systemctl --user enable --now ccd-carry-dedupe.timer \
     && systemctl --user restart ccrc-agent.service \
@@ -1342,12 +1352,15 @@ else
   # The unit file joins the set here too (I2, final review): REMOTE_CMD below
   # `cp`s straight over ~/.config/systemd/user/ccrc.service with no backup
   # ever taken, unlike dist-pwa and coord.db beside it.
-  "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
+  # 0700, and the private store's snapshot beside coord.db's (Overlord W1 private store A): the same script at 0600, guarded the
+  # same way (only a MISSING store is skippable), and named by the capture's manifest below.
+  "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS && chmod 700 ~/ccrc-backups/$TS"
   "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
   "${SCP[@]}" deploy/coordination-snapshot.mjs "$BOX":ccrc-backups/coordination-snapshot.mjs
   "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
     && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
-    && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
+    && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; } \
+    && { [ ! -f ~/.ccrc/operator-model.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/operator-model.db ~/ccrc-backups/$TS/operator-model.db; }"
   # The coordination snapshot (delegation broker wave 3, O3) is the LAST member of this set and is taken BEFORE the rsync below:
   # the delegation journal and checkpoint are authority a running server wrote, and the rsync is the first step that can touch
   # a box's tree. The helper (shipped fresh above, like backup-coord.mjs; it imports nothing from this tree) describes the SQLite

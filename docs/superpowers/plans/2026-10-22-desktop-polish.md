@@ -687,7 +687,7 @@ The worker explicitly says the current key-injection boundary has no atomic comp
 
 **As accepted (review 1284, 2026-10-30, at fbe8d91c9; this text corrects the pre-amendment wording above, which it does not rewrite).** The Acceptance line's "every option … at 1280×600 and up" is superseded by change 3 as amended: below 700px tall the first option is in view and the rest are reachable in the surface's own scroll. Change 1's "a short question has no scrollbar" is measured for the question region at 700px tall and up; the whole-card "no scrollbar anywhere" check runs at 900px tall and up (corrected on review 1291 F3). Step 1's cell "the surface does not scroll" and Step 3's mutant "the surface allowed to shrink" describe the design before ask 212; the built cells check each view's measured `scrolls`, and the shrink order is pinned by M1 and M12 (Task T1e lists what review 1284 left open). Rulings on review 1284: an arrow on the question region keeps T1c's key model and moves the highlight to the start row, while Space, PageUp/PageDown and Home/End scroll the region (F1); the by-construction argument from css-flexbox-1 is accepted, and Firefox and WebKit stay unmeasured as a known limit (F6); at Refined 1920×1080 the hint line cut at the surface's edge is accepted as the scroll cue, since every answer row is in view (F7).
 
-- **D-7565** - `inline-ask-options-stay-in-view`: Task T1d, the operator's report of 2026-10-30, approved the same day. At the desk the inline ask card keeps its header and its answer rows in view: the question text scrolls in its own region, and the answer surface scrolls on its own only past the floors; the question reads at prose size, not as a large heading; the room is shared by the priority order of change 3 as amended (the 60% cap and the fifth, in the first text, were withdrawn on ask 212). It amends D-6326's one-scroller card at the desk only. As built (wave-done 12888 and fix round 1, wave-done 13023 at fbe8d91c9; departures recorded here, no new number): `.ask-inline-body` holds two non-scrolling slots, each with one region (the question, then the surface), because the surface must be one box to scroll on its own. Only the question slot has a floor, min(content, two lines); the surface slot is `flex: 0 1 content; min-height: 0`, and the order comes from the shrink weights (the question slot `flex: 0 1000000 content` against the surface's 1), not from a percentage, so it holds in any conforming engine (measured in Chrome only). `.ask-inline-body` is `overflow: clip` with a `-sp-1` margin and an `sp-1` padding, so focus rings keep their room; the clip is pinned at 1280x425, where the card overflows. The question region is a named Tab stop (`role="group"`, "Question"), so a long question scrolls by its keys, and T1c's R102 and R115 Tab cells step section, region, row. And `InlineCard` measures the chat pane with a ResizeObserver into `--ask-pane` (default `100dvh`, which `css-vars` requires), because a percentage in the card's own rules would be of the card. Rulings on asks 212, 216 and 217 set the priority order, the card-first reading and the short-window rule (below 700px tall: one question line, no transcript floor). The twelve "no scrollbar anywhere" cells at 600, 699 and 700 tall (four skin and theme pairs each) are skipped: a five-row surface cannot fit a card that short, so below 900px tall only fixture 1's question-region check runs, and fixture 2's whole-card check is not pinned between 700 and 899 (corrected on review 1291 F3).
+- **D-7565** — `inline-ask-options-stay-in-view`: Task T1d, the operator's report of 2026-10-30, approved the same day. At the desk the inline ask card keeps its header and its answer rows in view: the question text scrolls in its own region, and the answer surface scrolls on its own only past the floors; the question reads at prose size, not as a large heading; the room is shared by the priority order of change 3 as amended (the 60% cap and the fifth, in the first text, were withdrawn on ask 212). It amends D-6326's one-scroller card at the desk only. As built (wave-done 12888 and fix round 1, wave-done 13023 at fbe8d91c9; departures recorded here, no new number): `.ask-inline-body` holds two non-scrolling slots, each with one region (the question, then the surface), because the surface must be one box to scroll on its own. Only the question slot has a floor, min(content, two lines); the surface slot is `flex: 0 1 content; min-height: 0`, and the order comes from the shrink weights (the question slot `flex: 0 1000000 content` against the surface's 1), not from a percentage, so it holds in any conforming engine (measured in Chrome only). `.ask-inline-body` is `overflow: clip` with a `-sp-1` margin and an `sp-1` padding, so focus rings keep their room; the clip is pinned at 1280x425, where the card overflows. The question region is a named Tab stop (`role="group"`, "Question"), so a long question scrolls by its keys, and T1c's R102 and R115 Tab cells step section, region, row. And `InlineCard` measures the chat pane with a ResizeObserver into `--ask-pane` (default `100dvh`, which `css-vars` requires), because a percentage in the card's own rules would be of the card. Rulings on asks 212, 216 and 217 set the priority order, the card-first reading and the short-window rule (below 700px tall: one question line, no transcript floor). The twelve "no scrollbar anywhere" cells at 600, 699 and 700 tall (four skin and theme pairs each) are skipped: a five-row surface cannot fit a card that short, so below 900px tall only fixture 1's question-region check runs, and fixture 2's whole-card check is not pinned between 700 and 899 (corrected on review 1291 F3).
 
 ### Task T1c-F: call-bound answer-channel feasibility (R118; research, no PR)
 
@@ -1025,11 +1025,11 @@ The worker explicitly says the current key-injection boundary has no atomic comp
 **Carried (R51), each intended change in its own commit.** T2f's Files also include `pwa/browser/instrument-desk.browser.test.ts`, `pwa/test/instrument-shell.test.tsx` and the comment-only passages of `pwa/src/fleet/FleetHead.tsx`. Serve a waiting update view in `WITH_RUNS` and assert the indicator is drawn at the 900 boundary, alongside the whole count. Add the missing column-presence assertions to both no-head loops. Correct the mutation footer: rows 1 and 4 also run in the browser, row 7 only there. Name the frame's status bar and the rail's doors in FleetHead/FleetScreen comments. List all seven measured reds for row 6 rather than only five. Run the instrument-desk browser file as well as Step 5's suites; preserve the status-bar count, pool lag and phone line. These are T2g's accepted follow-ups, not a second implementation of its flags.
 
 **Departures, numbered on review 1117 (2026-10-28).**
-- **D-7257** - `t2f-chooser-takes-a-row-height`: `ClassChooser` takes one optional `className`, merged by `cn`, which the desk toggle row uses for `min-h-row`. It is the component's only prop.
-- **D-7258** - `t2f-mutation-table-in-chooser-suite`: T2f's mutation table lives in the header of `fleet-class-chooser.test.tsx`, so T3b's `instrument-list.test.tsx` carries one appended hunk.
-- **D-7259** - `t2f-fleet-css-edit-in-feat-commit`: two re-points of `fleet-css.test.ts`'s runs-line read ride inside feature commits (`b2f43b4c6` and `350ddb122`), because each feature commit would otherwise be red.
-- **D-7260** - `t2f-instrument-list-cases-after-feat`: the three `instrument-list.test.tsx` cases were committed after the feature commit, while T3b's consent (11646) was pending, so no red-first run is recorded for them. The mutation table's rows prove they guard. The case "below 900 the runs row is as today" is a characterization case, green on the base by design.
-- **D-7261** - `t2f-fleetscreen-comments-in-feat-commit`: R51 F4's FleetScreen half (the `headChrome` and `headCount` docs) is comment text inside the feature commit `b2f43b4c6`, whose message discloses it; its FleetHead half has its own commit.
+- **D-7257** — `t2f-chooser-takes-a-row-height`: `ClassChooser` takes one optional `className`, merged by `cn`, which the desk toggle row uses for `min-h-row`. It is the component's only prop.
+- **D-7258** — `t2f-mutation-table-in-chooser-suite`: T2f's mutation table lives in the header of `fleet-class-chooser.test.tsx`, so T3b's `instrument-list.test.tsx` carries one appended hunk.
+- **D-7259** — `t2f-fleet-css-edit-in-feat-commit`: two re-points of `fleet-css.test.ts`'s runs-line read ride inside feature commits (`b2f43b4c6` and `350ddb122`), because each feature commit would otherwise be red.
+- **D-7260** — `t2f-instrument-list-cases-after-feat`: the three `instrument-list.test.tsx` cases were committed after the feature commit, while T3b's consent (11646) was pending, so no red-first run is recorded for them. The mutation table's rows prove they guard. The case "below 900 the runs row is as today" is a characterization case, green on the base by design.
+- **D-7261** — `t2f-fleetscreen-comments-in-feat-commit`: R51 F4's FleetScreen half (the `headChrome` and `headCount` docs) is comment text inside the feature commit `b2f43b4c6`, whose message discloses it; its FleetHead half has its own commit.
 
 **Acceptance.** No runs row and no inert chooser in Instrument's desk column; R51's carried fixture, guard and comment fixes complete. **Rollback.** A plain revert.
 
@@ -1537,8 +1537,8 @@ Fences:
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
 **Departures, numbered on review 1120 (2026-10-28).**
-- **D-7262** - `t3e-extra-files`: two files beyond the task's list. `pwa/src/session/chat.css` gets one selector, so the Inspector door lays out its word beside its glyph like Terminal and More; review 1120 measured that without it the word stacks under the glyph. `pwa/test/w7-storage-keys.test.ts` gets the `ccrc-inspector` row.
-- **D-7263** - `t3e-storage-owner`: `pwa/src/inspector/inspectorShown.ts` (the `ccrc-inspector` key) is the twelfth `localStorage` owner, and the W7 census reads 12. The plan asks for a per-device choice, and C7l's storage port has not landed, so the owner is written directly, as `stripExpanded.ts` and `foldState.ts` are.
+- **D-7262** — `t3e-extra-files`: two files beyond the task's list. `pwa/src/session/chat.css` gets one selector, so the Inspector door lays out its word beside its glyph like Terminal and More; review 1120 measured that without it the word stacks under the glyph. `pwa/test/w7-storage-keys.test.ts` gets the `ccrc-inspector` row.
+- **D-7263** — `t3e-storage-owner`: `pwa/src/inspector/inspectorShown.ts` (the `ccrc-inspector` key) is the twelfth `localStorage` owner, and the W7 census reads 12. The plan asks for a per-device choice, and C7l's storage port has not landed, so the owner is written directly, as `stripExpanded.ts` and `foldState.ts` are.
 
 **Acceptance.** The panel hides and shows by a header button or `i`, the choice survives a reload, and its tasks and mail are never lost. **Rollback.** A plain revert; the orphaned `ccrc-inspector` key is read by nothing.
 
@@ -1920,7 +1920,7 @@ Verify runs T2c's `lane-order` and `fleet-pieces` suites as well, because `strip
 **R120 amendment (the operator, 2026-10-27, while S5b runs).** The operator asked that the top lanes panel be one line
 by default, with the lanes as a sorted list, and that hovering that line show every lane, still sorted. S5b's fold
 already makes the desk strip one line by default; R120 adds two things to this task, and changes nothing else above.
-- **D-7153** - `strip-hover-flyout`: at the desk (900 px and up, both skins), while the strip is folded, hovering the
+- **D-7153** — `strip-hover-flyout`: at the desk (900 px and up, both skins), while the strip is folded, hovering the
   strip's line, or moving keyboard focus into it, opens a flyout: a panel below the line, drawn over the content and not
   pushing it down, that holds EVERY lane card in `lanesByFree`'s order, the same cards and doors as the expanded strip.
   It closes when the pointer has left both the line and the flyout, on Escape (focus returns to the card it came from),
@@ -1930,7 +1930,7 @@ already makes the desk strip one line by default; R120 adds two things to this t
   nothing changes. Tests: open on hover and on focus, close on leave, on Escape and on blur, every lane present and in
   order, no flyout while expanded or below 900 px, and a browser render at 1280 and 1920 in both skins. Each guard
   gets a mutant that reds it.
-- **D-7154** - `lanes-tie-break-soonest-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`, T2c's, outside S5b's
+- **D-7154** — `lanes-tie-break-soonest-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`, T2c's, outside S5b's
   original Files) keeps its first key, the binding use (`bindingPct`) lowest first. Lanes that tie on it now sort by
   the binding window's reset, soonest first (a lane with no reset time after one with a reset time), then by the other
   window's use, lowest first, and only then in roster order. A never-read lane and an expired sign-in still go last.
@@ -1938,7 +1938,7 @@ already makes the desk strip one line by default; R120 adds two things to this t
   latest to reset are at the bottom. `bindingWindow` is the one decider of which reset binds, so `lanesByFree` reads
   it, not a second copy. `pwa/test/lane-order.test.ts` gains the tie cases, each red first, with a mutant that drops
   the reset key.
-- **D-7233** - `instrument-first-row-is-its-chrome`: Task S5b, coordinator ruling on review 1102's F2. The Acceptance's
+- **D-7233** — `instrument-first-row-is-its-chrome`: Task S5b, coordinator ruling on review 1102's F2. The Acceptance's
   "in both skins ... at most 440 px" holds for Refined (418.8 px at 390x844, folded). Instrument measures 533.8 px. The
   fold saves the same 386.2 px in both skins, and the strip is the same height in both. The 115 px difference is
   Instrument's own chrome, which S5b does not touch: 28 px in its taller `fleet-head` above the strip, and 87 px in
@@ -1968,21 +1968,21 @@ already makes the desk strip one line by default; R120 adds two things to this t
 **Why** (the programme ledger's R121, the operator's answers of 2026-10-28). Q8: "534 is ok, but implement same logic as desktop re open full panel but on tap instead of hover, otherwise show e.g. two lines." So Instrument's phone figure of 534 px (D-7233) stands, and the phone gets the desk's full panel, opened by a tap. Folded, the phone shows about two lines of cards. Q3 ("probably", taken as yes): lanes at 95% binding use or more sort as one band, soonest reset first, instead of only exact ties (amends D-7154). Review 1108's F1 is fixed here too, because it is in the same files: keyboard focus that reaches a card from the end cell opens nothing at the desk.
 
 **The shape (the operator's rule; the details are the coordinator's defaults, which the operator may still change).**
-- **D-7254** - `phone-strip-tap-panel`: below 900 px, in both skins, a folded strip with lanes folded away opens the SAME panel as the desk's flyout (D-7153): every lane card in `lanesByFree`'s order, drawn over the content under the strip, not pushing it down, each card its lane's door.
+- **D-7254** — `phone-strip-tap-panel`: below 900 px, in both skins, a folded strip with lanes folded away opens the SAME panel as the desk's flyout (D-7153): every lane card in `lanesByFree`'s order, drawn over the content under the strip, not pushing it down, each card its lane's door.
   - A tap opens it, and nothing on the phone opens it on hover or focus alone. The tap target is the strip's control, `foldWords`' "+n more", which on a phone opens the panel instead of expanding the strip inline. The line's cards stay doors to their lanes, so tapping a card never opens the panel.
   - It closes on a second tap of the control, a tap outside the strip and the panel, Escape, or a tap on one of its cards (which then opens that lane). A close returns focus to the control when focus was in the panel.
   - The control names its state (`aria-expanded`, `aria-controls` naming the panel) and keeps its 44 px target under a coarse pointer.
   - The panel has a bounded height, at most the viewport below the strip, and scrolls inside itself, so 17 lanes never push the page.
   - Below 900 px the per-device expanded choice (`stripExpanded.ts`, `ccrc-accounts-strip`) is neither read nor written: a phone is always folded, with the panel one tap away. At the desk nothing changes: the control pins the strip open, and the hover and keyboard flyout runs as D-7153 says. A device that crosses 900 px closes an open panel.
-- **D-7255** - `phone-fold-two-lines`: below 900 px a folded strip shows as many lanes as fill two measured lines of the cards' group, instead of `FOLD_SHOWN`'s fixed four. The width is `useRowWidth` on the group, as the desk measures it. The lanes per line come from `rowFit` with the phone grid's own card floor and gap, as `shell.css` and `fleet.css` lay the phone strip out today. The count is `2 × tracks`, at least one, and the phone's end cell stays a row of its own under the cards. An unmeasured phone row shows `FOLD_SHOWN` (4), never "fold nothing", so a phone's first paint is never the full strip. `foldShown` stays the one decider. Step 0 measures what four shows today at 360, 390, 438, 699, 700 and 899 (the number of lines) and reports it. Where four already fills two lines, the visible change at that width is nil, and the rule keeps it two lines at every phone width. The first session row's top at 390×844, folded: Refined at most 440 px, Instrument at most 540 px (D-7233), unchanged.
-- **D-7256** - `near-full-lanes-band-by-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`) reads one new constant, `NEAR_FULL_PCT = 95`, written once beside it.
+- **D-7255** — `phone-fold-two-lines`: below 900 px a folded strip shows as many lanes as fill two measured lines of the cards' group, instead of `FOLD_SHOWN`'s fixed four. The width is `useRowWidth` on the group, as the desk measures it. The lanes per line come from `rowFit` with the phone grid's own card floor and gap, as `shell.css` and `fleet.css` lay the phone strip out today. The count is `2 × tracks`, at least one, and the phone's end cell stays a row of its own under the cards. An unmeasured phone row shows `FOLD_SHOWN` (4), never "fold nothing", so a phone's first paint is never the full strip. `foldShown` stays the one decider. Step 0 measures what four shows today at 360, 390, 438, 699, 700 and 899 (the number of lines) and reports it. Where four already fills two lines, the visible change at that width is nil, and the rule keeps it two lines at every phone width. The first session row's top at 390×844, folded: Refined at most 440 px, Instrument at most 540 px (D-7233), unchanged.
+- **D-7256** — `near-full-lanes-band-by-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`) reads one new constant, `NEAR_FULL_PCT = 95`, written once beside it.
   - Its first key is the binding use, with every lane at or above `NEAR_FULL_PCT` reading as the same value: one band, sorted after every lane below 95.
   - Within the band, and among exact ties below it, the order is D-7154's: the binding window's reset, soonest first (no reset time after a known one), then the other window's use, then the roster.
   - A rate-limited lane (100%, `WINDOW_LIMITED_PCT`) is in the band, and a never-read lane and an expired sign-in still go last.
   - Below 95 nothing changes.
   - The "+n more" words (`foldWords`) are unchanged.
   - `bindingWindow` stays the one decider of which reset binds.
-- **D-7253** is the task's own number. Under it, review 1108's F1 is fixed: at the desk, keyboard focus that arrives at a card of the line or the flyout from the strip's end cell opens the flyout, by Shift+Tab back from "+n more", "Show fewer" or All accounts. This is the same as focus arriving from outside the strip. The end cell still never HOLDS the flyout open (D-7153's clarification); only arriving at a card counts. A click's focus still opens nothing.
+- **D-7253** — the task's own number. Under it, review 1108's F1 is fixed: at the desk, keyboard focus that arrives at a card of the line or the flyout from the strip's end cell opens the flyout, by Shift+Tab back from "+n more", "Show fewer" or All accounts. This is the same as focus arriving from outside the strip. The end cell still never HOLDS the flyout open (D-7153's clarification); only arriving at a card counts. A click's focus still opens nothing.
 
 **Files:**
 - Modify `pwa/src/fleet/stripFold.ts`: `foldShown` takes the phone's measured tracks, and its doc comment says two lines. `FOLD_SHOWN` stays as the unmeasured phone's count. If the phone grid's card floor is not `LANE_CARD_MIN`, add one constant for it here, never a second copy of a figure CSS also writes; the CSS reads it as a custom property, as `--lane-card-min` does.
@@ -2028,8 +2028,8 @@ already makes the desk strip one line by default; R120 adds two things to this t
 **Acceptance.** On a phone, in both skins, the folded strip shows two measured lines of the freest lanes, and one tap on "+n more" opens every lane in a panel over the page, in order, each card a door. A tap outside, Escape, or the control again closes it. Lanes at 95% or more sit together at the bottom of the live lanes, soonest reset first. At the desk nothing changes, except that Shift+Tab back onto a card opens the flyout. Every case is green, every mutant red, and the renders are taken before and after.
 
 **Departures, numbered on review 1126 (2026-10-28).**
-- **D-7266** - `phone-tracks-read-drawn`: under the coordinator's answer to ask 174, the phone reads the cards' group's DRAWN tracks (its computed `grid-template-columns`) through `useRowWidth.ts`, which is outside the task's Files. `useRowWidth` drops its `enabled` parameter and measures at every width. The phone grid has no card floor, since its tracks come from a viewport breakpoint, so no floor is written anywhere.
-- **D-7267** - `app-test-phone-control-names-panel`: `pwa/test/app.test.tsx` (outside Files, claim 2876). Its assertion that the control's `aria-controls` names the strip's group becomes desk-only, because on a phone the control names the panel.
+- **D-7266** — `phone-tracks-read-drawn`: under the coordinator's answer to ask 174, the phone reads the cards' group's DRAWN tracks (its computed `grid-template-columns`) through `useRowWidth.ts`, which is outside the task's Files. `useRowWidth` drops its `enabled` parameter and measures at every width. The phone grid has no card floor, since its tracks come from a viewport breakpoint, so no floor is written anywhere.
+- **D-7267** — `app-test-phone-control-names-panel`: `pwa/test/app.test.tsx` (outside Files, claim 2876). Its assertion that the control's `aria-controls` names the strip's group becomes desk-only, because on a phone the control names the panel.
 - Review 1126 F7: "Show fewer" exists only while the strip is expanded, and then there is no flyout. So D-7253's list of origins is in effect "+n more" and All accounts.
 
 **Rollback.** A plain revert. The per-device key keeps its desk meaning throughout.
@@ -2810,11 +2810,11 @@ that keeps every assertion, the `wheel-chain*` browser files.
 - [ ] **Step 4: Verify.** The real-tmux file, run in a loop on a busy box and on CI. The full suite on the PR, which
   the `.github/` change forces. The browser job's time at the head.
 
-- **D-7248** - `tmux-test-waits-for-its-server`: Task C11, the coordinator's reading on R121's Q7 and Q10, on
+- **D-7248** — `tmux-test-waits-for-its-server`: Task C11, the coordinator's reading on R121's Q7 and Q10, on
   2026-10-28. The drawer test's reset no longer races a server that is exiting, and the browser leg's cap rises from
   15 to 20 minutes with a measured comment. No product code changes.
-- **D-7250** - `browser-cap-pin-moves-in-ci-pipeline-test`: Task C11, ruled on review 1113 on 2026-10-28. `server/test/ci-pipeline.test.ts` pins the browser leg's cap, so its title and its expect move from 15 to 20 with the cap, red first. The pin is outside C11's Files and was taken under claim 2862.
-- **D-7251** - `d-ref-spelled-as-task-in-tracked-text`: Task C11, ruled on review 1113 on 2026-10-28. A number defined only in an unpublished plan amendment sits above main's in-tree high-water, and deviation-refs reds on it in tracked text. So a feature PR's tracked text names the task ("desktop polish Task C11"), and the number goes only in its commit messages and PR body until the ledger PR publishes the amendment.
+- **D-7250** — `browser-cap-pin-moves-in-ci-pipeline-test`: Task C11, ruled on review 1113 on 2026-10-28. `server/test/ci-pipeline.test.ts` pins the browser leg's cap, so its title and its expect move from 15 to 20 with the cap, red first. The pin is outside C11's Files and was taken under claim 2862.
+- **D-7251** — `d-ref-spelled-as-task-in-tracked-text`: Task C11, ruled on review 1113 on 2026-10-28. A number defined only in an unpublished plan amendment sits above main's in-tree high-water, and deviation-refs reds on it in tracked text. So a feature PR's tracked text names the task ("desktop polish Task C11"), and the number goes only in its commit messages and PR body until the ledger PR publishes the amendment.
 
 **Acceptance.** The real-tmux file passes the reproducing loop; the browser job's cap and comment match the measured
 time. **Rollback.** A plain revert.
@@ -2857,15 +2857,15 @@ time. **Rollback.** A plain revert.
 - [ ] **Step 2: Item 11's CI savings.** Measure the browser leg before and after from CI's own logs, at the PR's run and at one re-run. Take a saving only if every wheel-chain case still fails on its own mutant.
 - [ ] **Step 3: Verify.** Run each touched suite once, the pwa and server typechecks, `deviation-refs`, and the citation and anchor tests that README edits can break.
 
-- **D-7264** - `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
-- **D-7281** - `top-bar-sits-clear-of-the-lanes-row`: Task C12 item 19, issued on 2026-10-28 from the operator's report that the search field does not sit nicely above the accounts bar. At the desk, Instrument's bar line is `--tap-min` tall and its command field and New session fill it top to bottom, and the frame header leaves about 4 px (`.shell-accounts`' padding) before the lanes row's first cards, against the cards' own `--sp-2` gap, so the field and `+` read as resting on the cards. Fix: the bar's controls keep their size and floors, and the space between their bottom edge and the first line of cards is at least the gap between cards (`--sp-2`), with the bar's top gutter matched so the controls sit centred in their line. The header grows by that much, and nothing else in it moves. Refined (its 56 px line) is measured too and changes only if it shows the same fault. A real-Chrome case in lanes-row.browser, red on main's tree, measures the gap from the command field's and New session's bottom edges to the top of the first card, at 900, 1280 and 1920, both skins, fine and coarse pointer, and the controls' heights stay at their floors. The files are T3b's and S5c's until #1703 and #1765 merge.
-- **D-7282** - `c12-note-corrections-in-c12-note`: Task C12, issued on 2026-10-28. The corrections that items 4, 5, 15 and 21 make to earlier task notes (t2d.md, t2b.md, t3b.md and c7.md) go in C12's own new note, c12.md, and no existing note is edited, because the ledger guard refuses an edit to an existing plan note without a ledger-edit trailer. The coordinator folds them on the ledger PR.
-- **D-7283** - `c12-desk-head-case-added`: Task C12 item 4, issued on 2026-10-28. The old desk-width case ran an empty fleet, whose sidebar head draws nothing, so it could not see a stray mail door; a new case with a row covers it.
-- **D-7284** - `c12-slow-first-sequencer-files`: Task C12 item 11, issued on 2026-10-28. Running the browser leg's slowest files first needs a sequencer (`pwa/browser/slowFirst.ts`, wired in `vitest.browser.config.ts` and pinned in `test/browser-leg.test.ts`), which lies outside the item's named files.
-- **D-7285** - `c12-lanes-row-page-clock`: Task C12 item 16, issued on 2026-10-28. Reading the leave time before the pointer moves was measured first and still under-read under load (a close read at 22 ms), because the All accounts route moves the strip out from under the resting pointer before the move. The case now times the close on the page's own clock.
-- **D-7286** - `c12-refined-bar-clear-6px`: Task C12 item 19, under D-7281, issued on 2026-10-28. Refined's bar controls sit centred, 6 px clear of the lanes row's cards, which is not the fault D-7281 fixes (controls resting on the cards), so Refined is unchanged (ask 179), and the case holds Refined to its 6 px.
-- **D-7287** - `c12-day-comments-not-call`: Task C12 item 21 (review 1132 A1), issued on 2026-10-28. The day still reaches every bubble, and the comments in SessionScreen and MessageBubble now say so, rather than the call handing it only to the rows that read the clock. Behaviour is unchanged.
-- **D-7288** - `c12-session-hook-reset-copy-left`: Task C12 item 11, issued on 2026-10-28. `server/test/session-hook.test.ts` keeps its local reset copy, because the file is under another programme's claim, and the request to its holder was withdrawn (11789). It is a residual for a later change once that claim releases.
+- **D-7264** — `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-7281** — `top-bar-sits-clear-of-the-lanes-row`: Task C12 item 19, issued on 2026-10-28 from the operator's report that the search field does not sit nicely above the accounts bar. At the desk, Instrument's bar line is `--tap-min` tall and its command field and New session fill it top to bottom, and the frame header leaves about 4 px (`.shell-accounts`' padding) before the lanes row's first cards, against the cards' own `--sp-2` gap, so the field and `+` read as resting on the cards. Fix: the bar's controls keep their size and floors, and the space between their bottom edge and the first line of cards is at least the gap between cards (`--sp-2`), with the bar's top gutter matched so the controls sit centred in their line. The header grows by that much, and nothing else in it moves. Refined (its 56 px line) is measured too and changes only if it shows the same fault. A real-Chrome case in lanes-row.browser, red on main's tree, measures the gap from the command field's and New session's bottom edges to the top of the first card, at 900, 1280 and 1920, both skins, fine and coarse pointer, and the controls' heights stay at their floors. The files are T3b's and S5c's until #1703 and #1765 merge.
+- **D-7282** — `c12-note-corrections-in-c12-note`: Task C12, issued on 2026-10-28. The corrections that items 4, 5, 15 and 21 make to earlier task notes (t2d.md, t2b.md, t3b.md and c7.md) go in C12's own new note, c12.md, and no existing note is edited, because the ledger guard refuses an edit to an existing plan note without a ledger-edit trailer. The coordinator folds them on the ledger PR.
+- **D-7283** — `c12-desk-head-case-added`: Task C12 item 4, issued on 2026-10-28. The old desk-width case ran an empty fleet, whose sidebar head draws nothing, so it could not see a stray mail door; a new case with a row covers it.
+- **D-7284** — `c12-slow-first-sequencer-files`: Task C12 item 11, issued on 2026-10-28. Running the browser leg's slowest files first needs a sequencer (`pwa/browser/slowFirst.ts`, wired in `vitest.browser.config.ts` and pinned in `test/browser-leg.test.ts`), which lies outside the item's named files.
+- **D-7285** — `c12-lanes-row-page-clock`: Task C12 item 16, issued on 2026-10-28. Reading the leave time before the pointer moves was measured first and still under-read under load (a close read at 22 ms), because the All accounts route moves the strip out from under the resting pointer before the move. The case now times the close on the page's own clock.
+- **D-7286** — `c12-refined-bar-clear-6px`: Task C12 item 19, under D-7281, issued on 2026-10-28. Refined's bar controls sit centred, 6 px clear of the lanes row's cards, which is not the fault D-7281 fixes (controls resting on the cards), so Refined is unchanged (ask 179), and the case holds Refined to its 6 px.
+- **D-7287** — `c12-day-comments-not-call`: Task C12 item 21 (review 1132 A1), issued on 2026-10-28. The day still reaches every bubble, and the comments in SessionScreen and MessageBubble now say so, rather than the call handing it only to the rows that read the clock. Behaviour is unchanged.
+- **D-7288** — `c12-session-hook-reset-copy-left`: Task C12 item 11, issued on 2026-10-28. `server/test/session-hook.test.ts` keeps its local reset copy, because the file is under another programme's claim, and the request to its holder was withdrawn (11789). It is a residual for a later change once that claim releases.
 
 **Acceptance.** Every item is fixed or named as already fixed, with its commit. Every new guard is red under its mutant, and nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -2885,8 +2885,8 @@ time. **Rollback.** A plain revert.
 
 **Acceptance.** The open flyout and the phone's panel hold only the folded-away lanes, each once, in order, aligned under the line at the desk. Every guard is red under its mutant, and no other strip behaviour changes. **Rollback.** A plain revert.
 
-- **D-7290** - `lanes-panel-holds-only-the-folded-lanes`: Task C13, issued on 2026-10-28 from the operator's report that the open flyout repeats the line's first row.
-- **D-7291** - `panel-never-repeats-the-line`: the operator, 2026-10-28. This supersedes D-7153's "holds EVERY lane card ... the same cards and doors as the expanded strip" and D-7254's "every lane card". The panel holds only the lanes the folded line does not show, in `lanesByFree`'s order, so every lane is drawn exactly once across the line and the panel. The expanded strip, a stored per-device choice, still draws every lane on its own lines.
+- **D-7290** — `lanes-panel-holds-only-the-folded-lanes`: Task C13, issued on 2026-10-28 from the operator's report that the open flyout repeats the line's first row.
+- **D-7291** — `panel-never-repeats-the-line`: the operator, 2026-10-28. This supersedes D-7153's "holds EVERY lane card ... the same cards and doors as the expanded strip" and D-7254's "every lane card". The panel holds only the lanes the folded line does not show, in `lanesByFree`'s order, so every lane is drawn exactly once across the line and the panel. The expanded strip, a stored per-device choice, still draws every lane on its own lines.
 
 ### Task G2: a programme is a box in its project card, in both skins (D-7331, D-7332)
 
@@ -2988,14 +2988,14 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Rollback.** A plain revert. The `--prog-*` aliases go with it, and nothing else reads them.
 
-- **D-7331** - `programme-is-a-box`: Task G2, issued on 2026-10-29 from the operator's approval of prototype v6. A coordinator's open work is one box in its project card (one box per coordinator session, led by its busiest programme): a kicker, the coordinator's row, a tray folded to the workers `operatorAsk` holds for, and the existing children toggle. The box's state is one pure decider: needs, paused, stalled, then moving. Supersedes the coordinator's "n workers · …" summary line as a separate row. `foldChildren`'s rule and `openChildren` are unchanged.
-- **D-7332** - `programme-hue-borrows-the-cool-lane-hues`: the operator approved v6 with the overlap named. A programme's identity hue is one of cyan, violet, magenta and blue, through the `--prog-*` aliases of the `--acct-*` pairs, assigned by `assignHues` (FNV-1a of the slug, collisions to the next free hue). It amends the two-skins spec §3's "same hue per lane" row: the lanes keep their hues, and a programme borrows the four cool ones, always beside its title in words, never glowing, never on a lane's card.
+- **D-7331** — `programme-is-a-box`: Task G2, issued on 2026-10-29 from the operator's approval of prototype v6. A coordinator's open work is one box in its project card (one box per coordinator session, led by its busiest programme): a kicker, the coordinator's row, a tray folded to the workers `operatorAsk` holds for, and the existing children toggle. The box's state is one pure decider: needs, paused, stalled, then moving. Supersedes the coordinator's "n workers · …" summary line as a separate row. `foldChildren`'s rule and `openChildren` are unchanged.
+- **D-7332** — `programme-hue-borrows-the-cool-lane-hues`: the operator approved v6 with the overlap named. A programme's identity hue is one of cyan, violet, magenta and blue, through the `--prog-*` aliases of the `--acct-*` pairs, assigned by `assignHues` (FNV-1a of the slug, collisions to the next free hue). It amends the two-skins spec §3's "same hue per lane" row: the lanes keep their hues, and a programme borrows the four cool ones, always beside its title in words, never glowing, never on a lane's card.
 
-- **D-7337** - `programme-title-rides-the-kicker`: G2's Step 0 departure, ruled 2026-10-29. The programme's title is printed in the box's kicker ("Programme · <title>", in its hue). The coordinator's row keeps the session's own label, so a box names both the programme and the session that runs it, and `SessionLine` takes no new prop. This amends the spec's §2.2, which put the title on the coordinator's row.
-- **D-7338** - `last-move-fallback-belongs-to-the-reader`: G2's Step 0 departure, ruled 2026-10-29. `programmeBoxes`' `lastMoveAt` is the maximum of `lastMoveOf` over the open runs, and null when every value is null. The `dispatchedAt ?? openedAt` fallback belongs to G1's reader at the call site: a server that sent `lastMoveAt: null` falls back, an absent field reads null. So an older server shows no movement, as the spec's §5 says.
-- **D-7340** - `coordinator-band-stays-on-surface`: G2's departure, ruled 2026-10-29. Only the kicker sits on the programme's tint. The coordinator's row stays on the box's own ground, because the session row's inks measure below 4.5:1 on the hue tints in several palettes (for example `--ink-tertiary` on the cyan tint in tokyo-night, 3.70:1). The contrast census pins the kicker's pairs. This amends the spec's §2.8, which also tinted the coordinator band, under its own rule that a red pair changes the ground, never the hue.
-- **D-7341** - `decider-file-named-for-its-export`: G2's departure, ruled 2026-10-29. The pure decider is `pwa/src/fleet/programmeBoxes.ts`, named for its main export, because `programmeBox.ts` beside `ProgrammeBox.tsx` is one file on a case-insensitive disk and `drawer-keybar.test.tsx`'s case census refuses it. Every exported name and type is unchanged. G1 and G3 import from `./programmeBoxes`. On the same CI run, `census-w7/pwa.test.ts`'s `runMatchers()` row (reporting, not ratcheting) moves from 19 to 22, with the three new match sites named in the PR body: fleetTree's `claimed` index, programmeBoxes' claimant lookup, and its call of `runForSession`.
-- **D-7369** - `one-programme-one-hue-across-the-fleet`: ruled on review 1152, 2026-10-29. `assignHues` runs once over every open programme in the fleet (every open run's programme, review runs included, so a review-only box has a hue; ruled on review 1163), not once per card. So a programme keeps one hue on every card, in a far worker's line and in G3's Status view, and it changes only when the set of open programmes does. Collisions still move to the next free hue in sorted-slug order. Past four open programmes, hues repeat. That is acceptable, because the title in words is always printed. The map is computed once per runs frame (`fleetHues`, in `fleetTree`), and each card receives only its own programmes' entries (`cardHues`). Those entries ride the per-frame group, so they add no re-render. Measured on review 1163's probe, main's merge base and the tip are identical: 0, 3 and 3 card renders for the same runs array, an equal new array, and a change to another card's run. That every card re-renders on every runs frame is main's behaviour (FleetCards rebuilds the tree, and fleetTree returns a fresh group per card). It is recorded as a residual for C9's line of work, not G2's. This amends the spec's §2.8, which resolved collisions per card.
+- **D-7337** — `programme-title-rides-the-kicker`: G2's Step 0 departure, ruled 2026-10-29. The programme's title is printed in the box's kicker ("Programme · <title>", in its hue). The coordinator's row keeps the session's own label, so a box names both the programme and the session that runs it, and `SessionLine` takes no new prop. This amends the spec's §2.2, which put the title on the coordinator's row.
+- **D-7338** — `last-move-fallback-belongs-to-the-reader`: G2's Step 0 departure, ruled 2026-10-29. `programmeBoxes`' `lastMoveAt` is the maximum of `lastMoveOf` over the open runs, and null when every value is null. The `dispatchedAt ?? openedAt` fallback belongs to G1's reader at the call site: a server that sent `lastMoveAt: null` falls back, an absent field reads null. So an older server shows no movement, as the spec's §5 says.
+- **D-7340** — `coordinator-band-stays-on-surface`: G2's departure, ruled 2026-10-29. Only the kicker sits on the programme's tint. The coordinator's row stays on the box's own ground, because the session row's inks measure below 4.5:1 on the hue tints in several palettes (for example `--ink-tertiary` on the cyan tint in tokyo-night, 3.70:1). The contrast census pins the kicker's pairs. This amends the spec's §2.8, which also tinted the coordinator band, under its own rule that a red pair changes the ground, never the hue.
+- **D-7341** — `decider-file-named-for-its-export`: G2's departure, ruled 2026-10-29. The pure decider is `pwa/src/fleet/programmeBoxes.ts`, named for its main export, because `programmeBox.ts` beside `ProgrammeBox.tsx` is one file on a case-insensitive disk and `drawer-keybar.test.tsx`'s case census refuses it. Every exported name and type is unchanged. G1 and G3 import from `./programmeBoxes`. On the same CI run, `census-w7/pwa.test.ts`'s `runMatchers()` row (reporting, not ratcheting) moves from 19 to 22, with the three new match sites named in the PR body: fleetTree's `claimed` index, programmeBoxes' claimant lookup, and its call of `runForSession`.
+- **D-7369** — `one-programme-one-hue-across-the-fleet`: ruled on review 1152, 2026-10-29. `assignHues` runs once over every open programme in the fleet (every open run's programme, review runs included, so a review-only box has a hue; ruled on review 1163), not once per card. So a programme keeps one hue on every card, in a far worker's line and in G3's Status view, and it changes only when the set of open programmes does. Collisions still move to the next free hue in sorted-slug order. Past four open programmes, hues repeat. That is acceptable, because the title in words is always printed. The map is computed once per runs frame (`fleetHues`, in `fleetTree`), and each card receives only its own programmes' entries (`cardHues`). Those entries ride the per-frame group, so they add no re-render. Measured on review 1163's probe, main's merge base and the tip are identical: 0, 3 and 3 card renders for the same runs array, an equal new array, and a change to another card's run. That every card re-renders on every runs frame is main's behaviour (FleetCards rebuilds the tree, and fleetTree returns a fresh group per card). It is recorded as a residual for C9's line of work, not G2's. This amends the spec's §2.8, which resolved collisions per card.
 ### Task G3: Instrument's Status view shows programmes, not children (D-7333) — after G2
 
 **Spec:** §2.7. **Routing:** band 2. **Needs:** G2 merged (`programmeBoxes.ts`, `ProgrammeBox.tsx`). **Files:**
@@ -3025,9 +3025,9 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** In Instrument's Status view the operator sees the boxes that need them first, then the other programmes, then the sessions in no programme. No child appears outside its box, and every count matches what it shows. **Rollback.** A plain revert.
 
-- **D-7333** - `status-view-shows-programmes-not-children`: Task G3, the operator's words of 2026-10-28 ("just the coordinators, and only those children that need my action"). In Instrument's Status view a child draws only inside its programme's box, and only while `operatorAsk` holds. The groups are Needs you (boxes, then lone sessions), Programmes, then today's groups for the lone sessions. Every group counts what it draws.
+- **D-7333** — `status-view-shows-programmes-not-children`: Task G3, the operator's words of 2026-10-28 ("just the coordinators, and only those children that need my action"). In Instrument's Status view a child draws only inside its programme's box, and only while `operatorAsk` holds. The groups are Needs you (boxes, then lone sessions), Programmes, then today's groups for the lone sessions. Every group counts what it draws.
 
-- **D-7377** - `orphan-worker-stays-lone`: G3's Step 0 departure, ruled 2026-10-29. A worker whose claimant is a box nowhere (its coordinator gone, archived or folded away) stays a lone row in the Status view, with its orphan marker, because hiding it would lose it. Gone includes a claimant measured dead (its presence `dead`, the word `orphanNote` reads), archived or not: its workers are lone rows with the marker and the reclaim guidance, never hidden members of the dead coordinator's box, which still draws while its runs are open (review 1177 N1, ruled 2026-10-29). A hibernated claimant, or one whose presence is unmeasured, still heads its workers, and a worker drawn inside a hibernated claimant's box, selected or not, carries no extra `coordinator-hibernated` marker in the Status view: the box already says hibernated (review 1183 F1, the operator's ruling R122, 2026-10-30). A box's tray in the Status view shows the children `operatorAsk` holds for, plus the selected session, by `foldChildren`'s own rule: the row the operator has open never vanishes from the list. Instrument's dead `.ins-coord-crumb` rule (instrument.css) joins G3's Files, to be deleted once nothing reads it.
+- **D-7377** — `orphan-worker-stays-lone`: G3's Step 0 departure, ruled 2026-10-29. A worker whose claimant is a box nowhere (its coordinator gone, archived or folded away) stays a lone row in the Status view, with its orphan marker, because hiding it would lose it. Gone includes a claimant measured dead (its presence `dead`, the word `orphanNote` reads), archived or not: its workers are lone rows with the marker and the reclaim guidance, never hidden members of the dead coordinator's box, which still draws while its runs are open (review 1177 N1, ruled 2026-10-29). A hibernated claimant, or one whose presence is unmeasured, still heads its workers, and a worker drawn inside a hibernated claimant's box, selected or not, carries no extra `coordinator-hibernated` marker in the Status view: the box already says hibernated (review 1183 F1, the operator's ruling R122, 2026-10-30). A box's tray in the Status view shows the children `operatorAsk` holds for, plus the selected session, by `foldChildren`'s own rule: the row the operator has open never vanishes from the list. Instrument's dead `.ins-coord-crumb` rule (instrument.css) joins G3's Files, to be deleted once nothing reads it.
 ### Task G1: a run says when it last moved (D-7334) — when claim 2921 on `shared/api.ts` and `server/src/server.ts` is released
 
 **Spec:** §2.5. **Routing:** band 2. **Needs:** the other programme's live claim on `shared/api.ts` and `server/src/server.ts` released. The coordinator dispatches G1 then, never earlier. G2 merged, for the one call site to wire. **Files:**
@@ -3058,13 +3058,13 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** A box says when its programme last moved, and reads stalled at the stall watch's own threshold or paused under the operator's pause. An older server or an older app sees no change. **Rollback.** A plain revert. The fields are optional, so nothing else reads them.
 
-- **D-7334** - `a-run-says-when-it-last-moved`: Task G1. `RunSummary.lastMoveAt` is the newest act on the run: a non-stall, non-operator `run_events` row, or a mail naming the run from its worker, its reviewer or its coordinator session (spec §2.5; review 1176 F3 ruled 2026-10-29 that an unrelated session's mail moves nothing). The runs frame carries the stall watch's `stallQuietMs` and the operator's pause, so the app's stalled word and the stall watch mean one thing by quiet. Additive, absence-permits.
+- **D-7334** — `a-run-says-when-it-last-moved`: Task G1. `RunSummary.lastMoveAt` is the newest act on the run: a non-stall, non-operator `run_events` row, or a mail naming the run from its worker, its reviewer or its coordinator session (spec §2.5; review 1176 F3 ruled 2026-10-29 that an unrelated session's mail moves nothing). The runs frame carries the stall watch's `stallQuietMs` and the operator's pause, so the app's stalled word and the stall watch mean one thing by quiet. Additive, absence-permits.
 
-- **D-7373** - `pause-rides-the-coord-frame`: G1's Step 0 departure, ruled 2026-10-29. The operator's pause is already on the wire: the coord frame's `CoordStatus.pause` (`set`, `clear` or `unmeasurable`), from the tick's own registry listing. The runs frame is composed without that listing, so `coordPaused` is not added to the runs frame. The app reads `coord.pause === 'set'` from the fleet store's existing coord field: one fact, one carrier. `stallQuietMs` rides the runs frame, set in `onRuns` from a watcher getter, and `emitRuns`' byte guard is keyed on it too. `server/src/watch.ts` and `server/src/coord/runWire.ts` join G1's Files, and so does `server/test/reconstruction-drill.test.ts` (its `RUN_SUMMARY_KEYS` count moves from 27 to 28 with `lastMoveAt`, which is derived per frame and is not unrecoverable). The reader follows D-7338: an absent field reads null, a null falls back to `dispatchedAt ?? openedAt`, and a number is the move.
-- **D-7374** - `runs-frame-composed-in-watch`: G1's departure, ruled 2026-10-29. The live runs frame is composed in `server/src/watch.ts`'s `emitRuns` (byte-guarded, every tick). `server.ts` holds only the cold start and the frame wrapper, `onRuns`. `watch.ts`, `server/src/coord/runWire.ts` and `server/src/coord/stallsettings.ts` join G1's Files.
-- **D-7375** - `quiet-read-per-frame-by-the-resolvers-quiet-half`: G1's departure, ruled 2026-10-29. The frame's `stallQuietMs` is read every tick through `stallQuietOf`, the quiet half of `resolveStallWatch`, extracted so both call it, never the stall lane's cached resolution. The lane resolves only on its 60 s beat, so the frame would re-emit once on the second tick, which reds fleetws' "a second tick must NOT re-emit" (measured). A Settings change reaches the next frame.
-- **D-7376** - `no-shared-quiet-default`: G1's departure, ruled 2026-10-29. The app holds no copy of `STALL_QUIET_MS`. A server old enough to omit `stallQuietMs` also omits `lastMoveAt`, which reads null and never stalls. A new server omits it only before its first runs frame.
-- **D-7380** - `g1-lands-the-frame-g1b-wires-the-card`: a coordinator ruling, 2026-10-29. G1 ships as one PR from its branch at base 555b6916b, carrying the server and store half: the held-bytes commit under the other programme's consent, `lastMoveAt` and `stallQuietMs` on the live frame (D-7374, D-7375), `stallQuietOf`, the reconstruction-drill pin, and the store reading the frame once (D-7376). G2 merged after G1 was based, and absorbing `origin/main` to reach its code is none of clause 16's three triggers, so the card wiring leaves G1 rather than wait on that absorb. That wiring is `nextStallBoundary` in `programmeBoxes.ts`, the stall boundary in `useRollupClock`, `FleetCards` reading `stallQuietMs` and the coord frame's pause (D-7373) and handing each card `boxNow`, `ProjectCard` dropping `NO_MOVE`, `QUIET_MS` and the test-only `nowMs` path, the programme-box and programme-box-card cases, their mutants, `runWords.ts`'s `LastMoveCarrier` becoming `RunSummary`, and the Status view's movement and pause inputs (`statusView`'s `() => null` and `null` in `FleetTable`, the spec's interim until then; review 1175 asked, ruled 2026-10-29). It becomes Task G1b, dispatched only after G1 merges, as a fresh run whose workspace starts from `origin/main`. G1's scratch-clone work is pinned as its starting patch, to be re-verified red first there. G1's acceptance is the frame and store half; the box reads stalled or paused only once G1b lands, and until then the cards keep G2's placeholders. Amended 2026-10-30 (the operator approved starting G1b): G3's live claim holds `statusGroups.ts` and instrument `FleetTable.tsx` while #1853 is in review, so the Status view's movement and pause inputs leave G1b for Task G1c, a fresh run from `origin/main` after #1853 merges. G1b is the cards half.
+- **D-7373** — `pause-rides-the-coord-frame`: G1's Step 0 departure, ruled 2026-10-29. The operator's pause is already on the wire: the coord frame's `CoordStatus.pause` (`set`, `clear` or `unmeasurable`), from the tick's own registry listing. The runs frame is composed without that listing, so `coordPaused` is not added to the runs frame. The app reads `coord.pause === 'set'` from the fleet store's existing coord field: one fact, one carrier. `stallQuietMs` rides the runs frame, set in `onRuns` from a watcher getter, and `emitRuns`' byte guard is keyed on it too. `server/src/watch.ts` and `server/src/coord/runWire.ts` join G1's Files, and so does `server/test/reconstruction-drill.test.ts` (its `RUN_SUMMARY_KEYS` count moves from 27 to 28 with `lastMoveAt`, which is derived per frame and is not unrecoverable). The reader follows D-7338: an absent field reads null, a null falls back to `dispatchedAt ?? openedAt`, and a number is the move.
+- **D-7374** — `runs-frame-composed-in-watch`: G1's departure, ruled 2026-10-29. The live runs frame is composed in `server/src/watch.ts`'s `emitRuns` (byte-guarded, every tick). `server.ts` holds only the cold start and the frame wrapper, `onRuns`. `watch.ts`, `server/src/coord/runWire.ts` and `server/src/coord/stallsettings.ts` join G1's Files.
+- **D-7375** — `quiet-read-per-frame-by-the-resolvers-quiet-half`: G1's departure, ruled 2026-10-29. The frame's `stallQuietMs` is read every tick through `stallQuietOf`, the quiet half of `resolveStallWatch`, extracted so both call it, never the stall lane's cached resolution. The lane resolves only on its 60 s beat, so the frame would re-emit once on the second tick, which reds fleetws' "a second tick must NOT re-emit" (measured). A Settings change reaches the next frame.
+- **D-7376** — `no-shared-quiet-default`: G1's departure, ruled 2026-10-29. The app holds no copy of `STALL_QUIET_MS`. A server old enough to omit `stallQuietMs` also omits `lastMoveAt`, which reads null and never stalls. A new server omits it only before its first runs frame.
+- **D-7380** — `g1-lands-the-frame-g1b-wires-the-card`: a coordinator ruling, 2026-10-29. G1 ships as one PR from its branch at base 555b6916b, carrying the server and store half: the held-bytes commit under the other programme's consent, `lastMoveAt` and `stallQuietMs` on the live frame (D-7374, D-7375), `stallQuietOf`, the reconstruction-drill pin, and the store reading the frame once (D-7376). G2 merged after G1 was based, and absorbing `origin/main` to reach its code is none of clause 16's three triggers, so the card wiring leaves G1 rather than wait on that absorb. That wiring is `nextStallBoundary` in `programmeBoxes.ts`, the stall boundary in `useRollupClock`, `FleetCards` reading `stallQuietMs` and the coord frame's pause (D-7373) and handing each card `boxNow`, `ProjectCard` dropping `NO_MOVE`, `QUIET_MS` and the test-only `nowMs` path, the programme-box and programme-box-card cases, their mutants, `runWords.ts`'s `LastMoveCarrier` becoming `RunSummary`, and the Status view's movement and pause inputs (`statusView`'s `() => null` and `null` in `FleetTable`, the spec's interim until then; review 1175 asked, ruled 2026-10-29). It becomes Task G1b, dispatched only after G1 merges, as a fresh run whose workspace starts from `origin/main`. G1's scratch-clone work is pinned as its starting patch, to be re-verified red first there. G1's acceptance is the frame and store half; the box reads stalled or paused only once G1b lands, and until then the cards keep G2's placeholders. Amended 2026-10-30 (the operator approved starting G1b): G3's live claim holds `statusGroups.ts` and instrument `FleetTable.tsx` while #1853 is in review, so the Status view's movement and pause inputs leave G1b for Task G1c, a fresh run from `origin/main` after #1853 merges. G1b is the cards half.
 
 ### Task G1b: a programme's box reads stalled or paused on its card (D-7380) — after G1 (#1858) merges
 
@@ -3131,7 +3131,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
 - [ ] **Step 2: Verify.** Run each touched suite once, the pwa typecheck, contrast-check, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`.
 
-- **D-8110** - `chat-and-desk-nav-follow-up-sweep`: Task C14, issued on 2026-11-07. The findings that the final reviews of chat reading (1586, 1589, 1592, 1601, 1603, 1606) and desk-nav Task A (1643, 1646) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8110** — `chat-and-desk-nav-follow-up-sweep`: Task C14, issued on 2026-11-07. The findings that the final reviews of chat reading (1586, 1589, 1592, 1601, 1603, 1606) and desk-nav Task A (1643, 1646) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -3156,7 +3156,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item**, red first, mutants run.
 - [ ] **Step 2: Verify.** The touched server suites, `rings`, `single-definition`, the ccd suites for `forget`, the pwa held-by tests, both typechecks and `deviation-refs`, through `ccrc test`, one at a time.
 
-- **D-8111** - `held-by-follow-up-sweep`: Task C15, issued on 2026-11-07. The findings that cleanup R2's reviews (1580, 1585, 1590) carried to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8111** — `held-by-follow-up-sweep`: Task C15, issued on 2026-11-07. The findings that cleanup R2's reviews (1580, 1585, 1590) carried to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3188,7 +3188,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
 - [ ] **Step 2: Verify.** Each touched suite once, the pwa typecheck, contrast-check, `css-vars`, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`. Screenshots of the desk Docs head at 600, 900 and 1280 px, both skins, fine and coarse, before and after, in the PR body.
 
-- **D-8139** - `desk-docs-head-and-desk-nav-follow-up-sweep`: Task C16, issued on 2026-11-09. The findings that the final reviews of desk-nav Task B (1697, 1704), C14 (1689, 1694) and C15 (1668) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8139** — `desk-docs-head-and-desk-nav-follow-up-sweep`: Task C16, issued on 2026-11-09. The findings that the final reviews of desk-nav Task B (1697, 1704), C14 (1689, 1694) and C15 (1668) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -3213,7 +3213,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each fix names the cause it removes. A flake fix is proved by repeated runs of the file (at least 20, and under load where load is the trigger), before and after, with the counts in `c17.md`.
 - [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`, `rings`, `single-definition`, the ccd suites for `forget`, both typechecks, the agent suite, the connect-sheet browser file and `deviation-refs`. A full CI run (`full-ci`) on the PR.
 
-- **D-8140** - `ci-flake-sweep`: Task C17, issued on 2026-11-09. The five flakes that dequeued #2480 on 2026-11-09, and C15's deferred Forget registry read, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8140** — `ci-flake-sweep`: Task C17, issued on 2026-11-09. The five flakes that dequeued #2480 on 2026-11-09, and C15's deferred Forget registry read, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item's cause is named and removed, or named as fixed already, with its commit; each flake's before and after counts are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3239,7 +3239,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 - [ ] **Step 1: One commit per item.** Each guard is red first, under its mutant, restored from a saved copy with its sha checked.
 - [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`; item 1's file at least 10 times; the pwa and server type checks; `deviation-refs`. A full CI run (`full-ci`) on the PR.
 
-- **D-8150** - `w24-r12-and-follow-up-sweep`: Task C18, issued on 2026-11-10. The slow W24-R12 case's cause, and the findings that reviews 1722 to 1733 carried to a later sweep outside the Docs head, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8150** — `w24-r12-and-follow-up-sweep`: Task C18, issued on 2026-11-10. The slow W24-R12 case's cause, and the findings that reviews 1722 to 1733 carried to a later sweep outside the Docs head, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit; item 1's before and after times are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3251,7 +3251,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **The change.** The job's matrix goes from two shards to three; `timeout-minutes` stays 20, since a longer limit is not the fix. The comment records the measured per-file times, the expected time per shard and the margin. Every reader of the matrix follows (`server/test/ci-pipeline.test.ts`, the merge-queue census, any shard helper), red first where it is a guard. If one file alone keeps a shard over about 12 minutes, the worker mails the numbers before going further; no test file is split in this task.
 
-- **D-8167** - `browser-shards-at-job-limit`: Task C19, issued on 2026-11-10. The browser suite's two queue shards ran at 14 to 19 minutes against a 20-minute job limit and were cancelled under load; it runs in three shards under the same limit. Any departure is named by slug in `c19.md` as it is found.
+- **D-8167** — `browser-shards-at-job-limit`: Task C19, issued on 2026-11-10. The browser suite's two queue shards ran at 14 to 19 minutes against a 20-minute job limit and were cancelled under load; it runs in three shards under the same limit. Any departure is named by slug in `c19.md` as it is found.
 
 **Acceptance.** Three browser shards run and pass on the PR or in the queue, each one's time recorded in the PR body and in `c19.md` with the before times. **Rollback.** A plain revert.
 
@@ -3261,7 +3261,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **The change.** The rule, first that applies wins: `owner/repo#n` is a PR name that carries its repository and opens it in any session when the chat can tell it; a bare `#n` or commit opens the one repository its own message (its whole text) names for it, and is text where it names two or one it cannot tell; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose project's repository is not the home one; otherwise it is text. The spec carries it as R15. The receipts are in `c21.md`.
 
-- **D-8172** - `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
+- **D-8172** — `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
 
 **Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, and every mutant of the chosen set is killed (`c21.md` records the set and the count); a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
 
@@ -3291,7 +3291,7 @@ re-anchored on `main` at `45015062b`, after C21 landed. The receipts are in `c20
 Not in this task: the Docs head items (review 1723 N5, review 1725 F4), whose files another programme holds, and the
 browser-suite growth watch, which is the coordinator's.
 
-- **D-8187** - `carried-sweep-1740-1747-1762`: Task C20, issued on 2026-11-10. The carried findings of reviews 1740, 1747 and 1762 land in one task: the chat evidence reader's `gh` flags, quotes, escapes, reserved pages and commit index, two census rows, comment fixes, and corrected receipts. Departures are named by slug in `c20.md`.
+- **D-8187** — `carried-sweep-1740-1747-1762`: Task C20, issued on 2026-11-10. The carried findings of reviews 1740, 1747 and 1762 land in one task: the chat evidence reader's `gh` flags, quotes, escapes, reserved pages and commit index, two census rows, comment fixes, and corrected receipts. Departures are named by slug in `c20.md`.
 
 **Fix round 1 (review 1766, ruled by the coordinator).** Three wrong or home links where `main` was right came from the
 round's rules as written, and are fixed as ruled: an open quote voids a command only inside its own words (F1); every flag
@@ -3335,7 +3335,7 @@ or stay text. Every change here fails toward text. The receipts are in `c22.md`.
 
 R15 gains one sentence for each changed rule, and nothing else in the spec changes.
 
-- **D-8196** - `gh-net-linear-and-last-gaps`: Task C22, issued on 2026-11-11. Review 1769's carried findings: the net's flag values end at the next flag (F1), glued short flag values and `repos/o/r` path words (F2), unclaimed repository flags as candidates for every number (F3), the `gh` word gate (F4) and `GH_REPO: o/r` (F8), each failing toward text; `c20.md`'s record corrected (F2, F9). Departures are named by slug in `c22.md`.
+- **D-8196** — `gh-net-linear-and-last-gaps`: Task C22, issued on 2026-11-11. Review 1769's carried findings: the net's flag values end at the next flag (F1), glued short flag values and `repos/o/r` path words (F2), unclaimed repository flags as candidates for every number (F3), the `gh` word gate (F4) and `GH_REPO: o/r` (F8), each failing toward text; `c20.md`'s record corrected (F2, F9). Departures are named by slug in `c22.md`.
 
 **Acceptance.** Every review 1769 shape the brief names is a row; the budget pins hold with recorded margins; the mutation
 count is recorded in `c22.md`. **Rollback.** A plain revert.
@@ -3379,7 +3379,7 @@ spelling split by a continuation is read in every context (A). An `api.github.co
 budget and bound pins (F5-gap, F6), the record fixes, and the fuzz's two-repository check. R15 gains one sentence for the
 net's join and one for the API commits address.
 
-- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Fix round 2 (review 1800): the net reads the joined text (A), and an API commits address and a commits sub-path name their commit (B). Departures are named by slug in `c23.md`.
+- **D-8279** — `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Fix round 2 (review 1800): the net reads the joined text (A), and an API commits address and a commits sub-path name their commit (B). Departures are named by slug in `c23.md`.
 
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
@@ -3403,7 +3403,7 @@ on both platforms that the reader still says "never" while a writer holds the FI
 iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
 `read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
 
-- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+- **D-8344** — `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
 
 **Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
 `c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
@@ -3429,7 +3429,7 @@ hang is inferred from its matching symptoms. The probe now hands the run its inp
 pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are unchanged. Evidence and runs are in
 `c29.md`.
 
-- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
+- **D-8354** — `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
 
 **Acceptance.** Both files are green in a `macos.yml` dispatch at the PR's tip, with the repeat runs recorded in `c29.md`.
 A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new
@@ -3453,7 +3453,7 @@ directory and `tar` extracts that file; the tarball's contents are unchanged. A 
 without the fix. Every fixture step in `release-main.test.ts` now reports its pid, status, signal, stdout and stderr,
 where it used to report stderr alone. Evidence and runs are in `c31.md`.
 
-- **D-8391** - `release-stage-git-archive-sigpipe`: Task C31, issued on 2026-11-12. The brief asked why the fixture's steps fail on macOS with no output. The builder's staging pipe, `git archive | tar -x`, loses a race on macOS: tar can leave before git has written its last bytes, git dies of SIGPIPE, and `pipefail` with `set -e` ends the build at 141 without a word. The builder now stages through a file. Departures are named by slug in `c31.md`.
+- **D-8391** — `release-stage-git-archive-sigpipe`: Task C31, issued on 2026-11-12. The brief asked why the fixture's steps fail on macOS with no output. The builder's staging pipe, `git archive | tar -x`, loses a race on macOS: tar can leave before git has written its last bytes, git dies of SIGPIPE, and `pipefail` with `set -e` ends the build at 141 without a word. The builder now stages through a file. Departures are named by slug in `c31.md`.
 
 **Acceptance.** `release-main.test.ts` and `build-release.test.ts` are green in a `macos.yml` dispatch at the PR's tip,
 with the probe's repeat runs recorded in `c31.md`. The new case reds when the stage goes back to a pipe. **Rollback.**
@@ -3481,7 +3481,7 @@ repository the message means, or stay text. The receipts are in `c24.md`.
 R15 gains one sentence for the union, one for single quotes and one for the glued tail, and its "Not read" list names
 `owner/repo@sha` (M6, the coordinator's answer to this task's ask), and nothing else in the spec changes.
 
-- **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
+- **D-8291** — `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
 
 ### Task C30: spawnSyncGroup hands an input to its child as a regular file (D-8381) — now
 
@@ -3500,7 +3500,7 @@ descriptor as the child's stdin. The group, the timeout, the group kill, the str
 The fixed helper had 0 hangs in 30,000 runs on macOS. Three cases in `proc-leak.test.ts` pin the route. The nine
 callers' inputs measured 1,989 bytes at the largest. Evidence and runs are in `c30.md`.
 
-- **D-8381** - `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
+- **D-8381** — `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
 
 **Acceptance.** The PR's required checks and a `macos.yml` dispatch at its tip are green. The new cases red when the
 input goes back through `spawnSync`'s `input`, when the directory outlives the child's start, and when the caller's
@@ -3538,7 +3538,7 @@ operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and
 No test is skipped on Darwin, no Linux assertion is loosened, no timeout is raised, and the gate, `full-suite` and
 `macos.yml` are unchanged.
 
-- **D-8343** - `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
+- **D-8343** — `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
   fakes and the trial's sign-in listener bind without `HTTPServer`'s `getfqdn` (about 35 s on macOS), `rig.sh`'s
   `sessions_snap` lists transcripts without GNU find's `-printf`, and the test bound `BOUNDED` decides from the child's
   process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
@@ -3584,7 +3584,7 @@ coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5
 puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
 without the fix. Departures by slug in `c28.md`.
 
-- **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
+- **D-8345** — `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
   whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
   measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
   read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
@@ -3618,7 +3618,7 @@ holds the run in such options and also asserts that the detail pane has no sidew
 clips and the page's own scroll cannot show it (F2). The pane assertion runs in the 12 desktop cases; the test is red on `main` in all 16 cases, and red in 10 without the new rule (review 1944 F1). The
 note corrects the run's length to 340 characters (F3) and says which checked rows hold no long run (F4).
 
-- **D-8585** - `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
+- **D-8585** — `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
   min-content width of a How step that could not wrap, so a long run with no spaces pushed all of the card's text past its
   edge, under the side panel. The card's column is now `minmax(0, 1fr)` and the How steps wrap anywhere; fix round 1 (review
   1938) makes a decision's options wrap too. Departures are named by slug in `c32.md`.
@@ -3644,12 +3644,1862 @@ file's other long lines are left alone. Red first, measured with a mutant that t
 four ring cases are green on `main`'s test and red on the fix (`expected 'demo' to be 'Docs'`). The runs, the line lengths
 before and after and the brief's one misquoted line ending are in `c25.md`.
 
-- **D-8647** - `ring-cases-class-only`: Task C25, issued on 2026-11-15. The desk head's four focus-ring cases checked only
+- **D-8647** — `ring-cases-class-only`: Task C25, issued on 2026-11-15. The desk head's four focus-ring cases checked only
   that Tab from back reached a crumb, not the first one, so a first crumb out of the Tab order passed them. They now check
   its words. Departures are named by slug in `c25.md`.
 
 **Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
 red on the fix with the mutant in place. **Rollback.** A plain revert.
+
+### Task C34: the three tests on the flake watch list, each cured or shown cured (D-8657) — now
+
+Placed after C25's section, before the acceptance matrix. Test code only; no product behaviour changes, and the shipped locale
+pins of D-3833 and D-3979 are unchanged.
+
+**Why.** Three tests on the programme's flake watch list: the linearity case in `pwa/test/chat-marks-negation.test.ts`
+(dequeued #2692 once, a ratio of 8.25 against 8), the `/digest` row of "every route says where you are" in
+`pwa/test/instrument-shell.test.tsx` (dequeued #2762 once), and R14(i)'s Linux case in `server/test/platform-hazards.test.ts`
+(red in every run on the fleet box's bash 5.3.9, green on CI's 5.2.21). Root cause first, measured, for each.
+
+**What was found and done.**
+
+- **The linearity case.** Reproduced: under six busy loops in the fleet's 4-CPU test slice, the shipped wall-clock form was red
+  in 12 of 40 and then 5 of 40 runs, ratios up to 15.8. The 200k run waits off the CPU far longer than the 50k run on a loaded
+  box (its fastest wall time rose to 88 to 112 ms while its CPU time stayed near 17 to 29 ms), and equal-work wall-clock
+  batches did not help. The case now compares CPU time (`process.cpuUsage()`), after an untimed warm-up of each size, over five
+  alternating turns, the least of each kept, bound still `< 8`; every run keeps its 400 ms wall bound. Under the same load it
+  was green in 100 of 100 runs (ratio at most 6.10), and 40 of 40 beside a looping pwa suite. The quadratic mutants still
+  fail: the two that rebuild per label hit the wall bound, and two with a small constant, which pass the wall bound, are
+  caught by the ratio 3 of 3 each, where the shipped form caught the milder one 2 of 3.
+- **The `/digest` row.** Already cured by #2780 (`166aa21ee`); no code change. The failing queue run's test file is
+  byte-identical to the one before #2780, it had no part of the fix, and its message is the one #2780's mutant "without the
+  wait" records. #2780's mutant on today's file reds with that message, and the file is green as it is.
+- **R14(i) on Linux.** Bash 5.3 reads bytes correctly under a UTF-8 locale. Measured on 5.1.16, 5.2.15 and 5.2.37 (misread)
+  and 5.3.9 and 5.3.20 (no misread), on glibc and musl alike. The case now asserts the misread on a bash below 5.3 and records
+  the answer on a later one, failing only if a probe does not run or the version cannot be read. On bash 5.2.15 it still reds
+  when the probe reads bytes, and dropping a locale pin still reds U4n (T4-M32) and U4u (T1-1); on 5.3.9 both mutants survive,
+  which the case now prints.
+
+The runs, the tables and the mutants are in `c34.md`. Departures by slug: `plugin-bound-under-load` (another case in the
+same file went over its 400 ms wall bound once in 100 loaded runs; not changed) and `locale-pins-hollow-on-bash-5-3` (on bash
+5.3 the locale pins guard nothing these probes show, so T4-M32, T4-M31 and T1-1 cannot red there).
+
+- **D-8657** — `flake-watch-three`: Task C34, issued on 2026-11-16. The linearity guard's wall-clock ratio inflated on a
+  loaded runner because the 200k run waits off the CPU, so it now compares CPU time after a warm-up over five alternating
+  turns; the `/digest` row was already cured by #2780; R14(i)'s Linux case asserts the UTF-8 misread on a bash below 5.3 and
+  records it on 5.3 and later, where bash no longer misreads. Departures are named by slug in `c34.md`.
+
+**Acceptance.** Each changed test file passes alone, repeated, at the PR's tip; pwa's whole suite passes once; the
+whole-tree guards (deviation-refs, dtbd, topology-clean, single-definition, the test tsc) pass. **Rollback.** A plain revert.
+
+### Task C33: this plan's hyphen entries are written so the ledger reads them, and a guard keeps that form out (D-8656) — now
+
+Placed after C25's section, before the acceptance matrix. Found by review 1938 F7; the operator made it a goal of this
+programme. No product behaviour changes.
+
+**Why.** `DEFINITION` (`server/src/coord/ledger.ts`) reads a `- **D-N**` entry only when an em dash, a parenthesis or a
+colon follows the bold number. This plan wrote 112 of its entries as `- **D-N** - `, with a hyphen, and no other plan
+did. The deviation-refs cross-tree scan and the server's reconcile sweep could not see those numbers, so none of them
+could land and a second definition of one would not have been caught.
+
+**What was done.** Before the conversion every number was measured: the allocator issued all 112, and no other
+programme's plan defines any of them. 108 of the entries now use the em dash, `- **D-N** — `, and nothing else on those
+lines changed. `DEFINITION`'s grammar is unchanged. The other four, D-8344, D-8345, D-8354 and D-8381, were also defined
+in this programme's own task notes (`c27.md` to `c30.md`). On the coordinator's ruling, each note's line was reworded
+into a citation, with only its opening changed. The four plan lines keep the hyphen form for now. On `origin/main` the
+notes still define those numbers, so converting the plan lines in this PR would put one definition on each side of the
+cross-tree scan, red until the merge and in the merge queue too. Task C33b, which the coordinator opens after this PR
+merges, converts the four under D-8656. Until then the sweep reads none of those four numbers.
+
+A new describe in `deviation-refs.test.ts` fails on any `- **D-N**` line at column 0 that `DEFINITION` does not read,
+outside fenced blocks. `UNREAD_BASELINE` lists the lines plans hold today, and it may only shrink: 175 lines in 14
+plans, plus the four that C33b converts. It was red first on this plan's 112 entries. With one converted entry put back
+in the hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in
+`c33.md`.
+
+**Follow-up C33b.** The four entries C33 left in the hyphen form, D-8344, D-8345, D-8354 and D-8381, now open with
+the em dash, because the task notes `c27.md` to `c30.md` hold citations on `main` and each number has one definition.
+D-7253's line in Task S5c now opens `- **D-7253** — the task's own number.`, which the ledger reads. The guard's shape
+also reads the dot form, `- **D-N.** subject`, which `DEFINITION` does not read either, and `UNREAD_BASELINE` holds
+today's 161 such lines in 17 plans: 335 lines in 30 plans in all. Records, corrections to C33's notes and the
+measurements are in `c33.md`. Under D-8656, with no number of its own.
+
+- **D-8656** — `hyphen-entries-unread`: Task C33, issued on 2026-11-16. This plan's 112 hyphen entries were invisible to
+  the ledger. 108 now use the em dash, and C33b converts the last four after this PR merges. A guard reds on any new
+  definition-shaped line the ledger cannot read. Four task-note lines that defined the same numbers became citations.
+  Departures are named by slug in `c33.md`.
+
+**Acceptance.** `deviation-refs.test.ts` passes at the PR's tip. Each of the 108 converted numbers is defined once
+across the two trees. The guard reds with one converted entry put back. **Rollback.** A plain revert. The guard and the
+conversion revert together, because the guard is red on the hyphen form.
+
+### Task C35: the timeout helper's pure-bash arm passes the caller's stdin through (D-8658) — now
+
+**Why.** C28's fix round 1 found that on a box with neither `timeout` nor `gtimeout` the shared timeout helper starts
+the command as `"$@" &` in a shell without job control, so bash gives it /dev/null for stdin and no pasted sign-in code
+reached the mint. Ask 357 ruled that fix at the sign-in helper's call sites and left the helper alone. The same arm still
+gave every other caller /dev/null, while the binary arm passes stdin through. The operator made fixing it a goal of this
+programme. Each claim below is labelled measured or inferred in `c35.md`, with the call-site census and the runs.
+
+**What was done.**
+- **The change.** In all four copies (`_plat_timeout` in `ccd/ccd` and `ccd/ccrc`, `_auth_timeout` in the sign-in
+  helper, `_rt_timeout` in `ccd/ccgpt-runtime`, pinned two by two byte for byte) the arm runs `"$@" <&0 &`, in one
+  commit. `<&0` is a stdin redirection of the job's own, so bash keeps the caller's fd 0 (measured on bash 5.3, and in
+  `--posix`); with fd 0 closed the command still runs with it closed, as under the binary, which a copy through a spare
+  descriptor would not do (measured). The expiry code 124, the stamp, the single TERM with no pid escalation (D-2764),
+  the watcher's discarded streams and the whole binary arm are unchanged.
+- **The census.** 85 call sites in seven files (measured). On a box with coreutils every one already gets the caller's
+  stdin; the change reaches only a box with neither binary, and makes each behave as it does on Linux (inferred). Sites
+  whose call binds the command's stdin, the strict neighbour's sites and C28's spawns and drain change nothing. The
+  commands that read no stdin change nothing in effect, the two inside a redirected read loop included. The three
+  `claude -p` account probes in `ccd/ccrc` read a non-terminal stdin and now get the caller's on both arms (inferred).
+- **C28's call-site handling** (the fd-5 trampoline, the drain's `read -u 8`, the ccgpt probe's own `< probe.py`) is
+  kept exactly; only the comments that described the old arm are updated.
+- **Tests.** A new describe in `ccd-plat-timeout.test.ts`, on all four copies, each on a PATH with no deadline binary:
+  a reader gets the caller's bytes (a redirect, a here-string, the shell's own stdin); a read loop loses its remaining
+  input as under the binary, with a binary-arm parity case; a reader blocked on stdin still answers 124; a closed stdin
+  stays closed and the command runs. Red first: 16 red on `main`'s helpers, the 4 parity cases green.
+
+- **D-8658** — `pure-bash-arm-stdin`: Task C35, issued on 2026-11-16. The shared timeout helper's pure-bash arm gave
+  its command /dev/null for stdin, where the binary arm passes the caller's through. All four copies now run
+  `"$@" <&0 &`. Departures are named by slug in `c35.md`.
+
+**Acceptance.** `ccd-plat-timeout.test.ts` passes in full at the PR's tip, with the new cases red on `main`'s helpers;
+every server test file that drives a copy passes; the `macos.yml` run on the branch is reported in the PR and the
+wave-done mail (it runs after the one push).
+**Rollback.** A plain revert.
+
+### Task C36: the terminal view's stale and overlapping characters, from the drawer's provisional mask (D-8665) — now
+
+**Why.** The operator saw a session's terminal on desktop drawn with doubled lines, two lines' letters interleaved in
+one row, and leftover characters in rows that should be blank, with tmux's status row ending `‹secret m` and its date
+alone on the row below. The brief's lead, a terminal narrower or wider than the program believes, was measured and does
+not hold: the xterm, the tmux client and the window are 220 columns on every glass and in both views. Each claim below
+is labelled measured or inferred in `c36.md`, with the widths, the reproduction and the screenshots.
+
+**What was done.**
+- **The cause** (measured through a real tmux at the drawer's 220 x 51, on headless xterm). With fingerprint rows held,
+  the drawer's masker drew a 15-column provisional `SECRET_MASK` in place of an open run whose hold had expired, and
+  erased it later with `CUB 15` and `ECH 15`. The date that ends tmux's status row is 9 columns and ends in the last
+  column of the last row, so the mask ran past the edge, the terminal wrapped and scrolled the whole screen, and every
+  later redraw landed a row off tmux's picture of the glass: all 51 rows differed from the raw stream's screen, against
+  none with the shape-only masker.
+- **The change**, in `DrawerMask` alone: a withheld run is drawn as nothing until it resolves, so the drawer sends the
+  stream's own bytes unless a secret is masked in it. No mark can be drawn and taken back safely without knowing the
+  cursor's column (a mark at the right edge leaves the wrap pending, and neither `CUB` nor a saved cursor recovers it,
+  measured). D-5995's fail-closed rule and its accepted gaps are unchanged. No window size, no `ccd`, no PWA file.
+- **Tests.** `drawer-mask-screen.test.ts` renders on `@xterm/headless` (a new server dev dependency): Claude-Code-like
+  redraws ending on the status row's date leave the screen exactly as the raw stream draws it; a secret-free stream cut
+  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes;
+  and no byte of a withheld run reaches the screen before it resolves, nor ever when it never resolves (two leak
+  mutants turn it red). Red first on `main`'s masker. `@xterm/headless` is pinned to 6.0.0, the PWA's xterm release. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
+
+- **D-8665** — `drawer-provisional-mark-dropped`: Task C36, issued on 2026-11-16. The drawer's provisional mask, 15
+  columns drawn in place of a shorter run and erased with `CUB` and `ECH`, ran past the right edge on tmux's status
+  row and moved the glass a row off tmux's picture of it. A withheld run is now drawn as nothing until it resolves.
+  Departures are named by slug in `c36.md`, `drawer-final-mask-columns` among them (reported, not fixed).
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its three cases are red on `main`'s masker;
+`secret-mask.test.ts` and `pty.test.ts` pass in full; before and after screenshots at 1920 and 390 px from a fixture.
+**Rollback.** A plain revert.
+
+### Task C37: the programme page shows its work, done and outstanding (design) (D-8669) — now
+
+**Why.** The operator, 2026-11-16, on a programme's page: "I want to see at a glance on that page what work remains
+outstanding in the programme, what work is already done, at a high level." The page shows Goals, Waiting on you and the
+open runs, and nothing lists the work the programme set out to do. This task is the design only: a spec with mockups,
+and a build plan. No product code.
+
+**What was done.** The spec is `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`, with desktop, phone
+and no-plan mockups in the folder beside it. The build plan is `docs/superpowers/plans/2026-11-16-programme-work-map.md`.
+- **Measured.** Five programmes of different shapes, and the server's plans and runs (spec §2). The stored plan (epics
+  and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
+  2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
+  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale
+  (this programme's has 40 rows for waves 1 to 42, against wave 132).
+  A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
+  many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
+- **Decided.** The card is built on the Linear hierarchy's plan model (programme, epic, checkpoint, ticket; its wave 2
+  is on `main`) and supersedes that plan's Task 5.2. To it the design adds a sequence axis: phases in order, each
+  referencing the epics and tickets it takes on, a ticket allowed in several phases, and a slip recorded as a carry
+  from one phase to a later one. The hierarchy's work model is unchanged; epics without wave ranges, which would let
+  them run side by side, are put to the operator (Q5). Done is derived from evidence the server checks (a done run, or
+  a pull request landed on the landing line), stored with its time and re-checked on every read. The Work card sits
+  below Goals: "N of M done" with a bar and a strip of each epic's count and checkpoints, then phases in order, each
+  ticket inside with its epic as a tag, a carried ticket counted once. The view carries both axes, so which one leads
+  changes only the card. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
+  runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
+  you moves to the top of the right column.
+- **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
+  with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
+  ticket done except its own run. In a plan that declares phases, `runs open` now refuses `ticket-required` while the
+  run's epic has an open declared ticket that no run holds, and a coordinator's `plan ticket-done` records a finished
+  ticket with evidence the server verifies (the hierarchy's approved "the coordinator closes it").
+- **The review** (run 2252, 19 findings, all text) led to the coordinator's rulings: done derived and verified, carries
+  recorded, the view carrying both axes, and the hierarchy's model left unchanged except through the operator (Q5).
+  The rest corrected the refusal vocabulary, the claims each task waits for, the overlaps with the hierarchy's wave 3 in
+  flight and its Tasks 4.1, 4.3 and 6.1, the plan's four states (none, declared empty, ended, unreadable), the stuck
+  verdicts' reader, and three cells of the measurement.
+- **For the operator.** Five questions, raised as Waiting on you items. The operator answered four with the
+  recommendations: a stage is a "phase" (R129, item 355), phases lead the card (R130, item 354), a phase becomes a
+  Linear label written by the hierarchy's sync (R131, item 356), and live programmes declare their plans at their next
+  wave boundary after the build lands (R132, item 353). Q5, may an epic have no wave range, is open.
+- **The build** is seven tasks, WM0 to WM6, one PR each; WM6 is built only if Q5 is answered yes. Only WM4 touches
+  claim 4522's files (`ProgrammeScreen.tsx`, `pwa/src/lib/api.ts` and their test), so it waits for that claim. WM0 and
+  WM1 wait for the hierarchy wave 3's claim on `planStore.ts`, or a co-edit grant, and WM1 for `shared/api.ts`.
+
+**Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
+words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
+wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." Then, the same day:
+"I guess we can allow references to epics / tickets that are part of a wave/phase"; a ticket in more than one phase is
+"a good idea"; and "I guess if we properly implement linear it should have the initiatives, projects, etc." The spec now
+keeps the two axes apart, builds the work on the hierarchy's model unchanged, and adds phases that reference it, with
+recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced by four new ones on the corrected model
+(353 to 356), and the review added a fifth (Q5).
+
+- **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
+  stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work
+  (epics and tickets), with a status decided once on the server, and falls back to the programme's runs. It replaces the
+  Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan: `phase-is-not-epic`,
+  `hierarchy-5-2-replaced`, `waiting-card-moves-right` and `ticket-required-and-done`.
+
+**Acceptance.** The spec, its mockups and the build plan are on `main`. A fresh builder read the spec before the PR.
+`deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
+**Rollback.** A plain revert; nothing ships.
+
+### Task C38: seven console items from the delegation broker programme (D-8670) — now
+
+**Why.** The delegation broker programme closed with seven minor console items carried to its Rider (its entries of
+2026-11-07 and 2026-11-09), and the operator agreed they come here. Each was measured on `main` first; `c38.md` has a
+row per item with the measurement, the cause, the fix or the reason not, and the test.
+
+**What was done.**
+- **The Sheet owns the close** (`ui/src/primitives/sheet.tsx`, every sheet in the app at once). The page's hiding follows
+  `open`, as Radix's trap does: as a sheet turns closed its panel's exit no longer leaves the page `aria-hidden`, so a
+  refusal's live region and a focus placed as it leaves are announced (item 1). Shift+Tab pressed first, from the panel,
+  goes to the sheet's last control instead of the page (item 2). A switch card's confirm closed by Cancel, Escape or the
+  scrim gives the focus back to its radio group, on the checked radio, even when a disabled fieldset dropped the
+  opener's focus to the page before the sheet could read it, and a radio is no longer treated as a text field on a phone
+  (item 5: measured for a radio opener on Worktrees left behind and Shadow lanes, the other cards and openers inferred;
+  `c38.md` row 5).
+- **The worktree row's box** (`ProjectCard.tsx`, `fleet.css`) says `aria-busy` while its act is in flight and draws the
+  page's focus ring after a keyboard action, reversing review 1623 F8 (d) (item 3).
+- **Worktrees left behind's read** (`useDelegationAdoptView.ts`): a poll nobody asked for moves no `landed`, so a failed
+  poll no longer re-renders the Settings page once a minute (item 7).
+- **Not changed.** Item 6: the console has no words table for ccd's free failure text, so a switch card keeps relaying
+  it after its own sentence. Item 4 reproduces, and waits: its file, `pwa/src/lib/refusalWords.ts`, was under another
+  programme's claim for the whole task.
+- **Tests.** `sheet-trap-hide.test.tsx` and `delegation-adopt-view.test.tsx` (new), a row in `project-card.test.tsx`,
+  `browser/confirm-focus.browser.test.ts` (new, Chrome), the ring row in `delegation-rows.browser.test.ts`, and
+  Shadow lanes' browser row now waiting out its confirm's exit. Red first on `main`, and every fix mutated away once
+  (`c38.md`'s table).
+
+- **D-8670** — `c38-sheet-owns-the-close`: Task C38, issued on 2026-11-16. Items 1, 2 and 5 are fixed once in the
+  Sheet, not per caller. The further departures are named by slug in `c38.md`: the box draws the ring
+  (`c38-box-draws-the-ring`), a radio opener's focus goes to its group's checked radio (`c38-radio-opener-goes-home`),
+  ccd's text stays verbatim (`c38-ccd-text-stays-verbatim`), item 4 waits for its file
+  (`c38-item-4-waits-for-claim-4522`), and Shadow lanes' browser row waits out its confirm's exit
+  (`c38-shadow-lanes-row-waits-out-the-exit`).
+
+**Acceptance.** pwa's whole suite and ui's typecheck pass at the PR's tip; the new rows are red on `main`; the browser
+leg passes, with `confirm-focus.browser.test.ts` red on `main`'s Sheet.
+
+**Rollback.** A plain revert.
+
+### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
+
+**Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
+(15 columns), is drawn once per ROW SEGMENT of a key, so the head of a key a program broke across rows, a whole short
+shape key or a short tail followed by text could run past the right edge, and every later redraw landed a row off,
+over tmux's status row too. Each claim below is labelled measured or inferred in `c39.md`, with the measurements, the
+options and the screenshots.
+
+**What was done.**
+- **Measured** (a real tmux at the drawer's 220 x 51 and a deterministic sweep over every start column, on headless
+  xterm, synthetic keys). Other rows move exactly when a mark is wider than the text it replaces and the excess reaches
+  the row's last column: a head under 15 columns starting at columns 207 to 220 (14 of 44 placements), a short tail
+  whose row's text is pushed past the edge, a whole 11-character `sk-` key ending at columns 217 to 220. Up to 48 of 51
+  rows differ on the pane's last rows, and tmux's relative move down writes over the status row. A key on one row
+  never moves another row (0 of 316 placements at each of three rows). C36's departure note is corrected in `c39.md`.
+- **Ruled.** No mark keeps the row's width without showing the key's length, so the options went to the coordinator
+  before any build: A (exact width) shows the length, B (never wider than 15) shows a short segment's width, G (the
+  label at 15 columns or wider, else one column) shows one bit per segment; all three were declined for that reason.
+  C, a constant one-column mark, shows nothing beyond today's constant mark and was ruled.
+- **The change.** The drawer draws `DRAWER_SECRET_MASK` (U+2327 `⌧`, East Asian Width Neutral, one column in xterm's
+  width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
+  parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
+  unchanged. No `ccd`, tmux window size or PWA change.
+- **Tests.** Seven cases in `drawer-mask-screen.test.ts` (heads at 207 to 220 at the edge and 7 columns
+  before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
+  ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
+  by digest from `main`, the sliced arm included; and, from review 2307's fix round, one mark per row a key touches for
+  keys of 11 to 8,192 characters, with no SGR beside a mark): six are red on `main`, and the seventh, one mark per row,
+  is red on review 2307's `o1c` and `o7` (review 2326 F4). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
+
+- **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
+  (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
+  never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip, six of its seven C39 cases are red on `main`'s
+masker and the seventh on `o1c` and `o7`;
+`secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
+fixture.
+
+**Rollback.** A plain revert.
+
+### Task C40: the sheet never lifts an aria-hidden it did not set (D-8698) — now
+
+**Why.** C38's third review (2310) found one gap, in two shapes, in how the Sheet tells the page's own hidden elements
+from Radix's marks. The `aria-hidden` package marks a node that is already hidden as uncontrolled and never puts its
+`aria-hidden` back. The Sheet took the page's own to be the hidden nodes with no Radix mark. So when a dialog still
+mounted had marked an element the page hid itself, the next sheet lifted that element as it closed, and it stayed
+announced for good. The two shapes are a sheet opened while the previous one is still in its exit (F2, a regression from
+`main` since C38) and two confirms overlapping over a sheet that holds a live region (F1). `c40.md` holds the
+measurements, the search of the app for F2, the mutants and the browser run.
+
+**What was done.**
+- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`, and a record it reads,
+  `ui/src/lib/modal-layers.ts`). An element the page hid itself is never lifted, whatever modal marked it. Every other
+  mark is lifted, whether it is the sheet's own or another modal's. C38's topmost-dialog rule, the re-hide on a reopen
+  during the exit and the focus guards are unchanged. A single sheet with no overlapping exit behaves as before.
+- **The record** (fix round 2, review 2334 F1 and F2). Each modal layer, `Sheet` and the command palette's drawer,
+  records at its panel's mount, before its own Radix hiding runs, what the page hid itself: the hidden nodes no modal has
+  marked, plus what every layer still mounted recorded (since Task C42, D-8714: only those still `aria-hidden`).
+
+  The answer does not depend on tree order or on another modal's marks. So it removes the first build's cost (review
+  2323 F1: a sheet rendered before the closing menu kept the page hidden through its exit). It also removes round 1's
+  two costs: the palette's hand-off, and a layer that an effect closes one commit after the sheet under it. The ordering
+  of the read before Radix's hiding is inferred from, and verified against, the installed React and Radix sources. Its
+  effect is measured in jsdom and in Chrome.
+- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows and two extensions (25 rows):
+  - F2 and F1, red on `main`.
+  - The menu's hand-off with the opening sheet earlier in the tree, red on the first build.
+  - Four rows for the palette's hand-off (both tree orders, the palette closing or gone) and one for the effect-driven
+    layer, all red on round 1.
+  - Two StrictMode hand-offs.
+  - The focus guards staying hidden while a sheet closes.
+  - Section 1's first row closing its reopened sheet again, and the three-deep row asserted after the confirm unmounts.
+
+  `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds three groups:
+  - the stacked swap flow (Session actions, Swap account, its confirm, Cancel; review 2310 F4);
+  - the session menu's hand-off over a chat with and without a live region, red on `main`'s Sheet;
+  - the palette's hand-off to Show shortcuts, red on `main`'s and on round 1's.
+- **F2 in the app.** Seven handlers in five places close one modal and open another in one commit (found by a code
+  search); the session menu's rows and the palette's commands are the common ones. In Chrome, on one transcript with a
+  code block, the menu marked none of the elements the page hid itself. So F2 is not reached on that page with that
+  transcript. The browser rows plant such an element to hold the fix in the real flows.
+- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (review 2310 F6).
+
+- **D-8698** — `c40-lift-only-own-marks`: Task C40, issued on 2026-11-16. The Sheet never lifts an element the page hid
+  itself, whatever modal marked it, and lifts every other mark. What the page hid is a record each modal layer (`Sheet`
+  and the command palette's drawer) keeps at its panel's mount: the hidden nodes no modal has marked, plus what every
+  layer still mounted recorded (fix round 2, review 2334). It replaces two earlier reads, each of which cost a window
+  where the page stayed hidden through a sheet's exit while `main` announced it:
+  - the first build's read of every hidden node in the `open` effect (review 2323 F1);
+  - round 1's same read at the panel's mount (review 2334 F1, the palette's hand-off; F2, a layer an effect closes one
+    commit after the sheet under it).
+
+  The record as merged had one cost of another kind (corrected by Task C42, review 2343 F1): a node the page un-hid while
+  a layer was open stayed in every later layer's record as the page's own, so a later layer that mounted while the first
+  was still mounted hid it again and nothing lifted it; it stayed hidden for good (measured in jsdom; no route in the app
+  reaches it, inferred from a code search). Task C42 (D-8714) removed it for the sheets (measured); the palette as the
+  outer layer, and a hide the page makes during a later layer, stay open (`c42.md`). The only modal layers are the two
+  that keep the record. A future Radix modal that
+  kept no record would not bring back the old read's window: its marks on an element the page hid itself would hide that
+  element from a later sheet's record, so the sheet would lift it and it would stay announced for good, C38's original
+  failure (review 2310 F2; review 2343 F6; inferred from code).
+
+**Acceptance.** The new jsdom rows are red on `main` (F2, F1), on the first build (the reversed tree order) or on round
+1 (the palette's hand-off, the effect-driven layer), and green at the tip; every C38 row stays green. The new browser
+file passes in Chrome. Its hand-off rows are red on `main`'s Sheet, and its palette rows are red on round 1's. Every pwa
+test file that renders a Sheet, a QuickConfirm or the command palette passes, as do ui's typecheck and the deviation-refs,
+dtbd and topology-clean guards.
+
+**Rollback.** A plain revert.
+
+### Task C41: a key across any number of rows is masked, in the terminal view and pane history (D-8710) — now
+
+**Why.** Review 2326 (F3) found an exact-bytes leak on `main` that C39 neither caused nor changed: the masker joined a
+run that ends its row with the next row's leading run only, so a fingerprinted key a program draws on three or more
+rows reached the drawer whole. The same review saw two related shapes (O1, O2). This is secret masking, so fail-closed
+comes first. Each claim is labelled measured or inferred in the task note, `docs/superpowers/programs/desktop-polish/c41.md` (`c41.md` below; moved out of
+`plans/` in fix round 2 by the operator's ruling), with the measurements, the mutants and the costs.
+
+**What was done.**
+- **Measured on `main`** (synthetic keys; byte probes of the masker and the drawer; a private tmux 3.6 server with a
+  client at the drawer's 220 x 51). F3 at three to 70 rows under every separator tried, at 25 to 220 columns: no mark,
+  a whole row shown. Through a real tmux, a 500-character key a program drew on three rows arrived unmasked under each
+  of four program separators, and a two-row key's first row showed too, because the drawer held back only the last
+  row's run of a chunk. O1: a shape key longer than a drawer holds was masked for one chunk, then drawn (2,713 of
+  12,000 characters). O2: a move down then CR between rows split every key, but tmux re-renders it as a cursor
+  position, so no drawer receives it from tmux. And a long shape key's rows after any chunk cut showed once the 1 KiB
+  context lost its start. Every other egress joins no rows at all (`c41.md` §3).
+- **The change** (`server/src/accounts/mask.ts`, `shapes.ts`). One row break, LF then CR included, under every row
+  reader. The exact-bytes join walks every row a key fills, read once and searched by length, so it stays linear. The
+  drawer holds a run with every row it continues and reads what it sends with what it holds; a taint lasts as long as
+  its run, with one mark; and a masked run's rows are walked across a chunk boundary by the shapes' own walk. Bounded
+  by measured cost and the commits' security review (rows of 12 units or more, 128 rows, 2 MiB of row-join hashing a
+  frame, failing closed, and twice a drawer's hold). No `ccd`, tmux or PWA change; the drawer draws C39's mark only.
+- **Tests.** `drawer-mask-rows.test.ts` (new, nine cases) and two cases in `drawer-mask-screen.test.ts` on C36's
+  harness: three and four rows under seven separators on the screen, and a 500-character key at 220 columns whole and
+  cut. Ten of the eleven are red on `main`; the eleventh pins the lookahead. Nineteen mutants, each red.
+- **C39's carries** (review 2326): F1, case 7's samples are loops; F2, `c39.md`'s "only a wider row" scoped to a
+  segment that fits its row, with the terminal-wrap residual measured through a real tmux; F4, the count of C39 cases
+  red on `main`; F5, the budget's figure; F6, C38's Rollback line restored.
+- **Fix round 1** (review 2352, `c41.md` §11). The drawer's window and pane history's slice overlap were one run's hold
+  (about 9 KiB), narrower than the rows of a key near the 8,192-byte ceiling with a colour escape or a wide indent on
+  each, so such a key could show whole (F1, F2): the drawer reads twice that for a key's rows and pane history's slices
+  overlap by as much (18 KiB; `secret-mask.test.ts`'s overlap bound moved from 16 to 18 KiB, its one changed line, with
+  its claim holder's consent, by the coordinator's ruling), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
+  it found in the hold: a colour tmux re-sends inside a row, a hold that expired inside the escape moving to the next
+  row, and a chunk cut inside a hyperlink's terminator. Nine more cases: eight red at a69085c93 (review 2370 F12; this
+  line said seven), the 17,802-byte block across a slice boundary among them and red at 29219c442 (16 KiB of overlap)
+  too, and the budget's fail-closed arm red on its mutant (F4); ten more mutants, each red. The 128-row and 12-unit
+  bounds stay as they are: a key past them shows in full with no mark and no notice, as on `main`, which for a key at the
+  run ceiling is 66 columns or fewer after a five-column prefix with a two-column indent on its other rows, 64 or fewer
+  with the prefix and no indent, 65 or fewer with the indent and no prefix, and 63 or fewer with neither (F3; measured in
+  fix round 2, review 2370 F15, and by review 2411 F14).
+- **Fix round 2** (review 2370, `c41.md` §12). Two holes in round 1's own mechanism, each less than `main` leaks. The
+  drawer sent a key's held rows later with only 1 KiB of context, so a key whose hold began inside it drew its tail
+  (F1): now a match's spans in held text carry to where that text is sent. At a chain longer than its 18 KiB window the
+  drawer held from the window's first row, and a window with no row break read its first byte as the chain's start, so
+  up to the whole key could show; pane history did the same past its 18 KiB overlap (F2, F3): now such a chain is read
+  again over the whole text and withheld from its start, pane history's lookahead reads on while the same walk still
+  reaches the cut and carries the match into the next slice, and past 256 KiB both send the chain's rows masked (the
+  coordinator's rulings). Review 2411 measured three forms where those claims do not hold, none showing more than
+  `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (the whole key at every phase in small
+  chunks), pane history's cap arm reading no run in a blank indent (the whole key at 15 of 16 placements), and a key
+  coloured per character on one joined row (up to 7,539 bytes); and slices and pushes past the 25 ms bound on hostile
+  key-free panes (26 to 37 ms). All four are carried to Task C44 (D-8728, `mask-fail-open-forms`). Eleven more cases
+  (29 in all), eight red at e37701c43 for key bytes drawn (the drawer's cap row first on its marks count, review 2411
+  F8); of the three that pass there, the F8 row reds on its mutants (`r16`, `r18`) and the key-free pane-history row pins
+  bytes, but no recorded mutant reds the F4 row (`m-win2` survives by design, review 2411 F10). The secret-mask overlap pin
+  stays at 18 KiB; the comment above it changed with its claim holder's consent. The task note moved to
+  `docs/superpowers/programs/desktop-polish/c41.md` by the operator's ruling (coordinator mail 23009).
+
+- **D-8710** — `drawer-mask-row-join-n-rows`: Task C41, issued on 2026-11-17. The exact-bytes row join walks every row a
+  key fills, bounded by the longest held length, and the drawer holds, reads ahead and taints by the rows a key spans,
+  so a key across any number of rows is masked whatever the separator. Further departures are named by slug in
+  `c41.md` §9: the two-row hold (`drawer-mask-two-row-hold`), the long shape key across a cut
+  (`drawer-mask-long-shape-across-cut`), the bounds (`drawer-mask-row-join-bounds`), fix round 1's three holes in the
+  hold (`drawer-hold-run-across-escapes`, `drawer-flush-cut-row-escape`, `drawer-hold-string-escape-terminator`), and
+  five not changed, carried to a follow-up masking task (`shape-walk-narrow-rows`, `egress-no-row-join`,
+  `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`) or put to the coordinator (`drawer-mark-terminal-wrap`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip; ten of the eleven new cases are red on `main`'s
+masker, eight of fix round 1's nine at a69085c93, and eight of fix round 2's eleven at e37701c43 (`c41.md` §12); each mutant in `c41.md` §6 reds, but for those §6 names surviving by design (bounds that now set only cost, and an arm no chain reaches); deviation-refs, dtbd, topology-clean, single-definition and the server test
+typecheck pass.
+
+**Rollback.** A plain revert.
+
+### Task C42: a node the page un-hides is not kept hidden by the next modal layer (D-8714) — now
+
+**Why.** Review 2343 of Task C40 found that C40's modal-layer record (`ui/src/lib/modal-layers.ts`) only ever grows. The
+page hides a body-level node X; layer A records X as the page's own, and A's Radix marks X as already hidden, so its undo
+never takes that `aria-hidden` off. If the page then un-hides X while A is open, and layer B mounts while A still is,
+B's record took X in from A's as the page's own; B's Radix hid X again, nothing lifted it, and X stayed hidden after every
+dialog had gone (F1, a regression from `main` in that one shape; no route in `pwa/src` or `ui/src` reaches it). The
+review also found the record's prune unpinned (F2), a reopen during the exit that puts back a mark another modal has
+since taken off (F3, on `main` before C40), the palette's Chrome row without its overlap control (F4), and five text
+slips (F5 to F9). Review 2353 of the first build found that build's filter ineffective under StrictMode, three deep with
+a layer held in its exit, and when B closes before A, and ruled the deletion variant (fix round 1). `c42.md` holds the
+measurements, each row and what reds it, and the mutants.
+
+**What was done.**
+- **F1, at the record.** A node in a still-mounted layer's record that no longer carries `aria-hidden="true"` is deleted
+  from that record, which the layer's sheet holds by reference, and is not taken into the new layer's. So no layer keeps
+  a node the page un-hid as its own, and whichever closes last lifts it, like any other mark. The rule the record keeps:
+  a page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark,
+  and is lost. Every C38 and C40 row stays green, and no caller changed.
+- **F3, in the sheet.** A reopen during the exit puts back only the lifted nodes that a modal still marks
+  (`data-aria-hidden`), so a node whose mark the palette's undo removed is not hidden again with no mark.
+- **Tests.** `sheet-trap-hide.test.tsx` has 55 rows (30 new). The F1 rows cover three models of the page's un-hide (a
+  direct removal, a portal un-set by state, and a portal writing `aria-hidden="false"`) and four shapes (the hand-off in
+  both tree orders, B over A with A closed by code, and B closing before A); four hand-offs run under StrictMode, and
+  one three-deep chain keeps a layer in its exit. Each un-hide shape has a control where the page never un-hides X. Two
+  rows pin the "hide during a layer" class as it stands. One row each covers the prune (through the palette), S15 (a
+  layer leaving under the palette) and F3. `sheet-stack-hide.browser.test.ts`'s palette group reads the overlap right
+  after Show shortcuts, names the focused element at each read, and keeps the still-closing variant (10 rows).
+- **Text.** The StrictMode comments follow React 19's order and say what survives its undo (F5, review 2353 F8);
+  `c40.md` and the D-8698 entry are corrected on the cost, on a modal that keeps no record (F6), on the mutant table (F7)
+  and on the row counts (F8); the browser file's header names each read's moment and the palette group (F9).
+
+- **D-8714** — `c42-record-forgets-unhidden`: Task C42, issued on 2026-11-17. A node in a mounted modal layer's record
+  that no longer carries `aria-hidden="true"` is deleted from that record and not taken into the new one (review 2343
+  F1, review 2353's variant), and a reopen during the exit puts back only nodes a modal still marks (F3). The rule: the
+  page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark and
+  is lost (the node ends announced; measured, two rows pin it; at `main` 6c2d705d2 both shapes ended hidden, and before
+  C40, at f8251a39d, one ended announced and one hidden, so this is a change from `main` in a shape no route reaches). The
+  palette as the outer layer keeps a node it hid after the page un-hid it (it never lifts its own marks; measured by
+  review 2353). The prune is now a bound on what the record retains, not a guard any row can tell apart (measured; why
+  is inferred). Further departures, by slug:
+  - `c42-prune-row-via-palette`: the brief's sequential shape for F2 needs no prune once the record filters a node the
+    page un-hid (measured), so the F2 row goes through the palette; since the variant it reds only with the delete
+    removed too (measured).
+  - `c42-reverse-close-residual`, narrowed to `c42-palette-outer`: the reverse close (B over A, B closes before A) is
+    fixed for sheets (measured: three rows); a palette as the outer layer stays open.
+
+**Acceptance.** The F1, StrictMode, three-deep, reverse-close and F3 rows are red at `main` or at the first build
+(296a56403) and green at the tip; every control stays hidden; every C38 and C40 row stays green; each mutant reds the
+rows `c42.md` names; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs, dtbd and
+topology-clean guards pass.
+**Rollback.** A plain revert.
+
+### Task C43: task notes leave docs/superpowers/plans/, and the ledger guard holds new specs and plans to the review judge's layout (D-8719) — now
+
+**Why.** The operator ruled on 2026-11-17 that this repo follows its review judge's standard and fixes the judge's
+findings in-repo. The judge's one blocking reason on every programme PR was `spec-misplaced`: the PR's task note at
+`docs/superpowers/plans/<plan>/<task>.md`. Its layout rule (format F1) reads only files a PR adds: under the specs
+directory a new file is `YYYY-MM-DD-<slug>-design.md` or its `-design.promise-ids.json`, under the plans directory
+`YYYY-MM-DD-<slug>.md`, each directly in that directory, the slug `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` and at most 40
+characters. Its settings have no key for a notes directory, so the fix is ours. `docs/superpowers/programs/desktop-polish/c43.md`
+holds each changed place, each row and what reds it, the mutants and the open-PR measure.
+
+**Steps.**
+- [x] The new route: a per-task note is ADDED at `docs/superpowers/programs/<programme>/<task-or-pr>.md`; notes already
+  on `main` stay where they are. Every place that told a worker or a coordinator the old route now names the new one.
+- [x] The layout arm, red first: the ledger guard (the one existing mechanism) refuses an added or copied file, or a
+  rename's target, under `docs/superpowers/specs/` or `docs/superpowers/plans/` that is not one of the shapes above, as
+  `layout`, with the path and the shape it should take, on every branch and with no trailer escape; `enforce`, `warn`
+  and the fail-closed exit are kept. 13 rows were red before the arm (measured); 16 mutants are each killed (measured).
+- [x] CLAUDE.md: one bullet under "Conventions that shape every change" says we follow the judge's standard, names its
+  check, and points at the guard's layout arm. The judge's name leaves the committed hashed private-name list (the
+  operator's ruling of 2026-11-17: "yeah remove it from private names").
+- [x] The open-PR measure: 8 of 20 open PRs add a file the arm refuses (read-only, listed in `c43.md`).
+
+**Files.** `.github/ci/ledger-guard.mjs`, `.github/workflows/ci.yml` (the job's comment), `server/test/ci-ledger-guard.test.ts`,
+`ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15, and one unpinned sentence trimmed for the
+skill-size cap), `server/test/coordinator-skill.test.ts` (its
+pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `shared/private-names.mjs` and
+`server/test/private-names-characterization.test.ts` (the judge's row removed on the operator's ruling of 2026-11-17,
+and the digest re-pinned), this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
+
+- [x] Fix round 1 (review 2396): rows for a one-digit month or day, an uppercase or digit-first slug and text after
+  the extension; the layout rows assert the refusal line and the path; the README's warn-only sentence corrected; a
+  spec's images and mockup pages go under `docs/design/<spec file name less its extension>/` (the guard's message,
+  CLAUDE.md and CONTRIBUTING).
+
+**Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, skill-size-ratchet, the
+private-names suites, single-definition, deviation-refs, dtbd and topology-clean pass; the guard passes on this branch
+against `origin/main`.
+**Rollback.** A plain revert; the open PRs that add a note under `plans/<plan>/` pass the guard again.
+
+### Task C44: the masker closes the fail-open forms C41 left, and bounds the cost of its re-reads (D-8728) — now
+
+**Why.** Review 2411 read C41 (#2966) and measured three forms in which the masker's ruled fail-closed claims do not
+hold, none showing more than `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (F1), pane
+history's cap arm reading no run in a blank indent (F2), and a key coloured per character on one joined row (F3); and a
+cost past the 25 ms bound on hostile key-free panes (F4). This is secret masking, so fail-closed comes before a tidy
+screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
+
+**What was done.**
+- **Records first.** C41's records (`c41.md` §10 and §12, its section above, D-5995 items (3), (7) and (16), and the
+  2 MiB row-join cut) say what review 2411 measured, each residual marked `mask-fail-open-forms`; once the fixes landed,
+  D-5995 (3), (7) and (16) say what C44 closed and what it costs.
+- **Measured on `main`** (synthetic keys, `main`'s masker and this branch's in one script). F1: the whole key in a
+  styled listing, an OSC 8 listing at 110 columns and a cursor-positioned listing at 200 columns in small chunks; one row
+  (110 bytes) at 66 of 330 three-chunk cases and 702 of 839 cuts at a 7 or 13 ms gap. F2: the whole key at 15 of 16
+  placements (448 bytes at the 16th) with 2,600 blanks of indent a row. F3: 1,477 to 7,538 bytes of a key coloured
+  per character on one joined row. F7's arm: 98 bytes of a 108-byte shape key whose row ends at the window's first byte.
+- **The change** (`server/src/accounts/mask.ts` only). F1: the walk holds a run that joins back into the drawer's sent
+  text from its first unsent byte (`floor`), not a row later; a run that ends its row and reaches past it is held from
+  it. Not `lead = ''`: it reds `secret-mask.test.ts`'s "a compatible key typed slowly" row (measured). F2: the cap arm
+  reads from the row before when its read ends in an indent or between escapes, and a read that is all one row's indent
+  grows. F3: slices and windows end outside an escape, a chain cut at a cap is carried on through every later slice in
+  its own units, and a text's unfinished row is handed to the next text. F4: `WHOLE_HELD_MAX` 256 KiB → 64 KiB, past
+  which a chain's rows are masked: the review's hostile key-free slices and pushes fall from 10 to 47 ms to 5.8 to 18.1
+  ms at the same load. F7: r19's arm takes the open tail only. The drawer's one-mark taint reads through escapes.
+- **Tests.** Seven cases in `drawer-mask-rows.test.ts` (describe "D-8728"), six red at `main` (five for key bytes, the
+  F4 row for its read bound) and the seventh red on its mutant; the drawer's cap row checks key bytes first (F8); the
+  6,000-character row allows a mark each for the rows either side of a key masked past the hold. The `secret-mask.test.ts`
+  overlap pin's comment (F11), with its claim holder's consent. Twelve mutants, each red (`c44.md` §5).
+- **Carried, measured and unchanged** (`c44.md` §7): `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`,
+  `shape-walk-narrow-rows`, `egress-no-row-join`. The 300-key fuzz stays a script (F9: past ten minutes).
+- **Fix round 1 (review 2430).** The 64 KiB hold moved texts of 64 to 256 KiB, which `main` read whole, onto the
+  carried-chain arms, which read a move down then a CR (CUD+CR, IND+CR) as two breaks with an empty row between and a
+  text ending inside a break as an empty row: up to 3,840 bytes of a key in the drawer and the whole key in pane history
+  where `main` showed none (F1, review 2430's measurement; this task's own script measured up to 2,736 bytes in the
+  drawer and up to 8,064 of 8,128 in pane history, `c44.md` §12.2, figures C45 labelled after review 2445 F7). `chainRowSpans`, the cap's step back, a grown
+  read's end and pane history's slice cut now read row breaks as `ROW_BREAK` does, and `endsInRow` (so `cont`) answers
+  true for a text that ends inside a break or after one the next text may complete. That also closed the same reader's
+  form past `main`'s 256 KiB hold, and two pane-history forms that leaked on `main` too: CR LF at a grown read (review
+  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe; six red before the fix, the
+  seventh on its mutant `n2c`), eight more mutants (twenty), each red; the minors F4 to F10 are corrected in the records
+  (`c44.md` §12). A 200-form fuzz shows this branch worse than `main` in none; four forms coloured character by character leak on both alike, carried
+  (`mask-perchar-fuzz-shared`).
+
+- **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
+  start fail closed, its cap arm masks a chain's rows whatever the read ends in, and its re-reads are bounded in cost
+  (review 2411 F1 to F4, F7). Further departures are named by slug in `c44.md` §9: the 64 KiB hold (`mask-hold-64k`),
+  the floor rather than an empty lead (`drawer-lead-floor-not-empty`), five holes found in the task and closed
+  (`drawer-lead-bel-hyperlink`, `pane-cap-blank-read`, `chain-row-tail-cont`, `drawer-taint-through-escapes`,
+  `r19-row-tail-arm`), the F11 comment in a file another run claims (`secret-mask-comment-consent`), and, from review
+  2430 F1, the carried-chain arms, the cap's step back, a grown read's end and pane history's slice cut reading row
+  breaks as `ROW_BREAK` does, with `cont` true for a text that ends inside a break (`chain-row-break-grammar`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip, but for load timeouts that `main`'s masker
+shows too (`c44.md` §11 and §12.9); the D-8728 rows are red at `main` as `c44.md` §4 and §12.3 say (of the fix round's
+seven, six were red before it and the seventh reds its mutant `n2c`); each mutant in `c44.md` §5 and §12.4 reds; the
+server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+
+**Rollback.** A plain revert.
+
+### Task C45: the masker follow-up to C44 (D-8749) — now
+
+**Why.** Review 2445 read C44 (#2998) and found nothing that blocked its landing, but nine findings to carry: a slice
+cut that still ends a key's rows when a LF and its CR are far apart or have an escape between them (F1), the cut's bound
+and the back reader's grammar unpinned (F3, F2), consecutive row breaks that end a key's rows (F4), a slow case that may
+have slowed (F5), rows that a drawer sending nothing passes (F6), and record figures (F7 to F9). This is secret masking,
+so fail-closed comes before a tidy screen. The task note is `docs/superpowers/programs/desktop-polish/c45.md`.
+
+**What was done.**
+- **F5 first.** `secret-mask.test.ts`'s "typed slowly" case is not slower at `main` than before C44: ratio 0.93 over six
+  alternating pairs, and 468 against 475 ms of CPU over eight in one process; its wall clock is opening five `coord.db`
+  files under load (26 to 32 s of 26 to 32 s), not the masker (`c45.md` §1). No masker change for it.
+- **F1** (`pane-cut-long-break`): the slice cut reads its break through the escape view, and a slice's lookahead reads
+  the rest of a break the cut fell inside as part of it (`lookaheadEnd`'s `lead`), not as an empty row. A LF, 64 blanks or
+  more (or NULs, or an escape), then a CR showed up to the whole key in pane history at `main`; 0 here. Cutting at the
+  break's start, the review's first proposal, leaked every form, short breaks included (measured), so it was not used.
+- **F3**: a row pins where a slice ends at 63 and 64 blanks and for an escape, so `BREAK_CUT_MAX` at 63 or 65 reds it.
+- **F2**: `breakStartAt` keeps the one family it reads back differently from `ROW_BREAK` (a CR LF, blanks or none, then
+  a CR; since fix round 2 a CR LF, blanks, then a CR CR LF; since fix round 3 a CR LF right before a CR CR LF), because
+  the difference fails closed; its docstring says where, and a brute force over 2,015,538 strings (488,280 before fix round 1's tab) pins the
+  agreement and the difference (`mask-break-grammar.test.ts`).
+- **F4** (`drawer-consecutive-breaks`): the cause is the forward grammar, not `chainBack`. `ROW_BREAK` reads CR CR LF (a
+  CR LF doubled) as one break, closing it in the drawer and pane history (the whole key at `main`); CR LF CR, CR SGR LF,
+  CR LF SGR CR, LF LF and CR LF then CUD+CR stay as at `main`, named with their sizes.
+- **F6**: C44's seven fix-round rows assert the mark too; a drawer that drops every emit reds each drawer row.
+- **Records** (F7 to F9): the row comments, `c44.md` and this plan's C44 figures corrected or labelled as review 2430's
+  or the C44 script's; D-5995 (16) names `mask-perchar-fuzz-shared`; #2998's stale lines listed in `c45.md` §10.
+- **Tests.** Three rows in `drawer-mask-rows.test.ts` (describe "D-8749"), each red at `main`, and the new
+  `mask-break-grammar.test.ts`. Twelve mutants, each red (`c45.md` §6).
+
+- **Fix round 1 (review 2514).** The first `ROW_BREAK` change also refused a LF, blanks, CR break that a CR LF followed,
+  so a LF or a move down, a blank or an SGR, then a CR CR LF ended a key's chain at a blank row: 1,152 key bytes in the
+  drawer and up to 1,160 in pane history where `main` showed 0 (review 2514 F1, blocking). The lookahead is `main`'s
+  again and `breakStartAt`'s CR CR LF arm reads back as the grammar reads forward (`row-break-lookahead-restored`), so
+  those forms measure as at `main`; a push that ends in both CRs of a CR CR LF is held (`crcr-push-end-held`, review 2514
+  F2: the whole key at `main`, 0 here). Three more rows and four mutants; the minors F3 to F14 in `c45.md` §13.
+- **Fix round 2 (review 2585).** This task's CR CR LF arm (its second commit, 9c8942ef1) read a CR LF, blanks (or an SGR), then a CR CR LF back to
+  its first CR, so pane history's step back at the 64 KiB cap stopped at the blank row: the whole 2,000-byte key where
+  `main` showed 360 bytes (review 2585 F1, blocking). The arm now reads that break back from its second CR, as `main` did,
+  the kept family's second member (`crcrlf-arm-after-crlf-blanks`); the brute force pins it with its count. One more row,
+  two mutants, a sweep of every earlier form against `main`, and the minors F2 to F14 in `c45.md` §14.
+- **Fix round 3 (review 2644).** The round-2 guard was not exact: with a CR LF (or two) between the blank row and the
+  CR CR LF, the arm still read it back to its first CR, and the whole key showed past the cap where `main` showed 360
+  bytes (review 2644 F1, blocking, at 467 of 1,001 placements). The arm now reads a CR CR LF back from its second CR
+  whenever a LF comes before it, blanks between or none (`crcrlf-arm-after-crlf`, the review's c1), the kept family's
+  third member (985 breaks); the brute force also checks the cap's step back against `main`'s reading from every LF or
+  CR: never short, never further. One more row, a placement on the round-2 row, mutants, a sweep of every form against
+  `main`, and the minors in `c45.md` §15.
+
+**Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
+`main` shows too (`c45.md` §12, §13.6, §14.4 and §15.4); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
+round's at 20775879e as §13.5 says, fix round 2's at da2c4569d as §14 says, and fix round 3's at b1b092d3c as §15 says; each mutant in
+`c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+
+**Rollback.** A plain revert.
+
+### Task C46: the fleet list drops the subagent and delegated counts (D-8771) — now
+
+**Why.** The operator, 2026-11-19: "the number of subagents in a session is noise at this point on the left panel. It's
+information useful only inside the session running them." A session's row in the fleet list (the left panel on desktop,
+the session list on a phone) no longer draws a count of its subagents or delegated entries. The session's header and
+details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
+
+**Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one data row
+(`HEADER_COUNT_ALLOWANCES`) for the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
+(the `delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
+`delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
+removed), `rollup.ts` (`SummaryPart.n` optional, a worker part still counted, `partWords` the one spelling) and
+`programmeBoxes.ts` (a comment). A coordinator's fold line and a programme box's footer are a separate grouping the
+operator taps to open the delegated rows, so they stay and drop only the numbers (the coordinator's ruling of 2026-11-19).
+Tests: `card-header-facts`, `project-card`, `session-line`, `rollup`, `fleet-rollup-render`, `fleet-screen`, `nestFleet`
+and `delegation-words`, and the real-Chrome `delegation-rows`. The two delegation specs carry a dated amendment each.
+
+**Measured.** Which pins were red at `main` and which only guard, and every figure and what was not measured, are in
+`docs/superpowers/programs/desktop-polish/c46.md`. The PR body carries the plan's matrix (before and after, Refined and
+Instrument, dark and light, at 360, 390, 1280 and 1920) and its Departures.
+
+**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, or counts its background work, in its
+text (a working row reads `working · in background`), and none counts its subagents or delegated entries in its titles or
+accessible names; the working row's status title is the one place the background count stays (`2 in background:
+workflow, agent`, ruled in fix round 1); the header still draws both disclosures and its background count; the delegated
+rows stay reachable through their fold line.
+
+- **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
+  session's subagents, delegated entries or delegated background work in its text, and none of the first two in its titles;
+  a working row's status title keeps the background count (the operator's ruling of 2026-11-19, and the coordinator's
+  ruling of fix round 1). D-7781's card
+  chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
+  `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
+  form keeps the count the card dropped (`working · N in background`): one data row (`HEADER_COUNT_ALLOWANCES`, key `status`)
+  read by the rule's own comparison (which holds a card status equal to the header word for word, too), so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
+  disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
+  say `delegated` and `worktrees` with no number.
+
+**Rollback.** A plain revert.
+
+**C47: C46's records made true and its count pins made able to fail (follow-up, under D-8771).** No new deviation number and no behaviour a person sees changes. What changed, from the C46 review (run 2708): the Acceptance
+line and D-8771's first sentence above say where the one count stays (the working row's status title), as `c46.md` does (R1);
+the status allowance holds a card status equal to the header word for word as well as the card's uncounted form, in the one
+comparison (L1-1); the header's status fact takes its title from the header's own background words and the card keeps its own
+(L1-2); the card's uncounted words are taken from `backgroundWords`' own output, so they are spelt once, and the allowance row
+is built from them, with no edit to `shared/api.ts` (L1-3, by the coordinator's ruling); the both-skins rendered case reads the
+allowance row and applies it to the header's own status element only (L1-4); the comments in `sessionHeaderView.ts` and the rule
+header in `sessionFacts.ts`, and both spec amendments, say what is true (L1-5, L1-6, R4, R5, which also moves the broker spec's
+amendment beside the R table's and adds the subagent count to both); the no-count pins also fail for a bare number (L2-1), the
+allowance table pins the regex's flags (L2-2), and the dead-session half of the guard loop says it cannot fail for subagents
+(L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
+**Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
+
+### Task C48: the fleet list drops every delegation row (D-8782) — now
+
+**Why.** The operator, 2026-11-19, on C46: "the number of subagents in a session is noise at this point on the left panel.
+It's information useful only inside the session running them." C46 (D-8771) and C47 took the counts off a session's row, and
+left the delegation rows themselves. The operator then sent a screenshot of rows still nested under a session in the left
+panel ("workflow · not confirmed", "agent · not confirmed", one per helper) and called it the same noise. So the rows go
+too. A scope change the same day, "Yeah I want them out too", took the worktree rows and the unowned rows with them: the
+fleet list draws no delegation row at all. The coordinator then ruled that worktrees MOVE rather than vanish: a session's own
+details gain its worktrees with the same three controls; unowned work has no session to live under and gets no new home.
+
+**Files.** Source, `pwa/src/fleet/`: `nestFleet.ts` (the `activity`, `lease`, `unowned` and `delegation-group` row kinds are
+removed with `delegationPass`, `CardDelegation` and rules 6 to 11; `nestFleet(sessions, runs)` takes no delegation input),
+`fleetTree.ts` (`delegationSlices`, the `delegation` argument and `unplacedActivities` are removed), `rollup.ts` (the fold
+counts workers only; `SummaryPart` is a counted part; `isWorker`, `delegatedWords` and the bare-word arm are removed),
+`programmeBoxes.ts` (the footer names workers only), `delegationWords.ts` (the group, unowned and fold words,
+`delegationParts`, the foot region's words and the `from` label are removed; `leasesStartedBy` is added; the worktree, control,
+chip and refusal words, `activityLine`, `delegatedChip`, `activitiesStartedBy` and `readDelegation` stay), `ProjectCard.tsx`
+(`WorktreeControls`, the row arms, the group toggles and the `offlineOpen` and `unownedOpen` props are removed), `FleetCards.tsx`
+(the group keys, the foot region and its `data-delegation-unplaced` mark; `data-delegation` stays), `fleet.css` (the foot
+region's one rule), `WorkLine.tsx` (a comment only), `design/audit.mjs` (one reason text), `sessionFacts.ts` (the fact set
+carries `worktrees`); new: `fleet/WorktreeControls.tsx` (the controls' view, lifted out of `ProjectCard` unchanged but for the
+focus heading), `fleet/sessionWorktrees.ts` (the two labels a row names, read as one primitive key) and
+`session/SessionWorktrees.tsx` (the details' section). `session/SessionDetails.tsx` draws the section, `screens/SessionScreen.tsx`
+reads the leases, and `session/chat.css` and `skins/refined/refined.css` carry the section's layout (review 2864 F6). Tests: the
+`nestFleet`, `fleetTree`, `rollup`, `delegation-words`, `project-card`, `fleet-rollup-render`, `fleet-screen`, `fleet-css`,
+`run-binding-readers`, `w7-run-binding-table` and `programme-box` cases that held a delegation row or the foot region are
+rewritten to say there is none, each with a positive control; `leaseCardFixture` renders the section; the controls' cases of
+`project-card` moved to `session-worktrees.test.tsx`, with `session-details-worktrees.test.tsx` and `session-screen-worktrees.test.tsx`
+(the real `SessionScreen`) beside it; the real-Chrome `delegation-rows` file keeps activities, worktrees, an unowned tree and an
+unlisted activity in the frame to show none is drawn on the list, and measures the section and the controls' real sheet on the
+session page. The two server census tests that list the files allowed to name the broker (`delegation-wave3.integration` and its
+mirror in `fleet-health`) name the three new files. `fleet-css`, `role-census`, `worktree-confirm-close`, `fleet.css`'s chip and
+controls rules and `design/audit.mjs`'s entries are as at `main` (the controls and chips are still drawn, now in the details).
+The two delegation specs carry a dated amendment each. Nothing leaves the wire or the server. `pwa/src/lib/api.ts` is untouched:
+`operatorRetainLease` and `resolveLease` keep their caller.
+
+**What stays.** Session rows, spawn rows and the programme tree; the session's own details, whose `N delegated` disclosure and
+list still carry every activity with its condition word and title, and, since the move, its worktrees with their three
+controls; and the Settings switch for keeping a finished delegated worktree. A lease shows on its coordinator's page AND on its
+via-worker's (the fleet list drew it once); a lease whose path is a listed session's workdir is not drawn (the old rule 7, kept
+in `leasesStartedBy` as a re-check beside the server's own precedence). **Unowned work, activities whose session the list does
+not carry, and leases with no listed session have no place in the PWA after this change**, nor does the unowned tree's Not
+delegated door: the fleet foot's "Delegated work, session not listed" region went too (review 2864 F1), because it was a
+delegation group header with delegation rows. They get a home in the Archive section that C49's helpers-panel design builds, and
+until then nowhere (Settings' "Worktrees left behind" card lists only what the lane's last pass kept); the coordinator raises
+that follow-up.
+
+**Measured.** Which new cases were red at `main`, the files run and what was seen in a real browser are in
+`docs/superpowers/programs/desktop-polish/c48.md`.
+
+**Acceptance.** For a card whose session has an agent, a workflow, a worktree and an unowned tree, the fleet list draws the
+session row and nothing of the others, in text, titles or accessible names; an offline coordinator's work draws no group
+header and no row; an activity whose session the list does not carry draws no foot group and no row; the session's details still
+list both activities and now list the worktree with its three controls, each posting what the fleet-list row posted at `main`;
+an offline coordinator's own page, opened as the real `SessionScreen`, lists the worktrees it held with their controls.
+
+- **D-8782** — `fleet-list-drops-delegation-rows`: Task C48, issued on 2026-11-19. The fleet list draws no delegation row: not
+  a session's subagent or workflow, not a worktree, not an unowned tree, not the foot's region of activities whose session is
+  listed nowhere, and no group header for any of them. No row kind of `delegationPass` survives, so its row kinds, its card
+  slice, its view, its words, its controls and the rollup arms only they used are removed, and a fold line and a programme
+  box's footer name workers only. This supersedes the delegation broker's wave 4 rule (§5.8, rules 6 to 11) for the fleet
+  list, and the operator's first reading of this task (rows for worktrees and unowned work stay); the session's own details keep
+  every activity and gain its worktrees with their controls (the worktree rows move, they are not dropped; one lease shows on
+  its coordinator's page and its via-worker's; the old rule 7 is kept in `leasesStartedBy`; the old `via` swap to the parent
+  when the parent sat at depth 1 is not carried, since the lease shows on that worker's own page). **Unowned work, activities
+  whose session is not listed, and leases with no listed session (their parent and worker both absent from the fleet store, so
+  no session page opens for them) have no place in the PWA after this change, and neither does the unowned tree's Not delegated
+  door; they get a home in the Archive section C49 designs** (the operator's ruling and scope change of 2026-11-19, the
+  coordinator's rulings on the move and, in fix round 1, on the foot region and the vanished lease).
+
+**Rollback.** A plain revert.
+
+### Task C51: the coordinator badge sits on the title line (D-8834) — now
+
+**Why.** The operator handed the coordinator a look to rule on (2026-11-20), weighing compactness and usability. C50 (#3111) put the
+coordinator badge where the word "coordinator" had stood, in the session header's details row. In the Instrument skin that leaves
+the badge alone on a line of its own under the details, at 360 and 1280 px (the C50 screenshots, `after-header-instrument-*.png`
+under `docs/design/2026-10-22-desktop-polish/c50/`): a whole line of header for one glyph, and a glyph that far from the name does
+not read as belonging to it.
+
+**The ruling (the coordinator's, 2026-11-20).** In both skins the badge sits on the title line, right after the session's name
+("project-a › billing-coord" then the badge), sized to the name's text and on its baseline. The details row no longer carries it, and
+the header loses the line the badge stood on alone. Everything else about the badge stays as C50 shipped it: `RoleBadge`, the
+network icon, the accessible name "coordinator", the role title on hover, and the ink of the line it sits on. The fleet row's role
+cell is unchanged. On a phone there is no hover, so the ruling asked whether `@ccrc/ui` already has a primitive that shows a title
+on tap, to be used for the badge if it does.
+
+**Fix round 1 (review 2963, the coordinator's rulings).** The first version drew the badge as a plain inline box after the name, which
+can wrap alone onto a line of its own (F1), and hid an empty details row with a stylesheet rule that read what had rendered (F3 to F6).
+The rulings: glue the badge to the name's last word and pin it with a sweep over name lengths; decide the empty details row in code,
+as a fact beside the header's others; correct every general claim to what the sweep measures.
+
+**Files.** `pwa/src/session/SessionHeader.tsx` (`HeaderTitleText`, the title's own node in both skins: a coordinator's name is drawn as
+plain text whose last character and the badge share one `white-space: nowrap` box, `.chat-title-glue`),
+`pwa/src/session/sessionHeaderView.ts` (the view gains `coordinatorRole`, the facts' own reading; `detailRows`, `detailsHaveFacts` and
+`detailsEndWithWorktrees` decide the details row), `pwa/src/fleet/sessionFacts.ts` (`headerMetaHasCells`, the one reading of the meta
+row's cells), `pwa/src/session/SessionDetails.tsx` (the row and its phone door are drawn only when the row has something to show; the
+role detail and the `Detail` class prop are gone), `pwa/src/session/SessionWorktrees.tsx` (when the worktrees are the row's only
+facts, the focus a control hands back goes to the header's title), `pwa/src/session/chat.css` (C50's `.chat-fact-role` rules and
+their `min-height` are removed; `.chat-title-glue` and `.chat-title-role` are added; no rule reads the details row's emptiness).
+Tests: `pwa/test/coordinator-badge.test.tsx`, `pwa/test/header-details-facts.test.tsx` (new), `pwa/browser/role-fact.browser.test.ts`
+(the placement cases and the name-length sweep), `pwa/browser/delegation-rows.browser.test.ts` (the worktrees-only focus case), and C50's
+pins re-pointed at the new place, none weakened: `pwa/test/build-and-spend.test.ts`, `pwa/test/session-line.test.tsx` and
+`pwa/test/role-census.test.ts`. No server, wire, ccd or `@ccrc/ui` change.
+
+**The badge is glued to the name's last character.** A browser may break a line before an atomic inline such as the badge. **Measured**
+on a probe page in Chrome (482 widths, a name in words and a name as one token): with nothing glued, 34 widths left the badge alone on a
+line of its own; a word joiner (U+2060) before it left the same 34, a no-break space left 31, and an inline (non-flex) badge left 34.
+Only a box that spans the last piece of the name and the badge and does not break glued it: 0 of 482, for the last word and for the last
+character. The last **character** is boxed, not the last word, so a single token wider than the column keeps `overflow-wrap:
+break-word`'s emergency break inside it, as the ruling asks, and the badge follows its last fragment.
+
+**The cost, and what the sweep can and cannot say.** A coordinator's title is plain text, never a `TypedLabel`: the label's one text
+node and its `role="img"` root cannot hold a box that spans its last character and a sibling, so a rename of a coordinator's name no
+longer types in; it changes at once, as a main checkout's title does. **The rule, as the coordinator ruled it (2026-11-20, fix round 1): the badge never sits alone on a line, and a coordinator's header is taller than a worker's only where the name's last line has no room for the glyph.** When the name's last line leaves less than the glyph's width and its 4 px gap before the column's edge, the glyph needs a line the worker's name did not, and the badge wraps with the name's last character. **Measured** (real Chrome, both skins, both themes, 360, 390 and 1280 px, names of 1 to 130 characters in words and as one token, 260 names a view): at every length the badge's centre is inside the name's last line box; the header is taller than the same header with the badge hidden (a worker's header of that name, the badge being the only difference on the title line) at 4 to 36 of the 260 names a view, and at each of those the last line left no room for the glyph to within a pixel; with room, never. The sweep asserts both halves.
+
+**The details row is decided in code (F3 to F6).** `detailsHaveFacts` says whether the row has anything to show: one of its own facts
+(`detailRows`: a main checkout's name, the run, a programme hold, the PR, an away lane, the question), a cell of its meta row
+(`headerMetaHasCells`), or a worktree. With none, the header draws no row and no Details door: a door that opens nothing goes.
+`header-details-facts.test.tsx` renders `SessionMeta` for each cell alone and requires `headerMetaHasCells` to agree with whether it drew
+one. When the last worktree leaves and the row goes with it, the focus a control hands back rests on the header's title (it takes
+`tabindex=-1`), not on `body`; `detailsEndWithWorktrees` tells `SessionWorktrees`, which reads it through a ref because a control
+registers its leave-time hand-off once, at mount. **This reaches every header, workers' too** (F6). **Measured** (layout heights,
+real Chrome, a session with nothing to show, `main` against the tip; the picture sizes in the screenshots are these rounded up):
+
+| Header | 360 and 390 px, closed | 360 and 390 px, open | 1280 px |
+|---|---|---|---|
+| Instrument, coordinator | 159.75 to 138.25 | 181.25 to 138.25 | 84.25 to 65 |
+| Instrument, worker | 159.75 to 138.25 | not measured | 67.75 to 65 |
+| Refined, coordinator | 109 to 87.5 | 109 to 87.5 | 85 to 85 |
+| Refined, worker | 109 to 87.5 | not measured | 85 to 85 |
+
+**One earlier pin is restated as main's own claim (fix round 1, the coordinator's ruling of 2026-11-20).** `goals-door-height.browser.test.ts`
+pins that the Goals door costs a phone header no height (PL11: "on a phone nothing"). The first version of this round re-pointed its
+expectation, because in Refined an out-of-programme coordinator with no other fact is 24 px shorter than the same session in one
+(**measured**: 85 against 109, Refined, 390 px). **That was the same session out of a programme against in it, not main against this
+branch**, and the round's wave-done wording "85 to 109" read as the latter; it is corrected here. **Measured against main** (a `main` copy
+at `f95ac048a4` and this branch, real Chrome, coarse pointer, light theme, a main-checkout coordinator with no other fact, header height in
+px, closed / details open):
+
+| Header | Main, in a programme | This branch, in a programme | Main, out of a programme | This branch, out of a programme |
+|---|---|---|---|---|
+| Refined, 360 and 390 px | 109 / 109 | 109 (no door, nothing to open) | 109 / 109 | 85 |
+| Instrument, 360 and 390 px | 159.75 / 181.25 | 134.75 (no door, nothing to open) | 159.75 / 181.25 | 134.75 |
+
+A workspace coordinator with a PR cap keeps its door and is equal to main at 390 px in both skins (Refined 109 against 109; Instrument
+159.75 / 181.25 against 159.75 / 181.25); at 360 px Refined is 116.8 against 109, which is the first rule's accepted case (the name's last
+line has no room for the glyph, so the title takes a second line), not the Goals door. So a coordinator in a programme with no facts is
+**no taller than at main in every layout measured**: equal in Refined, 25 px shorter in Instrument. The Goals door keeps its 44 px floor, and
+it adds no row: in Refined the rail row it stands in is 44 px in main (the Details door's) and here (its own). What cannot be asked of
+the pin is that "in" equals "out" for such a session, because its out header lost the Details door that opened nothing (F3 to F6's gain).
+The pin now says main's own claim: where the out header still has its Details door, "in" and "out" are equal; where it has none, "in" is no
+taller than the out header with main's Details door, rebuilt in the page as a frozen copy (a `Door` of the shared primitive at the end of
+the status row; calibrated: 109 in Refined and 159.75 in Instrument, the heights main measured), and on a phone the Goals door is at least
+the 44 px tap floor. It runs at 360, 390, 1200, 1279 and 1280 px in both skins. **Measured under three mutants** (CSS appended, restored
+from a saved copy): the Goals door's floor dropped reds 10 cases; a Refined rail that gives the Goals door a row of its own reds the
+main-checkout cases ("in a programme the header is 150, taller than at main"); an Instrument Back row made taller reds them likewise
+("194.75, taller than at main (159.75 with main's Details door)"). The coordinator ruled not to move the Goals door into the title row.
+
+A phone header with nothing to show loses the Details door's line (21.5 px); at 1280 px Instrument's loses 2.75 px for a worker and
+19.25 px for the coordinator (its badge's old line), and Refined's is unchanged. The measured heights are for these fixtures
+(a coordinator and a worker with no other fact, a 10-character name); a header with other facts keeps its row and its door.
+
+**Phone: no primitive shows a title on tap, so none is used and none is added.** `@ccrc/ui` has `Popover` (a Radix panel that a
+trigger button opens, with a 12 rem minimum width and its own focus scope; it is a menu container), `Sheet` and `Confirm`, and no
+tooltip, hint or title-on-tap primitive (a search of `ui/src` for tooltip, hint and long-press finds none). Making the badge a
+`Popover` trigger would turn a mark into a 44 px control with a panel, which is a design decision the ruling did not make. The role
+title therefore shows on hover only, as C50 left it; the badge's accessible name is unchanged, and the heading's accessible name now
+ends with "coordinator" (the badge is inside the `h1`; review 2963 found no test or source that reads the session heading by name).
+
+**Measured.** Which cases were red at `origin/main` and why, the sweep, the mutants, the files run and what a real Chrome showed
+(before and after screenshots at 360 and 1280 px, both skins, both themes, and one long name that wraps) are in
+`docs/superpowers/programs/desktop-polish/c51.md`.
+
+**Acceptance.** A coordinator's header draws one badge inside its title line, after the name and glued to its last character, and none
+in a details row; its glyph is the name's font size, rests on the baseline, and at every name length of the sweep shares the name's
+last line; the header is as tall as the same header with the badge hidden wherever the glyph has room; a header whose details row has
+nothing to show draws no row and no door; a worker's header draws no badge.
+
+- **D-8834** — `coordinator-badge-on-the-title-line`: Task C51, issued on 2026-11-20. A coordinator's role badge sits on the session
+  header's title line, right after the name and glued to its last character, in both skins, sized to the name's text and on its
+  baseline, and not in the details row, by the coordinator's ruling of 2026-11-20 on the operator's look at C50; and a header whose
+  details row has nothing to show draws no row and no Details door, for every session (review 2963). It amends D-8817's placement
+  only (the badge, its name, its title and its ink are D-8817's); nothing leaves the wire or the server.
+
+This section was added between Task C48's and Task C49's sections with the consent of the worker that holds the plan's claim for the
+helpers task (its mails of 2026-11-20), for this one section only.
+
+**Rollback.** A plain revert.
+
+### Task C49: the session's helpers, designed (D-8794) — now
+
+**What.** A design task, and no product code. The operator, 2026-11-19: "inside the session in the right hand panel I still
+want to see actual information about any running workflows and subagents, for the session i'm inside of, in a useful way
+though please". The spec is `docs/superpowers/specs/2026-11-19-session-helpers-design.md`, with its mockups in
+`docs/design/2026-11-19-session-helpers-design/`. A **Helpers** section in the session panel lists each subagent and
+workflow, running ones first, with its description, kind, model, effort, measured state, elapsed time and last activity, and
+for a workflow its phase and agents done out of total. A finished helper keeps a one-line outcome for ten minutes, folded.
+The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`)
+with a bounded scan of the transcript at stream start, and travel as additive fields on the `workflows` frame. The broker's
+activity records and the `N delegated` chip leave the session panel, and a worktree row there says its path, disposition and
+controls. Unowned
+delegated worktrees, and leases whose two sessions are both gone, get a section of the Archive screen (the coordinator's
+call). The broker gains an end from an Agent's task report, plus a one-time, dry-run-first pass that closes the old records
+it never closed (the coordinator's call, designed and not done here). The build is seven PRs (H4, H1a, H1b, H2, H3, S1 and
+S2), listed in the spec's §11. The measurements are in the spec's §2, which also says what was not measured: why the old
+records never closed.
+
+- **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
+  carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. This line is
+  the ledger's definition; the spec's §12 carries the same entry with its full text.
+
+This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
+section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
+only. Its revision after review 2888 has the consent of Task C50's worker, who holds the plan's claim now (its mail of
+2026-11-20), for this section only.
+
+### Task H4: the Archive holds work no session owns (D-8828) — now
+
+**What.** The first build task of C49's session-helpers design (`docs/superpowers/specs/2026-11-19-session-helpers-design.md`, §6, Table 8,
+Figure 6 and Table 13's H4 row). C48 took the unowned rows and the leases of two unlisted sessions off the fleet list and gave them no
+home. The Archive screen now has a section, **Work no session owns**, above the archived workspaces, under two subheads: **No single owner**
+(a tree the broker could not give one owner) and **Neither session listed** (a worktree whose parent and worker are both unlisted).
+An unowned row says the project, the path (the admin record when no path is known), the verdict (`no owner found` or `two owners claimed
+it`) and the attempt's age (`tried 3 days ago`), and offers Not delegated only where a lease is hidden (`leaseId`), through the existing
+resolve door. A worktree row says the project, the path and its disposition word, and offers what `worktreeControls` gives (Keep
+worktree and Not delegated in the states that offer them; never Attach to…, which needs a listed parent). No row carries a liveness word,
+a `title` or the bare word `unmeasured`: where presence on disk was not measured the head says it once (`presence on disk not measured for
+1 tree`). The note under the title says what the section holds, in the subhead's words (worktrees neither of whose sessions is listed). With
+nothing of either kind the section draws nothing, and the fleet list gains nothing but one thing, added in review's fix round 1: the
+fleet foot's existing Archived row is also the door to this section, so it draws when there is work no session owns even with nothing
+archived, and its words say what is there (`foot-row-is-the-door`).
+
+**Files.** New: `pwa/src/fleet/ArchiveUnownedWork.tsx` (L4, C4: the section, one row view and one group view), `pwa/src/fleet/archiveUnownedWork.css`
+(a new stylesheet: `fleet.css` is capped), `pwa/test/archive-unowned-work.test.tsx`, `pwa/browser/archive-unowned.browser.test.ts`. Edited:
+`pwa/src/fleet/delegationWords.ts` (L1: `VERDICT_WORD`, `hiddenLeaseOf`, `unownedControls` re-added as Table 8 says; `unlistedLeases`,
+`presenceWord`, `triedWord` and `unownedWork`, which decides every row, count and word), `pwa/src/screens/ArchiveScreen.tsx` (takes the frame
+and a clock), `pwa/src/app.tsx` (the `/archive` route reads the frame from the store), `pwa/design/audit.mjs` (four grounds),
+`pwa/test/contrast.test.ts` (one line in the app's stylesheet list, with the consent of the worker holding that file's claim, 2026-11-20),
+`pwa/test/app.test.tsx` (one route case), `pwa/src/screens/FleetScreen.tsx` (the foot row, fix round 1) and `pwa/test/fleet-screen.test.tsx` (its
+cases), and the two census lists that name the files allowed to name the broker
+(`server/test/delegation-wave3.integration.test.ts` and its mirror in `server/test/fleet-health.test.ts`). Nothing on the wire or the
+server changes.
+
+**Measured.** The red-first run, the mutation table, the real-Chrome measures and the screenshots are in
+`docs/superpowers/programs/desktop-polish/h4.md`.
+
+**Acceptance.** An Archive screen over a frame with an unowned tree, a hidden lease and a worktree of two unlisted sessions draws the
+section with each row's words and acts as above; an archived session and a stopped main checkout count as unlisted (the fleet list's own
+Archived fold) and a cleanup session as listed; one listed session, or a session whose working directory is the lease's path, gives a lease
+a page and takes it out of the section; the last row leaving while its control holds the focus hands it to the page's body; the fleet
+foot's Archived row also draws for work no session owns (alone, or beside the archived half); no row draws a liveness word, a title or `unmeasured`; the presence sentence is in the head once; a frame with
+none of either kind, or no frame, draws no section; each act posts to its existing door (Not delegated to `POST /api/leases/:lease/resolve`
+with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
+
+- **D-8828** — `archive-holds-unowned-work`: Task H4, issued on 2026-11-20. The Archive screen holds the delegated work no session
+  owns, as spec §6 and Table 8 say, with these departures from the spec, each named by slug and each a spec correction for the
+  coordinator to fold:
+  - `neither-session-listed`: the second subhead reads "Neither session listed", not "Both sessions gone" (spec §6, Table 8, Figure 6 and
+    its mockup), and the note under the title follows it: "Delegated worktrees the broker could not give one owner, and worktrees neither
+    of whose sessions is listed." (review 2966 F1). An archived session is unlisted, not gone (review 2900's minor).
+  - `unlisted-means-in-the-archived-fold` (was `unlisted-means-not-listed-live`; corrected in fix round 1, review 2966 F2): "neither
+    session is listed" is decided by the fleet list's own fold rule, `inArchivedFold` (`listedOnFleet`, which calls it and never copies
+    it): a session is listed unless the fleet list folds it into Archived. So a lease whose coordinator is an archived workspace or a
+    stopped main checkout is drawn here as well as on that row's own page (C48's SW-S2), and a lease whose session is a cleanup row, which
+    the fleet list keeps at its top level, is not. The spec's "row of the fleet list" read as "present in the store" would have left
+    such a lease with its archived page as its only home. And the session pages' own workdir rule (`atASessionWorkdir`, one reader
+    beside `leasesStartedBy`) applies here too: a lease whose path is a fleet session's working directory is that session's own row and
+    is not drawn (review 2966 F4).
+  - `foot-row-is-the-door` (fix round 1, review 2966 F5, the coordinator's ruling): the spec gives the fleet list nothing and names the
+    foot's Archived row as the section's door, but that row drew only when something was archived. It now draws when either half has
+    something (`archiveDoorWord`, L1): `Archived on disk · 2 · 2.3 GB`, `Work no session owns · 2`, or both joined by ` · `. The same row,
+    the same door (`/archive`), no new row or control.
+  - `disposition-word-with-its-date`: the worktree row's disposition is `worktreeStateParts`' words, the one owner of them, which carry the
+    held-until date for an adopted or retained tree (`worktree kept until 17 Nov`); spec §4.4 lists `worktree kept` without it.
+  - `age-in-whole-words`: the attempt's age is `elapsedShort`'s ladder (the one shared ladder) in whole words: `tried 5 minutes ago`,
+    `tried 2 hours ago`, `tried 3 days ago`, `tried just now` under a minute; a time that cannot be read leaves the age out of the row.
+  - `section-above-archived-and-alone`: the section sits above the archived workspaces and draws when nothing is archived, with the
+    "Nothing is archived." line kept below it (the spec is silent on an empty archive). Unowned trees list the newest attempt first.
+  - `words-in-delegation-words`: the words and the selection live in `delegationWords.ts`, the existing L1 owner of every delegation
+    label, not in a new file (spec Table 12 names only the component): the section's title, its note and its two subheads
+    (`UNOWNED_WORDS`) too, and the foot row's sentence (`archiveDoorWord`).
+  - `no-title-attributes`: no row carries a `title`, so no word hides in a tooltip a phone never shows (the spec's §4.4 says no liveness word;
+    it does not mention titles).
+  - `presence-in-the-head-title`: the head's title carries the count of both kinds and the presence sentence, as the mockup draws it, so
+    the section's accessible name includes them.
+
+### Task C50: the operator's tidying notes (D-8817) — now
+
+**Why.** The operator, 2026-11-19, two notes on the fleet list. First: "We don't need to write the word "Programme" when we use
+the programme icon and colours and also the wave timer." Second: "instead of writing the word "coordinator" let's come up with a
+badge to give to the workspace". The programme box's header drew the workflow icon, the word PROGRAMME, a middot, the title and
+the waves bar, all in the programme's hue, so the word said what the icon and the hue already said. A coordinator's row and
+header wrote the word "coordinator", which is a role and so reads better as a mark than as a label.
+
+**Files.** `ui/design/make-icons.mjs` and the generated `ui/src/icons/lucide.ts` (one new vendored icon, `network`, from
+lucide-static 1.59.0; the diff is that icon alone), a new primitive `ui/src/primitives/role-badge.tsx` with its story, exported
+from `ui/src/index.ts`; `pwa/src/fleet/ProgrammeBox.tsx` (no visible word; the icon is drawn by the same `RoleBadge` primitive, named
+"Programme" with the hover title "Programme", and the leading middot that only separated the word from the title is gone), `pwa/src/fleet/programmeBox.css` (the
+`.pg-word` rule removed; four hue rules colour the coordinator's badge inside its box), `pwa/src/fleet/sessionFacts.ts` (the word
+stays as `COORDINATOR_WORD`, now the badge's accessible name and the palette's text; `COORDINATOR_BADGE` spells the icon, the name
+and the title once; `ROLE_CELL_CHARS` is sized for the badge: 3 characters and the separator, where the word took 11 and the separator), `pwa/src/fleet/SessionMeta.tsx`
+and `pwa/src/session/SessionDetails.tsx` (both spread `COORDINATOR_BADGE` into `RoleBadge`; the header's role detail has its own class,
+`chat-fact-role`), `pwa/src/session/chat.css` (that detail: the Goals glyph's size, 1em of `--fs-meta`, and the word's line,
+`min-height: 1lh`), `pwa/src/fleet/fleet.css` (`.sess-role`, the card's cell only, loses its font and `nowrap` and keeps `flex`,
+`align-self` and the quiet ink). `pwa/src/command/sessionEntries.ts` is untouched: the
+palette's entries are text the operator types to search, so they keep the word.
+
+**Why `RoleBadge` is in `@ccrc/ui`, with the word passed in.** A primitive that draws a picture with an accessible name is the
+design system's; it takes `icon`, `label` and `title`, so the package keeps no app vocabulary and the word is still spelt in one
+place (`sessionFacts.ts`). The badge strokes in `currentColor` and paints no colour of its own, so the contrast audit's pairs stay
+where the callers' rules name them.
+
+**Colour.** Inside a programme box the badge is the programme's hue (`--prog-*`, an alias of the lane hues), on the coordinator
+band's ground, the card's surface; on a card outside a box it is the quiet secondary ink (`.sess-role`). The hue pair is a gated
+one: each hue on the surface at 4.5 in every palette, and the lane hues on the selected row's tint. The badge pair itself is
+pinned by one row per hue in `contrast.test.ts`, beside the workers' slugs (a co-edit the file's other claimant consented to on
+2026-11-20), and the row-ink census of `fleet-css.test.ts` accepts `.sess-role`'s `var(--ink-secondary)`.
+
+**The session header's badge keeps the word's ink and the word's line.** In the details the word was drawn in the row's inherited
+ink (the primary), so the badge there carries no `.sess-role` class: it inherits that ink, and the card's `align-self: flex-start`
+does not reach it. Its glyph is the Goals door's size (1em of `--fs-meta`) on the line the word took (`min-height: 1lh`), so the
+header is the height it was with the word, in both skins (measured, `docs/superpowers/programs/desktop-polish/c50.md`). It has no
+hue, because no programme box surrounds the header; giving it one would mean reading the programme's hue from the run, a separate
+decision.
+
+**The programme page's kicker stays.** `ProgrammeScreen`'s `Programme` kicker sits in the page head beside a Back button, the
+title and the wave line, in the programme's hue but with no programme icon beside it, so the word is the one thing there that
+names what the page is; the operator's note is about the word beside the icon, so it stays. A sentence
+the server writes about a run ("not a work run of this programme") is not a label and stays.
+
+**Measured.** Which new cases were red at `main`, the files run and what was seen in a real Chrome (with screenshots, before and
+after, at 360 and 1280 px, in both skins, light and dark) are in `docs/superpowers/programs/desktop-polish/c50.md`.
+
+**Acceptance.** The programme box header draws no visible "Programme" text and its icon is an image named "Programme"; a
+coordinator's fleet row and its session header draw one badge, whose accessible name is "coordinator" and whose title is the role
+title, and no visible "coordinator" text; a worker draws no badge; the command palette still lists "coordinator".
+
+- **D-8817** — `coordinator-badge-and-no-programme-word`: Task C50, issued on 2026-11-19. A programme box's header does not
+  write the word "Programme" beside the programme icon, hue and waves bar, and a coordinator is marked by one `RoleBadge` (an icon
+  from the design system, the accessible name "coordinator" and the role title on hover), not by the word, in the fleet row and in
+  the session header; the palette keeps the word because it is search text. This changes D-8142's reading that the
+  card says the word; it adds one vendored icon and one design-system primitive, and nothing leaves the wire or the server.
+
+**Rollback.** A plain revert.
+
+### Task H1a: the helpers decision, pure (D-8829) — now
+
+**What.** The pure pieces of C49's Helpers section (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.2,
+Figure 2, and §11's H1a row), and nothing that reads, sends or draws: no read, no frame and no UI, which H1b and H2 wire.
+Built on this task's branch, red first: the branch's first commit held 136 cases (30 for the fact parser, 106 for the decision), every
+one failing on `main`; 26 cases were added after the first mutation round, and fix round 1 (review 2961) added 47 more, most of them in a
+commit of their own before its code and the rest after its mutation round (at the tip: 57 and 152 cases, all of them failing on an
+extraction of `main`, where the symbols do not exist; measured):
+
+- `shared/workflows.ts` (L0, K): `AgentHelperView`, `AgentHelperState` (its runtime list, its final states and its words
+  derived from one record), `HelpersUnmeasured`, `HELPER_FINISHED_KEEP_MS` (ten minutes) and `HELPER_KEPT_MAX` (20), the bounds
+  of the Agent arm below, `WORKFLOW_AGENT_TYPE` and `isHelperId`. Nothing in `shared/api.ts`, which stays at its cap.
+- `server/src/transcript/parse.ts` (L1, C3): `helperFactsOf(line)` reads an Agent launch result (`async_launched`, or a
+  foreground `completed` with its report and duration) and a task notification (`completed`, `failed`, `killed`, `stopped`) in
+  BOTH shapes it is written in: a user record whose content is the envelope (the notification reached an idle main thread), and an
+  `attachment` record, a queued command of mode `task-notification` whose `prompt` is the envelope (it reached a busy one; review
+  2961 F1). A notification seen in both folds to one fact.
+  A report and a summary are masked, then cut (review 2900 F15), a report to 16 KiB and a summary to one line of 200 bytes.
+- `server/src/workflows/model.ts` (L1, C3): `decideAgentHelpers` (Figure 2, strongest fact first), `foldHelperFacts`,
+  `isFinishedKept` (the keep's one owner, review 2900 F5), `seenDrops` (the witness of a drop, which the decision itself uses,
+  review 2961 F13), `capKeptWorkflow`, `frameDue` and `isWorkflowAgentName`. `frameDue` is the gate H1b MOVES here: nothing
+  calls it yet and `checkWorkflows` still decides the gate inline, so until H1b deletes that copy there are two, and H1b pins in
+  a characterization case that they agree on today's inputs (review 2961 F9). The id rule is not a new copy: `isHelperId` reads
+  the one `AGENT_ID_RE` of `shared/continuity-reports.ts` (review 2961 F6).
+
+**The witness of a drop (review 2900 F13, review 2961 F2 and F11).** The process start time alone is not sound: a `/clear` or an
+in-session `resume` runs a SessionStart and empties the roster without a new process, and the dispatcher `/clear`s a worker
+between waves. The witness is the roster's own CONTINUITY, vetoed by a measured change of the process start: an id listed in the
+previous roster, absent now, is a seen drop when an id that sat BEFORE it in the previous roster's order is still listed (a reset
+empties the roster whole, and the hook's cap evicts the OLDEST entries first, so an older survivor proves neither happened),
+with fewer than 32 ENTRIES in both readings (the hook counts entries with no id toward its cap) and no change in
+`Proc.live.startedAt` between two readings that measured it; the last measured start is carried across a reading that does not.
+RESIDUALS: the oldest entry's real Stop looks exactly like the cap's eviction, and the last listed id's looks exactly like a
+reset, so those helpers' states are left out (`agentsUnmeasured: { why: 'unseen' }`) rather than called a drop. Such a helper is
+usually final by its notification or its meta's marker a moment later.
+
+**A helper continued after its end (review 2961 F3).** Measured on this box's delegation spool: a continued agent fires a NEW
+`SubagentStart` (116 of 3,323 started agent ids had a start after a stop and a notification, and 87 ids were notified twice), and
+the hook lists it again with the later start; its meta's `finished` marker stays true meanwhile (110 of 122 continued agents'
+metas). So a usable roster that lists the id with a start LATER than the end fact's own time is positive evidence that it runs
+again, and ranks above the end and the marker: the row reads `running`, with no end time, summary or report. Nothing is inferred.
+RESIDUALS: a roster read from a process that is gone, or an end with no readable time, or a start no later than the end's, leaves
+the end where it was; and a helper whose only end evidence is the meta's marker (no notification read) stays `finished` beside a
+listing, because the marker carries no time to compare a start with.
+
+**The roster's read time (review 2900 F6).** `launched` compares the launch result's time with `RosterInput.at`, an input
+H1b fills from `HookReading.at`; `now` decides nothing there (a test moves `now` an hour).
+
+**The bounds (review 2900 F9), each an exported constant.** The Agent arm is at most `HELPER_LISTED_MAX` (32) running rows +
+`HELPER_NONFINAL_MAX` (32) launched, no-longer-listed, session-ended and left-out rows together + `HELPER_KEPT_MAX` (20)
+finished rows = 84 rows; the eviction keeps the newest and `omitted` counts what it evicted. The text fields are capped by
+character, not by byte (the description at 200 characters, three labels at 64 each; only the summary has a byte cap, 200), so a
+row's size depends on its text. MEASURED on a row with every field at its cap, serialised as JSON: ASCII text 895 bytes a row
+(73 KiB for 84 rows); 3-byte characters 1,677 bytes (138 KiB); supplementary-plane characters 1,287 bytes (106 KiB). No byte
+cap is added and none is found on the path; pinning a worst-case row's serialised size belongs where the frame is built (H1b).
+The fold of launch results and notifications keeps `HELPER_FACTS_MAX` (256) ids, and the memory it hands the next reading is
+bounded by the same constant. The workflow arm: a finished (kept) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` (40)
+agents, running and failed first, and says how many it left out; at most 20 finished workflows are kept (H2 applies it). A
+running workflow keeps today's `WORKFLOW_AGENTS_MAX` (120). Not bounded by this task, and said: the count of RUNNING workflows
+(the reader's budget, H1b) and the length of a workflow agent's label and phase (an existing reader's).
+
+**Measured and inferred.** MEASURED on this box's own session transcripts: the launch result's shape (`async_launched` with
+`agentId` and `resolvedModel`); the notification's (`task-id`, `status`, `summary`, `result`) in BOTH record shapes (a user record,
+and an `attachment` record with `queued_command` and `task-notification`; review 2961 F1 counted the second as the only record
+of 27% to 56% of background helpers' notifications); and the foreground `completed` result (39 results, every one a user record
+with a list `content`, a numeric `totalDurationMs` and a `resolvedModel`). MEASURED on the delegation spool: a continued agent
+fires a new `SubagentStart` (above). INFERRED: that the hook's roster lists a continued agent with that later start, from the
+hook's own rule that a start for an unlisted id adds an entry (not read from a live roster).
+
+**Carried to H1b, H2 and the spec, each by name.** To H1b: the roster's read time is stamped by the reader and its readings reach
+the decision in nondecreasing `at`, one memory per feed (review 2961 F7; the fallback read has no time yet); `hookstate.ts`'s
+private `AGENT_ID_RE` folds onto the shared one, with a single-definition holder test (F6); a worst-case row's serialised size
+pinned where the frame is built (F5); `checkWorkflows`' inline gate is deleted and pinned equal to `frameDue` (F9); a `finished`
+row whose last write is read one reading late is held while the tail read is pending (F10c, with the read budget). To H2: a
+finished workflow with no readable end time is drawn once, as §4.3 says, by applying `noEndShown`'s rule where it moves the
+workflow keep onto `isFinishedKept` (F8).
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter that holds each TypeScript file as
+the module text and runs the two new test files against a copy of the tree with that one file replaced): the first round ran 172
+mutants, 172 killed (the decision 106, the fact parser 36, the shared types 30); it left 26 alive, which added a case for each, and
+six mutants were removed rather than killed. Fix round 1 re-ran every branch at the new tip, 249 mutants (the decision 161, the fact
+parser 52, the shared types 30, the id rule 6): 244 killed and 5 equivalent, each named in the note; seven mutants survived once
+(a tie of two ends of one outcome, a previous reading with no measured process start, the new process start held after a restart,
+two edges of the surrogate range, a hyphen and a dot in an id) and each got a case. The tables are in
+`docs/superpowers/programs/desktop-polish/h1a.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8829** — `helpers-decision-pure`: Task H1a, issued on 2026-11-20. The Agent arm's decision is a pure function of its
+  inputs, and it departs from the spec in these places:
+  - `drop-witness-is-continuity` (F13): the witness of a seen drop is the roster's continuity, vetoed by a measured change of
+    the process start, not "no SessionStart between them", which nothing the reader receives states; continuity needs an OLDER
+    survivor (F2). The residuals above are accepted.
+  - `seen-drop-persists`: a seen drop stays `no longer listed` on later readings while the roster stays usable, held in the
+    memory the decision hands back and forgotten when the roster cannot be used. The spec's "listed in one reading, absent in the
+    next" would otherwise flip the row back to a state left out one reading later.
+  - `foreground-start-is-end-less-duration`: a foreground helper's launch result is written when it ENDS, so its start is
+    that time less `totalDurationMs`, else the roster's `startedAt`, else unknown; the spec's "elapsed from the launch result's
+    timestamp" is right for a background launch only.
+  - `agents-unmeasured-for-left-out-states`: `agentsUnmeasured` is sent only while a known helper's state was left out, which
+    is a subset of "a known helper is not final" (a session-ended row needs no word about the roster).
+  - `launch-result-is-positive-evidence`: an id a launch result names is an Agent row even if its roster name or meta would
+    exclude it; the exclusion by name, type and meta path applies to ids no launch named.
+  - `kept-per-arm`: `HELPER_KEPT_MAX` is the cap of each arm (20 Agent rows and 20 workflow rows), not of both together.
+  - `omitted-and-known-leave-the-arm`: the decision returns `omitted` (rows the bounds evicted) and `known` (the frame gate's
+    count of known ids); neither is on the wire yet, and H1b decides whether the first is.
+  - `listing-after-the-end-is-running` (F3): a usable roster that lists the id with a start later than the final notification's
+    time ranks above that notification, where Figure 2 puts the final notification first; the spec says nothing of a helper
+    continued after its end.
+  - `helperfact-type-lives-in-parse`: `HelperFact` is defined in `parse.ts` and imported by `model.ts` as a type only; the
+    spec's table puts the tailer's `HelperFact[]` in `tail.ts`, which only carries it (H1b).
+
+Spec corrections for the coordinator to fold: §3.2's `no longer listed` paragraph (the witness and the residuals above) and its
+Figure 2 (a listing later than the end ranks above it); §4.2's elapsed for a foreground helper; §5's frame bound (the Agent arm is
+84 rows, about 73 KiB for ASCII text and about 138 KiB for 3-byte characters, not 52 KiB's 32 and 20) and the workflow arm's
+bound; and §8's `agentsUnmeasured` condition.
+
+**Acceptance.** The two new suites pass (57 and 152 cases), every suite that imports one of the three modules passes, and
+every mutant of every decision branch goes red. `tsc` passes for `server` and `pwa`.
+
+**Rollback.** A plain revert: nothing reads these pieces yet.
+
+### Task H1c: the bounded start scan (D-8873) — now
+
+**What.** The start scan that H1b split out (D-8862's `start-scan-and-report-request-split`; spec
+`docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1 "The start scan", §5, Table 13's scan tests), and the
+carries of review 3033 (H1b's round 2). At stream start, each reader scans the session transcript backwards from the
+stream's own seam for helper facts only, so a reload and a reconnect draw the same rows within the scan's bound. Nothing is
+drawn by this task. Built red first: the branch's first commit holds the tests, and the note records which failed on `main`.
+
+- `server/src/workflows/helperScan.ts` (new, L3, C3; its header says L3): `HelperStartScan`, `scanCutoff`, `HelperScanSeam`,
+  `HELPER_SCAN_BYTES` (8 MiB), `HELPER_SCAN_CHUNKS` (32) and `HELPER_SCAN_CHUNKS_PER_READING` (4). It walks back with the
+  shared back-reader (`backread.ts#walkBack`) and parses with the tailer's parser (`transcript/parse.ts#helperFactsOf`).
+- `server/src/workflows/read.ts` (L3, C3): the one call site, in `SessionWorkflows.readAll`: the scan's facts join the
+  stream's before the Agent arm reads. The reader owns the scan, so a new session dir rebuilds both. Review 3033 F1 in
+  `markLastWriteUnreadable`. Both by co-edit with the holder of claim 6169, the H2 worker (consent of 2026-11-21: the
+  call site in `readAll`, the field and constructor line, the import, and F1's method).
+- `server/src/transcript/tail.ts` (L3, C3): `BacklogRead.scanEnd` (the window's first byte) and `BacklogRead.cut` (the
+  partial line the window starts in, which the backlog drops).
+- `server/src/sessionws.ts` (L4, C3): the stream's seam, from the backlog or the client's offset on a resume, carried to
+  `readAll`. Four net code lines of its 40 (measured: six code lines in, two out). Review 3033 F8's comment. By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/workflows/model.ts` (L1, C3): the fold's ties and bound (review 2900 F4), `orderHelperHook`'s bound (review
+  3033 F4) and the display strip (review 3033 F5). By co-edit (the H2 worker's consent of 2026-11-21).
+- `server/src/sessionFeed.ts` (L4, C3): `PUBLISHED_FRESH_MS` exported and handed to `orderHelperHook`.
+
+**The seam, so no byte is read twice (review 2900 F4).** The scan ends where the stream's forward reading begins: the
+backlog window's first byte on a backlog stream, the client's offset on a resumed one. The backlog drops the partial line its
+window starts in and hands it over as `cut`; the scan's newest read ends in that line's head, and the two are joined, so the
+line is parsed once. A character the seam splits reads as U+FFFD in that one line's text. A resume offset inside a line
+loses that line, for the scan as for the chat (a residual). The scan starts once per reader: a later backlog on the same
+transcript (a re-point) does not restart it.
+
+**Legitimately different from the tailer (review 2900 F4).** The tailer is the other reader of the session transcript. It
+reads forward from the seam, for the chat and its helper facts, for the stream's life. The scan reads backward from the same
+seam, once, for helper facts only, bounded by time and bytes. The two read disjoint bytes and share the parser and the
+back-reader. The record is in `helperScan.ts`' header.
+
+**The pace and the cost (review 2900 F10).** The scan reads in `READ_FROM_MAX_BYTES` (256 KiB) reads, the agent link's own
+cap, not the spec's 64 KiB: 32 reads at most, at most 4 a reading (1 MiB, the spec's pace), so it ends within 8 readings,
+about 16 s at the 2 s tick. It runs OUTSIDE the feed's polling gate: `step` grants the reads and returns the facts found so
+far, and never awaits a read. So a reading never waits for the scan, and the feed's next reading is not held back for any
+socket on the session. A read still in flight counts against the next grant, so at most one read per scan is in flight. A scan
+nobody steps stops after its last grant. Each open socket has its own reader, so two sockets on one session run two scans:
+at most 16 MiB, 2 MiB a reading over the same 8 readings, two reads in flight. **Measured** on this box (local reads, load
+about 9, 2026-11-21), at stream start on four real transcripts of 2.0 MB, 2.8 MB, 11.5 MB and 1.05 GB: each scan stopped on
+time after one 256 KiB read (each window's oldest lines were older than ten minutes), in at most 3 ms. With a listed helper
+that started long ago (the worst case), the two large files read 8 MiB in 32 reads over 8 readings, with 32 and 46 ms of read
+time in all for two sockets. The two small files read their whole prefix below the seam, 0.98 MB and 1.8 MB, in 4 and 7
+reads. A `step` took at most 0.21 ms. **Inferred:** in remote mode each read is one agent round trip, which this local
+measurement does not cover.
+
+**The same rows, only within the bound (review 2900 F11).** A reload and a reconnect draw the same rows once their scans
+end, when every fact a row needs lies within the bound. Until a scan ends, rows fill in. Beyond the bound:
+
+- a helper the roster lists draws `running`, its start from the roster;
+- a listed helper whose meta says finished draws `finished`, ending at its last write, with no summary or report;
+- a helper neither listed nor named by any fact the stream read is unknown to the reader and draws no row, while a socket
+  that was open when it ran may still show it in the keep.
+
+A drop is a second difference. A socket that saw a helper drop off the roster draws it `no longer listed`. A new reader
+has no earlier roster to compare with, so that helper's state is left out (`agentsUnmeasured: unseen`) until a final fact or
+its meta's marker decides it. Likewise, a row already drawn once with no end time leaves an old socket on the next
+reading, and a new reader draws it once again.
+
+**The carries of review 3033.**
+
+- F1 taken: a failed final stat or range read keeps a last write already measured, so the row ends at it and is kept.
+  Only a helper whose last write was never measured ends with no time.
+- F2, F3 and F6 taken as cases: the early reserve against a burst of twelve new ids, the 12-call bound with every range
+  read failing (open and final helpers), and a held helper stat'ed once.
+- F4 taken: `orderHelperHook(last, next, lagMs)` holds an older read only within `lagMs`, the feed's freshness window
+  (`PUBLISHED_FRESH_MS`, 10 s). A read older by more is a clock step and is taken, so the helper roster freezes for at most
+  10 s after the clock steps back. **Inferred** bound: a published copy older than the window is not the reading, and the
+  fallback read is stamped when it returns, so a lag cannot be longer under a monotonic clock.
+- F5 taken: display text is `shared/unprintable.ts#stripLine` after lone surrogates are removed. A run of the set is now a
+  space, where it was nothing, and format, bidi, line-separator and U+2060-U+206F characters are removed too. The frame's
+  byte bound is unchanged or lower: the strip never lengthens a string.
+- F7 and F8 corrected. F9 (this plan's H1b slug) and F10 (`h1b.md`'s `model.ts` row) are records for the coordinator to
+  fold: the memory is one per feed, and `model.ts` also exports `workflowLastActivity`, `orderHelperHook` and the strip. F11:
+  this branch's commits carry their trailer as a trailer. F12 to F14 are H1b's records.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1b's kind of adapter, one test file per
+process in a scratch copy of the tree): round 1 killed 45 of 52 mutants. Seven survived: a seam line longer than one read,
+the summary and report ranks, the tie of evicted ids, the stream's cut, and the stream's seam offset each got a case. The
+`from` rank was equivalent and was removed. Round 2 killed 42 of 42. The tables are in
+`docs/superpowers/programs/desktop-polish/h1c.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8873** — `bounded-start-scan`: Task H1c, issued on 2026-11-21. The bounded start scan, and the carries of review
+  3033. It departs from the spec in these places:
+  - `scan-in-its-own-file`: the scan is `server/src/workflows/helperScan.ts`, not part of `read.ts` as Table 12 says. It is
+    called from `read.ts` once (`SessionWorkflows.readAll`), so the helper reads and the scan change for their own reasons.
+  - `scan-reads-at-the-link-cap` (review 2900 F10): reads of `READ_FROM_MAX_BYTES` (256 KiB), at most 4 a reading, not 64
+    KiB chunks, at most 16 a reading. The bytes per reading are the spec's.
+  - `scan-outside-the-polling-gate` (review 2900 F10): a reading starts the scan's reads and never awaits them. Their facts
+    reach the next reading.
+  - `scan-ends-at-the-seam` (review 2900 F4): the scan reads only below the stream's own reading (the backlog window's first
+    byte, or the client's offset), and parses the line the window cut, from the backlog's `cut`. The spec says only
+    "backwards".
+  - `scan-once-per-reader`: a second backlog on the same transcript does not restart the scan. A new session dir rebuilds
+    the reader, and its scan with it.
+  - `scan-cutoff-is-listed-agent-helpers`: the time bound counts only roster entries with a helper id that are not a
+    workflow's agent.
+  - `fold-is-order-independent` (review 2900 F4): ties are broken by one rule (the more telling outcome, then a summary,
+    then a report, then content) and the fold keeps the ids with the newest facts. This replaces H1a's "the newer read" and
+    "the least recently touched". Past `HELPER_FACTS_MAX` ids, an evicted id's later fact starts it afresh (a residual).
+  - `measured-last-write-survives` (review 3033 F1): both arms of a failed final read keep a measured last write. This
+    reverses D-8862's `finished-held-until-its-last-write-attempt` "with no last write or end time" for a helper whose last
+    write was already measured.
+  - `helper-roster-freeze-bounded` (review 3033 F4): `orderHelperHook` takes the feed's freshness window as its bound.
+  - `display-text-is-the-shared-strip` (review 3033 F5): one rule with every other one-line string.
+  - `same-rows-within-the-bound` (review 2900 F11): the spec's equality holds only within the bound, as said above.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the seam; the reads of 256 KiB; outside the polling gate; and, where it says "So a reload and a
+  reconnect get the same rows within that bound", what a helper beyond the bound and an unseen drop draw (above).
+- §5, Table 7's "A reload or a reconnect" row: "The same rows once the scan ends, within its bound; a drop the new reader
+  did not see is left out".
+- §5's start-scan paragraph: 256 KiB reads, 4 a reading, the two-socket cost, and the measurement above, which replaces
+  "Measured cost of a typical case is unknown until H1b builds it".
+- Table 12: a `helperScan.ts` row (L3, C3), and the scan leaves the `read.ts` row.
+- Table 13: the scan's tests move from H1b's row to an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or is recorded as equivalent, and `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert. The scan only adds facts the fold already accepts. The fold's new tie rule and bound, the
+bounded order and the strip go back to H1b's.
+
+**Corrected on 2026-11-21 (Task HF1, D-8876; review 3067 F1 and F10).** Three sentences above are wrong, and the HF1
+section below has the full record:
+
+- The mutation run's round 1 killed 36 of 43 mutants, not 45 of 52. Seven survived, as said. **Measured:** the note's table
+  has 43 rows, seven of them survivors, and no row backs the 52. Round 2's 42 of 42 is those 43 less D7.
+- F5's strip removes nothing. Format, bidi and line-separator characters and U+2060 to U+206F are in the set, so each run
+  of them becomes a space, white space collapses, and the ends are trimmed (`shared/unprintable.ts#stripLine`).
+- Table 13's correction also changes the table's caption, "Seven PRs, each red first", to eight. It is the H1c row that
+  D-8862's corrections already name, not a second one.
+- The cost measurement was made with a scratch script that is not in the repository. Its method is in `h1c.md` §4, and
+  review 3067 repeated one row with its own script: 1 read, 262,144 bytes, a stop on time, 2 to 3 ms.
+
+### Task HF1: the start scan's carried findings (D-8876) — now
+
+**What.** Review 3067 read H1c (#3149) and found no grade-a finding. It carried ten findings to a later follow-up
+(`h1c.md`, review 3067 F1 to F10), and review 3080 carried one more (F1, the migration slots). This task fixes all eleven,
+so the start scan is pinned and its gaps are closed. Nothing is drawn by this task. It was built red first: the branch's
+first commit holds the tests, and `docs/superpowers/programs/desktop-polish/hf1.md` records which failed on `main`.
+
+- `server/src/transcript/tail.ts` (L3, C3), F5: `readBacklog` answers `scanEnd` wherever its tailer starts on a measured
+  file. That is the window's first byte, or the file's size when the window read fails (the unreadable arm), or 0 for an
+  empty file. So a stream whose window read failed still runs its scan, from where its tailer starts. `scanEnd` is absent
+  only with `missing`, so one absence no longer stands for absent, empty and unread.
+- `server/src/workflows/helperScan.ts` (L3, C3), F6, F7 and F8:
+  - F6: a scan that stopped `unreadable` starts again on the stream's next new seam, once per seam. Seams are compared by
+    value: file, end and cut.
+  - F7: each later usable roster lowers the cutoff to the minimum of old and new. A scan that stopped on time reads on from
+    where it stopped once its last read's oldest line is no longer older than the cutoff.
+  - F8: the scan keeps its running pump's promise, so the tests wait on it.
+- `server/src/sessionws.ts`: **unchanged**. The stream already turns any `scanEnd` into its seam, so F5 needs no line there,
+  and its per-PR growth budget is not spent (**measured**: `git diff --stat` names no `sessionws.ts`).
+- Tests: `helper-scan` (F2, F3, F4, F6, F7 and F8's wait), `transcript-tail` (F5's two arms), `sessionws-helpers` (F5
+  through a stream), and the new `migration-slots` (review 3080 F1).
+
+**F7, lowered and not waited for.** The other way was to start the scan only once a usable roster arrives. That fails a
+session whose hook state is never usable: its scan would never run, or would run late, and every row would wait for it.
+Lowering costs nothing when the first roster was already right. When a helper is listed later, the scan pays only for the
+reads that helper needs. And a scan that already stopped on time is not lost: it reads on from where it stopped, without
+reading a byte twice, inside the same 8 MiB. The cutoff only falls, and only a usable roster moves it, so a clock that steps
+back, with no usable roster, does not reopen a time stop.
+
+**The carried tests.**
+- F2: a range read that rejects ends the scan `unreadable` and keeps what it found, with no unhandled rejection.
+- F3: one line older than the cutoff, the oldest in its read, stops the scan after exactly that read.
+- F4: past the 256-id bound, an id is ranked by the newer of its two facts, in both directions.
+- F8: the helper-scan test's `drain` waits on the pump's own promise, never on a count of real ticks.
+
+Each case goes red under its mutant.
+
+**Records.** F1 and F10 are corrected in the dated note at the end of Task H1c's section above, and in `h1c.md`. F9 is
+corrected in `h1c.md` alone, because only the note carried the cell. The H1c PR's body keeps its old figure: it is merged,
+and nothing here edits it.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter of H1c's kind, one test file per
+process in a scratch copy of the tree):
+- round 1: 21 of 24 mutants killed. Three survived in `helperScan.ts`: a seam compared without its cut, a resume that skips
+  its check, and the check made strict. Each got a case.
+- round 2: `helperScan.ts` 16 of 16, run whole again; the 8 in `tail.ts`, `model.ts` and `schema.ts` were killed in round 1.
+
+The table is in `hf1.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8876** — `start-scan-carries`: Task HF1, issued on 2026-11-21. The carries of reviews 3067 and 3080. It departs from
+  the spec and from D-8873 in these places:
+  - `scan-end-is-where-the-tailer-starts` (review 3067 F5): `BacklogRead.scanEnd` is present on every measured file: the
+    window's first byte, the file's size when the window read fails, or 0 for an empty file. This replaces D-8873's "Absent
+    when no window was read".
+  - `scan-restarts-on-a-new-seam` (review 3067 F6): a scan stopped `unreadable` starts again on a seam that differs by value,
+    once per seam, and its cost adds up across restarts. This amends D-8873's `scan-once-per-reader` for that one stop.
+  - `scan-cutoff-only-falls` (review 3067 F7): later usable rosters lower the cutoff, and a scan stopped on time resumes
+    when its stop no longer holds. This amends D-8873's cutoff, which was fixed at the first reading. The spec's "whichever
+    comes first" holds against the cutoff in force.
+  - `scan-pump-is-awaitable` (review 3067 F8): `HelperStartScan` keeps its running pump's promise in a private field that
+    the test reads; `step` still never awaits it.
+  - `migration-slots-pinned` (review 3080 F1): `server/test/migration-slots.test.ts` pins slots 106 to 117 of `MIGRATIONS`,
+    each by a fragment of its DDL that no other entry carries.
+  - `h1c-records-corrected` (review 3067 F1, F9, F10): the dated note in Task H1c's section, and `h1c.md`.
+
+Spec corrections for the coordinator to fold:
+
+- §3.1, "The start scan": the time bound's cutoff falls with each later usable roster, and a time stop it no longer holds is
+  lifted. A read that fails ends the scan until the stream's next new seam.
+
+**Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red, and `tsc` passes for `server` and its tests.
+
+**Rollback.** A plain revert. The backlog's absent `scanEnd` and the fixed cutoff come back, and so does the stop on a
+failed read. A stream whose window read failed then draws its helpers from the roster and its meta alone, as on `main`.
+
+### Task H1b: the helpers reach the frame and the store (D-8862) — now
+
+**What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
+13's H1b row), less two pieces the coordinator moved out (the first departure below): H1a's pure decision is wired to the
+session's reads, the helpers go on the session's `workflows` frame, and the PWA's store accepts them. Nothing is drawn yet:
+H2 draws. Built red first: the branch's first commit holds the tests, each failing on `main` except those labelled
+characterization pins in the note.
+
+- `shared/continuity-reports.ts` (L0, K): `isAgentId`, the one guard over the one `AGENT_ID_RE`; `shared/workflows.ts`'s
+  `isHelperId` is it, `server/src/hookstate.ts`'s private copy of the rule is gone, and `continuity/hookReports.ts`'s private
+  guard is gone (review 2961 F6, review 2978 F5). A single-definition case pins both holders.
+- `server/src/hookstate.ts` (L3, C1): the roster keeps its optional `id`; one that fails the rule reads as absent, never as a
+  malformed state. `server/src/fleet.ts` (L3, C1) strips it, so `FleetSession.subagents` and the state cache are unchanged.
+- `server/src/sessionFeed.ts` (L4, C3): `FeedReading.helperHook` pairs the roster with its read time (the published copy's
+  `at`, else the moment the fallback read returned). The helper roster alone is ordered per identity; every other hook
+  consumer gets the latest read, as before (reviews 2900 F6, 2961 F7 and 3014 F3).
+- `server/src/transcript/tail.ts` (L3, C3): the tailer's second output, `HelperFact[]`, emitted as `helpers` beside the
+  chunk's events, and the backlog's facts from its whole window (`BacklogRead.helpers`, absent when none).
+- `server/src/workflows/read.ts` (L3, C3; its header now says L3): `SessionHelpers`, the reads BY ID with the helper tier
+  (`HELPER_READS_PER_TICK` = 12) in the spec's order and its rotation, owned by `SessionWorkflows` (`readAll`); and
+  `lastActivityAt` on every workflow row, the newest write the reader measured (its journal's or a running agent's
+  transcript's).
+- `server/src/workflows/model.ts` (L1, C3): `rosterInputOf` (the raw hook read and its time into the decision's roster, each
+  `HelpersUnmeasured` reason told apart), `orderHelperHook`, `parseHelperMeta`, `lastLineTime`, `workflowLastActivity`,
+  `isAgentHelper` (the agent rule the decision and reader share), and `helpersFrame` (the frame, gated by `frameDue`).
+- `server/src/sessionws.ts` (L4, C3): `checkWorkflows` carries the ordered roster read, the tailer's facts and the session
+  dir to the reader, and sends what `helpersFrame` decides. The characterization table compares the old inline gate with
+  `frameDue` on all 16 inputs before deleting it (review 2961 F9). It copies the old gate and needs the new frame builder,
+  so it is not a suite that loads on main (review 3014 F8). Seven net code lines of its 40.
+- `shared/api.ts` (L0, K): the `workflows` member is the intersection with `HelperFrameMembers` (`agents?`, `agentsUnmeasured?`,
+  `readEvery?`, defined in `shared/workflows.ts`), two existing lines edited, zero net code lines, by co-edit with the holder
+  of its claim (the holder's consent of 2026-11-20).
+- `pwa/src/stores/session.ts` (L4, C3): `agents`, `agentsUnmeasured` and `readEvery` in `SessionState`, `SessionSnapshot` and
+  `snapshotOf`, replaced with every frame (absent is none), and cleared with the workflow rows at the three client reset
+  sites (a backlog onto another transcript, the initial state, `disconnect()`). On the server, `sendBacklogAndTail` restates
+  the frame (its gate resets, as before) and restarts the facts from the backlog's, and a new session dir rebuilds the reader,
+  which forgets the old dir's helpers with its workflows. **H2:** Table 11's absence draws nothing; it cannot distinguish
+  an older server from a current server with no helper rows (review 3014 F13). There is no new protocol marker.
+
+**The carries, each taken or left.** Review 2900: F6 taken (the helper roster's read stamp, its test); F14 taken as the split
+below. Review 2961: F7 taken (only the helper roster is ordered per identity, one memory per feed); F6 taken; F5 taken (the
+serialized Agent arm bound below); F9 taken; F10c taken (the hold below).
+Review 2978: F1 taken (two characterization pins: an unmeasured process with a later listing reads running; an unlisted helper
+whose meta was written after its end keeps its end); F2 taken (a pin for a sibling-first envelope, and the H1a note's rows
+corrected: that mutant is not equivalent); F3 taken as a comment and a residual (below), the memory's shape kept; F5 taken; F4
+and F6 left, records the coordinator folds. Review 3014: F1–F5 taken; F6 and F7 corrected in the records; F8 clarified, not
+moved (the gate is unchanged this round); F9 and F10 taken; F11 left (rotation cursor unchanged; churn can defer a row);
+F12 gains a behavioral clock-step test, while the historical reds and the PWA fallback test are unchanged; F13 noted for H2.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1a's kind of adapter: each TypeScript file held
+as a module's text, each mutant run in a scratch copy of the tree): the initial round measured 94, with 92 killed, one
+accepted non-equivalent survivor (the prefilter on JSON-escaped input the writer does not emit) and one equivalent survivor
+(the reducer's snapshot members). The review fix adds 15 killed mutants, including the five review 3014 F5 cases; the
+initial and fix-round tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8862** — `helpers-reach-the-frame`: Task H1b, issued on 2026-11-20. The helpers reach the session frame and the store,
+  and it departs from the spec in these places:
+  - `start-scan-and-report-request-split` (review 2900 F14, the coordinator's call): the start scan of the transcript moves to
+    a task H1c after this one, with its own measurement, and the `helper-report` request moves to H2, its first user. Until H1c,
+    a stream that starts mid-session knows the facts of the backlog's window (the last 1 MiB) and what it tails after.
+  - `agent-arm-beside-the-workflow-read`: the spec moves `SessionWorkflows.read`'s early return "inside the workflow arm"; H1b
+    leaves `read` as the workflow arm, unchanged, and adds the Agent arm as a sibling reader (`SessionHelpers`) that
+    `SessionWorkflows.readAll` runs regardless of it.
+  - `finished-held-until-its-last-write-attempt` (reviews 2961 F10c and 3014 F1): a meta that says `finished` is held until
+    the reader attempts the last-write measurement. Meanwhile the row reads what else is measured (running when listed).
+    A failed stat or range read releases the hold on that reading, with no last write or end time; the final row can be
+    drawn once and the final read is not retried.
+  - `tier-costs-as-built` (review 3014 F2): step 4 re-stats open helper metas and listed ids whose meta was missing. The
+    first re-stat also wants a read (the first meta read stored no stat). A changed stat whose read does not fit is saved;
+    the read leads step 4 next time. Step 5 attempts any final helper's unread last write or one whose meta says `finished`,
+    not only those first seen final. Reserve one call for due step 4 and two for due step 5 (stat and a nonempty range),
+    inside the same 12-call budget.
+  - `hook-order-applies-only-to-the-helper-roster` (reviews 2961 F7 and 3014 F3): the feed holds one ordered helper roster
+    per active identity via `model.ts#orderHelperHook`. The fallback is stamped on return. The hook ask and other readers
+    keep the latest raw read even after the wall clock steps back.
+  - `helper-display-text-json-bound` (review 3014 F4): strip controls and lone surrogates from display text, including
+    transcript-derived model labels and summaries, not reports. A final row is at most 1,905 serialized bytes; the frame
+    with no legacy workflow rows is below 134,000 bytes even with Agent qualifiers and JSON escaping.
+  - `no-hook-read-is-unreadable`: a reading that carries no hook read (only a direct call, today) gives the roster
+    `unreadable`, never an empty listing.
+  - `omitted-stays-off-the-wire` (H1a's `omitted-and-known-leave-the-arm`): `AgentArm.omitted` is not put on the frame; it has
+    no reader until H2, which decides.
+  - `workflow-last-activity-is-the-newest-mtime`: `WorkflowView.lastActivityAt` is the newest mtime the reader measured, the
+    journal's or a running agent's transcript's, for running and finished rows alike.
+  - `helper-facts-prefilter`: `helperFactsOf` returns at once for a line that names neither `"toolUseResult"` nor
+    `<task-notification>`, because the tailer now asks it of every line.
+  - `continued-older-id-still-a-survivor` (review 2978 F3, a residual): the drop witness's memory keeps ids, not their starts,
+    so an older id stopped and re-added between two readings that also reset the roster still counts as a survivor, and the
+    newer ids read `unlisted` (no end claimed) rather than left out. The comment in `seenDrops` says so; the memory's shape is
+    kept, because the case needs a reset and a continued helper's new start inside one 2 s reading.
+
+Spec corrections for the coordinator to fold: §3.1 (the split; the Agent arm as a sibling reader; `frameDue` from
+`helpersFrame`, not `workflowsFrame`); Table 7 and §5 (the start-scan guarantee waits for H1c); §5's helper tier (hold,
+listed meta retry, final attempts and reservations above) and its frame-size sentence (the serialized Agent arm bound);
+Table 12 (`sessionFeed.ts` carries the ordered roster read; the Agent rule stays in `model.ts`); Table 13's H1b row (less the
+start scan and the report request) and an H1c row.
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or its disposition is recorded in the note, `tsc` passes for `server`, its tests and `pwa`.
+
+**Rollback.** A plain revert: the frame's new members are additive (an older PWA ignores them), and the roster's `id` never
+leaves the server.
+
+### Task H2: the Helpers section in the session panel (D-8872) — now
+
+**What.** C49's H2 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4, §5, §8 Table 11, §10 and
+Table 13's H2 row), plus the helper report moved here from H1b (the coordinator's split on review 2900 F14). The operator's
+words of 2026-11-19: "inside the session in the right hand panel I still want to see actual information about any running
+workflows and subagents, for the session i'm inside of, in a useful way though please". H2 draws the Helpers section from
+what H1a and H1b put on the frame. Built red first: the branch's first commit holds the tests, each failing on `main`
+except five labelled characterization pins.
+
+- `ui/src/components/workflow-strip.tsx` (the design system), extended in place: the workflow strip of D-5560 becomes the
+  Helpers section. `HelpersStrip` under the transcript (a head, a glance of two running rows, then the rows and the
+  finished fold) and `HelpersPanel` in a column of its own; a row's facts per Tables 5 and 6, each measured or left out;
+  each state's glyph (review 2900 F16); a finished row with a report opens to its first four lines, Show all and Copy.
+  `workflow-strip.css` holds the styles (the fold toggle, the opening row and the report's links at `--tap-min`, review
+  2900 F18; tokens left out of a section under 480 px wide).
+- `pwa/src/session/helpersWords.ts` (L1, C3, new): the head's counts and its "not known" lines (Table 4), said once and only
+  while a row they concern is drawn, and the main list and the finished fold. Absence draws nothing (review 3014 F13).
+- `pwa/src/inspector/HelpersSection.tsx` (L4, C3, new): the rail's section at 1600 px and up, and the column's strip, which
+  `SessionScreen` draws only while the rail does not hold it (the mail and task strips' rule, so a hidden rail brings it
+  back). `InspectorSections` and Refined's `InspectorRail` place it after Mail.
+- `pwa/src/stores/session.ts` (L4, C3): `requestHelperReport(id)` sends the request; the reducer applies the answer into
+  `reports`, keeps only the ids the frame still carries, and the three reset sites clear it.
+- `server/src/workflows/model.ts` (L1, C3): `keepWorkflows` replaces `selectRows` and asks `isFinishedKept`, the keep's one
+  clock (review 2900 F5); `holdReports`, `boundReports` and `reportAnswer`. `shared/workflows.ts`: `HelperReportRequest`,
+  `HelperReportAnswer`; `WORKFLOW_EVICT_MS` retired with its pins.
+- `server/src/workflows/read.ts` (L3, C3): `finishedView` asks `isFinishedKept`; a kept finished run is held as read and
+  left quiet (no stat per reading); `SessionHelpers` holds the reports and answers `reportOf`.
+- `server/src/sessionws.ts` (L4, C3): `helperReport(id)` sends the answer, one method. `server/src/server.ts`:
+  `asSessionClientMsg` reads the request (an agent id by `isHelperId`, else null) and the socket handler routes it, by
+  co-edit with the holder of its claim (consents of 2026-11-21, below).
+- `shared/api.ts`: the import line, `SessionClientMsg` and the frame's union edited in place, zero net code lines (it
+  stands at 5110 of its 5140 cap here; #3134 takes it to 5140), by co-edit with the holder of its claim.
+
+**The carries, each taken.** Review 2900: F5 (the keep's one owner, and a kept finished run costs no stat per reading), F7
+and F15 (a report masked, then cut at 16 KiB with `cutAt`'s back-off, at parse time since H1a; held and answered here, with
+its `cut`), F14 (the report request, on all three layers), F16 (each state's glyph: only `running` draws the filled diamond
+in the running ink; `launched`, `no longer listed`, `session ended` and a state left out draw the hollow diamond in a
+neutral ink; `done` ✓ done ink, `failed` ✗ dead ink, `stopped` ■ and `finished` ✓ neutral; a workflow ▣ running, ✓, ✗, ■;
+the mockup's two stale rows redrawn and its figure re-rendered), F18 (the fold toggle, the opening row and Show all and
+Copy floor at `--tap-min`). Review 2961 F8 (a finished workflow with no readable end time is drawn once: `keepWorkflows`
+applies `noEndShown`'s rule). Review 3014 F13 (the words module says why absence draws nothing).
+
+**Consents.** `shared/api.ts` (claim 6133, run 2958): yes, 2026-11-21, for the import line, `SessionClientMsg` and the
+frame's member with its comment. `server/src/server.ts` (claim 6166, run 3027): yes, 2026-11-21, for the parser and the
+socket handler, and then for the one `isHelperId` import line; the hierarchy route registration is untouched. H1c (run
+3044): its call site is in `SessionWorkflows.readAll`, not inside `SessionHelpers.read`; I said yes, 2026-11-21, to its
+lines in `read.ts`, `model.ts` and `sessionws.ts` and named mine, which do not overlap.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8872** — `helpers-section-drawn`: Task H2, issued on 2026-11-21. The Helpers section is drawn from the frame, the
+  workflow keep is the helpers' ten minutes, and a finished helper's report travels on request. It departs from the spec in
+  these places:
+  - `reports-held-for-drawn-rows`: the reader holds the reports of the fold's own end facts: every report of a row drawn
+    with `hasReport`, and the newest `HELPER_KEPT_MAX` of the rest by end time (so at most 40 of at most 16 KiB each), and
+    answers a report only for a row the last reading drew with `hasReport`; §8 says only that a report is at most 16 KiB.
+  - `report-answer-null`: an unknown or evicted id is answered `report: null`, which the row says as "This report is no
+    longer held"; an older server never answers, and the row then shows nothing, never that there is none.
+  - `keep-workflows-replaces-select-rows`: `selectRows` retires; `keepWorkflows` is the workflow arm's keep, which also
+    applies the 20-row cap and the 40-agent cut that H1a named for H2. A finished workflow with no readable end time cannot
+    arise from today's reader (`summaryView` always gives the summary's file time), so its draw-once rule guards the type's
+    null.
+  - `finished-view-gates-on-the-summary-time`: `finishedView` asks `isFinishedKept` of the summary's mtime, which is never
+    earlier than the end it records, before it reads the summary; `keepWorkflows` rules on the row's own end time.
+  - `kept-run-quiet-from-first-read`: a kept finished run is re-stat'ed every `RESTAT_EVERY` readings (about 30 s), like a
+    dropped one, so a resume in place of a run inside its keep shows up to 30 s later than before.
+  - `head-counts`: the head counts `N running` (Agent helpers and workflows), else `N helpers` for the main list, then
+    `M finished`; a `no longer listed` or `session ended` row is in the main list and not counted as running.
+  - `workflow-unreadable-in-the-head`: the old strip's two unreadable sentences move to the head, as `workflow state could
+    not be read` and `workflow state not re-read: showing the last read`; Table 4 does not list them.
+  - `rail-panel-always-open`: in the rail the section is always open, with its counts and notes as one line under the
+    rail's own heading; the rail places it after Mail.
+  - `tokens-follow-the-section-width`: line 2 leaves the tokens out whenever the section is under 480 px wide (a container
+    query), so in the 320 px rail too, not only on a phone.
+  - `workflow-row-opens-its-phases`: a workflow row, running or finished, opens by its line 1 to the phases and agents the
+    old strip showed, with its done-agents fold; Table 6 names only finished workflows.
+  - `glance-at-every-width`: the collapsed glance (line 1 of the first two running rows) is the same at every width; §10
+    describes it for the phone.
+  - `finished-time-is-the-duration`: a finished row's time is its duration (end less start) in the shared formatter, so
+    Table 6's `finished · 6m` reads `finished · 6m0s`.
+
+Spec corrections for the coordinator to fold: §4.3 and §8 (the held reports, their bound, and the null answer); §4.1's
+Table 4 (the workflow-unreadable lines); §4.2's Table 5 and §10 (tokens by the section's width); §4.3's Table 6 (a running
+workflow opens too); Table 12 (`HelpersSection.tsx` also exports the column's strip; the design system's `HelpersPanel`).
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H1a's and H1b's: each
+TypeScript file held as a Python module's text, each mutant written into a scratch copy of the tree outside the work tree,
+removed after the run, its test files run once through `ccrc test`): 77 mutants at the tip, 73 killed and 4 accepted (two change only what the stream holds in memory, never an
+answer; one is a branch the reader cannot reach; the fourth, `bound-shown-without-report`, does change an answer and became
+the code in fix round 1, review 3072 F5). The first pass found one defect, fixed here (a notification that is no row's could
+evict a drawn row's report: `boundReports`), and seven missing cases, each added. Fix round 1 ran 44 mutants of the branches
+it changed: 44 killed. The tables are in `docs/superpowers/programs/desktop-polish/h2.md`.
+
+**Looked at in the real app.** The production build, through the browser harness, at 360, 1280 and 1600 px, in Refined and
+Instrument, dark (Phosphor) and light, the strip collapsed and open, the fold open and a report expanded: the screenshots are
+in the note and under `docs/design/2026-11-19-session-helpers-design/h2/`. The first look found a defect, fixed in this
+task: at 360 px the glance cut line 1 to one letter (the row glyph's grid area leaked into the glance's grid); the
+real-Chrome test now checks the glance's order, room and line. Fix round 1 retook every image, and its look found the narrow
+rail clipping a too-long state group, fixed there.
+
+**Fix round 1 (review 3072).** F1 (the meter-ring block of `lanes-row.browser.test.ts` selects the Helpers row's meter), F2
+(an answer is kept with its row's end), F3 (a state outside the vocabulary draws the neutral glyph), F4 (no answer before the
+stream's first reading; the store owns the ask and asks again after a stream's first frame; no wire change), F5, F6 (spec §10
+followed: at the phone width elapsed is in line 2), F7, F8, F11, F12, F13 and F14's separators, each with its case; F9, F10
+and the rest of F14 are records in the note. **The matrix that binds H2 is its brief's** (360, 1280 and 1600 px, both skins,
+light and dark, the fold open and closed, a report expanded); the "Acceptance (the matrix, per PR)" section below, with 390
+and 1920, is the programme's final gate, not this task's.
+
+**Acceptance.** The new suites pass (server 2 files, PWA 4 files and the real-Chrome file), every suite that imports a
+changed module passes, every mutant of a new decision branch goes red or its disposition is recorded in the note, `tsc`
+passes for `server`, `pwa` and `ui`, and the PWA builds.
+
+**Dated note, 2026-11-21 (Task H3, review 3099 F8).** Three statements of this section went stale in H2's fix round and are
+corrected here, the code being the authority: `reports-held-for-drawn-rows`: the reader holds a report while its end fact is
+the fold's (`holdReports`), and the bound keeps the report of every row the last reading drew, whatever its `hasReport`, plus
+the newest `HELPER_KEPT_MAX` of the rest by end time (`boundReports`); it answers only for a row drawn with `hasReport`
+(`reportAnswer`). `report-answer-null`: besides an unknown or evicted id answered `report: null`, a stream answers nothing at
+all before its first reading (review 3072 F4), and the store asks again after that stream's first frame. The store bullet
+above: the store keeps an answer only for a row the frame still draws with `hasReport` and at the end the answer came for
+(`reportsFor`, review 3072 F2), and since H3 an answer, kept or dropped, ends the store's record of the ask (review 3099 F1).
+
+**Rollback.** A plain revert: the request is additive (an older server ignores it) and the answer is a new frame an older
+PWA's reducer ignores; the keep reverts to 30 s with the old constant.
+
+### Task H3: SessionDetails sheds its lists and its words (D-8875) — now
+
+**What.** C49's H3 row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4.4, §4.5, §11 Table 13's H3
+row; "Later" keeps `FleetSession.subagents` on the wire). With the Helpers section in the session panel (H2, #3148), the panel
+sheds what it replaces. Built red first: two test commits before the code, each case failing on `main` (the note lists them).
+
+- `pwa/src/session/SessionDetails.tsx` (L4, C3): no subagent button or list, no `N delegated` chip, no title of it and no
+  activity row. The entry list's bring-into-view (`bringIntoRail`, D-7784) and its tap bookkeeping had no other reader and
+  went with it. Review 2995 F2: the details hand their worktrees section their own render's answer to "is this region still
+  drawn" (`detailsStay`), so the focus a worktree control hands back when its row leaves is decided by the commit that
+  removes it.
+- `pwa/src/session/SessionWorktrees.tsx` (L4, C3): a presence on disk not measured is said once, in the section's head, in
+  the Archive's words (`presenceWord`: `presence on disk not measured for N tree(s)`); `detailsStay` replaces
+  `rowEndsWithThem`, and `NOTE_CLASS` is the section's own.
+- `pwa/src/session/sessionHeaderView.ts` (L1, C3): `detailsEndWithWorktrees` retired (its one reader was the prop above).
+- `pwa/src/fleet/sessionFacts.ts` (L1, C1): no `subagents` or `delegated` fact, field or input; `FactKey` loses both keys.
+- `pwa/src/fleet/SessionMeta.tsx` (L4, C1): the two toggles and their props go.
+- `pwa/src/fleet/delegationWords.ts` (L1, C1): `worktreeLine` says what made the worktree, its path and the worker it is via,
+  titled by the path, with no liveness word and no presence word. `activityLine`, `delegatedChip`, `activitiesStartedBy`,
+  `byOpened`, `ENTRIES_NOTE`, `ACTIVITY_WORD`, `WORKSPACE_WORD` and their types had no reader left and go;
+  `LIVENESS_QUALIFIER` stays as the census's list (below).
+- `pwa/src/screens/SessionScreen.tsx` (L4, C3): the entries are no longer read for the header.
+- `pwa/src/fleet/SessionLine.tsx`, `fleet.css`, `session/chat.css`, `skins/refined/refined.css`: the subagent list's
+  stand-down, the toggles' overlay and tap floors, the list's rules and the lamp's second variant selector, each with no
+  reader left; `chat.css` lets a worktree row's path wrap. `fleet.css` loses net lines; nothing grows past a cap.
+- The carries: `pwa/src/stores/session.ts` (review 3099 F1), `ui/src/components/workflow-strip.tsx` (F2, F3), the tests of
+  F4 and F5, and `pwa/browser/role-fact.browser.test.ts`'s two comments (review 2995 F6).
+
+**A worktree row's parts, each kept or dropped (the coordinator's ruling on review 2900 F17).**
+
+| Part | Kept or dropped | Why, in one line |
+|---|---|---|
+| What made it (`agent worktree`, `workflow worktree`, `worktree`, `attached worktree`) | kept | a fact of the tree the operator rules on: Not delegated answers whether it is delegated work, and Attach is offered only for an inferred one |
+| The path | kept, now the row's free-text part and its title, drawn whole (it wraps) | §4.4: the worktree's path |
+| The admin record | dropped from the words; kept in the controls' accessible names | the path names the worktree; the record keeps two rows' controls apart (F9 (f)) |
+| `via <label>` | kept | names the worker whose worktree it is, the session Attach would attach it to (`leaseParentOf`) |
+| works-on chip | kept | the tree holds another project's code: a fact of the tree |
+| `inferred` chip | kept | D-6999: the link rests on negative evidence, and it gates Attach |
+| creator chip (`Bash call …`) | kept | D-6999 has it beside `inferred` wherever the row is drawn; provenance, not liveness |
+| The liveness word and its sentence in the title | dropped | §4.4 and the ruling: no word the operator cannot act on |
+| The presence word (`unmeasured`) | dropped from the row; said once in the section's head | the ruling: said once, in words with no banned word |
+| The disposition (`worktree kept until …`, `moving to a run`, `moved to a run`) | kept | §4.4 |
+| The controls (Keep worktree, Attach to…, Not delegated) | kept | §4.4 |
+
+**The carries, each taken.** Review 3099 (H2 round 2): F1 (an answered or reset ask is forgotten: cases A and D), F2 (the
+coordinator's ruling: the two-line layout stays for a narrow section wherever it sits; a state group breaks only between its
+words, a no-break space before each `·` inside it, so a separator never starts a line; the real-Chrome split check lets a
+group take two lines and checks its words), F3 (a running workflow's `running`, phase, progress and failures are its state
+group, with its times), F4 (the meter block opens the strip with no condition; the rail wording is gone), F5 (a finished row's
+summary is prose outside the group; the misnamed case renamed), F6 and F7 (records, in the note), F8 (the dated note in H2's
+section above), F9 and F10 (records, in the note). Review 2995 (C51): F2 (the focus target, above, with its case and a second
+case the mutation run asked for), F6 (the two comments).
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8875** — `session-panel-sheds-broker-words`: Task H3, issued on 2026-11-21. The session panel draws no subagent or
+  recorded-entry count, toggle or list, and no word of the broker's liveness, and it departs from the spec in these places:
+  - `worktree-row-keeps-its-maker`: a worktree row also says what made it (`agent worktree` and its kin), beside the path,
+    disposition and controls §4.4 lists; the table above says why each part stays or goes.
+  - `path-replaces-admin-record`: the row's free-text part is the path, also its title, and in the worktrees section it
+    wraps anywhere instead of ending in D-7783's ellipsis: cut to one line, a long unbroken path sized Instrument's phone
+    header to its own length (measured: 42 and 72 px of sideways scroll at 360 and 390). The admin record stays only in the
+    controls' accessible names.
+  - `presence-in-the-section-head`: "said once in the panel head" is the worktrees section's own head line, in the Archive's
+    words (`presenceWord`), so the session panel and the Archive say it alike.
+  - `liveness-qualifier-kept-as-census`: `LIVENESS_QUALIFIER` stays, drawn by no page; its readers are the jsdom census
+    (`session-panel-sheds.test.tsx`) and the real-Chrome ones (`delegation-rows`, `session-panel-words`), which read its words
+    and sentences as what must not appear.
+  - `focus-target-from-the-committing-render` (review 2995 F2): `detailsEndWithWorktrees` retires; SessionDetails answers
+    from its own render, which also covers a desk narrowed to a phone behind a closed door.
+  - `asked-is-an-unanswered-ask` (review 3099 F1): `disconnect()` needs no clear of its own, because it drops `framed` and
+    the next stream's first frame clears the asks; its mutant is equivalent (the note).
+  - `narrow-section-two-lines-everywhere` (review 3099 F2): line 2 follows the section's width for elapsed as well as for
+    tokens, so the 1600 px rail draws the phone's two-line row; a state group wider than the line breaks only between its
+    words, and a separator never starts a line. This widens H2's `tokens-follow-the-section-width`.
+  - `running-workflow-state-group` (review 3099 F3): a running workflow's line 2 is `workflow`, then one state group of
+    `running`, its phase, its agents, its failures and its times; `mainFacts` names the kind alone.
+
+Spec corrections for the coordinator to fold: §10 and Table 5 (the two-line row is the narrow section's, in the rail too;
+the state group breaks between its words, never inside one); §4.4 (the row's maker stays; the presence line's home and
+words); §4.5 (the header's subagent and delegated facts leave the header's facts model too, `sessionFacts.ts`); Table 13's
+H3 row (the 2995 carries).
+
+**Spec amendments.** `docs/superpowers/specs/2026-11-02-delegation-visibility-design.md` and
+`docs/superpowers/specs/2026-10-04-delegation-broker-design.md` each carry a dated amendment: the session header's entry
+list and the liveness words a worktree row said are gone from the PWA.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H2's: each TypeScript file held
+as a Python module's text, each mutant written into a scratch copy of the tree under the session's temp root, its test files
+run through `ccrc test`, the original written back, the tree removed after the run): pass 1 ran 19 mutants, 17 killed; one
+survivor was a missing case (H3-5, added) and one was equivalent (`disconnect()`'s clear, removed from the code). At the tip,
+**18 mutants, 18 killed**. The table is in
+`docs/superpowers/programs/desktop-polish/h3.md`.
+
+**Looked at in the real app.** The production build in a real Chrome (`pwa/browser/session-panel-words.browser.test.ts`, new):
+the whole session panel, Helpers included, in Refined and Instrument, dark and light, at 360, 390, 1280, 1600 (the rail) and
+1920 px, every door opened; 20 of 20 green on this branch, and on `origin/main` 20 of 20 red at the census and green on every
+other check. The before and after pairs are under `docs/design/2026-11-19-session-helpers-design/h3/`, and the matrix is in
+the note and the PR. The first real-Chrome run found a defect of this task, fixed in it: a long unbroken path sized
+Instrument's phone header to its own length (`path-replaces-admin-record`).
+
+**Acceptance.** The new suites pass, every suite that imports a changed module passes, every mutant of a new decision branch
+goes red or its disposition is recorded in the note, `tsc` passes for `pwa` and `ui`, the PWA builds, and the PR body carries
+the matrix of "Acceptance (the matrix, per PR)" for the whole session panel, Helpers included.
+
+**Rollback.** A plain revert: nothing leaves the wire or the server, and `FleetSession.subagents` is still sent.
+
+### Task HF2: the session panel's carried findings (D-8877) — now
+
+**What.** The findings H3 (#3153) and its neighbours carried, none blocking, in the session panel, its header and the Archive:
+review 3123 (H3) F1 to F14, with the coordinator's two rulings (recorded call 98: `readDelegation`'s tidying and
+`LIVENESS_QUALIFIER` stay as wire tolerance; a toast about the operator's own act is outside §4.4); review 2995 (C51) F1, F3,
+F4 and F5; review 2988 (H4) F6, F7 and F8. Spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §4.4, §4.5 and
+§10. Red first: a test commit before the code, each case red at `main` or a guard whose mutant it kills (the note lists which).
+
+- `pwa/src/fleet/sessionFacts.ts` (L1, C1): `headerMetaCells`, the header's meta row cell by cell, the one reading of which
+  cells it draws; `headerMetaHasCells` asks it (review 2995 F3).
+- `pwa/src/fleet/SessionMeta.tsx` (L4, C1): the header mode draws exactly the cells `headerMetaCells` names, in its order.
+- `pwa/src/fleet/delegationWords.ts` (L1, C1): `presenceUnmeasured` (the one count of trees whose presence was not measured,
+  the session panel's and the Archive's), `archiveDoorParts` (the foot row's two halves); the `WorkWords` doc says what a row
+  does with its path now (3123 F8); `archiveDoorWord` had no reader left and goes.
+- `pwa/src/lib/format.ts` (L1, a leaf that imports nothing): `pathBreaks`, a path cut after each `/`. It sits with the pure
+  formatters, not in the words module, so `WorkLine.tsx` names no module of the delegation broker (the closed scope census,
+  `delegation-wave3.integration`).
+- `pwa/src/fleet/WorkLine.tsx` (L4, C1): the path drawn as one box per piece.
+- `pwa/src/session/chat.css`: below the desk a path takes a line of its own, after the row's short words; its pieces are inline
+  boxes; a raw worktree's two chips are one box; the strips give way before the composer (they shrink, the Helpers strip never
+  below its head, and scroll on a screen too short for that).
+- `pwa/src/skins/refined/refined.css` (review 3184 F1, fix round 1): while Refined's phone rail wraps (the details open with
+  worktrees drawn), its items and chips are capped at the row's width and their text wraps inside, so nothing is wider than
+  the rail.
+- `pwa/src/session/SessionWorktrees.tsx`, `SessionDetails.tsx` (L4, C3): the chip box and the shared count; the details' drawn
+  answer spelled once.
+- `pwa/src/stores/session.ts` (L4, C3): `resetsHelpers`, the one decision of a helper reset, read by the reducer and the asks.
+- `pwa/src/screens/FleetScreen.tsx` (L4, C1): the unowned count selected as a number; the foot row's halves drawn as boxes.
+- `pwa/src/fleet/SessionLine.tsx`, `fleet.css`, `ui/src/components/workflow-strip.tsx`: comments only (3123 F14, F4).
+  `fleet.css` keeps its code lines (2518, measured).
+- Tests: `pwa/test/panelCensus.ts` (new, the census's one owner), `fleet-screen-frame.test.tsx` (new), and cases in
+  `session-panel-sheds`, `card-header-facts`, `header-details-facts`, `helpers-report-store`, `delegation-words`,
+  `fleet-screen`, `session-worktrees` and the real-Chrome `session-panel-words`, `helpers-rail`, `archive-unowned`,
+  `delegation-rows` and `goals-door-height`.
+- Records: `docs/superpowers/programs/desktop-polish/h3.md` (its §6 labels and its matrix's cells, 3123 F3 to F9),
+  `c51.md` (2995 F4 and F5), the broker spec's H3 amendment (3123 F9: "drawn nowhere", not "read and drawn nowhere"), and the
+  note `docs/superpowers/programs/desktop-polish/hf2.md`.
+
+**Each finding, taken.** Review 3123: F1 the census list holds §4.4's five words as literals (`panelCensus.ts`), and the table's
+words are pinned to them; F2 a session whose only header fact is its subagents draws no details row and no door (HF2-4); F3 the
+path (below); F4 the record (below); F5 and F7 the strips give way (below); F6 the chip box; F8 the `WorkWords` doc; F9 h3.md's
+labels and the broker amendment; F10 and F11 the store's cases E and F; F12 the header is the same markup with and without its
+subagents (HF2-H3, C46's technique) and the presence count is pinned at 2 and 3 trees (HF2-3); F13 the rail's no-break is
+measured at 1600 with a state group wider than its line; F14 the comments, the one reset, the drawn answer spelled once and the
+one presence count. Review 2995: F1 in Instrument below 900 the in-programme header equals the one out of it; F3
+`headerMetaCells`; F4 and F5 c51.md's figure and screenshot sentence, scoped (and the same figures in Task C51's section above
+are corrected by this entry, not edited there). Review 2988: F6 the Archive's focus in a real Chrome; F7 the selected count;
+F8 the foot row's halves.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8877** — `session-panel-carried-findings`: Task HF2, issued on 2026-11-21. The session panel's carried findings of
+  reviews 3123, 2995 and 2988, and it departs from the spec and from earlier entries in these places:
+  - `meta-cells-one-list` (review 2995 F3): the header's meta row is drawn from one list, `headerMetaCells`, which the details
+    row's decision asks; no second reading of the row's conditions.
+  - `census-holds-the-spec-words` (review 3123 F1): the census's banned list has one owner, `pwa/test/panelCensus.ts`, which
+    writes §4.4's five words out as the spec spells them and adds the table's words and sentences; `LIVENESS_QUALIFIER` stays
+    as wire tolerance (call 98), so this amends D-8875's `liveness-qualifier-kept-as-census`: the table is no longer the list.
+  - `path-on-its-own-line-below-the-desk` (review 3123 F3): below 900 px a worktree's path takes the row's full width, drawn
+    after the row's short words (what made it, `via`, the disposition), which share the first line; the DOM keeps the words'
+    order (maker, path, via, disposition), so a reader hears them as before. At every width the path breaks after a `/`, and
+    inside a piece only when the piece is wider than the line: each piece is an inline box, because a `<wbr>` alone lost to a
+    hyphen inside a piece, which a browser filling the line greedily takes first (measured). It costs 12.5 to 18 px of header
+    at 390 px (and Instrument's 360) where the middle column had fitted (measured).
+  - `separator-may-start-a-line` (review 3123 F4, the record fix): this amends D-8875's `narrow-section-two-lines-everywhere`,
+    which said "a separator never starts a line". A separator of a Helpers line 2 can start a line, between its facts
+    (measured: the 1600 px rail drew `Sonnet` / `· high ·`) and inside a state group (inferred: the same mechanism). Chrome
+    breaks after any inline block whatever follows it; a no-break space and a word joiner before the `·` were each measured
+    not to hold. The code fix would move every separator into the box before it and hide the ones that lead a part the width
+    hides (the tokens, the phone's elapsed), restructuring H2's line 2 and its pins; the slug is the smaller true fix. A state
+    group still breaks only between its words, never inside one (measured in the rail, F13).
+  - `chips-one-box` (review 3123 F6): a raw worktree's `inferred` and `Bash call …` chips are one box, so the row wraps them
+    together (D-6999: side by side).
+  - `strips-give-way` (review 3123 F5 and F7): the strips under the transcript may shrink, the Helpers strip first, never below
+    its head, and scroll on a screen too short for that, so the composer and its key-hint row stay inside the pane and the
+    window with every door open. Before, the column ran past the pane: at a desk the chat's `overflow: hidden` (D-161) cut the
+    key-hint row under Instrument's status bar (22 and 24 px at 1280 and 1600), and on a phone the composer fell below the
+    window (48 to 83 px at 360 and 390). The cut at 1280 predates H3 (review 3123 saw it on both sides); its cause is the
+    open strip's height (H2's half of the viewport) plus an open header, which this task's strips now absorb.
+  - `presence-count-one-rule` (review 3123 F14): one count, `presenceUnmeasured`, for the session's worktrees head and the
+    Archive's section (they spelled it `!== 'present'` and `=== 'unmeasured'`).
+  - `unowned-count-selected` (review 2988 F7): the fleet screen selects the unowned count, a number, so a frame that leaves it
+    as it was re-renders nothing of the screen.
+  - `foot-row-halves` (review 2988 F8): the fleet foot's both-state row draws its two halves as boxes joined by a `·` after a
+    no-break space, so a narrow row breaks between them; `archiveDoorWord` had no reader left and goes.
+  - `instrument-phone-goals-equal` (review 2995 F1): where the Goals door stands on Back's row (Instrument below 900) the
+    in-programme header equals the one out of it within 0.5 px, for every session; main's frozen Details door bounds only
+    Refined's phone rail.
+  - `open-rail-holds-no-overflow` (review 3184 F1, fix round 1): this amends D-8782's wrapping rail (review 2864 F6). On
+    Refined's phone, while the details are open with worktrees drawn, the rail wraps, and now its items and chips take the
+    shared caps back (the row's width, the text wrapping inside, the coordination line wrapping), as at a desk. Before, a chip
+    wider than the closed rail scrolled it to reach the door, and the open rail kept that scroll: the door, every fact and
+    every worktree path started 80 px left of the screen at 390 (measured, a real tap, both themes, and at 360). With nothing
+    wider than the rail the scroll is spent, and every line starts on the screen; the door keeps its focus. The closed rail is
+    the sideways row it was. It costs 20 px of open header at 360 and 390 for a session whose model and branch chips are
+    wider than the rail (measured from the pictures), and nothing where they fit.
+
+Spec corrections for the coordinator to fold: §10 (line 2's separators may start a line; the state group breaks only between
+its words) and Table 5's caption; §4.4 (the presence line's count, one rule); Task C51's section above (its "24 px … 25 px"
+figures are a main-checkout coordinator's, and a workspace coordinator drops 21.5 px; its "rounded up" picture sentence is false
+for the two Refined 360 pictures): c51.md carries both, measured by review 2995.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter like H2's and H3's: each TypeScript or
+CSS file held as a Python module's text, each mutant written into a scratch copy of the tree under the session's temp root, its
+kill files run through `ccrc test`, and a run the memory cap killed run again rather than counted): pass 1 ran 34 mutants, 28
+killed; of the 6 survivors two were missing or vacuous cases (HF2-6 added, HF2-H3 made to read the meta row), one an equivalent
+clause (removed from the code), one written on the wrong element (rewritten), and two equivalent. At the tip, **33 mutants, 31
+killed, 2 equivalent**; `main`'s census and `main`'s Goals pin each let their finding's mutant through (measured). The table is
+in `docs/superpowers/programs/desktop-polish/hf2.md`.
+
+**Looked at in the real app.** The production build in a real Chrome: the whole session panel (`session-panel-words`) and the
+Archive section with the fleet foot (`archive-unowned`), in Refined and Instrument, dark and light, at 360, 390, 1280, 1600 and
+1920 px, before (`origin/main`) and after. Fix round 1 (review 3184) adds the header after a real tap on the details door
+(`delegation-rows`), in both skins and themes at 360, 390 and 1280, before (the first tip, `68d70aef12`) and after. The pairs
+are under `docs/design/2026-11-19-session-helpers-design/hf2/`, and the matrix is in the note and the PR.
+
+**Acceptance.** The new cases pass, every suite that imports a changed module passes, every mutant of a new decision branch goes
+red or its disposition is recorded in the note, `tsc` passes for `pwa` and `ui`, the PWA builds, and the PR body carries the
+matrix of "Acceptance (the matrix, per PR)" for the session panel and the Archive section.
+
+**Rollback.** A plain revert: nothing leaves the wire or the server.
 
 ## Acceptance (the matrix, per PR)
 
@@ -3802,20 +5652,20 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
 
 `POST /api/ledger/deviations` issued eight numbers on 2026-10-24, D-6845 to 6852. All eight are defined in this same allocation act; none is guessed from the floor.
 
-- **D-6845** - `t5a-census-row`: Task T5a, R61/R67/R71: server/test/hibernate-census.test.ts, outside the original Files, gains the derived exited-tier reader row for sessionEntries.ts. The initial CI census red and its one-row fix remain disclosed, not rewritten as first-run green.
-- **D-6846** - `t5a-words-arrows`: Task T5a, R61/R67: groupWords and labelWords are top-level arrow functions so the existing plain-words scan reads their operator-visible words. The existing one-home guard pins their identifier use and each importer's module and binding; no second scanner or word owner.
-- **D-6847** - `t5a-r41-browser-cases`: Task T5a, R67/R71: the extra real-width R41 focus cases landed with the search red-first commit, rather than in R41's own three commits. They were green on their parent and red against the old restore; the current Chrome cases fail on named focus assertions. R41's restore with its jsdom case, preventScroll pin and docstring remain three items in three commits.
-- **D-6848** - `t5a-routing`: Task T5a: the original main loop implemented instead of the specified native implementer/task-review chain, as its handoff disclosed. Record a process departure, not retroactive compliance. Fix rounds were instructed to use native Sonnet/high implementation, Opus/high task review and workflow off; this does not prove the original route followed them.
-- **D-6849** - `inline-engagement-continues-within-one-ask`: Task T1c, operator R64 and application R69: deliberately engaged keyboard control may continue across question/review/back within the SAME logical ask, amending the original raise/Tab/click-only focus rule. One engagement owner releases on different ask, replacement or clear, including byte-identical clear/re-ask in one batch. No arrival auto-focus or external focus theft; aged transcript copies are included. This authorizes scope, not acceptance of the current implementation.
-- **D-6850** - `transcript-goes-to-the-inline-question`: Task T1c, operator R64: the transcript's non-form Go to question action calls the EXISTING raise path, revealing and focusing the first option within both the inner scrollport and viewport (R69). No duplicate answer form, new modal or answer sender; phone Answer is unchanged.
-- **D-6851** - `inline-card-uses-the-existing-shortcut-guard`: Task T1c, operator R64: pwa/src/command/useShortcuts.ts and new pwa/test/ask-shortcuts.test.tsx, outside the original Files, extend only the existing focused-control guard. Suppress page navigation/help/chords while focus is INSIDE the mounted card, not globally while an ask exists. T5a's command-layer test has no edit consent.
-- **D-6852** - `whole-pixel-mono-line`: Task C5, operator R68: investigate .msg-assist pre, WELL and .tool-ask-a separately and permit a local whole-pixel line-height fix only where fractional scroll range/dead-first-wheel behaviour reproduces. Each changed box needs its own red-first reproduction, independent guard mutant, measurements/renders and outside-transcript Well regressions. Non-reproducing boxes are measured no-fix-needed; no blanket 20px, global font change or JS wheel interception. Scope authorization is not acceptance of the unfinished R68 work.
+- **D-6845** — `t5a-census-row`: Task T5a, R61/R67/R71: server/test/hibernate-census.test.ts, outside the original Files, gains the derived exited-tier reader row for sessionEntries.ts. The initial CI census red and its one-row fix remain disclosed, not rewritten as first-run green.
+- **D-6846** — `t5a-words-arrows`: Task T5a, R61/R67: groupWords and labelWords are top-level arrow functions so the existing plain-words scan reads their operator-visible words. The existing one-home guard pins their identifier use and each importer's module and binding; no second scanner or word owner.
+- **D-6847** — `t5a-r41-browser-cases`: Task T5a, R67/R71: the extra real-width R41 focus cases landed with the search red-first commit, rather than in R41's own three commits. They were green on their parent and red against the old restore; the current Chrome cases fail on named focus assertions. R41's restore with its jsdom case, preventScroll pin and docstring remain three items in three commits.
+- **D-6848** — `t5a-routing`: Task T5a: the original main loop implemented instead of the specified native implementer/task-review chain, as its handoff disclosed. Record a process departure, not retroactive compliance. Fix rounds were instructed to use native Sonnet/high implementation, Opus/high task review and workflow off; this does not prove the original route followed them.
+- **D-6849** — `inline-engagement-continues-within-one-ask`: Task T1c, operator R64 and application R69: deliberately engaged keyboard control may continue across question/review/back within the SAME logical ask, amending the original raise/Tab/click-only focus rule. One engagement owner releases on different ask, replacement or clear, including byte-identical clear/re-ask in one batch. No arrival auto-focus or external focus theft; aged transcript copies are included. This authorizes scope, not acceptance of the current implementation.
+- **D-6850** — `transcript-goes-to-the-inline-question`: Task T1c, operator R64: the transcript's non-form Go to question action calls the EXISTING raise path, revealing and focusing the first option within both the inner scrollport and viewport (R69). No duplicate answer form, new modal or answer sender; phone Answer is unchanged.
+- **D-6851** — `inline-card-uses-the-existing-shortcut-guard`: Task T1c, operator R64: pwa/src/command/useShortcuts.ts and new pwa/test/ask-shortcuts.test.tsx, outside the original Files, extend only the existing focused-control guard. Suppress page navigation/help/chords while focus is INSIDE the mounted card, not globally while an ask exists. T5a's command-layer test has no edit consent.
+- **D-6852** — `whole-pixel-mono-line`: Task C5, operator R68: investigate .msg-assist pre, WELL and .tool-ask-a separately and permit a local whole-pixel line-height fix only where fractional scroll range/dead-first-wheel behaviour reproduces. Each changed box needs its own red-first reproduction, independent guard mutant, measurements/renders and outside-transcript Well regressions. Non-reproducing boxes are measured no-fix-needed; no blanket 20px, global font change or JS wheel interception. Scope authorization is not acceptance of the unfinished R68 work.
 
 ### R119 departure issued 2026-10-27
 
 `POST /api/ledger/deviations` issued D-7117, D-7118, D-7121, D-7122 to D-7124, D-7139 to D-7142, D-7145, D-7146 to D-7152, D-7153 to D-7154, D-7155 to D-7157, D-7158 to D-7159, D-7160 to D-7163, D-7164, D-7197, D-7201, D-7210, D-7215 to D-7217, D-7218, D-7219, D-7222 to D-7223, D-7233 and D-7234 on 2026-10-27, and D-7248, D-7250 to D-7252, D-7253 to D-7256, D-7257 to D-7261, D-7262 to D-7263, D-7264, D-7266 to D-7267, D-7281, D-7282 to D-7288 and D-7290 to D-7291 on 2026-10-28, and D-7331 to D-7334, D-7337 to D-7338, D-7340, D-7341, D-7369, D-7373, D-7374 to D-7376, D-7377 and D-7380 on 2026-10-29, and D-7565 on 2026-10-30, in forty-two allocations, and each is defined here in the act that issued it.
 
-- **D-7117** - `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
+- **D-7117** — `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
   history ... slices" asserts a wall-clock maximum gap (`< BOUND/5`) over about 40 gaps, so one scheduler pre-emption
   on a loaded shard fails it. Following D-6929's ruled shape (#1534), the required row keeps a load-independent pin:
   every slice is at most `SLICE_UNITS`, there is a pause between every two slices, the answer equals the one-string
@@ -3832,30 +5682,30 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   bounds only warmed gaps at `BOUND/5`. The old row bounded every gap, the cold first slice included. No row now asserts
   a cold-first-slice bound. That is a narrowing of what is measured, disclosed in the row title, ci.yml and the PR body.
   A cold-slice bound with its own measured budget is a follow-up.
-- **D-7118** - `literal-walker-parses-ts-as-ts`: Task B5, under R119, coordinator ruling on ask 156. `pwa/test/literalWalker.ts`'s
+- **D-7118** — `literal-walker-parses-ts-as-ts`: Task B5, under R119, coordinator ruling on ask 156. `pwa/test/literalWalker.ts`'s
   `parseTs` parses every file as TSX, so `pwa/src/lib/api.ts` misparses from its generic arrow `async <T>(path`, with 534
   parse diagnostics. This is pre-existing on main, and it leaves the literal census partly blind to that file: a
   duplicate appended there survived. The owner picks `ScriptKind.TS` for `.ts` files and `TSX` for `.tsx`. B5 removes its own
   separate `ScriptKind.TS` parse of `api.ts`, so the walker stays the one parser (consolidate, don't duplicate). The
   surviving duplicate mutant must go red, and all four walker readers stay green. `literalWalker.ts` sits outside B5's
   original Files.
-- **D-7121** - `literal-census-parses-once`: Task B5, under R119. `pwa/test/literal-census.test.ts`, outside B5's original
+- **D-7121** — `literal-census-parses-once`: Task B5, under R119. `pwa/test/literal-census.test.ts`, outside B5's original
   Files, parses its roughly 400 pwa, ui and shared sources once at module load, not inside each of three cases. Before
   the fix each case parsed every file inside a 5 s deadline: about 1.5 s idle, and 4.6 to 4.8 s pinned to one core.
   After it, 2 to 13 ms under the same contention. The census's assertions and scope are unchanged, and six census mutants
   are killed. The original red was not reproduced in this run (it measured 4.8 s against the 5 s bound), and that is
   disclosed.
-- **D-7122** - `t1c-r119-second-push`: Task T1c, under R119, ask 160. A second push (`afeb44f78`) went beyond the
+- **D-7122** — `t1c-r119-second-push`: Task T1c, under R119, ask 160. A second push (`afeb44f78`) went beyond the
   brief's "push once". It carries only the jsdom 30 test repair (D-7123). The coordinator relaxed its own brief rule; this
   is a process record, not a scope change.
-- **D-7123** - `t1c-jsdom30-test-premises`: Task T1c, under R119. Main's #1609 moved the PWA to jsdom 30 and vitest 5. On
+- **D-7123** — `t1c-jsdom30-test-premises`: Task T1c, under R119. Main's #1609 moved the PWA to jsdom 30 and vitest 5. On
   jsdom 30, `blur()` leaves a disabled row focused, and `focus()` cannot land on one. Four `ask-inline.test.tsx` cases
   whose premise was "focus falls to the body" therefore failed on the merge ref. A test-only repair: `focusToBody()` lifts
   `disabled` for the blur alone and asserts the premise, at all 11 sites, and the gap case reads the roving tab stop. It
   is green on both stacks, and product code is unchanged. Row 56 reds 3 cases on jsdom 30, not 4, and the row stays
   killed. Review 1059 measured the cause: under the mutant the 16 ms inline timer calls `focus()` on the in-flight
   disabled row, which jsdom 28 honours and jsdom 30 and Chrome refuse, so the lost kill was a jsdom 28 artefact.
-- **D-7124** - `t1c-render-matrix-fixture1-only`: Task T1c, under R119. The exact-runtime render matrix was captured at
+- **D-7124** — `t1c-render-matrix-fixture1-only`: Task T1c, under R119. The exact-runtime render matrix was captured at
   `4b5598dca` for fixture 1 only (18 captures: desk 1280/1920 and phone 360/390, both skins, both palettes). The plan's
   112-cell four-fixture set was not refreshed, and the missing older captures stay missing. `afeb44f78` changes no
   product code, so these are the head's runtime renders.
@@ -3866,22 +5716,22 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `ui/` or class change, so the older cells still describe the geometry. The cells missing as images (899/900, and
   fixtures 3, 6 and 7) are covered as measurements by the R93 Chrome matrix (232 cases), which the reviewer ran green
   at the tip. The 112-cell refresh is not required for T1c.
-- **D-7139** - `model-list-names-its-provider`: Task T3d. `pwa/src/lib/models.ts`, outside T3d's Files, gains two exported
+- **D-7139** — `model-list-names-its-provider`: Task T3d. `pwa/src/lib/models.ts`, outside T3d's Files, gains two exported
   functions: `modelListProvider` names whose list `modelOptions` picks, and `classReadbackMeasurable` is the one
   measurability rule. `modelOptions` and `effortOptions` both go through `modelListProvider`, and `routingLine`'s rule
   reuses that one branch instead of a second `=== 'gpt'` test, so the rule is consolidated, not duplicated. (Text
   corrected after review 1082's F3: the entry first named a `pwa/src/session/models.ts` that does not exist and one
   function.)
-- **D-7140** - `routing-line-takes-the-view`: Task T3d. The signature is `routingLine(row, view, laneLabel)`, with
+- **D-7140** — `routing-line-takes-the-view`: Task T3d. The signature is `routingLine(row, view, laneLabel)`, with
   `view = routeView(row, wrapper, provider)`, instead of the plan's `routingLine(row, routeInfo, provider)`. The provider
   reaches the line through `routeView`, so the rail and the header share one decision.
-- **D-7141** - `route-view-splits-pending`: Task T3d. `routeView` also exposes `classPending` and `effortPending`;
+- **D-7141** — `route-view-splits-pending`: Task T3d. `routeView` also exposes `classPending` and `effortPending`;
   `wireQueuedField` keeps today's effort-first answer. Without the split, a pending class behind a pending effort could
   never read "asked".
-- **D-7142** - `routing-line-says-pending-effort`: Task T3d. The line adds "· asked effort <x>" while an effort is pending,
+- **D-7142** — `routing-line-says-pending-effort`: Task T3d. The line adds "· asked effort <x>" while an effort is pending,
   so the rail agrees with the header's badge. It keeps today's "routing could not be read" when a field's read failed.
   The model and effort words stay the chooser doors, with the same accessible names.
-- **D-7145** - `desk-rule-not-container-threshold`: Task T3b. On main the row's `.sess-body` track measures 185 to 303 px
+- **D-7145** — `desk-rule-not-container-threshold`: Task T3b. On main the row's `.sess-body` track measures 185 to 303 px
   at the desk and 226 to 274 px on a phone, so the plan's 320 px container threshold never fires at any desk width, and a
   container query cannot tell the desk from a phone. Instead, from 900 px (a media query) the card draws the full name
   and branch, wrapping at token breaks and clamped at two lines; a longer name is cut where the second line fills.
@@ -3889,27 +5739,27 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   the 320 px container rule is kept for wide tablet tracks. Step 3's mutant "the threshold back at 320 px" becomes "the
   desk rule removed". T3b takes R21 F2 / R32 F2's "wrapping name" arm, does not edit `instrument.css`, and reports
   Instrument's 1280 row heights.
-- **D-7252** - `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's. Clarified on T3b's fix round 2 (the coordinator, 2026-10-28): "taller than on main" bounds the arm. A row that D-7145's full forms already make taller than main (a two-line long name, a whole branch, a long programme slug) is bounded by its own height without the arm, which the arm never exceeds; the committed case picks rows whose text main draws the same, so it bounds by main exactly.
-- **D-7146** - `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
+- **D-7252** — `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's. Clarified on T3b's fix round 2 (the coordinator, 2026-10-28): "taller than on main" bounds the arm. A row that D-7145's full forms already make taller than main (a two-line long name, a whole branch, a long programme slug) is bounded by its own height without the arm, which the arm never exceeds; the committed case picks rows whose text main draws the same, so it bounds by main exactly.
+- **D-7146** — `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
   beyond the plan's one: the identical frames' cost as a ratio of the changing frames' cost, per skin. The plan's row
   is a ceiling only, which a store that re-renders on every identical frame can still pass. The ratio row reds with
   C6's `pwa/src` reverted (the pair at `b1225668a`, declared at 11:53:30Z, AFTER FINAL-A's red at the same head and
   seven diagnostic repeats; review 1068 F1). It can also red with no window overrun under host CPU
   pressure (FINAL-A, 1.78, cause not established), so CI's quiet runner is the arbiter.
-- **D-7147** - `snapshot-refusal-predicate`: Task C6. `pwa/src/lib/offline.ts` exports `snapshotRefused`, the one decision
+- **D-7147** — `snapshot-refusal-predicate`: Task C6. `pwa/src/lib/offline.ts` exports `snapshotRefused`, the one decision
   behind `saveFleetSnapshot`'s refusals. The throttled snapshot scheduler reads it too, so a frame the snapshot would
   refuse never opens a window (consolidate, don't duplicate).
-- **D-7148** - `program-attempt-comment`: Task C6. One comment in `useProgramAttempt.ts`, outside C6's Files, now says
+- **D-7148** — `program-attempt-comment`: Task C6. One comment in `useProgramAttempt.ts`, outside C6's Files, now says
   that `sessions` changes only on a frame that changes, adds, removes or reorders a row. No code changes there.
-- **D-7149** - `render-fanout-stand-in`: Task C6. Render fan-out case 1 counts `SessionScreen`'s renders through a
+- **D-7149** — `render-fanout-stand-in`: Task C6. Render fan-out case 1 counts `SessionScreen`'s renders through a
   stand-in child rather than by instrumenting the screen itself.
-- **D-7150** - `render-fanout-late-row`: Task C6. An extra render fan-out case: a row that arrives late must still be
+- **D-7150** — `render-fanout-late-row`: Task C6. An extra render fan-out case: a row that arrives late must still be
   reached by the memoised doors. The plan's "openActions opens the newest row" is green on the base too, so it cannot
   catch frozen doors.
-- **D-7151** - `reporter-flag-wording`: Task C6. `runs-finished-fold.test.tsx`'s reporter comment credits the measurement
+- **D-7151** — `reporter-flag-wording`: Task C6. `runs-finished-fold.test.tsx`'s reporter comment credits the measurement
   that was made: on vitest 4.1.10 in an agent session, no flag and `--silent=false` print no measurement line, while
   `--reporter=verbose` and `--reporter=default` do; with the agent variables unset, all four print it.
-- **D-7152** - `frame-cost-window-overrun`: Task C6, under R119, the operator's answer to ask 157 ("Overrun refusal"). A
+- **D-7152** — `frame-cost-window-overrun`: Task C6, under R119, the operator's answer to ask 157 ("Overrun refusal"). A
   frame-cost window whose measured span passes `gapMs + SPAN_SLACK_MS` (1000 ms) fails the attempt as a named harness
   failure, `window-overrun`, never as a cost figure. The check covers every window, the idle one (`during(-1)`) and the
   self-tests' included, and the overrun window is kept in the record, which a gate case keeps through vitest's
@@ -3918,51 +5768,51 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   Review 1068 F3: several pressure figures quoted for ask 157 did not recompute from the retained 1 s samples. #1697's
   body restates them with the method named. The restated figures still show severe memory pressure in the A2 interval.
 - **D-7153** and **D-7154** are defined under Task S5b's R120 amendment, where they apply.
-- **D-7155** - `unread-count-retired`: Task T2d, coordinator ruling on ask 169. Once every Inbox door counts
+- **D-7155** — `unread-count-retired`: Task T2d, coordinator ruling on ask 169. Once every Inbox door counts
   `waitingOnYou` (AppBar, PhoneHeader, the rail, and the fleet head's MailBadge), `unreadMailCount` in `navBadges.ts`
   has no production reader, so it is deleted rather than kept as a second count. `raisesUnread` and `isUnseenAt` stay
   the Inbox rows' one unread mark (D-5431). `instrument-shell`'s R32 F5 cases, which pinned `isUnseenAt` through the
   rail's unread count, move to the Inbox rows (`mail-screen.test.tsx`), keeping each assertion and its mutant. The
   plan's F8 sentence ("the fleet head calls `unreadMailCount` directly") described main before T2d. The corrected
   Rail comment names `useNavBadges`' readers instead.
-- **D-7156** - `fleethead-prop-name`: Task T2d. FleetHead's `unreadMail` prop would carry the waiting count, so it is
+- **D-7156** — `fleethead-prop-name`: Task T2d. FleetHead's `unreadMail` prop would carry the waiting count, so it is
   renamed with its doc. `FleetHead.tsx` is outside T2d's original Files: one prop and its comment.
-- **D-7157** - `browser-tests-unnamed`: Task T2d. Three browser files assert the old door names and are not in T2d's
+- **D-7157** — `browser-tests-unnamed`: Task T2d. Three browser files assert the old door names and are not in T2d's
   Files: `refined-bar.browser` and `refined-phone.browser` (with the exact consent of S5b, which holds them) and
   `instrument-desk.browser`. They change only the asserted names and counts.
-- **D-7158** - `c3-task-sweep-handoff-already-on-main`: Task C3. The task-sweep half of C3 landed before it, through
+- **D-7158** — `c3-task-sweep-handoff-already-on-main`: Task C3. The task-sweep half of C3 landed before it, through
   #1240 (D-5864): `tick()` already passes its registry read to `sweepTasks`, whose own read is tagged
   `[registry-refused:tests-only]`, and the census already pins both. So C3 makes no edit to
   `registry-refused-census.test.ts` (the plan's row rewrite and new pin would duplicate it), and "a due task sweep adds
   no uuid read" is a regression pin, green on the base, whose mutant still reds it. C3's change is the bounded capture
   pass in `detectDialogs` and the carried text.
-- **D-7159** - `c3-capture-bound-beside-module-constants`: Task C3. `TASK_SWEEP_MS` moved into `laneSchedule.ts`'s lane
+- **D-7159** — `c3-capture-bound-beside-module-constants`: Task C3. `TASK_SWEEP_MS` moved into `laneSchedule.ts`'s lane
   table, so `DIALOG_CAPTURE_CONCURRENCY` goes beside `watch.ts`'s other exported module constants, not into the cadence
   table: it is a bound, not a cadence.
-- **D-7160** - `t3c-more-sheet-lists-the-doors`: Task T3c. `sessionMenu` (`SessionFlows.tsx`) gains Terminal and, for a
+- **D-7160** — `t3c-more-sheet-lists-the-doors`: Task T3c. `sessionMenu` (`SessionFlows.tsx`) gains Terminal and, for a
   workspace, the PR door with its word, after Docs (`session-docs-link.test.tsx` pins the first four). They run through
   SessionFlows' one `run`; no new plumbing.
-- **D-7161** - `t3c-typed-label-test-edited`: Task T3c. `pwa/test/typed-label.test.tsx`, outside T3c's Files, pinned
+- **D-7161** — `t3c-typed-label-test-edited`: Task T3c. `pwa/test/typed-label.test.tsx`, outside T3c's Files, pinned
   `.chat-crumb` in its rename case; the crumb is now the project, so it pins `.chat-title-text`. The edit landed before
   T3c took its claim (2764); no one else held the file. A process record.
-- **D-7162** - `t3c-d5390-reversed`: Task T3c. `header.test.tsx`'s D-5390 assertions (an ellipsis on
+- **D-7162** — `t3c-d5390-reversed`: Task T3c. `header.test.tsx`'s D-5390 assertions (an ellipsis on
   `.status-line-name`) are rewritten to pin the reverse, as R8's "never cut" requires.
-- **D-7163** - `t3c-refined-rail-max-width`: Task T3c. Refined's phone rail sets `max-width: none` on `.metachip`,
+- **D-7163** — `t3c-refined-rail-max-width`: Task T3c. Refined's phone rail sets `max-width: none` on `.metachip`,
   `.status-line--coordinator` and `.status-line-name`, because a capped box let its nowrap text paint under the next
   chip (measured).
   Ruled 2026-10-27 on T3c's wave-done residual 1: Instrument's interim header grows 48 px at exactly 900 (139.63 to
   187.63, both palettes), because the worded doors make the chip rail wrap. The plan's never-cut rule prefers a wrap to
   an ellipsis, and its height bound is measured at 1280, where the header is unchanged. So this is within the plan,
   and disclosed in the PR body.
-- **D-7164** - `routing-line-names-inert-class`: Task T3d. When the session's class is inert on its lane, the one
+- **D-7164** — `routing-line-names-inert-class`: Task T3d. When the session's class is inert on its lane, the one
   routing line reads " · model set by the lane", so the old rail's "not applied on this lane" fact survives in that one
   line (T3d's final review, M-7), and no second line is added.
-- **D-7197** - `t2b-carries-r13-in-refined-phone-browser`: Task T2b, coordinator ruling on ask 168. R13's two
+- **D-7197** — `t2b-carries-r13-in-refined-phone-browser`: Task T2b, coordinator ruling on ask 168. R13's two
   browser-leg items live in `pwa/browser/refined-phone.browser.test.ts`, outside T2b's Files and under S5b's claim. T2b
   edits that file for those two cases only, with S5b's exact consent. The toast case measures the real ToastHost, and
   the home-indicator case runs at a non-zero inset (34 px, CDP-emulated). Both are test fixes with no behaviour change,
   each red on its mutant against the new file and green against the old one.
-- **D-7201** - `c8-false-comments-corrected`: Task C8, coordinator ruling on ask 172. Once the fleet store is the one
+- **D-7201** — `c8-false-comments-corrected`: Task C8, coordinator ruling on ask 172. Once the fleet store is the one
   `/api/accounts` caller, comments outside C8's listed hunks become false. C8 corrects them, comment-only: `lib/accounts.ts`
   :16-20 and :41-48 and `AccountsScreen.tsx` :236-238 and :273-276 (with S5b's exact consent, which holds both), and
   `AccountPoolSheet.tsx` :15, `StartProgramSheet.tsx` :146-149 and `lib/api.ts` :424 (under a claim C8 takes). Source
@@ -3973,46 +5823,46 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `fleet-screen` (its timer list) and `session-lifecycle`. Extended again on review 1099's F1 and F4, for fix round 2:
   `fleet-screen`'s two mount-fetch notes and its timer list (made complete, each interval credited to its real owner), and
   `auth-door`'s mount-fetch note, outside C8's Files and unclaimed, comment-only.
-- **D-7210** - `t3d-inspector-css-joins-the-task`: Task T3d, coordinator ruling on review 1082's F2.
+- **D-7210** — `t3d-inspector-css-joins-the-task`: Task T3d, coordinator ruling on review 1082's F2.
   `pwa/src/inspector/inspector.css`, outside T3d's Files, is part of the task: the one routing line needs inline-flow
   rules (`.insp-routing-row`, `.route-queued`, `.insp-routing-tail`) in place of the old row's dt/dd rules, and the empty
   state's `.insp-empty` goes with the "Not read yet" text it styled. No other inspector rule changes. The F4 ruling
   holds D-7142 as written: when nothing is read, the model and effort doors keep their old accessible names ("Model:
   not read yet, change", "Effort: set effort, change"), which still match the header chip; only the inert effort's
   "Effort: set by the lane, change" is new, as the task asks.
-- **D-7215** - `t3a-mixed-chip-says-pinned`: Task T3a, the operator's answer to ask 165, confirmed by the coordinator.
+- **D-7215** — `t3a-mixed-chip-says-pinned`: Task T3a, the operator's answer to ask 165, confirmed by the coordinator.
   When a project's sessions sit on several accounts, the pool chip's title says "pinned to", not the plan's "run on",
   because the chip measures each session's pinned account, not where it runs.
-- **D-7216** - `t3a-route-note-says-routing-default`: Task T3a. The New session sheet's route note reads "Unset fields
+- **D-7216** — `t3a-route-note-says-routing-default`: Task T3a. The New session sheet's route note reads "Unset fields
   take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).", so it no longer names the old chooser
   word "Coordinator row" that this task retires.
-- **D-7217** - `t3a-badged-head-keeps-row-height`: Task T3a. `.ins-group-seen` joins the desk group-head rule in
+- **D-7217** — `t3a-badged-head-keeps-row-height`: Task T3a. `.ins-group-seen` joins the desk group-head rule in
   `pwa/src/skins/instrument/instrument.css`, outside T3a's Files and under T2b's claim with its consent (one selector,
   disjoint from T2b's hunk), so a badged Instrument head keeps the fold row's height. Found by T3a's own browser
   pin, together with the unplanned `size="fit"` fix: `@ccrc/ui`'s Button defaults to full width, and a badged head
   stood 156 px against 32.
-- **D-7218** - `t2b-fab-layout-browser-pin`: Task T2b, coordinator ruling on review 1083's A2. The plan says a task's
+- **D-7218** — `t2b-fab-layout-browser-pin`: Task T2b, coordinator ruling on review 1083's A2. The plan says a task's
   layout claim is pinned by a committed browser case. The two existing files that could carry T2b's are held by T2d and S5b,
   so T2b creates `pwa/browser/instrument-fab.browser.test.ts`, outside its Files and under its own claim: at 899 the
   round + is the one New session door, and at 900 and 1280 there is none, in both palettes. After review 1090's F1, a door
   counts as visible only when the browser's own visibility check says so, not merely on a non-zero client rect.
-- **D-7219** - `c8-red-list-differs`: Task C8. The plan's "known so far" list of cases that assumed a component's
+- **D-7219** — `c8-red-list-differs`: Task C8. The plan's "known so far" list of cases that assumed a component's
   own poll is not the measured one. `fleet-pieces`, `project-card` and `add-workspace-sheet` stayed green and are
   untouched. Seven other test files went red and are migrated, one commit per file: `lifecycle-ui`, `fleet-screen`,
   `account-pool-chip`, `meter`, `runs-screen`, `tap-targets` (T2d's claim, with the coordinator's consent on its three
   hunks) and `auth-passkey`, all under C8's own claim except tap-targets. Step 0's measured list is the authority, as the
   plan says.
-- **D-7222** - `t3a-phone-tabs-keep-their-counts`: Task T3a, coordinator ruling on review 1092's F2. In Instrument's
+- **D-7222** — `t3a-phone-tabs-keep-their-counts`: Task T3a, coordinator ruling on review 1092's F2. In Instrument's
   status mode on a phone, each tab keeps its group's count beside the open panel's head. The tabs are the navigation to
   panels that are not on screen, and a tab without its count would lose the only count of a hidden bucket. So "one count
   per bucket per screen" counts a bucket's count once among the things that describe the open panel: the chips are gone,
   and the head carries the count. The repeat on the selected tab is legitimately different, not a second count.
-- **D-7223** - `t3a-files-outside-the-list`: Task T3a, coordinator ruling on review 1092's F6. Three files outside T3a's
+- **D-7223** — `t3a-files-outside-the-list`: Task T3a, coordinator ruling on review 1092's F6. Three files outside T3a's
   Files are part of the task: `pwa/src/fleet/classWords.ts` (new; the one home of the Automatic word and its title, from the
   CI fix round, so literal-census holds), `pwa/test/session-line.test.tsx` (a two-line word swap that the rename forces),
   and `pwa/browser/instrument-group-seen.browser.test.ts` (new; the committed browser pin the plan requires for T3a's
   layout claim, beside D-7217).
-- **D-7234** - `t4a-any-escape-is-ansi`: Task T4a, coordinator ruling on review 1105's F5. The plan routes a tool
+- **D-7234** — `t4a-any-escape-is-ansi`: Task T4a, coordinator ruling on review 1105's F5. The plan routes a tool
   result with SGR codes to `ansi`, one headed by a unified diff to `diff`, and anything else to plain. T4a routes a
   result holding ANY escape byte to the ANSI reader (`lib/ansi.ts`'s any-ESC predicate), so an erase-only, OSC-only or
   stray escape is removed rather than shown raw. That is the safer direction, and it is accepted: no control byte
@@ -4021,6 +5871,27 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   as dead code. Ruled with it: Q8's default A applies to inline code in assistant messages, as the plan names it. The
   Docs reader's `doc-body` and the compaction recap's `compaction-body` keep today's inline code until the operator
   rules otherwise.
+- **D-8719** — `c43-notes-leave-plans`: Task C43, issued on 2026-11-17. A per-task note is added at
+  `docs/superpowers/programs/<programme>/<task-or-pr>.md`, no longer under `docs/superpowers/plans/<plan>/`, and the ledger
+  guard's layout arm refuses a new file under `docs/superpowers/specs/` or `docs/superpowers/plans/` outside the review
+  judge's layout (format F1), on every branch and with no trailer escape (the operator's ruling of 2026-11-17: follow the
+  judge's standard). Notes already on `main` stay where they are. Further departures, by slug, in `c43.md`.
+- **D-8749** — `mask-c44-follow-up`: Task C45, issued on 2026-11-18. The masker closes the slice-cut and doubled-CR forms
+  review 2445 carried from C44 and pins its break grammar: a slice's lookahead reads the rest of a LF ... CR break its cut
+  fell inside as part of that break, and the cut reads its break through the escape view (`pane-cut-long-break`, review
+  2445 F1, not by cutting at the break's start, which leaked every form); `ROW_BREAK` reads CR CR LF as one break, and the
+  other consecutive-break forms stay as at `main`, carried (`drawer-consecutive-breaks`, F4); `breakStartAt`'s one
+  difference from `ROW_BREAK` is kept and pinned (F2); the slow case's setup is carried as a test change
+  (`secret-mask-slow-case-db`, F5). Fix round 1 (review 2514): `ROW_BREAK`'s LF, blanks, CR lookahead is `main`'s again
+  and `breakStartAt`'s CR CR LF arm agrees with it (`row-break-lookahead-restored`, review 2514 F1: the first change ended
+  a key's chain at a LF, blank, CR CR LF, a new leak), and a push that ends in both CRs of a CR CR LF is held
+  (`crcr-push-end-held`, review 2514 F2, closed). Fix round 2 (review 2585): `breakStartAt` reads a CR LF, blanks, CR CR
+  LF back from its second CR, as `main` did, so the cap's step back crosses the blank row before it
+  (`crcrlf-arm-after-crlf-blanks`, review 2585 F1: the whole key in pane history past the cap where `main` showed 360
+  bytes, a leak since this task's second commit, 9c8942ef1). Fix round 3 (review 2644): `breakStartAt` reads a CR CR LF
+  back from its second CR whenever a LF comes before it, blanks between or none, so a CR LF right before it no longer
+  stops the cap's step back at the blank row (`crcrlf-arm-after-crlf`, review 2644 F1: the round-2 guard left that form,
+  the whole key past the cap where `main` showed 360 bytes). Sizes and runs in `c45.md`.
 
 ## Out of scope
 

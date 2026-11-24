@@ -1,0 +1,32 @@
+# ccd-quiz-weekly.timer - fires ccd-quiz-weekly.service on the wall clock, four times a day at 00:17, 06:17, 12:17 and
+# 18:17 UTC. The runner does the week's one act per tick (or nothing, when the week is already confirmed), so the cadence
+# only bounds how soon a stopped week is resumed: within six hours.
+#
+# WHY A WALL CLOCK, not `OnActiveSec=` plus `OnUnitInactiveSec=` (run 3508; docs/superpowers/programs/overlord/
+# quiz-weekly-repair.md): systemd re-bases an `OnActiveSec=` elapse to "now" whenever the timer is re-armed from the
+# dead state, and a daemon-reload re-arms every timer that way (timer.c's coldplug runs with the state still dead). Fleet
+# sessions' own unit acts reload the user manager every few minutes, so the thirty-minute first elapse was never reached
+# and the timer never fired. An `OnCalendar=` elapse is computed from the timer's last trigger (or, before the first, from
+# when it was armed), never from now, so no number of reloads or restarts can postpone or starve it.
+[Unit]
+Description=Run the weekly replay quiz unattended, four times a day on the wall clock
+[Timer]
+# The four slots. UTC, because the runner's weeks are ISO weeks in UTC: the Monday 00:17 slot opens a new week at once.
+# Minute 17, so the tick does not share the top of the hour with every other calendar job on the box.
+OnCalendar=*-*-* 00/6:17:00 UTC
+# NO `Persistent=`, deliberately, for ccd-land-probe.timer's reason (D-1981): with it, a timer armed after a missed slot
+# (an install's or a deploy's `enable --now`, a box that was down) fires AT ONCE, on top of the deploy's supervisor sweep.
+# Without it a FRESH enable never fires at once: with no last trigger the first slot is counted from the arming, and the
+# next slot, at most six hours away, resumes the week; that is the bound a stopped week was promised, so no catch-up is
+# needed. Firing at once is not the catch-up switch's doing alone; two cases fire a passed slot without it (readings of
+# systemd's timer.c, single source, not measured on a box): ONCE PER BOX, the first reload over the OLD unit, whose timer
+# was armed and never fired, so the new calendar counts from its old arming time; and a timer STOPPED ACROSS A SLOT and
+# started again (v259 keeps the last trigger across a stop; a never-fired one counts from its previous arming).
+# `DeferReactivation=` (systemd 257 and later): the next slot is counted from the END of the last run, so a run that
+# takes hours and spans a slot never has a second run started the moment it ends. An older systemd ignores the key with
+# a warning and starts one run at once behind a run that spanned a slot; the runner's week bound (one --budget a week)
+# and its lock hold either way.
+DeferReactivation=yes
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

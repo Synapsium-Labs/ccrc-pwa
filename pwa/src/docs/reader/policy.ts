@@ -12,7 +12,7 @@
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
 import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
-import { docLinkTarget } from '../docsLinks';
+import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DocSectionSlug } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
@@ -25,11 +25,14 @@ export type ReaderLink =
   | { kind: 'external'; url: string; scheme: 'http' | 'https' | 'mailto'; host: string };
 
 /** What the host does with a link. `in-app`: navigate to a Docs page (`fragment` is the link's, for the visit to
- *  scroll to once that page renders). `hash`: move to an anchor in this page. `sheet`: ask before opening a URL
+ *  scroll to once that page renders). `hash`: move to an anchor in this page; `reopen` says whether the frame must be mounted
+ *  again at that anchor: false for a `fragment` link (the frame scrolls to an anchor it finds by itself, and reports to the
+ *  host only an `#id` it did not find), true for a `relative` link to this very page with a fragment (`this.md#sec`, which
+ *  the frame sends to the host as a navigate and does not scroll). `sheet`: ask before opening a URL
  *  (`foreign`: its host is not the console's own). `inert`: nothing. */
 export type ReaderRoute =
   | { kind: 'in-app'; href: string; fragment: string | null }
-  | { kind: 'hash'; id: string }
+  | { kind: 'hash'; id: string; reopen: boolean }
   | { kind: 'sheet'; url: string; scheme: string; host: string; foreign: boolean }
   | { kind: 'inert' };
 
@@ -48,11 +51,13 @@ function sheetFor(url: string, scheme: string, hostRaw: string, ownHostRaw: stri
 
 /** The route of one link reported by the frame. A `relative` link is rebuilt as its path plus `#fragment` and goes
  *  through `docLinkTarget`, so a root-relative link, a climb above the repository and every refused spelling are
- *  inert exactly as in the plain view; an external or GitHub resolution is a sheet. */
+ *  inert exactly as in the plain view; an external or GitHub resolution is a sheet. A `fragment` link is a `hash` with
+ *  `reopen: false`; a `relative` link that `docLinkTarget` resolves to this very page with a fragment is a `hash` with
+ *  `reopen: true`. */
 export function routeReaderLink(ctx: DocLinkContextValue, link: ReaderLink, ownHost: string): ReaderRoute {
   switch (link.kind) {
     case 'fragment':
-      return { kind: 'hash', id: link.id };
+      return { kind: 'hash', id: link.id, reopen: false };
     case 'external': {
       // Re-derive from the URL: a parse failure or a protocol outside the allowlist is inert. http(s) takes the
       // parse's hostname (no port, the shape of `ownHost`); mailto keeps the link's host, because its hostname is ''.
@@ -71,7 +76,7 @@ export function routeReaderLink(ctx: DocLinkContextValue, link: ReaderLink, ownH
         case 'in-app':
           return { kind: 'in-app', href: target.href, fragment: target.fragment };
         case 'fragment':
-          return { kind: 'hash', id: target.fragment };
+          return { kind: 'hash', id: target.fragment, reopen: true };
         case 'inert':
           return { kind: 'inert' };
         case 'external':
@@ -178,18 +183,30 @@ export interface ReaderMountPlan {
   /** Whether the mount is handed the reader's storage port. */
   readonly store: boolean;
   readonly chrome: ReaderChrome;
+  /** Whether the mount carries the doc's history: the version seed's commits and day filter, and the `changes` and
+   *  `openVersion` adapters (completion plan Task 12). The reader lab's mounts never do. */
+  readonly history: boolean;
 }
 
 /** The one decision: the Docs reader draws as the E17 reading says (`docsDrawFor`), waits `readerWatchdogMs(bytes)`, keeps
- *  reader state and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
+ *  reader state, carries the doc's history and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
  *  (where `ready` waits for the figures, so the lab's gap window still times the draw: refinement (d)), waits
- *  READER_LAB_DRAW_WATCHDOG_MS, keeps nothing and has the frame's own bar, whatever the reading and the bar asked for. */
+ *  READER_LAB_DRAW_WATCHDOG_MS, keeps nothing, carries no history and has the frame's own bar, whatever the reading and the bar asked for. */
 export function readerMountPlan(
   profile: ReaderMountProfile | undefined, bytes: number, chrome: ReaderChrome, e17: ReaderE17Reading,
 ): ReaderMountPlan {
   return profile === 'lab-draw'
-    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' }
-    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome };
+    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false }
+    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true };
+}
+
+/** Whether the library's mount focuses the frame as it inserts it (the completion plan's D-8729). The Docs reader yields
+ *  to a host element that owns focus: it focuses the frame only when `hostOwnsFocus` is false, where `hostOwnsFocus` is
+ *  the bridge's reading, taken as the mount starts, that a connected element outside the reader holds focus. The reader
+ *  lab's `lab-draw` mount keeps its unconditional focus, whoever owns it. Explicit reader commands are not decided here:
+ *  they focus the frame themselves. */
+export function readerMountFocusFor(profile: ReaderMountProfile | undefined, hostOwnsFocus: boolean): boolean {
+  return profile === 'lab-draw' ? true : !hostOwnsFocus;
 }
 
 /** The reader's tools a host may run without the frame's bar: the library's `DocFrame.command` names, held equal by

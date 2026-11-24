@@ -40,7 +40,7 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, DRAWER_SECRET_MASK, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
 import { SHAPE_MASK, shapeMatchers } from '../src/accounts/shapes.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
@@ -343,7 +343,7 @@ describe('the drawer stream (D-5513)', () => {
     const d = new DrawerMask(new SecretMasker(), (t) => out.push(t), 50);
     d.push(`token: ${OAT.slice(0, 20)}`);
     d.push(`${OAT.slice(20)}\r\n`);
-    expect(out.join('')).toBe(`token: ${SECRET_MASK}\r\n`);
+    expect(out.join('')).toBe(`token: ${DRAWER_SECRET_MASK}\r\n`);
     out.length = 0;
     d.push('plain line\r\n');                    // ends on a delimiter: sent at once
     expect(out).toEqual(['plain line\r\n']);
@@ -353,8 +353,8 @@ describe('the drawer stream (D-5513)', () => {
     d.push('sk-pa');                             // an open run that could start a shape is held, at most 50 ms (D-5995)
     expect(out).toEqual(['prompt> ']);
     vi.advanceTimersByTime(50);
-    expect(out).toEqual(['prompt> ', SECRET_MASK]);   // the expired hold draws a provisional mask (D-5995)
-    d.push('ss x');                               // the run ends as no shape: the mask is erased and the text drawn
+    expect(out).toEqual(['prompt> ']);   // the expired hold withholds the run and draws nothing in its place (D-8665)
+    d.push('ss x');                               // the run ends as no shape: the text is drawn as one chunk would be
     expect(screen(out.join(''))).toBe('prompt> sk-pass x');
     d.dispose();
   });
@@ -397,7 +397,7 @@ describe('the drawer stream (D-5513)', () => {
       write(): void {} resize(): void {} kill(): void {}
     }
     const local = await drawerFrames(() => new StubPty(), (s) => s.includes('DONE'));
-    expect(local).toContain(SECRET_MASK);
+    expect(local).toContain(DRAWER_SECRET_MASK);
     expect(leaksNone(local, OAT)).toBe(true);
     await app!.close(); app = undefined;
 
@@ -412,7 +412,7 @@ describe('the drawer stream (D-5513)', () => {
       offPty: () => {},
     } as unknown as FleetClient;
     const remote = await drawerFrames(createSpawnPty(client), (s) => s.includes('DONE'));
-    expect(remote).toContain(SECRET_MASK);
+    expect(remote).toContain(DRAWER_SECRET_MASK);
     expect(leaksNone(remote, OAT)).toBe(true);
   });
 });
@@ -815,7 +815,7 @@ describe('the review findings: the mask stays cheap and the drawer stays live (D
     vi.advanceTimersByTime(4);
     d.push('y');                       // still held; the deadline does not restart
     vi.advanceTimersByTime(2);
-    expect(out.join('')).toBe(`x e ${SECRET_MASK}`);   // 6 ms after the first hold, failed closed on the begun shape
+    expect(out.join('')).toBe('x e ');   // 6 ms after the first hold, failed closed on the begun shape: withheld, nothing drawn (D-8665)
     d.dispose();
   });
 });
@@ -890,6 +890,16 @@ describe('the review findings: every egress of session text is masked (D-5995)',
   it('GET /api/digest, GET /api/ledger and GET /api/landing are masked like their siblings, as one frame each', () => {
     // the one answer hook masks both (D-5995)
     for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
+  });
+
+  it('the Overlord inbox doors (W1 inbox piece): the two GETs are masked by the one answer hook, and the acknowledge POST by the write-answer rule', () => {
+    for (const p of ['/api/overlord/inbox', '/api/overlord/messages/:id']) {
+      expect(MASKED_GET_ROUTES.has(p), p).toBe(true);
+      expect(answerMasked('GET', p), p).toBe(true);
+    }
+    const ack = '/api/overlord/messages/:id/acknowledge';
+    expect(WRITE_ANSWER_EXEMPT.test(ack), ack).toBe(false);
+    expect(answerMasked('POST', ack), ack).toBe(true);
   });
 
   it('POST /api/landing/entries and /api/landing/order answers are masked: neither is write-answer exempt, and an assembled credential never leaves (wave 5f)', async () => {
@@ -1060,11 +1070,11 @@ describe('the rulings: the drawer echoes at once and never masks ordinary text f
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     const k = typeSlowly(m, CMP);
     // the accepted gap (D-5995): a key's first 19 bytes, typed slower than the hold, leave before it could be one
-    expect(k.shown).toBe(`$ ${CMP.slice(0, 19)}${SECRET_MASK}\n$`);
+    expect(k.shown).toBe(`$ ${CMP.slice(0, 19)}${DRAWER_SECRET_MASK}\n$`);
     expect(leaksNone(k.raw, CMP.slice(19)), k.raw).toBe(true);
     m.close();
     const s = typeSlowly(new SecretMasker(), OAT);
-    expect(s.shown).toBe(`$ sk${SECRET_MASK}\n$`);
+    expect(s.shown).toBe(`$ sk${DRAWER_SECRET_MASK}\n$`);
     expect(leaksNone(s.raw, OAT.slice(2)), s.raw).toBe(true);
   });
 
@@ -1114,7 +1124,7 @@ describe('the rulings: the provisional mask waits for the run to end, and no lon
       d.push(`    ${CMP.slice(cut)}\r\n$ `);
       vi.advanceTimersByTime(80);
       expect(leaksNone(out.join(''), CMP), `cut ${cut}: ${JSON.stringify(out)}`).toBe(true);
-      expect(screen(out.join('')), `cut ${cut}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+      expect(screen(out.join('')), `cut ${cut}`).toBe(`key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
       d.dispose();
     }
     m.close();
@@ -1232,7 +1242,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
     '/api/fleet/overrides': "the switchboard's override names with a marker state word each, and the approvals topology's two words and file name: no session text (D-8382)",
     '/api/push/key': 'the VAPID public key',
-    '/api/models/:lane': "a lane's classes, each with its model id and catalogue label, read from the lane's own model files: no session text (D-8406)",
+    '/api/models/:lane': "a lane's classes, each with its model id, catalogue label and effort levels, and, on the `models` op's path, the lane's advance state (each class's family, hold, previous model and last move, the pending intent, and the file's state), all read from the lane's own model files; an `unreadable` or `invalid` state's `detail` is a file path and an error message: no session text (D-8406, D-8686)",
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",
     '/api/projects': 'project names and paths',
@@ -1244,10 +1254,18 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/lane-arm': "each shadow lane's choice word, write and import times, and its retired marker's name: no session text (D-8274)",
     '/api/coord/run-close': "the run-close groups' states, run ids with their programme slugs and reasons, and 7-day counts: no session text (D-8077)",
     '/api/face': 'the face character, one word from a closed set, and its change time: no session-derived text',
+    '/api/responses': 'ids, kinds, states and times of the response rows about one item or digest line: no session text',
+    '/api/responses/retention': 'one number of days, its default and its bounds',
+    '/api/overlord/private-names': "whether a private-name list is stored, its row count, its upload time and an unreadable reason word: never a name, an entry, a hash or the key (Overlord W2, private names B)",
+    '/api/decision-model': "each decision-model row's mode, ceiling, hold and line counts, today's call counts, and the host's kind, endpoint, origin and model id and the key's set time and masked flag: never the key, a price or a model's answer (Overlord W2, decision model B)",
+    '/api/continuity/renewal-backstop': 'an hour, an IANA zone name, a flag and a time: no session text (Overlord W1 renewal readings A)',
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
     '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
+    '/api/coord/coordinator-advisor': 'one setting word, a cap, a scope of session ids, and the defaults and choices: no session text (D-8967)',
+    '/api/coord/renewal-mode': 'one setting word, its default and its two choices (Overlord W1a, the renewal hand-offs)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
+    '/api/coord/delegation-backfill': "the one-time pass's dry run: counts by kind and age, a mode word, an instant and the basis's fixed words: no session text, no record id (D-8874)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/testbox/admin': "the test box's connection state, pin fingerprint and act ledger: no address, no secret, no session text (D-8166)",
     '/api/testbox/builds': "each Claude Code build's capture verdict, its times and counts and the test box's replay output: no session text (D-8289)",
@@ -1258,6 +1276,8 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/projects': 'repository content, not session text',
     '/api/docs/:project/tree': 'repository content, not session text',
     '/api/docs/:project/file': 'repository content, not session text',
+    '/api/docs/:project/history': 'repository content (commit subjects and author names), not session text',
+    '/api/docs/:project/range': 'repository content (one file in frames, base64), not session text',
     // The reader lab's door (reader lab plan, RL-a; D-7967): the run read answers its opener counts by the lab's closed
     // names and classes, and the probe answers an empty 204. Neither carries session text.
     '/api/reader-lab/runs/:nonce': "a run's counts by probe name and request class, from the lab's closed vocabulary; no session text",
@@ -1281,6 +1301,8 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // The linking standard's session read (D-8147): the caller's own project's row, a box-token machine lane. The project name
     // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
     // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
+    '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
+    '/api/overlord/restore': "the authority guard's state: one of three closed words and a closed cause or reason word (AUTHORITY_STATE_WORDS, AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS); no session-written text (Overlord W1 authority journal C)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 
@@ -1383,11 +1405,13 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     const slices = events.filter((e): e is number => e !== 'pause');
     expect(slices.length).toBeGreaterThan(30);
     expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
-    // The overlap a slice carries (its context and its lookahead) is a few KiB: one held run plus slack. This bound pins
-    // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
-    // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
+    // The overlap a slice carries (its context and its lookahead) is the chain hold, 18 KiB (two held runs), in this text,
+    // which holds no chain of key rows across a cut: where one crosses a cut, rows mode grows the lookahead up to 64 KiB
+    // (`lookaheadEnd`, `WHOLE_HELD_MAX`), and the context side never grows. This bound pins that the overlap does not grow
+    // with the text, the load-independent part of the per-slice cost the old wall-clock row bounded (a quadratic
+    // regression such as `context: text.slice(0, at)` would otherwise pass).
     expect(overlaps.length).toBe(slices.length * 2);
-    expect(Math.max(...overlaps)).toBeLessThanOrEqual(16 * 1024);
+    expect(Math.max(...overlaps)).toBeLessThanOrEqual(18 * 1024);
     // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
     expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
     expect(leaksNone(sliced, CMP)).toBe(true);
@@ -1441,7 +1465,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
       const sent: number[] = [];
       for (const c of seq) { sent.push(Date.now()); d.push(c); vi.advanceTimersByTime(30); }
       const raw = out.map((o) => o.text).join('');
-      expect(raw, JSON.stringify(seq)).not.toContain(SECRET_MASK);
+      expect(raw, JSON.stringify(seq)).not.toContain(DRAWER_SECRET_MASK);
       // each key's character reaches the socket within 8 ms of its chunk
       const keys = seq.slice(1).map((c) => c.replace(/\x1b\[[?0-9;]*[A-Za-z]/g, ''));
       let k = 0; let seen = '';
@@ -1469,7 +1493,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
         expect(screen(out.join('')), `${key.length} cut ${cut}`).toMatch(/^export KEY=(?:‹secret masked›)?$/);
         d.push(`${key.slice(cut)}\r\n$ `);
         vi.advanceTimersByTime(40);
-        expect(screen(out.join('')), `${key.length} cut ${cut}`).toBe(`export KEY=${SECRET_MASK}\n$`);
+        expect(screen(out.join('')), `${key.length} cut ${cut}`).toBe(`export KEY=${DRAWER_SECRET_MASK}\n$`);
         d.dispose();
       }
     }
@@ -1481,7 +1505,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
       d.push(' ');
       vi.advanceTimersByTime(30);
       expect(screen(o.join('')), word).toBe(`$ ${word}`);
-      expect(o.join(''), word).not.toContain(SECRET_MASK);
+      expect(o.join(''), word).not.toContain(DRAWER_SECRET_MASK);
       d.dispose();
     }
     m.close();
@@ -1516,7 +1540,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     d.push('CCCCCCCCCCCC done\r\n');
     const shown = screen(out.join(''));
     expect(shown).not.toContain('C');
-    expect(shown.endsWith(`${SECRET_MASK} done`)).toBe(true);
+    expect(shown.endsWith(`${DRAWER_SECRET_MASK} done`)).toBe(true);
     d.dispose();
     m.close();
   });
@@ -1675,7 +1699,7 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
     vi.advanceTimersByTime(9);
     d.push(`    ${OAT.slice(10)}\r\n$ `);
     vi.advanceTimersByTime(80);
-    expect(screen(out.join(''))).toBe(`  ⎿  key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+    expect(screen(out.join(''))).toBe(`  ⎿  key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
     d.dispose();
   });
 
@@ -1691,7 +1715,7 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
         d.push(`    ${CMP.slice(cut)}\r\n$ `);
         vi.advanceTimersByTime(80);
         expect(leaksNone(out.join(''), CMP), `cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
-        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
         d.dispose();
       }
     }

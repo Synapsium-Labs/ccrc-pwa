@@ -83,6 +83,10 @@ const LIST_REFERENCES: ReadonlyArray<{ re: RegExp; row: (m: RegExpExecArray) => 
   { re: /^INJECTED_PROMPTS(?:\.([a-z]+)|\['([a-z-]+)'\])\.text$/, row: (m) => m[1] ?? m[2]!, from: ['shared/injected-prompts.mjs'] },
   { re: /^IDLE_COMPACT_NUDGE_PROMPT$/, row: () => 'idle-compact-nudge', from: ['shared/injected-prompts.mjs', 'shared/api.ts'] },
   { re: /^renderMailNudge\([\w.]+\)$/, row: () => 'mail-nudge', from: ['server/src/coord/envelope.ts'] },
+  // The mail lane's line for one due delivery: the id-agnostic nudge, or an operator message's fixed line (both open with the
+  // `mail-nudge` head, so the echo needle is the same).
+  // The sweep passes its one designation read and its pass's clock, which the fixed-line table's wake line reads (W1 inbox, Task 4).
+  { re: /^mailNudgeOf\([\w.]+, \w+(?:, (?:\w+|\w+\(\w+\)), \w+)?\)\.line$/, row: () => 'mail-nudge', from: ['server/src/coord/envelope.ts'] },
 ];
 
 /** Whether `file` binds `name` to one of `from`: a value import of it from one of them, or `file` is one of them. */

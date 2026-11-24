@@ -25,8 +25,11 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, rosterWithFacts, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parseAliases, serializeAliases } from '../../shared/model-aliases.mjs';
+import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
+import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import {
   FIXTURES, TICK_RUN_N, plantFixture, plantShims, countTicks, loopSleeps, commandWords, unshimmedExternals,
   supervisePrelude, fixtureScreenFile, type FixtureName, type ShimOpts, type TickCount,
@@ -143,6 +146,14 @@ import {
  *  bash 5.3): the narrow tick no longer returns at its top, it asks `_session_hard_blocked` first, which re-measures
  *  the pane (`_pane_measurable`, one `list-panes` and one `awk`) and reads the stale-press stamp, the cached `tscan`
  *  verdict and the transcript. Every other fixture is on a measurable pane and does not move. narrow 51/17 -> 57/19.
+ *
+ *  RAISED BY THE ACCOUNT ORGANIZATION TIE-BREAK (account organization plan, Task C1, slug `org-tie-break-only`; Linux
+ *  bash 5.3) FOR THE TWO LEAVING FIXTURES ONLY: `_swap_target`'s candidate loop reads every account's label with ONE
+ *  `$( )` over the roster (`_org_cur`; `_acct_org` is a shell function, so no exec), once per call, and only at the
+ *  first EQUAL score in a bracket (on a rescue, at the first scored candidate); each relation then comes from that
+ *  table with no fork. Both leaving fixtures rank `claude` and `claude-d` at 30, so they tie. No other fixture's steady
+ *  tick reaches a tie. leaving 113/43 -> 114/43 · fable-leaving 121/47 -> 122/47. The same `leaving` with every
+ *  candidate labelled costs the same 114/43 (its own case, below): the read does not grow with the labels.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 90, execs: 33 },
@@ -152,9 +163,18 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'hard-blocked': { forks: 127, execs: 37 },
   cooldown: { forks: 65, execs: 24 },
   fable: { forks: 92, execs: 34 },
-  leaving: { forks: 113, execs: 43 },
-  'fable-leaving': { forks: 121, execs: 47 },
+  leaving: { forks: 114, execs: 43 },
+  'fable-leaving': { forks: 122, execs: 47 },
 };
+
+/** The `fable` fixture's steady tick for a session whose `poolset` exists (see its case), measured: 101/34 against `fable`'s 92/34. The pool rule's own set reads cost 6 of the 9
+ *  (the same fixture on the tree before the Overlord's arms measures 98/34); the arms cost 3, one `$( )` each for the side
+ *  read, the continuity read and the billing read. No exec: the reads are shell functions. */
+const SET_SIDE_FABLE_BUDGET = { forks: 101, execs: 34 };
+
+/** The `leaving` fixture's steady tick with every candidate labelled (see its case): `leaving`'s own figure, because the
+ *  labels are read once per `_swap_target` call whatever they hold. */
+const LABELLED_LEAVING_BUDGET = TICK_BUDGET.leaving;
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
  *  `300aedf8` it was 1 on every tick: the cache it sets died with the `$( )`
@@ -264,6 +284,130 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
       }, 120_000);
     });
   }
+
+  // THE OVERLORD'S ARMS COST FORKS ONLY FOR A SESSION WITH A `poolset` ENTRY (serviceability plan F7): every fixture above
+  // has none, so its figure is unmoved. A set-side session pays `$(_session_pool_side …)` and one `$( )` per fact read at
+  // each `_serviceable` call that holds its id. This one plants a set that admits every lane and a continuity record and an
+  // `included` billing fact on all of them, so the session is held where it is, and pins the exact figure.
+  it('a `fable` session whose `poolset` exists pays the side read and the fact reads, and no other fixture does', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-set-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'fable');
+    seedAccountsSh(h.home, rosterWithFacts(Object.fromEntries(
+      ['claude', 'claude-a', 'claude-b', 'claude-d'].map((w) => [w, { fableBilling: 'included' as const, continuity: 1_790_000_000 }]))));
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.poolset`), 'pool-a+untagged');
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(SET_SIDE_FABLE_BUDGET);
+  }, 120_000);
+
+  // THE ORGANIZATION TIE-BREAK COSTS THE SAME LABELLED AS UNLABELLED (account organization plan, Task C1, fix round
+  // `org-tie-read-costs-one-fork`): the `leaving` fixture with every candidate labelled, so its tie at 30 between `claude`
+  // (`other`) and `claude-d` (`same`) is broken by organization. `_swap_target` loads every label with one `$( )` at the
+  // first question and relates candidates from that table, so the figure is `leaving`'s own.
+  it('a labelled `leaving` session pays what the unlabelled one pays: one label read per `_swap_target` call', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-org-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'leaving');
+    const orgs: Record<string, string> = { claude: 'org-b', 'claude-a': 'org-b', 'claude-b': 'org-a', 'claude-d': 'org-a' };
+    seedAccountsSh(h.home, { ...DEFAULT_TEST_ROSTER,
+      accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => (orgs[a.id] ? { ...a, org: orgs[a.id] } : a)) });
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(LABELLED_LEAVING_BUDGET);
+  }, 120_000);
+
+  // THE ROUTING RECORD'S MODEL ID COSTS THE TICK NOTHING ONCE RECORDED (model classes A3.6): an Anthropic session whose
+  // `routeapplied` carries `model=` beside an unchanged aliases file whose class id is that model. The observe step returns on
+  // the recorded key, with builtins only, so the figure is `idle-home`'s own. Review 2964 F11d: the model is RECORDED by the
+  // run itself. The fixture plants a usage sidecar newer than the record and a reading the recording step accepts, tick 1
+  // writes `model=` (the first tick is outside the steady ones), and ticks 2..N cost the idle figure.
+  const ALIAS_CLASS_ID = 'claude-opus-9-1';
+  const plantAliasesFile = (h: CcdHarness): void => {
+    const id = ALIAS_CLASS_ID;
+    const classes: Record<string, unknown> = {};
+    for (const c of ['fable', 'opus', 'sonnet', 'haiku']) {
+      classes[c] = { id, source: 'cache', evidenceAt: null, idSince: null, seenAt: null, cacheTarget: id, seenId: id, unobserved: false,
+        unlaunchable: null, row: { id, label: null, efforts: ['low', 'high', 'xhigh'], defaultEffort: null, minVersion: null },
+        rowFrom: 'own', heldRow: null, orphaned: null };
+    }
+    const models = path.join(h.home, '.ccrc', 'models');
+    fs.mkdirSync(models, { recursive: true });
+    fs.writeFileSync(path.join(models, 'claude-a.aliases.json'), serializeAliases(parseAliases({
+      v: 1, at: '2026-11-01T00:00:00Z', cache: { format: 'current', fetchedAt: '2026-11-01T00:00:00Z' }, stale: false, classes })));
+  };
+  const reg = (h: CcdHarness, f: string): string => path.join(h.home, '.cc-sessions', `${ID}.${f}`);
+  /** A usage sidecar for the fixture's session: a reading well after the process start and the record's stamp, newer on disk too. */
+  const plantSidecar = (h: CcdHarness, model: string): void => {
+    const now = Math.floor(Date.now() / 1000);
+    const uuid = fs.readFileSync(reg(h, 'uuid'), 'utf8').trim();
+    const file = path.join(h.home, '.cc-sessions', 'usage', `${ID}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify({ ts: now + 120, uuid, account: 'acct-a', model, effort: 'xhigh', ctxPct: 12, cost: 0.5, agent: null })}\n`);
+    fs.utimesSync(file, now + 60, now + 60);
+  };
+  it('an Anthropic session with model= recorded and an unchanged aliases file costs the idle-home figure', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-model-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'idle-home');
+    plantAliasesFile(h);
+    plantSidecar(h, ALIAS_CLASS_ID);
+    expect(fs.readFileSync(reg(h, 'routeapplied'), 'utf8'), 'control: nothing is recorded before the run').not.toContain('model=');
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    expect(fs.readFileSync(reg(h, 'routeapplied'), 'utf8'), 'the run recorded the reading\'s model').toBe(`class=opus effort=xhigh model=${ALIAS_CLASS_ID}`);
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(TICK_BUDGET['idle-home']);
+  }, 120_000);
+
+  // AN UNPROMPTED PANE COSTS THE FILL ONCE, NOT EVERY TICK (review 2964 F8): an unfilled launch marker whose usage sidecar is newer
+  // than it, and no transcript yet. The first tick judges the sidecar (the fill: the sidecar read and the transcript's path, no more with no transcript) and finds no transcript; every later
+  // tick reads the sidecar's bytes and tests the transcript's path with builtins, so ticks 2..N cost the idle figure. Control: the
+  // fixture's first tick DID run the fill (the marker is unfilled because the transcript is absent, not because nothing read it), and
+  // the run's tick 1 costs more than a steady tick.
+  it('an unfilled launch marker with a newer sidecar and no transcript costs the idle-home figure after the first tick', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-marker-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'idle-home');
+    plantAliasesFile(h);
+    fs.writeFileSync(reg(h, 'routeapplied'), `class=opus effort=xhigh model=${ALIAS_CLASS_ID}`);   // the recording step is already done: only the marker is asked
+    const now = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(reg(h, 'aliaslaunch'), '1700000000 claude-a opus -\n');
+    fs.utimesSync(reg(h, 'aliaslaunch'), now - 300, now - 300);
+    plantSidecar(h, ALIAS_CLASS_ID);
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    expect(fs.readFileSync(reg(h, 'aliaslaunch'), 'utf8').trim(), 'undecided: still unfilled').toBe('1700000000 claude-a opus -');
+    expect(m.counts[1]!.forks, 'control: tick 1 ran the fill, so it cost more than the plain idle-home tick 1').toBeGreaterThan(measured('idle-home').counts[1]!.forks);
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(TICK_BUDGET['idle-home']);
+  }, 120_000);
+
+  // THE STEADY READER READS NOTHING WHEN THE ALIASES FILE IS ABSENT (review 2964 F3): an advance file with a standing hold and no aliases
+  // file is read by a LAUNCH only (`_alias_facts_to`'s `held` mode); the tick's readers still answer `absent` without a fork, so the
+  // figure is `idle-home`'s own on every tick, tick 1 included (a reader that forked would fork once, then cache).
+  it('an advance file with a hold and no aliases file costs the idle-home figure: only a launch reads it', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-advance-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'idle-home');
+    const models = path.join(h.home, '.ccrc', 'models');
+    fs.mkdirSync(models, { recursive: true });
+    const adv = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
+    adv.classes.opus!.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model: 'claude-opus-9-2' };
+    fs.writeFileSync(path.join(models, 'claude-a.advance.json'), serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    expect(fe(m.counts[1]!), 'tick 1, where a reader that forked would fork once and cache').toBe(fe(measured('idle-home').counts[1]!));
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(TICK_BUDGET['idle-home']);
+  }, 120_000);
 
   it('prints the table, for the PR\'s departure', () => {
     const rows = FIXTURES.map((name) => {

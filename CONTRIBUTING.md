@@ -73,9 +73,14 @@ density of the file you are editing.
 
 **Do not edit the shared ledgers in a feature pull request.** Existing files under
 `docs/superpowers/programs/` and `docs/superpowers/plans/` belong to the coordinator's `ledger/<programme>`
-pull request. Add a new note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds it in.
-`.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
-(a trailer on an earlier commit does not count).
+pull request. Add a new note, `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds it
+in. `.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
+(a trailer on an earlier commit does not count). A new file under `docs/superpowers/specs/` or `docs/superpowers/plans/`
+takes the repo's review judge's layout, a dated spec (`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`)
+or plan (`YYYY-MM-DD-<slug>.md`) directly in that directory; the guard's layout arm refuses anything else, with no
+escape (D-8719). A spec's images, mockup pages and other non-spec files go under
+`docs/design/<spec file name less its extension>/` (for example `docs/design/2026-11-16-programme-work-map/`), and
+the spec links to them by relative path; files already on `main` stay where they are.
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If

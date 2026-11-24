@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "fetchedAt": 1795000000000,
+  "staleAt": 1795000600000,
+  "resolution": "token_org",
+  "organizationUuid": "00000000-0000-4000-8000-000000000000",
+  "catalog": {
+    "config": {
+      "provider_alias_targets": {
+        "opus": { "default": "claude-opus-9-2", "per_provider": { "bedrock": "ignored-opus" } },
+        "sonnet": { "default": "claude-sonnet-9-1", "per_provider": {} },
+        "haiku": { "default": "claude-haiku-9-1", "per_provider": {} },
+        "fable": { "default": "claude-fable-9-1", "per_provider": {} }
+      },
+      "models": [
+        {
+          "id": "claude-opus-9-2", "name": "Opus 9.2", "short_name": "Opus", "min_claude_code_version": "9.2.0",
+          "runtime": { "family": "opus", "effort_levels": ["low", "medium", "high", "xhigh", "max"], "default_effort": "xhigh" },
+          "thinking": { "type": "effort", "effort_options": [{ "id": "low" }, { "id": "medium" }, { "id": "high" }, { "id": "xhigh" }, { "id": "max" }] }
+        },
+        {
+          "id": "claude-opus-9-1", "name": "Opus 9.1", "short_name": "Opus", "min_claude_code_version": null,
+          "runtime": { "family": "opus", "effort_levels": ["low", "medium", "high", "max"], "default_effort": "high" },
+          "thinking": { "type": "effort", "effort_options": [{ "id": "low" }, { "id": "medium" }, { "id": "high" }, { "id": "max" }] }
+        },
+        {
+          "id": "claude-sonnet-9-1", "name": "Sonnet 9.1", "short_name": "Sonnet",
+          "runtime": { "family": "sonnet", "effort_levels": ["low", "medium", "high", "max"], "default_effort": "medium" },
+          "thinking": { "type": "effort", "effort_options": [{ "id": "low" }, { "id": "medium" }, { "id": "high" }, { "id": "max" }] }
+        },
+        {
+          "id": "claude-haiku-9-1", "name": "Haiku 9.1", "short_name": "Haiku", "min_claude_code_version": "9.0.0",
+          "runtime": { "family": "haiku", "default_effort": null },
+          "thinking": { "type": "none" }
+        },
+        {
+          "id": "claude-fable-9-1", "name": "Fable 9.1", "short_name": "Fable", "min_claude_code_version": "9.1.0",
+          "runtime": { "family": "fable", "effort_levels": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high" },
+          "thinking": { "type": "effort", "effort_options": [{ "id": "low" }, { "id": "medium" }, { "id": "high" }, { "id": "xhigh" }, { "id": "max" }] }
+        },
+        {
+          "id": "claude-opus-9-0",
+          "runtime": { "family": "opus" }
+        }
+      ]
+    }
+  }
+}

@@ -34,6 +34,10 @@ export interface RenewalInputs {
   readonly modelDrift: Reading<boolean>;
   /** The start report: this generation's start resumed a conversation, and on another model class. */
   readonly startResumed: Reading<{ readonly resumed: boolean; readonly otherClass: boolean }>;
+  /** Overlord: the start resumed the conversation in another organization (the relation of the generation's account to the
+   *  previous generation's, `orgRelation`). Apart from `startResumed`, so an unknown organization blinds only its own row
+   *  (slug `other-org-reading-apart`); unknown is unmeasured, never "same" (`unknown-org-is-no-preference`). */
+  readonly startOtherOrg: Reading<boolean>;
   readonly entryRetired: Reading<boolean>;
   readonly termRaised: Reading<boolean>;
   readonly accountOutsideSet: Reading<boolean>;
@@ -59,16 +63,17 @@ export type RenewalDue =
 export const TRIGGER_CLASS: Readonly<Record<RenewalTrigger, TriggerClass>> = {
   'hard-cap': 'hard', 'soft-ceiling': 'soft', turns: 'soft', 'two-compactions': 'soft', idle: 'soft',
   'daily-backstop': 'soft', 'new-install': 'soft', 'probe-failed': 'soft', 'model-drift': 'hard',
-  'resumed-other-class': 'hard', 'entry-retired': 'hard', 'term-raised': 'hard', 'account-outside-set': 'hard',
-  'class-unservable': 'hard', 'account-load': 'hard', 'compaction-refused': 'soft', 'class-changed': 'soft',
-  'evaluation-due': 'soft', 'not-local': 'hard', 'resumed-long': 'hard', 'wave-boundary': 'soft', operator: 'hard',
+  'resumed-other-class': 'hard', 'resumed-other-org': 'hard', 'entry-retired': 'hard', 'term-raised': 'hard',
+  'account-outside-set': 'hard', 'class-unservable': 'hard', 'account-load': 'hard', 'compaction-refused': 'soft',
+  'class-changed': 'soft', 'evaluation-due': 'soft', 'not-local': 'hard', 'resumed-long': 'hard', 'wave-boundary': 'soft',
+  operator: 'hard',
 };
 
 /** Table 3.3.11b, per role, the operator's Renew now first, then the hard rows, then the soft rows, each in the
  *  table's order. A role that is not long-lived has no row: its wave is its renewal. Total over `FleetRole` (C49). */
 export const RENEWAL_ROWS: Readonly<Record<FleetRole, readonly RenewalTrigger[]>> = {
-  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired', 'term-raised',
-    'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long',
+  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'resumed-other-org', 'entry-retired',
+    'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long',
     'soft-ceiling', 'turns', 'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed',
     'compaction-refused', 'class-changed', 'evaluation-due'],
   auditor: [],
@@ -145,6 +150,7 @@ const PREDICATES: Readonly<Record<RenewalTrigger, (i: RenewalInputs) => Verdict>
   'probe-failed': (i) => flag(i.probeFailedUnfixed),
   'model-drift': (i) => flag(i.modelDrift),
   'resumed-other-class': (i) => resumed(i, true),
+  'resumed-other-org': (i) => flag(i.startOtherOrg),
   'entry-retired': (i) => flag(i.entryRetired),
   'term-raised': (i) => flag(i.termRaised),
   'account-outside-set': (i) => flag(i.accountOutsideSet),

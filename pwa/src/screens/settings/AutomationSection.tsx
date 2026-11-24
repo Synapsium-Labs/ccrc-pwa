@@ -1,7 +1,7 @@
-// Settings › Automation (settings spec §3.3, §5.4; D-5503): fourteen cards, in this order, each a `Section` with its
+// Settings › Automation (settings spec §3.3, §5.4; D-5503): fifteen cards, in this order, each a `Section` with its
 // scope and purpose line: Stall watch, Overrides in force (D-8382, which reads its own read-only route), Temp root collector, Shadow lanes (D-8274, which reads and writes its own door),
 // Dispatches that never came back (D-7319), Cleanup pause,
-// Browser tools (D-8121), which reads the updates poll's fleet node and the fleet frame, Roll idle sessions (D-7453), which reads and writes its own door, Stop leftovers (D-7902), which reads the coord frame
+// Browser tools (D-8121), which reads the updates poll's fleet node and the fleet frame, Roll idle sessions (D-7453), which reads and writes its own door, Auto memory for plain sessions and When soft renewals happen (Overlord W1a), which each read and write their own door, Stop leftovers (D-7902), which reads the coord frame
 // through its one reader (`paneScopeStopMarker`) and writes its switch, Leftover processes (D-7994), Worktrees left behind (D-8114), which reads the frame's view, Backups (D-7860) and
 // Work in transcript folders (D-7898), which read the shell's health poll, then Test box (D-7412), the section's last card
 // (D-7418), which reads the frame's view and writes its switch and its tools sync. Cleanup pause is its own card since
@@ -21,6 +21,8 @@ import { StallWatchSection } from '../StallWatchSection';
 import { OverridesSection } from '../../fleet/OverridesSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
 import { PlainAutoMemorySection } from '../../fleet/PlainAutoMemorySection';
+import { CoordinatorAdvisorSection } from '../../fleet/CoordinatorAdvisorSection';
+import { RenewalModeSection } from '../../fleet/RenewalModeSection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
 import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
 import { TestBoxSection } from '../../fleet/TestBoxSection';
@@ -44,6 +46,8 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       <BrowserToolsSection nodes={view.updates.view?.nodes ?? null} />
       <RollIdleSection />
       <PlainAutoMemorySection />
+      <CoordinatorAdvisorSection />
+      <RenewalModeSection />
       <PaneScopeStopSection />
       <ScopeSweepSection poll={view.scopeSweep} />
       <DelegationAdoptSection poll={view.delegationAdopt} />

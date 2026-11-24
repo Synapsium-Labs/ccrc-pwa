@@ -24,6 +24,9 @@ export interface PushPayload {
    *  sends the first two option labels and deep-links for the rest. Ignored by
    *  an older service worker, which simply shows the notification. */
   actions?: { action: string; title: string }[];
+  /** The outbox row's push id (Overlord W1, C67): set by the sender at the send, from the row, only when the push's
+   *  response row stands; read by the service worker's receipts. Not text, and never stored in the outbox's payload. */
+  pushId?: string;
 }
 
 /** What the service masks a payload with: `SecretMasker`'s `maskDeep`, declared here so `push.ts` loads no masker
@@ -40,6 +43,9 @@ export class PushService {
    *  builds the service with the shape-only masker and hands the wired one in with `setMasker`, since the service is
    *  built before coord.db is open (D-7510). */
   setMasker(m: PayloadMasker): void { this.masker = m; }
+  /** The masker `notify` masks with now (the shape-only one until `setMasker`): the outbox sender masks a payload it
+   *  stores with this one until `Deps.masker` is set, so the row and the push carry the same bytes (Overlord W1). */
+  get payloadMasker(): PayloadMasker { return this.masker; }
 
   constructor(private cfg: PushConfig, private storePath: string, private masker: PayloadMasker) {
     webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
@@ -87,12 +93,13 @@ export class PushService {
     await this.ensureLoaded();
     if (this.subs.size === 0) return { kind: 'no-subscription' };
     const body = JSON.stringify(this.masker.maskDeep(payload));
+    const opts = { TTL: 600, timeout: OUTBOX_SUB_TIMEOUT_MS };
     let pruned = false;
     const subs = await Promise.all(
       [...this.subs.values()].map(async (sub) => {
         const endpointHash = createHash('sha256').update(sub.endpoint).digest('hex');
         try {
-          const res = await webpush.sendNotification(sub, body, { TTL: 600, timeout: OUTBOX_SUB_TIMEOUT_MS });
+          const res = await webpush.sendNotification(sub, body, opts);
           return { endpointHash, verdict: 'accepted' as const, status: typeof res?.statusCode === 'number' ? res.statusCode : null };
         } catch (e) {
           // 404/410 = the browser dropped the subscription; forget it.
@@ -100,7 +107,7 @@ export class PushService {
             this.subs.delete(sub.endpoint);
             pruned = true;
           }
-          return { endpointHash, ...subscriptionVerdictOf(e) };
+          return { endpointHash, ...subscriptionVerdictOf(e, () => webpush.generateRequestDetails(sub, body, opts)) };
         }
       }),
     );
@@ -114,9 +121,12 @@ const BEFORE_SEND_CODES: ReadonlySet<string> = new Set(['ENOTFOUND', 'ECONNREFUS
 
 /** One failed send's verdict. A `WebPushError` carries the service's status: 404 or 410 is `gone`, 400, 403 or 413
  *  `refused-for-good`, any other `refused`. An error raised before the request left the box is `refused`. Any other
- *  error (a reset or a timeout after the write, a TLS failure, a connect `ETIMEDOUT`) is `no-answer`, the safe side,
- *  because the service may have taken it (slug no-answer-is-never-retried). */
-function subscriptionVerdictOf(e: unknown): { verdict: SubscriptionVerdict; status: number | null } {
+ *  error is asked once more of web-push's own request builder (`rebuild`, which sends nothing): a build that throws
+ *  means web-push refused the send on this box before any request existed (a stored subscription with bad keys), so it
+ *  is `unsendable` and its row seals `failed` (review 2119 F10). Otherwise (a reset or a timeout after the write, a TLS
+ *  failure, a connect `ETIMEDOUT`) it is `no-answer`, the safe side, because the service may have taken it (slug
+ *  no-answer-is-never-retried). The rebuild runs only on this error path, never before a send. */
+function subscriptionVerdictOf(e: unknown, rebuild: () => unknown): { verdict: SubscriptionVerdict; status: number | null } {
   if (e instanceof WebPushError) {
     const status = typeof e.statusCode === 'number' ? e.statusCode : null;
     if (status === 404 || status === 410) return { verdict: 'gone', status };
@@ -124,5 +134,7 @@ function subscriptionVerdictOf(e: unknown): { verdict: SubscriptionVerdict; stat
     return { verdict: 'refused', status };
   }
   const code = (e as { code?: unknown } | null)?.code;
-  return { verdict: typeof code === 'string' && BEFORE_SEND_CODES.has(code) ? 'refused' : 'no-answer', status: null };
+  if (typeof code === 'string' && BEFORE_SEND_CODES.has(code)) return { verdict: 'refused', status: null };
+  try { rebuild(); } catch { return { verdict: 'unsendable', status: null }; }
+  return { verdict: 'no-answer', status: null };
 }

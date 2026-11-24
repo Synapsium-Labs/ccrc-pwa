@@ -1,10 +1,14 @@
 // D-8181: the plan deciders (`coord/planPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
-  ticketIsHeld,
+  diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
+  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, ownerItemReady, parsePlanTake, parsePlanTriage, teamOwnerProject, teamOwnerDiagnostic, triageChoice, triageLookup, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
+import * as policy from '../src/coord/planPolicy.js';
+import { EPIC_FOR_OPEN_CASES } from './planEpicForOpenCases.js';
+import type { HierarchyProjectFacts, InboundRow } from '../src/coord/planStore.js';
+import { TRIAGE_DECISIONS } from '../../shared/plan.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
 import type { PlanEpicBody, PlanPutBody } from '../../shared/plan.js';
 
@@ -164,6 +168,49 @@ describe('states', () => {
   });
 });
 
+describe('epics without wave ranges (programme work map WM6, D-8780)', () => {
+  const noWaves = (i: number | string, over: Partial<PlanEpicBody> = {}): PlanEpicBody => {
+    const { waves: _w, ...rest } = epic(i, over);
+    return rest as PlanEpicBody;
+  };
+  it('an epic that omits waves parses, and a new one lists none', () => {
+    expect(parsePlanPut({ epics: [noWaves(1), noWaves(2)] })).toMatchObject({ ok: true });
+    expect(diffPlan(emptyStored, put(noWaves(1), noWaves(2), epic(3, { waves: [1, 2] })), ctx())).toMatchObject({
+      ok: true, changes: { epics: { insert: [{ key: 'e-1', waves: [] }, { key: 'e-2', waves: [] }, { key: 'e-3', waves: [1, 2] }] } },
+    });
+  });
+  it('waves that are not a list are plan-bad-body, absent or not', () => {
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: 'all' }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: null }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+  });
+  // Review 2791 F6, the coordinator's ruling: a put that omits `waves` KEEPS the stored range; an explicit [] clears it.
+  it('a put that omits the waves of a stored epic keeps its range', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(noWaves(1)), ctx());
+    expect(r.ok && r.changes.epics.update.some((u) => 'waves' in u)).toBe(false);
+  });
+  it('an explicit empty list clears the stored range', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(epic(1, { waves: [] })), ctx());
+    expect(r).toMatchObject({ ok: true, changes: { epics: { update: [{ id: 1, waves: [] }] } } });
+  });
+  it('an epic that keeps its range by omission still holds it: another epic cannot take a wave in it', () => {
+    const s = stored(storedEpic('e-1', { waves: [1, 2] }));
+    expect(diffPlan(s, put(noWaves(1), epic(2, { waves: [2, 3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
+  });
+  it('contiguity and overlap are read among the epics that list waves', () => {
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [2, 4] })), ctx())).toMatchObject({ ok: false, word: 'waves-not-contiguous' });
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [3] }), epic(3, { waves: [3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
+  });
+  it('listedWaves: a list is its own range, [] included; an absent list keeps the stored range, else lists none', () => {
+    expect(listedWaves({ waves: [2, 3] }, [1])).toEqual([2, 3]);
+    expect(listedWaves({ waves: [] }, [1])).toEqual([]);
+    expect(listedWaves({}, [1])).toEqual([1]);
+    expect(listedWaves({})).toEqual([]);
+  });
+  describe('epicForOpen: EPIC_FOR_OPEN_CASES of planEpicForOpenCases.ts', () => {
+    it.each(EPIC_FOR_OPEN_CASES.map((c) => [c.name, c] as const))('%s', (_n, c) => { c.run(policy); });
+  });
+});
+
 describe('callers and owners', () => {
   it('a worker files a follow-up into its own epic only', () => {
     const run = { program: 'prog-a', epicId: 4 };
@@ -186,5 +233,292 @@ describe('callers and owners', () => {
     expect(linearOwnerOf('project-a', facts({ presence: () => 'unmeasured' }))).toMatchObject({ live: false, gone: false });
     expect(linearOwnerOf('project-a', facts({ presence: () => 'dead' }))).toMatchObject({ live: false, gone: true });
     expect(linearOwnerOf('project-a', facts({ presence: () => 'absent' }))).toMatchObject({ gone: true });
+  });
+});
+
+// ── The inbound path's deciders (D-8183, Task 4.3) ──
+
+const projectFacts = (project: string, over: Partial<HierarchyProjectFacts> = {}): HierarchyProjectFacts =>
+  ({ project, teamKey: 'AAA', initiatives: 'on', linearOwner: null, ownsTeam: false, order: null, ...over });
+
+const routesFor = (...workspaces: string[]) => ({
+  slots: workspaces.map((workspaceId) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys: ['AAA'] })),
+  unreadableWorkspaces: new Set<string>(), unreadableLegacy: false,
+});
+
+describe('teamOwnerProject (D-8183)', () => {
+  it('routes an unpinned holder only to its unique workspace', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b' })];
+    expect(teamOwnerProject('AAA', rows, 'ws-b', routesFor('ws-a', 'ws-b'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    expect(teamOwnerProject('AAA', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
+    expect(teamOwnerProject('AAA', rows, 'ws-b', null)).toMatchObject({ kind: 'unmeasured', possible: [{ project: 'project-a' }, { project: 'project-b' }] });
+    expect(teamOwnerProject('AAA', rows.slice(0, 1), 'ws-b', routesFor('ws-a', 'ws-b'))).toEqual({ kind: 'none', reason: 'team-ambiguous' });
+  });
+  it('preserves confirmed unpinned ambiguity in an unreadable workspace that has no pinned holder', () => {
+    const routes = { ...routesFor('ws-a', 'ws-b'), unreadableWorkspaces: new Set(['ws-c']) };
+    const rows = [projectFacts('project-a')];
+    expect(teamOwnerProject('AAA', rows, 'ws-c', routes)).toEqual({ kind: 'none', reason: 'team-ambiguous' });
+    // The unpinned row's routing is readable (two readable workspaces already hold the key), so it joins neither and the pinned holder owns.
+    expect(teamOwnerProject('AAA', [...rows, projectFacts('project-c', { workspaceId: 'ws-c' })], 'ws-c', routes)).toMatchObject({ kind: 'owner', row: { project: 'project-c' } });
+  });
+  it('one owner answer for a failed listing and an unreadable slot (F8, D-8808)', () => {
+    const unreadable = (...ids: string[]) => ({ ...routesFor('ws-a'), unreadableWorkspaces: new Set(ids) });
+    const pinnedTop = [projectFacts('project-b', { order: 1, workspaceId: 'ws-b' }), projectFacts('project-a', { order: 2 })];
+    // A pinned top holder is the owner whatever the routing says.
+    expect(teamOwnerProject('AAA', pinnedTop, 'ws-b', null)).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    expect(teamOwnerProject('AAA', pinnedTop, 'ws-b', unreadable('ws-b'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+    // An unpinned top holder whose routing cannot be read is unmeasured, in both shapes.
+    const unpinnedTop = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b' })];
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', null)).toMatchObject({ kind: 'unmeasured' });
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', unreadable('ws-b'))).toMatchObject({ kind: 'unmeasured' });
+    expect(teamOwnerProject('AAA', unpinnedTop, 'ws-b', unreadable('ws-c'))).toMatchObject({ kind: 'unmeasured' });
+  });
+  it('the project marked ownsTeam owns the team key', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, ownsTeam: true })];
+    expect(teamOwnerProject('AAA', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-b' } });
+  });
+  it('with none marked, the first project that set the key owns it, whatever the row order', () => {
+    const rows = [projectFacts('project-b', { order: 5 }), projectFacts('project-a', { order: 2 }), projectFacts('project-c', { order: null })];
+    expect(teamOwnerProject('aaa', rows, 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
+  });
+  it('a key no project holds has no owning project, and another team key is not counted', () => {
+    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })], 'ws-a', null)).toEqual({ kind: 'none', reason: null });
+  });
+  it('a project with a key and no order still owns it when it is the only one', () => {
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { order: null })], 'ws-a', routesFor('ws-a'))).toMatchObject({ kind: 'owner', row: { project: 'project-a' } });
+  });
+});
+
+describe('linearOwnerOfTeam (D-8183)', () => {
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  it("answers the owning project's named owner, else its latest programme's coordinator", () => {
+    const rows = [projectFacts('project-a', { order: 1, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 2 })];
+    expect(linearOwnerOfTeam('AAA', rows, f, 'ws-a', routesFor('ws-a'))).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named', live: true });
+    expect(linearOwnerOfTeam('AAA', [projectFacts('project-b', { order: 2 })], f, 'ws-a', routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+  });
+  it('a team no project holds has no owner row at all', () => {
+    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f, 'ws-a', null)).toEqual({ kind: 'none', reason: null });
+  });
+});
+
+describe('linearOwnerOfProject (D-8183)', () => {
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  it("a project with no key is its own owner's; a sharing project answers the team's owning project", () => {
+    const rows = [projectFacts('project-a', { teamKey: null, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 1 }), projectFacts('project-c', { order: 2, linearOwner: 'coord-c' })];
+    expect(linearOwnerOfProject('project-a', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named' });
+    expect(linearOwnerOfProject('project-c', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+    expect(linearOwnerOfProject('project-b', rows, f, routesFor('ws-a'))).toMatchObject({ project: 'project-b', id: 'coord-of-project-b' });
+  });
+  it('a project that is in no row has no named owner and only the default', () => {
+    expect(linearOwnerOfProject('project-z', [], f, null)).toMatchObject({ project: 'project-z', id: 'coord-of-project-z', source: 'default' });
+  });
+});
+
+it('a pinned top holder owns on a failed listing and on its unreadable slot alike; an outranking unpinned row makes it unmeasured', () => {
+  const rows = [projectFacts('project-b', { order: 1, workspaceId: 'ws-b', linearOwner: 'coord-b' }), projectFacts('project-a', { order: 2 })];
+  const f = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+  expect(linearOwnerOfTeam('AAA', rows, f, 'ws-b', null)).toMatchObject({ kind: 'owner', project: 'project-b' });
+  expect(linearOwnerOfTeam('AAA', rows, f, 'ws-b', { ...routesFor(), unreadableWorkspaces: new Set(['ws-b']) })).toMatchObject({ kind: 'owner', project: 'project-b' });
+  // Outranked by an unpinned row whose routing cannot be read: unmeasured, naming both possible owners.
+  const outranked = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+  expect(linearOwnerOfTeam('AAA', outranked, f, 'ws-b', { ...routesFor(), unreadableWorkspaces: new Set(['ws-b']) })).toEqual({ kind: 'unmeasured', possibleIds: ['coord-b'] });
+  expect(teamOwnerDiagnostic('AAA', rows, f)).toMatchObject({ kind: 'owner', project: 'project-b' });
+});
+
+describe('ownerItemReady (D-8183)', () => {
+  it('does not settle on a live qualified owner while its workspace still has a waiting issue', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a', linearOwner: 'coord-a' })];
+    const facts = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-a' }])).toBe(false);
+    expect(ownerItemReady('project-a', rows, facts, null, [{ teamKey: 'AAA', workspaceId: 'ws-b' }])).toBe(true);
+  });
+});
+
+describe('ownerItemReady live-owner check (F11, D-8808)', () => {
+  it('does not settle when the workspace-qualified owner exists but is not live', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a', linearOwner: 'coord-a' })];
+    const gone = { latestProgrammeCoordinator: () => null, presence: () => 'dead' as const };
+    const alive = { latestProgrammeCoordinator: () => null, presence: () => 'alive' as const };
+    expect(ownerItemReady('project-a', rows, gone, null, [])).toBe(false);
+    expect(ownerItemReady('project-a', rows, alive, null, [])).toBe(true);
+  });
+});
+
+describe('parsePlanTriage (D-8183)', () => {
+  const bad = { ok: false, word: 'plan-bad-body' };
+  it('the four decisions are spelled once', () => expect(TRIAGE_DECISIONS).toEqual(['hand', 'upkeep', 'close', 'raise']));
+  it('a hand needs a programme key; its epic and checkpoint are optional here and checked by the route', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand', programme: 'Not A Key' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1', note: 'n' }))
+      .toEqual({ ok: true, triage: { issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1', note: 'n' } });
+  });
+  it('a close needs a reason of at most 500 characters; the note is bounded alike', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close', reason: 'x'.repeat(501) })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close', reason: 'duplicate of another' })).toMatchObject({ ok: true });
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'raise', note: 'x'.repeat(501) })).toMatchObject(bad);
+  });
+  it('upkeep and raise take the issue alone; an issue that is no identifier, an unknown decision and an unknown field are refused', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'upkeep' })).toEqual({ ok: true, triage: { issue: 'AAA-12', decision: 'upkeep' } });
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'raise' })).toMatchObject({ ok: true });
+    expect(parsePlanTriage({ issue: 'not an id', decision: 'upkeep' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'delete' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'upkeep', extra: 1 })).toMatchObject(bad);
+    expect(parsePlanTriage(null)).toMatchObject(bad);
+  });
+});
+
+describe('parsePlanTake (D-8183)', () => {
+  const bad = { ok: false, word: 'plan-bad-body' };
+  it('takes an issue into an epic, with an optional checkpoint', () => {
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1' })).toEqual({ ok: true, take: { issue: 'AAA-12', epic: 'e1' } });
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', checkpoint: 'c1' })).toEqual({ ok: true, take: { issue: 'AAA-12', epic: 'e1', checkpoint: 'c1' } });
+  });
+  it('closes with a why, or returns with a note', () => {
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: 'duplicate' } })).toEqual({ ok: true, take: { issue: 'AAA-12', close: { why: 'duplicate' } } });
+    expect(parsePlanTake({ issue: 'AAA-12', return: { note: 'not ours' } })).toEqual({ ok: true, take: { issue: 'AAA-12', return: { note: 'not ours' } } });
+  });
+  it('exactly one arm, each well-formed, no unknown field', () => {
+    expect(parsePlanTake({ issue: 'AAA-12' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', close: { why: 'x' } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: '' } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: 'x'.repeat(501) } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', return: {} })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'Not A Key' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', checkpoint: 'c1' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', extra: 1 })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'nope', epic: 'e1' })).toMatchObject(bad);
+  });
+});
+
+describe('triageVerdict (D-8183)', () => {
+  const row = (state: InboundRow['state']): InboundRow => ({
+    linearId: 'l1', workspaceId: 'ws-a', teamKey: 'AAA', identifier: 'AAA-12', title: 't', body: null, seenAt: 1, mailedTo: null, mailedAt: null,
+    handedTo: null, reason: null, actedAt: null, state, itemId: null, retiredWhy: null,
+  });
+  const owner = { id: 'coord-a', source: 'named' as const, live: true, gone: false };
+  it('only the team owner triages', () => {
+    expect(triageVerdict('coord-b', owner, row('waiting'))).toEqual({ ok: false, word: 'not-linear-owner' });
+    expect(triageVerdict('coord-a', { id: null }, row('waiting'))).toEqual({ ok: false, word: 'not-linear-owner' });
+    expect(triageVerdict('coord-a', owner, row('waiting'))).toEqual({ ok: true });
+  });
+  it('the issue must be waiting or mailed', () => {
+    expect(triageVerdict('coord-a', owner, row('mailed'))).toEqual({ ok: true });
+    for (const s of ['handed', 'taken', 'placed', 'closed', 'raised'] as const) expect(triageVerdict('coord-a', owner, row(s))).toEqual({ ok: false, word: 'issue-not-inbound' });
+    expect(triageVerdict('coord-a', owner, null)).toEqual({ ok: false, word: 'issue-not-inbound' });
+  });
+  it('the owner is judged before the issue', () => {
+    expect(triageVerdict('coord-b', owner, null)).toEqual({ ok: false, word: 'not-linear-owner' });
+  });
+});
+
+describe('triageLookup and triageChoice (D-8808, w8-triage-l1)', () => {
+  const noWs = new Map<string, string | null>();
+  const slot = (workspaceId: string, teamKeys: string[]) => ({ ref: { source: 'file' as const, id: workspaceId }, workspaceId, urlKey: workspaceId, teamKeys });
+  const unreadable = (...w: string[]) => ({ ...routesFor('ws-a'), unreadableWorkspaces: new Set(w) });
+
+  it('answers [null] with no holder of the key', () => {
+    expect(triageLookup('AAA', [], noWs, routesFor('ws-a'))).toEqual([null]);
+    expect(triageLookup('AAA', [projectFacts('project-a', { teamKey: 'BBB' })], new Map([['project-a', 'ws-a']]), routesFor('ws-a'))).toEqual([null]);
+  });
+  it('names the holders\' workspaces in row order, skipping a holder with none and repeats', () => {
+    const rows = [projectFacts('project-a'), projectFacts('project-b'), projectFacts('project-c'), projectFacts('project-d')];
+    const ws = new Map<string, string | null>([['project-a', 'ws-a'], ['project-b', 'ws-b'], ['project-c', null], ['project-d', 'ws-a']]);
+    expect(triageLookup('AAA', rows, ws, routesFor('ws-a', 'ws-b'))).toEqual(['ws-a', 'ws-b']);
+  });
+  it('adds every workspace the listing could not read', () => {
+    const rows = [projectFacts('project-a', { workspaceId: 'ws-a' })];
+    expect(triageLookup('AAA', rows, new Map([['project-a', 'ws-a']]), unreadable('ws-z'))).toEqual(['ws-a', 'ws-z']);
+  });
+  it('adds the slot listing the key while an unpinned holder is unmeasured, and no slot of another key', () => {
+    const routes = { ...unreadable('ws-c'), slots: [slot('ws-a', ['AAA', 'CCC']), slot('ws-b', ['BBB']), slot('ws-d', ['DDD'])] };
+    expect(triageLookup('AAA', [projectFacts('project-a')], noWs, routes)).toEqual(['ws-c', 'ws-a']);
+    // A pinned holder alone leaves the unpinned term off.
+    expect(triageLookup('AAA', [projectFacts('project-a', { workspaceId: 'ws-a' })], noWs, routes)).toEqual(['ws-c']);
+    // Readable routing leaves it off too.
+    expect(triageLookup('AAA', [projectFacts('project-a')], noWs, routesFor('ws-a', 'ws-b'))).toEqual([null]);
+  });
+  it('adds a pinned holder\'s workspace whose routing is unmeasured, and only with routes in hand', () => {
+    const rows = [projectFacts('project-b', { workspaceId: 'ws-b' })];
+    expect(triageLookup('AAA', rows, noWs, { ...routesFor('ws-a'), unreadableLegacy: true })).toEqual(['ws-b']);
+    expect(triageLookup('AAA', rows, noWs, routesFor('ws-a', 'ws-b'))).toEqual([null]);
+    expect(triageLookup('AAA', rows, noWs, null)).toEqual([null]);
+  });
+
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  const found = (...w: string[]) => w.map((workspaceId) => ({ teamKey: 'AAA', workspaceId, tag: workspaceId }));
+  const pinnedRows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a' }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+  const routes2 = routesFor('ws-a', 'ws-b');
+
+  it('prefers the row whose owner in its own workspace is the caller over the first', () => {
+    const r = triageChoice('AAA', 'coord-b', found('ws-a', 'ws-b'), pinnedRows, f, routes2);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-b' });
+    expect(r.owner).toMatchObject({ kind: 'owner', project: 'project-b', id: 'coord-b' });
+    expect(triageChoice('AAA', 'coord-of-project-a', found('ws-b', 'ws-a'), pinnedRows, f, routes2).row).toMatchObject({ workspaceId: 'ws-a' });
+  });
+  it('prefers a row the caller may own while it is unmeasured over the first', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, workspaceId: 'ws-b', linearOwner: 'coord-b' })];
+    const r = triageChoice('AAA', 'coord-b', found('ws-a', 'ws-b'), rows, f, null);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-b' });
+    expect(r.owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-of-project-a', 'coord-b'] });
+  });
+  it('an owned row beats an earlier unmeasured one', () => {
+    // The earlier row's unmeasured owner may be the caller too (project-b's named owner), so only the order of the two
+    // preference steps decides: swapped, the earlier unmeasured row would win (review 3172 F1).
+    const rows = [projectFacts('project-a', { order: 1, workspaceId: 'ws-a', linearOwner: 'coord-a' }), projectFacts('project-b', { order: 2, linearOwner: 'coord-a' })];
+    const r = triageChoice('AAA', 'coord-a', found('ws-b', 'ws-a'), rows, f, unreadable('ws-b'));
+    expect(r.row).toMatchObject({ workspaceId: 'ws-a' });
+    expect(r.owner).toMatchObject({ kind: 'owner', id: 'coord-a' });
+    expect(triageChoice('AAA', 'coord-a', found('ws-b'), rows, f, unreadable('ws-b')).owner).toEqual({ kind: 'unmeasured', possibleIds: ['coord-a'] });
+  });
+  it('is the first row, with its owner, when the caller owns none', () => {
+    const r = triageChoice('AAA', 'nobody', found('ws-a', 'ws-b'), pinnedRows, f, routes2);
+    expect(r.row).toMatchObject({ workspaceId: 'ws-a' });
+    expect(r.owner).toMatchObject({ kind: 'owner', project: 'project-a', id: 'coord-of-project-a' });
+  });
+  it('answers no row and the key-only diagnostic when nothing was found', () => {
+    expect(triageChoice('AAA', 'coord-b', [], pinnedRows, f, routes2)).toEqual({ row: null, owner: teamOwnerDiagnostic('AAA', pinnedRows, f) });
+    expect(triageChoice('AAA', 'coord-b', [], pinnedRows, f, routes2).owner).toMatchObject({ kind: 'owner', project: 'project-a' });
+    expect(triageChoice('CCC', 'coord-b', [], pinnedRows, f, routes2)).toEqual({ row: null, owner: { kind: 'none', reason: null } });
+  });
+  it('drops a row of another key, and reads the key without case', () => {
+    const other = [{ teamKey: 'BBB', workspaceId: 'ws-a' }, { teamKey: 'aaa', workspaceId: 'ws-b' }];
+    expect(triageChoice('AAA', 'nobody', other, pinnedRows, f, routes2).row).toEqual(other[1]);
+    expect(triageChoice('AAA', 'nobody', [other[0]!], pinnedRows, f, routes2).row).toBeNull();
+  });
+});
+
+describe('the shared-key item decision (D-8808, review 3048 F5)', () => {
+  const owner = { kind: 'owner', project: 'project-a', id: 'coord-a', source: 'named', live: false, gone: true } as const;
+  const ambiguous = { kind: 'none', reason: 'team-ambiguous' } as const;
+  const noHolder = { kind: 'none', reason: null } as const;
+  const unmeasured = { kind: 'unmeasured', possibleIds: [] } as const;
+
+  it('raises each key the owner rule measured ambiguous, once, upper-case, less the keys an open item carries', () => {
+    const v = policy.sharedKeyItemVerdict([
+      { teamKey: 'aaa', owner: ambiguous }, { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'CCC', owner: ambiguous }, { teamKey: 'BBB', owner: ambiguous },
+      { teamKey: 'DDD', owner: noHolder }, { teamKey: 'EEE', owner: unmeasured }, { teamKey: 'FFF', owner },
+    ], [{ id: 7, teamKey: 'ccc' }], true);
+    expect(v).toEqual({ raise: ['AAA', 'BBB'], settle: [] });
+  });
+
+  it('settles an open item only when no waiting issue of its key is ambiguous or unmeasured, and only on a read routing', () => {
+    const open = [{ id: 1, teamKey: 'AAA' }, { id: 2, teamKey: 'BBB' }, { id: 3, teamKey: 'ccc' }, { id: 4, teamKey: 'DDD' }];
+    const verdicts = [
+      { teamKey: 'AAA', owner: ambiguous }, { teamKey: 'BBB', owner: unmeasured }, { teamKey: 'CCC', owner: noHolder }, { teamKey: 'ccc', owner },
+    ];
+    expect(policy.sharedKeyItemVerdict(verdicts, open, true)).toEqual({ raise: [], settle: [3, 4] });
+    expect(policy.sharedKeyItemVerdict(verdicts, open, false)).toEqual({ raise: [], settle: [] });
+    expect(policy.sharedKeyItemVerdict([], open, false)).toEqual({ raise: [], settle: [] });
+  });
+
+  it('names the rows holding the key that name no workspace, sorted', () => {
+    const rows = [
+      projectFacts('project-c'), projectFacts('project-a', { teamKey: 'aaa' }), projectFacts('project-b', { workspaceId: 'ws-b' }),
+      projectFacts('project-d', { teamKey: 'BBB' }),
+    ];
+    expect(policy.sharedKeyProjects('AAA', rows)).toEqual(['project-a', 'project-c']);
   });
 });

@@ -90,6 +90,10 @@ export interface AppView {
   readonly theme: string;
   /** A touch screen (a coarse pointer) at a desk width too; below 900 there always is one. */
   readonly touch?: boolean;
+  /** Let the context run service workers (reader lab 10 alone: the built app's own worker must register, activate and
+   *  control the page). Absent, workers are blocked, exactly as every other case has them: a worker that took over a page
+   *  would answer some of its requests where the harness's routes cannot see them. */
+  readonly serviceWorkers?: 'allow';
 }
 
 export interface OpenedApp {
@@ -141,12 +145,12 @@ type Unsequenced<E> = E extends HarnessEvent ? Omit<E, 'seq'> : never;
 
 /** A context at `view.width` (844 tall below 900, as a phone; 900 above), with a touch screen below 900 or when
  *  `view.touch` asks, the skin and
- *  the theme stored before the first paint (the keys the app itself reads), service workers blocked, and the fixture
- *  answering `/api` and `/ws`. The page is not navigated yet. */
+ *  the theme stored before the first paint (the keys the app itself reads), service workers blocked unless `view` allows
+ *  them, and the fixture answering `/api` and `/ws`. The page is not navigated yet. */
 export async function openApp(browser: Browser, view: AppView, fixture: AppFixture): Promise<OpenedApp> {
   const phone = view.width < 900;
   const ctx = await browser.newContext({
-    viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: 'block',
+    viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: view.serviceWorkers ?? 'block',
   });
   await ctx.addInitScript(([skinKey, skin, themeKey, theme]) => {
     try {
@@ -192,6 +196,15 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
       log({ kind: 'fulfil-done', path: pathname });
       for (const check of [...settled]) check();
     }
+  });
+  // The server's capability words (Overlord W1 home): `GET /health` sits outside `/api`, so it is routed on its own, by its
+  // exact path (a glob would also take `/api/fleet/health`). Unnamed, it answers a server with no words, so the console draws
+  // nothing of the Overlord's and reads none of its routes; a case that wants the Overlord names `/health` with
+  // `overlord-v1` and the designation and ladder reads in `api`.
+  await ctx.route((url) => url.pathname === '/health', async (route) => {
+    if (offline) { await route.abort('internetdisconnected'); return; }
+    const body = Object.hasOwn(fixture.api, '/health') ? fixture.api['/health'] : { ok: true, build: null, caps: [] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
   // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
   // (a reconnect replaced it) leaves the list.

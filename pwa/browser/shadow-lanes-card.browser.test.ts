@@ -2,7 +2,8 @@
 // 1280 and 1920 in both skins. `test/shadow-lanes-section.test.tsx` holds the card's behaviour in jsdom; this file holds what
 // only an engine can say: the roster card's row draws its two choices from the door's answer, nothing in it or on the page
 // overflows sideways, and Live is one tap then a confirm whose sheet fits, settling on the server's answer; and the continuity
-// row's gate line, the card's longest, wraps inside the card (review 2006 N7).
+// row's longest line wraps inside the card (review 2006 N7). The renewal act lifted that row's gate, so the row draws no gate
+// line and its Live is enabled; the longest line it can draw is now the replay quiz's `baseline-missing` refusal of a Live.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. `POST /api/coord/lane-arm` answers the 409
 // `confirm-required` to a Live with no key and the view to one with the key, as the route does. Run: `( cd pwa &&
@@ -136,6 +137,9 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
         if (shots) await page.screenshot({ path: path.join(shots, `shadow-lanes-confirm-${view.skin}-${view.width}.png`) });
         await sheet.getByRole('button', { name: T.confirmLabel }).click();
         await expect.poll(() => live.isChecked(), { timeout: 10_000 }).toBe(true);
+        // The confirm animates out after the write lands: once it has gone, the keyboard's way back opens none (Task C38:
+        // the page is no longer aria-hidden while the sheet leaves, so the radio reads checked before the sheet has gone).
+        await expect.poll(() => sheet.count(), { timeout: 10_000 }).toBe(0);
         expect(posts).toEqual([{ lane: 'roster-card', choice: 'live' }, { lane: 'roster-card', choice: 'live', confirm: KEY }]);
         fits(await measure(section));
 
@@ -153,25 +157,45 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
   }
 });
 
-describe('the continuity row\'s gate line at every width, in both skins (review 2006 N7)', () => {
-  const gate = laneArmGate('continuity')!;
+describe('the continuity row\'s longest line at every width, in both skins (review 2006 N7)', () => {
+  // The renewal act lifted the row's gate (review 2003 F3), so no gate line is drawn and Live is enabled. The server's
+  // refusal of a Live before the replay quiz's baseline (W0-28) is the longest line the row can draw now.
+  const refusal = `${T.refused} (${T.baselineMissing})`;
   for (const view of VIEWS) {
     it(named(view), async () => {
+      expect(laneArmGate('continuity'), 'the continuity row is gated again').toBeNull();
       const app = await openApp(browser!, view, FIXTURE);
       const { ctx, page, errors } = app;
-      await ctx.route(`**${DOOR}`, (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        ok: true, lanes: [{ lane: 'continuity', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null }],
-      }) }));
+      const posts: unknown[] = [];
+      await ctx.route(`**${DOOR}`, (r) => {
+        if (r.request().method() === 'GET') {
+          return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+            ok: true, lanes: [{ lane: 'continuity', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null }],
+          }) });
+        }
+        posts.push(r.request().postDataJSON());
+        return r.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({
+          ok: false, error: 'baseline-missing', detail: T.baselineMissing,
+        }) });
+      });
       try {
         await page.goto(server!.origin + '/settings/automation');
         const section = page.getByRole('region', { name: T.title });
-        await expect.poll(() => section.getByRole('radio', { name: T.shadow }).isChecked(), { timeout: 20_000 }).toBe(true);
-        const line = section.getByText(gate);
-        expect(await line.isVisible(), 'the gate line is not drawn').toBe(true);
+        const shadow = section.getByRole('radio', { name: T.shadow });
+        const live = section.getByRole('radio', { name: T.live });
+        await expect.poll(() => shadow.isChecked(), { timeout: 20_000 }).toBe(true);
+        expect(await live.isDisabled(), 'the continuity row\'s Live is disabled').toBe(false);
+        fits(await measure(section));
+
+        await live.click();
+        const line = section.getByText(refusal);
+        await expect.poll(() => line.isVisible(), { timeout: 10_000 }).toBe(true);
+        await expect.poll(() => shadow.isChecked(), { timeout: 10_000 }).toBe(true);
+        expect(posts).toEqual([{ lane: 'continuity', choice: 'live' }]);
         const m = await measure(section);
         fits(m);
-        expect(m.texts.some((t) => t.text === gate), 'the gate line is not one of the card\'s measured texts').toBe(true);
-        if (process.env.CCRC_SHOTS) await section.screenshot({ path: path.join(process.env.CCRC_SHOTS, `shadow-lanes-gate-${view.skin}-${view.width}.png`) });
+        expect(m.texts.some((t) => t.text === refusal), 'the refusal line is not one of the card\'s measured texts').toBe(true);
+        if (process.env.CCRC_SHOTS) await section.screenshot({ path: path.join(process.env.CCRC_SHOTS, `shadow-lanes-continuity-${view.skin}-${view.width}.png`) });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

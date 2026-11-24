@@ -1,6 +1,6 @@
 import type { KeyFact, NoteKind } from './continuity.js';
 import type { FleetRole } from './fleetRoles.js';
-import type { ItemKind, ItemState, NeededBy } from './ledgers.js';
+import type { ItemKind, ItemState, NeededBy, RatifiedByKind } from './ledgers.js';
 
 /** The card's vocabulary (Overlord design spec §3.3.3, C38; §3.3.9, C50 to C52; the spec is
  *  `docs/superpowers/specs/2026-11-09-overlord-design.md`). Ring L0, context K: pure vocabulary, type-only imports of
@@ -52,8 +52,10 @@ export interface CardRun {
   readonly kind: string;
 }
 
-/** One goal of a programme. A goal the operator has not ratified is untrusted data (C50, §3.8). */
-export interface CardGoal { readonly text: string; readonly ratified: boolean }
+/** One goal of a programme. Every goal is untrusted data, ratified or not (C50, §3.8): its text is session-written, and a
+ *  goal's ratifier may be the coordinator (Overlord W1, portfolio B). `ratifiedBy` names who ratified a ratified goal, so the
+ *  card can say it (review 2240 F8); absent on an unratified one. */
+export interface CardGoal { readonly text: string; readonly ratified: boolean; readonly ratifiedBy?: RatifiedByKind }
 /** One decision recorded in a programme's ledger. */
 export interface CardDecision { readonly at: number; readonly text: string }
 
@@ -126,9 +128,33 @@ export interface CardHandover {
   readonly cautions: readonly string[];
   readonly tone: string;
 }
-/** The checkpoint carried across a renewal: in W1a, the handover note of the generation this one replaced (the notes piece;
- *  the renewal-act piece adds the thread). `at` is when the note was written. */
-export interface CardCheckpoint { readonly at: number; readonly handover: CardHandover }
+/** One live note as the checkpoint kept it when the generation before this one renewed: the note's own fields, its key as one
+ *  phrase (`noteKeyText`), and no key fact (the row is read as it was then). Its `waitsOn` and `next` are untrusted. */
+export interface CardCheckpointNote {
+  readonly id: number;
+  readonly at: number;
+  readonly kind: NoteKind;
+  readonly key: string;
+  readonly waitsOn: string;
+  readonly next: string;
+}
+/** One ruling a coordinator's checkpoint carries (the renewal-act piece): the operator's decision, sent to it as mail, kept as
+ *  stored. `source` is the door's word (`tick` or `correction`); `subject` and `text` are untrusted. */
+export interface CardRuling {
+  readonly at: number;
+  readonly source: string;
+  readonly subject: string;
+  readonly text: string;
+}
+/** The checkpoint carried across a renewal: what the generation this one replaced stored when the lane renewed it (the
+ *  renewal-act piece). `at` is when the lane stored it. ADDITIVE: the handover note is `null` for a hard renewal (none is
+ *  asked), and `notes` and `rulings` are absent in a snapshot stored before they existed, which reads as none. */
+export interface CardCheckpoint {
+  readonly at: number;
+  readonly handover: CardHandover | null;
+  readonly notes?: readonly CardCheckpointNote[];
+  readonly rulings?: readonly CardRuling[];
+}
 
 /** One pending timer of the session's own (the timers piece of W1a, plan `w1a-timers.md` Task 10): its id, its due time
  *  (an absolute stamp), the first words of its note (`timerPreview`, the one cut: the note itself never rides the card),
@@ -177,9 +203,10 @@ export const ANCHOR_CARD_MAX_CHARS = 1_500;
 /** The prompt's anchor after an automatic compaction: the canaries and the instruction only (W0-04 measured a 600-character
  *  UserPromptSubmit context arriving with the prompt). */
 export const ANCHOR_PROMPT_MAX_CHARS = 600;
-/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction) and `fork` (no
- *  text: the door answers whether the slot is live, and the hook prints its one refusal line). */
-const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork', true>> = { start: true, prompt: true, fork: true };
+/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction), `fork` (no
+ *  text: the door answers whether the slot is live, and the hook prints its one refusal line) and `delta` (one line, the
+ *  canaries then the counts, which the door process caches for the hook's every prompt: Overlord W1 door process A2). */
+const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork' | 'delta', true>> = { start: true, prompt: true, fork: true, delta: true };
 export type AnchorForm = keyof typeof ANCHOR_FORM_MAP;
 export const ANCHOR_FORMS = Object.keys(ANCHOR_FORM_MAP) as readonly AnchorForm[];
 export function isAnchorForm(v: unknown): v is AnchorForm {

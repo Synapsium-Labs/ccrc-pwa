@@ -73,6 +73,7 @@ const FIXTURE: AppFixture = {
     '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting: WAITING },
     '/api/programmes/prog-a/goals': { ok: true, goals: goals('prog-a') },
     '/api/programmes/prog-b/goals': { ok: true, goals: goals('prog-b') },
+    '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     '/api/programmes/prog-a/secrets': { ok: true, program: 'prog-a', slots: [] },
   },
   fleetFrames: [
@@ -124,7 +125,7 @@ const listed = (page: Page): Promise<string[]> =>
 describe.each(SKINS)('one Waiting on you page in %s', (skin) => {
   for (const width of WIDTHS) {
     it(`at ${width}: a programme chip opens the filtered list; an item steps along it and goes back to it; clearing shows every programme`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/', 'section.pg-box .pg-waiting');
+      const { ctx, page, errors } = await open(skin, width, '/fleet', 'section.pg-box .pg-waiting');
       try {
         await page.locator('section.pg-box', { hasText: 'Programme B' }).locator('.pg-waiting').click();
         await page.waitForSelector('.wl-groups .wl-item');

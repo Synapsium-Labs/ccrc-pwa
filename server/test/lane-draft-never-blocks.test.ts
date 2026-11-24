@@ -248,6 +248,9 @@ const CALL_SITES: readonly Site[] = [
   { file: 'server.ts', fn: 'POST /api/sessions/:id/prompt', policy: 'refuse-or-replace' },   // the PWA's human send
   { file: 'watch.ts', fn: 'idleNudgeOne', policy: 'stash' },                     // the idle compact nudge
   { file: 'watch.ts', fn: 'mailPass', policy: 'stash' },                        // every mail
+  // The renewal host's two first prompts, one call per `RenewalPrompt` row (Overlord W1a; the Overlord's own row, designation).
+  { file: 'continuity/renewalWiring.ts', fn: 'renewalHostOf', policy: 'stash' }, // `renewal-first-prompt`
+  { file: 'continuity/renewalWiring.ts', fn: 'renewalHostOf', policy: 'stash' }, // `overlord-first-prompt`
 ];
 
 const FN_RE = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?(?!(?:if|for|while|switch|catch|return|await)\b)([A-Za-z_]\w*)\s*\(|^(?:export )?(?:async )?function\s+([A-Za-z_]\w*)|app\.(get|post|put|patch|delete)\('([^']+)'/;

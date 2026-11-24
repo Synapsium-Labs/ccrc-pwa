@@ -125,14 +125,14 @@ describe('each lazy route renders with the computed styles of the eager build', 
         const direct = await openApp(browser!, view, FIXTURE);
         try {
           // Reached by a navigation: the entry draws the fleet first, then the chunk (and its sheet) loads.
-          await reached.page.goto(server!.origin + '/');
+          await reached.page.goto(server!.origin + '/fleet');
           await fleetReady(reached.page);
           const entryBefore = await snapshot(reached.page, '.app-shell');
           expect(Object.keys(entryBefore).length, 'the fleet drew something to measure').toBeGreaterThan(2);
           await go(reached.page, route);
           await drawn(reached.page);
           const viaNavigation = await snapshot(reached.page, '.shell-detail');
-          await go(reached.page, '/');
+          await go(reached.page, '/fleet');
           await fleetReady(reached.page);
           expect(await snapshot(reached.page, '.app-shell'), 'loading the chunk changed no style the entry drew').toEqual(entryBefore);
 
@@ -163,7 +163,7 @@ describe('the composer’s field draws no focus ring, as the eager build drew it
       try {
         const rings: string[] = [];
         for (const how of ['opened', 'reached'] as const) {
-          await opened.page.goto(server!.origin + (how === 'opened' ? `/s/${SID}` : '/'));
+          await opened.page.goto(server!.origin + (how === 'opened' ? `/s/${SID}` : '/fleet'));
           if (how === 'reached') {
             await fleetReady(opened.page);
             await go(opened.page, `/s/${SID}`);
@@ -188,7 +188,7 @@ describe('the first @layer statement still precedes every built sheet', () => {
   it('after Settings, Runs and the Digest have loaded their chunks', async () => {
     const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
     try {
-      await opened.page.goto(server!.origin + '/');
+      await opened.page.goto(server!.origin + '/fleet');
       await fleetReady(opened.page);
       for (const route of ['/settings', '/runs', '/digest']) {
         await go(opened.page, route);

@@ -1,5 +1,7 @@
-// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/` is the
-// fleet, and every other route fills the detail pane. On phones this is a
+// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/fleet` is
+// the fleet, `/` is the home (Overlord W1 home: it replaces itself with the
+// place `homePlace` answers, the Fleet's or the Overlord's, `HomeRoute`), and
+// every other route fills the detail pane. On phones this is a
 // full-screen swap (one pane at a time); on desktop it's a two-pane
 // master–detail — the fleet as a persistent sidebar beside the active detail
 // pane (styles/shell.css does the responsive layout, the same DOM serves
@@ -51,10 +53,15 @@ const RunsAdvancedScreen = lazyScreen(() => import('./screens/RunsAdvancedScreen
 const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
 const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
+import { EpicScreen } from './ledgers/EpicScreen';
+import { UpkeepScreen } from './ledgers/UpkeepScreen';
 import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
+import { useOverlordStore } from './stores/overlord';
+import { HomeRoute } from './overlord/HomeRoute';
+import { OverlordRoute } from './overlord/OverlordRoute';
 import './styles/shell.css';
 
 export { navigate } from './lib/router';
@@ -68,7 +75,9 @@ function ShellCommands(): ReactNode {
 /** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
 function ArchiveRoute(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
-  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(sessionPath(id))} />;
+  // The delegation frame feeds the Archive's "Work no session owns" section (desktop polish H4); null reads unavailable.
+  const delegation = useFleetStore((s) => s.delegation);
+  return <ArchiveScreen sessions={sessions} delegation={delegation} onOpen={(id) => navigate(sessionPath(id))} />;
 }
 
 export function App(): ReactNode {
@@ -83,6 +92,9 @@ export function App(): ReactNode {
     // dialog badges. connect() is idempotent; the socket survives navigation.
     useFleetStore.getState().connect();
   }, []);
+  // The Overlord's reads (Overlord W1 home, Task 2): one store, started once at the shell, so the bars, the home route and the
+  // place read one answer. Its stop ends the poll when the shell unmounts.
+  useEffect(() => useOverlordStore.getState().start(), []);
   // The shell holds no subscription to `sessions` (C6, D-6438): a fleet frame that changes one row re-renders the
   // readers of that row, not the frame, the ladder and every sibling mounted here. `/archive` subscribes locally.
   // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
@@ -105,6 +117,8 @@ export function App(): ReactNode {
   // the fleet's placeholder, never a screen the table does not name.
   const at = matchRoute(path);
   const route = at?.route.id ?? null;
+  // The epic row's second capture (`RouteMatch.rest`); undefined on every other row.
+  const [epicKey] = at?.rest ?? [];
   const sessionId = route === 'session' ? at!.param : null;
   // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback, except a
   // malformed escape (`/settings/%zz`), which is outside the table (carry C, D-7951; review 1437 F2).
@@ -178,7 +192,12 @@ export function App(): ReactNode {
   const loading = (screen: ReactNode): ReactNode => (
     <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}>{screen}</Suspense>
   );
-  const ladder = sessionId !== null ? loading(
+  const ladder = route === 'home' ? (
+    // `/` decides the home and replaces itself with the place it answers (Overlord W1 home, plan question 1).
+    <HomeRoute />
+  ) : route === 'overlord' ? (
+    <OverlordRoute />
+  ) : sessionId !== null ? loading(
     // key remounts per session so per-session UI state (terminal drawer,
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />
@@ -218,6 +237,11 @@ export function App(): ReactNode {
     // (`shapeProgramSlug`) matches no route (the row's `accepts`), so it is an unknown path: the placeholder below on a
     // desk, and the fleet on a phone, where `shellViewOf` answers `fleet` for it (carry C, D-7951; review 1388 F1).
     <ProgrammeScreen key={at!.param} slug={at!.param!} />
+  ) : route === 'epic' && epicKey !== undefined ? (
+    // Keyed by slug and epic key: one epic's read never shows under another's name (Linear hierarchy §11.2, D-8184).
+    <EpicScreen key={`${at!.param}/${epicKey}`} slug={at!.param!} epicKey={epicKey} />
+  ) : route === 'upkeep' ? (
+    <UpkeepScreen key={at!.param} project={at!.param!} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">

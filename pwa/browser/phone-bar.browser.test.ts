@@ -19,7 +19,7 @@
 import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 import { withRunBinding } from '../test/runBindingFixture';
@@ -62,6 +62,7 @@ const FIXTURE: AppFixture = (() => {
       '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
       '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting },
       '/api/programmes/prog-a/goals': { ok: true, goals: GOALS },
+      '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     },
     fleetFrames: [
       { type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS },
@@ -85,6 +86,27 @@ const FIXTURE_99: AppFixture = (() => {
   };
 })();
 
+/** A server advertising `overlord-v1` with a bound Overlord on the `chat` rung (Overlord W1 home, Task 3): the phone bar draws the
+ *  Overlord's door first, eight doors in all. */
+const FIXTURE_OVERLORD: AppFixture = {
+  ...FIXTURE,
+  api: {
+    ...FIXTURE.api,
+    '/health': { ok: true, build: null, caps: ['overlord-v1'] },
+    '/api/overlord/designation': {
+      ok: true,
+      designation: {
+        bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+        accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+      },
+    },
+    '/api/overlord/ladder': {
+      ok: true, operatorRung: 'chat', operatorRungSource: 'set', effectiveRung: 'chat', binding: [], latches: [], conditions: [],
+      readBy: [], lastChange: null, rungs: [],
+    },
+  },
+};
+
 const SKINS = [REFINED, INSTRUMENT] as const;
 const PHONES = [360, 390] as const;
 const DESKS = [900, 1280] as const;
@@ -92,7 +114,7 @@ const PHONE_DOORS = ['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accoun
 /** Each page with the selector that says it is drawn. */
 const PAGES = [
   ['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/programmes/prog-a', '.pv'], ['/docs', '.shell-detail'],
-  ['/settings', '.shell-detail h1'], ['/', '.shell-nav .fleet'],
+  ['/settings', '.shell-detail h1'], ['/fleet', '.shell-nav .fleet'],
 ] as const;
 
 let dist: string | undefined;
@@ -118,8 +140,8 @@ interface Insets { readonly top?: number; readonly bottom?: number }
 /** A notched phone: a 47 px status bar and a 34 px home indicator. */
 const NOTCHED: Insets = { top: 47, bottom: 34 };
 
-async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE) {
-  const opened = await openApp(browser!, { skin, theme: 'light', width }, fixture);
+async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE, theme = 'light') {
+  const opened = await openApp(browser!, { skin, theme, width }, fixture);
   if (insets !== undefined) {
     const cdp = await opened.ctx.newCDPSession(opened.page);
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
@@ -150,6 +172,40 @@ const measureBar = (page: Page) => page.evaluate(() => {
   };
 });
 
+// Overlord W1 home, Task 3 (plan question 13, slug `phone-bar-sheds-doors-to-search`): with the Overlord's door the bar has
+// eight doors. A door keeps the width its word needs (50 px, `PHONE_DOOR_FIT_PX`, measured here: "Accounts" needs 49 px), so
+// from 400 px all eight fit, at 360 to 399 Docs is reached through Search, and at 320 Accounts too. The plan's matrix (320,
+// 360, 390 and 899, both skins, a light and a dark palette; review 3319 A6), and 412, the first common width with all eight.
+const THEMES = ['light', PHOSPHOR] as const;
+describe.each(SKINS)('the phone bar with the Overlord in %s', (skin) => {
+  const EIGHT = ['go-overlord', ...PHONE_DOORS];
+  const cases = [
+    [320, EIGHT.filter((d) => d !== 'go-docs' && d !== 'go-accounts')], [360, EIGHT.filter((d) => d !== 'go-docs')],
+    [390, EIGHT.filter((d) => d !== 'go-docs')], [412, EIGHT], [899, EIGHT],
+  ] as const;
+  for (const theme of THEMES) for (const [width, doors] of cases) {
+    it(`${theme}, at ${width}: the Overlord's door is first, ${doors.length} doors, each at least 44 x 44 inside the viewport, words whole`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/fleet', '[data-command="go-overlord"]', undefined, FIXTURE_OVERLORD, theme);
+      try {
+        const bar = await measureBar(page);
+        expect(bar, 'the bar').not.toBeNull();
+        expect(bar!.doors.map((d) => d.command)).toEqual([...doors]);
+        for (const d of bar!.doors) {
+          expect(d.h, `${d.command} height`).toBeGreaterThanOrEqual(44);
+          expect(d.w, `${d.command} width ${JSON.stringify(d)}`).toBeGreaterThanOrEqual(44);
+          expect(d.left, `${d.command}`).toBeGreaterThanOrEqual(0);
+          expect(d.right, `${d.command}`).toBeLessThanOrEqual(bar!.innerWidth + 0.5);
+          expect(d.wordWhole, `${d.command}: its word is whole ${JSON.stringify(d)}`).toBe(true);
+        }
+        expect(bar!.sideways, 'sideways scroll').toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
 describe.each(SKINS)('the phone bar in %s', (skin) => {
   for (const width of PHONES) {
     it(`at ${width}: the bar is fixed to the foot on every ledger page, Docs, Settings and the fleet, seven doors, each at least 44 x 44, words whole`, async () => {
@@ -175,7 +231,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           const clear = await page.evaluate(() => {
             window.scrollTo(0, document.documentElement.scrollHeight);
             const top = document.querySelector('nav.shell-phone-nav')!.getBoundingClientRect().top;
-            const pane = document.querySelector<HTMLElement>(location.pathname === '/' ? '.shell-nav .fleet' : '.shell-detail')!;
+            const pane = document.querySelector<HTMLElement>(location.pathname === '/fleet' ? '.shell-nav .fleet' : '.shell-detail')!;
             const last = [...pane.querySelectorAll<HTMLElement>('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().height > 0).at(-1);
             return last === undefined ? null : { lastBottom: last.getBoundingClientRect().bottom, barTop: top };
           });
@@ -195,7 +251,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           const clear = await page.evaluate(() => {
             window.scrollTo(0, document.documentElement.scrollHeight);
             const bar = document.querySelector('nav.shell-phone-nav')!.getBoundingClientRect();
-            const pane = document.querySelector<HTMLElement>(location.pathname === '/' ? '.shell-nav .fleet' : '.shell-detail')!;
+            const pane = document.querySelector<HTMLElement>(location.pathname === '/fleet' ? '.shell-nav .fleet' : '.shell-detail')!;
             const last = [...pane.querySelectorAll<HTMLElement>('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().height > 0).at(-1);
             return { lastBottom: last?.getBoundingClientRect().bottom ?? null, barTop: bar.top, barHeight: bar.height };
           });
@@ -242,7 +298,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
     });
 
     it(`at ${width}: on the fleet, + New sits above the bar`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/', '.shell-nav .fleet');
+      const { ctx, page, errors } = await open(skin, width, '/fleet', '.shell-nav .fleet');
       try {
         const at = await page.evaluate(() => {
           const fab = document.querySelector<HTMLElement>('[data-command="new-session"]');
@@ -369,16 +425,18 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
 
   for (const width of DESKS) {
     it(`at ${width}: no bar at a desk`, async () => {
-      for (const [path, ready] of [['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/', '.shell-nav .fleet']] as const) {
+      for (const [path, ready] of [['/waiting', '.wl-group'], ['/waiting/2', '.wi'], ['/fleet', '.shell-nav .fleet']] as const) {
         const { ctx, page, errors } = await open(skin, width, path, ready);
         try {
           expect(await page.locator('nav.shell-phone-nav').count(), path).toBe(0);
-          // No fleet place at a desk: the one go-fleet there is Instrument's wordmark door, the way home (desk-nav Task A,
-          // D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of this case reads; Refined draws none.
-          const home = page.locator('[data-command="go-fleet"]');
-          expect(await home.count(), `${path}: no fleet place at a desk`).toBe(skin === INSTRUMENT ? 1 : 0);
+          // No fleet place at a desk (D25): no go-fleet at all. The way home is Instrument's wordmark door, which runs go-home
+          // since Overlord W1 home (desk-nav Task A, D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of
+          // this case reads; Refined draws none.
+          expect(await page.locator('[data-command="go-fleet"]').count(), `${path}: no fleet place at a desk`).toBe(0);
+          const home = page.locator('[data-command="go-home"]');
+          expect(await home.count(), `${path}: the one way home`).toBe(skin === INSTRUMENT ? 1 : 0);
           if (skin === INSTRUMENT) {
-            expect(await page.locator('header nav[aria-label="Primary"] > [data-command="go-fleet"] [data-wordmark]').count(),
+            expect(await page.locator('header nav[aria-label="Primary"] > [data-command="go-home"] [data-wordmark]').count(),
               `${path}: it is the wordmark door, in the header's Primary nav`).toBe(1);
           }
           expect(errors).toEqual([]);

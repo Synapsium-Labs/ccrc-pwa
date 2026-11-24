@@ -16,7 +16,9 @@ export function isDispatchAbandonChoice(v: unknown): v is DispatchAbandonChoice 
 /** How long a `planned` run may carry a `dispatchStartedAt`, with no session bound, before the server abandons it:
  *  the default of `CCRC_DISPATCH_ABANDON_MS`. Fifteen minutes. The console calls such a dispatch stalled at
  *  `SPAWN_STALL_MS` (6 min); this waits two and a half times that, and three times the `ws-add` verb ceiling the runner
- *  and the agent enforce (300 s), so no `ws-add` started at that stamp can still be running when the act reads it. */
+ *  and the agent enforce (300 s), so no `ws-add` started at that stamp can still be running when the act reads it.
+ *  An orphaned run (D-8126, `DISPATCH_ORPHANED_EVENT`) skips this bound only when ccd's `ws-add` ended measured (it
+ *  returned), so the same holds for it: a cut-short or unmeasured ending journals no orphan and waits here. */
 export const DISPATCH_ABANDON_DEFAULT_MS = 900_000;
 
 /** What the server read of the switch, on the wire (`GET /api/coord/dispatch-abandon`).
@@ -53,14 +55,39 @@ export const DISPATCH_ABANDON_EVENT = 'dispatch-abandoned:never-came-back';
  *  from a dispatch's own. Followed by `session=<id> started=<ms>`. */
 export const DISPATCH_BIND_EVENT = 'dispatch-bound:returned-child';
 
+/** D-8126: the `run_events.detail` prefix a dispatch journals when its `ws-add` ENDED MEASURED (ok, or a failure ccd
+ *  exited with) and the AFTER read could not name the one new workspace (`registry-unmeasurable`, `ambiguous-dispatch`):
+ *  a spawn may exist that no run owns, and no `ws-add` of that dispatch still runs. Followed by the refusal's name. The
+ *  dead-dispatch pass reads it as "do not wait out the bound". */
+export const DISPATCH_ORPHANED_EVENT = 'dispatch-orphaned:';
+
+/** D-8126: the orphaned refusal's name (what follows `DISPATCH_ORPHANED_EVENT`) when a run's NEWEST journal row at or after
+ *  its dispatch stamp is one, else `null`: the store's candidate rule (`stalledDispatchRunIds`), read again on the run's
+ *  own journal, oldest row first. A later re-dispatch restamps the run, which puts an older orphan row before the stamp
+ *  and hides it; a newer row of any other kind hides it too. */
+export function orphanedRefusalOf(events: readonly { at: number; detail: string | null }[], stamp: number | null): string | null {
+  if (stamp === null) return null;
+  const since = events.filter((e) => e.at >= stamp);
+  const last = since.length === 0 ? null : since[since.length - 1]!.detail;
+  return last !== null && last.startsWith(DISPATCH_ORPHANED_EVENT) ? last.slice(DISPATCH_ORPHANED_EVENT.length) : null;
+}
+
 /** The mail's subject: one kebab word, the server's other mail subjects' shape. */
 export const DISPATCH_ABANDON_SUBJECT = 'dispatch-abandoned';
 
 /** The coordinator's mail body: what was abandoned, why, and what to do. */
 export function dispatchAbandonMailBody(m: {
   runId: number; program: string; wave: number; project: string; startedAt: number; boundMs: number;
+  /** D-8126: the orphaned refusal's name, when the dispatch itself said a spawn may exist that no run owns. */
+  orphaned?: string | null;
 }): string {
   const minutes = Math.round(m.boundMs / 60_000);
+  if (m.orphaned !== undefined && m.orphaned !== null) {
+    return `Run #${m.runId} (${m.program}, wave ${m.wave}, project ${m.project}) was abandoned by the server: its dispatch `
+      + `started at ${new Date(m.startedAt).toISOString()} and refused after its spawn (${DISPATCH_ORPHANED_EVENT}${m.orphaned}), `
+      + 'so no run names the workspace it may have made, and no workspace names this run. The run is closed failed. '
+      + 'Open a new run and dispatch it again if the work is still wanted.';
+  }
   return `Run #${m.runId} (${m.program}, wave ${m.wave}, project ${m.project}) was abandoned by the server: its dispatch `
     + `started at ${new Date(m.startedAt).toISOString()} and never came back. After ${minutes} min no workspace names `
     + 'the run and no dispatch for it is still running, so the run is closed failed. '

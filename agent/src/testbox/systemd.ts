@@ -64,24 +64,35 @@ export function unitExit(show: ReadonlyMap<string, string>): number {
 }
 
 /** The main process's `ExecMainCode`s: `exited`, `killed`, `dumped`, or their numbers. Anything else (`0`, or the
- *  field absent) means the main process never ran. */
+ *  field absent) means the main process never ran, or (`0` only) that the unit was collected after a pass (`unitEnd`). */
 const MAIN_RAN = new Set(['exited', 'killed', 'dumped', '1', '2', '3']);
 
 /** A unit's end from `start --wait`'s own status and `show`. `ExecMain*` describe the main process only, and after a
  *  start that failed before it (an `ExecStartPre=` that refused, a unit not found, masked or denied) they are the
  *  defaults or the last run's: so 0 is a pass only when `start` exited 0, `Result=` is `success` and the main process
- *  ran. Every other 0 reads as `UNKNOWN_EXIT`; a non-zero exit of the main is kept as it is. */
+ *  ran. Every other 0 reads as `UNKNOWN_EXIT`; a non-zero exit of the main is kept as it is.
+ *
+ *  A COLLECTED PASS (D-8962). The system manager unloads a unit as soon as it is inactive and nothing
+ *  references it (`CollectMode=inactive`, the default), so the `show` after a `start --wait` that ended well reads a
+ *  freshly loaded unit: `ExecMainCode=0`, `Result=success` (measured on the test box's systemd 259, for every prepare,
+ *  run and clean that passed, so every run read as a failed prepare and every clean as failed, and both run users
+ *  stayed held). A unit that ended `failed` is never collected, and `start --wait` exits non-zero for it. So
+ *  `ExecMainCode=0` with `start` exiting 0 and `Result=success` is a pass: the one start that would also answer so is a
+ *  `Condition…=` that skipped the unit, and no unit the service starts has one (testbox-box-package.test.ts pins it). */
 export function unitEnd(started: { readonly status: number; readonly killed: boolean }, show: ReadonlyMap<string, string>): UnitEnd {
   const result = show.get('Result') ?? 'unknown';
-  if (!MAIN_RAN.has(show.get('ExecMainCode') ?? '')) return { exit: UNKNOWN_EXIT, result };
+  const code = show.get('ExecMainCode');
+  if (code === '0' && started.status === 0 && !started.killed && result === 'success') return { exit: 0, result };
+  if (!MAIN_RAN.has(code ?? '')) return { exit: UNKNOWN_EXIT, result };
   const exit = unitExit(show);
   if (exit === 0 && (started.status !== 0 || started.killed || result !== 'success')) return { exit: UNKNOWN_EXIT, result };
   return { exit, result };
 }
 
 /** The real manager: `systemctl start --wait`, `stop` and `show` of a checked name, nothing else. `start --wait` runs
- *  under the long bound (`CCRC_TESTBOX_UNIT_MAX`, which the units' own `RuntimeMaxSec=` also is, TB7); a client the
- *  bound ended stops the unit before the end is read, so nothing runs on after the service has moved on. */
+ *  under the long bound (`CCRC_TESTBOX_UNIT_MAX`, which the units' own `RuntimeMaxSec=` also is, and the oneshot
+ *  install unit's `TimeoutStartSec=`, TB7); a client the bound ended stops the unit before the end is read, so nothing
+ *  runs on after the service has moved on. */
 export function systemctlManager(short: Exec, long: Exec, systemctl = 'systemctl'): SystemManager {
   const exec = short;
   return {

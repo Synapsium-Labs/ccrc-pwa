@@ -5,7 +5,7 @@
 // test user (chown is a no-op shim, the installer runs under the TB_SYS fixture).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { makeBox, makeWorld, install, REPO, type Box, type World } from './testboxBoxFixture.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -14,6 +14,10 @@ removeTmpFixturesEachTest();
 
 const ADMIN = readFileSync(path.join(REPO, 'ccd', 'ccrc-testbox-admin'), 'utf8');
 const SNIPPET = /^\s*_tba_cx_out sh -c '(umask 077; p=\$1; d=\$\(dirname "\$p"\);[^']*)' sh "\$TBA_BOX_ENV_PATH"/m.exec(ADMIN)?.[1];
+
+const TOKEN_SNIPPET = /^\s*_tba_cx_out sh -c '(umask 022; p=\$1; case \$p in[^']*)' sh "\$svc_tok"/m.exec(ADMIN)?.[1];
+// The installer and its steps (deploy/testbox/box-steps since D-8903, which the box updater calls too).
+const INSTALLER = ['install.sh', 'box-steps'].map((f) => readFileSync(path.join(REPO, 'deploy', 'testbox', f), 'utf8')).join('\n');
 
 let W: World;
 beforeAll(async () => { W = await makeWorld(); }, 180_000);
@@ -81,5 +85,28 @@ describe('connect: try again against the real installer (D-8166, TC7)', () => {
     const w = writeBoxFile(b, 'CCRC_TESTBOX_EXTRA=1\n', shim);
     expect(w.rc, w.err).toBe(0);
     expect(mode(b.boxFile)).toBe('600');
+  });
+
+  it('the service token is written again over the one a first pairing left, at 0600 (a second pairing of the same box)', () => {
+    const shim = mkTmp('ccrc-tb-token-shim-');
+    shimOwners(shim);
+    const dir = mkTmp('ccrc-tb-token-');
+    const file = path.join(dir, 'svc', 'testbox-service.token');
+    const script = path.join(shim, 'token-write.sh');
+    writeFileSync(script, `${TOKEN_SNIPPET!}\n`);
+    const write = (tok: string): number =>
+      spawnSync('sh', [script, file, 'svc-user'], { input: tok, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` } }).status ?? -1;
+    expect(write('a'.repeat(64))).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe('a'.repeat(64));
+    expect(write('b'.repeat(64))).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe('b'.repeat(64));
+    expect(mode(file)).toBe('600');
+    expect(readdirSync(path.dirname(file))).toEqual(['testbox-service.token']);
+    expect(TOKEN_SNIPPET).not.toContain('/dev/stdin');
+  });
+
+  it('the installer sets a mirror\'s config by its file, so a second run does not open a repository the service user owns', () => {
+    expect(INSTALLER).toContain('_tbi_git config --file "$m/config" "${kv%%=*}" "${kv#*=}"');
+    expect(INSTALLER).not.toMatch(/_tbi_git -C "\$m" config/);
   });
 });

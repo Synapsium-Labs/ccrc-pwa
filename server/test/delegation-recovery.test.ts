@@ -60,31 +60,19 @@ import {
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_DURABILITY_EDGES,
-  DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
-  DELEGATION_REPAIR_FULL_MS,
   DELEGATION_RESTORE_IN_PROGRESS,
-  DelegationDurability,
-  DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  isDelegationCheckpointKebab,
-  recoverDelegation,
-  recoverDelegationFromFiles,
-  recoverDelegationState,
-  repairDelegationProjection,
-  type DelegationDurabilityDeps,
-  type DelegationDurabilityEdge,
-  type DelegationDurableBatch,
-  type DelegationProjectionPort,
-  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_RECOVERY_PHASES, DelegationEvidenceIndex, recoverDelegation, recoverDelegationState } from '../src/coord/delegation-recovery.js';
+import { DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
+import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
-import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
+import type { DelegationApplyOutcome } from '../src/coord/delegation-durability.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
@@ -3508,8 +3496,10 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
       const c = stripComments(programSource(CHECKPOINT_SOURCE));
       // wave 4 (D-7021): the compaction's two renames join the checkpoint's and the quarantine's, each of a temp onto its own file, the carried
       // file's FIRST (a crash between them leaves a valid retained set)
-      expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried and journal temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(']);
+      // D-8874 (session helpers S2): and the one-time pass's list, written whole before the pass's commit, its temp onto its own file.
+      expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried, journal and backfill-list temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(', '.rename(']);
       expect(c).toMatch(/this\.port\.rename\(this\.tempPath, this\.checkpointPath\)/);
+      expect(c).toMatch(/const temp = `\$\{file\}\.tmp`;[\s\S]*await this\.port\.rename\(temp, file\);/);
       expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
       // the compaction's renames and temp removals, read from the parse by symbol (ARCH-06): the carried file's rename comes first, and
       // `removeTemp` names the two temps and nothing else (W4-CM16)
@@ -3603,7 +3593,10 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
     }
     const own = new Set(programMembers(CHECKPOINT_SOURCE).map((f) => `./${path.basename(f, '.ts')}.js`));
     const imports = [...new Set(texts.flatMap((t) => importsOf(strip(t.text))).filter((s) => !own.has(s)))];
-    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
+    // D-8830: plus the end-basis rules, a new L1 module the builder calls (session helpers S1), not a move out of the checkpoint.
+    // D-8874: plus the one-time pass's rules, a new L1 module the builder calls (session helpers S2), not a move out of the checkpoint, and
+    // its report's wire (`shared/delegationBackfill.ts`, L0), which the durability layer's pass answers.
+    expect(imports.sort()).toEqual(['../../../shared/api.js', '../../../shared/delegationBackfill.js', './delegation-backfill.js', './delegation-compaction.js', './delegation-end-basis.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
   });
   for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {

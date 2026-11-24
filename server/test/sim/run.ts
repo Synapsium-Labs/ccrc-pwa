@@ -23,6 +23,9 @@ export interface Scenario<E extends string> {
   readonly name: string; readonly startWallMs: number; readonly durationMs: number;
   /** Every edge the scenario must reach across its default seeds (Table 11.7b's reach coverage). */
   readonly edges: readonly E[];
+  /** Set by a scenario whose server beat awaits (a lane that runs acts through a port): the run then steps the world in
+   *  these grains and turns the microtasks over between steps (`SimWorld.runSteps`), instead of running every timer first. */
+  readonly step?: { readonly idleMs: number; readonly busyMs: number };
   setup(ctx: SimContext<E>): void;
 }
 export interface SimResult<E extends string> {
@@ -73,7 +76,8 @@ export async function simulate<E extends string>(s: Scenario<E>, seed: number, i
     const seq = new SimSequence(world.server.clock);
     const covered = new Set<E>();
     s.setup({ world, seq, cover: (edge) => { covered.add(edge); }, entropy: world.server.entropy });
-    world.runUntil(s.durationMs);
+    if (s.step === undefined) world.runUntil(s.durationMs);
+    else await world.runSteps(s.durationMs, s.step);
     await world.settle();
     const warning = world.time.warnings[0];
     if (warning !== undefined) throw new Error(`scenario ${s.name}, seed ${seed}: ${warning}`);

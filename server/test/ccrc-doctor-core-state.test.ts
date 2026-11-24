@@ -1385,4 +1385,17 @@ describeLinux('ccrc doctor: land-probe', () => {
     writeFileSync(join(home, 'fixture-unit-ccd-land-probe.timer'), 'active\n');
     expect(lineFor(runDoctor(home).stdout, 'services')).toContain('ccd-land-probe.timer is active');
   });
+
+  it('services: an installed, stopped ccd-quiz-weekly.timer WARNS with its own consequence (Overlord W1a)', () => {
+    const home = healthy('ccrc-doctor-services-quiz-weekly-timer-');
+    writeUnitFile(home, 'ccd-quiz-weekly.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-quiz-weekly.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-quiz-weekly.timer is installed but inactive');
+    expect(lines[i]).toContain('the weekly replay quiz is not run, recorded or confirmed');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-quiz-weekly\.timer$/);
+  });
 });

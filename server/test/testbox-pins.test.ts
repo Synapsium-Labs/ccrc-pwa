@@ -340,9 +340,21 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   const PROBE_HOLDERS = ['agent/src/testbox/probes.ts', 'agent/test/testbox-probes.test.ts', 'shared/testbox.ts'];
   // The ledger's old and new values (D-8399) add their own test and the lane's, whose staged changes name a box key.
   const LEDGER_VALUES_HOLDERS = ['server/test/testbox-ledger-values.test.ts', 'server/test/testbox-admin-lane.test.ts'];
+  // The build capture runner (spec 2026-11-22) adds the capture's paths and its desk, which name the box root in comments,
+  // and the capture op's test, which plants the fleet host's settings.
+  const CAPTURE_HOLDERS = ['agent/src/testbox/capture.ts', 'agent/src/testbox/captureDesk.ts', 'agent/test/testbox-capture-op.test.ts'];
+  // The managed node's box updater (D-8903, spec 2026-11-22 §9 PR 2) adds the installer's steps as a file of their own,
+  // which reads the box keys the installer read (they moved with the code), the updater, which reads the registry
+  // proxy, the upstream and the token file through the same table, the installer's characterization and its record,
+  // which name box keys in a box file edit and in a refusal's sentence, and the updater's test.
+  const MANAGED_NODE_HOLDERS = [
+    'deploy/testbox/bin/box-update', 'deploy/testbox/box-steps', 'server/test/fixtures/testbox-installer-golden.json',
+    'server/test/testbox-box-update.test.ts', 'server/test/testbox-installer-characterization.test.ts',
+  ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
     ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS, ...TC_HOLDERS, ...PROBE_HOLDERS, ...LEDGER_VALUES_HOLDERS,
+    ...CAPTURE_HOLDERS, ...MANAGED_NODE_HOLDERS,
   ].sort();
   it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README; W2: the box settings view\'s table, value words and tests)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);

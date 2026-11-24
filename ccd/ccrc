@@ -715,7 +715,19 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
   stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
-  "$@" &
+  # `<&0` ON THE COMMAND, AND IT IS WHAT GIVES THIS ARM THE BINARY'S STDIN
+  # (D-8658). A shell without job control gives a background job /dev/null for
+  # stdin unless the job carries a stdin redirection of its own, so the command
+  # here used to read nothing where the binary arm's read the caller's stdin:
+  # C28 found it on the sign-in mint, whose pasted code never arrived. `<&0` is
+  # a redirection of the job's own, and it names the caller's fd 0, so the
+  # command now reads what it would under `timeout`: a redirect on the call, a
+  # here-string, the shell's inherited stdin, the rest of a read loop's input.
+  # Not a copy through a spare descriptor: with fd 0 closed that copy fails and
+  # the command never runs, while `<&0` runs it with fd 0 closed, as the binary
+  # does. MEASURED on bash 5.3, `--posix` too; `ccd-plat-timeout.test.ts` pins
+  # all four copies. The watcher below keeps its /dev/null: it reads nothing.
+  "$@" <&0 &
   pid=$!
   # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
@@ -1391,8 +1403,10 @@ _launchd_class() {
 # A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h`,
 # `OnUnitInactiveSec=<n>s|min|h` (the period counted from the END of the last
 # run, the graph sweep's since D-7876: the gap between a run's end and the next
-# start is the one number) or `OnCalendar=*:0/<n>` (every <n> minutes, <n>
-# dividing the hour, so the gap between firings is one number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# start is the one number), `OnCalendar=*:0/<n>` (every <n> minutes, <n>
+# dividing the hour, so the gap between firings is one number) or
+# `OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC` (every <h> hours from midnight UTC, <h>
+# dividing the day: the weekly quiz's slots since run 3508). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
 # `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
 # keys), each comment and each blank is IGNORED, never refused: they sit beside
 # the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
@@ -1417,8 +1431,10 @@ _timer_period_s() {   # <timer-file>
     esac
   elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
     echo $((BASH_REMATCH[1] * 60))
+  elif [[ "$hit" =~ ^OnCalendar=\*-\*-\*\ 00/([1-9][0-9]?):[0-5][0-9]:[0-5][0-9]\ UTC$ ]] && [ $((24 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 3600))   # run 3508: every <h> hours of the day from midnight UTC; one gap only when <h> divides 24
   else
-    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h, OnCalendar=*:0/<n> or OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC" >&2; return 1
   fi
 }
 
@@ -1896,7 +1912,7 @@ BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 #        spawns). Every os: the op runs it in the foreground, never --detach.
 # ccrc-install-*.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync below-cap)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -2432,6 +2448,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_ACT_ID=""           # the act's id, set only by the test box's updater after it sources this file (D-8905); never taken from the environment
 UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
@@ -2525,7 +2542,7 @@ MODELS_SUBS="clear-window discovery hold init release revert rm set-class set-ef
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="advance-backfill advance-commit clear-window discovery hold init lower-windows materialise release revert rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill advance-commit aliases-refresh clear-window discovery hold init lower-windows materialise release revert rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -2554,7 +2571,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test|testbox-admin}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test|testbox-admin|quiz-record}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2673,7 +2690,9 @@ already running).
             only by the automatic restore and by 'ccrc rollback' itself,
             never typed by hand on THIS verb — that is refused. Through
             that caller, any of the three may go below the floor, which
-            stays.
+            stays. [--below-cap <word>] passes the capability floor for that
+            word alone, with a WARN (a fact stands that needs ccd's word and
+            the target lacks it); --force never does.
             --detach (Linux only, and it needs --to) hands the run to a
             transient systemd --user unit and returns at once, so the update
             survives the restart of the unit that asked for it; the detached
@@ -2707,7 +2726,8 @@ already running).
             rollback whose gate fails is NOT restored — its target was the
             known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
-            [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
+            [--from <who>] names the caller (${UPD_FROM_WORDS[*]});
+            [--below-cap <word>] as update's.
             A version kept under ~/ccrc-versions is rolled back to by a
             flip of ~/ccrc and its own spine, with no download.
   versions  list the kept release trees under ~/ccrc-versions (* marks the one ~/ccrc points at);
@@ -2734,8 +2754,9 @@ already running).
             the fleet box then the server box (--server-first inverts), stops
             at the first failure (a box's exit 3 is relayed, not a stop; its
             exit 4 stops), and re-measures both ('ccrc version', /health).
-            --check only prints where each box stands; --force, --downgrade
-            and --allow-unsigned pass through to each box's update, and a
+            --check only prints where each box stands; --force, --downgrade,
+            --allow-unsigned and --below-cap pass through to each box's update
+            (--below-cap is refused unless every box's ccrc lists it), and a
             box below its floor refuses the whole rollout before anything
             moves unless --downgrade was typed; [--to vX.Y.Z] pins a tag, or
             [--channel stable|dev] pins the one tag each box's own
@@ -2766,6 +2787,7 @@ already running).
             session's prose is not configuration) unless [--purge-memory]
             is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, the
+            private store's (operator-model.db, 0600, in a 0700 directory), the
             delegation journal and checkpoint with their manifest
             (coordination-snapshot.json), dists, ccd and the units to
             ~/ccrc-backups/<ts>/ (never
@@ -2823,7 +2845,7 @@ already running).
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on the session hook's generated region) after its body changed. A file
             with no marker is refused, never adopted; so is ccd/ccd, which is
-            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)
+            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)$(_usage_quiz_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -3213,9 +3235,10 @@ _ver_newer() {
 # `single-definition` is pointed at that pair.) It answers with a return code
 # per CONDITION, because the callers do different things about each:
 #
-#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version)
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version ccdCaps)
 #                           (version = "" when the stamp carries none — the
-#                           additive fifth field, stage 4 Task 1)
+#                           additive fifth field, stage 4 Task 1; ccdCaps is
+#                           `<absent>`, `<malformed>` or the space-joined list)
 #   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
 #   4  the path is there but is not a regular file (a directory, say)
 #   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
@@ -3225,7 +3248,7 @@ _ver_newer() {
 # an operator acts on completely differently (`apt install jq` vs. redeploy)
 # must not share one signal.
 #
-# The output is SIX lines — the five fields (version as `""` when absent) and
+# The output is SEVEN lines — the six fields (version as `""` when absent) and
 # an `END` sentinel — and both
 # are checked. `$( )` strips trailing newlines, so a sentinel-less form would lose
 # an empty last field silently; the sentinel makes any truncation loud. A field
@@ -3285,6 +3308,11 @@ _box_build_fields() {
   # about a well-formed stamp would have this verb printing one the server
   # refuses to serve). It travels as a fifth line, `""` for absent, so the END
   # sentinel keeps its truncation duty at index 5.
+  # `ccdCaps` (the Overlord W1 pool set, plan Task 8, slug `ccdcaps-field-level-answer`) is a FIELD-LEVEL answer on a
+  # sixth line, `BOX_BUILD[5]`: `<absent>`, `<malformed>` (not an array of capability tokens), or the tokens joined by
+  # one space (empty for `[]`). Its expression cannot throw and never empties the output, so whatever `ccdCaps` holds the
+  # stamp parses as it did before (`shared/buildinfo.ts#parseBuildInfo` ignores the key too); the sentinels hold `<`,
+  # outside the token grammar, so no list spells them. `_upd_cap_floor_check` is its one reader; END moves to index 6.
   out="$(jq -r '
     try (
       if (type == "object")
@@ -3294,15 +3322,16 @@ _box_build_fields() {
          and (.dirty | type == "boolean")
          and ((has("version") | not)
               or ((.version | type == "string") and (.version | length > 0)))
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\nEND"
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\n\(if has("ccdCaps") | not then "<absent>"
+        elif (.ccdCaps | type == "array") and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*\\z"))) then .ccdCaps | join(" ") else "<malformed>" end)\nEND"
       else empty
       end
     ) catch empty
   ' -- "$stamp" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
-  [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
-  unset 'BOX_BUILD[5]'
+  [[ "${#BOX_BUILD[@]}" -eq 7 && "${BOX_BUILD[6]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[6]'
   local f
   for f in "${BOX_BUILD[@]}"; do
     [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
@@ -8558,7 +8587,7 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity="" org=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -8574,7 +8603,15 @@ _acct_set() {
       --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
       --placement=overflow|--placement=full) placement="${1#*=}" ;;
       --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login|openai-login --attempt <attemptId>" ;;
+      --fable-billing=included|--fable-billing=credits) billing="${1#*=}" ;;
+      --fable-billing) { [ "${2:-}" = included ] || [ "${2:-}" = credits ]; } || _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written."; billing="$2"; shift ;;
+      --fable-billing=*) _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written." ;;
+      --continuity=on|--continuity=off) continuity="${1#*=}" ;;
+      --continuity) { [ "${2:-}" = on ] || [ "${2:-}" = off ]; } || _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written."; continuity="$2"; shift ;;
+      --continuity=*) _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written." ;;
+      --org=?*) org="${1#*=}" ;;   # the organization label, or none; its shape is the op's to refuse (account organization A3)
+      --org) [ -n "${2:-}" ] || _acct_refuse 2 missing-value "the flag --org takes a label or none. Nothing was written."; org="$2"; shift ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off, --org <label>|none and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -8582,13 +8619,16 @@ _acct_set() {
   if [ -n "$method" ] || [ -n "$attempt" ]; then
     { [ -n "$method" ] && [ -n "$attempt" ]; } \
       || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
-    { [ "$stated" -eq 0 ] && [ -z "$placement" ]; } \
-      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated or --placement beside it. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity$org" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing, --continuity or --org beside it. Nothing was written."
     _acct_set_method "$id" "$method" "$attempt"
     return 0
   fi
-  [ "$stated" -eq 1 ] || [ -n "$placement" ] \
-    || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
+  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity$org" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off or --org <label>|none. Nothing was written."
+  # The label's shape is refused before the stated account or the placement is written (PR A's review, F2): the op owns
+  # the gate, so the verb asks it, read-only, and holds no copy of the id shapes.
+  [ -z "$org" ] || _acct_write_op "Nothing was written." org-check --org "$org"
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8616,7 +8656,21 @@ _acct_set() {
       fi
     fi
     _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
+    done_note="${done_note}The placement was recorded. "
     _acct_projection "The roster records lane $id's placement as $placement."
+  fi
+  if [ -n "$billing$continuity$org" ]; then   # the serviceability facts (H16) and the organization label, under the placement's marker lock
+    [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
+    _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
+      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} ${org:+--org "$org"} --recorded-at now
+    local -a facts_named=()   # its own name: shellcheck reads one name across functions, and `w` is a string elsewhere
+    [ -z "$billing" ] || facts_named+=("billing fact"); [ -z "$continuity" ] || facts_named+=("continuity record")
+    [ -z "$org" ] || facts_named+=("organization label")
+    case ${#facts_named[@]} in
+      1) v=${facts_named[0]} ;; 2) v="${facts_named[0]} and ${facts_named[1]}" ;;
+      *) v="${facts_named[0]}, ${facts_named[1]} and ${facts_named[2]}" ;;
+    esac
+    _acct_projection "The roster records lane $id's $v."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"
@@ -12581,6 +12635,9 @@ _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yam
 #      `how: "hand"`) is recorded in the advance file as the hand move it was, and is no event and no push (ruling
 #      RC3). The recovery is read whether or not the answer was ok (D-6067): a refusal after the writer's first
 #      successful write still carries it. When the backfill created the file or settled a move, the plan is read again.
+#      It never writes a class's run of sightings of a missing pin: the first pass's `materialise --refresh true` does,
+#      after every successful probe, so an hour this step skips (readiness, budget, a held lock) still records it, and
+#      a pin listed again ends the run before any step here reads it (programme wave 3, D-8838).
 #   3. READINESS, asked once, no lock (D22): the lane's mode first, by a bounded read; on `litellm`,
 #      `_codex_tier_ours --bounded-read` for the LiteLLM tier and then the shim, each 0 (ours and running; the shim's 0
 #      is its proof that the listener answers as THIS lane, D-5210), then the check-only `litellm` op answering
@@ -12683,7 +12740,7 @@ _models_canary_reserve_secs() {   # (C + 15 + 8) + T + J + 2H
 # `$HOME/.cc-sessions` - with its `--push` flag, so the server sends it to the phone as well as the banner
 # (`/api/notify`, which pushes only a line `modelsPushOf` reads). Best-effort by the hook's own contract: its output is
 # dropped and its status never ends the refresh. DELIVERY IS NOT PROMISED: the server refuses to push a line over
-# `modelsPushOf`'s cap (long model ids make a failed-canary line long) or of a lane not codex-kind in ITS roster. IN THE
+# `modelsPushOf`'s cap (long model ids make a failed-canary line long) or of a lane that is neither codex-kind nor an Anthropic lane (D-8751) in ITS roster. IN THE
 # AUTOMATIC CONTEXT the COMPLETE hook (not only its curl) is a strict deadline, admitted first (a hook with no time to
 # run is skipped, never run late); a hand caller's call is a best-effort deadline with today's fallbacks. ONE RESIDUAL:
 # the hook itself is the strict call's direct child, so a TERM-ignoring HELPER the hook starts can outlive the hook's
@@ -12692,7 +12749,10 @@ _models_push() {   # <message> -> rc 0
   local hook="$_SVC_REG/notify.sh"
   [ -x "$hook" ] || return 0
   if [ -n "${MODELS_AUTO_DEADLINE:-}" ]; then
-    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )) || return 0
+    if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )); then
+      [ "${2:-}" != grouped ] || printf 'ccrc: models push skipped (deadline): %s\n' "$1" >&2
+      return 0
+    fi
     _plat_timeout_strict "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
   else
     _plat_timeout "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
@@ -12722,6 +12782,7 @@ MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._:/-]
 def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}\\z");
 def flat($n): if type == "string" then (gsub("[^ -~]+"; " ") | gsub("^ +| +$"; "") | .[0:$n]) else "" end;
 def ofpin: if . == null then "none" else . end;
+def moveline($id): "\($id): \(.class) \(.from | ofpin) → \(.to)";
 def eff: type == "string" and test("^[\\x21-\\x7e]([\\x20-\\x7e]{0,62}[\\x21-\\x7e])?\\z");
 def recovered($id):
   (.recoveredMove // null) as $rm
@@ -13137,6 +13198,77 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
   return 0
 }
 
+# The Anthropic arm's step of the hourly refresh (model-class Anthropic arm A2.4, D-8751): ONE lane's `aliases-refresh`,
+# under the lane-files lock, in the AUTOMATIC context (the run's one advance deadline, `MODELS_AUTO_DEADLINE`, set as the
+# non-exported local the Codex step sets), so a spent budget answers `budget-deferred` and nothing is written. Prints ONE
+# row object for the refresh's output and rc 0, or rc 1 for a row that failed (the caller's `failed`).
+#   {id, ok: true,  aliases: {ok: true,  moved: [...]}}                 refreshed
+#   {id, ok: true,  aliases: {ok: false, error: <word>, moved: []}}     NOT RUN: `budget-deferred`, or `not-capable` (no
+#                                                                       flock or no strong deadline on this box), which the
+#                                                                       Codex step skips silently too; the next hour retries
+#   {id, ok: false, reason, aliases: {ok: false, error: <word>, moved: []}}   the op or the lock refused (`lock-busy`, the
+#                                                                       op's own cause word, `no-answer`): a failed row
+# It pushes nothing: the row carries what moved, and the refresh sends ONE push per (class, from, to) over every lane
+# (`_models_aliases_push`), so one alias change is one notification however many lanes it moved (F15).
+_models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE row; rc 0 unless the row failed
+  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then :
+  elif ! _models_advance_capable "$id"; then body='{"ok":false,"error":"not-capable"}'
+  else pre=0
+    body="$(_models_node_locked "$id" aliases-refresh --file "$file" --id "$id" --reg "$_SVC_REG" 2>/dev/null)" || rc=$?
+    body="$(printf '%s' "$body" | tail -n1)"
+  fi
+  # ONE jq decides the row from the answer: refreshed; NOT RUN (a deferral before the op, or `budget-deferred` from the
+  # lock when the budget ran out between the admission and the lock); or failed, with the op's word, or `no-answer`.
+  row="$(jq -cn --arg id "$id" --arg rc "$rc" --arg pre "$pre" --arg body "$body" '
+    ($body | fromjson? // null) as $b
+    | if $pre == "0" and $rc == "0" and ($b | type) == "object" and $b.ok == true and $b.op == "aliases-refresh"
+      then {id: $id, ok: true, aliases: {ok: true, moved: ($b.moved | if type == "array" then . else [] end)}}
+      else (if ($b | type) == "object" and ($b.error | type) == "string" then $b.error else "no-answer" end) as $w
+        | if $pre == "1" or $w == "budget-deferred" then {id: $id, ok: true, aliases: {ok: false, error: $w, moved: []}}
+          else {id: $id, ok: false, aliases: {ok: false, error: $w, moved: []},
+                reason: (if $w == "no-answer" then "aliases-refresh exited \($rc) with no answer"
+                         elif ($b.detail | type) == "string" then $b.detail else "aliases-refresh refused with \($w)" end)}
+          end end')" || return 1
+  printf '%s\n' "$row"
+  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; esac
+  return 0
+}
+
+# The ONE push of the Anthropic arm (D-8751, F15): the moves of every refreshed row, grouped by (class, from, to) in the order
+# each group first appears, one line per group naming its lanes in the rows' order (the roster's),
+# `<lane>, <lane>: <class> <from|none> → <to>`, which `modelsPushOf` reads. `tok` and `word` check the tokens, as `recovered`
+# does. A row that failed or was deferred holds no move and so names no lane. Each line goes through `_models_push` in the
+# automatic context at the run's advance deadline, so a spent budget skips the push rather than running it late.
+_models_aliases_push() {   # <deadline-secs> <row>... -> rc 0
+  local MODELS_AUTO_DEADLINE="$1" line lines
+  shift
+  lines="$(printf '%s\n' "$@" | jq -rs "$MODELS_JQ_DEFS"'
+    reduce (.[] | select(type == "object" and .ok == true and .aliases.ok == true) | .id as $id
+            | (.aliases.moved // []) | if type == "array" then .[] else empty end
+            | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
+            | {k: [.class, .from, .to], id: $id, m: .}) as $e
+      ([]; (map(.k) | index([$e.k])) as $i
+        | if $i == null then . + [{k: $e.k, m: $e.m, ids: [$e.id]}]
+          else .[$i].ids += [$e.id] end)
+    | .[] | (.ids | join(", ")) as $lanes | .m | moveline($lanes)' 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  # The strict hook call needs the capability THIS shell proved: the lanes' own runs proved it in their subshells, so it is
+  # proved here, admitted first, and a box without it sends nothing, as a lane without it ran nothing.
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then
+    while IFS= read -r line; do
+      [ -z "$line" ] || printf 'ccrc: models push skipped (deadline): %s\n' "$line" >&2
+    done <<<"$lines"
+    return 0
+  fi
+  _plat_timeout_capability >/dev/null
+  [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] && _models_push "$line" grouped
+  done <<<"$lines"
+  return 0
+}
+
 # D25 (codex-bridge Stage 2, Task 15): a refusal the lane's bridge recorded lowers that model's window, through the
 # hourly refresh. Only a `direct` lane (its mode read from the rendered lane.json by `_codex_lane_mode`, never the
 # roster; a lane whose mode cannot be read is not one) whose lane.json names a stats file (`bridgeFiles.stats`, a bare
@@ -13213,13 +13345,18 @@ _models_box_sub() {   # <subcommand> [args…]
       # lane from this list — `registryInvalid`/`catalogueInvalid` are
       # separate facts a row can carry now, and `probe` is null only when
       # there is no VALID registry.
+      # D-8751: an Anthropic row is collected apart (`select(.anthropic == true)`): it has no registry to probe, so the
+      # registry path below never sees it, and its own step (`_models_aliases_lane`) runs after the Codex steps.
+      local anth
+      anth="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.anthropic == true)]')"
       lanes="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.hasRegistry)]')"
 
       local wanted="$lanes"
       if [ "$target" != "--all" ]; then
         wanted="$(printf '%s' "$lanes" | jq -c --arg id "$target" 'map(select(.id == $id))')"
-        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] \
-          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry on this box. Anthropic lanes have none — their four classes are Claude Code's own defaults, so there is nothing to probe. For any other lane run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
+        anth="$(printf '%s' "$anth" | jq -c --arg id "$target" 'map(select(.id == $id))')"
+        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] || [ "$(printf '%s' "$anth" | jq 'length')" -eq 1 ] \
+          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry, or an Anthropic lane, on this box. For a lane with no registry run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
         # A lane WITH a registry that does not parse or validate is a
         # DIFFERENT fact from "no registry at all" (Fix round 1, Finding 2,
         # ruling): named directly, with the same error code the general op
@@ -13277,7 +13414,10 @@ _models_box_sub() {   # <subcommand> [args…]
           local mreason="" mat_body mat_rc=0
           # Under the lane-files lock (auto-advance spec D21): a refresh overlapping a hand verb, or another
           # refresh, re-materialises after it, never interleaved. A held lock is this row's reason, never a hang.
-          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          # `--refresh true` (programme wave 3, D-8838, D-8842) is this call alone: it writes the fallback for an
+          # effort level the new catalogue dropped, and records this probe's sightings of a missing pin. The switch
+          # and ensure callers' materialise passes nothing, so a dropped level is refused there as before.
+          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" --refresh true 2>/dev/null)" || mat_rc=$?
           if [ "$mat_rc" -ne 0 ]; then
             mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
             [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
@@ -13323,6 +13463,13 @@ _models_box_sub() {   # <subcommand> [args…]
             # row is about to take is kept, so the step's events land on it.
             if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
+          # D-8842, D-8865: a dropped level's fallback is never silent: every row whose materialise kept one, the
+          # LiteLLM-failure row and a refusal whose write-back failed included, carries what materialise wrote and
+          # whether the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
+          local fbrow
+          fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
+            '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
+            2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
@@ -13368,6 +13515,19 @@ _models_box_sub() {   # <subcommand> [args…]
           case "$adv" in *'"restored":false'*) failed=1 ;; esac
         done
       fi
+      # THE ANTHROPIC ARM (D-8751), after the Codex steps and inside the same deadline: one `aliases-refresh` per Anthropic
+      # row, each in the automatic context, its row appended to `rows` so that BOTH output paths below carry it (the
+      # advance overlays are keyed by the indexes the registry rows took above, which an append never moves). A budget that
+      # is spent defers a lane, never fails it.
+      local anth_n anth_i anth_id anth_row anth_rows=()
+      anth_n="$(printf '%s' "$anth" | jq 'length')"
+      for (( anth_i = 0; anth_i < anth_n; anth_i++ )); do
+        anth_id="$(printf '%s' "$anth" | jq -r ".[$anth_i].id")"
+        anth_row="$(_models_aliases_lane "$anth_id" "$file" "$adv_deadline")" || failed=1
+        rows+=("$anth_row"); anth_rows+=("$anth_row")
+      done
+      # ONE push per (class, from, to) over every lane, after the loop has run them all (F15).
+      [ "${#anth_rows[@]}" -eq 0 ] || _models_aliases_push "$adv_deadline" "${anth_rows[@]}"
       if [ "$adv_entered" -eq 1 ]; then
         # The final output, bounded: ONE strict jq assembles the rows and the advance overlays and writes the result
         # straight to stdout (no capture, no outer printf, no per-lane merge elsewhere). Its allowance is the 18 s
@@ -18315,9 +18475,14 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 0644: data for jq the hook loads with `jq -L`,
   # placed before the hook. Without it the hook makes no card (fail open).
   _inst_atomic "$tree/ccd/lib/roster-card.jq" "$HOME/.cc-sessions/lib/roster-card.jq" 644
+  # The mail hold's matcher, texts and log decision (mid-turn mail, plan Task 5.2), 0644: data for jq the hook loads with
+  # `jq -L`, placed before the hook. Without it the hook holds nothing and logs `module-missing` (fail open, D3).
+  _inst_atomic "$tree/ccd/lib/mail-hold.jq" "$HOME/.cc-sessions/lib/mail-hold.jq" 644
   # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a; a projection of FLEET_ROLES),
   # 0644: data for jq. Without it a profile-naming spawn launches without its profile and warns.
   _inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644
+  # The Overlord's constitution (W1 sandbox), 0644: ccd links it into the Overlord's workspace as its CLAUDE.md.
+  _inst_atomic "$tree/ccd/lib/overlord-constitution.md" "$HOME/.cc-sessions/lib/overlord-constitution.md" 644
   # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
   _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
   # the in-flight manifest's program (session-continuity 6b, D-8368), 0644, read-only.
@@ -18990,6 +19155,10 @@ _inst_units() {
     # none. Gated `!= server`, so `fleet` and `both` take it.
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.service" "$dir/ccd-land-probe.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-land-probe.timer" "$dir/ccd-land-probe.timer" 644
+    # The weekly replay quiz's pair (Overlord W1a), role-gated for its own reason: a server box keeps no history store and
+    # runs no sessions. The unit runs the tree's deploy/history-quiz-unattended.mjs through node, so no bin is placed.
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-quiz-weekly.timer" "$dir/ccd-quiz-weekly.timer" 644
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
@@ -19487,6 +19656,8 @@ _inst_enable() {
   # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
+  # Same gate as its unit files, and the same DEGRADE-rather-than-die idiom: the weekly quiz is an unattended reading, not a guardrail.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer quiz-weekly ccd-quiz-weekly.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
   [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
@@ -20906,7 +21077,7 @@ _inst_floor() {
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0 below=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -20919,6 +21090,7 @@ cmd_update() {
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
       --no-gate) no_gate=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --detach) detach=1 ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
@@ -20986,6 +21158,7 @@ cmd_update() {
     echo "$PROG: update: --check and --allow-unsigned are exclusive — --check measures and writes nothing, --allow-unsigned admits an unsigned install; pick one" >&2
     exit 2
   fi
+  [ "$check" -eq 0 ] || [ -z "$below" ] || { echo "$PROG: update: --check and --below-cap are exclusive — --check measures and writes nothing, --below-cap passes the capability floor of a run that moves this box; pick one" >&2; exit 2; }
   # And `--from` (design §10): it attributes a run that MOVES this box, which
   # --check never does — the same trap, the same refusal.
   if [ "$check" -eq 1 ] && [ "$from_set" -eq 1 ]; then
@@ -21141,7 +21314,7 @@ cmd_update() {
     # would refuse without --downgrade, and until now `--check` answered it
     # `behind`, so rollout's preflight moved one box and then failed at the
     # other. A current box keeps `current`: it has nothing to move.
-    local chk_floor chk_caps="" w
+    local chk_floor chk_caps="" w chk_needs=unmeasured
     chk_floor="$(_upd_floor_word)"
     # m5's unversioned+broken-projection case (above; text fixed fix round 1
     # item 0 / batch A rereview N4) sets UPD_VERSION to the literal `none`
@@ -21155,6 +21328,7 @@ cmd_update() {
       state="below-floor"
     fi
     while IFS= read -r w; do chk_caps="$chk_caps${chk_caps:+,}$w"; done < <(_ccrc_cap_words)
+    _cap_floor_standing && chk_needs="${CAP_FLOOR_NEEDS:-none}"   # the ccd words a standing fact needs (the capability floor)
     # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
     # caps=, floor= AND projection= (item 22 / your Q8, fix round 1) sit
     # BEFORE state= (plan D-3232): rollout reads state as everything after
@@ -21164,7 +21338,7 @@ cmd_update() {
     # `_upd_intent_state` word (ok|none|not-configured|unreadable|stale|
     # malformed) — read via `_rollout_field "$line" projection`, the same
     # grammar `caps=`/`floor=` already use.
-    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor projection=$chk_projection state=$state"
+    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor needs=$chk_needs projection=$chk_projection state=$state"
     case "$chk_floor" in
       unreadable|malformed) echo "this box's floor (~/.ccrc/floor) is $chk_floor — 'ccrc update' refuses until it is fixed by hand" ;;
     esac
@@ -21195,6 +21369,7 @@ cmd_update() {
     [ "$downgrade" -eq 1 ] && dflags+=(--downgrade)
     [ "$allow_unsigned" -eq 1 ] && dflags+=(--allow-unsigned)
     [ "$no_gate" -eq 1 ] && dflags+=(--no-gate)
+    [ -n "$below" ] && dflags+=(--below-cap "$below")
     _upd_detach update "$to" "$UPD_FROM" ${dflags[@]+"${dflags[@]}"}
     return 0
   fi
@@ -21350,6 +21525,10 @@ cmd_update() {
   # still reads `ccrc update` as a no-op rather than a `failed` report it
   # never earned.
   [ "$floor_checked" -eq 1 ] || _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
+  # The capability floor (Overlord W1 pool set, Task 8's call site (a)): the staged stamp's `ccdCaps`, inside the
+  # reporting window and before anything is installed. It covers the rollout's per-box update, a rollback's fall-through
+  # and restore arm 2's child (`--from restore`, which warns and proceeds).
+  _upd_cap_floor_check "$UPD_TREE/build.json" "$UPD_FROM" "$below"
   _upd_phase backing-up
   _upd_backup
   # THE BASELINE (design §10): written after the backup and BEFORE the staged
@@ -21941,7 +22120,7 @@ _rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 
 # shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 cmd_rollback() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0
+  local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0 below=""
   local -a extra=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -21951,6 +22130,7 @@ cmd_rollback() {
         to="$2"; shift ;;
       --to=*) to="${1#--to=}" ;;
       --detach) detach=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: rollback: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
         from="$2"; shift ;;
@@ -21972,6 +22152,10 @@ cmd_rollback() {
     usage >&2
     exit 2
   fi
+  # `--from watchdog` warns past the capability floor, so it is the unattended watchdog's word alone: `cmd_watchdog` names
+  # its own pid in CCRC_WATCHDOG_CALLER, and the launcher execs, so it is this run's parent. It never detaches, and no
+  # caller passes rollback `--from restore` (the restore runs `update`). Typed by hand, both refuse before anything moves.
+  case "$from" in restore|watchdog) [[ "$from" == watchdog && "$detach" -eq 0 && "${CCRC_WATCHDOG_CALLER:-}" == "$PPID" ]] || { echo "$PROG: rollback: --from $from is the unattended watchdog's own word, refused when typed by hand; nothing on this box was changed — to return this box to a kept version: ccrc rollback --to <tag>" >&2; exit 2; } ;; esac
   # Before the target is resolved and before any request: Task 3's ONE
   # spelling of the refusal (`_upd_detach` repeats it as its step 0).
   [ "$detach" -eq 1 ] && _upd_detach_os_check
@@ -22141,7 +22325,7 @@ cmd_rollback() {
   UPD_REPORTING=0
 
   if [ "$detach" -eq 1 ]; then
-    _upd_detach rollback "$to" "$from"
+    _upd_detach rollback "$to" "$from" ${below:+--below-cap "$below"}
     return 0
   fi
 
@@ -22190,6 +22374,9 @@ cmd_rollback() {
     UPD_VERSION="$to"
     UPD_REPORT_TARGET="$to"
     UPD_REPORTING=1
+    # The capability floor's call site (b), AFTER the reporting window opens so a refused console tap gets its `failed`
+    # row, and before `_ver_flip_back` changes anything: the kept tree's stamp copy (`--from watchdog` warns and proceeds).
+    _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$to/$VER_STAMP_COPY" "$run_from" "$below"
     # A belt: the resume at the top of this verb already ran, so this one is
     # masked by it — it exists for a crash made in the migration's window
     # between the two by a lockless plain install (final review F11).
@@ -22258,6 +22445,7 @@ cmd_rollback() {
   # absent or one-line record reads verified: the safe direction, because it
   # refuses a bundle-less target instead of admitting it.
   _upd_marker_unsigned && extra+=(--allow-unsigned)
+  [ -n "$below" ] && extra+=(--below-cap "$below")   # the cap floor is the one refusal --downgrade leaves
   echo "rollback: returning this box to $to (named by $via; asked by --from $from) — update's own path, as --from $run_from --downgrade: below the floor if need be, and the floor itself is never lowered"
   # Fix round 1 item 10 / review 155 C16: the process-local caller marker
   # `cmd_update`'s own argument-refusal block requires for `--from
@@ -23052,7 +23240,7 @@ cmd_watchdog() {
   # measurement §10 cites). `env -u` so an ambient marker can never make the
   # rollback skip acquiring it.
   _upd_unlock
-  env -u CCRC_UPDATE_LOCK_HELD "$HOME/.local/bin/ccrc" rollback --from watchdog || rrc=$?
+  env -u CCRC_UPDATE_LOCK_HELD CCRC_WATCHDOG_CALLER="$BASHPID" "$HOME/.local/bin/ccrc" rollback --from watchdog || rrc=$?
   if [ "$rrc" -ne 0 ]; then
     echo "watchdog: ccrc rollback --from watchdog exited $rrc"
     # Recorded only when the rollback wrote nothing of its own (the report's
@@ -23215,6 +23403,9 @@ _upd_phase() {
   # `ccrc doctor`'s update-sweep check reads it that way, and so does the server's
   # one reader of it (`sweepFrom`, D-8386), which puts it on `GET /api/updates`.
   [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
+  # The act's id (D-8905): a second additive key, written only by a caller that set UPD_ACT_ID (the test box's updater,
+  # which is handed one by the fleet host's driver). Absent in every other report; a reader matches two reports by it.
+  [ -z "${UPD_ACT_ID:-}" ] || sw+=",\"act\":$(_upd_json_str "$(_upd_redact "$UPD_ACT_ID")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
@@ -24561,6 +24752,13 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
   case "$role" in
     server|both) unit=ccrc.service ;;
     fleet)       unit=ccrc-agent.service ;;
+    # The test box's two arms (D-8903, D-8917; spec 2026-11-22-test-box-managed-node §2.7): `testbox`, and `testbox-legacy`
+    # for a release from before the box was a managed node. Its unit is a SYSTEM unit and its signals are files under
+    # the box's own root, which this file never names: the box's updater (deploy/testbox/bin/box-update) declares
+    # `_tb_gate_probe` before it calls `_upd_gate`. With no such function this is the refusal every other role meets.
+    testbox|testbox-legacy)
+      if declare -F _tb_gate_probe >/dev/null; then _tb_gate_probe "$role" "$want"; return $?; fi   # its status by name: a bare `return` in a signal handler is the status from before the handler in bash 5.2
+      UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
     *) UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
   esac
   if [ "$CCD_OS" = darwin ]; then   # the launchd arm: two pid samples, never systemctl
@@ -24744,6 +24942,71 @@ _upd_floor_check() {
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
+# ── THE CAPABILITY FLOOR (the Overlord W1 pool set, plan Task 8, Table 2) ─────────────────────────────────────────────
+# A standing fact on this box that only a build advertising a `ccd caps` word honours: while it stands, no update or
+# rollback takes the box to a build without the word. DATA, one row per word, `fact|word|remedy`, and every reader reads
+# every row (this check, the doctor's `cap-floor`, and PR B2's override and push), so a later piece adds a row and no
+# code. The fact is a registry suffix: any entry `~/.cc-sessions/<id>.<fact>` stands, a link, a directory and a FIFO
+# included, because the newer ccd fails closed on each and an older one ignores it (slug
+# `standing-set-is-a-poolset-entry`). The word is read from the target stamp's `ccdCaps` (`BOX_BUILD[5]`). The remedy
+# leads the refusal, because the update control plane keeps only a report detail's first 200 characters. It names only a
+# way out that exists: the operator clears the set from their own shell (`ccd route` refuses inside a session), and PR B2's
+# `--below-cap <word>` (update, rollback, rollout) passes that word's row alone, with a WARN, and is put at the refusal's
+# front. The designation piece rewrites the `poolset` and `profiledigest` remedies when its Settings doors land. The
+# `profiledigest` row is the sandbox piece's (PR A2): a ccd without `launch-surface-v1` ignores the field and renders the
+# Overlord's row fail-open.
+CAP_FLOOR_ROWS=(
+  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
+  'profiledigest|launch-surface-v1|the operator clears the launch digest from their own shell, never a session: ccd route --session <id> --set profiledigest='
+  'acctorder|keep-awake-v1|the operator releases the Overlord from their own shell, never a session: ccd keep-awake --session <id> --state off, then ccd route --session <id> --set acctorder='
+)
+_cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable
+  local LC_ALL=C IFS=' ' reg="$_SVC_REG" row e n ids
+  CAP_FLOOR_STANDING=(); CAP_FLOOR_NEEDS=""
+  [[ -e "$reg" || -L "$reg" ]] || return 0
+  [[ -d "$reg" && -r "$reg" && -x "$reg" ]] || return 1
+  for row in "${CAP_FLOOR_ROWS[@]}"; do   # an id may start with a dot, so the second glob
+    ids=""; for e in "$reg"/*."${row%%|*}" "$reg"/.*."${row%%|*}"; do [[ -e "$e" || -L "$e" ]] && n="${e##*/}" && ids+=" ${n%."${row%%|*}"}"; done
+    [[ -z "$ids" ]] || { CAP_FLOOR_STANDING+=("$row|$ids"); n="${row#*|}"; CAP_FLOOR_NEEDS+="${CAP_FLOOR_NEEDS:+,}${n%%|*}"; }
+  done
+}
+_cap_floor_words() {   # -> every row's word, comma-joined, in row order
+  local LC_ALL=C row w ws=""
+  for row in "${CAP_FLOOR_ROWS[@]}"; do w="${row#*|}"; ws+="${ws:+,}${w%%|*}"; done; printf '%s' "$ws"
+}
+_cap_floor_lifted() {   # <words, comma-joined | unmeasured> <the --below-cap list> -> 0 when the list names every word (unmeasured: every row's)
+  local LC_ALL=C IFS=',' ws="$1" w; local -a a=()
+  [[ "$ws" != unmeasured ]] || ws="$(_cap_floor_words)"
+  read -ra a <<<"$ws"; for w in "${a[@]}"; do [[ ",$2," == *",$w,"* ]] || return 1; done
+}
+_below_cap_arg() {   # <$#> <value> -> 0 for floor words, comma-joined; else the usage refusal (exit 2): an unknown word passes nothing
+  # An accident guard (fix round 1, F1): a Claude Code session (CLAUDECODE set) never crosses the floor; `env -u` defeats it.
+  [ -z "${CLAUDECODE:-}" ] || { echo "$PROG: --below-cap is the operator's flag, typed in their own shell: a Claude Code session never passes the capability floor; nothing was changed" >&2; exit 2; }
+  [[ "$1" -ge 2 && "$2" =~ ^[a-z][a-z0-9-]*(,[a-z][a-z0-9-]*)*$ ]] && _cap_floor_lifted "$2" "$(_cap_floor_words)" && return 0
+  echo "$PROG: --below-cap names capability floor words, comma-joined: $(_cap_floor_words) (got: ${2:-nothing})" >&2; usage >&2; exit 2
+}
+_upd_cap_floor_check() {   # <target-stamp|-> <from> [--below-cap list] -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN
+  local stamp="$1" from="$2" below="${3:-}" row fact word say ids why msg="" need="" passed="" caps="" brc=-
+  _cap_floor_standing || { _cap_floor_lifted unmeasured "$below" && passed="an unlistable ~/.cc-sessions" || { need="$(_cap_floor_words)"; msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"; }; }
+  # The stamp is read once, in a subshell, so the caller's BOX_BUILD is never touched; `-` (restore arm 3) has none.
+  [[ "$stamp" == - ]] || { caps="$(_box_build_fields "$stamp" && printf '%s' "${BOX_BUILD[5]}")"; brc=$?; }
+  for row in "${CAP_FLOOR_STANDING[@]}"; do
+    IFS='|' read -r fact word say ids <<<"$row"
+    if [[ "$brc" == - ]]; then why="the restored build's capabilities could not be read"
+    elif (( brc != 0 )); then why="the target's stamp could not be read (rc $brc)"
+    elif [[ "$caps" == "<absent>" ]]; then why="builds before ccdCaps predate $word"
+    elif [[ "$caps" == "<malformed>" ]]; then why="the target's ccdCaps cannot be read"
+    elif [[ " $caps " == *" $word "* ]]; then continue
+    else why="the target build lacks $word"; fi
+    _cap_floor_lifted "$word" "$below" && { passed+="${passed:+; }$word ($why; a $fact stands for$ids)"; continue; }
+    need+="${need:+,}$word"; msg+="${msg:+ | }$say: $why; a $fact stands for$ids"
+  done
+  [[ -z "$passed" ]] || echo "update: WARN: --below-cap passed the capability floor for $passed - a box below the word ignores that fact"
+  [[ -n "$msg" ]] || return 0
+  case "$from" in restore|watchdog) echo "update: WARN: $msg - proceeding because this run is --from $from"; return 0 ;; esac
+  _ccrc_die "pass --below-cap $need, or $msg. Nothing on this box was changed"
+}
+
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
 # Reads ~/.ccrc/floor with EXACTLY `_upd_floor_check`'s four tests, in its
 # order, so a check line never answers a floor the install path would read
@@ -24794,12 +25057,21 @@ _upd_backup() {
   # reordered floor sentences — a wording consistency, since the redacted
   # path (~/ccrc-backups/<ts>, about 30 characters) never comes close to
   # the 200-character cut.
-  mkdir "$UPD_BACKUP_DIR" \
+  # 0700 (Overlord W1 private store, Task 4): the directory holds the operator's private store, whose snapshot is 0600 too.
+  mkdir -m 700 "$UPD_BACKUP_DIR" \
     || _ccrc_die "already exists: $UPD_BACKUP_DIR (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
   if [ -f "$HOME/.ccrc/coord.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
+  fi
+  # The private store, by the same script, beside coord.db; the manifest names it, and a restore puts both back as one set.
+  # Never ~/.ccrc/privacy-journal.log: a restore leaves it in place, so a restored store never reissues a message id.
+  # Gated as `capture` gates it (lstat): any entry at the path, a dangling link included, is snapshotted or refuses here.
+  if [ -e "$HOME/.ccrc/operator-model.db" ] || [ -L "$HOME/.ccrc/operator-model.db" ]; then
+    node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
+      "$HOME/.ccrc/operator-model.db" "$UPD_BACKUP_DIR/operator-model.db" \
+      || _ccrc_die "the private store (operator-model.db) snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
   # THE COORDINATION SNAPSHOT RUNS LAST (delegation broker wave 3, O3). The two authoritative sidecars
@@ -24812,7 +25084,7 @@ _upd_backup() {
   local cerr=""
   cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
     || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, the private store's snapshot when it exists, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
   # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
   # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
   # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.
@@ -24839,17 +25111,23 @@ _upd_backup_set() {
   # before the launcher that names its digest.
   _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact.mjs" ccd-shared-redact.mjs   # the docs redactor (D-7077): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" ccd-shared-redact-cli.mjs
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/door-process.mjs" ccd-door-process.mjs   # the Overlord's door program (not a library, not a launcher): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" ccd-lib-delegation-lease.sh   # its third library (wave 5): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/pool-set.sh" ccd-lib-pool-set.sh   # its fourth library (the Overlord's pool set): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/long-lived.sh" ccd-lib-long-lived.sh   # its fifth library (the Overlord's ccd arms): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/door.sh" ccd-lib-door.sh   # its sixth library (the Overlord's door process): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/model-aliases.sh" ccd-lib-model-aliases.sh   # its seventh library (the model-class Anthropic arm): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json
+  _upd_backup_copy "$HOME/.cc-sessions/lib/overlord-constitution.md" overlord-constitution.md
   _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
+  _upd_backup_copy "$HOME/.cc-sessions/lib/mail-hold.jq" mail-hold.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/lib/inflight-manifest.py" inflight-manifest.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
@@ -25212,6 +25490,7 @@ _upd_restore_arm3() {
   # no sameness and reads the same way. `old_completed` is passed through
   # from `_upd_restore` (round 1 stopped one call short of doing so).
   local same_build=0 same_tag=0
+  _upd_cap_floor_check - restore   # the backup keeps no build.json: no capability to read, so it warns while a fact stands
   if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
      && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
     if [ "$old_completed" -eq 1 ]; then
@@ -25595,6 +25874,7 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
     done_as="flipped back to $UPD_PREV_TAG"
     echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
   fi
+  _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$UPD_PREV_TAG/$VER_STAMP_COPY" restore   # health first: warns, never refuses
   _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
   local spine_rc="$VER_SPINE_RC"
   case "$frc" in
@@ -26656,7 +26936,7 @@ _rollout_channel() {
 # on each box, `/health` on the server), never read off update's stdout.
 cmd_rollout() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none=""
+  local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none="" below="" nob=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -26669,6 +26949,7 @@ cmd_rollout() {
       --force) force=1 ;;
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --channel)
         [ $# -ge 2 ] || { echo "$PROG: --channel needs a value: stable or dev" >&2; usage >&2; exit 2; }
         channel="$2"; chan_given=1; shift ;;
@@ -26699,6 +26980,7 @@ cmd_rollout() {
     echo "$PROG: rollout: --check and --allow-unsigned are exclusive — --check measures and touches nothing, --allow-unsigned admits an unsigned install; pick one" >&2
     exit 2
   fi
+  [ "$check" -eq 0 ] || [ -z "$below" ] || { echo "$PROG: rollout: --check and --below-cap are exclusive — --check measures and touches nothing, --below-cap passes the capability floor of a box's move; pick one" >&2; exit 2; }
   local t
   for t in ssh curl jq; do
     command -v "$t" >/dev/null 2>&1 \
@@ -26785,7 +27067,7 @@ cmd_rollout() {
   # installed/new-enough question is asked only of a box that exited 0 with no check line; 255 is ssh's own failure, and 127
   # the remote shell's command-not-found, each in its own words.
   local i out first line state box sha caps floor allcurrent=1 crc cwhy
-  local -a states=() capss=() floors=()
+  local -a states=() capss=() floors=() needss=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
     crc=0; out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || crc=$?
@@ -26813,7 +27095,7 @@ cmd_rollout() {
     # NOTE, not a refusal: a refusal here would block the very first rollout
     # onto this wave, at the box that most needs it.
     [ -n "$floor" ] || echo "rollout: ${labels[$i]}: its check line lists no floor= (a ccrc older than W4 prints none) — its floor is checked at its own install"
-    states+=("$state"); capss+=("$caps"); floors+=("$floor")
+    states+=("$state"); capss+=("$caps"); floors+=("$floor"); needss+=("$(_rollout_field "$line" needs)")
     [ "$state" = current ] || allcurrent=0
   done
   if [ "$check" -eq 1 ]; then
@@ -26859,6 +27141,11 @@ cmd_rollout() {
   # authorize explicitly, on this preflight's own say-so rather than each
   # box's own converged check deciding after the OTHER box had already
   # moved).
+  # `--below-cap` (pool set B2) reaches only a box whose check line lists `below-cap`: an older ccrc refuses the flag as
+  # a usage error (exit 2) after the box before it moved. It moves without the flag (a B1 build has the floor but not the
+  # word, and the gate cannot tell the two apart), or the operator clears the standing fact there.
+  for i in "${!boxes[@]}"; do case ",${capss[$i]}," in *,below-cap,*) ;; *) nob+=" ${labels[$i]}" ;; esac; done
+  [ -z "$below" ] || [ -z "$nob" ] || { echo "$PROG: rollout: --below-cap needs a ccrc that lists below-cap in its caps, and these boxes' do not:$nob — move them without --below-cap, or clear the standing fact there if that move is refused; nothing was touched" >&2; exit 2; }
   for i in "${!boxes[@]}"; do
     case "${floors[$i]}" in
       unreadable|malformed)
@@ -26872,6 +27159,9 @@ cmd_rollout() {
           exit 2
         fi ;;
     esac
+    # The capability floor (pool set B1): a box's own update reads the target's ccdCaps, which no check line carries, so a
+    # box whose standing fact needs a word (or could not say) may only go FIRST; after another box moved it is too late.
+    [ "$i" -eq 0 ] || [ "${needss[$i]:-none}" = none ] || _cap_floor_lifted "${needss[$i]}" "$below" || { echo "$PROG: rollout: the ${labels[$i]} box has a standing fact that needs ccd's ${needss[$i]}, which its own update checks against the target only after ${labels[0]} has moved — run it first (drop --server-first), or clear the fact there; nothing was touched" >&2; exit 2; }
     if [[ "${floors[$i]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _ver_newer "${floors[$i]}" "$ROLLOUT_VERSION" \
        && [ "$downgrade" -eq 0 ]; then
       echo "$PROG: rollout: the ${labels[$i]} box's floor is ${floors[$i]:-unstated}, above $ROLLOUT_VERSION — pass --downgrade to move it down; nothing was touched" >&2
@@ -26891,10 +27181,12 @@ cmd_rollout() {
     flags="$forceflag"
     [ "$downgrade" -eq 1 ] && flags="$flags --downgrade"
     [ "$allow_unsigned" -eq 1 ] && flags="$flags --allow-unsigned"
+    [ -n "$below" ] && flags="$flags --below-cap $below"   # every box lists below-cap, by the gate above
     case ",${capss[$i]}," in *,update-json,*) flags="$flags --from rollout" ;; esac
     echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$flags"
     "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$flags" 2>&1 | sed "s/^/${labels[$i]}: /"
     rc="${PIPESTATUS[0]}"
+    untouched=""; [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
     # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
     # the box's health, not the rollout's — relay it, carry on, verify, and
     # say it again in this verb's own exit code. 4 (design §11) = its health
@@ -26949,12 +27241,10 @@ cmd_rollout() {
           ;;
       esac
     elif [ "$rc" -eq 4 ]; then
-      untouched=""
-      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update failed its health gate and restored itself (exit 4) — stopped here.$untouched Its ~/.ccrc/update.json names the restore arm; 'ccrc update --check' there says where it now stands"
+    elif [ "$rc" -eq 2 ]; then   # every exit 2 cmd_update reaches is an argument refusal, before its backup
+      _ccrc_die "rollout: the ${labels[$i]} box's update exited 2, a usage error from that box's ccrc: it changed nothing and took no backup — stopped here.$untouched"
     elif [ "$rc" -ne 0 ]; then
-      untouched=""
-      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update exited $rc — stopped here.$untouched Its lines above name the backup taken before anything changed; deploy.sh remains the fallback"
     fi
   done
@@ -28816,7 +29106,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-limit-watchdog.timer ccd-limit-watchdog.service \
-      ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-land-probe.timer ccd-land-probe.service ccd-quiz-weekly.timer ccd-quiz-weekly.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
@@ -28848,7 +29138,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-limit-watchdog.service" "$dir/ccd-limit-watchdog.timer" \
-    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-quiz-weekly.service" "$dir/ccd-quiz-weekly.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
@@ -29262,14 +29552,16 @@ _uninst_cc_sessions() {
   fi
   # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
-  # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
+  # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it, and so is
+  # `child-deny.digests`, the deny file's digest history (approvals PR 0), which the installer alone writes.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" "$reg/lib/inflight-manifest.py" \
-    "$reg/lib/roster-card.jq" "$reg/lib/launch-profiles.json" \
+    "$reg/lib/roster-card.jq" "$reg/lib/mail-hold.jq" "$reg/lib/launch-profiles.json" \
+    "$reg/lib/overlord-constitution.md" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
-    "$reg/account-deny.settings.json" \
+    "$reg/account-deny.settings.json" "$reg/child-deny.digests" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
   # The conflict radar's two mirrors (landing order wave 3b, and wave 5d's `lander`): `$reg/landing/<project>/enabled` and
@@ -29494,12 +29786,12 @@ _uninst_tree_bins() {
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
-    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
+    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/lib/long-lived.sh" "$HOME/.local/libexec/ccrc/lib/door.sh" "$HOME/.local/libexec/ccrc/lib/model-aliases.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" "$HOME/.local/libexec/ccrc/door-process.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -30063,6 +30355,13 @@ _usage_test_paragraph() {
     '            prints the slice and the queue. See README, "Test containment"'
 }
 
+_usage_quiz_paragraph() {
+  printf '\n%s' \
+    '  quiz-record  record a replay quiz run, by hand outside any session or pane:' \
+    '            ccrc quiz-record --report <file> --sha <64 hex>. The run is' \
+    '            pending until you confirm it on the Shadow lanes card'
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:487 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -30135,6 +30434,7 @@ case "$VERB" in
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;
   test)    exec bash "$CCRC_HERE/ccrc-test" "$@" ;;
   testbox-admin) exec bash "$CCRC_HERE/ccrc-testbox-admin" "$@" ;;
+  quiz-record) exec bash "$CCRC_HERE/ccrc-quiz-record" "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

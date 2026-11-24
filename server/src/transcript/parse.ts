@@ -1,7 +1,9 @@
 import {
-  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
+  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, parseTaskNotification, RATE_LIMIT_ERROR,
+  RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
+import { HELPER_REPORT_MAX_BYTES, HELPER_SUMMARY_MAX_BYTES, isHelperId } from '../../../shared/workflows.js';
 import { SHAPE_MASK } from '../accounts/shapes.js';
 import { stripSgr } from '../pane/dialog.js';
 
@@ -610,4 +612,182 @@ export function finishedTurnDecides(tail: string, ofUuid: string): boolean {
     return (JSON.parse(lines[i]!) as Record<string, unknown>)['type'] !== 'continued-in';
   }
   return false;
+}
+
+// ── THE FACTS OF AN AGENT HELPER (desktop polish C49, H1a, D-8829) ───────────
+// Two facts the chat does not need and the Helpers section does: an Agent or Task launch RESULT (a record's
+// `toolUseResult`: `async_launched` with the agent id and the resolved model, or `completed` with the report of a
+// foreground helper) and a task NOTIFICATION (the harness's report that a background task ended, whose task id is
+// the agent id). Pure: one raw line in, facts out; `ChatEvent` and the chat wire do not change. The reader that folds
+// them and decides a state is `workflows/model.ts` (`foldHelperFacts`, `decideAgentHelpers`).
+
+/** What one transcript line says about an Agent helper. `status` is the launch result's or the notification's own word;
+ *  a notification of any other status (a task still running, a word this reader has not seen) yields no fact. */
+export interface HelperFact {
+  readonly source: 'launch' | 'notification';
+  readonly id: string;
+  readonly status: 'async_launched' | 'completed' | 'failed' | 'killed' | 'stopped';
+  /** The record's own `timestamp`, epoch ms; null when absent or unparsable. */
+  readonly at: number | null;
+  /** The launch result's resolved model, null for the rest. */
+  readonly model: string | null;
+  /** A foreground launch result's `totalDurationMs`, null for the rest. */
+  readonly durationMs: number | null;
+  /** The notification's summary: one line, masked, at most `HELPER_SUMMARY_MAX_BYTES` bytes. */
+  readonly summary: string | null;
+  /** The report (a notification's `result`, or a foreground launch's content): MASKED BEFORE IT IS CUT (review 2900 F15),
+   *  at most `HELPER_REPORT_MAX_BYTES` bytes; null when there is none. */
+  readonly report: string | null;
+  /** The report was cut to that bound. */
+  readonly reportCut: boolean;
+}
+
+const FINAL_NOTICE_STATUS = { completed: 'completed', failed: 'failed', killed: 'killed', stopped: 'stopped' } as const;
+
+const timeOf = (v: unknown): number | null => {
+  if (typeof v !== 'string') return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+};
+
+/** `value` masked (the decoded value, as `eventsOfRecord` masks a tool input) and then cut to `maxBytes` BYTES, never in
+ *  the middle of a character and never in the middle of a run that could be a key (`cutAt`, D-5995). */
+function maskedCut(value: string, maxBytes: number): { text: string; cut: boolean } {
+  const masked = SHAPE_MASK.maskDeep(value);
+  if (Buffer.byteLength(masked, 'utf8') <= maxBytes) return { text: masked, cut: false };
+  const bytes = Buffer.from(masked, 'utf8');
+  let end = maxBytes;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--; // a continuation byte at the cut: back up to its character
+  const chars = bytes.subarray(0, end).toString('utf8').length;
+  return { text: masked.slice(0, cutAt(masked, chars)), cut: true };
+}
+
+function launchFact(result: unknown, at: number | null): HelperFact | null {
+  if (result === null || typeof result !== 'object') return null;
+  const t = result as { status?: unknown; agentId?: unknown; resolvedModel?: unknown; content?: unknown; totalDurationMs?: unknown };
+  if (!isHelperId(t.agentId)) return null;
+  if (t.status === 'async_launched') {
+    return {
+      source: 'launch', id: t.agentId, status: 'async_launched', at, model: typeof t.resolvedModel === 'string' ? t.resolvedModel : null,
+      durationMs: null, summary: null, report: null, reportCut: false,
+    };
+  }
+  if (t.status !== 'completed') return null;
+  const report = flattenContent(t.content);
+  const cut = report.trim() === '' ? null : maskedCut(report, HELPER_REPORT_MAX_BYTES);
+  return {
+    source: 'launch', id: t.agentId, status: 'completed', at, model: typeof t.resolvedModel === 'string' ? t.resolvedModel : null,
+    durationMs: typeof t.totalDurationMs === 'number' && Number.isFinite(t.totalDurationMs) && t.totalDurationMs >= 0 ? t.totalDurationMs : null, // a negative one would put the start after the end
+    summary: null, report: cut === null ? null : cut.text, reportCut: cut !== null && cut.cut,
+  };
+}
+
+/** The fact of one task-notification ENVELOPE (the text between and including the `<task-notification>` tags). */
+function noticeFact(content: unknown, at: number | null): HelperFact | null {
+  if (typeof content !== 'string' || !content.trimStart().startsWith('<task-notification>')) return null;
+  const parsed = parseTaskNotification(content);
+  if (!parsed.ok) return null;
+  const n = parsed.notification;
+  const id = n.fields.find((f) => f.name === 'task-id')?.value ?? '';
+  const status = n.status === null ? undefined : (FINAL_NOTICE_STATUS as Record<string, HelperFact['status'] | undefined>)[n.status];
+  if (!isHelperId(id) || status === undefined) return null;
+  // masked BEFORE the first line is taken (review 2961 F12), so a value spread over lines is masked as a whole
+  const line = SHAPE_MASK.maskDeep(n.summary ?? '').split('\n')[0]!.trim();
+  const summary = line === '' ? null : maskedCut(line, HELPER_SUMMARY_MAX_BYTES).text;
+  const result = n.fields.find((f) => f.name === 'result')?.value ?? '';
+  const report = result === '' ? null : maskedCut(result, HELPER_REPORT_MAX_BYTES);
+  return { source: 'notification', id, status, at, model: null, durationMs: null, summary, report: report === null ? null : report.text, reportCut: report !== null && report.cut };
+}
+
+/** The envelope a record carries, in either of the two shapes a task notification is written in (review 2961 F1): a user
+ *  record whose `message.content` is the envelope (the notification reached an idle main thread), or an `attachment`
+ *  record, a queued command of mode `task-notification` whose `prompt` is the envelope (it reached a BUSY main thread).
+ *  A notification seen in both folds to one fact (`foldHelperFacts`). */
+function envelopeOf(r: { type?: unknown; message?: unknown; attachment?: unknown }): unknown {
+  if (r.type === 'user') return r.message !== null && typeof r.message === 'object' ? (r.message as { content?: unknown }).content : undefined;
+  if (r.type !== 'attachment' || r.attachment === null || typeof r.attachment !== 'object') return undefined;
+  const a = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown };
+  return a.type === 'queued_command' && a.commandMode === 'task-notification' ? a.prompt : undefined;
+}
+
+/** The helper facts of ONE raw transcript line: an Agent or Task launch result, or a task notification. Defensive by
+ *  contract: a malformed line, a sidechain record or anything else answers [], and nothing throws. */
+export function helperFactsOf(line: string): HelperFact[] {
+  // H1b (D-8862): the tailer asks this of EVERY line, so a line that names neither shape is not parsed a second time. Both
+  // shapes carry their key in the raw text: a launch result's `toolUseResult`, an envelope's opening tag.
+  if (!line.includes('"toolUseResult"') && !line.includes('<task-notification>')) return [];
+  let raw: unknown;
+  try { raw = JSON.parse(line); } catch { return []; }
+  if (raw === null || typeof raw !== 'object') return [];
+  const r = raw as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; toolUseResult?: unknown; message?: unknown; attachment?: unknown };
+  if (r.isSidechain === true) return [];
+  const at = timeOf(r.timestamp);
+  const fact = (r.type === 'user' ? launchFact(r.toolUseResult, at) : null) ?? noticeFact(envelopeOf(r), at);
+  return fact === null ? [] : [fact];
+}
+
+// ── THE COORDINATOR ADVISOR'S FACTS (plan 2026-11-23-coordinator-advisor, D-8969, D-8971) ─────────────────────────────
+// What one raw transcript line says about Claude Code's advisor tool, in the shape found in the installed build's strings
+// (2.1.331): a call is a `server_tool_use` block named `advisor` (its `id` is the call's) in an assistant message, its
+// result an `advisor_tool_result` block; the advisor's tokens are `message.usage.iterations[]` entries of type
+// `advisor_message`; turning the tool on or off is an `attachment` line of type `advisor_tool` with `available`. No local
+// transcript held a call when this was written, so the saved line is the trial's first thing to confirm (D-8969). Pure:
+// one line in, one fact out; a line that is not JSON is `unreadable`, counted by the reader, never dropped in silence.
+
+/** The advisor tokens of one assistant message's usage: the sum of its `advisor_message` iterations. */
+export interface AdvisorUsage { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number }
+
+export type AdvisorLineFact =
+  /** A main-loop assistant line (one API request; the streamed lines of one message share `messageId`). */
+  | { readonly kind: 'request'; readonly messageId: string | null; readonly at: number | null; readonly calls: readonly string[];
+      readonly model: string | null; readonly usage: AdvisorUsage | null }
+  | { readonly kind: 'availability'; readonly available: boolean; readonly model: string | null; readonly at: number | null }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'none' };
+
+const tokenOf = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+
+function advisorUsageOf(usage: unknown): { model: string | null; usage: AdvisorUsage | null } {
+  const its = usage !== null && typeof usage === 'object' ? (usage as { iterations?: unknown }).iterations : undefined;
+  if (!Array.isArray(its)) return { model: null, usage: null };
+  let model: string | null = null; let found = false;
+  const sum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const it of its) {
+    if (it === null || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    if (o['type'] !== 'advisor_message') continue;
+    found = true;
+    if (typeof o['model'] === 'string') model = o['model'];
+    sum.input += tokenOf(o['input_tokens']); sum.output += tokenOf(o['output_tokens']);
+    sum.cacheRead += tokenOf(o['cache_read_input_tokens']); sum.cacheWrite += tokenOf(o['cache_creation_input_tokens']);
+  }
+  return { model, usage: found ? sum : null };
+}
+
+/** The advisor fact of ONE raw transcript line. Never throws. */
+export function advisorFactsOf(line: string): AdvisorLineFact {
+  if (line.trim() === '') return { kind: 'none' };
+  if (!line.includes('"assistant"') && !line.includes('"advisor_tool"')) return { kind: 'none' };
+  let raw: unknown;
+  try { raw = JSON.parse(line); } catch { return { kind: 'unreadable' }; }
+  if (raw === null || typeof raw !== 'object') return { kind: 'unreadable' };
+  const r = raw as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; message?: unknown; attachment?: unknown };
+  const at = timeOf(r.timestamp);
+  if (r.type === 'attachment' && r.attachment !== null && typeof r.attachment === 'object') {
+    const a = r.attachment as { type?: unknown; available?: unknown; model?: unknown };
+    if (a.type !== 'advisor_tool' || typeof a.available !== 'boolean') return { kind: 'none' };
+    return { kind: 'availability', available: a.available, model: typeof a.model === 'string' ? a.model : null, at };
+  }
+  if (r.type !== 'assistant' || r.isSidechain === true || r.message === null || typeof r.message !== 'object') return { kind: 'none' };
+  const m = r.message as { id?: unknown; content?: unknown; usage?: unknown };
+  const calls: string[] = [];
+  if (Array.isArray(m.content)) {
+    for (const b of m.content) {
+      if (b === null || typeof b !== 'object') continue;
+      const o = b as { type?: unknown; name?: unknown; id?: unknown };
+      if (o.type === 'server_tool_use' && o.name === 'advisor' && typeof o.id === 'string' && o.id !== '') calls.push(o.id);
+    }
+  }
+  const u = advisorUsageOf(m.usage);
+  return { kind: 'request', messageId: typeof m.id === 'string' && m.id !== '' ? m.id : null, at, calls, model: u.model, usage: u.usage };
 }

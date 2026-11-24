@@ -2,7 +2,8 @@
 // L1 pure, context Coordination. Text only: it reads an item, decides nothing and writes nothing (the route queues it,
 // in the tick's own transaction, through `insertSystemMailTx`).
 //
-// What it may say (spec §5): the item's title, its kind, the operator's answer and a standing instruction. A `secret` item
+// What it may say (spec §5): the item's title, its kind, the operator's answer (for a `do` item, the optional note the
+// operator ticked it with, D-8931) and a standing instruction. A `secret` item
 // is refused at the route before this runs, so no secret's value or its path is ever in a body built here.
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES } from '../../../shared/api.js';
 import type { ItemRow } from './store.js';
@@ -13,22 +14,36 @@ const SUBJECT_TITLE_MAX = 80;
 
 const bytesOf = (s: string): number => Buffer.byteLength(s, 'utf8');
 
+/** What every tick mail's subject starts with, before the item's id: the one spelling, read by `itemMailSubject` and by
+ *  `isTickMailSubject`. */
+const TICK_SUBJECT_HEAD = 'done: item ';
+
+/** Is this subject a tick mail's (`itemMailSubject`'s shape: the head, a positive item id, a colon and a space)? The
+ *  checkpoint's reader of an operator's rulings selects tick mail by it (Overlord W1a, the renewal act). */
+export const isTickMailSubject = (subject: string): boolean =>
+  subject.startsWith(TICK_SUBJECT_HEAD) && /^[1-9][0-9]*: /.test(subject.slice(TICK_SUBJECT_HEAD.length));
+
 /** The subject names the item, so the coordinator's inbox reads it and the newest tick mail of an item is found by it.
  *  `done: item <id>: <title>`: the title is cut to 80 characters and then, if the subject is still past
  *  `MAIL_SUBJECT_MAX_BYTES`, to fewer, always on a code-point boundary (never half of a surrogate pair). */
 export function itemMailSubject(item: Pick<ItemRow, 'id' | 'title'>): string {
-  const head = `done: item ${item.id}: `;
+  const head = `${TICK_SUBJECT_HEAD}${item.id}: `;
   let title = [...item.title].slice(0, SUBJECT_TITLE_MAX);
   while (title.length > 0 && bytesOf(head + title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
   return head + title.join('');
 }
 
-/** The body: what the item was, what the operator answered (or that it takes no answer), and the standing instruction. The
- *  coordinator never takes a tick as proof; it measures, as it does a worker's wave-done (spec Figure 3). */
+/** The tick mail's line when the tick carried no answer. Only a do item's tick can: its note is optional (D-8931),
+ *  and the line says so, so a coordinator that asked for a note reads that none came, never that none could. */
+const NO_ANSWER_LINE = "no answer: the operator ticked it with no note (a do item's note is optional)";
+
+/** The body: what the item was, what the operator answered (a do item's note is its answer; with none, the line that says
+ *  so), and the standing instruction. The coordinator never takes a tick as proof; it measures, as it does a worker's
+ *  wave-done (spec Figure 3). */
 export function itemMailBody(item: Pick<ItemRow, 'id' | 'program' | 'kind' | 'title'>, answer: string | null): string {
   return [
     `The operator ticked item ${item.id} (${item.kind}) of programme ${item.program}: ${item.title}`,
-    answer === null ? 'no answer: this item takes none' : `The operator's answer: ${answer}`,
+    answer === null ? NO_ANSWER_LINE : `The operator's answer: ${answer}`,
     `Re-measure before you confirm; return it with what you found if it does not hold. ccrc-api items confirm|return ${item.id}`,
   ].join('\n');
 }

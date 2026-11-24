@@ -8,6 +8,11 @@
 // checks every field and refuses a frame with any field it does not name, so a frame is never half-read.
 
 import { isReleaseTag } from './api.js';
+import {
+  CAPTURE_REFUSAL_MAP, CAPTURE_STATE_WORD_MAP, type CaptureAnswer, type CaptureSubmit,
+} from './claudeBuildCapture.js';
+import { readBuildCaptureResult } from './claudeBuildTrust.js';
+import { isClaudeVersion } from './claudeVersion.js';
 import { utf8Bytes } from './utf8.js';
 
 /** The test service's protocol version (spec §2.4's protocol row compares it with the wrapper's). */
@@ -52,11 +57,14 @@ export const TESTBOX_REPORT_MAP: Record<TestboxReport, true> = { ok: true, missi
 export type TestboxSyncState = 'idle' | 'syncing' | 'failed';
 export const TESTBOX_SYNC_STATE_MAP: Record<TestboxSyncState, true> = { idle: true, syncing: true, failed: true };
 
-/** The frame family's type words (spec §2.9; D-8290 adds the two probe frames). */
-export type TestboxFrameType = 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status' | 'probe.submit' | 'probe.state';
+/** The frame family's type words (spec §2.9; D-8290 adds the two probe frames; the capture runner spec of 2026-11-22 adds
+ *  the two capture frames, `shared/claudeBuildCapture.ts`). */
+export type TestboxFrameType =
+  | 'run.submit' | 'run.log' | 'run.summary' | 'run.cancel' | 'tools.sync' | 'status' | 'probe.submit' | 'probe.state'
+  | 'capture.submit' | 'capture.state';
 export const TESTBOX_FRAME_TYPE_MAP: Record<TestboxFrameType, true> = {
   'run.submit': true, 'run.log': true, 'run.summary': true, 'run.cancel': true, 'tools.sync': true, status: true,
-  'probe.submit': true, 'probe.state': true,
+  'probe.submit': true, 'probe.state': true, 'capture.submit': true, 'capture.state': true,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -218,7 +226,9 @@ export type TestboxToolVersions = { readonly [K in TestboxTool]: string };
 const ROW_DEPTH: Readonly<Record<TestboxTool, number>> = { node: 2, npm: 1, tmux: 1, git: 1, python3: 2, chrome: 1 };
 
 const VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
-const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
+/** A tool version as the frames carry one (`22.11.0`, `3.3a`), the shape's one definition: the frame readers below and
+ *  the box's reader of its own measured versions (`agent/src/testbox/tools.ts#parseMeasuredTools`) both ask it. */
+export const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
 
 /** One tool's difference, in the fallback's words `<name> <local> vs <remote>`. */
 export interface TestboxVersionDiff { readonly tool: TestboxTool; readonly local: string; readonly remote: string }
@@ -360,7 +370,8 @@ export interface ProbeAnswer {
   readonly exit: number | null;
 }
 
-export type TestboxFrame = RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer | ProbeSubmit | ProbeAnswer;
+export type TestboxFrame =
+  | RunSubmit | RunLog | RunSummary | RunCancel | ToolsSync | StatusAnswer | ProbeSubmit | ProbeAnswer | CaptureSubmit | CaptureAnswer;
 
 export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
@@ -536,6 +547,11 @@ function readProbes(v: unknown): TestboxProbes {
 }
 
 function readStatusAnswer(o: Obj): StatusAnswer {
+  // D-8912 (spec 2026-11-22-test-box-managed-node-design.md §5, the wire rule): this reader, like every reader of this
+  // family, refuses a whole answer for one field it does not name, so a released fleet agent refuses any answer that
+  // gains one. Nothing new rides the status answer: a managed box's measured tool versions are the VALUES of `tools`,
+  // and its node files, its drain and its ready fact are files on the box (`agent/src/testbox/boxFiles.ts`), never a
+  // field here. `agent/test/testbox-managed-node.test.ts` pins the released key set.
   // D-8290: `probes` is the one optional field: an older box, and a box that takes no probes, sends none.
   const withProbes = Object.prototype.hasOwnProperty.call(o, 'probes');
   const f = exact(o, 'status', withProbes ? [...STATUS_KEYS, 'probes'] : STATUS_KEYS);
@@ -588,9 +604,34 @@ function readProbeAnswer(o: Obj): ProbeAnswer {
   return { t: 'probe.state', probeId: runId(f.probeId, 'probeId'), state, refusal, detail: textOrNull(f.detail, 'detail'), position, exit };
 }
 
+const build = (v: unknown, at: string): string => (isClaudeVersion(v) ? v : refuse(at, 'not a Claude Code version'));
+
+function readCaptureSubmit(o: Obj): CaptureSubmit {
+  const f = exact(o, 'capture.submit', ['t', 'captureId', 'build']);
+  return { t: 'capture.submit', captureId: runId(f.captureId, 'captureId'), build: build(f.build, 'build') };
+}
+
+/** The verdict inside an ended capture is read by the verdict's one reader (`readBuildCaptureResult`), for this frame's
+ *  build: a result for another build, or off its shape, refuses the frame. */
+function readCaptureAnswer(o: Obj): CaptureAnswer {
+  const f = exact(o, 'capture.state', ['t', 'captureId', 'build', 'state', 'refusal', 'detail', 'position', 'result']);
+  const b = build(f.build, 'build');
+  const state = word(CAPTURE_STATE_WORD_MAP, f.state, 'state');
+  const refusal = f.refusal === null ? null : word(CAPTURE_REFUSAL_MAP, f.refusal, 'refusal');
+  const position = f.position === null ? null : int(f.position, 'position', 1);
+  const result = f.result === null ? null : (readBuildCaptureResult(f.result, b) ?? refuse('result', 'not a capture result for this build'));
+  if ((state === 'refused') !== (refusal !== null)) refuse('refusal', state === 'refused' ? 'missing on a refused capture' : `present on a ${state} capture`);
+  if (state !== 'refused' && state !== 'ended' && f.detail !== null) refuse('detail', `present on a ${state} capture`);
+  if (state === 'ended' && result !== null && f.detail !== null) refuse('detail', 'present beside a verdict');
+  if ((state === 'queued') !== (position !== null)) refuse('position', state === 'queued' ? 'missing on a queued capture' : `present on a ${state} capture`);
+  if (state !== 'ended' && result !== null) refuse('result', `present on a ${state} capture`);
+  return { t: 'capture.state', captureId: runId(f.captureId, 'captureId'), build: b, state, refusal, detail: textOrNull(f.detail, 'detail'), position, result };
+}
+
 const FRAME_READERS: { readonly [K in TestboxFrameType]: (o: Obj) => TestboxFrame } = {
   'run.submit': readRunSubmit, 'run.log': readRunLog, 'run.summary': readRunSummary, 'run.cancel': readRunCancel,
   'tools.sync': readToolsSync, status: readStatusAnswer, 'probe.submit': readProbeSubmit, 'probe.state': readProbeAnswer,
+  'capture.submit': readCaptureSubmit, 'capture.state': readCaptureAnswer,
 };
 
 /** The frames' ONE reader: a frame's JSON text to its typed frame, or the reason it is refused. Every field is checked
@@ -616,7 +657,8 @@ export function readTestboxFrame(json: string): Read<TestboxFrame> {
 export interface TestboxRepoPackage {
   readonly name: string;
   /** The files whose sha256 is the package's install key (its `package.json` and `package-lock.json`, plus any the
-   *  row adds), relative to the repository root. */
+   *  row adds), relative to the repository root. The box adds the files the package's own lifecycle scripts run, so
+   *  the row never lists them (D-8966, `agent/src/testbox/pristine.ts#lifecycleInputPaths`). */
   readonly installInputs: readonly string[];
   /** The command heads the box runs in this package (spec §2.5). */
   readonly commands: readonly string[];

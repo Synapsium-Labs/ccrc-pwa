@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ASK_OPERATOR_PRINCIPAL, DIGEST_COMMAND_CHARS, DIGEST_CORRECTION_MAX_CHARS, DIGEST_HOUR_FILE, DIGEST_LINE_KINDS,
-  DIGEST_REFUSALS, DRIFT_KINDS,
+  DIGEST_REFUSALS, DIGEST_ROW_KINDS, DRIFT_KINDS,
   type DigestAnswer, type DigestCorrectBody, type DriftKind, type DriftLine, type DigestLine, type DigestLineKind, type DigestRowKind, type DigestTotals,
 } from '../../../shared/api.js';
 import type { WatcherCoordPort } from './ports.js';
@@ -89,12 +89,18 @@ export function askDecision(a: AskRow): { kind: DigestLineKind; at: number } | n
 }
 
 /** An approval row's coordinator decision, or null: held for a coordinator at the mint, then allowed or denied by it
- *  (`answeredBy` the held-for claimant), handed over, or lapsed at its `notifyAt` (`released`, `stale`, or the
- *  operator's answer after the window). The operator's answer inside the window is the operator's. */
+ *  (`answeredBy` the held-for claimant), handed over, parked (approvals PR 3), or lapsed at its `notifyAt` (`released`,
+ *  `stale`, or the operator's answer after the window). The operator's answer inside the window is the operator's. */
 export function approvalDecision(r: ApprovalRow): { kind: DigestLineKind; at: number } | null {
   if (r.releaseReason !== null || r.parentId === ASK_OPERATOR_PRINCIPAL) return null;
   if ((r.state === 'allowed' || r.state === 'denied') && r.answeredBy === r.parentId && r.ruledAt !== null) {
     return { kind: r.state === 'allowed' ? 'allow' : 'deny', at: r.ruledAt };
+  }
+  // Approvals PR 3 (F9): a parked row is "parked, with its coordinator"; one whose unfetched ruling the last-poll move
+  // carried onto the park keeps that ruling's allow or deny line.
+  if (r.state === 'parked') {
+    if (r.verdict !== null && r.answeredBy === r.parentId && r.ruledAt !== null) return { kind: r.verdict, at: r.ruledAt };
+    return { kind: 'parked', at: r.notifyAt };
   }
   if (r.state === 'declined' && r.ruledAt !== null) return { kind: 'hand-over', at: r.ruledAt };
   if (r.state === 'released' || r.state === 'stale') return { kind: 'lapse', at: r.notifyAt };
@@ -221,6 +227,13 @@ export function digestPushCopy(day: string, t: DigestTotals, driftOpen = 0, clos
 /** The mail's subject, one per row (spec §10): it names the ask or approval id. */
 export const digestCorrectionSubject = (rowKind: DigestRowKind, id: number): string =>
   `Operator correction on ${rowKind} ${id}`;
+
+/** Is this subject a digest correction's (`digestCorrectionSubject`'s shape for some row kind and a positive id)? Derived
+ *  from the builder, so the wording has one holder; the checkpoint's reader of an operator's rulings selects by it. */
+export const isDigestCorrectionSubject = (subject: string): boolean => DIGEST_ROW_KINDS.some((k) => {
+  const head = digestCorrectionSubject(k, 0).slice(0, -1);
+  return subject.startsWith(head) && /^[1-9][0-9]*$/.test(subject.slice(head.length));
+});
 
 /** `POST /api/digest/correct`'s body, read: the row and the operator's sentence (trimmed, one to
  *  `DIGEST_CORRECTION_MAX_CHARS` characters). */

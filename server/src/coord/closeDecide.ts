@@ -4,7 +4,8 @@ import type { CcdPrLine } from '../prstate.js';
 import type { CloseCause, CloseOutcome, CloseRunBody, ChildGate } from './close.js';
 import type { DoneClaim, DoneVerdict } from './fingerprint.js';
 import type { PrHistoryRead } from './prhistory.js';
-import { HANDOFF_SHA, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
+import type { SingleRead } from '../registry.js';
+import { HANDOFF_SHA, actsOnClaimant, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
 import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from './store.js';
 
 /**
@@ -26,6 +27,8 @@ import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from '.
  *   abandon   (abandon arm) the same question for the abandon: release, or hand the claim to the survivor.
  *   ledger    (work close) the `.prhistory` read, and which of its rows are this run's branch's.
  *   verb      whether the box lists the fleet verb about to be sent.
+ *   gone      (a release) the registry's answer for the session, read IMMEDIATELY BEFORE the act: positively absent
+ *             is a release already done, and the act is not sent (D-8664).
  *   fleet     ccd's answer to the act.
  *   recheck   (abandon, sweep word) the claimant re-measured AFTER the act.
  *   commit    the store's answer to the transition: a refusal before any act is `refused`, after one `stale`.
@@ -223,10 +226,16 @@ function decideVerified(f: VerifiedFacts): CloseDecision<{ line: CcdPrLine | nul
 /** The fleet verb a close composes, and the reason a hold carries. */
 export type FleetAct = { verb: 'wsArchive' } | { verb: 'wsRelease' } | { verb: 'wsHold'; reason: string };
 
+/** The child gate of a close that read none: the workspace is not a child. An in-place run's close answers it, because the
+ *  workspace beneath it is its coordinator's own (D-6096). */
+export const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
+
 export interface ActPlan {
   /** The child gate the close read, carried to the hand-off after the commit. */
   gate: ChildGate;
-  fleet: FleetAct;
+  /** The fleet verb to compose, or `null` for NONE: an in-place run's close and abandon compose no `ws-*` verb, because the
+   *  session they would name is the claimant, whose workspace is the coordinator's own (D-6096). */
+  fleet: FleetAct | null;
   /** Is the workspace's claim GONE as a result: `true` only after a `ws-release`. */
   released: boolean;
 }
@@ -241,6 +250,15 @@ export interface CloseActFacts {
 }
 
 async function decideCloseAct(f: CloseActFacts): Promise<CloseDecision<ActPlan>> {
+  // D-6096: an in-place run's workspace is its coordinator's. No release, no hold for wave N+1 (the next wave's run names no
+  // session, never the claimant), no archive and no child gate: the sibling list and the gate are not even read.
+  if (actsOnClaimant(f.run)) {
+    if (f.state === 'failed' && f.archive) {
+      return refused({ ok: false, kind: 'hold-invalid',
+        detail: 'archive: this run is bound to its own coordinator, so its workspace is the coordinator\'s and is never archived' });
+    }
+    return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
+  }
   // Fail-shut ahead of the child gate and the fleet act alike: "the sibling rows could not be read" must never
   // arrive at an irreversible act spelled `[]` (D-2545).
   if (!f.siblings.ok) return refused({ ok: false, kind: 'hold-invalid', detail: f.siblings.detail });
@@ -270,6 +288,8 @@ export interface AbandonFacts {
 }
 
 async function decideAbandon(f: AbandonFacts): Promise<CloseDecision<ActPlan>> {
+  // D-6096: as the close above, an in-place run's abandon composes no `ws-*` verb on its claimant.
+  if (actsOnClaimant(f.run)) return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
   if (!f.siblings.ok) return refused({ ok: false, kind: 'hold-invalid', detail: f.siblings.detail });
   const siblings = f.siblings.siblings;
   // An abandon is FINISHED (spec §5.7), so an eligible child is exactly the no-survivor case: already released.
@@ -302,6 +322,24 @@ function decideVerb(f: VerbFacts): CloseDecision<null> {
   return f.can ? go(null) : refused({ ok: false, kind: 'unsupported' });
 }
 
+/** D-8664. ccd's `ws-release` dies `no such session` when the registry lists no `<id>.uuid`, so a run whose session
+ *  the fleet has since removed could never be abandoned: every retry answered `fleetFailed`. A release of a session the
+ *  registry POSITIVELY lists as absent (`readSessionRecord`'s `absent`: the listing succeeded and has no `.uuid`, the
+ *  same file ccd checks) is already done, and the act is not sent. FAIL-SHUT: an unlistable or unmeasurable registry is
+ *  not an absence, and the act runs as before, so ccd's own answer (and `fleetFailed` on any failure) still decides.
+ *  The hold and the archive are not releases: the registry is not read for them. The read is a thunk so it is taken
+ *  only for a release. */
+export interface GoneFacts {
+  step: 'gone';
+  verb: FleetAct['verb'];
+  read: () => Promise<SingleRead['kind']>;
+}
+
+async function decideGone(f: GoneFacts): Promise<CloseDecision<{ gone: boolean }>> {
+  if (f.verb !== 'wsRelease') return go({ gone: false });
+  return go({ gone: (await f.read()) === 'absent' });
+}
+
 export interface FleetFacts { step: 'fleet'; res: { ok: true } | { ok: false; stderr: string } }
 
 function decideFleet(f: FleetFacts): CloseDecision<null> {
@@ -314,12 +352,14 @@ export interface RecheckFacts {
   stop: DeadCoordinatorStop | null;
   /** Which act ran: a release (nothing else claimed the workspace) or a re-hold under the surviving run. */
   release: boolean;
+  /** D-6096 (review 2993 F6): whether a fleet act ran at all (`ActPlan.fleet !== null`); none for an in-place run. */
+  acted: boolean;
 }
 
 function decideRecheck(f: RecheckFacts): CloseDecision<null> {
   // A revive that landed during the release keeps its run open: the stale arm names which act already ran.
-  return f.stop === null ? go(null)
-    : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct: f.release ? 'released' : 're-held' } };
+  const fleetAct = !f.acted ? 'none' : f.release ? 'released' : 're-held';
+  return f.stop === null ? go(null) : { kind: 'stale', outcome: { ok: false, kind: 'sweep-stopped', stop: f.stop, fleetAct } };
 }
 
 export interface CommitFacts {
@@ -342,13 +382,14 @@ function decideCommit(f: CommitFacts): CloseDecision<null> {
 
 export type CloseFacts =
   | RequestFacts | SweepFacts | VerifiedFacts | CloseActFacts | AbandonFacts
-  | LedgerFacts | VerbFacts | FleetFacts | RecheckFacts | CommitFacts;
+  | LedgerFacts | VerbFacts | GoneFacts | FleetFacts | RecheckFacts | CommitFacts;
 
 export function decideClose(f: RequestFacts): CloseDecision<RequestPlan>;
 export function decideClose(f: SweepFacts | VerbFacts | FleetFacts | RecheckFacts | CommitFacts): CloseDecision<null>;
 export function decideClose(f: VerifiedFacts): CloseDecision<{ line: CcdPrLine | null }>;
 export function decideClose(f: LedgerFacts): CloseDecision<{ entries: Extract<PrHistoryRead, { ok: true }>['entries'] }>;
 export function decideClose(f: CloseActFacts | AbandonFacts): Promise<CloseDecision<ActPlan>>;
+export function decideClose(f: GoneFacts): Promise<CloseDecision<{ gone: boolean }>>;
 export function decideClose(f: CloseFacts): unknown {
   switch (f.step) {
     case 'request': return decideRequest(f);
@@ -358,6 +399,7 @@ export function decideClose(f: CloseFacts): unknown {
     case 'abandon': return decideAbandon(f);
     case 'ledger': return decideLedger(f);
     case 'verb': return decideVerb(f);
+    case 'gone': return decideGone(f);
     case 'fleet': return decideFleet(f);
     case 'recheck': return decideRecheck(f);
     case 'commit': return decideCommit(f);

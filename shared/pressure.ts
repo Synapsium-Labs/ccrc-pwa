@@ -99,6 +99,53 @@ export function readHeadroomBytes(x: unknown): number | null {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
+/** The sessions' memory limit as the agent read it (D-8920): the tightest cgroup limit on the memory the
+ *  fleet's sessions may use, in bytes; `none`, when no limit stands; or `unreadable`, when a limit file was there and
+ *  could not be parsed. Three words for three conditions: `unreadable` is never read as "no limit". */
+export type SessionMemLimit = number | 'none' | 'unreadable';
+
+/** The fleet host's size (D-8920), as MEASURED FACTS and nothing decided: the box's total memory in bytes,
+ *  the cores the agent may run on, and the sessions' memory limit beside them. The agent measures it
+ *  (`agent/src/pressure.ts#measureMachine`) and folds nothing: which figure bounds the run cap is the decider's
+ *  (`server/src/coord/caps.ts#deriveCap`). It is a fact about the machine, so nobody types it. */
+export interface HostMachine { memTotalBytes: number; cores: number; sessionMemLimit: SessionMemLimit }
+
+/** Why the server holds no size for the host, one word per remedy:
+ *  - `no-reading`: nothing has answered yet (the first seconds after a boot, a link that is down, an ask that was
+ *    rejected). It clears by itself.
+ *  - `agent-older`: the agent answered, and it has no `pressure` op or its reply carries no size. Update the agent.
+ *  - `read-failed`: the agent tried and could not measure (its own read failed, or the figures it sent are no size).
+ *    Waiting does not help: the box needs a look. */
+export type HostUnmeasuredWhy = 'no-reading' | 'agent-older' | 'read-failed';
+const HOST_UNMEASURED_WHY_MAP: Record<HostUnmeasuredWhy, true> = { 'no-reading': true, 'agent-older': true, 'read-failed': true };
+/** Every `HostUnmeasuredWhy`, derived from the type (a reason added to the union is a compile error until it is here). */
+export const HOST_UNMEASURED_WHYS = Object.keys(HOST_UNMEASURED_WHY_MAP) as HostUnmeasuredWhy[];
+
+/** The host's size as the server holds it. `unmeasured` carries its reason (`why`), and is never a size of zero. */
+export type HostMachineReading =
+  | { readonly kind: 'measured'; readonly machine: HostMachine }
+  | { readonly kind: 'unmeasured'; readonly why: HostUnmeasuredWhy };
+
+const positiveInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+
+/** THE ONE READER of the reply's `machine` (D-8920), which keeps every condition it can tell apart: no
+ *  `machine` key at all is an agent that predates the field (`agent-older`); `null`, or figures that are not two
+ *  positive safe integers, is a read that failed (`read-failed`): UNKNOWN, never a small machine. `sessionMemLimit` is a
+ *  positive safe integer or `none`; anything else, absence included, reads `unreadable` (unknown is never "no limit").
+ *  The agent's own measurement goes through it too, so the two sides cannot disagree about what a size is. */
+export function readHostMachine(x: unknown): HostMachineReading {
+  if (!isObj(x)) return { kind: 'unmeasured', why: 'read-failed' };
+  if (!('machine' in x) || x['machine'] === undefined) return { kind: 'unmeasured', why: 'agent-older' };
+  const v = x['machine'];
+  if (!isObj(v)) return { kind: 'unmeasured', why: 'read-failed' };
+  const memTotalBytes = v['memTotalBytes'];
+  const cores = v['cores'];
+  if (!positiveInt(memTotalBytes) || !positiveInt(cores)) return { kind: 'unmeasured', why: 'read-failed' };
+  const limit = v['sessionMemLimit'];
+  const sessionMemLimit: SessionMemLimit = limit === 'none' || positiveInt(limit) ? limit : 'unreadable';
+  return { kind: 'measured', machine: { memTotalBytes, cores, sessionMemLimit } };
+}
+
 /** The worst `full` share across both resources and both windows: the one figure the level and the link read. */
 export function worstFull(psi: HostPsi): number {
   return Math.max(psi.memory.full.avg10, psi.memory.full.avg60, psi.io.full.avg10, psi.io.full.avg60);

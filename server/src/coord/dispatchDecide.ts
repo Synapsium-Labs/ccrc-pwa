@@ -1,16 +1,21 @@
 import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
-  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
-  type CoordCaps, type CoordCapsUsage, type RouteFields, type SpawnVerdict,
+  IDLE_RUN_STATES, MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
+  type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { routeDefaultFor } from '../../../shared/route-defaults.js';
 import { parseLandingIntents, type LandingIntentHold } from '../../../shared/landingIntents.js';
-import { measuredIdentity, type RegistryRead, type SessionRecord } from '../registry.js';
+import { measuredIdentity, measuredProjectOf, type RegistryRead, type SessionRecord } from '../registry.js';
+import { isDocsBareRef } from '../../../shared/docs.js';
+import type { AttributionRead, AttributionRefusal } from './openRun.js';
 import type { MeasuredRead } from '../io.js';
 import type { HookStateRead } from '../hookstate.js';
 import type { cutShort } from '../lifecycle.js';
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReasonVerdict, type HoldReasonVerdict } from './rundefs.js';
 import type { TurnVerdict } from './archiveDoor.js';
-import type { RunReadResult, RunRow } from './store.js';
+import type { TurnMarkRead } from './stall.js';
+import { STOP_DONE_PARKED_IDLE_MS } from '../stopDone.js';
+import type { CapsCountedRun, RunReadResult, RunRow } from './store.js';
 import type { DispatchOutcome, SpawnPollTarget } from './dispatch.js';
 import { trackerIdsIn } from '../linking/policy.js';
 import type { LinkingMode } from '../../../shared/linking.js';
@@ -54,24 +59,243 @@ type RefusedWire = Extract<DispatchHalt, { kind: 'refused' }>;
 
 export type DispatchDecision<P> =
   | { kind: 'go'; plan: P }
-  | { kind: 'refused'; outcome: DispatchHalt; event?: string }
+  | { kind: 'refused'; outcome: DispatchHalt; event?: string; orphanEvent?: string }
   | { kind: 'stale'; outcome: RefusedWire };
 
 /** The decision that ends the dispatch: everything but `go`. */
 export type DispatchStop = Exclude<DispatchDecision<never>, { kind: 'go' }>;
 
 const go = <P>(plan: P): DispatchDecision<P> => ({ kind: 'go', plan });
-const refused = (outcome: DispatchHalt, event?: string): DispatchDecision<never> =>
-  event === undefined ? { kind: 'refused', outcome } : { kind: 'refused', outcome, event };
+const refused = (outcome: DispatchHalt, event?: string, orphanEvent?: string): DispatchDecision<never> => ({
+  kind: 'refused', outcome,
+  ...(event === undefined ? {} : { event }),
+  ...(orphanEvent === undefined ? {} : { orphanEvent }),
+});
 
-/** What `capsMeasured` reads: the caps, the usage and, when the concurrency cap is reached, its numbers. */
+/** D-8126: the `run_events.detail` a refusal journals when the `ws-add` ran and may have left a spawn the dispatch
+ *  could not bind (`DISPATCH_ORPHANED_EVENT` + the refusal's name). Only `decideBind` makes one: `decideBefore` refuses
+ *  before any spawn. ONLY A MEASURED ENDING journals it (the coordinator's ruling F1, run 2785): `ok`, or a failure
+ *  ccd exited with (`cutShort === false`). A cut-short or unmeasured ending (a deadline, a signal, a dropped agent link)
+ *  may leave `ws-add` still running on the box, so that run keeps the dead-dispatch pass's in-flight bound. */
+const orphaned = (res: SpawnEnding, kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string | undefined =>
+  (res.ok || res.cutShort === false ? `${DISPATCH_ORPHANED_EVENT}${kind}` : undefined);
+
+/** What `capsMeasured` reads: the limit, the usage and, when the concurrency cap is reached, its numbers. `limit` is THE
+ *  CAP IN FORCE (`dispatch.ts#capNow`, D-8920), a number and never a `CoordCaps`: that type is the STORED
+ *  number, which is the cap only as the operator's override or while the host is unmeasured. */
 export interface CapsReading {
-  caps: CoordCaps; usage: CoordCapsUsage;
+  limit: number; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
+  /** D-8792, armed only: the raw count is at or above the limit but the runs whose worker still works are below it, so the
+   *  worker readings freed a slot. It carries the RAW numbers a refusal says. `freedSlotPending` says so as data, the
+   *  caller asks the freed-slot window, and `capRefusalOf` hands the slot out only on its yes. Absent or null: no slot was
+   *  freed. */
+  freedSlot?: { limit: number; running: number } | null;
+  /** D-8792, shadow only: the slot the readings WOULD free if the `cap-counts-working` row were armed (same rule as
+   *  `freedSlot`). Read by `capShadowLine` for the shadow record and by nothing that refuses or admits. */
+  shadowFreed?: { limit: number; running: number } | null;
 }
+
+/**
+ * D-8792 (waiting workers spec 2026-11-19 Part 3): what a run's worker is doing, for the concurrency count. `busy`:
+ * working, or between turns. `waiting`: awake, idle, nothing running, and its turn marker quiet for
+ * `STOP_DONE_PARKED_IDLE_MS`. `gone`: asleep, stopped, archived, dead, or with no registry row. `unmeasured`: a reading
+ * could not be made. The armed cap leaves out `waiting` and `gone` and counts the other two: the cap fails closed.
+ */
+export type WorkerReading = 'busy' | 'waiting' | 'gone' | 'unmeasured';
+
+/** Why a worker reads `gone` (`workerFactsFor`): no registry row, a stop, an archive, a sleep (`ccd hibernate`'s marker),
+ *  or a pane tmux proved gone. Only `asleep` matters past the count: a send-back to a sleeper is a resume (D-8792). */
+export type WorkerGone = 'absent' | 'stopped' | 'archived' | 'asleep' | 'no-pane';
+
+/** The measured facts `workerReadingOf` and `resumeSkipsCap` decide on, gathered by `workerFactsFor` (`turnverdict.ts`,
+ *  L3). `awake` is a listed, measured row that is not stopped, archived or asleep, whose pane tmux proved alive with a
+ *  readable live file; it carries the fail-closed turn verdict, whether the frame's row lists background work or subagents
+ *  (null: no row), and the turn marker read. */
+export type WorkerFacts =
+  | { readonly kind: 'gone'; readonly why: WorkerGone }
+  | { readonly kind: 'unmeasured' }
+  | { readonly kind: 'awake'; readonly turn: TurnVerdict; readonly rowBusy: boolean | null; readonly mark: TurnMarkRead };
+
+/**
+ * D-8792: the one rule for a worker's reading. Waiting is MEASURED, never declared: the turn verdict is idle, nothing runs
+ * (the row lists no background work or subagents, and the marker's `bg` and `crons` are exactly 0), and the newest of
+ * the marker's stamps (`turnAt`, `stopAt`, `restartAt`) is at least `STOP_DONE_PARKED_IDLE_MS` old, the same 30 minutes
+ * the sleep lane waits for a parked worker. This amends D-6094, which read "idle" at the instant of asking and bounded it
+ * by the run's age: the quiet time replaces both, so a worker between turns keeps its slot. A marker with no stamp, and
+ * every read that could not be made, is `unmeasured`.
+ */
+export function workerReadingOf(f: WorkerFacts, now: number): WorkerReading {
+  if (f.kind === 'gone') return 'gone';
+  if (f.kind === 'unmeasured') return 'unmeasured';
+  if (f.turn === 'busy') return 'busy';
+  if (f.turn !== 'idle' || f.rowBusy === null || !f.mark.ok) return 'unmeasured';
+  if (f.rowBusy) return 'busy';
+  const m = f.mark;
+  // `bg` -1 and `crons` -1 or null are background work nobody measured: counted, never read as nothing running.
+  if (m.bg !== 0 || m.crons !== 0) return 'busy';
+  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
+  if (stamps.length === 0) return 'unmeasured';
+  return now - Math.max(...stamps) >= STOP_DONE_PARKED_IDLE_MS ? 'waiting' : 'busy';
+}
+
+/**
+ * D-6093 and D-8792, ARMED ONLY: whether a door's start of this worker is a resume that is not charged a slot. A resume
+ * dispatch (`dispatch`) of an awake worker starts no process (D-6093). A send-back (`advance`, `advance -> working`
+ * from an idle state) of an awake worker starts none either, and a send-back of a sleeping one is a wake, which the wake
+ * budget paces and the cap does not govern (D-8793). A resume dispatch of a sleeping worker starts a process, so it is
+ * charged. So: a send-back to a live or sleeping worker, or a resume of a live one, is never refused at the cap.
+ * Everything else, an unmeasured read included, is charged as today.
+ */
+export function resumeSkipsCap(f: WorkerFacts, door: 'dispatch' | 'advance'): boolean {
+  if (f.kind === 'awake') return true;
+  return door === 'advance' && f.kind === 'gone' && f.why === 'asleep';
+}
+
+/** D-8792: the one edge a send-back is charged on, the cap gate's own (`advance.ts`, its `cap` row): an idle run sent back
+ *  to `working`. The send-back reader asks it before reading any worker; `caps-counts-working.test.ts` holds it equal to
+ *  the gate's own, state by state, so the two cannot drift. D-6096 (review 2993 F2): an IN-PLACE run is charged on no
+ *  edge, because it never held a slot (`dispatchedAt` stays null): its coordinator sending it back after a review round
+ *  is never refused at the cap, and never waits for one. */
+export function sendBackCharged(to: RunState, from: RunState, inPlace = false): boolean {
+  return !inPlace && to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(from);
+}
+
+/**
+ * D-8792: THE CAP READING, decided once. `rows` are the store's counted rows (`capsCountedRuns`), so `usage.running` is
+ * their number. With no `readings` it is today's count, with no `waiting`. With them, `usage.waiting` says how many rows
+ * have a worker read `waiting` or `gone` (a row with no reading, `busy` or `unmeasured` counts). Shadow (`armed` false)
+ * keeps today's refusal exactly and only says, in `shadowFreed`, what arming would free. Armed, a refusal counts only the
+ * rows that still hold a slot, and a slot the readings free is `freedSlot`, handed out by `capRefusalOf`.
+ */
+export function capsReadingOf(
+  limit: number, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
+): CapsReading {
+  const running = rows.length;
+  const raw = running >= limit ? { limit, running } : null;
+  if (readings === null) return { limit, usage: { running }, overConcurrency: raw };
+  const holding = rows.filter((r) => {
+    const w = readings.get(r.runId);
+    return w === undefined || (w !== 'waiting' && w !== 'gone');
+  }).length;
+  const usage = { running, waiting: running - holding, workingOnly: armed };
+  const freed = holding < limit && running >= limit ? { limit, running } : null;
+  if (!armed) return { limit, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
+  return { limit, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
+}
+
+/** D-8792, armed only: whether this reading holds a slot the worker readings freed, which only the freed-slot window may
+ *  hand out. Data, never a write: the caller (L4) asks the window (`FleetWatcher.admitFreedSlot`, which records into it)
+ *  only on a yes here, and passes its answer to `capRefusalOf` (review 2875 F3). */
+export function freedSlotPending(c: CapsReading): boolean {
+  return c.overConcurrency === null && (c.freedSlot ?? null) !== null;
+}
+
+/**
+ * The refusal numbers of a cap reading, or null when the start may go on: ONE spelling for the dispatch and the
+ * send-back doors. An ordinary refusal is `overConcurrency`; a slot the worker readings freed (armed only,
+ * `freedSlotPending`) goes on only when the freed-slot window admitted it (`WAKE_BURST` per `WAKE_WINDOW_MS`), its answer
+ * passed in as `freedSlotAdmitted`; refused there, or with no window, it refuses with the raw numbers. Pure.
+ */
+export function capRefusalOf(c: CapsReading, freedSlotAdmitted: boolean): { limit: number; running: number } | null {
+  if (c.overConcurrency !== null) return c.overConcurrency;
+  const freed = c.freedSlot ?? null;
+  if (freed === null) return null;
+  return freedSlotAdmitted ? null : freed;
+}
+
+/** What the send-back door does about the cap (review 2875 F3): `today`, the gate's own lazy check as before; `free`, a
+ *  resume the cap never refuses; `recount`, the count over the runs whose worker still works. */
+export type SendBackCapPlan = 'today' | 'free' | 'recount';
+
+/** The facts `sendBackCapPlan` decides on, all measured by the caller. */
+export interface SendBackCapFacts {
+  /** Whether the `cap-counts-working` row is armed. The shadow record asks with `true`, for what arming would do. */
+  readonly armed: boolean;
+  /** Whether a worker port is wired: without one nothing can be read, so today's check stands. */
+  readonly port: boolean;
+  /** Whether today's count is at the cap (`capsMeasured(...).overConcurrency !== null`). */
+  readonly capFull: boolean;
+  readonly to: RunState;
+  /** The run's state, or null when the run could not be read. */
+  readonly from: RunState | null;
+  /** The run worker's facts, or null when they were not read (no session, or not asked yet). */
+  readonly worker: WorkerFacts | null;
+}
+
+/**
+ * D-8792 (the brief's F6; review 2875 F3): the send-back door's cap plan, decided once. Unarmed, with no port, with room
+ * under the cap, for an unreadable run, or on any edge but an idle run sent back to `working` (`sendBackCharged`):
+ * `today`. Otherwise a send-back to a worker `resumeSkipsCap` frees (awake or asleep) is `free`, and any other, a worker
+ * not read included, is `recount`. The caller reads the worker only when the plan without it is not `today`, and asks
+ * again with it.
+ */
+export function sendBackCapPlan(f: SendBackCapFacts): SendBackCapPlan {
+  if (!f.armed || !f.port || !f.capFull || f.from === null || !sendBackCharged(f.to, f.from)) return 'today';
+  return f.worker !== null && resumeSkipsCap(f.worker, 'advance') ? 'free' : 'recount';
+}
+
+/** D-8792, shadow: the server-journal line for a start the cap refused that the armed rule would have let through, or
+ *  null when there is nothing to record. It names the start, the numbers and each counted run the rule would leave out,
+ *  with its reading, which is the arming evidence the plan asks for (OA-F3). */
+export function capShadowLine(
+  c: CapsReading, start: string, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading>,
+): string | null {
+  const would = c.shadowFreed ?? null;
+  if (would === null || c.overConcurrency === null) return null;
+  const left = rows.flatMap((r) => {
+    const w = readings.get(r.runId);
+    return w === 'waiting' || w === 'gone' ? [`run ${r.runId} ${w}`] : [];
+  });
+  return `ccrc-server: cap-counts-working shadow: ${start} refused at ${would.running}/${would.limit}; `
+    + `armed, ${left.length} left out would free a slot (${left.join(', ')})`;
+}
+
+/**
+ * D-6095 (re-grounded on D-8792): how many concurrency slots are free in a cap reading, for the `admissionWake` lane's
+ * room check. The rows that hold slots are `capsMeasured`'s own: all of `usage.running` unless the reading is ARMED
+ * (`usage.workingOnly`, the `cap-counts-working` row), when the `waiting` rows it measured are left out. In shadow the
+ * waiting rows still hold their slots, so the wake fires only on a slot freed the ordinary way. Armed, a slot only the
+ * readings free is handed out by the dispatch door only when the freed-slot window admits it (`capRefusalOf`), so it is
+ * room only up to `freedAdmissible`, what that window would admit now (capacity follow-ups, T4 review 2907 F5): a waiter
+ * the window refused is not woken again every pass. Never negative. It consumes nothing: the caller reads the window
+ * without recording into it (`wakeBudget.ts#wakeRoom`), and the dispatch the mail prompts still passes `capRefusalOf`.
+ */
+export function capsRoomOf(c: CapsReading, freedAdmissible: number): number {
+  const ordinary = Math.max(0, c.limit - c.usage.running);
+  if (c.usage.workingOnly !== true) return ordinary;
+  const armed = Math.max(0, c.limit - (c.usage.running - (c.usage.waiting ?? 0)));
+  return ordinary + Math.min(armed - ordinary, Math.max(0, freedAdmissible));
+}
+
+/** D-8792, shadow (review 2875 F7): the journal line for a send-back the cap refused that arming would admit as a free
+ *  resume (`sendBackCapPlan` answers `free`), naming the worker's state. Same prefix as `capShadowLine`. */
+export function capShadowResumeLine(start: string, over: { limit: number; running: number }, f: WorkerFacts): string {
+  const state = f.kind === 'awake' ? 'awake' : f.kind === 'gone' ? f.why : 'unmeasured';
+  return `ccrc-server: cap-counts-working shadow: ${start} refused at ${over.running}/${over.limit}; `
+    + `armed, a send-back to a worker ${state} is a resume and is not charged`;
+}
+
+/** `self-dispatch`'s words: the other door, with the fields it takes (D-6096). */
+export const SELF_DISPATCH_DETAIL =
+  'a run bound to its own claimant is not dispatched onto its coordinator: send this route with inPlace: true, by, byUuid ' +
+  'and the sibling worktree\'s branch to take the wave in place';
 
 /** The run row a dispatch decides on, once it is known to exist. */
 export type DispatchRun = RunRow;
+
+/** D-8083, D-8085, D-8086: the one spelling of "another programme's run in this project holds a key this act names", for
+ *  the dispatch's request step and the in-place bind. The run's own programme never blocks itself (wave 2 may name what
+ *  wave 1 holds); `held` is read only for a non-empty list. */
+function intentHeldRefusal(
+  run: Pick<RunRow, 'project' | 'program'>, keys: readonly string[],
+  held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[],
+): DispatchHalt | null {
+  if (keys.length === 0) return null;
+  const other = held(run.project, keys).find((h) => h.program !== run.program);
+  return other === undefined ? null
+    : { ok: false, kind: 'refused', code: 'intent-held', key: other.key, holder: { runId: other.runId, program: other.program } };
+}
 
 // -- step: request -----------------------------------------------------------------------------------------------
 
@@ -208,15 +432,16 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // The stored SESSION ID, re-checked for the hold's reason (spec §2.3): every id-taking call after this takes this
   // column. It runs after the body checks and before the pause listing, so a refused id costs no read.
   if (run.sessionId !== null && !isRegistryId(run.sessionId)) return refused({ ok: false, kind: 'bad-session' });
+  // D-6096: a run bound to the session that CLAIMS it would be dispatched onto its own coordinator: `ensure`, the hold and
+  // the `/clear` would all name the coordinator's workspace. Refused here, before the pause listing and any fleet act, with
+  // the other door in words; the in-place bind (`bindRunInPlace`) is the way to take such a wave.
+  if (run.sessionId !== null && run.sessionId === run.claimedBy) {
+    return refused({ ok: false, kind: 'refused', code: 'self-dispatch', detail: SELF_DISPATCH_DETAIL });
+  }
   // D-8083, D-8085: another programme's run in this project holds a key this dispatch names. The run's own programme
   // never blocks itself (wave 2 may name what wave 1 holds). The thunk is read only for a non-empty list.
-  if (intentKeys.length > 0) {
-    const other = held(run.project, intentKeys).find((h) => h.program !== run.program);
-    if (other !== undefined) {
-      return refused({ ok: false, kind: 'refused', code: 'intent-held', key: other.key,
-        holder: { runId: other.runId, program: other.program } });
-    }
-  }
+  const heldElsewhere = intentHeldRefusal(run, intentKeys, held);
+  if (heldElsewhere !== null) return refused(heldElsewhere);
   return go({ run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold });
 }
 
@@ -226,23 +451,40 @@ export interface AdmitFacts {
   step: 'admit';
   /** The registry directory's listing, or `null` when it could not be listed. */
   names: readonly string[] | null;
-  /** Called only when neither marker refused. */
+  /** D-6093 and D-8792, armed only: this dispatch resumes a worker that `resumeSkipsCap` frees from the check, read by the
+   *  caller only past the markers (`admitMarkerRefusal`, so a pause costs zero worker reads) and only when the cap would
+   *  refuse. False in shadow, and false for every fresh spawn and every read that could not be made. */
+  resumeFree: boolean;
+  /** Called only when neither marker refused, and not at all for a free resume. */
   caps: () => CapsReading;
+  /** D-8792: the freed-slot window's answer for a slot the worker readings freed, asked by the caller only when
+   *  `freedSlotPending` (review 2875 F3: no write is reached from here). Absent or false: a freed slot is refused. */
+  freedSlotAdmitted?: boolean;
+}
+
+/** Step 1 of the admit step, alone: the operator's pause and the mail-disabled marker, in that order (null: neither).
+ *  Exported so the caller can ask it BEFORE any worker read (D-6093): `decideAdmit` answers through it, so the two cannot
+ *  drift. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut. */
+export function admitMarkerRefusal(names: readonly string[] | null): DispatchHalt | null {
+  if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) return { ok: false, kind: 'refused', code: 'paused' };
+  // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
+  // lifts the marker is a genuinely fresh dispatch.
+  if (names.includes(MAIL_DISABLED_MARKER)) return { ok: false, kind: 'refused', code: 'mail-disabled' };
+  return null;
 }
 
 function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
-  // 1: PAUSE / KILL-SWITCH FIRST. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut.
-  if (f.names === null || f.names.includes(COORDINATOR_PAUSE_MARKER)) {
-    return refused({ ok: false, kind: 'refused', code: 'paused' });
-  }
-  // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
-  // lifts the marker is a genuinely fresh dispatch.
-  if (f.names.includes(MAIL_DISABLED_MARKER)) return refused({ ok: false, kind: 'refused', code: 'mail-disabled' });
+  // 1: PAUSE / KILL-SWITCH FIRST.
+  const marker = admitMarkerRefusal(f.names);
+  if (marker !== null) return refused(marker);
+  // D-6093 (armed by D-8792's row): a resume of a live worker starts nothing, so it is not charged a slot. The pause and
+  // the marker above still refuse it first.
+  if (f.resumeFree) return go(null);
   // 2: the concurrency cap. The refusal carries the numbers: a cap that refuses without saying what it is reads as a
   // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-7068, operator
   // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator
   // with nothing that would wake it, and measured neither memory nor processes.
-  const { overConcurrency } = f.caps();
+  const overConcurrency = capRefusalOf(f.caps(), f.freedSlotAdmitted === true);
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',
@@ -296,7 +538,8 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       afterRead.records.some((r) => r.project === project && measuredIdentity(r) === null) ||
       [...afterRead.refused].some((x) => !beforeIds.has(x))) {
     // ccd's own words ride along when ccd ALSO failed. Present-or-absent, never `''`.
-    return refused({ ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) });
+    return refused({ ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) }, undefined,
+      orphaned(res, 'registry-unmeasurable'));
   }
   // A NAMED spawn has one acceptable identity, `<project>-<slug>` (ccd's id grammar): any other new row is a
   // stranger (an operator's racing `ws-add`) and is never bound in its place.
@@ -311,9 +554,11 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       // ccd failed AND left nothing new: no ambiguity to report, only a failure. `ambiguous-dispatch` means "the
       // ws-add worked and we cannot read the diff", which is a different sentence.
       if (candidates.length === 0) return refused({ ok: false, kind: 'fleetFailed', stderr: res.stderr }, event);
-      return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, event);
+      return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, event,
+        orphaned(res, 'ambiguous-dispatch'));
     }
-    return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length });
+    return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, undefined,
+      orphaned(res, 'ambiguous-dispatch'));
   }
   const winner = candidates[0]!;
   // §1.5: `!res.ok` no longer short-circuits before the diff. ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE
@@ -433,6 +678,110 @@ async function decideAct(f: ActFacts): Promise<DispatchDecision<ActPlan>> {
     }
   }
   return go({ clear: true });
+}
+
+// -- the in-place bind (D-6096) ---------------------------------------------------------------------------------
+
+/** The in-place body of `POST /api/runs/:id/dispatch`, shaped here (review 2993 F8): null when the body names no
+ *  `inPlace` (an ordinary dispatch), a refusal detail for a malformed one, else the caller and the raw branch, which
+ *  `decideInPlaceTarget` checks. Any `inPlace` value but `true` is malformed. */
+export type InPlaceRequest = { ok: true; by: string; byUuid: string; branch: unknown } | { ok: false; detail: string };
+export function inPlaceRequest(body: unknown): InPlaceRequest | null {
+  const b = (typeof body === 'object' && body !== null ? body : {}) as
+    { inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
+  if (b.inPlace === undefined) return null;
+  if (b.inPlace !== true) return { ok: false, detail: 'inPlace: must be true when given' };
+  if (typeof b.by !== 'string' || b.by === '' || typeof b.byUuid !== 'string' || b.byUuid === '') {
+    return { ok: false, detail: 'inPlace: by and byUuid (the claimant) are required' };
+  }
+  return { ok: true, by: b.by, byUuid: b.byUuid, branch: b.branch };
+}
+
+/** A refusal of the in-place bind: the dispatch union's failures, or the caller's attribution refusal. */
+export type InPlaceHalt = DispatchHalt | { ok: false; kind: 'attribution'; error: AttributionRefusal; detail: string };
+type InPlaceStep<P> = { ok: true; plan: P } | InPlaceHalt;
+
+/** Step 1 (`bindRunInPlace` reads the listing and the run, nothing else yet): the operator's pause and the mail kill
+ *  switch, failing shut on an unlistable registry; then the run: it exists, is a `planned` work run, is claimed by the
+ *  caller, and is not bound to another session (a wave N>=2 reclaim would be re-bound silently, and its worker's mail
+ *  re-issued to the coordinator). The plan carries the claimant as the STORE recorded it, equal to `by` once the
+ *  claimant check passed, so every later read and write names the stored id, never the request's value. */
+export function decideInPlaceRequest(
+  names: readonly string[] | null, read: RunReadResult, by: string,
+): InPlaceStep<{ run: RunRow; claimant: string }> {
+  const markers = admitMarkerRefusal(names);
+  if (markers !== null) return markers;
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
+  if (run === null) return { ok: false, kind: 'unknown-run' };
+  if (run.kind !== 'work') return { ok: false, kind: 'bad-request', detail: 'inPlace: only a work run is bound in place' };
+  if (run.state !== 'planned') return { ok: false, kind: 'bad-transition', from: run.state, to: 'working' };
+  if (run.claimedBy !== by) return { ok: false, kind: 'refused', code: 'claimed-by-another' };
+  if (run.sessionId !== null && run.sessionId !== by) {
+    return { ok: false, kind: 'bad-request', detail: 'inPlace: this run is already bound to another session' };
+  }
+  return { ok: true, plan: { run, claimant: run.claimedBy } };
+}
+
+/** Step 2: the caller's attribution (its uuid is the registry's), then its project MEASURED through `fieldMeasured`
+ *  (never `SessionRecord.project`, whose `project ?? id` default answers as if it were a measurement). Unreadable is
+ *  transient; an unrecorded project proves nothing and fails shut. */
+export function decideInPlaceCaller(run: RunRow, who: AttributionRead, project: MeasuredRead): InPlaceHalt | null {
+  if (!who.ok) return { ok: false, kind: 'attribution', error: who.error, detail: who.detail };
+  if (!project.ok && project.reason === 'unreadable') return { ok: false, kind: 'registry-unmeasurable' };
+  if (!project.ok || project.content === '') return { ok: false, kind: 'refused', code: 'project-mismatch' };
+  if (project.content !== run.project) return { ok: false, kind: 'refused', code: 'project-mismatch', by: project.content };
+  return null;
+}
+
+/** The branch a ws-add base names (`origin/main` -> `main`), or null when it records none. */
+const baseBranchOf = (base: string | null): string | null =>
+  base === null || base === '' ? null : base.startsWith('origin/') ? base.slice('origin/'.length) : base;
+
+/**
+ * Step 3 (review 2993 F3): the branch, which must be the SIBLING worktree's. It is a bare git ref (`isDocsBareRef`, the
+ * one shared reader), and it is none of these, read from one measured registry listing: the claimant's own registry
+ * branch (its workspace is the coordinator's), any registry row's branch in the project (another session's workspace,
+ * whose PR its own pr-state line binds), and the project's base branch, as each of those rows' recorded `base` names it.
+ * An unlistable registry, a missing claimant row, and a row of the project (or of a project that could not be read)
+ * with a plain field that could not be read, or whose branch could not be read or is empty, all refuse: an unreadable
+ * input never frees. So does an unknown base (review 3023 F3-a): when no row of the project, the claimant's included,
+ * records a readable `base` (a coordinator on the project's main checkout, with no ws-add row beside it), the base
+ * branch cannot be told from a sibling's. Then the landing intents, under the holder check the dispatch takes
+ * (`intentHeldRefusal`). The plan is the branch and the parsed keys.
+ */
+export function decideInPlaceTarget(
+  run: RunRow, by: string, branch: unknown, registry: RegistryRead, intents: unknown,
+  held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[],
+): InPlaceStep<{ branch: string; intentKeys: readonly string[] }> {
+  if (typeof branch !== 'string' || !isDocsBareRef(branch)) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: must be the sibling worktree\'s bare git branch name' };
+  }
+  if (!registry.listed || !registry.records.some((r) => r.id === by)) return { ok: false, kind: 'registry-unmeasurable' };
+  let baseKnown = false;
+  for (const r of registry.records) {
+    const project = measuredProjectOf({ kind: 'found', record: r });
+    const inProject = r.id === by || project === null || project === run.project;
+    if (!inProject) continue;
+    if (r.plainFieldUnreadable === true || r.branchEvidence === 'unreadable' || r.branchEvidence === 'empty') {
+      return { ok: false, kind: 'registry-unmeasurable' };
+    }
+    if (r.branch === branch || baseBranchOf(r.base) === branch) {
+      const what = r.branch === branch ? (r.id === by ? 'the claimant\'s own workspace branch' : `the workspace branch of ${r.id}`)
+        : 'the project\'s base branch';
+      return { ok: false, kind: 'bad-request', detail: `branch: ${branch} is ${what}, not a sibling worktree's` };
+    }
+    if (baseBranchOf(r.base) !== null) baseKnown = true;
+  }
+  if (!baseKnown) {
+    return { ok: false, kind: 'bad-request', detail: 'branch: the project\'s base branch is unknown (no registry row of '
+      + 'the project records a base), so no branch can be shown to be a sibling worktree\'s' };
+  }
+  const parsed = parseLandingIntents(intents);
+  if (!parsed.ok) return { ok: false, kind: 'bad-request', detail: parsed.detail };
+  const heldElsewhere = intentHeldRefusal(run, parsed.keys, held);
+  if (heldElsewhere !== null) return heldElsewhere;
+  return { ok: true, plan: { branch, intentKeys: parsed.keys } };
 }
 
 // -- the one function --------------------------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { readLinearStore, type LinearStoreRead } from '../linear/store.js';
 import { routableTeams } from '../linear/route.js';
 import { visibilityDue } from './policy.js';
-import { planTeamLink, repoNameOf } from './teamLink.js';
+import { planTeamLink, repoNameOf, type AttachedTally } from './teamLink.js';
 
 /** `cfg` is the Linear store's home for the team link; a lane given none (a test of the visibility step) links nothing. */
 type LaneDeps = Pick<WatcherDeps, 'coord' | 'runCcd' | 'fleetState'> & { cfg?: Pick<WatcherDeps['cfg'], 'ccrcDir'> };
@@ -26,6 +26,10 @@ export interface TeamLinkInputs {
   tally: (project: string) => ReadonlyMap<string, number>;
   /** The repository slug the PR sweep measured for the project, or null. */
   slug: (project: string) => string | null;
+  /** D-8808: the distinct issues attached to the project's repository's merged pull requests, or null when unmeasured.
+   *  OPTIONAL and unwired: nothing passes it until the operator's go for one live capture of the read, so the live lane
+   *  decides exactly as it did without it. */
+  attached?: (project: string) => AttachedTally | null;
 }
 
 /** What ccd printed, narrowed: a full answer, a failure with its word, or nothing intelligible. */
@@ -69,8 +73,9 @@ export class VisibilityLane {
         const slug = l?.measured.state === 'measured' ? l.measured.slug : inputs.slug(project);
         const plan = planTeamLink({ teamKey: l?.teamKey ?? null, source: l?.teamLink?.source ?? null }, {
           project, repo: slug === null ? null : repoNameOf(slug), mode: l?.mode ?? 'unknown', teams, tally: inputs.tally(project),
+          attached: inputs.attached?.(project) ?? null,
         });
-        if (plan.link !== null && coord.linkTeamAuto(project, plan.link, now)) continue;
+        if (plan.link !== null && coord.linkTeamAuto(project, { ...plan.link, workspace: plan.link.workspaceId }, now)) continue;
         coord.recordTeamCandidates(project, plan.candidates);
       }
     } catch (e) {

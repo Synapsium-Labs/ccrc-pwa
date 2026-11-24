@@ -31,7 +31,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
 import { type DelegationCensusPass, type ParentIncarnation, type WorktreeCensus } from '../src/coord/gitref.js';
-import { DELEGATION_CHECKPOINT_FILE, type DelegationDurability, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
 import { correlateDelegation, DELEGATION_DROPPED_UNMEASURED } from '../src/coord/delegation-correlation.js';
@@ -1151,6 +1152,15 @@ const W4_PWA_FILES = [
   'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
   'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
   'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  // Desktop polish C48 (D-8782): the worktrees of a session moved from the fleet list into its own details; these three files
+  // draw and label them, and name the wire types and the words module like the files above. No quote mark in a comment here:
+  // the health test mirrors this block by reading every quoted string in it.
+  'pwa/src/fleet/WorktreeControls.tsx', 'pwa/src/fleet/sessionWorktrees.ts', 'pwa/src/session/SessionWorktrees.tsx',
+  // Desktop polish H4 (D-8828): the Archive screen holds the work no session owns. The section, the screen that draws it and the
+  // route that reads the frame into it name the wire types and the words module like the files above.
+  'pwa/src/fleet/ArchiveUnownedWork.tsx', 'pwa/src/screens/ArchiveScreen.tsx', 'pwa/src/app.tsx',
+  // Fix round 1: the Archived row at the fleet foot is the door to the section, so the fleet screen reads the frame for its count.
+  'pwa/src/screens/FleetScreen.tsx',
 ] as const;
 /** Wave 5 PR8c's PWA files (D-8114): the Settings card over the adoption switch. It reads the switch's door and the lane's counts
  *  and list (`GET /api/coord/delegation-adopt`), so its files name the door and the wire's types; no string they make public says
@@ -1449,8 +1459,11 @@ describe('8. the closed scope census', () => {
       // It touches no lease, checkpoint or delegation journal, and it is listed by its exact printed line, so a second
       // `journal` route, or this one under another verb, is still red.
       const OTHER_JOURNAL = ['├── /api/coord/shadow-journal (GET, HEAD)'];
+      // Session helpers S2 opens the one-time pass's door BY NAME, by its exact printed line (D-8874): the dry run, the pass and its undo.
+      const S2_BACKFILL_DOOR = ['├── /api/coord/delegation-backfill (GET, HEAD, POST)'];
+      expect(routes.split('\n').filter((l) => S2_BACKFILL_DOOR.includes(l)), 'the one-time pass\'s door exists').toEqual(S2_BACKFILL_DOOR);
       expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l)
-        && !W5_SWITCH_DOOR.includes(l))).toEqual([]);
+        && !W5_SWITCH_DOOR.includes(l) && !S2_BACKFILL_DOOR.includes(l))).toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_JOURNAL.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_JOURNAL);
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call
@@ -1531,9 +1544,15 @@ describe('8. the closed scope census', () => {
     //    journal (#384's own collector journal, and a string helper), and neither names the journal (the list above).
     //    R80 N5: scoped to the files that can reach a file at all (they import `node:fs`, `node:fs/promises` or the delegation file port), so
     //    a string helper named like `truncateLabel(` elsewhere in the server does not red this; one added to such a file must be listed.
+    //    Overlord W1 (authority journal A0): the shared append-only port's one cut, `appendOnlyFile.ts#appendOnlyFileAt`'s `cutAside`, is
+    //    three spellings (its fs-operations member, that member's node:fs default, and the cut's one call). It cuts the Overlord's chained
+    //    journals, reached only through `chainedJournalFile.ts`, and names neither delegation file (the list above).
     const reachesFiles = (src: string): boolean => /from '(?:node:)?fs(?:\/promises)?'|DelegationFilePort|nodeDelegationFilePort/.test(src);
     const cuts = SRC.filter((f) => reachesFiles(read(f))).flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
+      'server/src/appendOnlyFile.ts: ftruncateSync(',
+      'server/src/appendOnlyFile.ts: ftruncateSync(',
+      'server/src/appendOnlyFile.ts: ops.ftruncateSync(',
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       `${applier}: this.port.truncate(`,
       'server/src/coord/delegation-file-port.ts: fsp.truncate(',
@@ -1598,6 +1617,13 @@ describe('8. the closed scope census', () => {
       ['writeCarriedLocked', /^: \(held\.journal \?\?= await this\.port\.openRead\(this\.journalPath\)\);$/],
       ['copySuffixLocked', /^held\.src = await this\.port\.openRead\(this\.journalPath\);$/],
       ['copySuffixLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      // D-8874 (session helpers S2): the one-time pass's list, a file of its own beside the retained set (never a part of it), read, and
+      // written whole as a temp renamed onto it; and the dry run's read of the retained set for review 3026 F4, through `retainedRecords`.
+      ['readBackfillList', /^const bytes = await this\.port\.readFile\(file\);$/],
+      ['writeBackfillList', /^const handle = await this\.port\.createTemp\(temp\);$/],
+      ['writeBackfillList', /^await this\.port\.rename\(temp, file\);$/],
+      ['writeBackfillList', /^await this\.port\.fsyncDir\(this\.deps\.dir\);$/],
+      ['retainedTaskReportKeys', /^for await \(const record of this\.retainedRecords\(\)\) \{$/],
       ['replaceCheckpoint', /^await this\.port\.mkdirp\(this\.deps\.dir\);$/],
       ['replaceCheckpoint', /^held\.handle = await this\.port\.createTemp\(this\.tempPath\);$/],
       ['replaceCheckpoint', /^await this\.edge\('checkpoint-rename', \(\) => this\.port\.rename\(this\.tempPath, this\.checkpointPath\)\);$/],
@@ -1680,17 +1706,19 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's twenty-two (the twenty-second, `overlord-history`, is the Overlord W1 history
+    // the request ops are a small closed set: main's twenty-four (the twenty-fourth, `testbox-capture`, is the build capture
+    // runner's op, spec 2026-11-22 §2.5; the twenty-third, `models`, is model classes R3's W4a op, D-8687,
+    // declared as two arms of one request type, so the scan below meets its word twice; the twenty-second, `overlord-history`, is the Overlord W1 history
     // op, its PR A; the twentieth, `backup`, is backup health's D-7858; the twenty-first, `testbox-admin`, is the test box connect plan's TC11, D-8166; the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's twenty-two members of the union
+    // interface-shaped parse cannot see), and exactly main's twenty-four members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
       'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'testbox-admin', 'pressure', 'testbox', 'testbox-tools-sync', 'backup',
-      'overlord-history']);
+      'overlord-history', 'models', 'models', 'testbox-capture']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
       'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq',
-      'TestboxReq', 'TestboxToolsSyncReq', 'TestboxAdminReq', 'BackupReq', 'OverlordHistoryReq']);
+      'TestboxReq', 'TestboxToolsSyncReq', 'TestboxAdminReq', 'BackupReq', 'OverlordHistoryReq', 'ModelsReq', 'TestboxCaptureReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's
@@ -1846,7 +1874,7 @@ describe('8. the closed scope census', () => {
       // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
       'if (this.deps.coord === undefined) return false;',
       // wave 5 (PR7 Task 5.7.3): the adoption step's notice sinks, the feed archive and the lease notices' mail (`queueRunlessNotice`)
-      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };',
+      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker, responseStamp: deps.responseStamp };',
       'notice: (title, body, mode) => { notify(sink, { kind: \'coord\', sessionId: \'\', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);

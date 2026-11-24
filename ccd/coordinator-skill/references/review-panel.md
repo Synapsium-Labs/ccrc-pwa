@@ -19,6 +19,11 @@ never accepted on the coordinator's own reading alone.
   mutation red), can it be reproduced from the tree as committed; a claim that cannot is a
   finding, whatever the commit message says.
 
+**Every lens and refuter prompt carries the literal-path rule and the prose-names line.** The script's
+`READ_ONLY` text ends with both sentences, word for word, from `references/approval-prompts.md`, which also
+holds the table of shapes Claude Code prompts for under bypass. A lens that deletes through a variable raises a
+prompt the operator must answer; the sentences are what keeps it from being written.
+
 **The findings cap.** Each lens returns at most its 8 most severe findings: the schema says
 `maxItems: 8` and the lens prompt says to keep the most severe, so a lens with more to say ranks
 and cuts rather than flooding the refute pass.
@@ -61,7 +66,11 @@ export const meta = {
 // (for labels only).
 const A = args
 const RANGE = `${A.base}..${A.tip}`
-const READ_ONLY = `Work in ${A.repo}. Read only: never edit, commit, stash, checkout or run a build there. Cite every claim as file:line at ${A.tip}.`
+// The literal-path rule and the prose-names line, word for word (`references/approval-prompts.md`): a lens
+// and a refuter are subagents, they never read a skill, and they raise almost every permission prompt.
+const RULE = 'Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full.'
+const PROSE = "The approval surface's deny matches names in plain prose, not only commands, so a note, a heredoc or a mail never names the approval files (the verifier script, the signing keys, the approval client verb or the approvals route): describe them in words."
+const READ_ONLY = `Work in ${A.repo}. Read only: never edit, commit, stash, checkout or run a build there. Cite every claim as file:line at ${A.tip}. ${RULE} ${PROSE}`
 const LENSES = [
   { key: 'correctness', prompt: `${READ_ONLY}\nReview the diff ${RANGE} (git -C ${A.repo} diff ${RANGE}) for CORRECTNESS: does the code do what its own comments and tests say at every seam the diff touches? A guard that cannot red for the thing it claims to guard is a finding. Return only findings you can point at, and at most your 8 most severe.` },
   { key: 'spec', prompt: `${READ_ONLY}\nReview the diff ${RANGE} for SPEC CONFORMANCE against the plan at ${A.plan} (its tasks for wave ${A.wave}) and the spec at ${A.spec}: a plan step skipped, a constraint weakened, a deviation not ledgered in the plan's Deviations section is a finding. Return only findings you can point at, and at most your 8 most severe.` },

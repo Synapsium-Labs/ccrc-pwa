@@ -58,7 +58,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 // derived" needs the import to be the easy path rather than the remembered one.
 import {
   API_KEY_PROVIDERS, CODEX_BRIDGE_MODES, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
-  RosterInvalid, rosterFromJson,
+  RosterInvalid, orgLabelVerdict, rosterFromJson,
 } from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
 
@@ -777,6 +777,10 @@ const OPS = {
   // Accounts plan Task A16 (D-7735).
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
+  // The two serviceability facts (plan 2026-11-14 Task 3, F11) and the organization label: `opSetFacts` below states it.
+  'set-facts': { keys: ['file', 'id', 'fable-billing', 'continuity', 'recorded-at', 'org'], repeat: [] },
+  // The label's gate alone, read-only and silent on success (account organization B1): `orgRefused` below states it.
+  'org-check': { keys: ['org'], repeat: [] },
   // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
   // shares with `pre-remove`, and the answers of the sign-in verbs.
   'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
@@ -2204,6 +2208,51 @@ function opSetPlacement(a) {
   return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
 }
 
+/** The organization label's gate, `set-facts`' and `org-check`'s: 0 for a label the roster admits or `none`, else the
+ *  refusal and 2. `org-check` is the verb's read-only ask before its first write (PR A's review, F2), so both refusals
+ *  say nothing was written, which holds for either caller. */
+function orgRefused(org) {
+  const word = org === undefined || org === 'none' ? 'ok' : orgLabelVerdict(org);
+  if (word === 'ok') return 0;
+  refuse(word === 'looks-like-an-id' ? 'org-looks-like-an-id' : 'bad-argv', word === 'looks-like-an-id'
+    ? "--org is a name you choose, never the organization's id. Nothing was written."
+    : '--org is a name matching ^[a-z][a-z0-9-]{0,31}$, or none. Nothing was written.');
+  return 2;
+}
+
+/** `set-facts` (F11): `--fable-billing included|credits` writes the billing fact; `--continuity on` writes
+ *  `{recordedAt}` (`--recorded-at now|<epoch seconds>`) only when no record stands, so a second `on` changes no byte,
+ *  and `off` removes the key, never a null. `--org <label>` writes the organization label and `--org none` removes it
+ *  (account organization A3); an id-shaped label is refused `org-looks-like-an-id` before any write. A call that
+ *  changes nothing writes no byte. Silent on success. */
+function opSetFacts(a) {
+  const acct = rosterEntryOf(a, 'set-facts');
+  if (acct === null) return 1;
+  const billing = a['fable-billing'];
+  const on = a['continuity'];
+  const at = a['recorded-at'] ?? 'now';
+  if ((billing !== undefined && billing !== 'included' && billing !== 'credits') || (on !== undefined && on !== 'on' && on !== 'off')
+      || (at !== 'now' && !/^[0-9]{1,15}$/.test(at))) {
+    refuse('bad-argv', '--fable-billing is included or credits, --continuity on or off, --recorded-at now or whole seconds');
+    return 2;
+  }
+  const org = a['org'];
+  if (orgRefused(org) !== 0) return 2;
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const next = { ...acct };
+  if (org === 'none') delete next['org'];
+  else if (org !== undefined) next['org'] = org;
+  if (billing !== undefined) next['fableBilling'] = billing;
+  if (on === 'off') delete next['continuity'];
+  if (on === 'on' && !isPlainObject(acct['continuity'])) next['continuity'] = { recordedAt: at === 'now' ? Math.floor(Date.now() / 1000) : Number(at) };
+  if (JSON.stringify(next) === JSON.stringify(acct)) return 0;
+  const whole = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? next : x)) };
+  const admits = rosterAdmits(whole, `setting lane "${a['id']}"'s facts would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], whole, 'the roster was unchanged') ? 0 : 1;
+}
+
 /** A lane's secrets file, relative to HOME: the one template `check-add` and the method switch share, and the name
  *  `_acct_write_secret` and `ccd-account-auth`'s capture write (the three writers `ccd-account-auth.test.ts` pins). */
 function secretsFileOf(id, provider) {
@@ -2327,6 +2376,8 @@ function main(argv) {
   if (op === 'lane-state') return opLaneState(a);
   if (op === 'pre-remove') return opPreRemove(a);
   if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'set-facts') return opSetFacts(a);
+  if (op === 'org-check') return orgRefused(a['org']);
   if (op === 'or-key') return opOrKey(a);
   if (op === 'set-method') return opSetMethod(a);
   if (op === 'auth-live') {

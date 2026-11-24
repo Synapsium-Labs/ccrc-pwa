@@ -308,6 +308,57 @@ describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names
 });
 
 
+// usage-user-agent (model-class-advance, D-8781): ccd/ccgpt-auth.py, which the catalogue probe and the usage poll both
+// load, owns the Codex client version they say. This guard reds three second copies in shipped code (tests, docs and
+// README.md are prose and left out): the floor's VALUE, the release cache's file NAME, and the user-agent's FORM, each
+// matched as fixed text. One argued exception: the poll's `_UNVERSIONED_USER_AGENT`, the form with version 0.0.0, which
+// it sends only when the library lacks the version reader, so a mismatched install still publishes; it may stand on
+// that one line of ccd/ccgpt-usage.py. It does not red a floor under another value or spelling, nor the version's
+// grammar, which has two argued copies (the library's comment names them).
+describe('usage-user-agent: the floor, the cache name and the user-agent form are spelled once, in the auth library', () => {
+  const LIB = 'ccd/ccgpt-auth.py';
+  const floorOf = (src: string): string | undefined => /^CLIENT_VERSION_FLOOR = "(\d+\.\d+\.\d+)"$/m.exec(src)?.[1];
+  const libText = (): string => readFileSync(path.join(ccrcRoot, LIB), 'utf8');
+  /** Every `file:line` of shipped code holding `needle` as fixed text. */
+  const shippedLines = (needle: string): string[] => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-n', '-F', '-e', needle, '--', ':!server/test', ':!docs', ':!README.md'],
+      { encoding: 'utf8' });
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\n').filter(Boolean);
+  };
+  const files = (lines: string[]): string[] => [...new Set(lines.map((l) => l.split(':')[0]!))].sort();
+
+  it('CONTROL: the patterns read the library\'s lines and pass over a use of the name', () => {
+    expect(floorOf('x = 1\nCLIENT_VERSION_FLOOR = "1.2.3"\n')).toBe('1.2.3');
+    expect(floorOf('    floor = CLIENT_VERSION_FLOOR\n')).toBeUndefined();
+    expect(/^CLIENT_RELEASE_NAME = "([^"]+)"/m.exec(libText())?.[1], 'the library names its cache file').toMatch(/\.json$/);
+    expect(/^ {4}return "(codex_cli_rs\/%s [^"]+)" % version$/m.exec(libText())?.[1], 'the library builds the user-agent')
+      .toMatch(/^codex_cli_rs\/%s \(/);
+  });
+
+  it('the floor\'s value appears in ccd/ccgpt-auth.py alone, and the probe carries no constant of its own', () => {
+    const floor = floorOf(libText());
+    expect(floor, 'ccd/ccgpt-auth.py declares no CLIENT_VERSION_FLOOR').toMatch(/^\d+\.\d+\.\d+$/);
+    expect(files(shippedLines(floor!))).toEqual([LIB]);
+    expect(shippedLines('CODEX_CLIENT_VERSION=')).toEqual([]);
+  });
+
+  it('the release cache\'s file name appears in ccd/ccgpt-auth.py alone', () => {
+    const name = /^CLIENT_RELEASE_NAME = "([^"]+)"/m.exec(libText())![1]!;
+    expect(files(shippedLines(name))).toEqual([LIB]);
+  });
+
+  it('the user-agent\'s form appears in ccd/ccgpt-auth.py, and beyond it only on the poll\'s fallback line', () => {
+    const form = /^ {4}return "codex_cli_rs\/%s ([^"]+)" % version$/m.exec(libText())![1]!;
+    const lines = shippedLines(form);
+    expect(files(lines)).toEqual([LIB, 'ccd/ccgpt-usage.py']);
+    const poll = lines.filter((l) => l.startsWith('ccd/ccgpt-usage.py:'));
+    expect(poll, 'the poll spells the form only on its fallback line').toHaveLength(1);
+    expect(poll[0]!.replace(/^ccd\/ccgpt-usage\.py:\d+:/, '')).toMatch(/^_UNVERSIONED_USER_AGENT = "codex_cli_rs\/0\.0\.0 /);
+  });
+});
+
+
 // W2-2b Task 1 (W2-D42, W2-D44; O13, O14): the marker's parser, formatter and fold are defined once, in lib.mjs; the arm
 // words are quoted once in ccd/history, on RECALL_ARMS' line; and every ccd/history code line naming headless-on's path
 // is historyPaths' own field or the marker's one read, store.mjs's readBounded at HEADLESS_LIST_MAX_BYTES with no link
@@ -708,8 +759,16 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
 describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
   const HOME = 'server/src/sleepLane.ts';
 
+  // The renewal act's fresh start is NOT a sleep act, legitimately different (Overlord W1a renewal act, slug
+  // renew-is-not-a-sleep-act): spec §3.3.11 H13 picks `ccd hibernate --roll --fresh` as `SessionHost.renew`'s act, which ends a
+  // long-lived session's conversation and starts a fresh one under the same id; it never puts a session to sleep, it is the
+  // port's ccd adapter, driven by the generations lane's renewal walk and never by the sleep executor's rows. It is named by
+  // symbol, so a second SLEEP act site is still red.
+  const NOT_SLEEP_ACTS: readonly string[] = ['server/src/continuity/ccdSessionHost.ts#ccdSessionHost'];
   it('the ccd hibernate act sites are one, sleepAct in sleepLane.ts (2 -> 1 at C4d; may only shrink)', () => {
-    expect(hibernateActSites().map((s) => s.symbol)).toEqual([`${HOME}#sleepAct`]);
+    const all = hibernateActSites().map((s) => s.symbol);
+    expect(all.filter((s) => !NOT_SLEEP_ACTS.includes(s))).toEqual([`${HOME}#sleepAct`]);
+    expect(all.filter((s) => NOT_SLEEP_ACTS.includes(s)), 'each named exception is still an act site the census sees').toEqual(NOT_SLEEP_ACTS);
   });
 
   it('no capability site is held for W4, and sleepLane.ts asks no verb through verbSupported(', async () => {
@@ -960,5 +1019,30 @@ describe('codex bridge: Claude Code\'s identity beta is spelled once', () => {
     // failure must never read as an empty list.
     if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/inbound.py']);
+  });
+});
+
+
+// Overlord wave 168 (`response-masks-miss-pem`). APPENDED. A PEM private-key block has one finder, `pemBlockSpans` in
+// `shared/redact.mjs`: the egress profiles' `pem-block` step and the response masks (`server/src/accounts/shapes.ts`)
+// both read it, and no other source file spells the block's BEGIN or END line, so the two can never drift apart.
+describe('a PEM private-key block has one finder (overlord wave 168)', () => {
+  const FILES = [...new Set([...ALL, ...ALL_MJS])];
+  const holders = (re: RegExp): string[] => FILES.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const SPELLING = /PRIVATE KEY-----/;
+  const DECL = /\bfunction\s+pemBlockSpans\b|\b(?:const|let|var)\s+pemBlockSpans\s*=/;
+  it('CONTROL: the patterns see the spelling and a declaration, and pass over a use', () => {
+    expect(SPELLING.test('const PEM_END = String.raw`-----END [A-Z ]*PRIVATE KEY-----`;')).toBe(true);
+    expect(DECL.test('export function pemBlockSpans(text) {')).toBe(true);
+    expect(DECL.test("import { pemBlockSpans } from '../../../shared/redact.js';")).toBe(false);
+  });
+  it("the block's BEGIN and END lines are spelt in shared/redact.mjs alone", () => {
+    expect(holders(SPELLING)).toEqual(['shared/redact.mjs']);
+  });
+  it('pemBlockSpans is declared once, and both the pem-block step and the response masks read it', () => {
+    expect(holders(DECL)).toEqual(['shared/redact.mjs']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/redact.mjs'))).toMatch(/function maskPemBlocks\([^)]*\) \{\n\s*const spans = pemBlockSpans\(text\);/);
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'shapeSpans')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['pemBlockSpans', 'pemRowSpans']));
   });
 });

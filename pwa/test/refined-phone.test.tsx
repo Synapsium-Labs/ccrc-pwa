@@ -17,7 +17,7 @@ import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
 import { lanesByFree } from '../src/fleet/laneOrder';
-import { pageAt, treeOk, treeResponse } from './docsFixtures';
+import { NO_RANGE_VISIT, pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
 /** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
@@ -45,7 +45,7 @@ const { DocsHead } = await import('../src/docs/DocsHead');
 const docsVisit = (): DocsVisit => ({
   tree: { s: 'ok', answer: treeResponse(treeOk()), receivedAt: Date.now() },
   file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-  retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+  ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
 });
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -73,13 +73,15 @@ const lane = (wrapper: string, five: number | null, seven: number | null): Accou
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   setSkin(REFINED);
+  // The Fleet's own path (Overlord W1 home): `/` is the home now, which lands on the Fleet only once its reads settle.
+  act(() => { navigate('/fleet'); });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  act(() => { navigate('/'); });
+  act(() => { navigate('/fleet'); });
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
   setSkin(REFINED);
 });

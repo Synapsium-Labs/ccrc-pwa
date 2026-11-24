@@ -17,7 +17,7 @@ import { useMediaQuery } from '../../lib/useMediaQuery';
 import { flipInspector } from '../frame';
 import { useInspectorShown, usePublishInspectorTarget } from '../../inspector/inspectorShown';
 import {
-  HistorySection, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
+  HelpersSection, HistorySection, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../../inspector/InspectorSections';
 import { INSPECTOR_QUERY, useInspectorSession } from '../../inspector/useInspectorSession';
 
@@ -35,6 +35,7 @@ export function InspectorRail(): ReactNode {
     <div className="ref-inspector">
       <TasksSection />
       <MailSection />
+      <HelpersSection />
       <PrSection />
       <RoutingSection />
       <LaneSection />

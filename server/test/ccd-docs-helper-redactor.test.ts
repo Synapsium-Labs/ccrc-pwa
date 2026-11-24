@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactDocsText } from '../../shared/docs.js';
-import { harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD_LIBS, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { docsRepo, REAL_GIT, runCcdDocs, type DocsRun } from './ccdDocsHelpers.js';
 import { unitJson } from './docsHelperPy.js';
 
@@ -84,7 +84,7 @@ const FANOUT_INDEX_LINE = `{"v":1,"verb":"docs-index","ok":true,"elapsedMs":0,"u
 }]}\n`;
 
 /** The drafts fixture's whole answer, normalized (`<M>` the main checkout's real path, `<C>` the one commit). */
-const DRAFTS_TREE_LINE = '{"v":1,"verb":"docs-tree","ok":true,"elapsedMs":0,"project":"demo","repo":{"key":"<K>","objectFormat":"sha1","shallow":false},"github":{"state":"none"},"ref":{"requested":null,"served":"refs/remotes/origin/main","name":"main","side":"origin","commit":"<C>","via":"default:origin-head","tried":[{"ref":"refs/remotes/origin/HEAD","result":"resolved"}],"relation":"equal","counterpart":{"ref":"refs/heads/main","commit":"<C>","ahead":0,"behind":0,"count":"measured"}},"mainCheckout":{"path":"<M>","branch":"main","head":"<C>"},"sections":[{"slug":"specs","path":"docs/superpowers/specs","state":"present","count":1},{"slug":"plans","path":"docs/superpowers/plans","state":"absent","count":0},{"slug":"product-design","path":"docs/product-design","state":"absent","count":0},{"slug":"conventions","path":"docs/conventions","state":"absent","count":0}],"entries":[{"section":"specs","path":"a.md","committed":{"kind":"file","blob":"7f3b95d297183eca8f6cf38ceaa253bee8c2d7cd","size":4},"draft":null}],"unlisted":{"count":0,"byReason":{}},"drafts":{"state":"unreadable","branch":"main","worktree":null,"step":"worktree-list","detail":"worktree list rc 128: fatal: unable to access \'https://***@example.invalid/x.git/\': planted\\nAuthorization: ***"},"freshness":{"remote":"origin","trackedRef":"refs/remotes/origin/main","stamp":null,"fetchHead":null}}\n';
+const DRAFTS_TREE_LINE = '{"v":1,"verb":"docs-tree","ok":true,"elapsedMs":0,"project":"demo","repo":{"key":"<K>","objectFormat":"sha1","shallow":false},"github":{"state":"none"},"ref":{"requested":null,"served":"refs/remotes/origin/main","name":"main","side":"origin","commit":"<C>","via":"default:origin-head","tried":[{"ref":"refs/remotes/origin/HEAD","result":"resolved"}],"relation":"equal","counterpart":{"ref":"refs/heads/main","commit":"<C>","ahead":0,"behind":0,"count":"measured"}},"mainCheckout":{"path":"<M>","branch":"main","head":"<C>"},"sections":[{"slug":"specs","path":"docs/superpowers/specs","state":"present","count":1},{"slug":"plans","path":"docs/superpowers/plans","state":"absent","count":0},{"slug":"product-design","path":"docs/product-design","state":"absent","count":0},{"slug":"conventions","path":"docs/conventions","state":"absent","count":0},{"slug":"vision","path":"docs/vision","state":"absent","count":0},{"slug":"promise","path":"docs/promise","state":"absent","count":0}],"entries":[{"section":"specs","path":"a.md","committed":{"kind":"file","blob":"7f3b95d297183eca8f6cf38ceaa253bee8c2d7cd","size":4},"draft":null}],"unlisted":{"count":0,"byReason":{}},"drafts":{"state":"unreadable","branch":"main","worktree":null,"step":"worktree-list","detail":"worktree list rc 128: fatal: unable to access \'https://***@example.invalid/x.git/\': planted\\nAuthorization: ***"},"freshness":{"remote":"origin","trackedRef":"refs/remotes/origin/main","stamp":null,"fetchHead":null}}\n';
 
 /** The drafts fixture's run-dependent values: the main checkout's path, its one commit and its repo key. */
 function draftsSubs(h: CcdHarness, main: string, r: DocsRun): Array<[string, string]> {
@@ -881,19 +881,29 @@ describe('the docs front probes node and the pinned redactor before any work (D-
 
   it('a hashing tool that answers the loader and then prints an empty digest answers redactor-mismatch', () => {
     const count = path.join(h.home, 'hash-calls');
+    const heads = path.join(h.home, 'hash-heads');
+    const input = path.join(h.home, 'hash-input');
     for (const tool of ['sha256sum', 'shasum']) {
       const real = execFileSync('sh', ['-c', `command -v ${tool} || true`], { encoding: 'utf8' }).trim();
       fs.writeFileSync(path.join(harnessBin(h.home), tool), [
         '#!/bin/sh',
-        `echo x >> ${shWord(count)}`,
-        // The loader hashes each of its four libraries (D-7463, wave 5, the Overlord W1 pool set); every later call is the front's.
-        `[ "$(wc -l < ${shWord(count)})" -le 4 ] && ${real ? `exec ${shWord(real)} "$@"` : 'exit 127'}`,
-        'cat >/dev/null; exit 0',
+        // Each call's input is kept and its first line logged, so the case can say WHICH bytes were hashed (review 3006 F8).
+        `cat > ${shWord(input)}; head -n 1 ${shWord(input)} >> ${shWord(heads)}; echo x >> ${shWord(count)}`,
+        // The loader hashes each of its seven libraries (D-7463, wave 5, the Overlord W1 pool set, ccd arms, door process and model aliases); every later call is the front's.
+        `[ "$(wc -l < ${shWord(count)})" -le 7 ] && ${real ? `exec ${shWord(real)} "$@" < ${shWord(input)}` : 'exit 127'}`,
+        'exit 0',
         '',
       ].join('\n'), { mode: 0o755 });
     }
     const r = installed().run(INDEX);
-    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(5);
+    // The loader hashed exactly the seven libraries, in its own order, the seventh being the model-aliases library; the front
+    // hashed after them. A library dropped from the loader's list moves the front's input into the first seven.
+    const libHeads = CCD_LIBS.map((f) => fs.readFileSync(f, 'utf8').split('\n')[0]);
+    expect(libHeads).toHaveLength(7);
+    expect(libHeads[6]).toContain('ccd/lib/model-aliases.sh');
+    const hashed = fs.readFileSync(heads, 'utf8').split('\n').filter(Boolean);
+    expect(hashed.slice(0, 7), 'the loader hashed the seven libraries, model-aliases.sh last').toEqual(libHeads);
+    expect(hashed.length, 'the front hashed after the loader').toBeGreaterThanOrEqual(8);
     expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
   });
 

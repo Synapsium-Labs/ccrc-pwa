@@ -9,6 +9,55 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
+import { createHash } from 'node:crypto';
+import { realpathSync, renameSync, statSync, type BigIntStats } from 'node:fs';
+
+// The byte-read identity's seam (run 3531), `io.test.ts`'s pattern: the real `open` is wrapped, never replaced. It reaches
+// the in-process agent's reads and the local adapter's alike. `afterOpen` acts on the handle just opened, before anything
+// reads it (a rename-over, controlled bigint stat facts). Disarmed, it is the real `open`.
+const afterOpen = vi.hoisted(() => ({ run: null as null | ((p: string, fh: import('node:fs/promises').FileHandle) => void) }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: (async (...a: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...a);
+      afterOpen.run?.(String(a[0]), fh);
+      return fh;
+    }) as typeof actual.open,
+  };
+});
+type Handle = import('node:fs/promises').FileHandle;
+/** Controlled facts for one handle's BIGINT stat (the identity's), the real answer otherwise; `fail` rejects it. */
+interface Facts { birth?: bigint; change?: bigint; fail?: boolean }
+const withFacts = (fh: Handle, f: Facts): void => {
+  const real = fh.stat.bind(fh) as (o?: { bigint?: boolean }) => Promise<unknown>;
+  fh.stat = (async (o?: { bigint?: boolean }) => {
+    if (o?.bigint !== true) return real(o);
+    if (f.fail === true) throw Object.assign(new Error('EIO: stat failed'), { code: 'EIO' });
+    const st = (await real({ bigint: true })) as BigIntStats;
+    if (f.birth !== undefined) st.birthtimeNs = f.birth;
+    if (f.change !== undefined) st.ctimeNs = f.change;
+    return st;
+  }) as Handle['stat'];
+};
+/** Arm `f` on every handle opened on `file` (by its given or canonical path). */
+const armFacts = (file: string, f: Facts): void => {
+  const want = realpathSync(file);
+  afterOpen.run = (p, fh) => { if (p === file || p === want) withFacts(fh, f); };
+};
+/** The token as the contract states it, derived independently of the code under test. */
+const tokenOf = (dev: bigint, ino: bigint, birth: bigint): string =>
+  createHash('sha256').update(`read-ident-v1\0${dev}\0${ino}\0${birth}`).digest('hex');
+const HEX64 = 'a'.repeat(64);
+/** A bounded answer without its optional token, which a one-call fixture file may or may not carry (its birth and change
+ *  times can fall in one tick or two): present, it must be 64 hex. */
+const sansIdent = <T extends object>(r: T): T => {
+  if (!('ident' in r)) return r;
+  expect((r as { ident: unknown }).ident).toMatch(/^[0-9a-f]{64}$/);
+  const { ident: _ident, ...rest } = r as T & { ident?: unknown };
+  return rest as T;
+};
 
 describe('remote FleetIO — file ops over the agent WS', () => {
   let agent: RunningAgent | undefined;
@@ -290,7 +339,7 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       const f = await connected();
       const file = sess('db-range.txt');
       writeFileSync(file, 'abcdefghij');
-      expect(await f.io.readFileFromBytesMeasured(file, offset, maxBytes))
+      expect(sansIdent(await f.io.readFileFromBytesMeasured(file, offset, maxBytes)))
         .toEqual({ ok: true, bytes: u8(Buffer.from(expected)), size: 10 });
     });
 
@@ -307,7 +356,7 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       const file = sess('db-big.bin');
       writeFileSync(file, bytes);
       const r = await f.io.readFileFromBytesMeasured(file, 10, SPOOL_MAX);
-      expect(r).toEqual({ ok: true, bytes: u8(bytes.subarray(10, 10 + SPOOL_MAX)), size: SPOOL_MAX + 10 });
+      expect(sansIdent(r)).toEqual({ ok: true, bytes: u8(bytes.subarray(10, 10 + SPOOL_MAX)), size: SPOOL_MAX + 10 });
     });
 
     it('readFileFromBytesMeasured: a bound of 1 returns one byte of a larger file, never more', async () => {
@@ -315,7 +364,7 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       const bytes = pattern(SPOOL_MAX + 10);
       const file = sess('db-one.bin');
       writeFileSync(file, bytes);
-      expect(await f.io.readFileFromBytesMeasured(file, 7, 1))
+      expect(sansIdent(await f.io.readFileFromBytesMeasured(file, 7, 1)))
         .toEqual({ ok: true, bytes: u8(bytes.subarray(7, 8)), size: SPOOL_MAX + 10 });
     });
 
@@ -325,8 +374,8 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       writeFileSync(file, '€');   // e2 82 ac
       const first = await f.io.readFileFromBytesMeasured(file, 0, 1);
       const second = await f.io.readFileFromBytesMeasured(file, 1, 2);
-      expect(first).toEqual({ ok: true, bytes: u8([0xe2]), size: 3 });
-      expect(second).toEqual({ ok: true, bytes: u8([0x82, 0xac]), size: 3 });
+      expect(sansIdent(first)).toEqual({ ok: true, bytes: u8([0xe2]), size: 3 });
+      expect(sansIdent(second)).toEqual({ ok: true, bytes: u8([0x82, 0xac]), size: 3 });
       const joined = Buffer.concat([
         Buffer.from(first.ok ? first.bytes : []), Buffer.from(second.ok ? second.bytes : []),
       ]);
@@ -337,7 +386,7 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       const f = await connected();
       const file = sess('db-not-utf8.bin');
       writeFileSync(file, Buffer.from([0xff, 0xfe, 0x00, 0x80]));
-      expect(await f.io.readFileFromBytesMeasured(file, 0, 4))
+      expect(sansIdent(await f.io.readFileFromBytesMeasured(file, 0, 4)))
         .toEqual({ ok: true, bytes: u8([0xff, 0xfe, 0x00, 0x80]), size: 4 });
     });
 
@@ -373,6 +422,65 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       writeFileSync(file, 'a€b');   // 61 e2 82 ac 62
       expect(await f.io.readFileFromMeasured(file, 1)).toEqual({ ok: true, data: '€b', size: 5 });
       expect(await f.io.readFileFrom(file, 1)).toEqual({ data: '€b', size: 5 });
+    });
+
+    // ── run 3531: the bounded read's optional identity, over the real wire ──
+    describe('the identity over the real wire', () => {
+      afterEach(() => { afterOpen.run = null; });
+
+      it('usable facts: the agent\'s token reaches the reader, and equals the local adapter\'s for the same file', async () => {
+        const f = await connected();
+        const file = sess('id-usable.txt');
+        writeFileSync(file, 'abcdefghij');
+        const st = statSync(file, { bigint: true });
+        armFacts(file, { birth: 5n, change: 9n });
+        expect(await f.io.readFileFromBytesMeasured(file, 2, 3))
+          .toEqual({ ok: true, bytes: u8(Buffer.from('cde')), size: 10, ident: tokenOf(st.dev, st.ino, 5n) });
+        expect(await localIO.readFileFromBytesMeasured(file, 2, 3))
+          .toEqual({ ok: true, bytes: u8(Buffer.from('cde')), size: 10, ident: tokenOf(st.dev, st.ino, 5n) });
+      });
+
+      it('unusable facts and a failed handle stat: the same bytes and size with no token', async () => {
+        const f = await connected();
+        const file = sess('id-unusable.txt');
+        writeFileSync(file, 'abcdefghij');
+        for (const facts of [{ birth: 7n, change: 7n }, { birth: 0n, change: 9n }, { fail: true }] as Facts[]) {
+          armFacts(file, facts);
+          const r = await f.io.readFileFromBytesMeasured(file, 2, 3);
+          expect(r).toEqual({ ok: true, bytes: u8(Buffer.from('cde')), size: 10 });
+          expect(r).not.toHaveProperty('ident');
+        }
+      });
+
+      it('EOF carries no token with usable facts: the exact old empty answer', async () => {
+        const f = await connected();
+        const file = sess('id-eof.txt');
+        writeFileSync(file, 'abcdefghij');
+        armFacts(file, { birth: 5n, change: 9n });
+        expect(await f.io.readFileFromBytesMeasured(file, 10, 4)).toEqual({ ok: true, bytes: u8([]), size: 10 });
+      });
+
+      it('a rename-over AFTER the agent\'s open: the old bytes with the old token, then the new bytes with a new token', async () => {
+        const f = await connected();
+        const file = sess('id-swap.txt');
+        const next = sess('id-swap.next');
+        writeFileSync(file, 'OLD-BYTES\n');
+        writeFileSync(next, 'NEW-BYTES-LONGER\n');
+        const old = statSync(file, { bigint: true });
+        const fresh = statSync(next, { bigint: true });
+        const want = realpathSync(file);
+        let swaps = 0;
+        afterOpen.run = (p, fh) => {
+          if (p !== file && p !== want) return;
+          withFacts(fh, { birth: 1n, change: 2n });
+          if (swaps === 0) { swaps += 1; renameSync(next, file); }
+        };
+        expect(await f.io.readFileFromBytesMeasured(file, 0, 9))
+          .toEqual({ ok: true, bytes: u8(Buffer.from('OLD-BYTES')), size: 10, ident: tokenOf(old.dev, old.ino, 1n) });
+        expect(swaps).toBe(1);
+        expect(await f.io.readFileFromBytesMeasured(file, 0, 9))
+          .toEqual({ ok: true, bytes: u8(Buffer.from('NEW-BYTES')), size: 17, ident: tokenOf(fresh.dev, fresh.ino, 1n) });
+      });
     });
   });
 });
@@ -474,6 +582,40 @@ describe('remote FleetIO — readdirMeasured and readFileFromBytesMeasured again
     const read = (res: unknown, offset: number, maxBytes: number) =>
       createIo(clientAnswering(res)).readFileFromBytesMeasured('/whatever/spool.bucket', offset, maxBytes);
     const ten = Buffer.from('abcdefghij');
+
+    // ── run 3531: the field's one reader ──
+    describe('the optional `ident`', () => {
+      it('a well-formed token on an answer that carries bytes is kept, exactly', async () => {
+        expect(await read({ ...answer(ten.subarray(4, 7), 10), ident: HEX64 }, 4, 3))
+          .toEqual({ ok: true, bytes: u8(ten.subarray(4, 7)), size: 10, ident: HEX64 });
+      });
+
+      it('a well-formed token on an EMPTY success is dropped: EOF never carries identity, on either adapter', async () => {
+        expect(await read({ data: '', dataB64: '', size: 10, ident: HEX64 }, 10, 4)).toEqual({ ok: true, bytes: u8([]), size: 10 });
+      });
+
+      it.each([
+        ['upper-case hex', 'A'.repeat(64)],
+        ['63 characters', 'a'.repeat(63)],
+        ['65 characters', 'a'.repeat(65)],
+        ['not hex', 'g'.repeat(64)],
+        ['a number', 42],
+        ['an object', { v: HEX64 }],
+        ['null', null],
+      ] as const)('a malformed token (%s) is dropped and the bytes still answer', async (_label, ident) => {
+        expect(await read({ ...answer(ten.subarray(4, 7), 10), ident }, 4, 3)).toEqual({ ok: true, bytes: u8(ten.subarray(4, 7)), size: 10 });
+      });
+
+      it('an older peer that sends no token answers exactly the old shape', async () => {
+        const r = await read(answer(ten.subarray(4, 7), 10), 4, 3);
+        expect(r).toEqual({ ok: true, bytes: u8(ten.subarray(4, 7)), size: 10 });
+        expect(Object.keys(r).sort()).toEqual(['bytes', 'ok', 'size']);
+      });
+
+      it('a token never rescues a refused answer: a wrong length is still unreadable', async () => {
+        expect(await read({ ...answer(ten.subarray(4, 6), 10), ident: HEX64 }, 4, 3)).toEqual({ ok: false, reason: 'unreadable' });
+      });
+    });
 
     describe('a well-formed answer is the bytes of dataB64, byte for byte', () => {
       it.each([
@@ -731,7 +873,7 @@ describe('localIO — readdirMeasured and readFileFromBytesMeasured', () => {
       ['the whole file under the largest bound', 0, SPOOL_MAX, 'abcdefghij'],
       ['exactly at EOF — a POSITIVE empty answer', 10, 5, ''],
     ] as const)('%s', async (_label, offset, maxBytes, expected) => {
-      expect(await localIO.readFileFromBytesMeasured(fileWith('abcdefghij'), offset, maxBytes))
+      expect(sansIdent(await localIO.readFileFromBytesMeasured(fileWith('abcdefghij'), offset, maxBytes)))
         .toEqual({ ok: true, bytes: u8(Buffer.from(expected)), size: 10 });
     });
 
@@ -745,13 +887,13 @@ describe('localIO — readdirMeasured and readFileFromBytesMeasured', () => {
 
     it('the largest bound (262144) returns exactly that many bytes of a larger file, byte-exact, at an offset', async () => {
       const bytes = pattern(SPOOL_MAX + 10);
-      expect(await localIO.readFileFromBytesMeasured(fileWith(bytes), 10, SPOOL_MAX))
+      expect(sansIdent(await localIO.readFileFromBytesMeasured(fileWith(bytes), 10, SPOOL_MAX)))
         .toEqual({ ok: true, bytes: u8(bytes.subarray(10, 10 + SPOOL_MAX)), size: SPOOL_MAX + 10 });
     });
 
     it('a bound of 1 returns one byte of a larger file, never more', async () => {
       const bytes = pattern(SPOOL_MAX + 10);
-      expect(await localIO.readFileFromBytesMeasured(fileWith(bytes), 7, 1))
+      expect(sansIdent(await localIO.readFileFromBytesMeasured(fileWith(bytes), 7, 1)))
         .toEqual({ ok: true, bytes: u8(bytes.subarray(7, 8)), size: SPOOL_MAX + 10 });
     });
 
@@ -759,14 +901,14 @@ describe('localIO — readdirMeasured and readFileFromBytesMeasured', () => {
       const file = fileWith('€');   // e2 82 ac
       const first = await localIO.readFileFromBytesMeasured(file, 0, 1);
       const second = await localIO.readFileFromBytesMeasured(file, 1, 2);
-      expect(first).toEqual({ ok: true, bytes: u8([0xe2]), size: 3 });
-      expect(second).toEqual({ ok: true, bytes: u8([0x82, 0xac]), size: 3 });
+      expect(sansIdent(first)).toEqual({ ok: true, bytes: u8([0xe2]), size: 3 });
+      expect(sansIdent(second)).toEqual({ ok: true, bytes: u8([0x82, 0xac]), size: 3 });
       const joined = Buffer.concat([Buffer.from(first.ok ? first.bytes : []), Buffer.from(second.ok ? second.bytes : [])]);
       expect(new TextDecoder('utf-8', { fatal: true }).decode(joined)).toBe('€');
     });
 
     it('bytes that are not UTF-8 come back exact', async () => {
-      expect(await localIO.readFileFromBytesMeasured(fileWith(Buffer.from([0xff, 0xfe, 0x00, 0x80])), 0, 4))
+      expect(sansIdent(await localIO.readFileFromBytesMeasured(fileWith(Buffer.from([0xff, 0xfe, 0x00, 0x80])), 0, 4)))
         .toEqual({ ok: true, bytes: u8([0xff, 0xfe, 0x00, 0x80]), size: 4 });
     });
 

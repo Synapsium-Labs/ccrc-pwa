@@ -44,7 +44,7 @@ describe("an empty Fleet pane says 'Reconnecting…' through a held reconnect at
     it(named(view), async () => {
       const app = await openApp(browser!, view, FIXTURE);
       try {
-        await app.page.goto(server!.origin + '/');
+        await app.page.goto(server!.origin + '/fleet');
         await app.page.waitForFunction(() => document.querySelector('.fleet')?.getAttribute('data-conn') === 'open',
           undefined, { polling: 50, timeout: 30_000 });
         const release = app.holdAttempts();

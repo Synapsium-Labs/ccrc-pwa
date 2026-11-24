@@ -2,19 +2,25 @@
 // dedup and the pending intent — `shared/model-advance.mjs`'s file half. Pure: nothing here reads or writes a
 // file; `deploy/models-op.mjs`'s one writer is measured through its ops (Tasks 5 and 6). Neutral ids only.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
 import {
   AdvanceInvalid, CANDIDATE_REASONS, HISTORY_CAP, REASON_MAX, backfillAdvance, causeOf, familyOf, heldBackOf,
-  lastMoveOf, parseAdvance, reconcilePending, recordFailure, recordMove, serializeAdvance, unmeasuredMoveNotice,
-  unmeasuredMoves,
+  lastMoveOf, parseAdvance, reconcilePending, recordFailure, recordMove, seedAnthropicAdvance, serializeAdvance,
+  unmeasuredMoveNotice, unmeasuredMoves,
 } from '../../shared/model-advance.mjs';
 import type { Advance, HandPending, HistoryEntry } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
 import type { Registry } from '../../shared/models.js';
 import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, reg } from './fixtures/advanceCases.js';
 import { SEEDED } from './fixtures/modelCases.js';
+// Auto-advance plan W3 Task 14: the session rule beside the family rule.
+import { BEHIND_AFTER_MS, BLOCKED_CAUSES, isoSeconds, sessionBehind } from '../../shared/model-advance.mjs';
+// D-8685 (public issue #2607): the stale catalogue's fall to the client window.
+import { clientWindowNotice } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -481,5 +487,367 @@ describe('SEED_FAMILIES in deploy/models-op.mjs', () => {
     for (const call of ['parseAdvance(', 'serializeAdvance(', 'backfillAdvance(', 'recordMove(', 'recordFailure(',
       'reconcilePending(', 'heldBackOf(', 'lastMoveOf(']) expect(src).toContain(call);
     expect(src).not.toContain(' as ');
+  });
+});
+
+// ── auto-advance plan W3 Task 14: whether one session is behind a move ───────────────────────────────────────
+// `sessionBehind` is pure: the op reads the session's two files and hands their JSON here. These rows are the
+// false positives the skeleton's Review Focus line 10 names (another class, a subagent's render, seconds against
+// milliseconds, clock skew around the day), each one condition away from the positive case, and the inputs the
+// rule must refuse rather than misread (a marker or sidecar that is not an object, a null model, a clock that is
+// not a number). Neutral ids only.
+describe('sessionBehind: one session still on a model a move replaced (§2.8; plan W3 Task 14)', () => {
+  const ms = (iso: string): number => Date.parse(iso);
+  /** The lane after ADVANCE_EXAMPLE's moves: each class on the model it moved to, the reverted class empty. */
+  const PINS = reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' });
+  const NOW = ms('2026-10-23T09:00:00Z');
+  const MOVED = ms('2026-10-21T14:05:11Z');
+  const TURN = ms('2026-10-22T09:11:40Z');
+  const RENDER_S = ms('2026-10-22T09:12:03Z') / 1000;
+  const turn = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ v: 1, sessionId: 'uuid-1', turnAt: TURN, ...o });
+  const usage = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ ts: RENDER_S, uuid: 'uuid-1', model: 'model-5.6-gamma', agent: null, ...o });
+  const BEHIND = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', movedAt: '2026-10-21T14:05:11Z',
+    turnAt: '2026-10-22T09:11:40Z', renderAt: '2026-10-22T09:12:03Z' };
+  interface Case { advance?: Advance; registry?: Registry; nowMs?: number; turn?: unknown; usage?: unknown }
+  const judge = (c: Case = {}): ReturnType<typeof sessionBehind> => sessionBehind({
+    advance: c.advance ?? ADVANCE_EXAMPLE, registry: c.registry ?? PINS, nowMs: c.nowMs ?? NOW,
+    turn: c.turn === undefined ? turn() : c.turn, usage: c.usage === undefined ? usage() : c.usage,
+  });
+
+  it('a session still rendering the replaced model, in a turn begun after a move a day old, is behind, with the evidence', () => {
+    expect(judge()).toEqual(BEHIND);
+  });
+
+  it('a move exactly a day old counts', () => {
+    expect(judge({ nowMs: MOVED + BEHIND_AFTER_MS })).toEqual(BEHIND);
+  });
+
+  it('a revert is a move: a session still on the model it replaced is behind it, to an empty class', () => {
+    // ADVANCE_EXAMPLE's fourth class advanced to model-6-delta, then was reverted to empty at 2026-10-22T08:00:00Z.
+    const t = ms('2026-10-22T09:00:00Z');
+    expect(judge({ turn: turn({ turnAt: t }), usage: usage({ model: 'model-6-delta', ts: t / 1000 + 60 }) }))
+      .toEqual({ class: 'fable', from: 'model-6-delta', to: null, movedAt: '2026-10-22T08:00:00Z',
+        turnAt: '2026-10-22T09:00:00Z', renderAt: '2026-10-22T09:01:00Z' });
+  });
+
+  it('a session two moves behind is still behind the move that replaced its model (D-5222)', () => {
+    const opus = ADVANCE_EXAMPLE.classes.opus;
+    const twice: Advance = { ...ADVANCE_EXAMPLE, classes: { ...ADVANCE_EXAMPLE.classes, opus: { ...opus, history: [
+      { at: '2026-10-20T10:00:00Z', how: 'advance', from: 'model-5.6-gamma', to: 'model-6-gamma', ok: true, canary: 'passed' },
+      { at: '2026-10-23T08:00:00Z', how: 'advance', from: 'model-6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'passed' },
+    ] } } };
+    expect(judge({ advance: twice })).toEqual({ ...BEHIND, to: 'model-6-gamma', movedAt: '2026-10-20T10:00:00Z' });
+    // The model the newest move replaced, an hour before `now`, is not yet a day behind.
+    expect(judge({ advance: twice, usage: usage({ model: 'model-6-gamma' }) })).toBeNull();
+  });
+
+  it.each([
+    ['a turn begun before the move is not evidence', { turn: turn({ turnAt: ms('2026-10-21T14:00:00Z') }) }],
+    ['a move one second short of a day', { nowMs: MOVED + BEHIND_AFTER_MS - 1000 }],
+    ['a move after `now` (a clock set back) never counts', { nowMs: ms('2026-10-21T00:00:00Z') }],
+    ['a render of the new model', { usage: usage({ model: 'model-6.1-gamma' }) }],
+    ['a session on another class\'s model', { usage: usage({ model: 'model-6-beta' }) }],
+    ['a replaced model another class pins now',
+      { registry: reg({ haiku: 'model-5.6-gamma', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' }) }],
+    ['a render from another Claude Code session (a /clear between them)', { usage: usage({ uuid: 'uuid-2' }) }],
+    ['a subagent\'s render', { usage: usage({ agent: 'helper' }) }],
+    ['a render from before the turn began', { usage: usage({ ts: TURN / 1000 - 60 }) }],
+    ['a render in the turn\'s own second', { usage: usage({ ts: Math.floor(TURN / 1000) }) }],
+    ['a sidecar ts in milliseconds', { usage: usage({ ts: RENDER_S * 1000 }) }],
+    ['a sidecar ts that is not a whole number', { usage: usage({ ts: RENDER_S + 0.5 }) }],
+    ['a marker whose turn was cleared', { turn: turn({ turnAt: null }) }],
+    ['a marker turnAt in seconds reads as before every move', { turn: turn({ turnAt: TURN / 1000 }) }],
+    // The sidecar's uuid matches the bad id in each, so the marker's own sid test decides it, never `uuid !== sid`.
+    ['a marker with an empty session id', { turn: turn({ sessionId: '' }), usage: usage({ uuid: '' }) }],
+    ['a marker with no session id, beside a sidecar with no uuid', {
+      turn: turn({ sessionId: undefined }), usage: usage({ uuid: undefined }) }],
+    // A turnAt that is not a whole ms epoch passes both time comparisons, so only isEpochMs keeps it out: without it
+    // the rule would answer behind with a `turnAt` of null.
+    ['a marker turnAt that is not a whole number of ms', { turn: turn({ turnAt: TURN + 0.5 }) }],
+    ['a marker that is not an object', { turn: null }],
+    ['no sidecar at all', { usage: null }],
+    // The status line writes `model: (.model.id // null)`. With all four classes pinned no class pins null, and
+    // ADVANCE_EXAMPLE's fourth class holds a successful move FROM null (an empty class filled): only the model's
+    // own type test keeps that move from reading as "behind, on null".
+    ['a sidecar with no model, on a lane whose four classes are all pinned', {
+      registry: reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma', fable: 'model-6-delta' }),
+      usage: usage({ model: null }) }],
+    // A negative `ts` can never be later than a `turnAt` (an epoch, so never negative): a control, with no guard of
+    // its own to remove.
+    ['a render dated before 1970', { usage: usage({ ts: -1 }) }],
+    // Every time comparison is written to FAIL on NaN, so a clock that is not a number is never evidence.
+    ['a clock that is not a number', { nowMs: Number.NaN }],
+    ['a failed move away from the model is not a move', {
+      registry: reg({ opus: 'model-6.1-gamma' }), nowMs: ms('2026-10-24T12:00:00Z'),
+      turn: turn({ turnAt: ms('2026-10-22T11:00:00Z') }),
+      usage: usage({ model: 'model-6-beta', ts: ms('2026-10-22T11:01:00Z') / 1000 }) }],
+  ] as [string, Case][])('%s: not behind', (_why, c) => {
+    expect(judge(c)).toBeNull();
+  });
+
+  it('isoSeconds cuts an epoch in ms to the advance file\'s whole-second form, and refuses what a Date does not hold', () => {
+    expect(isoSeconds(0)).toBe('1970-01-01T00:00:00Z');
+    expect(isoSeconds(TURN + 999)).toBe('2026-10-22T09:11:40Z');
+    for (const bad of [-1, 1.5, 8.64e15 + 1, Number.NaN]) expect(isoSeconds(bad)).toBeNull();
+  });
+
+  it('the threshold is one day, defined once, and lock-unwritable is a blocked word', () => {
+    expect(BEHIND_AFTER_MS).toBe(24 * 60 * 60 * 1000);
+    expect(BLOCKED_CAUSES).toContain('lock-unwritable');
+  });
+});
+
+// ── D-8685 (public issue #2607): the other way a lane's window falls ────────────────────────────────────────
+describe('clientWindowNotice: a stale catalogue drops an unmeasured class model to the client window (D-8685)', () => {
+  const PINS = reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' });
+  const ROOM = { tokens: 200000, source: 'client' as const, model: 'model-6.1-gamma' };
+
+  it('names the class, the model, the client window and both remedies, and offers no advertised window as measured', () => {
+    expect(clientWindowNotice('lane-x', PINS, true, ROOM)).toBe("lane-x's opus class model model-6.1-gamma has no "
+      + "measured window, and the lane's catalogue is stale, so its advertised window is not read: every session on "
+      + "the lane now runs at the client's own default window, 200000 tokens; refresh the catalogue (ccrc models "
+      + 'refresh lane-x), or measure model-6.1-gamma, then: ccrc models lane-x set-window model-6.1-gamma <tokens>');
+  });
+
+  it.each([
+    ['a fresh catalogue', { stale: false }],
+    ['no window decision at all', { room: null }],
+    ['a window the catalogue advertised', { room: { ...ROOM, source: 'provider' as const } }],
+    ['a measured window', { room: { ...ROOM, source: 'measured' as const } }],
+    ['a model no class pins', { room: { ...ROOM, model: 'model-6-delta' } }],
+    ['no model named', { room: { ...ROOM, model: null } }],
+    ['no window in force', { room: { ...ROOM, tokens: null } }],
+  ] as [string, { stale?: boolean; room?: Parameters<typeof clientWindowNotice>[3] }][])('%s is null', (_w, o) => {
+    expect(clientWindowNotice('lane-x', PINS, o.stale ?? true, o.room === undefined ? ROOM : o.room)).toBeNull();
+  });
+});
+
+// ── Model-class Anthropic arm A2, Task A2.3: the advance file on an Anthropic lane ─────────────────────────────────
+// A hold carries the id it holds (`hold.model`), a class the time of its last release (`releasedAt`) and a history
+// entry the time of the evidence its move rests on (`evidenceAt`): three optional keys, each a whole-second ISO time
+// or a model id, and each kept by an older build as an unknown key. The seed an Anthropic lane starts from has no
+// registry to read a family off, so each class's family is its own class word.
+describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)', () => {
+  const AT = '2026-11-17T06:00:00Z';
+  const withHold = (hold: unknown): any => { const a = example(); a.classes.opus.hold = hold; return a; };
+
+  it('seedAnthropicAdvance: every class its own word as family, no hold, previous or history, and no pending intent', () => {
+    const a = seedAnthropicAdvance();
+    expect(a.v).toBe(1);
+    expect(a.pending).toBeNull();
+    for (const c of CLASSES) {
+      expect(a.classes[c]).toEqual({ family: c, hold: null, previous: null, history: [] });
+    }
+    expect(Object.keys(a.classes)).toEqual([...CLASSES]);
+    expect(parseAdvance(a)).toEqual(a);
+    // A fresh object each call: editing one never edits the next.
+    a.classes.opus.history.push(entry());
+    expect(seedAnthropicAdvance().classes.opus.history).toEqual([]);
+  });
+
+  it('a hold may carry the id it holds; a hold with none still parses (every hold written before)', () => {
+    expect(parseAdvance(withHold({ at: AT, by: 'hand', model: 'claude-opus-9-1' })).classes.opus.hold)
+      .toEqual({ at: AT, by: 'hand', model: 'claude-opus-9-1' });
+    expect(parseAdvance(withHold({ at: AT, by: 'hand' })).classes.opus.hold).toEqual({ at: AT, by: 'hand' });
+  });
+
+  it.each([
+    ['a hold.model that is not an id', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: 'not an id' }; }, 'classes.opus.hold.model'],
+    ['a hold.model that is not a string', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: 7 }; }, 'classes.opus.hold.model'],
+    ['a hold.model of null', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: null }; }, 'classes.opus.hold.model'],
+    ['a releasedAt that is not a time', (a) => { a.classes.opus.releasedAt = '2026-11-17'; }, 'classes.opus.releasedAt'],
+    ['a releasedAt with milliseconds', (a) => { a.classes.opus.releasedAt = '2026-11-17T06:00:00.123Z'; }, 'classes.opus.releasedAt'],
+    ['an entry evidenceAt that is not a time', (a) => { a.classes.opus.history = [{ ...entry(), evidenceAt: 'yesterday' }]; }, 'classes.opus.history[0].evidenceAt'],
+    ['an entry evidenceAt that is a number', (a) => { a.classes.opus.history = [{ ...entry(), evidenceAt: 1 }]; }, 'classes.opus.history[0].evidenceAt'],
+  ] as [string, (a: any) => void, string][])('refuses %s, naming the field', (_w, spoil, field) => {
+    const a = example();
+    spoil(a);
+    expect(() => parseAdvance(a)).toThrow(AdvanceInvalid);
+    try { parseAdvance(a); } catch (e) { expect((e as AdvanceInvalid).field).toBe(field); }
+  });
+
+  it('keeps hold.model, releasedAt and evidenceAt through parse, recordMove and serialize', () => {
+    const a = example();
+    a.classes.opus.hold = { at: AT, by: 'revert', model: 'claude-opus-9-1' };
+    a.classes.opus.releasedAt = AT;
+    a.classes.sonnet.history = [{ ...entry(), evidenceAt: AT }];
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus.hold).toEqual({ at: AT, by: 'revert', model: 'claude-opus-9-1' });
+    expect(p.classes.opus['releasedAt']).toBe(AT);
+    expect(p.classes.sonnet.history[0]!['evidenceAt']).toBe(AT);
+    const moved = recordMove(p, 'opus', { ...entry(), evidenceAt: AT });
+    expect(moved.classes.opus.hold).toEqual(p.classes.opus.hold);
+    expect(moved.classes.opus['releasedAt']).toBe(AT);
+    expect(moved.classes.opus.history.at(-1)!['evidenceAt']).toBe(AT);
+  });
+
+  it('the four Anthropic cause words are blocked causes, and there are exactly four of them', () => {
+    for (const w of ['alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid']) {
+      expect(BLOCKED_CAUSES, w).toContain(w);
+    }
+    expect(BLOCKED_CAUSES.filter((w) => w.startsWith('alias'))).toHaveLength(4);
+    expect(Object.isFrozen(BLOCKED_CAUSES)).toBe(true);
+  });
+
+  // The older build, as it stood before this task: #2943's merge commit on main, whose `parseAdvance` keeps keys it does
+  // not know. The file is read out of git history into the run's own temporary directory (it cannot be a fixture: a
+  // second copy of the rules would drift); CI clones with full history, and a checkout without that commit reds.
+  const OLDER = 'ea0c3010a0';
+  const olderFiles = (): string | null => {
+    const dir = mkTmp('model-advance-older-');
+    fs.mkdirSync(path.join(dir, 'shared'));
+    for (const f of ['model-advance.mjs', 'models.mjs', 'base-url.mjs']) {
+      const r = spawnSync('git', ['-C', REPO, 'show', `${OLDER}:shared/${f}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (r.status !== 0) return null;
+      fs.writeFileSync(path.join(dir, 'shared', f), r.stdout);
+    }
+    return path.join(dir, 'shared', 'model-advance.mjs');
+  };
+
+  it('an older parseAdvance build reads a hold with model and a releasedAt: both keys kept, and a history entry with evidenceAt', async () => {
+    const file = olderFiles();
+    // A main commit (#2943's merge), so every full-history clone holds it; a clone that cannot read it reds here
+    // rather than passing with nothing asserted.
+    expect(file, `this checkout does not hold commit ${OLDER}, the older build this test reads`).not.toBeNull();
+    if (file === null) return;
+    const older = await import(pathToFileURL(file).href) as { parseAdvance: (j: unknown) => Advance };
+    expect('seedAnthropicAdvance' in older, 'the build under test is the older one').toBe(false);
+    const a = seedAnthropicAdvance();
+    a.classes.opus.hold = { at: AT, by: 'hand', model: 'claude-opus-9-1' };
+    a.classes.opus['releasedAt'] = AT;
+    a.classes.sonnet.history = [{ ...entry({ from: 'claude-sonnet-9-1', to: 'claude-sonnet-9-2' }), evidenceAt: AT }];
+    const read = older.parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(read.classes.opus.hold).toEqual({ at: AT, by: 'hand', model: 'claude-opus-9-1' });
+    expect(read.classes.opus['releasedAt']).toBe(AT);
+    expect(read.classes.sonnet.history[0]!['evidenceAt']).toBe(AT);
+  });
+});
+
+// ── Programme wave 3: two optional per-class keys, `missing` (backward-move) and `effortFallback`
+// (effort-level-dropped). Each parses when absent (every file written before), is refused when present and malformed,
+// naming its field, and is kept by an older build as an unknown key, so the mixed-version window reads both ways.
+describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
+  const AT = '2026-11-10T22:16:58Z';
+  const MISSING = { model: 'model-6.1-gamma', since: AT, seen: '2026-11-10T23:16:55Z' };
+  const FALLBACK = { at: AT, model: 'model-6.1-gamma', from: 'max', to: 'xhigh' };
+
+  it('both parse, and survive parse, recordMove and serialize', () => {
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.sonnet.effortFallback = FALLBACK;
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus['missing']).toEqual(MISSING);
+    expect(p.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+    const moved = recordMove(p, 'opus', { at: AT, how: 'hand', from: null, to: 'model-6.1-gamma', ok: true, canary: 'not-run' });
+    expect(moved.classes.opus['missing']).toEqual(MISSING);
+    expect(moved.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+  });
+
+  it('reads and preserves missing, effortFallback and releasedHold on one class', () => {
+    const a = example();
+    const releasedHold = { model: MISSING.model, at: AT };
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = releasedHold;
+    const fields = { missing: MISSING, effortFallback: FALLBACK, releasedHold };
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus).toMatchObject(fields);
+    expect(JSON.parse(serializeAdvance(p)).classes.opus).toMatchObject(fields);
+  });
+
+  it('refuses malformed releasedHold alongside valid missing and effortFallback', () => {
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.opus.effortFallback = FALLBACK;
+    a.classes.opus.releasedHold = { model: MISSING.model, at: 'not-a-time' };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.releasedHold',
+      message: 'classes.opus.releasedHold is not {"model": <id>, "at": <time of the form YYYY-MM-DDTHH:MM:SSZ>}.',
+    }));
+  });
+
+  // The reverse of the case above: a valid releasedHold never hides wave 3's own refusals on the same class.
+  it('refuses malformed missing alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.missing = { model: MISSING.model, since: 'not-a-time' };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.missing',
+      message: 'classes.opus.missing is not {"model": <id>, "since": <time>, "seen": <time>}.',
+    }));
+  });
+
+  it('refuses malformed effortFallback alongside a valid releasedHold, with wave 3\'s own message and field', () => {
+    const a = example();
+    a.classes.opus.effortFallback = { ...FALLBACK, to: null };
+    a.classes.opus.releasedHold = { model: MISSING.model, at: AT };
+    expect(() => parseAdvance(JSON.parse(serializeAdvance(a)))).toThrow(expect.objectContaining({
+      name: 'AdvanceInvalid',
+      field: 'classes.opus.effortFallback',
+      message: 'classes.opus.effortFallback is not {"at": <time>, "model": <id>, "from": <level>, "to": <level>}.',
+    }));
+  });
+
+  it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
+    const a = example();
+    a.classes.opus.missing = { model: 'model-6.1-gamma', since: AT };
+    expect(parseAdvance(a).classes.opus['missing']).toEqual({ model: 'model-6.1-gamma', since: AT });
+  });
+
+  it.each([
+    ['a missing that is not an object', (a: any) => { a.classes.opus.missing = 'yes'; }, 'classes.opus.missing'],
+    ['a missing with no model', (a: any) => { a.classes.opus.missing = { model: null, since: AT }; }, 'classes.opus.missing'],
+    ['a missing model that is not an id', (a: any) => { a.classes.opus.missing = { model: 'not an id', since: AT }; }, 'classes.opus.missing'],
+    ['a missing since that is not a time', (a: any) => { a.classes.opus.missing = { model: 'model-6.1-gamma', since: '2026-11-10' }; }, 'classes.opus.missing'],
+    ['a missing seen that is not a time', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: 1789000000 }; }, 'classes.opus.missing'],
+    ['a missing seen of null', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: null }; }, 'classes.opus.missing'],
+    ['an effortFallback that is not an object', (a: any) => { a.classes.opus.effortFallback = 1; }, 'classes.opus.effortFallback'],
+    ['an effortFallback with no at', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, at: undefined }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback model that is not an id', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, model: 'x y' }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback from of null', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, from: null }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback to of null', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, to: null }; }, 'classes.opus.effortFallback'],
+    ['an effortFallback to that is empty', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, to: '' }; }, 'classes.opus.effortFallback'],
+  ] as [string, (a: any) => void, string][])('refuses %s, naming the field', (_w, spoil, field) => {
+    const a = example();
+    spoil(a);
+    expect(() => parseAdvance(a)).toThrow(AdvanceInvalid);
+    try { parseAdvance(a); } catch (e) { expect((e as AdvanceInvalid).field).toBe(field); }
+  });
+
+  // The older build: #3107's merge commit on main (model classes wave 7), the build this wave lands on. Read out of git
+  // history into the run's own temporary directory, as the case above reads #2943's.
+  const OLDER_W7 = '6c8f52199c';
+  const olderW7 = (): string | null => {
+    const dir = mkTmp('model-advance-older-w7-');
+    fs.mkdirSync(path.join(dir, 'shared'));
+    for (const f of ['model-advance.mjs', 'models.mjs', 'base-url.mjs']) {
+      const r = spawnSync('git', ['-C', REPO, 'show', `${OLDER_W7}:shared/${f}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (r.status !== 0) return null;
+      fs.writeFileSync(path.join(dir, 'shared', f), r.stdout);
+    }
+    return path.join(dir, 'shared', 'model-advance.mjs');
+  };
+
+  it('an older build reads a file carrying both keys and keeps them through its own writes', async () => {
+    const file = olderW7();
+    expect(file, `this checkout does not hold commit ${OLDER_W7}, the older build this test reads`).not.toBeNull();
+    if (file === null) return;
+    const older = await import(pathToFileURL(file).href) as {
+      parseAdvance: (j: unknown) => Advance; recordMove: (a: Advance, c: string, e: unknown) => Advance;
+    };
+    expect('markMissing' in older, 'the build under test is the older one').toBe(false);
+    const a = example();
+    a.classes.opus.missing = MISSING;
+    a.classes.sonnet.effortFallback = FALLBACK;
+    const read = older.parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(read.classes.opus['missing']).toEqual(MISSING);
+    expect(read.classes.sonnet['effortFallback']).toEqual(FALLBACK);
+    const written = older.recordMove(read, 'opus', { at: AT, how: 'hand', from: null, to: 'model-6.1-gamma', ok: true, canary: 'not-run' });
+    expect(parseAdvance(JSON.parse(serializeAdvance(written))).classes.opus['missing'], 'and this build reads it back')
+      .toEqual(MISSING);
   });
 });

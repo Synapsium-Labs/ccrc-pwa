@@ -64,6 +64,11 @@ const BASH_EXCEPTIONS: readonly Exception[] = [
       + 'database\'s home), so `$TMUX` and `$TMUX_TMPDIR`, which a caller sets, never pick the server it asks',
   },
   { file: 'ccd/ccrc-doctor-checks', has: '_dr_need_bin tmux ', count: 1, why: 'a check that the program is on PATH, not a call of it' },
+  {
+    file: 'deploy/testbox/bin/box-update', has: 'm[tmux]=$(_tbu_measure tmux -V)', count: 1,
+    why: 'the test box\'s updater asks the installed program its version (`tmux -V`), which starts and asks no server; '
+      + 'the test box is not a fleet box, so there is no fleet server a socket name could pick',
+  },
 ];
 
 /** The TypeScript and JavaScript sites that name the literal 'tmux', each with why. */
@@ -150,6 +155,9 @@ describe('D-8270 — the lookup is one block, the same bytes in every script tha
     'ccd/lib/train-proof.sh': 'ccd/ccd',
     'ccd/lib/delegation-lease.sh': 'ccd/ccd',
     'ccd/lib/pool-set.sh': 'ccd/ccd',
+    'ccd/lib/long-lived.sh': 'ccd/ccd',
+    'ccd/lib/door.sh': 'ccd/ccd',
+    'ccd/lib/model-aliases.sh': 'ccd/ccd',
     'ccd/ccrc-doctor-checks': 'ccd/ccrc',
   };
   const canonical = lookupBlock(read('ccd/ccd'));

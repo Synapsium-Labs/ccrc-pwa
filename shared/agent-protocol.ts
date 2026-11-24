@@ -12,6 +12,7 @@
 // about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
 import type { DiskMeasured } from './disk.js';
+import type { HostReport } from './isolation.js';
 import {
   ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, isReleaseTag, isRequestKind, type AccountSub, type InFlightReport,
   type RequestKind,
@@ -105,8 +106,11 @@ export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
   /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
-   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1); `readReadyOps` reads them. */
+   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1) and `MODELS_OP` (`'models'`, auto-advance W4); `readReadyOps` reads them. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
+  /** ADDITIVE (Overlord W1, the isolation word, §7.4): the agent's uid and two keyed digests of its host ids. Its one reader
+   *  is `readHostReport` (`shared/isolation.ts`), called only by the client's ready handler; an older agent omits it. */
+  host?: HostReport;
 }
 
 /**
@@ -423,7 +427,7 @@ export interface DiskReq { t: 'req'; id: number; op: 'disk' }
  *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
  *  `bad-request`, which from this op means "the agent predates it". */
 export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq|TestboxCaptureReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1017,9 +1021,16 @@ export const PRESSURE_OP = 'pressure';
 /** The `pressure` op's reply: exactly what the decider takes, in this one type. D-8122 adds `headroomBytes`, the session
  *  slice's memory headroom (`memory.max` minus `memory.current`, no more than `MemAvailable`; `MemAvailable` alone when
  *  the slice has no `memory.max`), or `null` when it could not be read. ADDITIVE: an older agent sends no field, which
- *  the server reads as `null` (unmeasured), never as room. */
-export type PressureOpReply = HostPsi & { headroomBytes?: number | null };
-import type { HostPsi } from './pressure.js';
+ *  the server reads as `null` (unmeasured), never as room. D-8920 adds `machine`, the host's size (the
+ *  box's total memory, its cores and the sessions' memory limit, each as measured), or `null` when it could not be
+ *  measured. ADDITIVE in the same way: an older agent sends no field, which the server reads as unmeasured
+ *  (`readHostMachine`, `agent-older`), never as a small machine. A box with no PSI (the two kernel files unreadable)
+ *  answers `PressureOpSizeOnly`: a size does not depend on the PSI, and a reply with no PSI reads as no reading
+ *  (`readHostPsi`), exactly as the error such a box answered before did. */
+export type PressureOpReply = HostPsi & { headroomBytes?: number | null; machine?: HostMachine | null };
+/** The `pressure` op's reply from a box with no PSI: the size alone. */
+export interface PressureOpSizeOnly { machine: HostMachine | null }
+import type { HostMachine, HostPsi } from './pressure.js';
 
 // ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────
 // The fleet agent reads its host's test box settings through the wrapper's own printer, measures the six tools with
@@ -1182,3 +1193,178 @@ export interface OverlordHistoryReq extends OverlordHistoryRequest { t: 'req'; i
 /** The op's name, and the word an agent that serves the history store lists in `ready.ops` (Task 4). */
 export const OVERLORD_HISTORY_OP = 'overlord-history';
 import type { OverlordHistoryRequest } from './overlordHistory.js';
+
+// ── the `models` op (auto-advance spec 2026-10-13 §2.7, D14; plan W4 Task 16 as re-planned, D-8687, D-8692) ──
+// The SIXTH wire-triggered spawn outside the exec whitelist, on the `account` and `testbox-admin` ops' template: the
+// agent (`agent/src/modelsop.ts`, `agent/src/server.ts`) builds argv with `buildModelsArgv` and spawns
+// `<home>/.local/bin/ccrc models <lane> show`, or `… models <lane> hold|release|revert <class>`, and answers how it
+// ended, `ok: true` with a `kind` and `fleetIdentity` (`ModelsOpAnswer`), a refusal and a held gate included; the
+// agent never parses the verb's stdout. The server's two arms (`server/src/remote/io.ts`, and `server/src/io.ts`'s
+// `localIOFor`) call the same builder first and read the answer with `readModelsOpAnswer`. Bash cannot import this:
+// the verbs the op spawns are `ccd/ccrc`'s own `MODELS_SUBS`, and `server/test/models-op-shared.test.ts` holds the
+// actions to that list. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it never lists the word in
+// `ready.ops`, so the server never sends it, and `bad-request` from it means "this agent predates the op".
+//
+// An import placed here rather than at the head of the file: this file is cited by line, and the import is
+// hoisted either way (`shared/api.ts` does the same).
+import { CLASSES, MODELS_LANE_ID_RE, MODELS_RESERVED_IDS, type ModelClass } from './models.js';
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const MODELS_OP = 'models';
+
+/** The four actions the op runs: `ccrc models <lane> <action>`, each one of `ccd/ccrc`'s `MODELS_SUBS`. */
+export const MODELS_ACTIONS = ['show', 'hold', 'release', 'revert'] as const;
+export type ModelsAction = (typeof MODELS_ACTIONS)[number];
+
+export function isModelsAction(v: unknown): v is ModelsAction {
+  return typeof v === 'string' && (MODELS_ACTIONS as readonly string[]).includes(v);
+}
+
+export function isModelsClass(v: unknown): v is ModelClass {
+  return typeof v === 'string' && (CLASSES as readonly string[]).includes(v);
+}
+
+/** The ONE lane guard: MODELS_LANE_ID_RE and not one of MODELS_RESERVED_IDS (the words `ccrc models` reads as box subs). */
+export function isModelsLaneId(v: unknown): v is string {
+  return typeof v === 'string' && MODELS_LANE_ID_RE.test(v) && !MODELS_RESERVED_IDS.includes(v);
+}
+
+/** Why the builder refused, checked in this order. */
+export const MODELS_ARGV_REFUSALS = ['bad-lane', 'bad-action', 'bad-class'] as const;
+export type ModelsArgvRefusal = (typeof MODELS_ARGV_REFUSALS)[number];
+
+/** THE ONE BUILDER, called by validateReq, by the agent's case again, and by both server arms before anything is
+ *  sent or spawned. Checked in this order: lane (bad-lane), action (bad-action), then class: `show` with any class
+ *  value other than `undefined` is bad-class; a writing action whose class fails isModelsClass is bad-class.
+ *  The argv is FROZEN: ['models', lane, 'show'] or ['models', lane, action, cls]. */
+export function buildModelsArgv(lane: unknown, action: unknown, cls: unknown):
+  { readonly ok: true; readonly argv: readonly string[] } | { readonly ok: false; readonly why: ModelsArgvRefusal } {
+  if (!isModelsLaneId(lane)) return { ok: false, why: 'bad-lane' };
+  if (!isModelsAction(action)) return { ok: false, why: 'bad-action' };
+  if (action === 'show') {
+    return cls === undefined ? { ok: true, argv: Object.freeze(['models', lane, 'show']) } : { ok: false, why: 'bad-class' };
+  }
+  if (!isModelsClass(cls)) return { ok: false, why: 'bad-class' };
+  return { ok: true, argv: Object.freeze(['models', lane, action, cls]) };
+}
+
+/** The child's bound: SIGTERM to its group here, SIGKILL MODELS_KILL_GRACE_MS later. Above the lane-files lock's
+ *  20 s wait (`ccd/ccrc`'s `${CCRC_MODELS_LOCK_S:-20}`, which the child's three-name environment cannot override),
+ *  so a verb that waits out a writer refuses `lock-busy` itself and is never killed holding the lock. */
+export const MODELS_SPAWN_TIMEOUT_MS = 40_000;
+/** After the SIGTERM to the child's group, how long before the SIGKILL: the account op's grace
+ *  (`ACCOUNT_OP_KILL_GRACE_MS`'s value), re-derived, and pinned equal to it. */
+export const MODELS_KILL_GRACE_MS = 5_000;
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const MODELS_OP_DRAIN_MS = 2_000;
+/** The most stdout the agent keeps: one byte more kills the group and answers `too-large`. */
+export const MODELS_OP_OUTPUT_MAX_BYTES = 262_144;
+/** The server's FleetClient.request deadline: the bound, the grace, the drain and a margin (accountOpRequestTimeoutMs's rule). */
+export const MODELS_OP_REQUEST_TIMEOUT_MS = MODELS_SPAWN_TIMEOUT_MS + MODELS_KILL_GRACE_MS + MODELS_OP_DRAIN_MS + 5_000;
+
+/** ONE member of the `req` envelope: `show` carries no `class`; a writing action carries one. A frame with any other
+ *  key is malformed (`bad-request`). */
+export type ModelsReq =
+  | { t: 'req'; id: number; op: 'models'; lane: string; action: 'show' }
+  | { t: 'req'; id: number; op: 'models'; lane: string; action: Exclude<ModelsAction, 'show'>; class: ModelClass };
+
+/** How one `models` op ended on the node, each arm kept apart (AccountOpOutcome's arms, plus `busy`):
+ *  exited (the verb ran; `stdout` is its whole output, unread by the agent), timeout / too-large (killed; outcome
+ *  UNKNOWN), not-started (nothing ran), refused (the builder refused; nothing ran), busy (the agent's one gate was
+ *  held; nothing ran). */
+export type ModelsOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' } | { kind: 'too-large' } | { kind: 'not-started' }
+  | { kind: 'refused'; why: ModelsArgvRefusal }
+  | { kind: 'busy' };
+
+/** The op's `ok: true` payload; `fleetIdentity` is the node's `~/.ccrc/node-id` through `NODE_ID_RE`, or `null`. */
+export type ModelsOpAnswer = ModelsOpOutcome & { fleetIdentity: string | null };
+
+/** THE ONE READER of a `models` op's answer: readAccountOpAnswer's grammar (fleetIdentity null or NODE_ID_RE; exited
+ *  code an integer 0..255 and stdout a string; refused `why` in MODELS_ARGV_REFUSALS), plus `busy`. null is "no answer
+ *  to trust", never an outcome. */
+export function readModelsOpAnswer(raw: unknown): ModelsOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started': case 'busy':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !(MODELS_ARGV_REFUSALS as readonly string[]).includes(r.why)) return null;
+      return { kind: 'refused', why: r.why as ModelsArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}
+
+/** How one `models` call ended as the SERVER's seam answers it (FleetIO.models): the node's outcome, plus
+ *  `unsupported` (an agent that does not list the op, an older agent answering bad-request, or the bare localIO;
+ *  nothing ran) and `lost` (the frame left and no answer came back, or one off readModelsOpAnswer's grammar; UNKNOWN). */
+export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
+
+// ── the `testbox-capture` op (spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.5) ─────────────
+// The build capture lane's job to the test box: the fleet agent reads its host's test box settings as the `testbox` op does
+// (the same fixed spawn, the same token file), opens one WebSocket to the box, sends `capture.submit` for the one build
+// the request names (`isClaudeVersion`, checked by `validateReq` before any case body runs) under a fresh capture id, and
+// waits for that capture's `refused` or `ended` state within `TESTBOX_CAPTURE_DEADLINE_MS`. The build is the op's only
+// field; no field reaches a spawn or a path. Declared at the file's foot so no line cited above moves. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent it (the server reads `ready.ops`
+// first).
+
+/** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). */
+export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TESTBOX_CAPTURE_OP = 'testbox-capture';
+
+/** How long the agent waits, after the job was sent, for the capture's `refused` or `ended` state. A capture that is still
+ *  queued or running then is `unanswered`: the job went out and no verdict came back. */
+export const TESTBOX_CAPTURE_DEADLINE_MS = 15 * 60_000;
+/** The server's request deadline for the op: the agent's wait plus the settings read and the box's hello. */
+export const TESTBOX_CAPTURE_REQUEST_MS = TESTBOX_CAPTURE_DEADLINE_MS + 2 * 60_000;
+
+/** What the op came to. Before the job was sent: `unconfigured` (no `CCRC_TESTBOX_URL`), `unreachable` (no connection,
+ *  hello or status answer within the status deadline), `bad-answer` (the box's status answer was off its shape). After:
+ *  `not-taken` (the box closed the connection as a policy refusal of the frame: a box that predates the job kind),
+ *  `refused` (a `capture.state refused`, its word in `refusal`), `answered` (a `capture.state ended`; `result` is null when
+ *  the box had no verdict), `unanswered` (no refused or ended state within the deadline, the connection lost after the
+ *  job was sent, or a frame for this capture off its shape). */
+export type TestboxCaptureOutcome = 'unconfigured' | 'unreachable' | 'bad-answer' | 'not-taken' | 'refused' | 'answered' | 'unanswered';
+export const TESTBOX_CAPTURE_OUTCOME_MAP: Record<TestboxCaptureOutcome, true> = {
+  unconfigured: true, unreachable: true, 'bad-answer': true, 'not-taken': true, refused: true, answered: true, unanswered: true,
+};
+
+/** The op's reply. `refusal` only on `refused`; `result` only on `answered` (and null there when the box had no
+ *  verdict); `detail` is a short sentence for the log, never a decision input. */
+export interface TestboxCaptureReply {
+  readonly outcome: TestboxCaptureOutcome;
+  readonly refusal: CaptureRefusal | null;
+  readonly result: BuildCaptureResult | null;
+  readonly detail: string | null;
+}
+
+/** THE ONE READER of a `testbox-capture` op's reply (the `res` frame itself: its envelope fields `t`, `id` and `ok` are not
+ *  read, as `readTestboxOpReply` reads its own), for the build the request named. `null` is "no answer to trust". Each of
+ *  the four fields must be present; the verdict is read by the verdict's one reader. */
+export function readTestboxCaptureReply(raw: unknown, build: string): TestboxCaptureReply | null {
+  if (!isObj(raw) || !['outcome', 'refusal', 'result', 'detail'].every((k) => Object.prototype.hasOwnProperty.call(raw, k))) return null;
+  const { outcome, refusal, result, detail } = raw;
+  if (typeof outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_CAPTURE_OUTCOME_MAP, outcome)) return null;
+  if (!shortTextOrNull(detail)) return null;
+  if ((outcome === 'refused') !== (refusal !== null)) return null;
+  if (refusal !== null && (typeof refusal !== 'string' || !Object.prototype.hasOwnProperty.call(CAPTURE_REFUSAL_MAP, refusal))) return null;
+  if (outcome !== 'answered' && result !== null) return null;
+  const read = result === null ? null : readBuildCaptureResult(result, build);
+  if (result !== null && read === null) return null;
+  return { outcome: outcome as TestboxCaptureOutcome, refusal: refusal as CaptureRefusal | null, result: read, detail };
+}
+import { CAPTURE_REFUSAL_MAP, type CaptureRefusal } from './claudeBuildCapture.js';
+import { readBuildCaptureResult, type BuildCaptureResult } from './claudeBuildTrust.js';

@@ -28,15 +28,13 @@ import {
   type DelegationFilePort,
 } from '../src/coord/delegation-journal.js';
 import {
-  DelegationDurability,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  recoverDelegation,
   validateDelegationCheckpoint,
-  type DelegationDurabilityDeps,
-  type DelegationLeaseTransitionRequest,
-  type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
+import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
+import { DelegationDurability, type DelegationDurabilityDeps, type DelegationLeaseTransitionRequest } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import { promoteRunMismatch } from '../src/coord/delegation-lease-state.js';
 import { openCoordDb } from '../src/coord/db.js';

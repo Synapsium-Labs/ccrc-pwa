@@ -22,6 +22,13 @@
 // route. It still never settles on what was TYPED: the server is the authority
 // on what it stored, and a request for 9 answered with 4 renders 4.
 //
+// THE NUMBER IS DERIVED, AND THE BOX IS THE OVERRIDE (D-8920, the operator's ruling of 2026-11-22). The
+// run cap is a fact about the machine the fleet runs on, so the server derives it from the fleet host's memory and
+// cores and this control SHOWS it: "Automatic: 16 (from 64 GB and 16 cores)". Nobody has to set a number. The box and
+// `save` remain as the operator's override (lower it in an incident, or raise it), and `use automatic` clears the
+// override. All the words are `capsWords.ts`'s, over the server's `capNow`; an older server sends none, and then this
+// control is exactly what it was: the stored number, the box, `save`.
+//
 // NO TIMERS OF ANY KIND. `runs-screen.test.tsx`'s cadence pin measures
 // `useNow` as the only `setInterval` in this screen's whole tree and names each
 // sibling that runs none — this component among them (D-1217: that sentence was
@@ -34,8 +41,10 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
-import type { CoordCaps, CoordCapsView } from '../../../shared/api';
+import type { CoordCapsView } from '../../../shared/api';
+import type { CoordCapsWrite } from '../../../shared/runCap';
 import { ApiError, api, apiErrorText } from '../lib/api';
+import { capInForce, capIsAutomatic, capIsOverride, capSourceWords, capsUsageWords } from './capsWords';
 import './fleet.css';
 
 /** What the operator has typed but not yet saved, per field. `null` means
@@ -61,7 +70,7 @@ type Note =
  *  first two while `Number('')` silently turned the third into a request to
  *  store 0. That is the overloaded seam this tree bans by name, in a component. */
 type SaveIntent =
-  | { kind: 'send'; body: Partial<CoordCaps> }
+  | { kind: 'send'; body: CoordCapsWrite }
   | { kind: 'nothing' }
   | { kind: 'unparsed'; text: string };
 
@@ -73,10 +82,17 @@ type SaveIntent =
  *  they stay server-side: 99 and 1.5 are SENT, and the refusal that comes back
  *  names the field and the bounds in the route's own words rather than in a
  *  second copy of the policy kept here. */
-const readDraft = (draft: Draft, caps: CoordCaps): SaveIntent => {
-  const body: Partial<CoordCaps> = {};
-  const fields: [label: string, typed: string | null, stored: number, key: keyof CoordCaps][] = [
-    ['workers', draft.workers, caps.maxConcurrentWorkers, 'maxConcurrentWorkers'],
+const readDraft = (draft: Draft, cap: number, automatic: boolean): SaveIntent => {
+  const body: CoordCapsWrite = {};
+  // `cap` is the cap IN FORCE (`capInForce`): the number the box shows untouched, so "moved" means moved from what is
+  // on screen. On an older server that is the stored number, as before.
+  //
+  // `automatic` (`capIsAutomatic`, D-8920): the number on screen is the server's, not the operator's.
+  // Then a number saved from a box the operator typed in is ALWAYS an ask, the number on screen included: it turns the
+  // cap they see into their own override, which nothing else in this control can do. An untouched box is still no ask,
+  // so the operator who does nothing sets nothing.
+  const fields: [label: string, typed: string | null, stored: number, key: 'maxConcurrentWorkers'][] = [
+    ['workers', draft.workers, cap, 'maxConcurrentWorkers'],
   ];
   for (const [label, typed, stored, key] of fields) {
     if (typed === null) continue;                       // untouched — not an ask
@@ -84,7 +100,7 @@ const readDraft = (draft: Draft, caps: CoordCaps): SaveIntent => {
     if (typed.trim() === '' || !Number.isFinite(n)) {
       return { kind: 'unparsed', text: `${label} is not a number — nothing was sent` };
     }
-    if (n !== stored) body[key] = n;
+    if (automatic || n !== stored) body[key] = n;
   }
   return Object.keys(body).length === 0 ? { kind: 'nothing' } : { kind: 'send', body };
 };
@@ -106,7 +122,7 @@ export function CapsControl({
   /** Injectable so a test can drive the control without a server — the same
    *  shape `CoordBanner`'s own `coordPause` prop uses. */
   coordCaps?: () => Promise<CoordCapsView>;
-  setCoordCaps?: (next: Partial<CoordCaps>) => Promise<CoordCapsView | 'unreadable'>;
+  setCoordCaps?: (next: CoordCapsWrite) => Promise<CoordCapsView | 'unreadable'>;
 } = {}): ReactNode {
   const [view, setView] = useState<CoordCapsView | null>(null);
   const [draft, setDraft] = useState<Draft>({ workers: null });
@@ -123,8 +139,25 @@ export function CapsControl({
 
   if (view === null) return null;
 
+  const cap = capInForce(view);
+
+  /** One write and its three endings, shared by `save` (an override) and `use automatic` (clearing it). */
+  const send = (body: CoordCapsWrite): void => {
+    setBusy(true);
+    setNote({ kind: 'none' });
+    setCoordCaps(body).then(
+      (answer) => {
+        setBusy(false);
+        if (answer === 'unreadable') { setNote({ kind: 'unconfirmed' }); return; }
+        setView(answer);
+        setDraft({ workers: null });
+      },
+      (err: unknown) => { setBusy(false); setNote({ kind: 'refused', text: refusalText(err) }); },
+    );
+  };
+
   const onSave = (): void => {
-    const intent = readDraft(draft, view.caps);
+    const intent = readDraft(draft, cap, capIsAutomatic(view));
     // A BOX THAT HOLDS NO NUMBER (D-1221). Said here rather than sent, because
     // the alternative is to send a value the operator never chose.
     if (intent.kind === 'unparsed') { setNote({ kind: 'refused', text: intent.text }); return; }
@@ -148,21 +181,13 @@ export function CapsControl({
       setNote((n) => (n.kind === 'refused' ? { kind: 'none' } : n));
       return;
     }
-    setBusy(true);
-    setNote({ kind: 'none' });
-    setCoordCaps(intent.body).then(
-      (answer) => {
-        setBusy(false);
-        if (answer === 'unreadable') { setNote({ kind: 'unconfirmed' }); return; }
-        setView(answer);
-        setDraft({ workers: null });
-      },
-      (err: unknown) => { setBusy(false); setNote({ kind: 'refused', text: refusalText(err) }); },
-    );
+    send(intent.body);
   };
 
+  const source = capSourceWords(view);
+
   const field = (
-    label: string, id: string, value: string, used: number, cap: number,
+    label: string, id: string, value: string, usage: string,
     onChange: (v: string) => void,
   ): ReactNode => (
     <span className="caps-field">
@@ -172,16 +197,17 @@ export function CapsControl({
         value={value} disabled={busy} onChange={(e) => onChange(e.target.value)}
       />
       {/* Usage against the cap, as one reading — the number an operator acts
-          on is the pair, never either half alone. */}
-      <span className="caps-usage">{used} / {cap}</span>
+          on is the pair, never either half alone. With the server's waiting
+          count (D-8792) it also says how many wait, in `capsUsageWords`. */}
+      <span className="caps-usage">{usage}</span>
     </span>
   );
 
   return (
     <ControlRow className="caps-control" role="group" aria-label="coordination caps">
       {field('workers', 'caps-workers',
-        draft.workers ?? String(view.caps.maxConcurrentWorkers),
-        view.usage.running, view.caps.maxConcurrentWorkers,
+        draft.workers ?? String(cap),
+        capsUsageWords(view.usage, cap),
         (v) => setDraft((d) => ({ ...d, workers: v })))}
       <Button
         variant="quiet"
@@ -196,6 +222,22 @@ export function CapsControl({
       >
         {busy ? 'saving…' : 'save'}
       </Button>
+      {/* Only while the operator's own number stands: there is nothing to clear otherwise, and an older server has no
+          automatic cap to return to (`capIsOverride` is false for it, so it is never sent a `mode`). */}
+      {capIsOverride(view) && (
+        <Button
+          variant="quiet"
+          size="fit"
+          className="caps-auto flex-none"
+          disabled={busy}
+          onClick={() => send({ mode: 'automatic' })}
+        >
+          use automatic
+        </Button>
+      )}
+      {/* What the cap is and why, in `capSourceWords`'s one sentence. Not a live region: it restates the number the
+          save just re-rendered, and the note below is the one place this control announces. */}
+      {source !== null && <p className={`caps-source ${CONTROL_ROW_NOTE}`}>{source}</p>}
       {/* ONE note element, ALWAYS mounted, and it is the live region (D-1222).
           Always mounted because a `role="status"` inserted at the same moment its
           text appears is announced unreliably; the region has to exist first and

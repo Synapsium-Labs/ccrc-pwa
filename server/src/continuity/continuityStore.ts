@@ -1,8 +1,10 @@
 // L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a), the card's and the notes'
-// (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and one read,
-// `startsSince` (the generations lane's); `continuity_generations` and `continuity_cursor` are written only through the
+// (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and its reads:
+// `startsSince` (the generations lane's), `startsOf`, and the act-key claim's `newestMintedStartOf` and `startByNonce`; `continuity_generations` and `continuity_cursor` are written only through the
 // generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
 // here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
+// The renewal readings' section (W1, PR A) reads the closed-book spot probes by class and keeps the daily backstop's row,
+// `renewal_backstop_settings`, whose one writer is `setBackstop`, called only by its door.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
   GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isBookState, isGenerationOutcome, isGenerationState, isNoteKeyKind, isNoteKind,
@@ -15,8 +17,17 @@ import {
   TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerState,
 } from '../../../shared/continuity-timers.js';
 import type { Observed } from '../time/observed.js';
+import { isTickMailSubject } from '../coord/ledgersMail.js';
+import { isDigestCorrectionSubject } from '../coord/digest.js';
+import { isRulingSource, type Checkpoint, type CheckpointHandover, type CheckpointNote, type Ruling } from './checkpoint.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
+import type { SpotProbe } from './probes.js';
+import { isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
+import type { ClaimRead, StartFact } from './actKey.js';
+import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
+import type { CarryFact } from './sandboxCheck.js';
+export type { StartLoadsReport } from './startLoads.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
 export interface StartInsert {
@@ -29,6 +40,9 @@ export interface StartInsert {
   rowIncarnation: string | null;
   reportedAt: number;
   receivedAt: number;
+  /** The launch nonce's sha256 the spawn bound to this start (the door process, Overlord W1), or null: an older hook's start,
+   *  or a start no spawn bound, binds no nonce. Optional, so a caller that predates it writes null. */
+  doorNonceSha256?: string | null;
 }
 
 /** `fresh: false` is a resend that met the unique key: the first report's row stands and its id is answered. */
@@ -40,15 +54,79 @@ export type StartsRead = { ok: true; rows: StartRow[] } | { ok: false; detail: s
 export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResult {
   try {
     const res = db.prepare(
-      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) '
-      + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
-    ).run(row.sessionId, row.reportId, row.uuid, startSourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt);
+      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt, doorNonceSha256) '
+      + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
+    ).run(row.sessionId, row.reportId, row.uuid, startSourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt,
+      row.doorNonceSha256 ?? null);
     if (Number(res.changes) === 1) return { ok: true, id: Number(res.lastInsertRowid), fresh: true };
     const held = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?')
       .get(row.sessionId, row.reportId) as { id: number } | undefined;
     return held === undefined ? { ok: false, kind: 'write-failed' } : { ok: true, id: held.id, fresh: false };
   } catch {
     return { ok: false, kind: 'write-failed' };
+  }
+}
+
+// ── The loads report (Overlord W1 sandbox, Task 5; spec §3.6 H4, Table 11.1e) ─────────────────────────────────────────
+// `continuity_start_loads` has ONE writer, `insertStartLoads`, and one read, `startLoadsOfNewestStart`. No reader picks a
+// report by session alone: every read joins the newest `startup` or `resume` start by `startId`, so an older start's report
+// never answers for a newer start (Review Focus 3).
+
+export type StartLoadsInsertResult = { ok: true; startId: number; fresh: boolean } | { ok: false; kind: 'unknown-start' | 'write-failed' };
+
+/** The table's one writer. The start is the session's own `startup` or `resume` start the `reportId` names, the only
+ *  sources the read returns (`unknown-start` when the server has not recorded it yet, which the hook keeps and resends, and
+ *  for a `clear` or `compact` start, whose report no read would return: review 2135 nit). The first body for a start is kept (`fresh: true`); a resend of
+ *  the same body changes nothing; a body that differs sets `conflicted`. Both answer `fresh: false`. */
+export function insertStartLoads(db: DatabaseSync, sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult {
+  try {
+    return tx(db, () => {
+      const start = db.prepare("SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ? AND source IN ('startup', 'resume')").get(sessionId, r.reportId) as
+        { id: number } | undefined;
+      if (start === undefined) return { ok: false, kind: 'unknown-start' } as const;
+      const res = db.prepare(
+        'INSERT INTO continuity_start_loads (startId, profileRole, profileDigest, launchRc, claudeVersion, permissionMode, cwdInWorkspace, '
+        + 'loaded, carriedFrom, bodySha256, reportedAt, receivedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (startId) DO NOTHING',
+      ).run(start.id, r.profileRole, r.profileDigest, r.launchRc, r.claudeVersion, r.permissionMode,
+        r.cwdInWorkspace === null ? null : r.cwdInWorkspace ? 1 : 0, JSON.stringify(r.loaded), r.carriedFrom, r.bodySha256, r.reportedAt, receivedAt);
+      if (Number(res.changes) === 1) return { ok: true, startId: start.id, fresh: true } as const;
+      db.prepare('UPDATE continuity_start_loads SET conflicted = 1 WHERE startId = ? AND bodySha256 != ? AND conflicted = 0').run(start.id, r.bodySha256);
+      return { ok: true, startId: start.id, fresh: false } as const;
+    });
+  } catch {
+    return { ok: false, kind: 'write-failed' };
+  }
+}
+
+export type NewestStartLoadsRead =
+  | { ok: true; newest: { start: StartRow; report: StartLoadsRow | null; carry: CarryFact } | null }
+  | { ok: false; detail: string };
+
+/** The session's newest `startup` or `resume` start (by `reportedAt`, then id) with its report joined by `startId`, the
+ *  start with a null report when none landed, or null when the session has no such start. A failed read answers ok: false.
+ *  `carry` is the start a resume's report names in `carriedFrom`, read in the same statement (W1 sandbox PR B, review 2135
+ *  F9): its source and its own report's digest, build and conflict flag, so the check can vouch for the carried kinds. */
+export function startLoadsOfNewestStart(db: DatabaseSync, sessionId: string): NewestStartLoadsRead {
+  try {
+    const row = stmt(db,
+      'SELECT s.id, s.sessionId, s.reportId, s.uuid, s.source, s.model, s.rowIncarnation, s.reportedAt, s.receivedAt, '
+      + 'l.startId AS lStartId, l.profileRole, l.profileDigest, l.launchRc, l.claudeVersion, l.permissionMode, l.cwdInWorkspace, '
+      + 'l.loaded, l.carriedFrom, l.conflicted, c.id AS cId, c.source AS cSource, cl.startId AS clStartId, cl.profileDigest AS clDigest, '
+      + 'cl.claudeVersion AS clVersion, cl.conflicted AS clConflicted FROM continuity_starts s LEFT JOIN continuity_start_loads l ON l.startId = s.id '
+      + 'LEFT JOIN continuity_starts c ON c.sessionId = s.sessionId AND c.reportId = l.carriedFrom LEFT JOIN continuity_start_loads cl ON cl.startId = c.id '
+      + "WHERE s.sessionId = ? AND s.source IN ('startup', 'resume') ORDER BY s.reportedAt DESC, s.id DESC, c.id DESC LIMIT 1",
+    ).get(sessionId) as (Record<string, unknown> & { source: string; lStartId: number | null; cId: number | null; clStartId: number | null }) | undefined;
+    if (row === undefined) return { ok: true, newest: null };
+    const start = { id: row['id'], sessionId: row['sessionId'], reportId: row['reportId'], uuid: row['uuid'], source: startSourceOf(row.source),
+      model: row['model'], rowIncarnation: row['rowIncarnation'], reportedAt: row['reportedAt'], receivedAt: row['receivedAt'] } as StartRow;
+    const report = row.lStartId === null ? null : startLoadsRowOf({ ...(row as unknown as StartLoadsRaw), startId: row.lStartId });
+    const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+    const carry: CarryFact = report === null || report.carriedFrom === null ? { kind: 'none' } : row.cId === null ? { kind: 'absent' }
+      : { kind: 'read', source: startSourceOf(String(row['cSource'])), report: row.clStartId === null ? null
+        : { profileDigest: str(row['clDigest']), claudeVersion: str(row['clVersion']), conflicted: row['clConflicted'] !== 0 } };
+    return { ok: true, newest: { start, report, carry } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_start_loads read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -77,6 +155,46 @@ export function startsOf(db: DatabaseSync, sessionId: string, limit: number): St
     return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// The act-key claim's two start reads (Overlord W1 door process, plan `w1-door-process.md` Task 1). Each follows the start the
+// generations lane minted from, which the generation row names (`continuity_generations.startId`; review 2636 F1, slug
+// claim-reads-the-minted-start, `actKey.ts`), so a start the lane declined (a compaction or a fork, a nested process in the
+// pane carrying the spawn's hash, a late start, a role or row it does not mint) neither supersedes nor stands in. One
+// session's start order is `reportedAt`, then id (`StartRow`'s ORDER note). Each start carries its place in that order and
+// the generation minted from it, if any. A failed read answers `ok: false` with its detail, never `'none'`.
+const CLAIM_START_SQL = 'SELECT s.id AS startId, s.reportedAt AS reportedAt, s.doorNonceSha256 AS nonceSha256, g.id AS genId, g.n AS n, '
+  + 'g.state AS state FROM continuity_starts s LEFT JOIN continuity_generations g ON g.startId = s.id WHERE s.sessionId = ?';
+type ClaimStartRaw = { startId: number; reportedAt: number; nonceSha256: string | null; genId: number | null; n: number | null; state: string | null };
+function claimStartOf(r: ClaimStartRaw | undefined): ClaimRead<StartFact | 'none'> {
+  if (r === undefined) return { ok: true, value: 'none' };
+  const at = { startId: r.startId, reportedAt: Number(r.reportedAt), nonceSha256: r.nonceSha256 };
+  if (r.genId === null) return { ok: true, value: { ...at, generation: 'not-minted' } };
+  if (!isGenerationState(r.state)) return { ok: false, detail: `continuity_generations row ${r.genId}: state ${String(r.state)}` };
+  return { ok: true, value: { ...at, generation: { id: r.genId, n: Number(r.n), state: r.state } } };
+}
+const claimReadFailed = (e: unknown): { ok: false; detail: string } =>
+  ({ ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` });
+
+/** The session's newest start the generations lane minted from, with its generation, `'none'`, or the read's failure. */
+export function newestMintedStartOf(db: DatabaseSync, sessionId: string): ClaimRead<StartFact | 'none'> {
+  try {
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND g.id IS NOT NULL ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`)
+      .get(sessionId) as ClaimStartRaw | undefined);
+  } catch (e) {
+    return claimReadFailed(e);
+  }
+}
+
+/** Of the session's starts carrying this nonce hash, the newest the lane minted from, else the newest (not minted yet, or
+ *  declined), with its generation, `'none'`, or the read's failure. */
+export function startByNonce(db: DatabaseSync, sessionId: string, nonceSha256: string): ClaimRead<StartFact | 'none'> {
+  try {
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND s.doorNonceSha256 = ? ORDER BY g.id IS NULL, s.reportedAt DESC, s.id DESC LIMIT 1`)
+      .get(sessionId, nonceSha256) as ClaimStartRaw | undefined);
+  } catch (e) {
+    return claimReadFailed(e);
   }
 }
 
@@ -111,11 +229,19 @@ export interface GenRow {
   readonly proven: boolean; readonly renudged: boolean; readonly probeRounds: number; readonly hostEnded: boolean;
   readonly blind: readonly RenewalTrigger[] | null;
   readonly model: string | null; readonly prevModel: string | null; readonly lane: string | null; readonly host: string | null;
+  /** The previous generation's account, written by the mint alone, as `prevModel` is (account organization §4); null for
+   *  the first generation, one whose predecessor had no lane, and a row an older build wrote. */
+  readonly prevLane: string | null;
   readonly cardHash: string | null; readonly snapshotId: string | null; readonly attempts: number;
   readonly outcome: GenerationOutcome | null; readonly resumed: boolean;
   readonly startId: number; readonly startReportedAt: number;
   readonly observed: Observed; readonly mintedObservedMs: number;
   readonly softRenewalObservedMs: number | null; readonly holdOffUntilObservedMs: number | null;
+  /** The designation's model class when minted under the `overlord` identity, written by the mint alone (renewal readings
+   *  PR C, slug designated-class-stamped-at-mint). A mint under its own session id, including a pending rebind body with
+   *  role `overlord`, stamps null. A row minted before the column or by an older build also stores null; `classChangedOf`
+   *  reads null as unmeasured. */
+  readonly designatedClass: string | null;
 }
 
 /** What a compare-and-set compares: the row's place in its identity's line and both state columns with the walk, as the
@@ -123,6 +249,11 @@ export interface GenRow {
 export type GenExpect = Pick<GenRow, 'term' | 'n' | 'state' | 'shadowState' | 'walk'>;
 export const genExpectOf = (r: GenRow): GenExpect =>
   ({ term: r.term, n: r.n, state: r.state, shadowState: r.shadowState, walk: r.walk });
+
+/** A session's live generation among the rows `liveGenerations` read (its newest), or null when it has none: the one lookup
+ *  the console's prompt route and the Renew now door share (the renewal hand-offs). A generation row's own session, no run. */
+export const sessionLiveGeneration = (rows: readonly GenRow[], sessionId: string): GenRow | null =>
+  rows.filter((g) => g.sessionId === sessionId).at(-1) ?? null;
 
 /** The column a walk moves. */
 export type GenColumn = 'state' | 'shadowState';
@@ -162,7 +293,7 @@ const deadlineFor = (s: GenerationState, now: number): number | null => {
 const GEN_COLUMNS = 'id, identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, walkClass, enteredAt, '
   + 'deadlineAt, shadowDeadlineAt, dueSince, dueWhy, dueClass, dueSinceObservedMs, proven, renudged, probeRounds, hostEnded, '
   + 'blind, model, prevModel, lane, host, cardHash, snapshotId, attempts, outcome, resumed, startId, startReportedAt, observed, '
-  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs';
+  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs, prevLane, designatedClass';
 
 /** The generation functions' statements, prepared once per database: the lane runs every period over a handful of rows,
  *  and compiling the same SQL on every call is most of a pass's cost. */
@@ -226,11 +357,11 @@ function genRowOf(raw: Record<string, unknown>): GenRow | string {
     dueSince: num('dueSince'), dueWhy, dueClass,
     dueSinceObservedMs: num('dueSinceObservedMs'),
     proven: num('proven') === 1, renudged: num('renudged') === 1, probeRounds: num('probeRounds') ?? 0, hostEnded: num('hostEnded') === 1,
-    blind, model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane),
+    blind, model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane), prevLane: strOrNull(raw.prevLane),
     host: strOrNull(raw.host), cardHash: strOrNull(raw.cardHash), snapshotId: strOrNull(raw.snapshotId), attempts: num('attempts') ?? 0,
     outcome, resumed: num('resumed') === 1, startId, startReportedAt,
     observed, mintedObservedMs: minted, softRenewalObservedMs: num('softRenewalObservedMs'),
-    holdOffUntilObservedMs: num('holdOffUntilObservedMs'),
+    holdOffUntilObservedMs: num('holdOffUntilObservedMs'), designatedClass: strOrNull(raw.designatedClass),
   };
 }
 
@@ -261,6 +392,9 @@ const changedOf = (r: { changes: number | bigint }): { changed: boolean } => ({ 
 export interface MintInput {
   identity: string; sessionId: string; role: FleetRole; term: number; rowIncarnation: string | null;
   startId: number; startReportedAt: number; resumed: boolean; model: string | null; lane: string | null; host: string | null;
+  /** The designation's class an Overlord generation is minted under (`renewalReadings.ts#designatedClassAtMint`); absent or
+   *  null writes NULL. */
+  designatedClass?: string | null;
   /** The outcome written on the generation this start ends, when there is one. */
   outcome: GenerationOutcome;
   /** This process's monotonic reading and id: the new row's accumulator is re-anchored on them with no advance. */
@@ -289,13 +423,19 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       if (expect === null ? old !== null : old === null || old.term !== expect.term || old.n !== expect.n || old.state !== expect.state
         || old.shadowState !== expect.shadowState || old.walk !== expect.walk) throw new Superseded();
       if (stmt(db, 'SELECT 1 FROM continuity_generations WHERE startId = ?').get(input.startId) !== undefined) throw new Superseded();
-      const newest = stmt(db, 'SELECT observed, n, model FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
-        .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown } | undefined;
+      const newest = stmt(db, 'SELECT observed, n, model, lane FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
+        .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown; lane: unknown } | undefined;
       const carried = observedOf(newest?.observed)?.ms ?? 0;
       const n = (intOrNull(newest?.n) ?? 0) + 1;
       if (old !== null) {
+        // An `operator` due ends with its generation (ruling F1 on review 2312): the operator's Renew now was for this
+        // conversation, so an ended row never carries one.
         const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
-          + `shadowDeadlineAt = NULL WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
+          + "shadowDeadlineAt = NULL, dueSince = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSince END, "
+          + "dueSinceObservedMs = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSinceObservedMs END, "
+          + "dueClass = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueClass END, "
+          + "dueWhy = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueWhy END "
+          + `WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
         if (Number(ended.changes) !== 1) throw new Superseded();
       }
       const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
@@ -303,19 +443,37 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       const observed: Observed = { ms: carried, mono: input.mono, proc: input.proc };
       const res = stmt(db, 
         'INSERT INTO continuity_generations (identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, enteredAt, '
-        + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs) '
-        + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs, '
+        + 'prevLane, designatedClass) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(input.identity, input.sessionId, input.role, input.term, input.rowIncarnation, n,
         mode === 'live' ? 'carded' : 'active', mode === 'live' ? null : 'carded', mode, input.now,
         mode === 'live' ? deadline : null, mode === 'live' ? null : deadline,
         input.resumed ? 1 : 0, input.startId, input.startReportedAt, input.model, strOrNull(newest?.model), input.lane, input.host,
-        JSON.stringify(observed), carried);
+        JSON.stringify(observed), carried, strOrNull(newest?.lane), input.designatedClass ?? null);
       if (cursor !== null && !advanceCursorIn(db, cursor)) throw new Superseded();
       return { ok: true as const, id: Number(res.lastInsertRowid), n };
     });
   } catch (e) {
     return { ok: false, kind: e instanceof Superseded ? 'superseded' : 'write-failed' };
   }
+}
+
+/** The designate arm's re-stamp (Overlord designation plan Task 1, X5), `overlordDesignationStore.ts#goLive`'s: the body's live
+ *  generation, minted under its own session id (or already `overlord`), takes identity `overlord` and the raised `term`. It
+ *  runs INSIDE the caller's transaction (`tx` does not nest), so it opens none and answers `changed: false` rather than
+ *  throwing when the identity `overlord` already holds a live generation of another session (the live-identity index). */
+export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, term: number): { changed: boolean } {
+  return changedOf(stmt(db, "UPDATE continuity_generations SET identity = 'overlord', term = ? WHERE sessionId = ? AND state <> 'ended' "
+    + "AND identity IN (?, 'overlord') AND NOT EXISTS (SELECT 1 FROM continuity_generations o WHERE o.identity = 'overlord' "
+    + "AND o.state <> 'ended' AND o.sessionId <> ?)").run(term, sessionId, sessionId, sessionId));
+}
+
+/** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
+ *  the caller's transaction and opens none. */
+export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { changed: boolean } {
+  return changedOf(stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
+    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended'").run(sessionId));
 }
 
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
@@ -367,16 +525,24 @@ export function clearShadowWalk(db: DatabaseSync, id: number, expect: GenExpect,
 /** What a pass learnt of `renewalDue`: due (the trigger, its class, the wall time and the accumulator at which it became
  *  due) or not, and always the triggers it could not read. A generation already due keeps the time it became due. */
 export type DueWrite = { due: true; why: RenewalTrigger; cls: TriggerClass; at: number; observedMs: number } | { due: false };
-export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } {
+/** `cursor`, when given, advances a cursor in the same transaction (the Renew now requests' `renew-requests`, the hand-offs
+ *  piece), so a request is read once: a due write that is refused leaves the cursor, and the next pass reads it again. */
+export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[],
+  cursor: CursorAdvance | null = null): { changed: boolean } {
   try {
     const b = JSON.stringify(blind);
-    if (!due.due) {
-      return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
-        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`).run(b, ...casArgs(id, expect)));
-    }
-    return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
-      + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`)
-      .run(due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)));
+    const st = !due.due
+      ? stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
+        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`)
+      : stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
+        + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`);
+    const args = !due.due ? [b, ...casArgs(id, expect)] : [due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)];
+    if (cursor === null) return changedOf(st.run(...args));
+    return tx(db, () => {
+      const w = changedOf(st.run(...args));
+      if (w.changed && !advanceCursorIn(db, cursor)) throw new Superseded();
+      return w;
+    });
   } catch {
     return { changed: false };
   }
@@ -801,6 +967,15 @@ export function putHandover(db: DatabaseSync, h: { generationId: number; note: H
   }
 }
 
+/** A note key as JSON wrote it (a handover thread's reference, a checkpoint note's key), or null when it is not one. */
+function noteKeyOfJson(ref: unknown): NoteKey | null {
+  if (typeof ref !== 'object' || ref === null) return null;
+  const r = ref as Record<string, unknown>;
+  if (!isNoteKeyKind(r.kind)) return null;
+  if (r.kind === 'programme') return typeof r.slug === 'string' ? { kind: 'programme', slug: r.slug } : null;
+  return Number.isSafeInteger(r.id) ? { kind: r.kind, id: r.id as number } : null;
+}
+
 function handoverNoteOf(text: string): HandoverNote | null {
   try {
     const v = JSON.parse(text) as Record<string, unknown>;
@@ -808,16 +983,54 @@ function handoverNoteOf(text: string): HandoverNote | null {
     if (!Array.isArray(v.threads) || !strings(v.cautions) || typeof v.tone !== 'string') return null;
     const threads: HandoverThread[] = [];
     for (const t of v.threads as Record<string, unknown>[]) {
-      const ref = t?.ref as Record<string, unknown> | undefined;
-      if (typeof t?.waitsOn !== 'string' || typeof t.next !== 'string' || ref === undefined || !isNoteKeyKind(ref.kind)) return null;
-      const key: NoteKey | null = ref.kind === 'programme' ? (typeof ref.slug === 'string' ? { kind: 'programme', slug: ref.slug } : null)
-        : Number.isSafeInteger(ref.id) ? { kind: ref.kind, id: ref.id as number } : null;
-      if (key === null) return null;
+      const key = noteKeyOfJson(t?.ref);
+      if (typeof t?.waitsOn !== 'string' || typeof t.next !== 'string' || key === null) return null;
       threads.push({ ref: key, waitsOn: t.waitsOn, next: t.next });
     }
     return { threads, cautions: v.cautions, tone: v.tone };
   } catch {
     return null;
+  }
+}
+
+/** This generation's own handover note (written while it was `checkpointed`), or null when it wrote none: the renewal
+ *  walk's `handover` event and the checkpoint the acts seal read it (W1a renewal act). */
+export function handoverOf(db: DatabaseSync, generationId: number): HandoverRead {
+  try {
+    const row = stmt(db, 'SELECT g.n AS n, h.note AS note, h.dropped AS dropped, h.at AS at FROM continuity_handovers h '
+      + 'JOIN continuity_generations g ON g.id = h.generationId WHERE h.generationId = ?').get(generationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return { ok: true, handover: null };
+    const note = typeof row.note === 'string' ? handoverNoteOf(row.note) : null;
+    const n = intOrNull(row.n); const dropped = intOrNull(row.dropped); const at = intOrNull(row.at);
+    if (note === null || n === null || dropped === null || at === null) return { ok: false, detail: `continuity_handovers row ${generationId} does not read` };
+    return { ok: true, handover: { generationId, n, note, dropped, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The soft renewals an identity's line spent in one term, as accumulator stamps: one row of `continuity_soft_renewals` per
+ *  soft due the lane fed, so a generation that renews softly twice (after one went back) counts twice, and the budget's
+ *  window spans generations (ruling R4; slug soft-renewals-are-rows). */
+export function softRenewalsOf(db: DatabaseSync, identity: string, term: number): { ok: true; observedMs: number[] } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, 'SELECT observedMs AS at FROM continuity_soft_renewals WHERE identity = ? AND term = ? ORDER BY id')
+      .all(identity, term) as { at: unknown }[];
+    const out: number[] = [];
+    for (const r of rows) { const at = intOrNull(r.at); if (at === null) return { ok: false, detail: 'continuity_soft_renewals observedMs does not read' }; out.push(at); }
+    return { ok: true, observedMs: out };
+  } catch (e) {
+    return { ok: false, detail: `continuity_soft_renewals read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Feeding a soft `due` spends one of the soft budget's renewals: one row, stamped at the accumulator's reading. */
+export function recordSoftRenewal(db: DatabaseSync, g: { readonly id: number; readonly identity: string; readonly term: number }, observedMs: number): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO continuity_soft_renewals (identity, term, generationId, observedMs) VALUES (?, ?, ?, ?)').run(g.identity, g.term, g.id, observedMs);
+    return { ok: true };
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -839,6 +1052,183 @@ export function handoverBefore(db: DatabaseSync, identity: string, liveGeneratio
     return { ok: true, handover: { generationId: gid, n, note, dropped, at } };
   } catch (e) {
     return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the checkpoint
+// `continuity_checkpoints` and `continuity_renew_calls` (Overlord spec §3.3.2 C37, §3.3.11 H12, W1a, the renewal act; its
+// migration). ONE writer, the generations lane, through `putCheckpoint`, `claimRenewCall` and `answerRenewCall`; the card's gatherer
+// reads the checkpoint of the generation that ended last (`checkpointBefore`), the lane the renew calls of one generation
+// (`renewCallsOf`) and a coordinator's rulings (`rulingRowsOf`, which reads mail and writes nothing). A failed statement
+// answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial row.
+
+/** One stored checkpoint, with the outcome the generation it was assembled for ended with (null while it is still live). */
+export interface CheckpointRow {
+  readonly generationId: number; readonly n: number; readonly outcome: GenerationOutcome | null;
+  readonly notes: readonly CheckpointNote[]; readonly rulings: readonly Ruling[]; readonly handover: CheckpointHandover | null;
+  readonly at: number;
+}
+export type CheckpointRead = { ok: true; checkpoint: CheckpointRow | null } | { ok: false; detail: string };
+export type CheckpointInsert = Checkpoint & { readonly generationId: number; readonly at: number };
+
+/** The lane's checkpoint writer: one row per generation, the latest assembly standing (a retried step re-stores the same). */
+export function putCheckpoint(db: DatabaseSync, c: CheckpointInsert): { ok: true } | { ok: false } {
+  try {
+    stmt(db, 'INSERT INTO continuity_checkpoints (generationId, notes, rulings, handover, at) VALUES (?, ?, ?, ?, ?) '
+      + 'ON CONFLICT (generationId) DO UPDATE SET notes = excluded.notes, rulings = excluded.rulings, handover = excluded.handover, at = excluded.at')
+      .run(c.generationId, JSON.stringify(c.notes), JSON.stringify(c.rulings), c.handover === null ? null : JSON.stringify(c.handover), c.at);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+const parsedList = (text: unknown): unknown[] | null => {
+  if (typeof text !== 'string') return null;
+  try { const v: unknown = JSON.parse(text); return Array.isArray(v) ? v : null; } catch { return null; }
+};
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+
+function checkpointNotesOf(text: unknown): CheckpointNote[] | null {
+  const list = parsedList(text);
+  if (list === null) return null;
+  const out: CheckpointNote[] = [];
+  for (const x of list) {
+    if (!isObj(x)) return null;
+    const key = noteKeyOfJson(x.key);
+    if (!Number.isSafeInteger(x.id) || !Number.isSafeInteger(x.at) || !isNoteKind(x.kind) || key === null
+      || typeof x.waitsOn !== 'string' || typeof x.next !== 'string') return null;
+    out.push({ id: x.id as number, at: x.at as number, kind: x.kind, key, waitsOn: x.waitsOn, next: x.next });
+  }
+  return out;
+}
+
+function checkpointRulingsOf(text: unknown): Ruling[] | null {
+  const list = parsedList(text);
+  if (list === null) return null;
+  const out: Ruling[] = [];
+  for (const x of list) {
+    if (!isObj(x) || !Number.isSafeInteger(x.at) || !isRulingSource(x.source) || typeof x.subject !== 'string' || typeof x.text !== 'string') return null;
+    out.push({ at: x.at as number, source: x.source, subject: x.subject, text: x.text });
+  }
+  return out;
+}
+
+/** The handover as a checkpoint stores it: `{n, dropped, note}`, the note read by the handover row's own reader; undefined when
+ *  the text is not one (a null handover is the column's NULL, never this). */
+function checkpointHandoverOf(text: string): CheckpointHandover | undefined {
+  try {
+    const v: unknown = JSON.parse(text);
+    if (!isObj(v) || !Number.isSafeInteger(v.n) || !Number.isSafeInteger(v.dropped) || !isObj(v.note)) return undefined;
+    const note = handoverNoteOf(JSON.stringify(v.note));
+    return note === null ? undefined : { n: v.n as number, dropped: v.dropped as number, note };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The checkpoint of the generation just before `liveGenerationId` in its identity's line (the one the live generation
+ *  replaced), with that generation's outcome, or null when it stored none or there is none. It finds that generation by its
+ *  place in the line, as `handoverBefore` does, and reads no state column. A row that does not read, or an outcome word this
+ *  build does not know, is a failed read, never null. */
+export function checkpointBefore(db: DatabaseSync, identity: string, liveGenerationId: number): CheckpointRead {
+  try {
+    const row = stmt(db,
+      'SELECT g.id AS gid, g.n AS n, g.outcome AS outcome, c.notes AS notes, c.rulings AS rulings, c.handover AS handover, c.at AS at '
+      + 'FROM continuity_generations g LEFT JOIN continuity_checkpoints c ON c.generationId = g.id '
+      + 'WHERE g.identity = ? AND g.id < ? ORDER BY g.id DESC LIMIT 1',
+    ).get(identity, liveGenerationId) as Record<string, unknown> | undefined;
+    if (row === undefined || row.at === null) return { ok: true, checkpoint: null };
+    const gid = intOrNull(row.gid); const n = intOrNull(row.n); const at = intOrNull(row.at);
+    const outcome = row.outcome === null ? null : isGenerationOutcome(row.outcome) ? row.outcome : undefined;
+    const notes = checkpointNotesOf(row.notes); const rulings = checkpointRulingsOf(row.rulings);
+    const handover = row.handover === null ? null : typeof row.handover === 'string' ? checkpointHandoverOf(row.handover) : undefined;
+    if (gid === null || n === null || at === null || outcome === undefined || notes === null || rulings === null || handover === undefined) {
+      return { ok: false, detail: `continuity_checkpoints row ${String(row.gid)} does not read` };
+    }
+    return { ok: true, checkpoint: { generationId: gid, n, outcome, notes, rulings, handover, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_checkpoints read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One `SessionHost.renew` call the lane made for one try of one renewal of a generation. A renewal is an EPISODE, named by
+ *  the wall time its generation entered `clearing` (set once on entry and kept while it retries there), because a
+ *  generation that went back to `active` may renew again and its tries start at 1 again (slug renew-calls-keyed-by-episode).
+ *  `answer` is null while the call is in flight, or when its answer was lost to a crash (the try is then never repeated: the
+ *  lane reads the receipt first). */
+export interface RenewCallRow {
+  readonly generationId: number; readonly episode: number; readonly try: number; readonly at: number; readonly answer: string | null;
+}
+export type RenewCallsRead = { ok: true; calls: RenewCallRow[] } | { ok: false; detail: string };
+/** Which call: the generation, its renewal's episode and the try within it. */
+export interface RenewCallKey { readonly generationId: number; readonly episode: number; readonly try: number }
+
+/** Claims a try BEFORE the call is made, so a crash between the claim and the call never repeats the try: `claimed: true`
+ *  for the one caller that inserted the row, `claimed: false` when it was already there. A statement that fails is
+ *  `ok: false`, kept apart from "already claimed". */
+export function claimRenewCall(db: DatabaseSync, k: RenewCallKey, at: number): { ok: true; claimed: boolean } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT OR IGNORE INTO continuity_renew_calls (generationId, episode, try, at, answer) VALUES (?, ?, ?, ?, NULL)')
+      .run(k.generationId, k.episode, k.try, at);
+    return { ok: true, claimed: Number(res.changes) === 1 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Records a claimed try's answer word, once: the first answer stands, and a try never claimed has no row to answer
+ *  (`recorded: false` for both). */
+export function answerRenewCall(db: DatabaseSync, k: RenewCallKey, answer: string): { ok: true; recorded: boolean } | { ok: false } {
+  try {
+    const res = stmt(db, 'UPDATE continuity_renew_calls SET answer = ? WHERE generationId = ? AND episode = ? AND try = ? AND answer IS NULL')
+      .run(answer, k.generationId, k.episode, k.try);
+    return { ok: true, recorded: Number(res.changes) === 1 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** One renewal's calls (a generation's episode), in try order. */
+export function renewCallsOf(db: DatabaseSync, generationId: number, episode: number): RenewCallsRead {
+  try {
+    const rows = stmt(db, 'SELECT generationId, episode, try, at, answer FROM continuity_renew_calls WHERE generationId = ? AND episode = ? ORDER BY try')
+      .all(generationId, episode) as Record<string, unknown>[];
+    const calls: RenewCallRow[] = [];
+    for (const r of rows) {
+      const g = intOrNull(r.generationId); const ep = intOrNull(r.episode); const t = intOrNull(r.try); const at = intOrNull(r.at);
+      if (g === null || ep === null || t === null || at === null || (r.answer !== null && typeof r.answer !== 'string')) {
+        return { ok: false, detail: `continuity_renew_calls row (${String(r.generationId)}, ${String(r.episode)}, ${String(r.try)}) does not read` };
+      }
+      calls.push({ generationId: g, episode: ep, try: t, at, answer: r.answer as string | null });
+    }
+    return { ok: true, calls };
+  } catch (e) {
+    return { ok: false, detail: `continuity_renew_calls read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+export type RulingsRead = { ok: true; rulings: Ruling[] } | { ok: false; detail: string };
+
+/** A coordinator's rulings, newest first, at most `limit`: the operator's mail to its session id that rides no run and whose
+ *  subject is a tick's or a digest correction's (measured in `w1a-renewal-act/departures.md`, rulings-rows). The mail kind is
+ *  not selected on: the stall watch raises `operator` mail too, and only the subject tells a ruling from a notice. The text is
+ *  the mail's body as stored. A mail row that does not read fails the read whole. */
+export function rulingRowsOf(db: DatabaseSync, sessionId: string, limit: number): RulingsRead {
+  try {
+    const out: Ruling[] = [];
+    const rows = stmt(db, "SELECT at, subject, body FROM mail WHERE fromId = 'operator' AND toId = ? AND runId IS NULL ORDER BY id DESC").iterate(sessionId);
+    for (const r of rows as Iterable<Record<string, unknown>>) {
+      const at = intOrNull(r.at);
+      if (at === null || typeof r.subject !== 'string' || typeof r.body !== 'string') return { ok: false, detail: 'a mail row to the session does not read' };
+      const source = isTickMailSubject(r.subject) ? 'tick' : isDigestCorrectionSubject(r.subject) ? 'correction' : null;
+      if (source === null) continue;
+      out.push({ at, source, subject: r.subject, text: r.body });
+      if (out.length >= limit) break;
+    }
+    return { ok: true, rulings: out };
+  } catch (e) {
+    return { ok: false, detail: `mail read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -1029,5 +1419,180 @@ export function snapshotFacts(db: DatabaseSync, id: string): { ok: true; facts: 
     return typeof row.facts === 'string' ? { ok: true, facts: row.facts } : { ok: false, detail: `continuity_snapshots row ${id}: facts` };
   } catch (e) {
     return { ok: false, detail: `continuity_snapshots read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the hand-offs
+// `continuity_renew_requests`, `operator_marks` and `operator_mark_quiet` (Overlord spec §3.3.9 C50, §3.3.11, Table 11.1e;
+// W1a, the hand-offs piece, plan `w1a-renewal-handoffs.md` Tasks 1 and 3). One writer each: the Renew now door
+// (`continuity/routes.ts`) inserts a request and the generations lane reads it after its `renew-requests` cursor; the
+// console's prompt route writes a mark's `at`; the generations lane writes the mark's `quiet`, in a row of its own keyed on
+// the `at` it read (the coordinator's ruling F5 on review 1902), so the route and the lane never write one row.
+
+/** The lane's cursor over the Renew now requests, a row of `continuity_cursor` beside the starts cursor. */
+export const RENEW_REQUESTS_CURSOR = 'renew-requests';
+
+/** One Renew now. `live`: the `continuity` row was live when the operator pressed it; a press made in shadow is recorded for
+ *  the record only, and the lane never turns it into an `operator` due, then or after the row is armed (the coordinator's
+ *  ruling F1 on review 2312). */
+export interface RenewRequestRow { readonly id: number; readonly sessionId: string; readonly actor: string; readonly at: number; readonly live: boolean }
+export type RenewRequestsRead = { ok: true; rows: RenewRequestRow[] } | { ok: false; detail: string };
+
+/** The door's one write. */
+export function insertRenewRequest(db: DatabaseSync, r: Omit<RenewRequestRow, 'id'>): { ok: true; id: number } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_renew_requests (sessionId, actor, at, live) VALUES (?, ?, ?, ?)')
+      .run(r.sessionId, r.actor, r.at, r.live ? 1 : 0);
+    return { ok: true, id: Number(res.lastInsertRowid) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The requests after `afterId`, oldest first, at most `limit`; `sessionId`, when given, only that session's. */
+export function renewRequestsAfter(db: DatabaseSync, afterId: number, limit: number, sessionId?: string): RenewRequestsRead {
+  try {
+    const raws = (sessionId === undefined
+      ? stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? ORDER BY id LIMIT ?').all(afterId, limit)
+      : stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? AND sessionId = ? ORDER BY id LIMIT ?')
+        .all(afterId, sessionId, limit)) as Record<string, unknown>[];
+    const rows: RenewRequestRow[] = [];
+    for (const raw of raws) {
+      const id = intOrNull(raw.id); const at = intOrNull(raw.at); const live = intOrNull(raw.live);
+      if (id === null || at === null || (live !== 0 && live !== 1) || typeof raw.sessionId !== 'string' || typeof raw.actor !== 'string') {
+        return { ok: false, detail: `continuity_renew_requests row ${String(raw.id)} does not read` };
+      }
+      rows.push({ id, sessionId: raw.sessionId, actor: raw.actor, at, live: live === 1 });
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `continuity_renew_requests read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One programme's mark: `at`, the wall ms of the operator's newest prompt there, and the lane's `quiet` for that `at`, or
+ *  null when the lane has not advanced it since (which reads as 0: ruling F5). */
+export interface OperatorMarkRow { readonly programme: string; readonly at: number; readonly quiet: Observed | null }
+export type OperatorMarksRead = { ok: true; rows: OperatorMarkRow[] } | { ok: false; detail: string };
+
+/** The prompt route's one write: the programme's mark moves to `at`, so any `quiet` the lane kept is for an older `at`. */
+export function putOperatorMark(db: DatabaseSync, programme: string, at: number): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO operator_marks (programme, at) VALUES (?, ?) ON CONFLICT (programme) DO UPDATE SET at = excluded.at')
+      .run(programme, at);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Every mark, with the lane's `quiet` only when it was kept for the mark's current `at`. */
+export function operatorMarks(db: DatabaseSync): OperatorMarksRead {
+  try {
+    const raws = stmt(db, 'SELECT m.programme AS programme, m.at AS at, q.quiet AS quiet FROM operator_marks m '
+      + 'LEFT JOIN operator_mark_quiet q ON q.programme = m.programme AND q.at = m.at ORDER BY m.programme').all() as Record<string, unknown>[];
+    const rows: OperatorMarkRow[] = [];
+    for (const raw of raws) {
+      const at = intOrNull(raw.at);
+      const quiet = raw.quiet === null ? null : observedOf(raw.quiet);
+      if (typeof raw.programme !== 'string' || at === null || (raw.quiet !== null && quiet === null)) {
+        return { ok: false, detail: `operator_marks row ${String(raw.programme)} does not read` };
+      }
+      rows.push({ programme: raw.programme, at, quiet });
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `operator_marks read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The lane's one write of a mark's `quiet`, a compare-and-set on the `at` it read: a prompt that moved the mark since the
+ *  read changes nothing (`changed: false`), so the reset the route made is never overwritten. */
+export function advanceMarkQuiet(db: DatabaseSync, programme: string, readAt: number, quiet: Observed): { changed: boolean } {
+  try {
+    return tx(db, () => {
+      const row = stmt(db, 'SELECT at FROM operator_marks WHERE programme = ?').get(programme) as { at: unknown } | undefined;
+      if (row === undefined || intOrNull(row.at) !== readAt) return { changed: false };
+      stmt(db, 'INSERT INTO operator_mark_quiet (programme, at, quiet) VALUES (?, ?, ?) ON CONFLICT (programme) '
+        + 'DO UPDATE SET at = excluded.at, quiet = excluded.quiet').run(programme, readAt, JSON.stringify(quiet));
+      return { changed: true };
+    });
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The Setting "when soft renewals happen" (R19; Table 11.1d, W1a), `renewal_mode_settings`, as read: a row, no row, or a
+ *  read that failed. Nothing is decided here: `renewalModeOf` (`renewNow.ts`) says what the stored word means. */
+export type RenewalModeRead = { kind: 'row'; mode: unknown } | { kind: 'absent' } | { kind: 'unreadable'; detail: string };
+
+export function renewalModeSetting(db: DatabaseSync): RenewalModeRead {
+  try {
+    const r = stmt(db, 'SELECT mode FROM renewal_mode_settings WHERE id = 1').get() as { mode: unknown } | undefined;
+    return r === undefined ? { kind: 'absent' } : { kind: 'row', mode: r.mode };
+  } catch (e) {
+    return { kind: 'unreadable', detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The Settings door's one write, in one transaction: the row before, the write (an insert for a lost row), the row after.
+ *  The door has narrowed `mode`; a write that changes nothing runs no `UPDATE`, so `updatedAt` stays. */
+export function setRenewalMode(db: DatabaseSync, mode: string, at: number): { before: RenewalModeRead; after: RenewalModeRead } {
+  return tx(db, () => {
+    const before = renewalModeSetting(db);
+    if (before.kind === 'unreadable') throw new Error(`renewal mode setting unreadable inside the write: ${before.detail}`);
+    if (before.kind === 'absent') stmt(db, 'INSERT INTO renewal_mode_settings (id, mode, updatedAt) VALUES (1, ?, ?)').run(mode, at);
+    else if (before.mode !== mode) stmt(db, 'UPDATE renewal_mode_settings SET mode = ?, updatedAt = ? WHERE id = 1').run(mode, at);
+    return { before, after: renewalModeSetting(db) };
+  });
+}
+
+// ── The renewal readings (Overlord W1, plan `w1-renewal-readings.md`, PR A) ──────────────────────────────────────────────
+
+/** The graded closed-book spot probes of one model class, across generations, for the fitted ceiling (C41;
+ *  `renewalReadings.ts#fittedCeilingOf`): `kind = 'spot'`, `book = 'closed'`, graded `pass` or `fail`, with a depth. A
+ *  question graded `unmeasured` never counts toward the ceiling's window or its rate (review 2183 F6, slug
+ *  unmeasured-grades-never-fit-the-ceiling): the door could not grade it as served, which says nothing of the session's
+ *  recall. `at` is when the question was asked. One statement, no new index: the table holds one row per question asked. */
+export function closedSpotProbes(db: DatabaseSync, modelClass: string): { ok: true; spots: SpotProbe[] } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, "SELECT id, depthTokens, grade, askedAt FROM continuity_probes WHERE kind = 'spot' AND book = 'closed' "
+      + "AND grade IN ('pass', 'fail') AND depthTokens IS NOT NULL AND modelClass = ? ORDER BY askedAt, id").all(modelClass) as Record<string, unknown>[];
+    const spots: SpotProbe[] = [];
+    for (const r of rows) {
+      const depthTokens = intOrNull(r.depthTokens); const at = intOrNull(r.askedAt);
+      if (depthTokens === null || at === null || (r.grade !== 'pass' && r.grade !== 'fail')) return { ok: false, detail: `continuity_probes row ${String(r.id)}: a spot probe` };
+      spots.push({ depthTokens, grade: r.grade, closed: true, modelClass, at });
+    }
+    return { ok: true, spots };
+  } catch (e) { return probeReadFailed(e); }
+}
+
+/** The daily backstop's setting (R19), narrowed through `isBackstopHour` and `isBackstopZone`: a row outside them, or no
+ *  row, reads `{ ok: false }` with what failed, never a default in its place. */
+export function backstopRead(db: DatabaseSync): BackstopRead {
+  try {
+    const r = stmt(db, 'SELECT hour, zone, isDefault, setAt FROM renewal_backstop_settings WHERE id = 1').get() as Record<string, unknown> | undefined;
+    if (r === undefined) return { ok: false, detail: 'renewal_backstop_settings has no row' };
+    const setAt = intOrNull(r.setAt);
+    if (!isBackstopHour(r.hour)) return { ok: false, detail: `renewal_backstop_settings.hour ${String(r.hour)}` };
+    if (!isBackstopZone(r.zone)) return { ok: false, detail: 'renewal_backstop_settings.zone is not a time zone' };
+    if (setAt === null || (r.isDefault !== 0 && r.isDefault !== 1)) return { ok: false, detail: 'renewal_backstop_settings row' };
+    return { ok: true, backstop: { hour: r.hour, zone: r.zone, isDefault: r.isDefault === 1, setAt } };
+  } catch (e) {
+    return { ok: false, detail: `renewal_backstop_settings read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The backstop's ONE writer, called only by its door (`POST /api/continuity/renewal-backstop`): the operator's hour and
+ *  zone, `isDefault` cleared, in one transaction. The door has validated both; the row exists from the migration. */
+export function setBackstop(db: DatabaseSync, b: { hour: number; zone: string; at: number }): { ok: boolean } {
+  try {
+    return tx(db, () => {
+      const r = stmt(db, 'UPDATE renewal_backstop_settings SET hour = ?, zone = ?, isDefault = 0, setAt = ? WHERE id = 1').run(b.hour, b.zone, b.at);
+      return { ok: Number(r.changes) === 1 };
+    });
+  } catch {
+    return { ok: false };
   }
 }

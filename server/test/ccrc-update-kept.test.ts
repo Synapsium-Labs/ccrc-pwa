@@ -12,7 +12,7 @@ import { scaled } from './timeScale.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
-import { installedCcdBody } from './ccdWsHelpers.js';
+import { installedCcdBody, stripCcrcKnobs } from './ccdWsHelpers.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
 import {
   REPO,
@@ -2124,7 +2124,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
 describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and no per-function trap clobbers another (W6 Task 8A)', () => {
   const chainEnv = (home: string): NodeJS.ProcessEnv => {
     const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
-    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    stripCcrcKnobs(env);
     return env;
   };
   it('chainEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {

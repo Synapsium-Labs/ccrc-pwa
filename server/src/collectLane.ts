@@ -733,6 +733,14 @@ export type CollectVerdictWord = keyof typeof COLLECT_VERDICT_TABLE;
 export const COLLECT_VERDICT_WORDS: readonly CollectVerdictWord[] = Object.keys(COLLECT_VERDICT_TABLE) as CollectVerdictWord[];
 const isCollectVerdictWord = (w: string): w is CollectVerdictWord => Object.hasOwn(COLLECT_VERDICT_TABLE, w);
 
+/** D-8955: does a journalled `collect` refusal leave a temp root standing that the collector could not take? Not for a
+ *  word this lane paces (a verdict word: deferred, scheduled, silent, or terminal and kept for the operator) or one
+ *  `ws-collect` refuses with (`isWorkspaceRefusal`): those say the root is not one to take now. Any other word (a pre-lock
+ *  die, or one this build does not know) is read as a failure, as the audit reader reads it. */
+export function collectRefusalBlocks(word: string | null): boolean {
+  return word === null || !(isCollectVerdictWord(word) || isWorkspaceRefusal('collect', word));
+}
+
 /** A run of one deferral or schedule word, answered without a break (spec §5.10, attention): from the first such
  *  answer's arrival to the latest's, with the latest's detail (ccd's holder, for `in-use`). */
 export interface CollectStreak {

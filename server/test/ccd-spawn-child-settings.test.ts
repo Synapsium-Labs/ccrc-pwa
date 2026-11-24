@@ -72,10 +72,10 @@ const childLine = (id: string, settings: string, sidflag: string): string =>
   + `CLAUDE_CODE_SHELL=/bin/bash ${sessionPanePath(h)} '${h.home}/.local/bin/claude' --effort high --settings '${settings}' ${sidflag} --dangerously-skip-permissions`;
 
 describe('CHILD_DENY_RULES (spec §6.6)', () => {
-  it('is Task 12\'s forbidden ccd verbs, then ccrc update and rollback, then claude install and update; the path-qualified forms wait on Task 13', () => {
+  it('is Task 12\'s forbidden ccd verbs, then the child-scope `ccd ws-add` (D-8978), then ccrc update, rollback and rollout, then claude install and update; the path-qualified forms wait on Task 13', () => {
     expect(CHILD_DENY_PATH_QUALIFIED).toBe(false);
     expect(CHILD_DENY_RULES).toEqual([
-      ...FORBIDDEN_CCD_VERBS.map((v) => `Bash(ccd ${v}:*)`), 'Bash(ccrc update:*)', 'Bash(ccrc rollback:*)',
+      ...FORBIDDEN_CCD_VERBS.map((v) => `Bash(ccd ${v}:*)`), 'Bash(ccd ws-add:*)', 'Bash(ccrc update:*)', 'Bash(ccrc rollback:*)', 'Bash(ccrc rollout:*)',
       'Bash(claude install:*)', 'Bash(claude update:*)',
     ]);
   });
@@ -97,7 +97,12 @@ describe('CHILD_DENY_RULES (spec §6.6)', () => {
     expect(FORBIDDEN_CCD_VERBS).toContain('ws-lease-mark');
     expect(CHILD_DENY_RULES).toContain('Bash(ccd ws-lease-mark:*)');
     expect(CHILD_DENY_RULES.filter((r) => r.startsWith('Bash(ccd ')).map((r) => r.slice('Bash(ccd '.length, -':*)'.length)))
-      .toEqual([...FORBIDDEN_CCD_VERBS]);
+      .toEqual([...FORBIDDEN_CCD_VERBS, 'ws-add']);
+  });
+  it('D-8978: `ws-add` is child-denied but is no SAFETY verb, so the classifier\'s forbidden list never names it', () => {
+    expect(CHILD_DENY_RULES).toContain('Bash(ccd ws-add:*)');
+    expect(childDenyRules('upstream-a')).toContain('Bash(ccd ws-add:*)');
+    expect(FORBIDDEN_CCD_VERBS).not.toContain('ws-add');
   });
   it('no account verb is denied: `ccd swap` and `ccd swap-self` stay open (the 2026-10-19 ruling)', () => {
     for (const r of childDenyRules('upstream-a')) expect(r, r).not.toMatch(/^Bash\(ccd swap/);

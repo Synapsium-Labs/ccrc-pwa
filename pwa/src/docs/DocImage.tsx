@@ -15,6 +15,8 @@ import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DocInLinkContext, DocLinkContext, type DocLinkContextValue } from './DocLink';
 import { docsLocation, imagePinFor } from './docsLinks';
+import { base64Of } from './mockup/load';
+import { mockupSizeBasis } from './mockup/plan';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence,
   kib, slotSentence, type DocImageRefusal,
@@ -30,7 +32,7 @@ import { rasterObjectUrl, showBytes } from './objectUrls';
  *  uncommitted asset{s}"). The provider keeps `loaders`, `queue` and `onDraftAsset` stable across renders: a new
  *  `loaders` or `queue` loads every image again. */
 export interface DocsAssetContextValue {
-  readonly loaders: Pick<DocsLoaders, 'file' | 'raster'>;
+  readonly loaders: Pick<DocsLoaders, 'file' | 'raster' | 'range'>;
   readonly queue: FetchQueue;
   readonly onDraftAsset: (count: number) => void;
   /** Export's registry of the bytes this page's images hold (spec 4.3 item 6; refinement (g)); absent or `null`: nothing
@@ -65,7 +67,7 @@ const refused = (why: DocImageRefusal, action: Extract<ImagePlan, { kind: 'refus
 /** The page the image sits on, as the leaf location `imagePinFor` reads (its project, ref and view). */
 function leafOf(ctx: DocLinkContextValue): Leaf {
   const loc = docsLocation({ kind: 'project', project: ctx.project, ref: ctx.pageRef },
-    { kind: 'path', section: ctx.section, path: ctx.path, dirSlash: false, view: ctx.view });
+    { kind: 'path', section: ctx.section, path: ctx.path, dirSlash: false, view: ctx.view, at: ctx.pageAt });
   if (loc.kind !== 'path') throw new Error('DocImage: a path target built a page that is not a leaf');
   return loc;
 }
@@ -119,10 +121,25 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   }
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
-  if (!ip.ok) return refused(ip.why);
-  const size = ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;
+  if (!ip.ok) {
+    // A draft with no fingerprint is not loaded here (the raster route needs one), but its own page reads a raster by
+    // range through its stat pin (spec 4.3), so the chip opens that page. An SVG's page offers Download alone: the same
+    // refusal, with no action.
+    if (ip.why === 'draft-unhashed') {
+      return refused('draft-unhashed', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null);
+    }
+    return refused(ip.why);
+  }
+  // Refinement (n): on a version page the listing's size is not checked, so ccd's class cap answers. Every other page
+  // asks the one size basis the mockup planner reserves by (`mockupSizeBasis`, D-8659): a listed size is checked here.
+  const basis = ctx.pageAt !== null ? null : mockupSizeBasis(e, ctx.tree, ip.pin, cls);
   const cap = DOCS_CLASS_CAP[cls];
-  if (typeof size === 'number' && size > cap) return refused('too-large', null, { size: kib(size), cap: kib(cap) });
+  if (basis !== null && basis.kind === 'listed' && basis.bytes > cap) {
+    // Spec 4.3: a raster's chip keeps its sentence and opens the image's own page, which reads it by range; an SVG's page
+    // offers Download alone, so its chip has no action.
+    return refused('too-large', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null,
+      { size: kib(basis.bytes), cap: kib(cap) });
+  }
   return {
     kind: 'pinned', pin: ip.pin, cls, draft: ip.draft, uncommittedNotShown: ip.uncommittedNotShown, leafHref,
     deferred: index === null || index >= DOCS_MAX_IMAGES_PER_PAGE,
@@ -151,13 +168,6 @@ export const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
 
 function notOkFailure(a: DocsNotOk): Extract<Fetched, { s: 'failed' }> {
   return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };
-}
-
-/** Bytes as base64, in chunks small enough to spread into `String.fromCharCode`. */
-function base64Of(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
 }
 
 /** An SVG's bytes as the only `src` Docs ever gives an SVG (spec 5.5): `data:image/svg+xml;base64,...`, never a

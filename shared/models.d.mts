@@ -31,26 +31,27 @@ export declare const MODEL_ID_RE: RegExp;
 // words of `ccrc models`, each defined once in `shared/models.mjs`.
 export declare const MODELS_LANE_ID_RE: RegExp;
 export declare const MODELS_RESERVED_IDS: readonly string[];
-// D-8406: the lane model files' directory and names, the read grant's shape, and each class's model with its label.
+// D-8406: the lane model files' directory and names, and each class's model with its label.
 export declare const MODELS_DIR_NAME: string;
 export declare function registryFileName(id: string): string;
 export declare function catalogueFileName(id: string): string;
-export declare function isLaneModelsReadName(name: unknown): boolean;
+export declare function aliasesFileName(id: string): string;
 export declare function laneClassModels(reg: Registry, catalogue: Catalogue | null): LaneClassModels;
 // Auto-advance plan W2 Task 12: the one reader of a models push line, its length cap and the pure policy of
 // `/api/notify`'s `push: true`, each defined once in `shared/models.mjs`.
 export declare const MODELS_PUSH_MAX: number;
 export type ModelsPushKind = 'moved' | 'canary-failed' | 'move-failed';
+/** `lanes` is every lane the line names, in line order (several only for a `moved` line); `lane` is the first. */
 export declare function modelsPushOf(
   message: unknown,
-): { lane: string; cls: ModelClass; kind: ModelsPushKind } | null;
+): { lane: string; lanes: string[]; cls: ModelClass; kind: ModelsPushKind } | null;
 /** What the policy asks of a roster: a lane id to its row, or `undefined`. The server's `roster.byId` (a
  *  `ReadonlyMap<string, AccountDef>`) is one. */
 export interface ModelsPushRoster {
-  get(lane: string): { readonly exec: { readonly kind: string } } | undefined;
+  get(lane: string): { readonly exec: { readonly kind: string }; readonly telemetry?: string } | undefined;
 }
 export type ModelsPushDecision =
-  | { verdict: 'pushable'; lane: string; cls: ModelClass; kind: ModelsPushKind; tag: string }
+  | { verdict: 'pushable'; lane: string; lanes: string[]; cls: ModelClass; kind: ModelsPushKind; tag: string }
   | { verdict: 'refused'; reason: 'not-a-model-line' | 'over-cap' }
   | { verdict: 'refused'; reason: 'unknown-lane' | 'not-a-codex-lane'; lane: string };
 /** Every word a refusal can carry, derived from the decision so the two cannot differ. */

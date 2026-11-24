@@ -68,14 +68,16 @@ describe('the base commands', () => {
     for (const go of GO_TO) {
       expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
     }
-    expect(GO_TO.map((g) => g.path)).toContain('/');
+    // The Fleet's own path (Overlord W1 home): `/` is the home, which no Go to offers (Go home is its own command).
+    expect(GO_TO.map((g) => g.path)).toContain('/fleet');
+    expect(GO_TO.map((g) => g.path)).not.toContain('/');
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
   });
 
   it('the two Settings diagnostics keep their own routes and Go to commands, and are not sections (library 1.1 take-up, Task 9)', () => {
-    expect(SETTINGS_SECTIONS).toHaveLength(5);
+    expect(SETTINGS_SECTIONS).toHaveLength(6);
     for (const [id, path] of [['go-reader-lab', '/settings/reader-lab'], ['go-measure-highlighting', '/settings/measure-highlighting']] as const) {
       expect(GO_TO.find((g) => g.id === id)?.path, id).toBe(path);
       expect(matchRoute(path)?.route.id, path).toBe(id.slice(3));
@@ -133,17 +135,21 @@ describe("the ids are W2's door table's", () => {
       // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
       'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
       'go-settings-security',
+      // D-8932: the Integrations section, Settings' sixth; its door is its index row.
+      'go-settings-integrations',
       // Docs W5h-a Task 9: R19's measurement page, a page under Settings; its door is the palette's Go to.
       'go-measure-highlighting',
       // The reader lab plan, Task 10: the reader lab, a page under Settings beside R19's; its door is the palette's Go to.
       'go-reader-lab',
       // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
-      'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
+      'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-renew', 'session-archive',
       'session-restore', 'open-terminal', 'session-pr',
       // Desktop polish T3e (D-6385): the inspector's hide and show, offered only while a part places a rail.
       'toggle-inspector',
       // D-8121: the ⋯ menu's Browser tools item, the session's own browser MCP choice.
       'session-browser',
+      // Overlord W1 home, Task 3: the Overlord's place (a top route, offered only under its word) and Go home (the wordmark).
+      'go-overlord', 'go-home',
     ].sort());
   });
 });
@@ -152,6 +158,7 @@ describe('the session commands (W2 Task S2d)', () => {
   const ctx = (session: CommandContext['session']): CommandContext => ({
     path: '/s/project-a-one', sessions: [], runs: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {}, setCharacter: () => {},
     openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session, inspector: null,
+    home: { place: 'fleet', why: 'not-advertised' }, overlordShown: false,
   });
 
   it('are offered only while a session screen hosts its flows, and only where the flows offer the item', () => {
@@ -219,7 +226,7 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
   it('entries with no terms, tier or searchOnly rank exactly as before', () => {
     // Measured on the base (4910f4cff) before T5a: the base commands' ids per query.
     const BEFORE: readonly [string, readonly string[]][] = [
-  ['', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
+  ['', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'new-session', 'open-session', 'next-session', 'prev-session', 'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-renew', 'session-archive', 'session-restore', 'open-terminal', 'session-pr', 'switch-layout', 'switch-theme', 'open-palette', 'show-shortcuts']],
   ['runs', ['go-runs']],
   ['go', ['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'go-archive', 'go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security', 'session-model', 'session-effort']],
   ['settings', ['go-settings', 'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation', 'go-settings-security']],
@@ -239,7 +246,10 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
     // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
     // The Overlord face plan's Switch character is read without the same way; its place is pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character');
+    // D-8932 reads it without go-settings-integrations the same way; its own rank row and place are pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character' && id !== 'go-settings-integrations'
+      // Overlord W1 home: Go to Overlord and Go home are read without the same way; their own rows are pinned in their case.
+      && id !== 'go-overlord' && id !== 'go-home');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -250,15 +260,48 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
     expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
-    // W5h-a: the one command whose title holds "measure", placed right after Settings' five pages.
+    // D-8932: the one command whose title holds "integrations", Settings' sixth page, right after Security.
+    expect(rankCommands('integrations', baseCommands()).map((c) => c.id)).toEqual(['go-settings-integrations']);
+    expect(baseCommands().find((c) => c.id === 'go-settings-integrations')?.title).toBe('Go to Settings › Integrations');
+    expect(empty.indexOf('go-settings-integrations'), 'after Security').toBe(empty.indexOf('go-settings-security') + 1);
+    // W5h-a: the one command whose title holds "measure", placed right after Settings' six pages.
     expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
-    expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' five pages').toBe(empty.indexOf('go-settings-security') + 1);
+    expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' six pages').toBe(empty.indexOf('go-settings-integrations') + 1);
     // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
     expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
     expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);
     // D-8121: the one command whose title holds "browser", placed right after Change effort, as the menu places it.
     expect(rankCommands('browser', baseCommands()).map((c) => c.id)).toEqual(['session-browser']);
     expect(empty.indexOf('session-browser'), 'after Change effort').toBe(empty.indexOf('session-effort') + 1);
+  });
+
+  // Overlord W1 home, Task 3 (plan question 9, ruled F4): its own case, away from the lines other waves add above.
+  it('Go to Overlord is offered only under overlord-v1, by g o; Go home runs g h and lands where the home is', () => {
+    const nav: string[] = [];
+    const ctx = (overlordShown: boolean, home: CommandContext['home']): CommandContext => ({
+      path: '/fleet', sessions: [], runs: [], navigate: (h) => { nav.push(h); }, setSkin: () => {}, setTheme: () => {}, setCharacter: () => {},
+      openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session: null, inspector: null,
+      home, overlordShown,
+    });
+    const ids = (c: CommandContext): string[] => available(baseCommands(), c).map((x) => x.id);
+    expect(ids(ctx(false, { place: 'fleet', why: 'not-advertised' }))).not.toContain('go-overlord');
+    expect(ids(ctx(true, { place: 'overlord', why: 'designated' }))).toContain('go-overlord');
+    const byId = (id: string) => baseCommands().find((c) => c.id === id)!;
+    expect(byId('go-overlord').keys).toEqual(['g', 'o']);
+    expect(byId('go-fleet').keys).toEqual(['g', 'f']);
+    expect(byId('go-home').keys).toEqual(['g', 'h']);
+    expect(ids(ctx(false, { place: 'fleet', why: 'not-advertised' }))).toContain('go-home');
+    byId('go-home').run(ctx(true, { place: 'overlord', why: 'designated' }));
+    byId('go-home').run(ctx(true, { place: 'fleet', why: 'rung-off' }));
+    byId('go-fleet').run(ctx(false, { place: 'fleet', why: 'none' }));
+    expect(nav).toEqual(['/overlord', '/fleet', '/fleet']);
+    // Review 3319 A1: a chord runs its command whatever its `when`, so Go to Overlord's run refuses without the word.
+    byId('go-overlord').run(ctx(false, { place: 'fleet', why: 'not-advertised' }));
+    expect(nav, 'without the word, Go to Overlord moves nothing').toEqual(['/overlord', '/fleet', '/fleet']);
+    byId('go-overlord').run(ctx(true, { place: 'overlord', why: 'designated' }));
+    expect(nav.at(-1)).toBe('/overlord');
+    expect(rankCommands('home', baseCommands()).map((c) => c.id)[0]).toBe('go-home');
+    expect(rankCommands('overlord', baseCommands()).map((c) => c.id)).toEqual(['go-overlord']);
   });
 
   // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.

@@ -1,14 +1,14 @@
 # ccd/contexts.tsv: every function ccd/ccd defines, mapped to ONE context of the 08-10 architecture spec
 # (C1 Fleet Registry & Accounts, C2 Fleet Mutation, C3 Session Conversation, C4 Workspace Lifecycle, C5 Coordination,
-# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs, C10 Session host; K = kernels
-# and platform, no aggregate). D-6054 (ARCH-34, #536). C10 is the session-host ruling Q13 (D-8272): hosting, observing
+# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs, C10 Session host, C11 Operator Model;
+# K = kernels and platform, no aggregate). D-6054 (ARCH-34, #536). C10 is the session-host ruling Q13 (D-8272): hosting, observing
 # and driving sessions behind one SessionHost interface, home ccd/lib/sessionhost.sh (the file-split plan's Task 7);
 # it is ccd's alone, and the server declares its port at C3. Data only: no installer reads it, and ccd/ccd never sources it.
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
-# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5) and ccd/lib/pool-set.sh (the Overlord's W1), which
-# ccd loads at its foot:
+# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1),
+# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms), ccd/lib/door.sh (the Overlord's door process) and ccd/lib/model-aliases.sh (the model-class Anthropic arm), which ccd loads at its foot:
 # <function name><TAB><context>.
 _tmx_sock	C10
 _tmx_argv	C10
@@ -86,6 +86,9 @@ _is_codex_backend	C1
 _is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
+_acct_org	C1
+_org_rel_of	C1
+_org_rel	C1
 _pool_sync_installed	C1
 _acct_pool_state	C1
 _pool_ok	C1
@@ -159,6 +162,7 @@ _ws_private_family	C4
 _ws_slug_free	C4
 _ws_slug_residue	C4
 _ws_slug_new	C4
+_ws_lane_cannot_spawn	C1
 _ws_least_loaded	C1
 _ws_disk_free_gb	C4
 _ws_pool_read	C1
@@ -190,6 +194,7 @@ _project_origin_ours	C4
 _project_origin_seed	C4
 _project_origin_make	C4
 cmd_project_add	C4
+cmd_skill_ensure	C1
 cmd_ws_archive	C4
 _ws_archive_unrecorded_empty	C4
 _ws_archive_manifest	C4
@@ -318,6 +323,12 @@ _id_wrapper	C1
 _home_for	C1
 _home_measured_to	C1
 _avail	C1
+_org_cur	C1
+_org_is	C1
+_org_tie	C1
+_org_note	C1
+_org_near_say	C1
+_orgnear_cut	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1
@@ -459,7 +470,12 @@ _browser_mcp_box	C2
 _browser_spawn_compose	C2
 _spawn_settings_last	C2
 _fleet_spawn_compose	C2
+_profile_digest_ok	C2
+_profile_workspace	C2
+_profile_launch_ok	C2
+_profile_refused	C2
 _profile_spawn_compose	C2
+_advisor_spawn_compose	C2
 _compact_text_to	C3
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
@@ -814,6 +830,10 @@ cmd_docs_index	C9
 cmd_docs_tree	C9
 cmd_docs_show	C9
 cmd_docs_fetch	C9
+cmd_docs_log	C9
+_docs_range_count_ok	C9
+_docs_range_nums_ok	C9
+cmd_docs_show_range	C9
 _docs_py	C9
 _ws_title	C1
 _ws_title_check	C1
@@ -913,6 +933,10 @@ _ws_shed_asleep_why	C4
 _ws_shed_run	C4
 cmd_ws_shed_deps	C4
 _ws_shed_locked	C4
+_ws_collect_sysblock	C4
+_ws_collect_devmm	C4
+_ws_collect_dev_gone	C4
+_ws_collect_absence_dev	C4
 _pr_train_py	C4
 cmd_pr_train_prove	C4
 _ws_train_tried_get	C4
@@ -948,3 +972,45 @@ _session_pool_side	C1
 _pool_ok_set	C1
 _pool_set_undecidable_why	C1
 _pool_set_mismatch_why	C1
+_pool_side_is_set	C1
+_pool_set_sid	C1
+_pool_side_token	C1
+_pool_cross_match	C1
+_pool_cross_lapse_why	C1
+_pool_undecided_rc	C1
+_pool_undecided_word	C1
+_pool_undecidable_cause	C1
+_pool_set_start_warn	C1
+cmd_pool_answer	C1
+cmd_keep_awake	C4
+_keep_awake_ours	C4
+_role_long_lived	C3
+_route_holddown_holds	C1
+_route_holddown_settle	C1
+_fresh_crossing_end	C1
+_fresh_pick_settle	C1
+_fresh_pick_ok	C1
+_fresh_pick_field_to	C1
+_fresh_pick_least_to	C1
+_fresh_pick_to	C1
+_door_prog_ok	C10
+_door_purge	C10
+_door_spawn	C10
+_model_id_bare_to	C3
+_ma_file_to	C3
+_ma_answer_to	C3
+_alias_facts_to	C3
+_lane_class_efforts_to	C3
+_class_takes_no_effort	C3
+_class_effort_barred_to	C3
+_orphaned_effort_to	C3
+_alias_launch_mark	C3
+_alias_fill_overruled	C3
+_alias_launch_fill	C3
+_alias_launch_observe	C3
+_route_applied_put	C3
+_route_applied_unpick_to	C3
+_route_model_record	C3
+_alias_model_observe	C3
+_alias_observe	C3
+_held_model_env_to	C3

@@ -77,8 +77,8 @@ const word = (v: StopDoneVerdict | HibernateVerdict): string => (v.act === 'hold
 // run-done's input: everything clear, the live state read and idle, the run closed past the grace, the marker 7 h quiet.
 const SD: StopDoneInput = {
   row: row(ID) as unknown as StopDoneInput['row'], heldKind: 'none', holdOkVerb: true,
-  store: { ok: true, last: { runId: 7, state: 'done', closedAt: NOW - GRACE - MIN }, openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false },
-  viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: true, optedOut: false,
+  store: { ok: true, last: { runId: 7, state: 'done', closedAt: NOW - GRACE - MIN }, openWorker: false, parkedWorker: false, otherOpenWorker: false, openClaimant: false, claim: false, mail: false },
+  viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: true, overlord: false, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK(7 * HOUR) },
   now: NOW, graceMs: GRACE,
 };
@@ -99,6 +99,7 @@ const RUN_DONE: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'archived', word: 'archived', touches: ['archivedAt'], set: sdRow({ archivedAt: NOW - HOUR }) },
   { name: 'stopped', word: 'stopped', touches: ['stoppedBy'], set: sdRow({ stoppedBy: { at: NOW - HOUR, surface: 'agent' } }) },
   { name: 'unmeasured', word: 'unmeasured', touches: ['unmeasured'], set: sdRow({ unmeasured: ['uuid'] }) },
+  { name: 'overlord', word: 'overlord', touches: ['overlord'], set: sdIn({ overlord: true }) },
   { name: 'opted-out', word: 'opted-out', touches: ['optedOut'], set: sdIn({ optedOut: true }) },
   { name: 'held', word: 'held', touches: ['held'], set: (i) => sdIn({ heldKind: 'operator' })(sdRow({ held: 'the operator holds it' })(i)) },
   { name: 'stranded', word: 'stranded', touches: ['stranded'], set: sdRow({ stranded: STANDING }) },
@@ -106,7 +107,8 @@ const RUN_DONE: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'substrate', word: 'substrate', touches: ['substrate'], set: sdRow({ substrate: STANDING }) },
   { name: 'runs-unreadable', word: 'runs-unreadable', touches: ['store.ok'], set: sdStore({ ok: false, detail: 'fixture' }) },
   { name: 'no-run', word: 'no-run', touches: ['last.state', 'last.closedAt'], set: sdLast(null) },
-  { name: 'not-done', word: 'not-done', touches: ['last.state'], set: sdLast({ state: 'working' }) },
+  // D-8790: `working` is the waiting case now, so the rung stands on a `dispatched` run.
+  { name: 'not-done', word: 'not-done', touches: ['last.state'], set: sdLast({ state: 'dispatched' }) },
   { name: 'close-unplaced', word: 'close-unplaced', touches: ['last.closedAt'], set: sdLast({ closedAt: null }) },
   { name: 'grace', word: 'grace', touches: ['last.closedAt'], set: sdLast({ closedAt: NOW - GRACE + 1 }) },
   { name: 'run-worker', word: 'run-worker', touches: ['openWorker'], set: sdStore({ openWorker: true }) },
@@ -130,19 +132,22 @@ const RUN_DONE: readonly Rung<StopDoneInput, StopDoneHold>[] = [
 /** The other ways run-done reaches a word its ladder already holds. */
 const RUN_DONE_ALSO: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'unmeasured (status)', word: 'unmeasured', touches: [], set: sdRow({ statusUnmeasured: true }) },
+  { name: 'unmeasured (designation)', word: 'unmeasured', touches: [], set: sdIn({ overlord: null }) },
   { name: 'viewer (after a start)', word: 'viewer', touches: [], set: sdIn({ sinceStartMs: VIEWER_OPEN_TTL_MS - 1 }) },
   { name: 'unmeasured (live word)', word: 'unmeasured', touches: [], set: sdLive({ word: { ok: false, reason: 'unmeasured' } }) },
   { name: 'pane (no config dir)', word: 'pane', touches: [], set: sdLive({ word: { ok: false, reason: 'no-config-dir' } }) },
   { name: 'unmeasured (turn verdict)', word: 'unmeasured', touches: [], set: sdLive({ turn: 'unmeasured' }) },
   { name: 'marker (unreadable)', word: 'marker', touches: [], set: sdLive({ mark: { ok: false, reason: 'foreign' } }) },
   { name: 'marker-background (bg -1)', word: 'marker-background', touches: [], set: sdMark({ bg: -1 }) },
+  // D-8791 (review 2887 F2): the waiting case under `mail-disabled`, decided after the ladder (`stopDoneVerdict`).
+  { name: 'mail-disabled (the waiting case)', word: 'mail-disabled', touches: [], set: (i) => sdIn({ mailDisabled: 'set' })(sdLast({ state: 'working', closedAt: null })(i)) },
   { name: 'scheduled (crons absent)', word: 'scheduled', touches: [], set: sdMark({ crons: null }) },
   { name: 'recent (no stamp)', word: 'recent', touches: [], set: sdMark({ turnAt: null, stopAt: null, restartAt: null }) },
 ];
 
 // idle-hours' input: everything clear, the live state read and idle, the marker 7 h quiet (past the default N).
 const HB: HibernateInput = {
-  row: row(ID) as unknown as HibernateInput['row'], optedOut: false,
+  row: row(ID) as unknown as HibernateInput['row'], overlord: false, optedOut: false,
   store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, mark: MARK(7 * HOUR) },
@@ -160,6 +165,7 @@ const IDLE_HOURS: readonly Rung<HibernateInput, HibernateHold>[] = [
   { name: 'archived', word: 'archived', touches: ['archivedAt'], set: hbRow({ archivedAt: NOW - HOUR }) },
   { name: 'pane (row)', word: 'pane', touches: ['status'], set: hbRow({ status: 'dead' }) },
   { name: 'unmeasured', word: 'unmeasured', touches: ['unmeasured'], set: hbRow({ unmeasured: ['uuid'] }) },
+  { name: 'overlord', word: 'overlord', touches: ['overlord'], set: hbIn({ overlord: true }) },
   { name: 'opted-out', word: 'opted-out', touches: ['optedOut'], set: hbIn({ optedOut: true }) },
   { name: 'held', word: 'held', touches: ['held'], set: hbRow({ held: 'the operator holds it' }) },
   { name: 'stranded', word: 'stranded', touches: ['stranded'], set: hbRow({ stranded: STANDING }) },
@@ -185,6 +191,7 @@ const IDLE_HOURS: readonly Rung<HibernateInput, HibernateHold>[] = [
 const IDLE_HOURS_ALSO: readonly Rung<HibernateInput, HibernateHold>[] = [
   { name: 'archived (bucket)', word: 'archived', touches: [], set: hbRow({ bucket: 'archived' }) },
   { name: 'unmeasured (status)', word: 'unmeasured', touches: [], set: hbRow({ statusUnmeasured: true }) },
+  { name: 'unmeasured (designation)', word: 'unmeasured', touches: [], set: hbIn({ overlord: null }) },
   { name: 'viewer (after a start)', word: 'viewer', touches: [], set: hbIn({ sinceStartMs: VIEWER_OPEN_TTL_MS - 1 }) },
   { name: 'unmeasured (live word)', word: 'unmeasured', touches: [], set: hbLive({ word: { ok: false, reason: 'unmeasured' } }) },
   { name: 'pane (no config dir)', word: 'pane', touches: [], set: hbLive({ word: { ok: false, reason: 'no-config-dir' } }) },
@@ -381,6 +388,8 @@ interface World {
   reg?: string[] | null;
   passNames?: string[];
   readonly listedAt: number[];
+  /** The designation both lanes' ports read; unset: no row. */
+  designation?: DesignationRead;
 }
 const world = (): World => ({
   now: NOW, verbs: ['hibernate', ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP], runState: new Map(), openWorker: new Set(),
@@ -418,6 +427,7 @@ const markOf = (w: World) => async (r: SessionRecord) => { w.events.push(`mark $
 function sdDeps(w: World): StopDoneSweepDeps {
   return {
     coord: {
+      designationRead: () => w.designation ?? { kind: 'not-designated' as const, row: null },
       lastRunBySession: (asked: readonly string[]) => ({
         ok: true, last: [], openWorkers: [], openClaimants: [],
         lastPlaced: asked.map((sessionId) => ({
@@ -425,11 +435,14 @@ function sdDeps(w: World): StopDoneSweepDeps {
           program: 'p', programTitle: null, claimedBy: 'lane-a-project-a',
         })),
         openPlacedWorkers: asked.filter((id) => w.openWorker.has(id)), parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: asked.filter((id) => w.openWorker.has(id)),
       }) as never,
       activeClaims: () => [],
       outstandingMailFor: (id: string) => (w.mail.has(id) ? [{ parkedAt: null }] : []) as never,
       recordFeedEvent: () => undefined,
       run: (runId: number) => ({ ok: true, run: { id: runId, state: 'working', reviews: null } }) as never,
+      laneArmSetting: () => ({ kind: 'absent' as const }),
+      runEvents: () => [],
     },
     runCcd: runCcdOf(w),
     fleetState: { ccdVerbs: w.verbs } as unknown as FleetState,
@@ -446,6 +459,7 @@ function sdDeps(w: World): StopDoneSweepDeps {
     serial: serialOf(w),
     queueRun: queueOf(w),
     listing: listingOf(w, []),
+    stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
     startedAt: STARTED,
     now: () => w.now,
   };
@@ -464,6 +478,7 @@ function hbDeps(w: World, o: { act?: boolean } = {}): HibernateSweepDeps {
       })) as never,
       activeClaims: () => [],
       outstandingMailFor: (id: string) => (w.mail.has(id) ? [{ parkedAt: null }] : []) as never,
+      designationRead: () => w.designation ?? { kind: 'not-designated' as const, row: null },
     }),
     viewers: { isOpen: (id: string) => w.viewers.has(id) },
     liveWord: liveWordOf(w),
@@ -504,10 +519,75 @@ function watcherWith(extra: Record<string, unknown>) {
 const probe = () => Object.assign([] as string[], { includes: vi.fn((_s: string) => false) });
 const atClock = (t: number) => vi.spyOn(Date, 'now').mockReturnValue(t);
 
+// ── X6: both lanes read the designation once a pass, and hold the Overlord's body ────────────────────────────────────
+
+describe('X6: the sleep lanes hold the Overlord, and an unread designation', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const BOUND: DesignationRead = { kind: 'designated', sessionId: ID, term: 5, row: view({ bound: { sessionId: ID, generation: 'g1' } }) };
+  const PENDING: DesignationRead = {
+    kind: 'not-designated',
+    row: view({ pending: { sessionId: ID, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }),
+  };
+  const OTHER: DesignationRead = { kind: 'designated', sessionId: 'project-a-other', term: 5, row: view({ bound: { sessionId: 'project-a-other', generation: 'g1' } }) };
+  const UNREAD: DesignationRead = { kind: 'unmeasured', why: 'fixture' };
+
+  it.each([['bound', BOUND], ['pending', PENDING]] as const)('run-done never stops the %s body, and sends nothing', async (_n, d) => {
+    const w = world();
+    w.designation = d;
+    expect(await sdPass(w)).toEqual([]);
+    expect(w.argv).toEqual([]);
+  });
+
+  it.each([['bound', BOUND], ['pending', PENDING]] as const)('idle-hours holds the %s body overlord', async (_n, d) => {
+    const w = world();
+    w.designation = d;
+    expect(await hbPass(w)).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'overlord' } }]);
+    expect(w.argv).toEqual([]);
+  });
+
+  it('an unread designation holds unmeasured in both lanes, and sleeps nothing', async () => {
+    const sd = world();
+    sd.designation = UNREAD;
+    expect(await sdPass(sd)).toEqual([]);
+    expect(sd.argv).toEqual([]);
+    const hb = world();
+    hb.designation = UNREAD;
+    expect(await hbPass(hb)).toEqual([{ id: ID, verdict: { act: 'hold', reason: 'unmeasured' } }]);
+    expect(hb.argv).toEqual([]);
+  });
+
+  it('another session\'s designation changes nothing for this one: both lanes sleep it as before', async () => {
+    const sd = world();
+    sd.designation = OTHER;
+    expect(await sdPass(sd)).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    const hb = world();
+    hb.designation = OTHER;
+    expect((await hbPass(hb))[0]!.verdict).toEqual({ act: 'hibernate', idleMs: 7 * HOUR });
+  });
+
+  it('the designation is read once a pass, and again at the act: a body designated between the two is not stopped', async () => {
+    const w = world();
+    let reads = 0;
+    const deps = hbDeps(w);
+    deps.coord!.designationRead = () => { reads++; return w.designation ?? { kind: 'not-designated', row: null }; };
+    w.beforeAct = () => { w.designation = BOUND; };
+    w.passNames = [HIBERNATE_LIVE_MARKER];
+    const out = await hibernatePass(deps, hbMem(), [row(ID)], [rec(ID)], [HIBERNATE_LIVE_MARKER]);
+    expect(w.argv).toEqual([]);
+    expect(out[0]!.act).toMatchObject({ kind: 'held-at-act' });
+    expect(reads).toBe(2);
+  });
+});
+
 // ── The difference table, one row per fact ─────────────────────────────────────────────────────────────────────────
 
 describe('the difference table (run-done | idle-hours), one row each', () => {
   it('differs: the holds before opted-out', () => {
+    expect(sdv(sdIn({ overlord: true, optedOut: true })(SD)), 'the Overlord holds before opted-out').toBe('overlord');
+    expect(hbv(hbIn({ overlord: true, optedOut: true })(HB))).toBe('overlord');
     const opted = sdIn({ optedOut: true })(SD);
     expect([
       sdRow({ child: { kind: 'none' } }), sdRow({ child: { kind: 'unreadable' } }), sdRow({ archivedAt: NOW - HOUR }),
@@ -522,13 +602,32 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
     expect(hbv(hbRow({ child: { kind: 'none' } })(HB)), 'idle-hours puts a non-child to sleep').toBe('hibernate');
   });
 
+  it('held — a hold naming the worker\'s own newest placed run is `run-own` and passes run-done; another session\'s open run stays `run-live` (D-8789)', () => {
+    const coord = { run: (id: number) => (id === 9
+      ? { ok: false, detail: 'unreadable' }
+      : { ok: true, run: { id, state: id === 5 ? 'done' : 'awaiting-review', sessionId: id === 7 ? 'other-worker' : 'this-worker' } }) as never };
+    const own = `${PROGRAMME_HOLD} run:6`;
+    const me = (newestPlacedRunId: number | null) => ({ sessionId: 'this-worker', newestPlacedRunId });
+    expect(heldKindOf(own, coord, me(6)), 'its own newest placed run').toBe('run-own');
+    expect(heldKindOf(own, coord, me(8)), 'its own open run, but not its newest placed one').toBe('run-live');
+    expect(heldKindOf(own, coord, me(null)), 'no placed run names it: nothing is its own').toBe('run-live');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:7`, coord, me(7)), 'another session\'s open run').toBe('run-live');
+    expect(heldKindOf(own, coord, null), 'a caller that names no session never answers run-own').toBe('run-live');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:5`, coord, me(5)), 'a terminal run reads as before').toBe('run-terminal');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:9`, coord, me(9)), 'a failed read holds').toBe('unreadable');
+    const held = (k: StopDoneHeldKind, holdOkVerb = true) => sdv({ ...SD, heldKind: k, holdOkVerb, row: { ...SD.row, held: own } });
+    expect(held('run-own'), 'passes, with the hold handed to --hold-ok').toBe('hibernate');
+    expect(held('run-own', false), 'no hold-ok token: held').toBe('held');
+    expect(held('run-live'), 'another session\'s open run still holds').toBe('held');
+  });
+
   it('differs: held — run-done passes a programme hold or a terminal run\'s, only with hibernate-hold-ok; idle-hours holds any', () => {
     const coord = { run: (id: number) => ({ ok: true, run: { id, state: id === 5 ? 'done' : 'working' } }) as never };
     const kinds: Array<[string | null, StopDoneHeldKind]> = [
       [null, 'none'], ['the operator holds it', 'operator'], [PROGRAMME_HOLD, 'programme'],
       [`${PROGRAMME_HOLD} run:5`, 'run-terminal'], [`${PROGRAMME_HOLD} run:6`, 'run-live'],
     ];
-    expect(kinds.map(([t]) => heldKindOf(t, coord))).toEqual(kinds.map(([, k]) => k));
+    expect(kinds.map(([t]) => heldKindOf(t, coord, null))).toEqual(kinds.map(([, k]) => k));
     const held = (k: StopDoneHeldKind, holdOkVerb = true) => sdv({ ...SD, heldKind: k, holdOkVerb, row: { ...SD.row, held: PROGRAMME_HOLD } });
     expect((['programme', 'run-terminal', 'operator', 'run-live', 'unreadable', 'none'] as const).map((k) => held(k)))
       .toEqual(['hibernate', 'hibernate', 'held', 'held', 'held', 'held']);
@@ -538,7 +637,7 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
   });
 
   it('differs: the run clock — run-done holds no-run, not-done, close-unplaced and grace after runs-unreadable; idle-hours has none', () => {
-    expect([sdLast(null), sdLast({ state: 'working' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
+    expect([sdLast(null), sdLast({ state: 'dispatched' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
       .toEqual(['no-run', 'not-done', 'close-unplaced', 'grace']);
     expect(sdv(sdStore({ ok: false, detail: 'x', last: null })(SD))).toBe('runs-unreadable');
     expect(Object.keys(HB.store).sort(), 'idle-hours\' store read carries no run').toEqual(['claim', 'mail', 'ok', 'openClaimant', 'openWorker']);
@@ -1266,7 +1365,7 @@ describe('C4b: one row per SleepPolicy field, each value answering the old verdi
   });
 
   it('field runClock: run-done reads the run\'s close after runs-unreadable (no-run, not-done, close-unplaced, grace); idle-hours reads no run', () => {
-    expect([sdLast(null), sdLast({ state: 'working' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
+    expect([sdLast(null), sdLast({ state: 'dispatched' }), sdLast({ closedAt: null }), sdLast({ closedAt: NOW - 1 })].map((m) => sdv(m(SD))))
       .toEqual(['no-run', 'not-done', 'close-unplaced', 'grace']);
     expect(sdv(sdLast(null)(sdStore({ openWorker: true })(SD))), 'the run clock stands above run-worker').toBe('no-run');
     expect(hibernateVerdict(HB, NOW, N)).toStrictEqual({ act: 'hibernate', idleMs: 7 * HOUR });
@@ -1865,6 +1964,7 @@ describe('C4d: sleepPass equals the old pass on every observable, scenario by sc
 
 import { writeFileSync } from 'node:fs';
 import { Viewers } from '../src/viewer.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import type { Runner } from '../src/exec.js';
 
 describe('C4e: the tick starts both sleep lanes, and neither waits on the other (Review focus 9)', () => {

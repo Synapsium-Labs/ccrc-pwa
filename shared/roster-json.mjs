@@ -213,6 +213,13 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
  *  over-the-cap and shell-metacharacter rows run the literal end to end through
  *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** Mirrors `shared/roster.ts`'s organization-label gate (`ORG_ID_SHAPES`, `orgLabelVerdict`), held equal by
+ *  `roster-org.test.ts` by text and by behaviour. Exported for the verb's `set-facts` op and the generator. */
+export const ORG_ID_SHAPES = [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, /^[0-9a-f]{32}$/i];
+export function orgLabelVerdict(v) {
+  if (ORG_ID_SHAPES.some((re) => re.test(v))) return 'looks-like-an-id';
+  return POOL_NAME_RE.test(v) && v !== 'none' ? 'ok' : 'off-shape';
+}
 
 // Mirrors `shared/roster.ts`'s `EXEC_KINDS`, the one definition of `exec.kind`'s closed set, IN ORDER: this
 // validator runs under bare Node and cannot import TypeScript, so it keeps this one copy, and
@@ -226,6 +233,8 @@ const EXEC_KINDS_SAID =
 // must know which one is the default an absent key reads: imported, never re-spelled.
 export const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
 const CODEX_UPSTREAMS = ['backend', 'siwc'];
+// Mirrors `shared/rosterFacts.ts`'s `FABLE_BILLINGS`, IN ORDER; `roster-exec-parity.test.ts` pins both declarations.
+const FABLE_BILLINGS = ['included', 'credits'];
 // Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
 // `openrouter` is D-5521's OpenRouter key lane (D-5753).
 const TELEMETRY_VALUES = Object.freeze({ anthropic: true, codex: true, none: true, openrouter: true });
@@ -513,6 +522,39 @@ function checkAccount(raw, index) {
       + 'letters, digits and hyphens only — or remove the key to leave the account untagged.');
   }
 
+  // Mirrors `parseRoster`'s two Overlord-fact gates (H16), written `null` refused as `pool`'s is. Both are RETURNED,
+  // because `generateAccountsSh` emits them into `_ccrc_fable_billing` and `_ccrc_continuity`.
+  const fableBilling = raw['fableBilling'];
+  if (fableBilling !== undefined && (typeof fableBilling !== 'string' || !FABLE_BILLINGS.includes(fableBilling))) {
+    bad(`account "${id}" has an invalid fableBilling ${JSON.stringify(fableBilling)}.`,
+      `Set "fableBilling" for account "${id}" to ${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}, `
+      + 'or remove the key to leave the fact unset.');
+  }
+  const continuity = raw['continuity'];
+  let continuityAt;
+  if (continuity !== undefined) {
+    const keys = typeof continuity === 'object' && continuity !== null && !Array.isArray(continuity)
+      ? Object.keys(continuity) : null;
+    const at = keys !== null && keys.length === 1 && keys[0] === 'recordedAt' ? continuity['recordedAt'] : undefined;
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) {
+      bad(`account "${id}" has an invalid continuity ${JSON.stringify(continuity)}.`,
+        `Set "continuity" for account "${id}" to {"recordedAt": <epoch seconds>}, or remove the key to leave the fact unset.`);
+    }
+    continuityAt = at;
+  }
+
+  // Mirrors `parseRoster`'s organization-label gate, a written `null` refused, and its message: the key and the reason,
+  // never the value (PR A's review F6). RETURNED: `_ccrc_org` emits it.
+  const org = raw['org'];
+  const orgWord = typeof org === 'string' ? orgLabelVerdict(org) : 'off-shape';
+  if (org !== undefined && orgWord !== 'ok') {
+    const why = typeof org !== 'string' ? 'is not a string' : orgWord === 'looks-like-an-id'
+      ? "looks like an organization's id (org-looks-like-an-id)" : 'is not a name matching ^[a-z][a-z0-9-]{0,31}$ other than "none"';
+    bad(`account "${id}" has an invalid "org": it ${why}.`,
+      `Set "org" for account "${id}" to a name matching ^[a-z][a-z0-9-]{0,31}$, other than "none" and never the `
+      + "organization's id, or remove the key to leave it unset.");
+  }
+
   const telemetry = raw['telemetry'];
   if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
@@ -560,6 +602,9 @@ function checkAccount(raw, index) {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
     execKind: exec['kind'], secretsFile: exec['secretsFile'], provider: exec['provider'],
     pool: pool === undefined ? null : pool,
+    fableBilling: fableBilling === undefined ? null : fableBilling,
+    continuity: continuityAt === undefined ? null : { recordedAt: continuityAt },
+    org: org === undefined ? null : org,
     ...codexTopology,
   };
 }

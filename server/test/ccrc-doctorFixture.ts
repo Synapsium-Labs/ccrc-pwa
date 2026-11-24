@@ -1231,9 +1231,9 @@ export function plantSpoolDir(home: string, id: string): string {
   return d;
 }
 
-/** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
- *  `ccd/ccrc-doctor-checks`) and the one `_check_land-probe` runs (`_LP_PY`, landing order wave 3b), handed to the real interpreter; the text is read from the shipped file so a third or an
- *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so).
+/** `python3 -I -c <program>` for the named doctor readers below, handed to the real interpreter. The text
+ *  comes from the shipped check file; any other program reaches the stub's bare `exit 0` instead.
+ *  Empty when this box has no python3 (the checks then say so).
  *  Its second arm (codex-bridge Stage 1, Task 9) hands `python3 -IS $HOME/.local/bin/ccgpt-auth.py …` to the real
  *  interpreter too: `_codex_auth`'s exact argv, so the doctor's `codex` check reads the placed library's own `status`
  *  (or a case's stand-in at that path) instead of the stub's empty answer, which `_codex_auth_status` refuses. */
@@ -1241,7 +1241,7 @@ export const BT_PY_ARM = ((): string => {
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   if (real === '') return '';
   const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
-  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET', '_LP_PY'].map((n) => {
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET', '_LP_PY', '_RL_PY'].map((n) => {
     const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
     if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
     return `'${m[1]}'`;
@@ -1503,9 +1503,10 @@ export const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od',
  *  `plantAuthHelper`'s reason: node resolves a module's imports from its REAL
  *  path. A file missing here is not a degraded fixture: every Codex PASS case
  *  reds on the check's "printed no answer" FAIL. */
-export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
+export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/models-anthropic.mjs',
+  'deploy/litellm-config.template.yaml',
   'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs',
-  'shared/model-advance.mjs', 'shared/model-suggest.mjs'];
+  'shared/model-advance.mjs', 'shared/model-aliases.mjs', 'shared/model-suggest.mjs'];
 
 export function installModelsOp(home: string): void {
   for (const rel of MODELS_OP_CLOSURE) {
@@ -1604,8 +1605,10 @@ export function editRosterRow(home: string, id: string, edit: (row: Record<strin
  *  lane ccrc runs end to end: its launcher, a signed-in authDir, its model
  *  registry and a fresh catalogue, and the files rendered from them; the
  *  five GPT-lane executables placed from the shipped tree; a current
- *  runtime. Every check still PASSes — healthy()'s contract — so a Codex
- *  case breaks exactly one thing. The ports are FREE ones (`freeLanes`),
+ *  runtime. Every check but `model-advance-blocked` still PASSes — healthy()'s contract — so a Codex
+ *  case breaks exactly one thing; that one WARNs `pin-grammar`, because this box's two-part fixture pins
+ *  predate the id grammar (auto-advance D16), and `model-sessions-behind` SKIPs, as healthy()'s other
+ *  session checks do, for no `~/.cc-sessions` (measured, auto-advance W3). The ports are FREE ones (`freeLanes`),
  *  never the fixed pure-parse pair: from Task 5 on the check connects to
  *  them. No `accounts.sh` (`codexRoster`'s `accountsSh: false`), for
  *  healthy()'s own reason. */
@@ -1785,8 +1788,21 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  browser build, so there is nothing to launch. `ccrc-doctor-session-path.test.ts` plants the builds.
  *
  *  RAISED BY ONE AGAIN, on every platform (D-8121): `browser-mcp` SKIPs - `healthy()` creates no `~/.cc-sessions`, so no
- *  session runs a browser server. `ccrc-doctor-browser-mcp.test.ts` plants the registry and the process table. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 18;
+ *  session runs a browser server. `ccrc-doctor-browser-mcp.test.ts` plants the registry and the process table.
+ *
+ *  RAISED BY FOUR, on every platform (model-class auto-advance W3, D-8689): `model-advance-held-back`,
+ *  `model-held-behind`, `model-sessions-behind` and `model-advance-blocked` SKIP - `healthy()` places no
+ *  deploy/models-op.mjs, so advance-health prints no answer, and its roster names no lane with a model registry
+ *  either way. Measured the same way: with the four in the table and this `+ 4` absent, every `(N skipped)` pin
+ *  that reads this constant reds (`ccrc-doctor-codex-host.test.ts`: 22 skipped measured where 18 was pinned, and 21
+ *  where 17 was). `ccrc-doctor-model-advance.test.ts` plants the op and the lane files.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (model-class auto-advance wave 3): `model-release-lookup` SKIPs -
+ *  `healthy()` places no auth library or release record for this check to measure. Measured the same
+ *  way: with the check in the table and this `+ 1` absent, the `(N skipped)` pins that read this constant red
+ *  (`ccrc-doctor-fleet.test.ts`: 24 skipped measured where 23 was pinned). `ccrc-doctor-model-advance.test.ts`
+ *  plants the record and each answer. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 23;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

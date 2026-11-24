@@ -69,6 +69,7 @@ describe("shared/roster.ts's import list", () => {
     expect(imports).toEqual([
       "import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';",
       "import { BASE_URL_OK } from './base-url.js';",
+      "import { FABLE_BILLINGS, type FableBilling, type ContinuityRecord } from './rosterFacts.js';",
     ]);
   });
 });

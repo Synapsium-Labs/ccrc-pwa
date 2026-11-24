@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { parseTranscriptLine } from './parse.js';
+import { helperFactsOf, parseTranscriptLine, type HelperFact } from './parse.js';
 import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
 
@@ -27,6 +27,16 @@ export interface BacklogRead {
   offset: number;
   missing: boolean;
   measured: boolean;
+  /** The tailer's SECOND output (session helpers H1b, D-8862): the helper facts of every whole line in the window read, not
+   *  only the last `lastN` events' (they cost no read). Absent when there is none, so a read with none is what it was. */
+  helpers?: HelperFact[];
+  /** Where the tailer's reading begins (session helpers H1c, D-8873): the start scan's seam, so it reads only the bytes before
+   *  it (`workflows/helperScan.ts`). The window's first byte; the file's size when the window could not be read, so the scan
+   *  still reads what the window would have (review 3067 F5, HF1, D-8876); 0 for an empty file. Absent only when no file
+   *  was measured (`missing`), so one absence no longer stands for absent, empty and unread. */
+  scanEnd?: number;
+  /** The partial line the window began inside, which the backlog drops and the scan joins to its head; absent at offset 0. */
+  cut?: string;
 }
 
 /**
@@ -37,7 +47,7 @@ export interface BacklogRead {
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
   const st = await io.statMeasured(file);
   if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
-  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true };
+  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
   const res = await io.readFileFromMeasured(file, start);
   if (!res.ok) {
@@ -48,17 +58,24 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
     // PWA rendering an empty chat over a transcript nobody could read — the
     // empty-backlog-with-a-real-offset defect this replaced (D-1403).
     const absent = res.reason === 'absent';
-    return { events: [], offset: st.size, missing: absent, measured: absent };
+    return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
   }
   let text = res.data;
+  let cut: string | undefined;
   // A non-zero start almost certainly lands mid-line — drop the partial head so
-  // we never hand half a JSON object to the parser.
+  // we never hand half a JSON object to the parser (the start scan parses it, joined to its head).
   if (start > 0) {
     const nl = text.indexOf('\n');
+    cut = nl >= 0 ? text.slice(0, nl) : text;
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
-  const events = text.split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine);
-  return { events: events.slice(-lastN), offset: res.size, missing: false, measured: true };
+  const lines = text.split('\n').filter((l) => l.trim() !== '');
+  const events = lines.flatMap(parseTranscriptLine);
+  const helpers = lines.flatMap(helperFactsOf);
+  return {
+    events: events.slice(-lastN), offset: res.size, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
+    scanEnd: start, ...(cut !== undefined ? { cut } : {}),
+  };
 }
 
 const NL = 0x0a;
@@ -66,6 +83,8 @@ const NL = 0x0a;
 /**
  * Tails a transcript JSONL file from a byte offset.
  * Events: ('events', ChatEvent[], newOffset) on appended complete lines;
+ * ('helpers', HelperFact[]) on appended complete lines that carry an Agent launch result or a task notification, the
+ * tailer's second output for the Helpers section (session helpers H1b, D-8862), emitted before that chunk's events;
  * ('rotated') then self-stop when the file shrinks (truncation/rotation).
  * Mechanics: delegates the raw byte-level watch to `io.tailFile`; this class
  * owns line-framing (partial trailing lines held in a carry buffer until the
@@ -87,24 +106,28 @@ export class TranscriptTailer extends EventEmitter {
   }
 
   override emit(event: 'events', events: ChatEvent[], newOffset: number): boolean;
+  override emit(event: 'helpers', facts: HelperFact[]): boolean;
   override emit(event: 'rotated'): boolean;
   override emit(event: string, ...args: unknown[]): boolean {
     return super.emit(event, ...args);
   }
 
   override on(event: 'events', listener: (events: ChatEvent[], newOffset: number) => void): this;
+  override on(event: 'helpers', listener: (facts: HelperFact[]) => void): this;
   override on(event: 'rotated', listener: () => void): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
 
   override once(event: 'events', listener: (events: ChatEvent[], newOffset: number) => void): this;
+  override once(event: 'helpers', listener: (facts: HelperFact[]) => void): this;
   override once(event: 'rotated', listener: () => void): this;
   override once(event: string, listener: (...args: any[]) => void): this {
     return super.once(event, listener);
   }
 
   override off(event: 'events', listener: (events: ChatEvent[], newOffset: number) => void): this;
+  override off(event: 'helpers', listener: (facts: HelperFact[]) => void): this;
   override off(event: 'rotated', listener: () => void): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
@@ -136,12 +159,14 @@ export class TranscriptTailer extends EventEmitter {
       return;
     }
     this.carry = Buffer.from(buf.subarray(nl + 1));
-    const events = buf
+    const lines = buf
       .subarray(0, nl)
       .toString('utf8')
       .split('\n')
-      .filter((l) => l.trim() !== '')
-      .flatMap(parseTranscriptLine);
+      .filter((l) => l.trim() !== '');
+    const helpers = lines.flatMap(helperFactsOf);
+    if (helpers.length > 0) this.emit('helpers', helpers);
+    const events = lines.flatMap(parseTranscriptLine);
     if (events.length > 0) this.emit('events', events, this.offset);
   }
 

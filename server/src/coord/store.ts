@@ -1,16 +1,20 @@
 // The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
 // `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
 // L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
-import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
+import * as advisor from './advisorStore.js';
+import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvisor.js';
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
@@ -28,35 +32,54 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamCandidates, setLinking } from './linkingStore.js';
+import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
-  insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
-  startsOf, startsSince, stepGeneration,
+  advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
+  generationsCursor, handoverBefore, handoverOf, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
-  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
+  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
+  type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import { modelSwitchesSinceStart, type HookStoreRead, type ModelSwitchRow } from '../continuity/hookReportStore.js';
+import * as designation from './overlordDesignationStore.js';
+import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
+import * as census from './approvalCensusStore.js';
+import * as parks from './approvalParkStore.js';
+import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
+import type { AttemptOutcome, DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { KeyedMail } from './mailKey.js';
+import { urgentSenderVerdict, type UrgentFacts, type UrgentRole, type UrgentRunIds, type UrgentVerdict } from './urgentMail.js';
+import type { ChildMark } from '../../../shared/api.js';
+import type { CapMode } from '../../../shared/runCap.js';
+import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
+import { lifecycleLaneRowsSince, type LifecycleLaneRow } from './lifecycleLaneRows.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
+import * as portfolio from './portfolioStore.js';
+import * as answerMarks from './answerMarkStore.js';
+import * as collisions from './claimCollisions.js';
+import * as pairs from './programmePairsStore.js';
+import * as programmeFacts from './programmeFactsStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -146,7 +169,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
-import type { RunLastMovesRead } from './runWire.js';
+import { incarnationOfMark, type RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -212,6 +235,7 @@ import {
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+import { type ApprovalParkWord, isApprovalParkWord } from '../../../shared/approval-park.js';
 
 /** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -269,6 +293,11 @@ export interface RunRow extends RunSummary {
    *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
    *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
   unattributed: boolean;
+  /** `schema.ts`'s `runs.closePr` entry (Overlord W2 done tests A, DT7; its slot moves at landing, so it is not named
+   *  here): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none, and NULL when the verified claim named no
+   *  PR or another one (review 2377 F1).
+   *  Parsed only by the done-test reader, which answers a malformed value `unmeasurable`; stripped by `toRunSummary`. */
+  closePr: string | null;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -307,7 +336,7 @@ export type { CoordPlacementStamp };
  *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, closePr: _closePr, ...summary } = row;
   return summary;
 };
 
@@ -868,6 +897,8 @@ export interface AskRow {
   /** D-5290: why the row was MINTED `released`; `null` for every row the hold
    *  minted, whatever happened to it after. Read through `isAskReleaseReason`. */
   releaseReason: AskReleaseReason | null;
+  /** The row's revision (Overlord W2): raised by each write that changes what an answer acts on, 0 at insert. */
+  revision: number;
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
@@ -970,10 +1001,13 @@ export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
 
-/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+/** The state predicate of the observation writer: a closed union of three members. `active` is the stall lane's
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
- *  is `episode`, PR landing in ccrc stage 1). */
-export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+ *  is `episode`, PR landing in ccrc stage 1); `admission` is the admission wake's (D-6095: a run still waiting for the
+ *  cap in an idle state, with a claimant, whose newest refusal is still `refusedAt`). */
+export type ObservationPredicate =
+  | { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number }
+  | { readonly kind: 'admission'; readonly refusedAt: number };
 
 /** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
 export type DelegationRunStampsResult =
@@ -997,6 +1031,10 @@ export type LastRunsResult =
      *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
      *  policy's parked clock is not cut short by a newer done run beside it. */
     lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
+    /** D-8790, additive: the asked sessions an ACTIVE run names that is NOT their newest placed run
+     *  (the same negative predicate as `openPlacedWorkers`). A worker whose newest placed run is itself active is held
+     *  by a second active run only; for every other worker this answers what `openPlacedWorkers` does. */
+    otherOpenPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -1011,6 +1049,15 @@ export interface ApprovalRow {
   state: ApprovalState; releaseReason: ApprovalReleaseReason | null; askAt: number; notifyAt: number;
   ruledAt: number | null; verdict: 'allow' | 'deny' | null; reason: string | null; ruling: string | null;
   answeredBy: string | null; toolUseId: string | null; corrected: boolean;
+  /** Approvals PR 0: the child's deny digest was the managed file's current one when the row was minted. A row minted
+   *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
+   *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
+  denyCurrent: boolean;
+  /** Approvals PR 3 (F1): the park's word decided at mint (`live`, `shadow`, `capped`), null on a row minted before PR 3 or
+   *  released at mint; a token this build does not know reads null, which never parks. `parkKey` is the key a retry
+   *  repeats (null with no word). `fetchedAt` is the ruling read's first serve of a ruling (F8-c), `wouldPark` the shadow's
+   *  record that the row would have parked. */
+  parkWord: ApprovalParkWord | null; parkKey: string | null; fetchedAt: number | null; wouldPark: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -1064,6 +1111,8 @@ interface RunRowDb {
   runTitle: string | null;
   closedBy: string | null;
   closeDetail: string | null;
+  closePr: string | null;
+  inPlace: number | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1084,7 +1133,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr, r.inPlace';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1290,6 +1339,9 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** One row the dispatch cap counts (`CoordStore.capsCountedRuns`, D-8792): the run and the worker it names, or null for a
+ *  row with no session, which the cap always counts. */
+export interface CapsCountedRun { readonly runId: number; readonly sessionId: string | null }
 /** The idle list, joined the same way (sibling-parked-run-takes-parked-clock): `lastRunBySession`'s parked read takes
  *  it without `planned`, as `STOP_DONE_PARKED_STATES` does. */
 const IDLE_RUN_STATES_SQL = `('${IDLE_RUN_STATES.join("','")}')`;
@@ -1472,6 +1524,12 @@ export const MAIL_RUN_CLOSED_ERROR = 'run closed';
  * is.
  */
 export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
+
+/** The insert met `mail_client_key_once` (Overlord wave 164, review 2725 F5): another send stored this sender's key between
+ *  the ingress's read and its insert. The route then reads the stored mail and asks `mailKeyVerdict` again, so the loser of
+ *  that race answers `same` or `key-conflict`, never a 500. Any other error is not this one. */
+export const isMailClientKeyClash = (e: unknown): boolean =>
+  e instanceof Error && /UNIQUE constraint failed: mail\.fromId, mail\.clientKey/.test(e.message);
 
 /**
  * The occupant-change park (design 2026-09-08 §4), and it is its OWN sentence
@@ -1661,6 +1719,16 @@ const ABANDONED_PARK_SQL =
 const OUTSTANDING_OR_ABANDONED_SQL =
   `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
+/** THE INBOX SET'S PREDICATE, named once (mid-turn mail, plan Task 2.1; spec §3.2): the ack door's guard
+ *  (`ackableDeliverySql`) AND the mailbox's read predicate (`OUTSTANDING_OR_ABANDONED_SQL`), over `d` (mail_deliveries)
+ *  and `rr` (the mail's run, LEFT JOINed), so it has no prefix: the read predicate is spelled over those two aliases.
+ *  `inboxFor`, `abandonedCount` and the urgent hold (`urgentHolds`, `urgentOutstanding`) read it, so the hold is the
+ *  urgent part of the set `mail inbox` prints, never a second copy of the rule. */
+const ACKABLE_OUTSTANDING_SQL: { readonly sql: string; readonly args: readonly string[] } = (() => {
+  const ack = ackableDeliverySql('d.');
+  return { sql: `${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`, args: ack.args };
+})();
+
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.
  *
@@ -1687,7 +1755,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times and the replay count, as TEXT (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText, CAST(d.replayCount AS TEXT) AS replayCountText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1695,7 +1766,17 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null; replayCountText: string | null;
 }
+
+/** One stored delivery number onto the wire (mid-turn mail PR 1): present only when its text is the one canonical
+ *  spelling of a positive safe integer (`parseCanonicalPositiveSafeInteger`), so a missing, fractional, textual,
+ *  hexadecimal, zero or unsafe value is absent, never zero. `replayCount` alone may also be zero, its column's default:
+ *  a first delivery not yet replayed. */
+const mailNumber = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt' | 'replayCount', text: string | null): Partial<MailSummary> => {
+  const v = key === 'replayCount' && text === '0' ? 0 : parseCanonicalPositiveSafeInteger(text);
+  return v === null ? {} : { [key]: v };
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -1922,6 +2003,19 @@ export interface LifecycleBirthEvent {
 /** D-5860: the stored form of a notice's once-only key (`feed_events.dedupe_key`): SHA-256 hex, so a key carrying a
  *  token-shaped run (a compaction uuid) is neither archived in the clear nor masked into a collision. */
 const feedDedupeHash = (key: string): string => createHash('sha256').update(key).digest('hex');
+
+/** One ask row to mint (`CoordStore.insertAsk`). */
+type AskMint = {
+  childId: string; parentId: string; runId: number | null; askKey: string;
+  askAt: number; dialogId: string; question: string; options: string[]; now: number;
+  /** D-5290: present, the row is minted `released` at `now` with this reason,
+   *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
+   *  `parent-project-mismatch` is read-only and never written again. */
+  releaseReason?: AskMintReleaseReason;
+};
+
+/** D-6096: the `run_events.detail` of both hops of an in-place bind (`CoordStore.bindInPlace`), the plan's word. */
+export const IN_PLACE_EVENT = 'in-place';
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -2499,12 +2593,20 @@ export class CoordStore {
    * id>)` — the honest outcome, since the party that can tell which program it
    * meant is the human reading it. Recorded here rather than opened; an operator
    * door that re-points one by id is a decision somebody makes on purpose.
+   *
+   * THE OVERLORD'S URGENT MAIL TO A DISPLACED CLAIMANT MOVES TOO, by session id (mid-turn mail, review 2833 F3): the rule
+   * marks a mail `overlord` only when its recipient claims the run it names (`urgentMail.ts`, the Overlord arm), and the
+   * hold derives from the delivery (`urgentHolds`). So it is a mail to the CHAIR of a run in this programme, whatever its
+   * `toId` says; left on the displaced id, it would hold a session that is no longer the chair and never hold the heir.
+   * Its run names the programme (`r.program`), so nothing is guessed. A `coordinator` urgent mail is a run's worker's,
+   * and never moves, even when that worker later becomes the claimant and is displaced (review 3069 F3). An abandoned
+   * urgent park stays where it is, as every park does (slug `urgent-park-not-moved`).
    */
   private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): DeliveryBulkWrite {
     return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
-      "WHERE m.toId = 'coordinator' AND r.program = ?)",
+      "WHERE (m.toId = 'coordinator' OR m.urgentAs = 'overlord') AND r.program = ?)",
       [...displaced, program]) };
   }
 
@@ -2978,6 +3080,7 @@ export class CoordStore {
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
     planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
+    this.clearAdmissionWait(runId);   // D-6095: any move ends the wait for the cap
     return { ok: true as const, from, to };
   }
 
@@ -3085,10 +3188,17 @@ export class CoordStore {
       ? this.db.prepare(
         `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
       ).get(runId) as { state: string } | undefined
-      : this.db.prepare(
-        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
-        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
-      ).get(runId, runId, when.episode) as { state: string } | undefined;
+      : when.kind === 'admission'
+        // D-6095: the admission waiters' own predicate (`admissionWaiters`), narrowed to the refusal being woken, so a run
+        // that moved, was refused again or lost its claimant since the lane read it is `run-gone` and gets no mail.
+        ? this.db.prepare(
+          `SELECT state FROM runs WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL} AND admissionWaitSince IS NOT NULL ` +
+          "AND lastRefusedAt = ? AND claimedBy <> ''",
+        ).get(runId, when.refusedAt) as { state: string } | undefined
+        : this.db.prepare(
+          "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+          "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+        ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -3179,9 +3289,14 @@ export class CoordStore {
     /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
      *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
     intents?: readonly string[];
+    /** Overlord W2 forecasts B, fix round 1 (F3): the conversation id the run was dispatched into, after its `/clear`
+     *  (`runs.dispatchConversation`). Written on every dispatch, NULL when omitted, so a later dispatch never keeps an
+     *  earlier one's conversation; the spend reads count a reading only in it. */
+    conversation?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      this.db.prepare('UPDATE runs SET dispatchConversation = ? WHERE id = ?').run(input.conversation ?? null, input.runId);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
       // Written UNCONDITIONALLY once `briefQueued` is given, both columns
       // together: recording only the interesting branch would make an older row
@@ -3194,14 +3309,19 @@ export class CoordStore {
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
-      for (const key of input.intents ?? []) {
-        this.db.prepare(
-          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
-          'SELECT id, project, ?, claimedBy, dispatchedAt FROM runs WHERE id = ?',
-        ).run(key, input.runId);
-      }
+      for (const key of input.intents ?? []) this.holdLandingIntent(input.runId, key, null);
       return adv;
     });
+  }
+
+  /** The ONE writer of `landing_intents` (D-7614 wave 5g; D-6096 gave it a second caller, `bindInPlace`): a hold on `key`
+   *  for the run's project, set by the run's claimant at `at`, or at the run's own `dispatchedAt` when `at` is null. A
+   *  repeated key throws on the primary key, so the caller's transaction rolls back. */
+  private holdLandingIntent(runId: number, key: string, at: number | null): void {
+    this.db.prepare(
+      'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+      'SELECT id, project, ?, claimedBy, COALESCE(?, dispatchedAt) FROM runs WHERE id = ?',
+    ).run(key, at, runId);
   }
 
   /** The landing intents held in a project for these keys: every row whose run is not terminal, ordered by key then run
@@ -3248,6 +3368,9 @@ export class CoordStore {
     /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
      *  `abandon:<reason>`; every other caller passes nothing. */
     detail?: string;
+    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line, claim.prNumber)`. ONE writer of
+     *  `runs.closePr`, in this transaction; absent or null writes nothing, so the column stays NULL. */
+    closePr?: ClosePrFacts | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3280,6 +3403,7 @@ export class CoordStore {
       // `null` is left standing rather than writing a claim this database has
       // never measured or even shape-checked.
       if (input.handoffCommit !== null) this.setHandoffCommit(input.runId, input.handoffCommit);
+      if (input.closePr != null) this.db.prepare('UPDATE runs SET closePr = ? WHERE id = ?').run(JSON.stringify(input.closePr), input.runId);
       // Review findings 8/14: cancel this run's own outstanding mail rather
       // than leave it to replay into whatever session (this run's own, next
       // wave, or — once a purged workspace slug is re-minted — an unrelated
@@ -4142,6 +4266,33 @@ export class CoordStore {
     ).run(workspace, branch, resumed ? 1 : 0, at, runId);
   }
 
+  /**
+   * D-6096 (fleet-capacity W1-4b): the IN-PLACE bind. A coordinator whose wave the concurrency cap refused takes that wave as
+   * the run's own worker, in a sibling worktree on `branch`: `planned` -> `dispatched` -> `working` in ONE transaction (the
+   * machine has no `planned` -> `working` edge and is not widened), the run's session the claimant (through `bindSession`,
+   * the one writer of that column), `branch` the sibling worktree's, `resumed` 0 and `inPlace` 1.
+   *
+   * `dispatchedAt` IS LEFT NULL, and that is the point: an in-place run starts no process, so `capsUsage().running` and
+   * `capsCountedRuns` (both read `dispatchedAt IS NOT NULL`) charge it to neither cap. `workspace` is
+   * left null too: the sibling worktree is not a registry workspace. Two `run_events` rows, one per hop, both detail
+   * `in-place` (the plan's word); the admission stamp is cleared by the hops (`advanceInner`). `at` stamps the landing
+   * intents it holds, since `dispatchedAt` is null here.
+   *
+   * The first hop is taken BEFORE any column is written, so a run not `planned` (or not a work run) refuses
+   * `bad-transition` with nothing changed. The caller (`bindRunInPlace`, `dispatch.ts`) has already decided WHO may bind.
+   */
+  bindInPlace(runId: number, sessionId: string, branch: string, intents: readonly string[] = [], at: number = Date.now()): AdvanceResult {
+    return tx(this.db, () => {
+      const first = this.advanceInner(runId, 'dispatched', 'coordinator', IN_PLACE_EVENT);
+      if (!first.ok) return first;
+      this.bindSession(runId, sessionId);
+      this.db.prepare('UPDATE runs SET branch = ?, resumed = 0, inPlace = 1 WHERE id = ?').run(branch, runId);
+      // Landing intents (D-8086), as `dispatchRun` writes them, stamped `at`: `dispatchedAt` is null for an in-place run.
+      for (const key of intents) this.holdLandingIntent(runId, key, at);
+      return this.advanceInner(runId, 'working', 'coordinator', IN_PLACE_EVENT);
+    });
+  }
+
   /** `runs.prLineage`, written once at close from a `.prhistory` read
    *  (`coord/prhistory.ts`). Stored as JSON (spec:92-95's fold), never
    *  reconstructed lazily on read — the same "store the render, don't defer
@@ -4237,6 +4388,19 @@ export class CoordStore {
     ).all(n) as unknown as RunRowDb[]);
   }
 
+  /** Every work run of one programme, each with its ticket's key (`runs.ticketId` joined to `plan_tickets.key`, null for
+   *  none), in id order, ALL-OR-FAILURE as `runs()`: the work map's one run read (programme work map WM2, D-8779; spec §5.1,
+   *  "Bound": every work run, not the closed-runs read's clamp). A failed run keeps its `ticketId`, so it names its ticket. */
+  programmeWorkRuns(program: string): { ok: true; runs: (RunRow & { ticketKey: string | null })[] } | Extract<RunsReadResult, { ok: false }> {
+    const rows = this.db.prepare(
+      `SELECT ${RUN_ROW_COLUMNS}, t.key AS ticketKey FROM runs r JOIN programs p ON p.slug = r.program ` +
+      "LEFT JOIN plan_tickets t ON t.id = r.ticketId WHERE r.program = ? AND r.kind = 'work' ORDER BY r.id",
+    ).all(program) as unknown as (RunRowDb & { ticketKey: string | null })[];
+    const read = this.hydrateRuns(rows);
+    if (!read.ok) return read;
+    return { ok: true, runs: read.runs.map((run, i) => ({ ...run, ticketKey: rows[i]!.ticketKey ?? null })) };
+  }
+
   /** `GET /api/runs/find` (D-8071, spec §11.4): the lookup and the close-order list, over stored columns. The query is
    *  `runFind.ts`'s; this delegate hands it the terminal-state list. */
   /** The runs that review run `id`, as hits (D-8071; spec §11.5 `reviewedBy`). */
@@ -4256,6 +4420,12 @@ export class CoordStore {
     });
   }
 
+  setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
+  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead, usage: portfolio.SpendUsageRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk, usage); }
+  recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
+  answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
+  askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
+  askMarkRead(id: number, now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkRead { return answerMarks.askMarkRead(this.db, id, now, liveAsk); }
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
   runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
     return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },
@@ -4468,12 +4638,12 @@ export class CoordStore {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
       'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace, inPlace FROM runs ' +
       `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
     ).all() as unknown as
       { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
         dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
-        reviewsText: string | null; project: string; workspace: string | null }[];
+        reviewsText: string | null; project: string; workspace: string | null; inPlace: number | null }[];
     const runs: StallRunRow[] = [];
     for (const r of rows) {
       const nums = measureRunNumbers(r);
@@ -4486,7 +4656,7 @@ export class CoordStore {
       }
       runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
         dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
-        project: r.project, workspace: r.workspace });
+        project: r.project, workspace: r.workspace, ...(r.inPlace === 1 ? { inPlace: true as const } : {}) });
     }
     return { ok: true, runs };
   }
@@ -5113,17 +5283,20 @@ export class CoordStore {
     if (sessionIds.length === 0) {
       return {
         ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: [],
       };
     }
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
     // `placedOnly` adds ONE clause to the newest-run subquery; the statement is otherwise the one `last` has always read.
+    // D-6096 (review 2993 F4): an in-place run is never its coordinator's run "as worker", so neither newest read counts
+    // one, and a coordinator whose last in-place run closed does not read released.
     const newest = (placedOnly: boolean): LastRun[] | { detail: string } => {
       const rows = this.db.prepare(
         'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
         'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
         'LEFT JOIN programs p ON p.slug = r.program ' +
-        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph})${placedOnly ? ' AND state <> ?' : ''} ` +
+        `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) AND inPlace IS NOT 1${placedOnly ? ' AND state <> ?' : ''} ` +
         'GROUP BY sessionId) ORDER BY r.id',
       ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as unknown as {
         idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
@@ -5155,9 +5328,16 @@ export class CoordStore {
     const parked = (this.db.prepare(
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-8790: an active run beside the newest placed one (`planned` is never active, so the newest
+    // placed run is the newest whose state is not `planned`). Unlike `newest(true)`, this subquery counts an in-place
+    // run, which here only ever holds a session awake (review 3023 F4-a).
+    const other = (this.db.prepare(
+      `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked, otherOpenPlacedWorkers: other,
     };
   }
 
@@ -5389,6 +5569,14 @@ export class CoordStore {
     const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
     return r !== undefined && r.planEnd === null;
   }
+  // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
+  collisionsSince(since: number): collisions.CollisionsRead { return collisions.collisionsSince(this.db, since); }
+  applyPairMoves(moves: Parameters<typeof pairs.applyPairMoves>[1], now: number): number[] { return pairs.applyPairMoves(this.db, moves, now); }
+  standingPairs(): pairs.StandingPairsRead { return pairs.standingPairs(this.db); }
+  newestEpisodes(): pairs.NewestEpisodesRead { return pairs.newestEpisodes(this.db); }
+  claimHistory(since: number, cap: number): pairs.ClaimHistoryRead { return pairs.claimHistory(this.db, since, cap); }
+  goalsStamp(slug: string): string { return pairs.goalsStamp(this.db, slug); }
+  programmeLandedSince(slug: string, at: number): boolean | 'unmeasured' { return pairs.programmeLandedSince(this.db, slug, at); }
 
   /** Count of this program's runs still in a NON-terminal state — the
    *  question `setProgramState`'s caller (the close route, D-51) needs
@@ -5453,17 +5641,49 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.1 C2, H27 (`overlordDesignationStore.ts`): the designation row's one read and its writers; the ones that
+   *  move authority (the Settings doors' two among them) take the journal, which appends in the row's own transaction. */
+  designationRead(): DesignationRead { return designation.designationRead(this.db); }
+  designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
+  bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
+  retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
+  stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
+  setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
+  setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
+  ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
+  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
+    const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+  }
+  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
+    const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+  }
+  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
+    const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+  }
+  /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
+  applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
+  insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
+  startLoadsOfNewestStart(sessionId: string): NewestStartLoadsRead { return startLoadsOfNewestStart(this.db, sessionId); }
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  /** Overlord W1 door process B1: the session's reported model switches since its generation's start, by the server's clock (the off-model input's read). */
+  modelSwitchesOf(sessionId: string, startId: number): HookStoreRead<ModelSwitchRow[]> { return modelSwitchesSinceStart(this.db, sessionId, startId); }
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
   stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
-  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[], c: CursorAdvance | null = null): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind, c); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
@@ -5490,6 +5710,25 @@ export class CoordStore {
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
   putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
+  softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
+  recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
+  /** Overlord §3.3.9 C50, §3.3.11 (the hand-offs piece, `continuityStore.ts`): the Renew now door's request and the lane's read
+   *  of it, the prompt route's mark and the lane's quiet of it, and the Setting "when soft renewals happen". */
+  insertRenewRequest(r: { sessionId: string; actor: string; at: number; live: boolean }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
+  renewRequestsAfter(afterId: number, limit: number, sessionId?: string): timers.RenewRequestsRead { return timers.renewRequestsAfter(this.db, afterId, limit, sessionId); }
+  putOperatorMark(programme: string, at: number): { ok: boolean } { return timers.putOperatorMark(this.db, programme, at); }
+  operatorMarks(): timers.OperatorMarksRead { return timers.operatorMarks(this.db); }
+  advanceMarkQuiet(programme: string, readAt: number, quiet: Observed): { changed: boolean } { return timers.advanceMarkQuiet(this.db, programme, readAt, quiet); }
+  renewalModeSetting(): timers.RenewalModeRead { return timers.renewalModeSetting(this.db); }
+  setRenewalMode(mode: RenewalMode, at: number): ReturnType<typeof timers.setRenewalMode> { return timers.setRenewalMode(this.db, mode, at); }
+  /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
+  putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
+  checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
+  claimRenewCall(k: RenewCallKey, at: number): ReturnType<typeof claimRenewCall> { return claimRenewCall(this.db, k, at); }
+  answerRenewCall(k: RenewCallKey, answer: string): ReturnType<typeof answerRenewCall> { return answerRenewCall(this.db, k, answer); }
+  renewCallsOf(generationId: number, episode: number): RenewCallsRead { return renewCallsOf(this.db, generationId, episode); }
+  rulingRowsOf(sessionId: string, limit: number): RulingsRead { return rulingRowsOf(this.db, sessionId, limit); }
   /** Overlord §3.3.5 C41 (the probes piece, `continuityStore.ts`): the lane's round writer, the probe door's answer writer, the
    *  card and note GETs' read stamp, and the reads. */
   openRound(r: probes.RoundInsert): ReturnType<typeof probes.openRound> { return probes.openRound(this.db, r); }
@@ -5500,17 +5739,42 @@ export class CoordStore {
   stampContinuityRead(sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } { return probes.stampContinuityRead(this.db, sessionId, door, at); }
   lastContinuityRead(sessionId: string): ReturnType<typeof probes.lastContinuityRead> { return probes.lastContinuityRead(this.db, sessionId); }
   snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
+  closedSpotProbes(modelClass: string): ReturnType<typeof probes.closedSpotProbes> { return probes.closedSpotProbes(this.db, modelClass); }
+  backstopRead(): ReturnType<typeof probes.backstopRead> { return probes.backstopRead(this.db); }
+  setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
-  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
-  claimOutboxRow(id: number, at: number): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at); }
-  silenceOutboxRow(id: number, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.silenceOutboxRow(this.db, id, why, at); }
-  markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
+  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number; pushSource?: string }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
+  claimOutboxRow(id: number, at: number, response?: responses.PushResponseOf): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at, response); }
+  silenceOutboxRow(id: number, why: PushSilentWhy, at: number): ReturnType<typeof outbox.silenceOutboxRow> { return outbox.silenceOutboxRow(this.db, id, why, at); }
+  supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
+  markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): ReturnType<typeof outbox.markOutboxVerdict> { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
   dueOutboxRows(now: number): outbox.OutboxRead { return outbox.dueOutboxRows(this.db, now); }
   openOutboxRows(): outbox.OutboxRead { return outbox.openOutboxRows(this.db); }
-  sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): { changed: boolean } { return outbox.sealAtBoot(this.db, id, to, at); }
+  sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): ReturnType<typeof outbox.sealAtBoot> { return outbox.sealAtBoot(this.db, id, to, at); }
   heldItemsReached(now: number, firstBootAt: number): outbox.ItemsRead { return outbox.heldItemsReached(this.db, now, firstBootAt); }
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
+  markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
+  firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
+  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number, stamp?: Parameters<typeof outbox.reachHeldItem>[5]): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at, stamp); }
+  /** Overlord W1 (the response record, `responsesStore.ts`): the boot's record and the receipts door's one transaction. The
+   *  push row's writers run inside the outbox's transactions, so they take the handle and have no delegate. */
+  recordResponseBoot(buildSha: string | null, at: number): ReturnType<typeof responses.recordResponseBoot> { return responses.recordResponseBoot(this.db, buildSha, at); }
+  receiveReceipts(receipts: Parameters<typeof responses.receiveReceipts>[1], at: number, verdictOf: Parameters<typeof responses.receiveReceipts>[3]):
+    ReturnType<typeof responses.receiveReceipts> { return responses.receiveReceipts(this.db, receipts, at, verdictOf); }
+  /** Responses B: the digest lines (inside `claimDigestDay`'s callback, so in its transaction), the lane's reads and seal, the
+   *  deleter by time in a transaction of its own, and the handled and retention doors' reads and writes. */
+  insertDigestResponses(d: Parameters<typeof responses.insertDigestResponsesInTx>[1]): { readonly inserted: number } { return responses.insertDigestResponsesInTx(this.db, d); }
+  openResponseRows(): responses.OpenRowsRead { return responses.openResponseRows(this.db); }
+  responseReceipts(id: number): ReturnType<typeof responses.receiptsOf> { return responses.receiptsOf(this.db, id); }
+  responseReplacedOn(row: Parameters<typeof responses.replacedOnOf>[1], windowEnd: number): string[] { return responses.replacedOnOf(this.db, row, windowEnd); }
+  responseBootsInWindow(after: number, through: number): number { return responses.bootsInWindowOf(this.db, after, through); }
+  sealResponse(id: number, d: Parameters<typeof responses.sealResponse>[2], at: number): { readonly changed: boolean } { return responses.sealResponse(this.db, id, d, at); }
+  deleteResponsesThrough(at: number): ReturnType<typeof responses.deleteResponsesThrough> { return responses.deleteResponsesThrough(this.db, at); }
+  responseRetention(): responses.RetentionRead { return responses.responseRetention(this.db); }
+  setResponseRetention(days: number, at: number): { readonly changed: boolean } { return responses.setResponseRetention(this.db, days, at); }
+  markResponseHandled(id: number, at: number): ReturnType<typeof responses.markResponseHandled> { return responses.markResponseHandled(this.db, id, at); }
+  responsesForRef(ref: Parameters<typeof responses.responsesForRef>[1]): responses.ResponseRowsRead { return responses.responsesForRef(this.db, ref); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -5525,6 +5789,11 @@ export class CoordStore {
   /** D-6795: record that the cap's ask is raised, once per cap level (`reviewCapStore.ts`). */
   raiseReviewCapAsk(workRunId: number, now: number): boolean {
     return raiseReviewCapAsk(this.db, workRunId, now);
+  }
+
+  /** D-8955: the disk cleanup lanes' journal rows since `atMs`, oldest first, at most `limit` (`lifecycleLaneRows.ts`). */
+  lifecycleLaneRowsSince(atMs: number, acts: readonly string[], limit: number): LifecycleLaneRow[] {
+    return lifecycleLaneRowsSince(this.db, atMs, acts, limit);
   }
 
   /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */
@@ -5556,6 +5825,12 @@ export class CoordStore {
   linkTeamAuto(project: string, link: Parameters<typeof linkTeamAuto>[2], at: number): boolean {
     return linkTeamAuto(this.db, project, link, at);
   }
+
+  /** D-8809: the Overlord's link and the call that records it, in one transaction: the call's id, or null when refused. */
+  linkTeamOverlord(project: string, link: Parameters<typeof linkTeamOverlord>[2], call: Parameters<typeof linkTeamOverlord>[3], at: number): number | null { return linkTeamOverlord(this.db, project, link, call, at); }
+
+  /** D-8808: a coordinator's suggested team for a project with no key: written, `team-set` or `no-project`. */
+  recordTeamSuggestion(project: string, s: Parameters<typeof recordTeamSuggestion>[2]): ReturnType<typeof recordTeamSuggestion> { return recordTeamSuggestion(this.db, project, s); }
 
   /** D-8405: the automatic pass's one-tap candidates for a project with no key. */
   recordTeamCandidates(project: string, candidates: Parameters<typeof recordTeamCandidates>[2]): void {
@@ -5732,6 +6007,7 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      closePr: row.closePr,
       // Migration 23's journal (D-5298), read through on the same idiom; 1 is
       // "accepted unattributed", every other value (0, the column default every
       // older row carries) is not. D-5531 reads it in the ask lane.
@@ -5745,6 +6021,8 @@ export class CoordStore {
       // stored word outside the three is no `closedBy`; the detail is the redacted form.
       closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
       closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
+      // Migration 117 (D-6096): present exactly for a run its coordinator took in place, absent for every other.
+      ...(row.inPlace === 1 ? { inPlace: true } : {}),
     };
   }
 
@@ -6019,10 +6297,23 @@ export class CoordStore {
    *  `coord.setCaps` call site. Nothing moves into `caps.ts`, so its purity scan
    *  is untouched; the red that scan warns about is for a DEFAULTED clock
    *  parameter inside `decideCaps`, which this is not. */
-  setCaps(next: CoordCaps, at: number = Date.now()): void {
+  /** D-8920: `mode` is written in the same statement, so this stays the ONE writer of the stored number
+   *  and of what it is (`coordinator_state.capMode`, migration 121). `override`: `next` is the operator's number, and it
+   *  is the cap. `automatic`: the cap is derived from the fleet host, and `next` is only the number used while the host
+   *  is unmeasured. It defaults to `override` because writing a number IS setting one: the route always says which
+   *  (`decideCaps`'s `mode`), and the default is what a fixture that sets a cap means. */
+  setCaps(next: CoordCaps, at: number = Date.now(), mode: CapMode = 'override'): void {
     this.db.prepare(
-      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, at);
+      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, capMode = ?, updatedAt = ? WHERE id = 1',
+    ).run(next.maxConcurrentWorkers, mode, at);
+  }
+
+  /** D-8920: what the stored number is, `coordinator_state.capMode`'s ONE reader. The column's CHECK
+   *  holds it to the two words; migration 121 made a row somebody had set `override` and left an untouched seed
+   *  `automatic`. Read beside `caps()` by `dispatch.ts#capNow` alone. */
+  capMode(): CapMode {
+    const row = this.db.prepare('SELECT capMode FROM coordinator_state WHERE id = 1').get() as { capMode: CapMode };
+    return row.capMode;
   }
 
   /** D-1169's read half. `coordinator_state.updatedAt` has been written since
@@ -6075,10 +6366,62 @@ export class CoordStore {
     // wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at
     // awaiting-review). D-13's principle is kept and sharpened: this names
     // the runs whose session is WORKING.
-    const running = (this.db.prepare(
-      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
-    ).get() as { c: number }).c;
-    return { running };
+    //
+    // D-8792 (waiting workers spec 2026-11-19 Part 3): the count is the length of `capsCountedRuns`, the ONE statement
+    // that names the counted rows, so the cap reader's waiting subset (`dispatch.ts#capsMeasured`) is taken over exactly
+    // these rows and never over a second copy of the predicate.
+    return { running: this.capsCountedRuns().length };
+  }
+
+  /**
+   * D-8792: the rows `capsUsage().running` counts, one per run, with the worker each names, oldest first. The ONE
+   * statement of the cap's counted-row predicate: `capsUsage` counts these rows, and the cap reader
+   * (`dispatch.ts#capsMeasured`) reads which of them have a worker measured waiting. A `planned` row and a row whose
+   * `dispatchedAt` is null are not here.
+   */
+  capsCountedRuns(): readonly CapsCountedRun[] {
+    return this.db.prepare(
+      `SELECT id AS runId, sessionId FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL} ORDER BY id`,
+    ).all() as unknown as CapsCountedRun[];
+  }
+
+  // ── the admission wait (D-6095) ───────────────────────────────────────────
+
+  /** A refusal by the concurrency cap, stamped on the run (inside the coordination serialiser): `admissionWaitSince` keeps
+   *  the OLDEST refusal (set only while null), `lastRefusedAt` always moves to `at`. Only a run still waiting (`planned`,
+   *  or parked in another idle state) takes a stamp. */
+  stampAdmissionWait(runId: number, at: number): void {
+    this.db.prepare(
+      `UPDATE runs SET admissionWaitSince = COALESCE(admissionWaitSince, ?), lastRefusedAt = ? WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL}`,
+    ).run(at, at, runId);
+  }
+
+  /** The `admissionWake` lane's mail for the run's newest refusal went out (or was already out): the only writer of
+   *  `admissionWokenAt`. A run with no stamp is left alone. */
+  markAdmissionWoken(runId: number, at: number): boolean {
+    const r = this.db.prepare('UPDATE runs SET admissionWokenAt = ? WHERE id = ? AND admissionWaitSince IS NOT NULL').run(at, runId);
+    return Number(r.changes) === 1;
+  }
+
+  /** All three columns to NULL. Called by `advanceInner` for every state move, so a dispatch, a send-back that proceeds, a
+   *  close and an abandon each end the wait. */
+  clearAdmissionWait(runId: number): void {
+    this.db.prepare(
+      'UPDATE runs SET admissionWaitSince = NULL, lastRefusedAt = NULL, admissionWokenAt = NULL WHERE id = ? AND admissionWaitSince IS NOT NULL',
+    ).run(runId);
+  }
+
+  /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
+   *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
+   *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
+  admissionWaiters(): { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; sendBack: boolean }[] {
+    const rows = this.db.prepare(
+      `SELECT id AS runId, program, claimedBy, admissionWaitSince AS since, lastRefusedAt, state FROM runs
+       WHERE admissionWaitSince IS NOT NULL AND lastRefusedAt IS NOT NULL AND state IN ${IDLE_RUN_STATES_SQL}
+         AND claimedBy <> '' AND (admissionWokenAt IS NULL OR admissionWokenAt < lastRefusedAt)
+       ORDER BY admissionWaitSince, id`,
+    ).all() as { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; state: string }[];
+    return rows.map((r) => ({ runId: r.runId, program: r.program, claimedBy: r.claimedBy, since: r.since, lastRefusedAt: r.lastRefusedAt, sendBack: r.state !== 'planned' }));
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────
@@ -6168,7 +6511,7 @@ export class CoordStore {
   /** A capture's verdict, on a `queued` row only. */
   recordClaudeBuildVerdict(r: BuildCaptureResult, now: number): boolean { return builds.recordClaudeBuildVerdict(this.db, r, now); }
   /** The operator's **Capture again** on a failed build. */
-  requeueClaudeBuild(build: string): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build); }
+  requeueClaudeBuild(build: string, opts?: builds.ClaudeBuildRequeueOptions): builds.ClaudeBuildRequeue { return builds.requeueClaudeBuild(this.db, build, opts); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 
@@ -6305,13 +6648,18 @@ export class CoordStore {
   }
 
   /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
-   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
-   *  so this query is economy, never a permission. */
+   *  `startedAtOrBefore`, oldest stamp first. D-8126: also a planned run with no session whose newest `run_events` row at
+   *  or after its stamp begins `DISPATCH_ORPHANED_EVENT` (the dispatch said a spawn may exist that no run owns), whatever
+   *  the stamp: a later re-dispatch restamps, which puts the older event before the stamp and hides it. Ids only: the
+   *  executor reads each run whole (`run(id)`) and decides on it, so this query is economy, never a permission. */
   stalledDispatchRunIds(startedAtOrBefore: number): number[] {
     return (this.db.prepare(
       "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
-      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
-    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+      'AND dispatchStartedAt IS NOT NULL AND (dispatchStartedAt <= ? OR substr(COALESCE((' +
+      'SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.at >= runs.dispatchStartedAt ' +
+      "ORDER BY e.id DESC LIMIT 1), ''), 1, ?) = ?) ORDER BY dispatchStartedAt, id",
+    ).all(startedAtOrBefore, DISPATCH_ORPHANED_EVENT.length, DISPATCH_ORPHANED_EVENT) as { idText: string }[])
+      .map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
   }
 
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
@@ -6742,16 +7090,98 @@ export class CoordStore {
 
   /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
-   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `clientKey` (Overlord
+   *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
+   *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
+   *  with the same sender and key (`isMailClientKeyClash` names that refusal). `inReplyTo`: the delivery id the send
+   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. `urgentAs` (mid-turn
+   *  mail, plan Task 2.2): the sender's role for an urgent mail, on `urgentSenderVerdict`'s `allowed`; absent or null for
+   *  every other mail. This is that column's one writer too. Only the mail ingress will pass it, and no caller passes it
+   *  until that ingress lands (`ingress-waits-for-routes`), so every row stays not urgent. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
+                  inReplyTo?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo, ' +
+      'urgentAs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null);
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** The mail `fromId` stored under `clientKey` (Overlord wave 164), as `mailKeyVerdict` compares it, or null when this
+   *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
+   *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
+   *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
+   *  `same`, on a row it cannot read. `urgent` is whether `mail.urgentAs` is set (mid-turn mail, ruling N10). */
+  mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
+    const row = this.db.prepare(
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo, urgentAs FROM mail WHERE fromId = ? AND clientKey = ?',
+    ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
+      body: string; artifacts: string; inReplyTo: number | null; urgentAs: string | null } | undefined;
+    if (row === undefined) return null;
+    const UNREADABLE: readonly string[] = [''];
+    let artifacts: readonly string[] = UNREADABLE;
+    try {
+      const parsed: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
+    } catch { /* UNREADABLE stands */ }
+    return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
+      body: row.body, artifacts, inReplyTo: row.inReplyTo, urgent: row.urgentAs !== null };
+  }
+
+  /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
+   *  print and the ack door would accept (`ACKABLE_OUTSTANDING_SQL`), in delivery-id order, each with the role its mail
+   *  stored. Derived, never stored: an ack, a run's close and a child's reclaim release a delivery by leaving that set.
+   *  `mail.urgentAs` is CHECKed to the two role words, so the read casts it. A recipient with nothing held is absent. */
+  urgentHolds(): ReadonlyMap<string, readonly { readonly deliveryId: number; readonly role: UrgentRole }[]> {
+    const rows = this.urgentRows('', []) as { toId: string; deliveryId: number; role: UrgentRole }[];
+    const holds = new Map<string, { deliveryId: number; role: UrgentRole }[]>();
+    for (const r of rows) holds.set(r.toId, [...(holds.get(r.toId) ?? []), { deliveryId: r.deliveryId, role: r.role }]);
+    return holds;
+  }
+
+  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the fact behind
+   *  `urgent-outstanding` (spec §3.1, plan P4). */
+  urgentOutstanding(fromId: string, toId: string): boolean {
+    return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
+  }
+
+  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) about run `runId` urgent now (spec §3.1, plan
+   *  P2 to P4). This store reads the facts once, as run ids from the binding's one view, and `urgentSenderVerdict` (L1)
+   *  decides. The recipient's runs are those that bind its INCARNATION, built from its registry mark (`mark`, which the
+   *  caller reads) as `heldFor` and the drift lane build it (`incarnationOfMark`), so a reused worker name never lets an
+   *  earlier occupant's coordinator through; a mark that cannot be read is `urgent-unmeasured`. Every fact read sits in
+   *  one try: a read that throws, or a series that cannot be represented, is `urgent-unmeasured`, never an empty answer.
+   *  The ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
+   *  insert, so two sends cannot both pass. */
+  urgentVerdict(fromId: string, toId: string, runId: number | null, mark: ChildMark): UrgentVerdict {
+    const ids = (r: OpenSiblingsResult): UrgentRunIds => (r.ok ? r.siblings.map((s) => s.id) : 'unmeasured');
+    let facts: UrgentFacts;
+    try {
+      const recipient = this.bindingsOf(toId);
+      const d = this.designationRead();
+      facts = { senderId: fromId, recipientId: toId, runId,
+        recipientWorksOn: mark.kind === 'unreadable' ? 'unmeasured'
+          : ids(recipient.worker({ incarnation: incarnationOfMark(this, toId, mark) })),
+        senderClaims: ids(this.bindingsOf(fromId).claimant()),
+        recipientClaims: ids(recipient.claimant()),
+        designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
+        outstanding: this.urgentOutstanding(fromId, toId) };
+    } catch (e) {
+      return { kind: 'refused', code: 'urgent-unmeasured',
+        detail: `the facts for an urgent mail to ${toId} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return urgentSenderVerdict(facts);
+  }
+
+  private urgentRows(and: string, args: readonly string[]): unknown[] {
+    return this.db.prepare(
+      'SELECT d.toId AS toId, d.id AS deliveryId, m.urgentAs AS role FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE m.urgentAs IS NOT NULL ${and}AND ${ACKABLE_OUTSTANDING_SQL.sql} ` +
+      'ORDER BY d.toId, d.id',
+    ).all(...args, ...ACKABLE_OUTSTANDING_SQL.args);
   }
 
   /**
@@ -6984,19 +7414,17 @@ export class CoordStore {
    * refuses, forever. Pure read: no row changes.
    */
   inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
-    const ack = ackableDeliverySql('d.');
     return this.db.prepare(
       'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
-    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql} ORDER BY d.id ASC`,
+    ).all(toId, ...ACKABLE_OUTSTANDING_SQL.args) as unknown as { deliveryId: number; envelope: string }[];
   }
 
   /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
    *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
    *  a subset of that predicate by construction, so this is a plain difference. */
   abandonedCount(toId: string): number {
-    const ack = ackableDeliverySql('d.');
     const base = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
@@ -7004,8 +7432,8 @@ export class CoordStore {
     const inbox = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
-    ).get(toId, ...ack.args) as { n: number };
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql}`,
+    ).get(toId, ...ACKABLE_OUTSTANDING_SQL.args) as { n: number };
     return base.n - inbox.n;
   }
 
@@ -7043,7 +7471,8 @@ export class CoordStore {
 
   /** Who sent a mail, under which run, and about what — the three fields a
    *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
-   *  select. A dedicated one-row read rather than a JOIN widening
+   *  select — and its body, which only the mail lane's fixed line of the wake
+   *  reads (`envelope.ts#FIXED_LINE_MAIL`). A dedicated one-row read rather than a JOIN widening
    *  `dueDeliveries`: that query runs over every due row on every sweep, and
    *  this runs only when a notification is actually about to be raised.
    *  SYNCHRONOUS, like everything here.
@@ -7053,9 +7482,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 
@@ -7086,6 +7515,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailNumber('deliveredAt', r.deliveredAtText), ...mailNumber('ingestedAt', r.ingestedAtText),
+      ...mailNumber('ackedAt', r.ackedAtText), ...mailNumber('replayCount', r.replayCountText),
     }));
   }
 
@@ -7153,6 +7584,20 @@ export class CoordStore {
       'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
     ).get(fromId, runId, toId, subject);
     return row !== undefined;
+  }
+
+  /** Whether a mail with this (fromId, toId, subject) has a delivery ACKED, over every delivery state of the others (the boot
+   *  pass's check that a queued operator message's nudge was typed and acked; F3). */
+  hasAckedMailWithSubject(fromId: string, toId: string, subject: string): boolean {
+    return this.db.prepare("SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? AND m.toId = ? AND m.subject = ? AND d.state = 'acked' LIMIT 1")
+      .get(fromId, toId, subject) !== undefined;
+  }
+
+  /** The largest `n` of any `operator-message:<n>` mail from `operator`, over every delivery state, or `none` (the boot
+   *  pass's check against the private store's highest id, Overlord W1 private store B). */
+  highestOperatorMessageMail(): number | 'none' {
+    const rows = this.db.prepare("SELECT subject FROM mail WHERE fromId = 'operator' AND subject LIKE 'operator-message:%'").all() as { subject: string }[];
+    return rows.reduce<number | 'none'>((hi, r) => { const n = operatorMessageIdOf(r.subject); return n !== null && (hi === 'none' || n > hi) ? n : hi; }, 'none');
   }
 
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
@@ -8796,7 +9241,7 @@ export class CoordStore {
     const now = input.now ?? Date.now();
     const callerLiveness = input.callerLiveness ?? 'unmeasurable';
     const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
-    return tx(this.db, () => {
+    const answer = tx(this.db, () => {
       // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
       this.expireLapsedInner(now);
       const liveRows = this.db.prepare(
@@ -8895,6 +9340,10 @@ export class CoordStore {
         input.sessionId, paths, now);
       return { ok: true as const, claims: out, lapsedSince, rechained };
     });
+    // Overlord W2 overlaps (plan w2-overlaps.md question 4, review F5): a refusal's collisions are recorded AFTER the claim's
+    // own transaction committed, in one of their own, and a failed record is swallowed there, so this answer never changes.
+    if (!answer.ok && answer.why === 'conflict') collisions.recordCollisionsAfterRefusal(this.db, input, answer.conflicts, now);
+    return answer;
   }
 
   /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s
@@ -9218,13 +9667,13 @@ export class CoordStore {
   private static readonly ASK_COLS =
     'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
     'askKey, askAt, dialogId, question, options, ' +
-    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason';
+    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason, revision';
 
   private hydrateAsk(r: {
     idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
-    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null;
+    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null; revision: number;
   }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'ask id');
     if (!id.ok) return id;
@@ -9291,14 +9740,10 @@ export class CoordStore {
    *  `null` IS LEGAL and stays legal: an ask minted for a child with no open
    *  run carries none. Only a NON-NULL value outside the domain is refused —
    *  refused, never coerced. */
-  insertAsk(a: {
-    childId: string; parentId: string; runId: number | null; askKey: string;
-    askAt: number; dialogId: string; question: string; options: string[]; now: number;
-    /** D-5290: present, the row is minted `released` at `now` with this reason,
-     *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
-     *  `parent-project-mismatch` is read-only and never written again. */
-    releaseReason?: AskMintReleaseReason;
-  }): number {
+  /** With the push outbox's bound write (Overlord W1): a row minted released reaches the operator, its stamp and bound row in this tx (I2). */
+  insertAsk(a: AskMint & { bound: outbox.BoundWrite }): { id: number; row: outbox.BoundRowRef | null };
+  insertAsk(a: AskMint): number;
+  insertAsk(a: AskMint & { bound?: outbox.BoundWrite }): number | { id: number; row: outbox.BoundRowRef | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
       throw new Error('insertAsk: ask runId is not a positive safe integer');
@@ -9319,7 +9764,9 @@ export class CoordStore {
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertAsk: generated ask id is not a positive safe integer');
       }
-      return Number(exactId);
+      const id = Number(exactId);
+      if (a.bound === undefined) return id;
+      return { id, row: reason === null ? null : outbox.reachInTx(this.db, 'ask', id, a.bound, a.now) };
     });
   }
 
@@ -9538,7 +9985,7 @@ export class CoordStore {
    *  asked (a wedge, not a race, is the failure this guard closes). */
   settleAsk(id: number, by: string, answer: string, now: number): void {
     this.db.prepare(
-      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ? " +
+      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ?, revision = revision + 1 " +
       "WHERE id = ? AND state = 'answering'",
     ).run(by, answer, now, id);
   }
@@ -9547,11 +9994,13 @@ export class CoordStore {
    *  sweep can tell "I released it" (push may proceed) from "someone beat
    *  me" (a principal already took the row; the sweep must not push a stale
    *  payload out from under an in-flight answer). */
-  releaseAsk(id: number, now: number): boolean {
-    const res = this.db.prepare(
-      "UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'",
-    ).run(now, id);
-    return Number(res.changes) > 0;
+  releaseAsk(id: number, now: number): boolean;
+  /** With the push outbox's bound write (Overlord W1): the CAS, the reach stamp and the bound row in ONE tx; `false` lost. */
+  releaseAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
+  releaseAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
+    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
+    const move = (): boolean => Number(cas.run(now, id).changes) > 0;
+    return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
 
   /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
@@ -9561,11 +10010,12 @@ export class CoordStore {
    *  a lapsed row stays answerable until a principal acts. Same "did THIS call
    *  move it" return as `releaseAsk`, and the same `releasedAt` column: the
    *  instant the operator's push was released. */
-  declineAsk(id: number, now: number): boolean {
-    const res = this.db.prepare(
-      "UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'",
-    ).run(now, id);
-    return Number(res.changes) > 0;
+  declineAsk(id: number, now: number): boolean;
+  declineAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
+  declineAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
+    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
+    const move = (): boolean => Number(cas.run(now, id).changes) > 0;
+    return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
 
   /** held OR answering -> stale, CAS, keyed by the pane's own identity
@@ -9597,7 +10047,7 @@ export class CoordStore {
    *  trace that survives a failure in this window. */
   staleAsk(dialogId: string, childId: string, now: number): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET state = 'stale', releasedAt = ? " +
+      "UPDATE asks SET state = 'stale', releasedAt = ?, revision = revision + 1 " +
       "WHERE dialogId = ? AND childId = ? AND state IN ('held','answering')",
     ).run(now, dialogId, childId);
     return Number(res.changes) > 0;
@@ -9650,7 +10100,9 @@ export class CoordStore {
    *  rather than the permanent wedge it replaces. */
   restampAsk(a: { id: number; dialogId: string; askKey: string; askAt: number }): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
+      // Row revisions (Overlord W2, question 2): this runs on every 2-second tick, most often with the `askAt` the row
+      // already holds, so it raises only when `askAt` moves.
+      "UPDATE asks SET askAt = ?1, revision = revision + (askAt IS NOT ?1) WHERE id = ?2 AND state = 'held' AND dialogId = ?3 AND askKey = ?4",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
   }
@@ -9693,13 +10145,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected';
+    'answeredBy, toolUseId, corrected, denyCurrent, parkWord, parkKey, fetchedAt, wouldPark';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
+    denyCurrent: number; parkWord: string | null; parkKey: string | null; fetchedAt: number | null; wouldPark: number | null;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9723,6 +10176,9 @@ export class CoordStore {
         verdict: r.verdict === 'allow' || r.verdict === 'deny' ? r.verdict : null,
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
+        denyCurrent: r.denyCurrent === 1,
+        parkWord: isApprovalParkWord(r.parkWord) ? r.parkWord : null,
+        parkKey: r.parkKey, fetchedAt: r.fetchedAt === null ? null : Number(r.fetchedAt), wouldPark: r.wouldPark === 1,
       },
     };
   }
@@ -9747,6 +10203,15 @@ export class CoordStore {
     const h = this.hydrateApproval(row);
     return h.ok ? { ok: true, row: h.row } : { ok: false, detail: h.detail };
   }
+
+  // The approval census (approvals plan 2026-11-18, §3.1; `approvalCensusStore.ts`): its one writer, reached only through
+  // the questions owner, its retention, and the census read's three reads.
+  insertCensusRow(r: census.CensusRowInsert): ReturnType<typeof census.insertCensusRow> { return census.insertCensusRow(this.db, r); }
+  pruneCensusSummaries(before: number): number { return census.pruneCensusSummaries(this.db, before); }
+  censusRowsIn(fromMs: number, toMs: number): census.CensusRowsResult { return census.censusRowsIn(this.db, fromMs, toMs); }
+  approvalRowsForCensus(fromMs: number, toMs: number): census.ApprovalCensusSourceResult { return census.approvalRowsForCensus(this.db, fromMs, toMs); }
+  approvalPushSources(fromMs: number, toMs: number): Readonly<Record<string, number>> { return census.approvalPushSources(this.db, fromMs, toMs); }
+  censusRunSpans(fromMs: number, toMs: number): census.CensusRunSpansResult { return census.censusRunSpans(this.db, fromMs, toMs); }
 
   /** A child's rows in the given states, oldest first. */
   approvalsForChild(childId: string, states: readonly ApprovalState[]): ApprovalsReadResult {
@@ -9774,30 +10239,55 @@ export class CoordStore {
   }
 
   /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
-   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. */
+   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. `denyCurrent`
+   *  (approvals PR 0) is optional only so the test callers that predate it, the pin files among them, run unedited: absent
+   *  stores 1, current, which is open for a caller that forgets it. The raise, the one production caller, always passes
+   *  it, and the approvals routes suite reds if it stops (review 2648 F3, the report's leave option). */
   insertApproval(a: {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
-    releaseReason?: ApprovalMintReleaseReason;
+    releaseReason?: ApprovalMintReleaseReason; denyCurrent?: boolean;
+    /** The census's two facts from mint (approvals plan 2026-11-18, Task 1.4): the statements' command words (null when
+     *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
+    commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
+    return this.insertApprovalAt(a).id;
+  }
+
+  /** `insertApproval` with the park's step (approvals PR 3, F1): given `park` (its key and the lane's and sign-in's state)
+   *  on a held row with a run, the word is decided INSIDE this transaction from the key's slots as read here, a `live`
+   *  word reserves a slot, and the row stores the word and key. Answers the id and the word (null: no park step ran). */
+  insertApprovalAt(a: Parameters<CoordStore['insertApproval']>[0] & {
+    park?: { key: string; runId: number; laneLive: boolean; signedIn: boolean };
+  }): { id: number; parkWord: ApprovalParkWord | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot, parkWord, parkKey) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
+      // The park's word, decided here with the slots this transaction reads (the cap race, F1): only a held row with a run.
+      // The park's run is the key's (the child's live binding run, review 2889 F2), not the row's.
+      const park = a.park !== undefined && reason === null && a.runId !== null ? a.park : null;
+      const parkWord = park === null ? null : parks.reserveParkAtMint(this.db, {
+        key: park.key, childId: a.childId, runId: park.runId, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
+      });
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
-        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
+        a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
+        a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
+        parkWord, park === null ? null : park.key,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
       }
-      return Number(exactId);
+      return { id: Number(exactId), parkWord };
     });
   }
 
@@ -9812,7 +10302,9 @@ export class CoordStore {
         'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
         "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
       ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
-      if (Number(res.changes) > 0) return { ok: true as const };
+      // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
+      // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
+      if (Number(res.changes) > 0) return parks.afterRulingOfRow(this.db, id, r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL);
       const read = this.approvalById(id);
       if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
       if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
@@ -9825,17 +10317,37 @@ export class CoordStore {
 
   /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
-    const res = this.db.prepare(
+    // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
+    return tx(this.db, () => parks.noteDeclinedIf(this.db, id, Number(this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
-    ).run(now, by, id);
-    return Number(res.changes) > 0;
+    ).run(now, by, id).changes) > 0));
   }
 
   /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
-  lapseApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'released' WHERE id = ? AND state = 'held'").run(id);
+  lapseApproval(id: number, wouldPark = false): boolean {
+    // Approvals PR 3: a shadow lapse records that the row would have parked (`wouldPark`), with the lapse itself.
+    const res = this.db.prepare(`UPDATE approvals SET state = 'released'${wouldPark ? ', wouldPark = 1' : ''} WHERE id = ? AND state = 'held'`).run(id);
     return Number(res.changes) > 0;
   }
+
+  // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
+  // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
+  parkApprovalRow(id: number, now: number, runClosed: (runId: number) => boolean): parks.ParkMove { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now, runClosed)); }
+  /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
+  approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
+    return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
+  }
+  markApprovalFetched(id: number, now: number): boolean { return parks.markApprovalFetched(this.db, id, now); }
+  approvalPark(key: string): parks.ParkRow | null { return parks.parkByKey(this.db, key); }
+  recordApprovalParkRuling(key: string, r: Parameters<typeof parks.recordParkRuling>[2]): boolean {
+    return tx(this.db, () => parks.recordParkRuling(this.db, key, r));
+  }
+  meetApprovalParkRuling(...a: Parameters<typeof parks.meetParkRuling> extends [unknown, ...infer R] ? R : never): ReturnType<typeof parks.meetParkRuling> {
+    return tx(this.db, () => parks.meetParkRuling(this.db, ...a));
+  }
+
+  /** The park's retention (approvals PR 3, T8-4): parks whose horizon passed before `before`. */
+  pruneApprovalParks(before: number): number { return tx(this.db, () => parks.pruneParks(this.db, before)); }
 
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
@@ -9848,25 +10360,30 @@ export class CoordStore {
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
+    parks.voidParksOfParkedRows(this.db, ids);   // approvals PR 3 (F4): only the rows this cleared dialog covered (review 2889 F3)
     let n = 0;
     const stmt = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released')");
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
     for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
     return n;
   }
 
-  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`. */
+  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. The other writers of `stale`
+   *  are `approvalParkStore.ts`'s `meetParkRuling` (a met key's parked rows) and `parkApprovalRow` (a `held` row whose key's
+   *  park is closed at its window's end, approvals PR 3c F-B), each inside its own transaction. */
   staleApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released')").run(id);
+    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;
   }
 
   /** The retention (spec §6.7): every row minted before `now - APPROVAL_INPUT_RETENTION_DAYS` loses its redacted
-   *  input, and the row itself is kept as the journal. Returns the count cleared. */
+   *  input and its command words (approvals PR 1, review 2638 F11b: a command name is kept as written, so it goes with
+   *  the input), and the row itself is kept as the journal. Returns the count cleared. */
   pruneApprovalInputs(now: number): number {
     const before = now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000;
     const res = this.db.prepare(
-      'UPDATE approvals SET inputRedacted = NULL WHERE askAt < ? AND inputRedacted IS NOT NULL',
+      'UPDATE approvals SET inputRedacted = NULL, commandWords = NULL WHERE askAt < ? AND (inputRedacted IS NOT NULL OR commandWords IS NOT NULL)',
     ).run(before);
     return Number(res.changes);
   }
@@ -9944,10 +10461,19 @@ export class CoordStore {
   }
 
   /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
-   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
-  claimDigestDay(day: string, sentAt: number, count: number): boolean {
-    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
-    return Number(res.changes) > 0;
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). With
+   *  `onClaim` (the digest lines' response rows, W1 responses B), the claim and the callback share one transaction and the
+   *  callback runs only when the claim won, under its own savepoint: its rows go all or none, a throw from it is logged and
+   *  never costs the claim, and a failure that took the whole transaction fails the claim too (`responseWriteInTx`). */
+  claimDigestDay(day: string, sentAt: number, count: number, onClaim?: () => unknown): boolean {
+    return tx(this.db, () => {
+      const won = Number(this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count).changes) > 0;
+      if (won && onClaim !== undefined) {
+        const w = responses.responseWriteInTx(this.db, onClaim);
+        if (!w.ok) responses.warnResponseWrite(`digest:${w.detail}`, `the digest's response rows were not written (${w.detail}); the claim stands`);
+      }
+      return won;
+    });
   }
 
   // ── pool edges ────────────────────────────────────────────────────────
@@ -11215,6 +11741,12 @@ export class CoordStore {
 
   /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
   raiseItem(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number { return ledgers.raiseItem(this.db, input, now, actor); }
+  /** `raiseItem` with the push outbox's bound write (Overlord W1): an item shown at its raise gets its stamp and one row in the raise's tx. */
+  raiseItemReached(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', bound: outbox.BoundOf): { id: number; row: outbox.BoundRowRef | null } {
+    let row: outbox.BoundRowRef | null = null;
+    const id = ledgers.raiseItem(this.db, input, now, actor, (itemId) => { row = outbox.reachInTx(this.db, 'item', itemId, bound(itemId), now); });
+    return { id, row };
+  }
   itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
   /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
   itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
@@ -11223,7 +11755,9 @@ export class CoordStore {
   /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
   tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
   /** A raise and its mail in ONE transaction; `queue` gets the new id and inserts the system mail (it opens no transaction). Returns the id. */
-  raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T): number { return ledgers.raiseItemWithMail(this.db, input, now, actor, queue).id; }
+  raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T, bound?: outbox.BoundOf): number {
+    return ledgers.raiseItemWithMail(this.db, input, now, actor, queue, bound && ((itemId) => { outbox.reachInTx(this.db, 'item', itemId, bound(itemId), now); })).id;
+  }
   /** One move and its mail in ONE transaction (the withdraw and decline of an end request tell the asker, A22). */
   moveItemWithMail<T>(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }, queue: (item: ItemRow) => T) { return ledgers.moveItemWithMail(this.db, id, act, actor, fields, now, ctx, queue); }
   /** Open end-request items whose run has closed move `settle`, with `note`: the mend for a death between the operator's act and its item. Returns how many moved. */
@@ -11242,16 +11776,34 @@ export class CoordStore {
   reviewChildReleased(reviewRunId: number): boolean { return ledgers.reviewChildReleased(this.db, reviewRunId); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
-  setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
+  /** With `bound`, a move to blocking arms the item's one outbox row in the same tx (Overlord W1, slug rearm-is-an-upsert); `row` is that row. */
+  setBlocking(id: number, blocking: boolean, now: number, bound?: outbox.BoundOf) {
+    let row: outbox.BoundRowRef | null = null;
+    const res = ledgers.setBlocking(this.db, id, blocking, now, bound && ((itemId) => { row = outbox.armInTx(this.db, 'item', itemId, bound(itemId), now); }));
+    return bound === undefined ? res : { ...res, row: row as outbox.BoundRowRef | null };
+  }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
-  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
-  setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null, source: WrittenSource): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen, source); }
+  setDoneWhen(program: string, doneWhen: readonly string[], now: number, modId: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now, modId); }
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  ratifyGoalsVersion(program: string, version: GoalsVersion, now: number, actor: string): ledgers.RatifyResult { return ledgers.ratifyGoalsVersion(this.db, program, version, now, actor); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+  /** Whether the programme has a Goals (spec) pin: R7's test for a pinned programme. */
+  isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
+  /** Whether the programme holds a `blocking` item in state `open`, waiting on the operator (a `checking` one is the coordinator's). */
+  programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
+
+  // ── the coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8967, D-8970) ───────────────────────────────────
+  // The SQL lives in `advisorStore.ts`; one writer per table (see its header).
+  coordinatorAdvisorSettings(): advisor.CoordinatorAdvisorRead { return advisor.coordinatorAdvisorSettings(this.db); }
+  setCoordinatorAdvisor(s: CoordinatorAdvisorSetting, at: number): { before: advisor.CoordinatorAdvisorRead; after: advisor.CoordinatorAdvisorRead } { return advisor.setCoordinatorAdvisor(this.db, s, at); }
+  advisorReadState(sessionId: string): advisor.AdvisorReadState | null { return advisor.advisorReadState(this.db, sessionId); }
+  recordAdvisorRead(sessionId: string, state: advisor.AdvisorReadState, rows: readonly advisor.AdvisorCallRow[], now: number, oldestDay: string): void { advisor.recordAdvisorRead(this.db, sessionId, state, rows, now, oldestDay); }
+  advisorDayCounts(day: string): Map<string, advisor.AdvisorDay> { return advisor.advisorDayCounts(this.db, day); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).
@@ -11261,10 +11813,31 @@ export class CoordStore {
   bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
   callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
   liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
+  blockClaimants(now: number): string[] { return calls.blockClaimants(this.db, now); }
+  blocksToWake(madeBy: string, now: number): CallRow[] { return calls.blocksToWake(this.db, madeBy, now); }
   callById(id: number): CallRow | null { return calls.callById(this.db, id); }
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
   overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
   markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
+  wakeBlockTx(id: number, now: number, onWoken: () => void): boolean { return calls.wakeBlockTx(this.db, id, now, onWoken); }
+  insertRemaining(program: string, byId: string, statement: programmeFacts.NewRemaining, edges: readonly programmeFacts.NewEdge[], build: string | null, now: number): programmeFacts.InsertRemainingResult { return programmeFacts.insertRemaining(this.db, program, byId, statement, edges, build, now); }
+  remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
+  openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
+  edgeTargetCheck(slug: string, target: programmeFacts.EdgeTarget): { ok: true } | { ok: false; detail: string } { return programmeFacts.edgeTargetCheck(this.db, slug, target); }
+  openEdgesToMeasure(): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesToMeasure(this.db); }
+  settleEdge(id: number, settle: programmeFacts.EdgeSettle, now: number): { written: boolean } { return programmeFacts.settleEdge(this.db, id, settle, now); }
+  sealForecast(seal: programmeFacts.NewSeal, now: number): { written: boolean } { return programmeFacts.sealForecast(this.db, seal, now); }
+  scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean } { return programmeFacts.scoreForecast(this.db, id, outcome, now); }
+  forecastsOf(q: { program: string } | { dueBy: number }): programmeFacts.SealedForecast[] { return programmeFacts.forecastsOf(this.db, q); }
+  unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now, TERMINAL_RUN_STATES_SQL); }
+  leadHistoryOf(program: string, asOf: number): programmeFacts.ForecastHistory { return programmeFacts.leadHistoryOf(this.db, program, asOf); }
+  outcomeFactsOf(sealId: number): programmeFacts.OutcomeFacts | null { return programmeFacts.outcomeFactsOf(this.db, sealId); }
+  appendHealth(program: string, verdict: programmeFacts.HealthVerdict, noticed: boolean, now: number): { id: number } { return programmeFacts.appendHealth(this.db, program, verdict, noticed, now); }
+  newestHealthOf(programs: readonly string[]): programmeFacts.HealthRow[] { return programmeFacts.newestHealthOf(this.db, programs); }
+  healthNoticedSince(program: string, word: string, since: number): boolean { return programmeFacts.healthNoticedSince(this.db, program, word, since); }
+  recordRunSpend(row: programmeFacts.NewRunSpend, now: number): { written: boolean } { return programmeFacts.recordRunSpend(this.db, row, now); }
+  unspentClosesOf(firstPassAt: number): programmeFacts.UnspentClose[] { return programmeFacts.unspentClosesOf(this.db, firstPassAt, TERMINAL_RUN_STATES_SQL); }
+  spendOf(programs: readonly string[]): programmeFacts.RunSpendRow[] { return programmeFacts.spendOf(this.db, programs); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

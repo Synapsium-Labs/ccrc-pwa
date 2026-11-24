@@ -2,7 +2,9 @@
 // URL out of a parsed tree before it renders, so no URL-bearing attribute reaches the DOM except through `DocLink` and
 // `DocImage`; `docLinkTarget` is the one decision
 // `DocLink` renders; `imagePinFor` is the one pin rule for a page's images (W5 part 1 Task 7); `docsLocation` is the
-// one builder of a page location a Docs view links to (refinement (q)). Pure: no React state or hook (`imagePinFor`
+// one builder of a page location a Docs view links to (refinement (q)). `docLinkTarget` and `docsLocation`, with
+// `docLinkTarget`'s answer type and `docsLocation`'s target type, are defined in `docLinkTarget.ts` and re-exported from here
+// (the reader's policy asks `docLinkTarget` and must not reach this file's hook-module import of `pinFor`). Pure: no React state or hook (`imagePinFor`
 // asks the visit's pure `pinFor` for the page's own pin), no DOM, no module state, and no input is ever written.
 // `sessionDocsHref` is the one builder of a session's link into Docs, for the actions sheet's row and the session
 // menu's item alike (spec 4.8; W5 part 1 Task 11). `docHref` is the one builder of the Docs reader address of a repository
@@ -11,13 +13,16 @@ import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast
 import { urlAttributes } from 'html-url-attributes';
 import type { FleetSession } from '../../../shared/api';
 import {
-  DOC_SECTIONS, DOC_SECTION_SLUGS, admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject,
-  isDocsRelPath, resolveDocRef,
-  type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
+  DOC_SECTIONS, DOC_SECTION_SLUGS, admitDraft, docsPageUrl, entryView, isDocsBareRef, isDocsProject, isDocsRelPath,
+  type DocPin, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
-import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
-import type { DocLinkContextValue } from './DocLink';
+import { docsLocation } from './docLinkTarget';
 import { pinFor } from './useDocsVisit';
+
+// `docLinkTarget` and `docsLocation`, with their `DocLinkTarget` and `DocsPageTarget` types, are defined in
+// `docLinkTarget.ts` (pure, no hook module, so the reader's policy can ask them) and re-exported here: every importer keeps this path.
+export { docLinkTarget, docsLocation } from './docLinkTarget';
+export type { DocLinkTarget, DocsPageTarget } from './docLinkTarget';
 
 /** What `detachUrls` recorded for one element of the copy. `attrs` holds every URL property moved off it (empty when it
  *  carried none), keyed by its hast property name, its value as text. `imageIndex: null` means the element is not an
@@ -101,131 +106,64 @@ export function detachUrls(tree: HastRoot): Detached {
   return { tree: root, urls, images };
 }
 
-/** Where a page links (refinement (q)). `index`: the Docs index. `project`, `section` and `path`: a page of the same
- *  project at the same ref. `default-view`: another (or the same) project's default view, `ref: null`, from any page,
- *  the index included. `same-page`: this very page (its section, path, view and frame) in `project` at `ref`
- *  (`ref: null` is that project's default view): the linked-worktree redirect (spec 4.7) and every "open this page at
- *  another ref" link. A `path` target's `view` absent means `effective`. */
-export type DocsPageTarget =
-  | { kind: 'index' }
-  | { kind: 'project' }
-  | { kind: 'default-view'; project: string }
-  | { kind: 'same-page'; project: string; ref: DocsRefSpec | null }
-  | { kind: 'section'; section: DocSectionSlug }
-  | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed' };
-
-/** THE one builder of a page location a Docs view links to (refinement (q)): it keeps `page`'s project and ref and
- *  applies `to`; a `path` target's `frame` is `inline` (W6 owns `full`), while a `same-page` target keeps the page's
- *  own frame, view and everything else. Every page URL a view writes is
- *  `docsPageUrl(docsLocation(page, to))`; no view builds a `DocsPageLocation` literal. The index names no project, so
- *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. */
-export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPageLocation {
-  if (to.kind === 'index') return { kind: 'index' };
-  if (to.kind === 'default-view') return { kind: 'project', project: to.project, ref: null };
-  if (page.kind === 'index') throw new Error(`docsLocation: the index names no project for a ${to.kind} target`);
-  if (to.kind === 'same-page') return { ...page, project: to.project, ref: to.ref };
-  const { project, ref } = page;
-  switch (to.kind) {
-    case 'project':
-      return { kind: 'project', project, ref };
-    case 'section':
-      return { kind: 'section', project, section: to.section, ref };
-    case 'path':
-      return {
-        kind: 'path', project, section: to.section, path: to.path, dirSlash: to.dirSlash, ref,
-        view: to.view ?? 'effective', frame: 'inline',
-      };
-  }
-}
-
-/** What `DocLink` renders for one link (spec 4.11). `in-app`: a Docs page of the same project at the page's ref
- *  (`href` is that page's URL, never with a fragment; `fragment: null` means the link names none). `fragment`: an
- *  anchor in this page. `external`: an http, https or mailto URL, opened on tap only. `github`: an in-repo file outside
- *  the four sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
- *  GitHub carries too). `inert`: everything else, with the span's whole title. */
-export type DocLinkTarget =
-  | { kind: 'in-app'; href: string; fragment: string | null }
-  | { kind: 'fragment'; fragment: string }
-  | { kind: 'external'; href: string }
-  | { kind: 'github'; href: string; note: 'may-differ' | null }
-  | { kind: 'inert'; title: string };
-
-/** The one decision for a Markdown link on a Docs page: `raw`, the link's `href` as `detachUrls` moved it (`''` for a
- *  link with none), resolved from the page's own section and path by L0 `resolveDocRef`. A doc link keeps the page's
- *  project and ref and drops `view` (`docsLocation`'s `path` target with no `view`), except that a link to THIS page
- *  that names a fragment is a `fragment` link. An inert link's title is `<sentence>: <raw>`. */
-export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTarget {
-  const inert = (why: DocLinkInertReason): DocLinkTarget => ({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE[why]}: ${raw}` });
-  const r = resolveDocRef({ section: ctx.section, path: ctx.path }, raw);
-  switch (r.kind) {
-    case 'doc': {
-      // This very page, spelled with its file name and a fragment: an anchor in the page, not a second history entry.
-      if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {
-        return { kind: 'fragment', fragment: r.fragment };
-      }
-      const here: DocsPageLocation = { kind: 'project', project: ctx.project, ref: ctx.pageRef };
-      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false }));
-      return { kind: 'in-app', href, fragment: r.fragment };
-    }
-    case 'fragment':
-      return { kind: 'fragment', fragment: r.fragment };
-    case 'external':
-      return { kind: 'external', href: r.url };
-    case 'repo': {
-      const link = githubBlobUrl(ctx.tree.github, ctx.tree.ref, { kind: 'repo', repoPath: r.repoPath });
-      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);
-    }
-    case 'self-contained':
-      return inert(r.scheme);
-    case 'refused':
-      return inert(r.why);
-  }
-}
-
 /** Which bytes a Markdown image on a Docs page may show (spec 4.11's pin rule). `ok`: `pin` names them; `draft` is
  *  true exactly when `pin` is a `DraftPin` (the image wears the `draft` chip and counts in the page banner);
  *  `uncommittedNotShown` is true exactly when a committed page in a ref view shows the committed bytes of an image
  *  whose draft would overlay there ("uncommitted change not shown"). Not ok, each one reason: `absent` (no entry at
  *  the path, or the side the rule needs is not a committed file or exec), `deleted-in-worktree` (a draft page whose
  *  image the worktree deletes), `draft-withheld` (a draft page whose image's draft is withheld or a type change: the
- *  committed bytes are never shown in its place). */
+ *  committed bytes are never shown in its place), `draft-unhashed` (a draft page whose image's draft opens through its
+ *  stat pin, read by range: it has no fingerprint to pin by, but its own page shows it). */
 export type ImagePin =
   | { ok: true; pin: DocPin; draft: boolean; uncommittedNotShown: boolean }
-  | { ok: false; why: 'absent' | 'deleted-in-worktree' | 'draft-withheld' };
+  | { ok: false; why: 'absent' | 'deleted-in-worktree' | 'draft-withheld' | 'draft-unhashed' };
 
 /** THE pin rule for a page's images (spec 4.11; the ONE derivation: `DocImage` now, Export in part 2, the W6 mockup
  *  planner). `e` is the tree entry at the image's resolved path; `undefined` means there is none. The page is a DRAFT
  *  page exactly when its own leaf opens a draft (`pinFor` answers a `DraftPin`); every other page is committed (the
  *  default view, `view=committed`, a ref-view leaf that opens committed, and a page whose leaf is not in the tree).
- *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)`, else `absent`; in a ref
- *    view an image whose draft `admitDraft` admits is marked `uncommittedNotShown`. A draft is never resolved.
+ *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)` (at `page.at` on a version
+ *    page), else `absent`; in a ref view an image whose draft `admitDraft` admits is marked `uncommittedNotShown` (never
+ *    on a version page). A draft is never resolved.
  *  - draft page (an admitted holder at the served commit): no draft on the image gives the committed side under the
  *    same condition; a deleted draft is `deleted-in-worktree`; a draft `entryView` opens gives
- *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`. */
+ *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`.
+ *  `pageDraft` is `pageOpensDraft(tree, page)` when the caller already holds it (the mockup planner asks it once per
+ *  plan, so a page of many references does not search the listing for the page's own entry once per reference); when
+ *  omitted it is asked here. */
 export function imagePinFor(
-  e: DocsEntry | undefined, tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' },
+  e: DocsEntry | undefined, tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' }, pageDraft?: boolean,
 ): ImagePin {
   if (e === undefined) return { ok: false, why: 'absent' };
   const drafts = tree.drafts;
   const committed = (uncommittedNotShown: boolean): ImagePin => {
     const kind = e.committed?.kind;
     if (kind !== 'file' && kind !== 'exec') return { ok: false, why: 'absent' };
+    // Refinement (n): a version page's images are read at its version (rich-docs spec G6), never at the tip.
     const pin: DocPin = {
-      kind: 'committed', commit: tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
+      kind: 'committed', commit: page.at ?? tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
     };
     return { ok: true, pin, draft: false, uncommittedNotShown };
   };
-  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.ref !== null && admitDraft(e, drafts));
+  if (!(pageDraft ?? pageOpensDraft(tree, page))) return committed(page.at === null && page.ref !== null && admitDraft(e, drafts));
   const draft = e.draft;
   if (draft === null) return committed(false);
   if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
-  if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder' || draft.fp === null) {
+  if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder') {
     return { ok: false, why: 'draft-withheld' };
   }
+  // X2 P1: a draft the page opens through its stat pin (read by range, spec 4.3) has no fingerprint to pin an image by;
+  // this is not the withheld case, which opens nothing.
+  if (draft.fp === null) return { ok: false, why: 'draft-unhashed' };
   const pin: DocPin = {
     kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: e.section, path: e.path, fp: draft.fp,
   };
   return { ok: true, pin, draft: true, uncommittedNotShown: false };
+}
+
+/** Whether `page` is a DRAFT page for `imagePinFor`: its own leaf opens a draft (`pinFor` answers a `DraftPin`). */
+export function pageOpensDraft(tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' }): boolean {
+  return pinFor(tree, page)?.kind === 'draft';
 }
 
 /** A session's link into Docs (spec 4.8). `href`: the session's project at the branch its worktree holds NOW, written
@@ -261,7 +199,7 @@ export function sessionBranchRef(branch: string | null): (DocsRefSpec & { kind: 
 
 /** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, at `ref` (null, the
  *  default: the project's default view, as the ledgers link), or null: no home project, a home the Docs grammar refuses, or a
- *  path outside the four sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
+ *  path outside the docs sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
 export function docHref(repoPath: string, homeProject: string | null, ref: DocsRefSpec | null = null): string | null {
   if (homeProject === null || !isDocsProject(homeProject)) return null;
   for (const section of DOC_SECTION_SLUGS) {

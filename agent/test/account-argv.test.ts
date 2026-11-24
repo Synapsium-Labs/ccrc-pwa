@@ -32,7 +32,7 @@ const VALID: Record<AccountSub, { laneId: string | null; fields: Record<string, 
   'auth-start': { laneId: LANE, stdin: false, fields: { method: 'login', attemptId: ATTEMPT } },
   'auth-code': { laneId: LANE, stdin: true, fields: { attemptId: ATTEMPT } },
   'auth-cancel': { laneId: LANE, stdin: false, fields: { attemptId: ATTEMPT } },
-  'set': { laneId: LANE, stdin: true, fields: { placement: 'full', limit: '100000', limitReset: 'daily' } },
+  'set': { laneId: LANE, stdin: true, fields: { placement: 'full', limit: '100000', limitReset: 'daily', fableBilling: 'included', continuity: 'on', org: 'org-a' } },
   'check': { laneId: LANE, stdin: false, fields: {} },
   'enable': { laneId: LANE, stdin: false, fields: {} },
   'disable': { laneId: LANE, stdin: false, fields: {} },
@@ -104,7 +104,7 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
   it('refuses a value outside each enum, in every enum field', () => {
     const enums: Array<[AccountSub, string]> = [
       ['add', 'provider'], ['add', 'method'], ['add', 'hue'], ['add', 'placement'], ['add', 'limitReset'], ['add', 'expiresIn'],
-      ['auth-start', 'method'], ['set', 'placement'], ['set', 'limitReset'], ['credential', 'method'], ['remove', 'mode'],
+      ['auth-start', 'method'], ['set', 'placement'], ['set', 'limitReset'], ['set', 'fableBilling'], ['set', 'continuity'], ['credential', 'method'], ['remove', 'mode'],
     ];
     for (const [sub, key] of enums) {
       expect(build(sub, { [key]: 'bogus' }), `${sub}.${key}`).toEqual({ ok: false, why: 'bad-field' });
@@ -156,6 +156,22 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(buildAccountArgv('set', LANE, { placement: 'full' }, false))
       .toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--placement=full'] });
     expect(buildAccountArgv('set', LANE, { stated: 'someone@example.invalid' }, false)).toEqual({ ok: false, why: 'bad-field' });
+  });
+
+  it('set builds the two account facts, and refuses a word off their vocabulary (serviceability plan Task 3)', () => {
+    expect(buildAccountArgv('set', LANE, { fableBilling: 'credits', continuity: 'off' }, false))
+      .toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--fable-billing=credits', '--continuity=off'] });
+    expect(buildAccountArgv('set', LANE, { continuity: 'on' }, false)).toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--continuity=on'] });
+    expect(buildAccountArgv('set', LANE, { fableBilling: 'free' }, false)).toEqual({ ok: false, why: 'bad-field' });
+    expect(buildAccountArgv('set', LANE, { continuity: 'true' }, false)).toEqual({ ok: false, why: 'bad-field' });
+  });
+
+  it('set builds the organization label or none, and refuses an off-shape or id-shaped one (account organization A3)', () => {
+    expect(buildAccountArgv('set', LANE, { org: 'org-a' }, false)).toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--org=org-a'] });
+    expect(buildAccountArgv('set', LANE, { org: 'none' }, false)).toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--org=none'] });
+    for (const v of ['Org-A', 'abcdef0123456789abcdef0123456789', '0f8e2c1a-1b2c-4d3e-8f90-123456789abc', `o${'x'.repeat(32)}`]) {
+      expect(buildAccountArgv('set', LANE, { org: v }, false), v).toEqual({ ok: false, why: 'bad-field' });
+    }
   });
 
   it('add and credential read a carried secret behind --credential=-, and write it only when stdin is carried (accounts plan Task A17)', () => {

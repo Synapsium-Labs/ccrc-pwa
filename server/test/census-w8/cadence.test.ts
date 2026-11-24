@@ -142,6 +142,7 @@ describe('the cadence census, on the real tree', () => {
 
   it('timerSpellings: the shipped spellings', () => {
     expect(timerSpellings()).toEqual([
+      'OnCalendar=*-*-* 00/6:17:00 UTC',   // run 3508: ccd-quiz-weekly.timer fires on the wall clock, every six hours from midnight UTC
       'OnCalendar=*:0/5',
       'OnUnitActiveSec=15min',
       'OnUnitActiveSec=1h',

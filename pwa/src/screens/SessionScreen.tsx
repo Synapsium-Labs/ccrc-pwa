@@ -5,19 +5,20 @@
 // (connected app-wide in app.tsx) supplies the header's live identity.
 // DialogSheet mounts between the transcript and the strips (its card is inline at the desk), the TerminalDrawer at the
 // bottom.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
-import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast, useNow } from '@ccrc/ui';
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
-import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
+import { accountHue, accountLabel, accountProvider, entryFor } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 import { ack } from '../lib/seen';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -39,12 +40,14 @@ import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
 import { useFrameSet } from '../skins/frame';
+import { HelpersStripFor } from '../inspector/HelpersSection';
 import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
-import { activitiesStartedBy, readDelegation } from '../fleet/delegationWords';
+import { readDelegation } from '../fleet/delegationWords';
+import { worktreeSidesKey, worktreesOf } from '../fleet/sessionWorktrees';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
@@ -53,10 +56,11 @@ import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords
 import { HistoryTab } from '../session/HistoryTab';
 import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, type PickOption } from '../lib/models';
-import { useLaneModels } from '../lib/useLaneModels';
+import { modelOptions, effortOptions, lanePickerNote, type PickOption } from '../lib/models';
+import { useLaneModelsView } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
+import { liveWaitOf } from '../session/toolActivity';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
 import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
 
@@ -183,13 +187,6 @@ export function SessionScreen({
   // unvalidated-dynamic-method-call false positive on the route-keyed store.)
   const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
-  // D-5560: subscribed through the store's own `subscribe`/`getState` rather
-  // than one more `useStore(…)` call site (D-5372's CodeQL false positive
-  // above); the reducer replaces the array on every workflows frame, so the
-  // snapshot is stable between frames. The flag is read beside it for
-  // D-5372's reason — the reducer sets it only together with a new array.
-  const workflows = useSyncExternalStore(useStore.subscribe, () => useStore.getState().workflows);
-  const workflowsUnreadable = useStore.getState().workflowsUnreadable;
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -203,7 +200,11 @@ export function SessionScreen({
   // reconnect's gap is different: the sheet there is the held surface, but the card follows the connection, not the hold,
   // so while `askFrameSeen` is down it reads unanswered without its Answer control until the new connection decides.
   // The sheet's own hold through the gap is `DialogSheet`'s.
-  const askPending = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen }).kind !== 'none';
+  const liveSource = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen });
+  const askPending = liveSource.kind !== 'none';
+  // Desktop polish wave 168, review 3478 F2: what KIND of wait it is, so the transcript ties it to a call only when it
+  // identifies one (an approval or a menu names none).
+  const askWait = liveWaitOf(liveSource);
   // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
   // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
   const answerLabel = answerControlLabel(liveDialog);
@@ -226,6 +227,9 @@ export function SessionScreen({
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
   // Delegation visibility (spec §5): the header lists every entry this session started, whatever its placement.
   const delegation = useFleet((s) => s.delegation);
+  // D-8782: this session's worktrees, in its details. The labels each row names come from the fleet's sessions, read as ONE
+  // primitive (the key), so a fleet frame that changes no label re-renders nothing here (C6, D-6438).
+  const worktreeKey = useFleet((s) => (s.delegation === null ? '[]' : worktreeSidesKey(id, readDelegation(s.delegation), s.sessions)));
   // D-8276: the fleet's newest Claude Code build, so the header names this session's build against it, and the newest
   // on its own lane, which is what a restart reaches.
   const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
@@ -353,7 +357,7 @@ export function SessionScreen({
     workingOn: coordination?.workingOn ?? null,
     coordinator: presence,
     coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
-    delegated: delegation === null ? null : activitiesStartedBy(live.id, readDelegation(delegation)),
+    worktrees: delegation === null ? null : worktreesOf(readDelegation(delegation).leases, worktreeKey),
     claudeLatest,
     claudeLaneLatest,
   });
@@ -369,9 +373,13 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
-  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
-  const route = routeView(live, wrapper, accountProvider(roster, wrapper), laneModels);
+  // D-8406: the lane's model files, which name each class's model in the picker and give its readback. The view's
+  // transient word (R3b fix round 1, F2) is said in the picker's note, beside the last good read it kept.
+  const laneView = useLaneModelsView(wrapper, undefined, picker === 'model');
+  const laneModels = laneView.read;
+  // D-8686: the roster row decides which option lists the two pickers show (`modelListProvider`).
+  const entry = entryFor(roster, wrapper);
+  const route = routeView(live, wrapper, entry, accountProvider(roster, wrapper), laneModels);
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
@@ -572,7 +580,7 @@ export function SessionScreen({
     coordination,
     facts,
     onInterrupt: (source) => void interrupt(source),
-    onBack: () => navigate('/'),
+    onBack: () => navigate(FLEET_PATH),
     queuedField,
     // PL11 (D-7986; spec §2, D30): the Goals door, for a session in a programme, read off its row and the runs it already holds,
     // named by the programme's title (review 1537 A10).
@@ -699,6 +707,7 @@ export function SessionScreen({
               onRetry={onRetry}
               onDiscard={onDiscard}
               askPending={askPending}
+              askWait={askWait}
               askBelow={askInline}
               answerLabel={answerLabel}
               onAnswer={onAnswer}
@@ -727,10 +736,9 @@ export function SessionScreen({
         {/* Above the plan, which stays the composer's neighbour. */}
         {!inspectorHoldsStrips && <MailStrip mail={mail} />}
 
-        {/* D-5560: the workflows this session is running, between the mail and the
-            plan — one line each, the facts Claude Code's own row prints; the head
-            opens their phases and agents. Read-only. */}
-        <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+        {/* Session helpers H2 (D-8872): the session's subagents and workflows, between the mail and the plan, where the
+            workflow strip of D-5560 sat; at >=1600 the rail holds them instead, as it holds the mail and the plan. */}
+        {!inspectorHoldsStrips && <HelpersStripFor store={useStore} />}
 
         {/* Overlord W1a, timers Task 13: the reminders this session set itself, with Cancel. Quiet: no line while it has
             no pending timer, as the workflow strip; a failed read says so. */}
@@ -765,8 +773,9 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
+        note={lanePickerNote(laneModels, laneView.transient)}
         options={modelOptions(
-          wrapper, laneModels, live?.model ?? null,
+          wrapper, entry, laneModels, live?.model ?? null,
           routeInfo
             ? {
               intended: classIntended, inert: classInert, unreadable: classUnreadable,
@@ -784,7 +793,7 @@ export function SessionScreen({
         eyebrow="effort"
         title="Reasoning effort"
         options={effortOptions(
-          wrapper, live?.effort ?? null, live?.ultracode ?? false,
+          wrapper, entry, route.effortLevels, live?.effort ?? null, live?.ultracode ?? false,
           routeInfo ? { intended: effortIntended, inert: effortInert, unreadable: effortUnreadable } : undefined,
         )}
         onPick={(o) => void pick(o)}
@@ -815,7 +824,7 @@ export function SessionScreen({
         session={live}
         open={reapOpen}
         onClose={() => setReapOpen(false)}
-        onReaped={() => { setReapOpen(false); navigate('/'); }}
+        onReaped={() => { setReapOpen(false); navigate(FLEET_PATH); }}
       />
     </div>
     </SessionFlows>

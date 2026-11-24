@@ -208,6 +208,14 @@ export function plantPoison(bin: string, name: string): void {
  *  reads. */
 export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-9_-]{43}\\",\\"nodeId\\":\\"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\"\}"$`;
 
+/** ccd/ccrc-api's request body, since the body rides curl's stdin config (Overlord W1 door process A1, ruled F1): one
+ *  `data-raw = "…"` line, its value holding no bare quote, no bare backslash and no control character, every quote and
+ *  backslash escaped and a newline or carriage return written `\n` or `\r` (curl's config grammar). `data-raw` never reads
+ *  a file, whatever its value starts with, so the line names no file and no URL: only the body posted to the URL the scan
+ *  read. As a sh-level ERE (grep -E); the backslash is doubled inside the bracket too, so GNU grep (a literal backslash,
+ *  twice) and ugrep (an escaped one) read the same set, as the header rule's bracket does. */
+export const CCRC_API_DATA_LINE_ERE = String.raw`^data-raw = "([^"\\[:cntrl:]]|\\[^[:cntrl:]])*"$`;
+
 /** A curl that runs `realCurl` ONLY for a call it can fully account for (wave 9 R10d, review fix). It PARSES argv:
  *
  *  - PASSES: the options ccrc's own curl calls use, measured in ccd/ccrc and ccd/ccrc-doctor-checks — the short flag
@@ -227,7 +235,9 @@ export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-
  *    `cfg=$(cat)` hangs instead: it never passes, and leaves no refusal record — wave 18, R23(a)). Since the box-token lifecycle
  *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
  *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
- *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
+ *    so it names no file (no leading `@`), no URL and no other field. Since the door process (Overlord W1 door process A1)
+ *    ONE more: ccrc-api's request body, `CCRC_API_DATA_LINE_ERE` above, a `data-raw = "…"` line whose value is escaped
+ *    as curl's config grammar needs (`data-raw` reads no file). Any other key (`url`, `proxy`,
  *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a leading or
  *    interior blank line, a comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read
  *    once with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs: so trailing blank lines pass, a
@@ -295,7 +305,7 @@ export function loopbackCurlFront(realCurl: string): string {
     // check that gave no verdict. Never fold grep's status through `!`: that would pass 2 and 127.
     'cfg_ok() {',
     '  [ -n "$cfg" ] || return 0',
-    '  printf \'%s\\n\' "$cfg" | grep -qvE -e \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\' -e \'' + CLAIM_DATA_LINE_ERE + '\'',
+    '  printf \'%s\\n\' "$cfg" | grep -qvE -e \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\' -e \'' + CLAIM_DATA_LINE_ERE + '\' -e \'' + CCRC_API_DATA_LINE_ERE + '\'',
     '  [ $? -eq 1 ]',
     '}',
     'scan() {',

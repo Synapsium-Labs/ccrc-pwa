@@ -15,10 +15,11 @@ import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readLimits, projectHome, projectPlacement, type AccountLimits } from '../src/limits.js';
 import { readSharesMeasured, type SharesRead } from '../src/shares.js';
+import { readRegistryMeasured } from '../src/registry.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, LEAST_LOADED_ORGS, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
 import { CCD, ghContainedEnv, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
@@ -115,6 +116,36 @@ const seedAuthDead = (wrappers: string[]): void => {
   }
 };
 
+/** The case's registry rows' `<id>.wrapper`, `<id>.spawn` and `<id>.uuid`, in the one directory both sides read: ccd
+ *  reads the first two, and the server reads them through the registry (review 2807 F2), which yields a row only for an
+ *  id whose identity triple (`.uuid`, `.wrapper`, `.workdir`) reads, so `.workdir` is seeded too. `link` seeds that one file as a symlink to a regular file outside the registry holding the same
+ *  bytes. Every earlier seed is swept first, so a case without `spawns` sees none. */
+const seedSpawns = (rows: LeastLoadedCase['spawns']): void => {
+  const dir = path.join(home, '.cc-sessions');
+  const targets = path.join(home, 'spawn-link-targets');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.rmSync(targets, { recursive: true, force: true });
+  fs.mkdirSync(targets);
+  for (const name of fs.readdirSync(dir)) {
+    if (/\.(spawn|wrapper|uuid|workdir)$/.test(name)) fs.rmSync(path.join(dir, name));
+  }
+  const put = (id: string, field: 'spawn' | 'wrapper', bytes: string, link: boolean): void => {
+    if (!link) { fs.writeFileSync(path.join(dir, `${id}.${field}`), bytes); return; }
+    fs.writeFileSync(path.join(targets, `${id}.${field}`), bytes);
+    fs.symlinkSync(path.join(targets, `${id}.${field}`), path.join(dir, `${id}.${field}`));
+  };
+  for (const r of rows ?? []) {
+    if (r.wrapper !== null) put(r.id, 'wrapper', r.wrapper, r.link === 'wrapper');
+    put(r.id, 'spawn', 'raw' in r ? r.raw : `${r.at} ${r.rc}`, r.link === 'spawn');
+    if (r.uuid !== false) fs.writeFileSync(path.join(dir, `${r.id}.uuid`), `00000000-0000-4000-8000-${String(r.id.length).padStart(12, '0')}`);
+    fs.writeFileSync(path.join(dir, `${r.id}.workdir`), `/w/${r.id}`);
+  }
+};
+
+/** A `date` stub for ccd's `_now_s_to` that answers `+%s` with `at`, so a case on a time boundary reads one clock on
+ *  both sides; every other `date` call goes to the real one. */
+const pinnedDate = (at: number): string => `date() { if [[ "$1" == +%s ]]; then printf '%s\\n' ${at}; else command date "$@"; fi; }; `;
+
 /** A present-but-malformed `<w>-authdead` — arbitrary raw content, not the
  *  well-formed `"<epoch> <reason>"` `seedAuthDead` writes. Called AFTER
  *  `seedAuthDead` in the runner below, deliberately: `seedAuthDead` sweeps
@@ -138,15 +169,20 @@ const seedAuthDeadMalformed = (byWrapper: Record<string, string>): void => {
  *  asserts. It is therefore LOAD-BEARING, not a courtesy: a bare `Number('')`
  *  would be `NaN` and red that case for a reason that has nothing to do with
  *  placement. */
-const shellScore = (wrapper: string): number => Number(sh(`_limit_score ${wrapper}`) || '0');
+const shellScore = (wrapper: string, clock = ''): number => Number(sh(`${clock}_limit_score ${wrapper}`) || '0');
 
-/** DEFAULT_TEST_ROSTER with the case's pool tags applied. Built HERE and not in
- *  the fixture file: the fixture is the cross-language contract and imports
- *  nothing, exactly as it expresses `now` as a parameter for the same reason. */
+/** DEFAULT_TEST_ROSTER with the case's pool tags and the fixture's organization
+ *  labels (`LEAST_LOADED_ORGS`, which placement ignores on both sides) applied.
+ *  Built HERE and not in the fixture file: the fixture is the cross-language
+ *  contract and imports nothing, exactly as it expresses `now` as a parameter
+ *  for the same reason. */
 const rosterWithPools = (pools: Record<string, string> | undefined): unknown => ({
   ...DEFAULT_TEST_ROSTER,
-  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) =>
-    pools?.[a.id] !== undefined ? { ...a, pool: pools[a.id] } : a),
+  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => ({
+    ...a,
+    ...(LEAST_LOADED_ORGS[a.id] !== undefined ? { org: LEAST_LOADED_ORGS[a.id] } : {}),
+    ...(pools?.[a.id] !== undefined ? { pool: pools[a.id] } : {}),
+  })),
 });
 
 /** The case's project tag, on disk where BOTH readers look. */
@@ -173,7 +209,9 @@ const seedSweep = (s: LeastLoadedCase['sweep']): void => {
 };
 
 describe('projectHome agrees with ccd _ws_least_loaded', () => {
-  it.each(leastLoadedCases(now()).map((c) => [c.name, c] as const))(
+  /** The epoch the cases were built from: a `pinClock` case reads it on both sides. */
+  const BUILT = now();
+  it.each(leastLoadedCases(BUILT).map((c) => [c.name, c] as const))(
     '%s',
     async (_name, c) => {
       // BOTH projections of the case's roster into the one fixture home.
@@ -231,6 +269,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedSpawns(c.spawns);
       seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
       const cfg = loadConfig({ CCRC_HOME: home });
@@ -241,10 +280,16 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
+      // The server reads the spawn records through the tick's registry rows (review 2807 F2), as the watcher does.
+      const reg = await readRegistryMeasured(localIO, cfg);
+      expect(reg.listed, 'the fixture registry lists').toBe(true);
+      const records = reg.listed ? reg.records : [];
+      const t = c.pinClock === true ? BUILT : now();
       const projected = projectHome(
-        cfg.roster, await readLimits(localIO, cfg), pool, NO_EDGES,
-        c.cls ?? 'default', await readSharesMeasured(localIO, cfg.registryDir), now(),
+        cfg.roster, await readLimits(localIO, cfg, t, undefined, records), pool, NO_EDGES,
+        c.cls ?? 'default', await readSharesMeasured(localIO, cfg.registryDir), t,
       );
+      const clock = c.pinClock === true ? pinnedDate(BUILT) : '';
       // The bash positional stays OPTIONAL: a case with no `project` calls
       // `_ws_least_loaded` with no argument, exactly as every pre-pool case
       // always has. `JSON.stringify` on the (possibly empty) project name is
@@ -253,7 +298,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // unquoted empty interpolation vanishes under bash word-splitting and
       // would shift `$2` (the class) into `$1` (the project).
       const bashPick = (): string =>
-        sh(`_ws_least_loaded ${JSON.stringify(c.project?.name ?? '')} ${c.cls ?? ''}`);
+        sh(`${clock}_ws_least_loaded ${JSON.stringify(c.project?.name ?? '')} ${c.cls ?? ''}`);
 
       if (c.expect === null) {
         // Nothing is placeable. The fixture can't express one shared "empty"
@@ -265,13 +310,13 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
         return;
       }
 
-      // 1. The prediction is right in its own terms.
-      expect(projected, c.why).toEqual(c.expect);
+      // 1. The prediction is right in its own terms (a KNOWN difference names the server's own answer).
+      expect(projected, c.why).toEqual(c.serverExpect ?? c.expect);
       // 2. …and bash, the authority, picks the same account.
       // 3. …and scores it the same, so the headroom the user reads is the
       //    headroom the account really has.
       expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
-      expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
+      expect(shellScore(c.expect.wrapper, clock), `score drift: ${c.why}`).toBe(c.expect.score);
     },
   );
 });
@@ -838,5 +883,41 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     expect(shH('declare -F _account_measured >/dev/null && echo defined || echo missing'))
       .toBe('defined');
     expect(shH('_account_measured a && echo yes || echo no')).toBe('no');
+  });
+});
+
+// A set side (Overlord W1 designation A, plan Task 2; the index's Q5). TypeScript-only rows: ccd's placer is unchanged
+// (Table 3.4d), so the parity harness above stays on the project rows.
+describe('projectHome and projectPlacement over a session set (C46)', () => {
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const acct = (id: string, pool?: string) => ({
+    id, label: id, configDirSuffix: `.${id}`, exec: id === 'lane-a' ? { kind: 'upstream' } : { kind: 'generated' },
+    homeAble: true, hue: 'cyan', telemetry: 'anthropic', continuity: { recordedAt: 1 }, ...(pool === undefined ? {} : { pool }),
+  });
+  const r = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), acct('lane-b', 'pool-b'), acct('lane-c')] });
+  const L = (five: number, seven: number): AccountLimits =>
+    ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
+  const lim = { 'lane-a': L(30, 30), 'lane-b': L(10, 10), 'lane-c': L(5, 5) };
+
+  it('a set without +untagged leaves the untagged account out, and +untagged brings it in', () => {
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: false } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-b', score: 10 });
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: true } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-c', score: 5 });
+  });
+  it('a set no account is in answers none carrying the set; an unreadable or malformed one answers unmeasurable', () => {
+    const set = { pools: ['pool-z'], untagged: false };
+    expect(projectPlacement(r, lim, { state: 'set', set }, NO_EDGES)).toEqual({ kind: 'none', set });
+    expect(projectPlacement(r, lim, { state: 'set-unreadable' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectPlacement(r, lim, { state: 'set-malformed' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectHome(r, lim, { state: 'set-malformed' }, NO_EDGES)).toBeNull();
+  });
+  it('the Overlord\'s class is asked as a set-side session: an account with no continuity record is not placed for it', () => {
+    const noCont = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), { ...acct('lane-b', 'pool-a'), continuity: undefined }] });
+    const set = { state: 'set', set: { pools: ['pool-a'], untagged: false } } as const;
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, set, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-a', score: 50 });
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, { state: 'tagged', name: 'pool-a' }, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-b', score: 1 });
   });
 });

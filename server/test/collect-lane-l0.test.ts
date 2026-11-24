@@ -54,17 +54,23 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. */
+/** `peers-claims-l0.test.ts`'s twenty-one lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. The twenty-first is the team-link vocabulary move (linear-hierarchy wave 8, D-8635): a type-only import from linking.ts, erased at compile, so no cycle forms. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
+  "import type { RosterFactsWire } from './rosterFacts.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",
   "import type { ReadFailure } from './agent-protocol.js';",
   "import type { PerfHealth } from './perf.js';",
-  "import type { WorkflowView } from './workflows.js';",
+  "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+  // The coordinator advisor (D-8967): type-only, from `shared/coordinatorAdvisor.ts`, whose one import is a value of this file.
+  "import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';",
+  // The cap in force (D-8920): type-only, from `shared/runCap.ts`, whose own imports are L0.
+  "import type { CoordCapNow } from './runCap.js';",
+  "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",
   "import type { LandingWrite } from './landingLine.js';",
   "import { hookEventIs, type HookEvent } from './hook-events.js';",
   // Overlord W1, the vocabulary piece: the two prompt constants moved into the list of what ccrc types, an import-free
@@ -78,6 +84,7 @@ const IMPORTS = [
   "import type { HostPressureHealth } from './pressure.js';",
   "import type { BackupHealth } from './backup.js';",
   "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
+  "import type { TeamCandidateWire, TeamLinkWire } from './linking.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

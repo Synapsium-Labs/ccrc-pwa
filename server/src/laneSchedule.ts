@@ -15,6 +15,12 @@
 
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
+import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
+
+/** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
+export const OUTBOX_LANE_PERIOD_MS = 30_000;
+/** The response lane's beat (Table 11.5's ten-minute `responses` cadence): it seals and deletes, and nothing waits on it. */
+export const RESPONSES_LANE_PERIOD_MS = 10 * 60_000;
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -22,6 +28,19 @@ import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
  *  a 304 still spends one, so every 30 minutes is 2 scheduled polls an hour, leaving the rest of the budget to
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
+
+/** The Linear plan sync's beat (D-8182, Linear hierarchy §5.2): a tick takes the programmes due past their debounce. */
+export const PLAN_SYNC_BEAT_MS = 5_000;
+/** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
+ *  key (the ISO week), so a day only bounds how late in a week the item appears. */
+export const QUIZ_LANE_PERIOD_MS = 86_400_000;
+/** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
+ *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
+export const FORECAST_LANE_PERIOD_MS = 60_000;
+/** The decision model's anchor-set lane's look (Overlord W2, the decision model PR B): once a day, the quiz lane's period by
+ *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
+ *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
+export const DECISION_ANCHOR_PERIOD_MS = QUIZ_LANE_PERIOD_MS;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -171,9 +190,16 @@ export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
 export const RUN_STUCK_SWEEP_MS = 60_000;
 /** The runs-closed notice's drain (D-8073): a minute, as the stuck verdict's pass. */
 export const RUN_UNTOLD_SWEEP_MS = 60_000;
+/** D-8955: the disk-lane stall alert's beat. Its window is an hour, so a pass every five minutes says it at most five
+ *  minutes late; each pass is one bounded journal read and the open items of one programme. */
+export const DISK_LANE_STALL_SWEEP_MS = 5 * 60_000;
 /** The run-close lane's pass (D-8077, rows E1 and E1r): a minute, the dead-coordinator lane's own sibling cadence. DERIVED from
  *  it by reference (`CHILD_RECLAIM_SWEEP_MS`), never a second literal: R7's budget is "per pass" and a pass is that throttle. */
 export const RUN_CLOSE_SWEEP_MS = CHILD_RECLAIM_SWEEP_MS;
+/** The admission wake's lane (D-6095): a coordinator the concurrency cap refused is mailed when the cap has room, at most
+ *  `WAKE_BURST` a window. Its cadence IS the wake budget's window (`WAKE_WINDOW_MS`, `coord/wakeBudget.ts`), declared here for
+ *  the reason `STOP_DONE_SWEEP_MS` is (the L0 table imports no L1 file); `admission-wake.test.ts` pins the two equal. */
+export const ADMISSION_WAKE_SWEEP_MS = 60_000;
 
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
@@ -186,10 +212,10 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -263,12 +289,45 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'stalls', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'CLAIM_SWEEP_MS', reason: 'the stall watch needs no finer beat than the claim lanes it runs after' },
   },
+  // Block wakes (P7) are their own lane: they hold no stall-watch arming and no run, so a parked thread wakes with the
+  // stall watch off and after its coordinator's last run closed. The cadence follows the stall sweep's.
+  {
+    name: 'blockWakes', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'STALL_SWEEP_MS', reason: 'a block wake needs no finer beat than the sweep it was split from' },
+  },
+  // The admission wake (D-6095): mails refused coordinators when the cap has room. One pass at a time; it catches its own
+  // failure with its own sentence, so no warnKey. Its beat is the wake budget's window (pinned equal in admission-wake.test.ts):
+  // the lane wakes at most WAKE_BURST coordinators a window, so a finer beat buys nothing.
+  { name: 'admissionWake', cadenceMs: ADMISSION_WAKE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The mailhold projection (mid-turn mail spec §3.4, plan Task 4.3; `coord/mailHoldLane.ts`): one pass at a time at the mail
+  // lane's cadence by reference. A pass older than 60 s is abandoned, well inside the 120 s renewal margin, so one wedged write
+  // never lets a held lease lapse, and the overtaken pass writes nothing more (`mailHoldPass`'s generation). It runs under `mail-disabled` too, where it only clears; a thrown pass is caught here.
+  {
+    name: 'mailHold', cadenceMs: MAIL_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 60_000,
+    warnKey: 'ccrc-server: the mailhold lane failed',
+    derivedFrom: { name: 'MAIL_SWEEP_MS', reason: 'a hold appears and clears with mail, so the projection looks as often as the mail lane does' },
+  },
+  // The Overlord inbox's coalesced wake (W1 inbox piece, Task 4; `coord/overlordInboxWake.ts`): one pass at a time at the mail lane's
+  // cadence by reference; it queues at most one `inbox-wake` mail a pass, and a thrown pass is caught here.
+  {
+    name: 'inboxWake', cadenceMs: MAIL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the inbox wake lane failed',
+    derivedFrom: { name: 'MAIL_SWEEP_MS', reason: 'the wake rides the mail lane, so looking more often than the mail lane delivers buys nothing' },
+  },
   { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
+  // The push outbox (Overlord §6.7, Table 11.1c; W1): the held items' reach, every due row sent once per claim, and the purge.
+  // One pass at a time; a pass older than two send deadlines is abandoned, since each send has its own deadline timer.
+  { name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed' },
+  // The response lane (Overlord §4.3, Table 11.1c, Table 11.5; W1 responses B): seals each response row once its window
+  // closes and deletes rows past the operator's retention. One pass at a time; it holds no deadline timer, so a pass older
+  // than two periods is abandoned.
+  { name: 'responses', cadenceMs: RESPONSES_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 2 * RESPONSES_LANE_PERIOD_MS, warnKey: 'ccrc-server: the responses lane failed' },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
   // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
   // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
@@ -321,6 +380,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // overlap as it always has (a pass spends its minute before it awaits anything), and never rejects, so no row warns;
   // `tick` dispatches it above the registry read's fail-shut return.
   { name: 'diskAlarm', cadenceMs: DISK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The disk-lane stall alert (D-8955): one pass at a time, beside the disk alarm above the registry read's fail-shut
+  // return; its pass catches its own failure with its own sentence, so no warnKey.
+  { name: 'diskLaneStall', cadenceMs: DISK_LANE_STALL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   // The tmp sweep census (D-6624) starts due as it always has, lets passes overlap, and its pass never rejects; `tick`
   // dispatches it beside the disk alarm, on the last good registry listing.
   { name: 'tmpCensus', cadenceMs: TMP_SWEEP_CENSUS_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -335,6 +397,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
     derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
+  },
+  // The overlaps arm (Overlord spec §5.5 and §5.6, Table 11.1c; W2, plan w2-overlaps.md Task 4): one read-and-record pass at a
+  // time over the refused claims' record, the radar's map and the claims history. In PR A it records pairs and sends nothing.
+  {
+    name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+    warnKey: 'ccrc-server: the overlaps arm failed',
+    derivedFrom: { name: 'landingRadar', reason: 'the arm reads the radar\'s map, which changes no faster than the radar lane writes it' },
   },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the
@@ -356,9 +425,50 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'launchProfile', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the launch-profile lane failed',
     derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'the lane reads the usage sidecar\'s window, which changes no faster than that lane reads it, and a route it writes is applied only at the session\'s next launch' },
   },
+  // The coordinator advisor's count lane (plan 2026-11-23-coordinator-advisor PR C, D-8971): one pass at a time, at the usage
+  // lane's cadence by reference. It reads advised coordinators' transcripts forward and records their calls; a thrown pass is caught here.
+  {
+    name: 'advisorCount', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the advisor count lane failed',
+    derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'a daily cap needs the count within minutes, and the launch-profile lane that reads it runs at this cadence' },
+  },
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.
   { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
+  // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
+  // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
+  // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
+  { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
+  // The Linear plan sync (D-8182): one tick at a time. A tick's deadline plus one call's timeout stays under `staleAfterMs`, and
+  // a tick restarted as stuck only joins the passes in flight (`planSync.ts`), so a restart never sends a second write.
+  { name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' },
+  // The Linear drift pass (D-8183, §7.2): one tick a minute, and it takes at most ONE managed workspace whose own pass period
+  // (`DRIFT_PASS_MS`, thirty minutes) has passed, so most beats read nothing; with no managed team it makes no call at all. A tick
+  // is a handful of reads and one restore flight per programme met, bounded by `staleAfterMs`; a tick the runner restarts as
+  // stuck finds the first still running (`DriftPass` returns at once) and never starts a second pass.
+  { name: 'linearDrift', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear drift pass failed' },
+  // D-8186: the per-team migration (Linear hierarchy design §10): mails for a map, applies an approved map, runs a put back asked for.
+  { name: 'linearMigration', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear migration failed' },
+  // The worker skill's self-install (D-8126, wave A7-5; `coord/skillInstallLane.ts`): one pass at a time, every 15 s, so an
+  // install follows its dispatch's `skill-preflight:absent` within one beat. A pass runs at most `SKILL_INSTALL_PER_PASS`
+  // verbs, each under `SKILL_ENSURE_DEADLINE_MS` (60 s), which `staleAfterMs` stays above, and never two on one home at once
+  // (an overdue call holds its account until it settles); a thrown pass is caught here.
+  { name: 'skillInstall', cadenceMs: 15_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 300_000, warnKey: 'ccrc-server: the skill self-install lane failed' },
+  // The coordinator skill's rollout mail (D-8126, wave A9-3; `coord/skillRolloutLane.ts`): one pass at a time, every 30 s,
+  // until a pass settles (every running coordinator told once, durably), then each beat returns at once. A pass is a few
+  // synchronous reads and mails per claimant, far inside `staleAfterMs`; a thrown pass is caught here.
+  { name: 'skillRollout', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: the skill rollout lane failed' },
+  // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
+  // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
+  // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
+  { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
+  // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`
+  // on the maintenance count, holds an armed row that drifted, and asks nothing of a row that is off, so every row ships quiet.
+  // A pass catches a throw in one row and goes on; a thrown pass is caught here.
+  {
+    name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the decision anchors lane failed',
+    derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'drift is counted in days against a UTC-day maintenance cap, so the lane looks once a day, as the quiz lane does' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

@@ -28,12 +28,15 @@ import { openCoordDb } from '../src/coord/db.js';
 import { closeRun } from '../src/coord/close.js';
 import { DISPATCH_ABANDON_CLOSE_DETAIL } from '../src/coord/runCloseSwitch.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT } from '../../shared/dispatch-abandon.js';
+import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT, DISPATCH_ORPHANED_EVENT } from '../../shared/dispatch-abandon.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 import { DISPATCH_ABANDON_PER_PASS } from '../src/coord/abandonDeadDispatch.js';
 import { bindReturnedChild } from '../src/coord/dispatch.js';
+import { decideDispatch } from '../src/coord/dispatchDecide.js';
+import type { RegistryRead } from '../src/registry.js';
+import { UNMEASURED } from '../src/unmeasured.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -576,5 +579,129 @@ describe("bindReturnedChild (D-7563): the spawn arm's write, refused on any chan
     f.coord.advance(id, 'failed', 'operator');
     expect(bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w9', claimedBy: COORD, startedAt })).toMatchObject({ ok: false });
     expect(f.sessionOf(id)).toBeNull();
+  });
+});
+
+describe('an orphaned spawn goes to the pass at once (D-8126)', () => {
+  const orphan = (f: Awaited<ReturnType<typeof fixture>>, id: number, kind = 'registry-unmeasurable', at = f.now()): void => {
+    f.coord.recordRunEvent(id, 'coordinator', `${DISPATCH_ORPHANED_EVENT}${kind}`, at);
+  };
+
+  it('a run stamped a minute ago with an orphan event is a candidate; with no workspace for it the pass abandons it and mails the coordinator', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    orphan(f, id);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).toContain(id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('failed');
+    expect(f.reasons(id)).toHaveLength(1);
+    expect(f.mail()).toEqual([expect.objectContaining({ toId: COORD, runId: id, subject: DISPATCH_ABANDON_SUBJECT })]);
+    expect(f.mail()[0]!.body).toMatch(/dispatch-orphaned:registry-unmeasurable/);
+  });
+
+  it('with exactly one marker naming it and a live pane the orphaned run binds, as a late run does', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    orphan(f, id, 'ambiguous-dispatch');
+    f.plant('demo-w9', { workspace: 'w9', branch: 'ws/w9', child: String(id), started: '1' });
+    f.live.add('demo-w9');
+    await f.pass();
+    expect(f.sessionOf(id)).toBe('demo-w9');
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.binds(id)).toHaveLength(1);
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('F1, the review\'s chain: a cut-short ws-add, then an unlistable AFTER read, then an empty registry next pass, is NOT abandoned before the bound', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    // The decider meets the dropped link: ccd's ending is cut short (or unmeasured), the AFTER read does not list.
+    for (const cutShort of [true, UNMEASURED] as const) {
+      const d = decideDispatch({ step: 'bind', project: 'demo', childSlug: null, beforeIds: new Set<string>(),
+        after: { listed: false } as unknown as RegistryRead, res: { ok: false, stderr: '', cutShort } });
+      expect(d.kind).toBe('refused');
+      // What `stopped()` journals: the refusal's event, then the orphan event last when there is one.
+      if (d.kind === 'refused') {
+        if (d.event !== undefined) f.coord.recordRunEvent(id, 'coordinator', d.event);
+        if (d.orphanEvent !== undefined) f.coord.recordRunEvent(id, 'coordinator', d.orphanEvent);
+      }
+    }
+    // The next pass reads an empty registry: the run is not a candidate, and nothing closes it inside the bound.
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('a run whose dispatch is still in flight (no orphan event, stamp inside the bound) is not a candidate and is never abandoned', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('a later re-dispatch (a newer stamp) hides an older orphan event', async () => {
+    const f = await fixture();
+    const id = f.stalled(120_000);
+    orphan(f, id, 'registry-unmeasurable', f.now() - 90_000);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).toContain(id);
+    f.coord.markDispatchStarted(id, f.now() - 30_000);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+  });
+
+  it('an orphan event older than the stamp, or a newer non-orphan event after it, does not admit the run', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    orphan(f, id, 'registry-unmeasurable', f.now() - 90_000);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
+    const other = f.stalled(60_000, 'prog-b');
+    orphan(f, other);
+    f.coord.recordRunEvent(other, 'coordinator', 'something-else', f.now() + 1);
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(other);
+  });
+
+  it('the switch off still stops an orphaned run', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    orphan(f, id);
+    f.coord.setDispatchAbandon('off', f.now());
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('the cleanup pause still stops an orphaned run', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    orphan(f, id);
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('the per-pass cap still holds when every candidate is orphaned', async () => {
+    let arms = 0;
+    const f = await fixture({ beforeAbandon: () => { arms += 1; } });
+    const ids = Array.from({ length: DISPATCH_ABANDON_PER_PASS + 2 }, (_, i) => f.stalled(60_000, `prog-o${i}`));
+    for (const id of ids) orphan(f, id);
+    await f.pass();
+    expect(arms).toBe(DISPATCH_ABANDON_PER_PASS);
+    expect(ids.filter((id) => f.stateOf(id) === 'failed')).toHaveLength(DISPATCH_ABANDON_PER_PASS);
+  });
+
+  it('a retry that restamps the run between the verdict and the arm stops the arm (the re-measure)', async () => {
+    let restamp = (): void => {};
+    const f = await fixture({ beforeAbandon: () => restamp() });
+    const id = f.stalled(60_000);
+    orphan(f, id);
+    restamp = () => { f.coord.markDispatchStarted(id, f.now() + 1); };
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.reasons(id)).toEqual([]);
   });
 });

@@ -19,19 +19,38 @@
 // take-up plan, refinement (i)).
 // A body stays where it landed until its `bodyKey` changes (`MarkdownBody` keys this component by it), so a fallback
 // never mounts again. The reason of G3, G4 and G6 is kept for the console and never reaches the page.
+// One thing starts the body again: images that answered 401 (`ReaderImages.auth`). Those images show the frame's own
+// "not loaded" chip, and signing in cures them, so a body whose images reported one listens for `onAuthRegained` (the plain
+// view's precedent, `useImageSrc`) and, when it fires, `ReaderFrame` starts a NEW body (it keys the body by the count of
+// those sign-ins): the old body's cleanup tears the mount down and gives its drafts back, and the new body runs the render,
+// the images and the mount from `rendering`, its "Formatting…" note shown, once per sign-in. A run inside the old body would
+// start where that body landed, and `readerBodyReducer` takes `plain` only from `rendering` and `ready` only from
+// `mounting`, so a second render that timed out or was refused would land nowhere (review 2361 F1). The body listens from
+// before its images walk: sign-in is announced once, and a sign-in that completes while a queued load is still pending is
+// latched, so a walk that ends with a 401 starts the new body at once, with no mount of its own (review 2372 F1). A body whose
+// images reported none stops listening when the walk ends.
+//
+// A body also owns its history (completion plan Task 12 part B, `readerHistory.ts`): when the leaf hands it the opened pin
+// (`opened`), the body's run starts the commit-list read as the render starts, so it runs beside the render and the images,
+// and awaits the seed once the images are in and before the mount. The mount then carries the version seed (the served
+// commit, the draft flag, the commits and the day filter) and the `changes` and `openVersion` of that body, which are closed
+// over the body's own pin and text and answer nothing once the body ends. The document carries no version of its own: the
+// seed is the one carrier. Without `opened` there is no history read and no version list, and the seed is the served hash alone.
 //
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
 import { THEMES } from '@ccrc/ui';
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import type { DocsShowOk } from '../../../shared/docs';
+import type { DocPin, DocsPageLocation, DocsShowOk } from '../../../shared/docs';
 import { utf8ByteLength } from '../lib/markdownGuard';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
+import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
 import { DocsAssetContext } from './DocImage';
+import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
 import {
@@ -40,6 +59,8 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
+import { readerServedHash, readerVersionSeed } from './reader/history';
+import { startReaderHistory } from './readerHistory';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
@@ -57,6 +78,8 @@ export interface ReaderDeps {
   render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
+  /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
+  readonly history?: DocsHistoryLoader;
 }
 
 /** The default `mount`: the adapter and the frame's texts load on first use, each through its own literal `import()`
@@ -76,9 +99,15 @@ export interface ReaderFrameProps {
   readonly link: LinkBase;
   readonly parser: MarkdownParser;
   readonly reader: ReaderDeps;
+  /** What the body's history is read for: the pin the leaf opened it at, the page now and the day filter of the history
+   *  entry the page stands on. Absent, no history is read and the frame offers no `changes` or `openVersion`. */
+  readonly opened?: { readonly pin: DocPin; readonly page: DocsPageLocation & { kind: 'path' }; readonly only: string | null };
   /** The visit's pending fragment: handed to the frame as its `initialHash` when it mounts. */
   readonly pendingFragment: string | null;
-  /** Called once the fragment is handed over. */
+  /** Called when this body's frame reports `ready` with an anchor to spend: at the first `ready` when the mount was handed
+   *  the fragment, and at the `ready` of each frame a same-page link reopened at its anchor (`openAt`), whether or not the
+   *  mount was handed one. So it can run more than once for one body, and the handler must bear a repeat (the leaf's,
+   *  `DocsLeaf`'s `setFragment(null)`, does). */
   onFragmentConsumed(): void;
 }
 
@@ -88,17 +117,21 @@ type Ask =
   | { readonly kind: 'copy'; readonly ask: ReaderCopyAsk }
   | { readonly kind: 'copy-failed'; readonly ask: ReaderCopyFailedAsk };
 
-const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0 };
+const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0, auth: 0 };
 
-/** The pending fragment as the frame's `initialHash`: the address bar holds it percent-encoded, and the frame matches
- *  decoded ids. A malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
-function decodedFragment(fragment: string | null): string | null {
-  if (fragment === null) return null;
+/** A fragment as the frame matches it: the address bar holds it percent-encoded, and the frame matches decoded ids. A
+ *  malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
+function decodedId(fragment: string): string {
   try {
     return decodeURIComponent(fragment);
   } catch {
     return fragment;
   }
+}
+
+/** The pending fragment as the frame's `initialHash` (`decodedId`), or none. */
+function decodedFragment(fragment: string | null): string | null {
+  return fragment === null ? null : decodedId(fragment);
 }
 
 /** What was thrown, for the console only: an error's name and message, else its type. */
@@ -141,11 +174,13 @@ function ReaderBarShown(p: { readonly bar: ReaderBar }): null {
  *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
+  /** How many times sign-in has returned over a body with 401 images: the body's key, so each one starts a new body. */
+  const [signedIn, setSignedIn] = useState(0);
   if (src.kind !== 'markdown') return null;
-  return <ReaderBody {...p} text={src.text} />;
+  return <ReaderBody key={signedIn} {...p} text={src.text} onSignedIn={() => setSignedIn((n) => n + 1)} />;
 }
 
-function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode {
+function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSignedIn: () => void }): ReactNode {
   const { text } = p;
   const bytes = useMemo(() => utf8ByteLength(text), [text]);
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
@@ -185,6 +220,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     let landed = false;
     let counted = 0;
     let uncount: ((delta: number) => void) | null = null;
+    /** The listener for sign-in: subscribed before the images walk, and kept after it only when the walk reported a 401. */
+    let unwatchAuth: (() => void) | null = null;
+    /** The anchor a same-page link last opened the frame at, held by the visit until the frame opened at it is ready. */
+    let reopened: string | null = null;
 
     const drop = (): void => {
       mount?.destroy();
@@ -196,10 +235,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       if (counted !== 0 && uncount !== null) uncount(-counted);
       counted = 0;
     };
+    const unwatch = (): void => {
+      unwatchAuth?.();
+      unwatchAuth = null;
+    };
     /** G3 and G6: the mount, if any, goes; the fixed note shows; the reason stays in the console. */
     const fallBack = (reason: string): void => {
       if (ac.signal.aborted || landed) return;
       landed = true;
+      unwatch();
       console.warn(`ccrc: reader fell back (${reason})`);
       drop();
       giveBack();
@@ -222,6 +266,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           break;
         case 'hash':
           replaceFragment(r.id);
+          // The policy says the frame did not scroll (a link to this very page spelled with its file name): this body's
+          // live mount opens the same document again at the anchor. The visit holds the anchor too, so a fallback of the
+          // frame opened at it lands the plain view there; that frame's `ready` spends it. `mount` is null before the mount
+          // lands and after a fallback or the body's end, so a late link opens nothing.
+          if (r.reopen && mount !== null && mount.openAt !== undefined) {
+            reopened = r.id;
+            cur.link.onFragment(r.id, location.pathname + location.search);
+            mount.openAt(decodedId(r.id));
+          }
           break;
         case 'sheet':
           setAsk({ kind: 'link', ask: { url: r.url, host: r.host, foreign: r.foreign } });
@@ -241,6 +294,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
 
     void (async () => {
       const first = live.current;
+      // The body's history starts with its render, so the commit list is read beside the render and the images.
+      const opened = first.props.opened;
+      const history = opened === undefined ? null : startReaderHistory({
+        project: first.props.link.project, show: first.props.show, text, pin: opened.pin,
+        page: () => (live.current.props.opened ?? opened).page, only: opened.only,
+        history: first.props.reader.history ?? null, loaders: first.assets?.loaders ?? null,
+        queue: first.assets?.queue ?? null, signal: ac.signal,
+      });
       let outcome: ReaderRenderOutcome;
       try {
         outcome = await first.props.reader.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: ac.signal });
@@ -263,6 +324,21 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       }
 
       const second = live.current;
+      // Sign-in is listened for from before the images walk, not after it: `clearAuthLost` announces once, to the listeners
+      // already subscribed, and a sign-in can complete while a queued image load is still pending (review 2372 F1). The
+      // listener latches that sign-in; once the walk has ended, a 401 left in it starts the new body at once.
+      let regained = false;
+      /** Set once the walk has reported a 401: from then on a sign-in starts the new body itself. */
+      let watching = false;
+      unwatchAuth = onAuthRegained(() => {
+        if (!watching) {
+          regained = true;
+          return;
+        }
+        // Sign-in returned: `ReaderFrame` starts a new body, whose run asks the images again; this body's cleanup ends this run.
+        unwatch();
+        live.current.props.onSignedIn();
+      });
       let images: ReaderImages;
       try {
         images = second.assets === null
@@ -274,11 +350,30 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         return;
       }
       if (ac.signal.aborted || landed) return;
+      if (images.auth === 0) {
+        unwatch();
+      } else if (regained) {
+        // A sign-in completed during the walk, after a load answered 401: the new body asks the images again, so this body
+        // counts no drafts and mounts nothing.
+        unwatch();
+        live.current.props.onSignedIn();
+        return;
+      } else {
+        watching = true;
+      }
       if (second.assets !== null && images.drafts !== 0) {
         counted = images.drafts;
         uncount = second.assets.onDraftAsset;
         uncount(counted);
       }
+
+      // The version seed: the served commit (or a draft's head) with the doc's commits and the day filter. It is awaited here,
+      // after the images, so the frame is seeded when it mounts; a body that ended or landed meanwhile mounts nothing.
+      const shown = first.props.show;
+      const seed = history === null
+        ? readerVersionSeed(readerServedHash(shown) ?? '', shown.source === 'draft', null, null)
+        : await history.seed;
+      if (ac.signal.aborted || landed) return;
 
       const cur = live.current;
       const el = hostRef.current;
@@ -291,18 +386,23 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       // The bar is read once, here: the frame keeps it for its life (refinement (f)).
       const chrome = cur.barSlot?.chrome ?? 'frame-bar';
       const progress = chrome === 'host-bar' ? createReaderProgress() : null;
+      /** The fragment this mount was handed: `onReady` spends it. */
+      const handedFragment = cur.props.pendingFragment;
+      let spent = false;
       const input: ReaderMountInput = {
         document: {
           result: outcome.result,
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
-          initialHash: decodedFragment(cur.props.pendingFragment),
-          // The W8a plan's refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
-          // The adapter keeps this only for a full hex sha (`withServedVersion`).
-          version: cur.props.show.source === 'draft'
-            ? { sha: cur.props.show.head ?? null, draft: true }
-            : { sha: cur.props.show.commit ?? null, draft: false },
+          initialHash: decodedFragment(handedFragment),
         },
+        // The W8a plan's refinement (k) and Task 12: the commit a committed doc was read at, or the head a draft was read over
+        // with its flag, with the doc's commits and the day filter. Absent for a served hash that is not a full commit.
+        ...(seed === null ? {} : { version: seed }),
+        ...(history === null ? {} : {
+          changes: (sha: string) => history.changes(sha),
+          openVersion: (v: { sha?: string; only?: string }) => history.openVersion(v),
+        }),
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),
@@ -311,7 +411,18 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         onHash: replaceFragment,
         copy: onCopy,
         onReady: () => {
-          if (!ac.signal.aborted && !landed) dispatch({ e: 'ready' });
+          if (ac.signal.aborted || landed) return;
+          dispatch({ e: 'ready' });
+          // The fragment is spent here, once and only for this body: a fallback raised before `ready`, after the mount has
+          // resolved included, keeps it for the plain view's scroll.
+          if (!spent && handedFragment !== null) {
+            spent = true;
+            live.current.props.onFragmentConsumed();
+          } else if (reopened !== null) {
+            // The frame opened at a same-page link's anchor is up: the visit no longer holds the anchor for the plain view.
+            reopened = null;
+            live.current.props.onFragmentConsumed();
+          }
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
@@ -340,8 +451,6 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           progress,
         });
       }
-      // The fragment is spent only once the frame is up: a fallback before this keeps it for the plain view's scroll.
-      if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
       const latest = live.current.prefs;
       if (latest !== seededPrefs.current) {
         seededPrefs.current = latest;
@@ -351,6 +460,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
 
     return () => {
       ac.abort();
+      unwatch();
       drop();
       giveBack();
     };

@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { parseFile } from '../scan/parse.js';
+import { parseFile, ts } from '../scan/parse.js';
+import { sqlWrites, tableRefSource } from './sqlStatements.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -310,25 +311,21 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items'] as const;
+  'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
+  'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
+  'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
+  'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
+  'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
+  'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state'] as const;
 
-/** Each table's writers, `file#Class.method`, sorted and unique. */
-export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
-  const out: Record<string, Set<string>> = Object.fromEntries(TABLES.map((t) => [t, new Set<string>()]));
-  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${TABLES.join('|')})\\b`, 'g');
-  for (const f of files) {
-    // Comment lines blanked to spaces, so prose naming a statement is not a writer and offsets still hold.
-    const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-    if (!TABLES.some((t) => text.includes(t))) continue;
-    const hits = [...text.matchAll(verb)];
-    if (hits.length === 0) continue;
-    const syms = parseFile(f).symbols;
-    for (const m of hits) {
-      const at = m.index!;
-      const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-      out[m[1]!]!.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
-    }
-  }
+/** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
+ *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
+export const tableWriters = (files: readonly string[], tables: readonly string[] = TABLES): Record<string, string[]> => {
+  const out: Record<string, Set<string>> = Object.fromEntries(tables.map((t) => [t, new Set<string>()]));
+  for (const w of sqlWrites(files, tables)) out[w.table]!.add(w.writer);
   return Object.fromEntries(Object.entries(out).map(([t, s]) => [t, [...s].sort()]));
 };
 
@@ -366,11 +363,21 @@ describe(TABLES_PIN, () => {
       // The push outbox (Overlord W1): `stampReach` is the one writer of `reachedOperatorAt`, on asks and on items.
       asks: [OUTBOX_REACH, ...['correctWithMail', 'declineAsk', 'insertAsk', 'pruneAskQuestions', 'releaseAsk', 'restampAsk', 'settleAsk',
         'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`)],
-      approvals: ['correctWithMail', 'declineApproval', 'insertApproval', 'lapseApproval', 'markApprovalOperator',
-        'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
+      // The park (approvals PR 3): the one write of `parked`, the spend's retry row and settled key, and `fetchedAt`.
+      approvals: [...['markApprovalFetched', 'meetParkRuling', 'parkApprovalRow'].map((f) => `server/src/coord/approvalParkStore.ts#${f}`),
+        ...['correctWithMail', 'declineApproval', 'insertApprovalAt', 'lapseApproval', 'markApprovalOperator',
+          'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`)],
+      // The approval census (approvals PR 1): its one writer, reached only through the questions owner, and its retention.
+      approval_census: ['insertCensusRow', 'pruneCensusSummaries'].map((f) => `server/src/coord/approvalCensusStore.ts#${f}`),
+      // The park (approvals PR 3, review 2889 F8): one table, written only in its own store, reached through `CoordStore` from the
+      // questions owner.
+      approval_parks: ['markFirstPark', 'noteCoordinatorVerdictOfRow', 'pruneParks', 'recordParkRuling', 'releaseParkSlotOfRow',
+        'reserveParkAtMint', 'spendParkRuling', 'voidParksOfParkedRows'].map((f) => `server/src/coord/approvalParkStore.ts#${f}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
-      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'setGenerationDue', 'setHoldOff', 'stepGeneration']
+      // The designation's go-live restamps the pending body's generation with its term (Overlord W1 designation, X5).
+      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'endOverlordGeneration', 'mintGeneration', 'restampOverlordGeneration', 'setGenerationDue', 'setHoldOff',
+        'stepGeneration']
         .map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_cursor: ['server/src/continuity/continuityStore.ts#advanceCursorIn'],
       continuity_snapshots: ['server/src/continuity/continuityStore.ts#insertSnapshot'],
@@ -382,12 +389,327 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      // The renewal act (Overlord W1a): the generations lane's checkpoint, and its one claim-then-answer record of a renew call.
+      continuity_checkpoints: ['server/src/continuity/continuityStore.ts#putCheckpoint'],
+      continuity_renew_calls: ['answerRenewCall', 'claimRenewCall'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_soft_renewals: ['server/src/continuity/continuityStore.ts#recordSoftRenewal'],
+      continuity_start_loads: ['server/src/continuity/continuityStore.ts#insertStartLoads'],
       // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
       push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
         'sealAtBoot', 'silenceOutboxRow'].map((f) => `server/src/coord/pushOutboxStore.ts#${f}`),
       // The item ledger's raise, its one state move and the level toggle, measured at the push outbox's build; and the reach stamp.
       operator_items: [...['moveItemInTx', 'raiseItemInTx', 'setBlocking'].map((f) => `server/src/coord/ledgersStore.ts#${f}`), OUTBOX_REACH],
+      // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
+      portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
+      answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
+      // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
+      // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
+      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
+      // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
+      // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
+      // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
+      // row's writers.
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+        .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
+      // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
+      // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
+      overlord_ladder: ['applyRestoreInTx', 'journalPendingInTx', 'setRungInTx'].map((f) => `server/src/coord/overlordLadderStore.ts#${f}`),
+      overlord_latches: ['applyRestoreInTx', 'clearLatchInTx', 'journalPendingInTx', 'raiseLatchInTx']
+        .map((f) => `server/src/coord/overlordLadderStore.ts#${f}`),
+      // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
+      // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
+      // nothing deletes a receipt; the boot's record.
+      // Responses B adds the Waiting on you rows' insert (in the reach's move), the digest lines' (in the digest's claim), the
+      // lane's one seal, the handled door's one mark, and the deleter by time, which also removes receipts and older boots.
+      operator_responses: ['deleteResponsesThroughInTx', 'insertDigestResponsesInTx', 'insertPushResponseInTx', 'insertWaitingResponseInTx',
+        'landPushVerdictInTx', 'markResponseHandled', 'sealResponse'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_receipts: ['deleteResponsesThroughInTx', 'insertReceipt'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_boots: ['deleteResponsesThroughInTx', 'recordResponseBoot'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      // The retention setting (responses B): its seed row, and the retention door's one writer.
+      response_settings: ['server/src/coord/responsesStore.ts#setResponseRetention', 'server/src/coord/schema.ts#(module)'],
+      // Overlaps and goal conflicts (Overlord W2, plan w2-overlaps.md Task 3): a refused claim's record, prune included, written
+      // only after the claim's own transaction committed; the pairs' rows by the arm's apply, and their goals stamps by the one
+      // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
+      claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
+      programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
+      // The renewal hand-offs (Overlord W1a): the Renew now door's request, the prompt route's mark and the lane's quiet of it.
+      continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
+      operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
+      operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
+      // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
+      // reservation and its settle, the boot release settling through the same writer; the anchor columns' one writer (PR B).
+      decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
+      decision_days: ['recordAnchorRun', 'reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The decision model's arming (Overlord W2 decision model B, Task 6): a row's one writer, journal record first; the host's
+      // one writer, in the key doors' transaction; a line's admission, and its canary columns.
+      decision_rows: ['server/src/coord/decisionModelStore.ts#moveDecisionRowInTx'],
+      decision_host: ['server/src/coord/decisionModelStore.ts#setDecisionHostInTx'],
+      decision_lines: ['admitDecisionLine', 'recordCanary'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
+      renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
+      // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
+      // remaining-work door; remaining work B's `settleEdge` writes `programme_edges`' state columns alone.
+      programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      programme_edges: ['insertRemaining', 'settleEdge'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
+      // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
+      // score arm's outcome write, each reached only from its arm of the forecast lane.
+      programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
+      // Health changes and what each run cost (Overlord W2 forecasts B, plan w2-forecasts-health.md Task 7): one writer
+      // each, reached only from its arm of the forecast lane.
+      programme_health: ['server/src/coord/programmeFactsStore.ts#appendHealth'],
+      run_spend: ['server/src/coord/programmeFactsStore.ts#recordRunSpend'],
+      // The door process's act key (Overlord W1 door process A1, plan w1-door-process.md Task 1): three facts, three writers,
+      // one row: the claim door's issue and refused-claim count, and the counter, reached only through gates B's guarded adapter.
+      continuity_act_keys: ['advanceActCounter', 'issueActKey', 'noteRefusedClaim'].map((f) => `server/src/continuity/actKeyStore.ts#${f}`),
+      // The gate's fence refusals (Overlord W1 gates B, plan w1-gates.md Task 5): one writer, which also prunes the table.
+      overlord_fence_refusals: ['server/src/coord/overlordGateStore.ts#recordFenceRefusal'],
+      // The hook's reports (Overlord W1 door process B1, plan w1-door-process.md Task 7): one writer, which also prunes its rows past their keep.
+      continuity_hook_reports: ['server/src/continuity/hookReportStore.ts#insertHookReport'],
+      // The witness checks (Overlord W1 door process B1, plan w1-door-process.md Task 9): one writer, which also prunes its rows past 7 days.
+      continuity_witness_checks: ['server/src/continuity/hookReportStore.ts#recordWitnessCheck'],
+      // The run cap's stored number and what it is (D-8920): ONE writer of `maxConcurrentWorkers`, `capMode`
+      // and `updatedAt`, in one statement, reached only from the caps door (`coord-caps-route.test.ts` holds the one
+      // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
+      // MIGRATIONS' string, so the scanner names its module.
+      coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
     });
+  });
+
+  // The portfolio's one writer is reached only from the rank door (Overlord W1, plan w1-portfolio.md Task 2; review 2130, F2):
+  // every call under `server/src` is listed, never deduplicated, by its innermost enclosing symbol and, inside a route's
+  // registration call, by that route. Fastify handlers are anonymous arrows, so the route is what tells a second call in
+  // another handler of the same registration function (the box-token goals read among them) from the rank door's own.
+  const ROUTE_VERB = /^(get|post|put|delete|patch)$/;
+  // The answer marks' one writer is pinned the same way (Overlord W1, plan w1-delegation-marks.md Task 2), so `callSitesOf`
+  // takes the callee's name.
+  const callSitesOf = (target: string) => (files: readonly string[]): string[] => {
+    const out: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8');
+      if (!text.includes(`${target}(`)) continue;
+      const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const syms = parseFile(f).symbols;
+      const visit = (node: ts.Node, route: string | null): void => {
+        let here = route;
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const first = node.arguments[0];
+          if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'app' &&
+            ROUTE_VERB.test(callee.name.text) && first !== undefined && ts.isStringLiteral(first)) {
+            here = `${callee.name.text.toUpperCase()} ${first.text}`;
+          }
+          const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : null;
+          if (name === target) {
+            const at = node.getStart(sf);
+            const inner = syms.filter((x) => x.start <= at && at < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+            out.push(`${rel(f)}#${inner?.name ?? '(module)'}${here === null ? '' : ` @ ${here}`}`);
+          }
+        }
+        ts.forEachChild(node, (c) => visit(c, here));
+      };
+      visit(sf, null);
+    }
+    return out.sort();
+  };
+  const rankCallSites = callSitesOf('setPortfolioRank');
+  const markCallSites = callSitesOf('recordAnswerMark');
+  const RANK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/portfolio/rank', `${S}setPortfolioRank`,
+  ];
+  const plant = async (name: string, text: string, check: (f: string) => void): Promise<void> => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-map-rank-'));
+    try {
+      const f = path.join(d, name);
+      writeFileSync(f, text);
+      check(f);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  };
+  // Renewal readings C, Task 5: count statements that write the class, not readers or other columns' writers.
+  const designatedClassWrites = (files: readonly string[]): string[] => {
+    const table = 'continuity_generations';
+    const insert = new RegExp(`\\b(INSERT|REPLACE)(?:\\s+OR\\s+\\w+)?\\s+INTO\\s+${tableRefSource(table)}\\s*(?:\\(([^)]*)\\))?`, 'i');
+    const column = /^["`\[]?designatedClass["`\]]?$/i;
+    const assignment = /(?:\bSET\s+|,\s*)["`\[]?designatedClass["`\]]?\s*=/i;
+    return sqlWrites(files, [table]).flatMap(({ writer, sql }) => {
+      const m = insert.exec(sql);
+      const sites: string[] = [];
+      if (m !== null && (m[3] === undefined || m[3].split(',').some((c) => column.test(c.trim())))) {
+        sites.push(`${writer} ${m[1]!.toUpperCase()}`);
+      }
+      if ((m === null ? /^UPDATE\b/i.test(sql) : /\bDO\s+UPDATE\s+SET\b/i.test(sql)) && assignment.test(sql)) sites.push(`${writer} SET`);
+      return sites;
+    }).sort();
+  };
+  it('CONTROL: the designatedClass census finds an insert and a second writer, not a read or an unrelated update', async () => {
+    await plant('a.ts', [
+      "export function mint() { db.prepare('INSERT INTO continuity_generations (id, designatedClass) VALUES (?, ?)'); }",
+      "export function restamp() { db.prepare('UPDATE continuity_generations SET term = ?, [designatedClass] = ? WHERE id = ?'); }",
+      "export function other() { db.prepare('UPDATE continuity_generations SET term = ? WHERE designatedClass = ?'); }",
+      "export function read() { db.prepare('SELECT designatedClass FROM continuity_generations'); }",
+    ].join('\n'), (f) => expect(designatedClassWrites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['mint INSERT', 'restamp SET']));
+  });
+  it('the designatedClass column is written by the mint INSERT alone', () => {
+    expect(designatedClassWrites(ALL.filter((f) => !rel(f).startsWith('pwa/'))))
+      .toEqual(['server/src/continuity/continuityStore.ts#mintGeneration INSERT']);
+  });
+  it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
+    await plant('a.ts', ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'),
+      (f) => expect(rankCallSites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']));
+  });
+  it('CONTROL: a second call in the goals read\'s handler, in the same registration function, is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = '    return reply.code(200).send({ ok: true, ...goalsReadOf(';
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `    coord.setPortfolioRank({ basedOn: 0, seen: [], order: [] }, 'x', 0);\n${anchor}`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = rankCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual([
+        'registerLedgerOperatorRoutes @ GET /api/programmes/:slug/goals', 'registerLedgerOperatorRoutes @ POST /api/portfolio/rank',
+      ]);
+      expect(sites).not.toEqual([RANK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('setPortfolioRank is called exactly once outside the store, inside the POST /api/portfolio/rank handler', () => {
+    expect(rankCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(RANK_CALLS);
+  });
+  const MARK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/answer-marks', `${S}recordAnswerMark`,
+  ];
+  it('CONTROL: a second recordAnswerMark call in the tick door\'s handler is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "  app.post('/api/items/:id/tick', (req, reply) => {\n";
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `${anchor}    deps.coord?.recordAnswerMark({ kind: 'item', id: 1, mark: 'unsure', value: true }, 'x', 0);\n`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = markCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual(['registerLedgerOperatorRoutes @ POST /api/answer-marks', 'registerLedgerOperatorRoutes @ POST /api/items/:id/tick']);
+      expect(sites).not.toEqual([MARK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
+    expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
+  });
+  // What a programme says is left (Overlord W2 remaining work A, plan w2-remaining-work.md Task 2): `programme_remaining`
+  // is append-only, so no statement that changes or removes a row names it anywhere, even inside its one writer (which the
+  // map above cannot tell from the INSERT): UPDATE, DELETE, REPLACE INTO, INSERT OR REPLACE, or an INSERT whose
+  // ON CONFLICT clause does an UPDATE (review 2347, F4). The writer is reached only from the remaining-work door, and it
+  // never changes an edge: the edge's state columns are remaining work B's `settleEdge`'s.
+  const remainingCallSites = callSitesOf('insertRemaining');
+  const uncommented = (t: string): string => t.replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, '');
+  const rowChanges = (table: string) => (text: string): boolean => {
+    const code = uncommented(text);
+    if (new RegExp(`(?:UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO|INSERT\\s+OR\\s+REPLACE\\s+INTO)\\s+${table}\\b`).test(code)) return true;
+    // An upsert names no table after its UPDATE: read each INSERT into the table up to the call that runs it.
+    return [...code.matchAll(new RegExp(`INTO\\s+${table}\\b`, 'g'))]
+      .some((m) => /ON\s+CONFLICT[^]*?DO\s+UPDATE/.test(code.slice(m.index).split(/\)\s*\.(?:run|get|all|iterate)\(/)[0]!));
+  };
+  const remainingChanges = rowChanges('programme_remaining');
+  const edgeChanges = rowChanges('programme_edges');
+  const insertRemainingBody = (text: string): string => {
+    const from = text.indexOf('export function insertRemaining(');
+    return from < 0 ? '' : text.slice(from, text.indexOf('\n}\n', from));
+  };
+  it.each([
+    'UPDATE programme_remaining SET reason = ?', 'DELETE FROM programme_remaining WHERE id = ?',
+    'REPLACE INTO programme_remaining (id) VALUES (?)', 'INSERT OR REPLACE INTO programme_remaining (id) VALUES (?)',
+    "db.prepare('INSERT INTO programme_remaining (id) VALUES (?) ' +\n  'ON CONFLICT(id) DO UPDATE SET reason = excluded.reason').run(1)",
+  ])('CONTROL: the append-only scan sees %s', (sql) => {
+    expect(remainingChanges(sql)).toBe(true);
+    expect(remainingChanges(sql.replace('programme_remaining', 'programme_edges'))).toBe(false);
+  });
+  it('CONTROL: an INSERT followed by another statement\'s upsert is not read as an upsert of programme_remaining', () => {
+    expect(remainingChanges("p('INSERT INTO programme_remaining (id) VALUES (?)').run(1);\np('INSERT INTO t (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET n = 1').run(1);")).toBe(false);
+  });
+  it('no statement that changes or removes a row names programme_remaining anywhere: append-only', () => {
+    expect(ALL.filter((f) => !rel(f).startsWith('pwa/') && remainingChanges(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('insertRemaining never changes or removes an edge: it only inserts into programme_edges', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    expect(insertRemainingBody(text)).toMatch(/INSERT INTO programme_edges/);
+    expect(edgeChanges(insertRemainingBody(text))).toBe(false);
+    // CONTROL: the same body with an edge UPDATE planted before its return is caught.
+    const planted = text.replace('    return { ok: true, id, added, kept };',
+      "    db.prepare(\"UPDATE programme_edges SET state = 'met' WHERE id = ?\").run(id);\n    return { ok: true, id, added, kept };");
+    expect(planted).not.toBe(text);
+    expect(edgeChanges(insertRemainingBody(planted))).toBe(true);
+  });
+  it('insertRemaining is called exactly once outside the store, inside the remaining-work door', () => {
+    expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
+      `${S}insertRemaining`,
+    ]);
+  });
+  // Remaining work B (plan w2-remaining-work.md Task 5): an edge's state columns have one writer, `settleEdge`, reached only
+  // from the forecast lane's edge arm, and it writes only a row still open. No coordinator path clears an edge.
+  it('settleEdge is called exactly once outside the store, inside the forecast lane', () => {
+    expect(callSitesOf('settleEdge')(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/forecastLane.ts#runForecastLane',
+      `${S}settleEdge`,
+    ]);
+  });
+  it('settleEdge\'s UPDATEs set the state columns alone, and only on a row still open', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_edges\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
+    expect(updates.map((m) => [m[1], m[2]])).toEqual([
+      ['state = ?, endedAt = ?, evidence = ?', "id = ? AND state = 'open'"],
+      ['unmeasuredSince = ?', "id = ? AND state = 'open' AND unmeasuredSince IS NOT ?"],
+    ]);
+  });
+  // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): each writer is reached only from its
+  // arm of the forecast lane, and `scoreForecast` writes the outcome columns alone, never a seal's dates, seed or statement.
+  it.each(['sealForecast', 'scoreForecast'])('%s is called exactly once outside the store, inside the forecast lane', (fn) => {
+    expect(callSitesOf(fn)(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/forecastLane.ts#runForecastLane',
+      `${S}${fn}`,
+    ]);
+  });
+  it('scoreForecast\'s one UPDATE sets outcome and scoredAt alone, and only on an open row', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_forecasts\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
+    expect(updates.map((m) => [m[1], m[2]])).toEqual([['outcome = ?, scoredAt = ?', "id = ? AND outcome = 'open'"]]);
+  });
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan w2-forecasts-health.md Task 7): each writer is reached
+  // only from its arm of the forecast lane.
+  it.each([['appendHealth', 'healthArm'], ['recordRunSpend', 'spendArm']])('%s is called exactly once outside the store, inside the forecast lane\'s %s', (fn, arm) => {
+    expect(callSitesOf(fn)(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      `server/src/coord/forecastLane.ts#${arm}`,
+      `${S}${fn}`,
+    ]);
+  });
+  // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
+  // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
+  const markReadSites = callSitesOf('answerMarksOf');
+  // Answer marks B adds `asksViewOf`, the waiting view's ask lists, which only `waitingViewOf` calls.
+  const MARK_READS = [
+    'server/src/coord/ledgersRoutes.ts#asksViewOf',
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes.operatorView', 'server/src/coord/ledgersRoutes.ts#waitingViewOf',
+    `${S}answerMarksOf`,
+  ];
+  it('CONTROL: an answerMarksOf call in the coordinator\'s box-token items read is a further entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "deps.presenceOf, deps.secretOf, 'none')) });";
+    expect(routes.split(anchor)).toHaveLength(2);
+    await plant('ledgersRoutes.ts', routes.replace(anchor, "deps.presenceOf, deps.secretOf, coord.answerMarksOf('item', []))) });"), (f) => {
+      const sites = markReadSites([f]).map((x) => x.replace(/^.*#/, ''));
+      expect(sites).toContain('registerLedgerCoordinatorRoutes @ GET /api/programmes/:slug/items');
+      expect(sites).not.toEqual(MARK_READS.slice(0, 3).map((x) => x.replace(/^.*#/, '')));
+    });
+  });
+  it('answerMarksOf is called only by the operator views (the item view, the waiting view and its ask lists)', () => {
+    expect(markReadSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_READS);
+  });
+  const tableReaders = (files: readonly string[]): string[] => files.filter((f) => /\bFROM\s+answer_marks\b/.test(
+    readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, ''))).map(rel).sort();
+  it('CONTROL: a FROM answer_marks outside a comment is found, and one in a comment is not', async () => {
+    await plant('a.ts', "// SELECT x FROM answer_marks\nexport const q = 'SELECT value FROM answer_marks';\n", (f) => expect(tableReaders([f])).toHaveLength(1));
+    await plant('b.ts', '// SELECT x FROM answer_marks\nexport const q = 1;\n', (f) => expect(tableReaders([f])).toEqual([]));
+  });
+  it('FROM answer_marks is spelled in answerMarkStore.ts alone', () => {
+    expect(tableReaders(ALL.filter((f) => !rel(f).startsWith('pwa/')))).toEqual(['server/src/coord/answerMarkStore.ts']);
   });
 });
 
@@ -483,6 +805,43 @@ describe(CAPS_PIN, () => {
   });
 });
 
+// THE PRIVATE STORE'S TABLES (Overlord W1, private store A; spec §9.1, C29). `operator-model.db` is a second SQLite file with
+// one owner, `OperatorModelStore`: `recordMessage` is the one INSERT of a message, `moveMessage` the one writer of its state and
+// stamps (by the message moves table), and `recordRead` the one writer of the read ledger; `replacePrivateNames` is the one
+// writer of the uploaded name list's two tables (Overlord W2, private names B). MAY ONLY SHRINK.
+const PRIVATE_TABLES = ['operator_messages', 'read_ledger', 'private_name_list', 'private_name_entries'] as const;
+describe('the private store\'s tables: every SQL write is an OperatorModelStore method, by name, may only shrink', () => {
+  it('CONTROL: a second UPDATE of operator_messages in another function is named, beside the store\'s own', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-private-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        'export class OperatorModelStore {',
+        "  moveMessage(): void { this.db.prepare('UPDATE operator_messages SET state = ? WHERE id = ?'); }",
+        '}',
+        "export function sneak(): void { db.prepare('UPDATE operator_messages SET text = ? WHERE id = ?'); }",
+        "export function look(): void { db.prepare('SELECT * FROM read_ledger'); }",
+      ].join('\n'));
+      const w = tableWriters([f], PRIVATE_TABLES);
+      expect(Object.fromEntries(Object.entries(w).map(([t, ws]) => [t, ws.map((s) => s.replace(/^.*#/, ''))])))
+        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [], private_name_list: [], private_name_entries: [] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each table\'s writers, by name', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const S = 'server/src/operatorModel/store.ts#OperatorModelStore.';
+    expect(tableWriters(files, PRIVATE_TABLES)).toEqual({
+      operator_messages: [`${S}moveMessage`, `${S}recordMessage`],
+      read_ledger: [`${S}recordRead`],
+      private_name_list: [`${S}replacePrivateNames`],
+      private_name_entries: [`${S}replacePrivateNames`],
+    });
+  });
+});
+
 // THE COORDINATOR CALL RECORD (D-8126, migration 55). Its table has one writer per column, all in `coordCallsStore.ts`:
 // `insertCall` the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` of `overturnedAt` and
 // `overturnNote`, `markBlockWoken` of `wokenAt`. MAY ONLY SHRINK: a statement from another function, or a SET naming one
@@ -536,5 +895,127 @@ describe('coordinator_calls: one writer per column, every write in coordCallsSto
       seenAt: [`${F}markCallSeen`],
       wokenAt: [`${F}markBlockWoken`],
     });
+  });
+});
+
+// Overlord W1, portfolio B (plan `w1-portfolio.md` Task 4; Table 11.1a, "`ratifiedBy` on each goals version"): the goals
+// versions' ratification columns have the writers the plan names and no other. `ratifiedBy` and `ratifiedAt` are written
+// by `setSpecPin` (a re-pin records its own source) and the operator's `ratifyGoalsVersion` on `programs`, and by
+// `addModification` and `ratifyGoalsVersion` on `programme_modifications`; `ratifiedActor` (review 2240 F7) by the same
+// writers of `programs` and by `ratifyGoalsVersion` alone on a modification (an insert leaves it NULL); `doneWhenBy` only in
+// the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). Review 2240 F2 widened it to the TEXT the source
+// describes: the pin's `specPath`, `inShort`, `inShortAt` and `doneWhen`, and a modification's `text`, `ruling` and
+// `itemId` (keyed by table, since those names are common), so a writer of the text that skips the source is a new entry.
+// MAY ONLY SHRINK. KNOWN WIDTH: a statement split from its verb across string pieces is not seen, as in the census above.
+describe('the goals versions\' ratification columns: every write in ledgersStore.ts, by the plan\'s writers', () => {
+  const COLS = /\b(ratifiedBy|ratifiedAt|ratifiedActor|doneWhenBy|doneWhen|inShort|inShortAt|specPath)\b/g;
+  const MOD_TEXT = /\b(text|ruling|itemId)\b/g;
+  const writes = (files: readonly string[]): Record<string, string[]> => {
+    const out: Record<string, Set<string>> = {};
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!/ratifiedBy|ratifiedAt|ratifiedActor|doneWhen|inShort|specPath|programme_modifications/.test(text)) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+        const lit = m[0];
+        if (!/\b(?:UPDATE|INSERT)\b/.test(lit)) continue;
+        const at = m.index!;
+        const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        const by = `${rel(f)}#${inner?.name ?? '(module)'}`;
+        for (const c of lit.matchAll(COLS)) (out[c[1]!] ??= new Set()).add(by);
+        if (/\bprogramme_modifications\b/.test(lit)) for (const c of lit.matchAll(MOD_TEXT)) (out[`programme_modifications.${c[1]!}`] ??= new Set()).add(by);
+      }
+    }
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()]));
+  };
+  const STORE = 'server/src/coord/ledgersStore.ts';
+  const F = `${STORE}#`;
+  // `addModification.insert` is the insert closure inside `addModification` (the row and a new list are one act there).
+  const EXPECTED = {
+    doneWhen: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    doneWhenBy: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    inShort: [`${F}setSpecPin`],
+    inShortAt: [`${F}setSpecPin`],
+    'programme_modifications.itemId': [`${F}addModification.insert`],
+    'programme_modifications.ruling': [`${F}addModification.insert`],
+    'programme_modifications.text': [`${F}addModification.insert`],
+    ratifiedActor: [`${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    ratifiedAt: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    ratifiedBy: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    specPath: [`${F}setSpecPin`],
+  };
+
+  it('CONTROL: an UPDATE and an INSERT naming a column are found by their function; a SELECT and a comment are not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        "export function upd(): void { db.prepare(\"UPDATE programs SET doneWhenBy = 'pin' WHERE slug = ?\"); }",
+        'export function ins(): void { db.prepare(`INSERT INTO programme_modifications (ratifiedBy) VALUES (?)`); }',
+        "export function sel(): void { db.prepare('SELECT ratifiedAt FROM programs'); }",
+        "// UPDATE programs SET ratifiedAt = 1",
+      ].join('\n'));
+      const w = writes([f]);
+      expect(w).toEqual({ doneWhenBy: [`${rel(f)}#upd`], ratifiedBy: [`${rel(f)}#ins`] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('CONTROL: a planted fifth writer in ledgersStore.ts is a further entry', async () => {
+    const real = readFileSync(path.join(ccrcRoot, STORE), 'utf8');
+    const planted = `${real}\nexport function plantedWriter(db: DatabaseSync): void { db.prepare("UPDATE programs SET ratifiedBy = 'operator' WHERE slug = ?").run('x'); }\n`;
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-plant-'));
+    try {
+      const f = path.join(d, 'ledgersStore.ts');
+      writeFileSync(f, planted);
+      expect(writes([f])['ratifiedBy']).toContain(`${rel(f)}#plantedWriter`);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each column\'s writers, by name, under server/src', () => {
+    const files = ALL.filter((f) => rel(f).startsWith('server/src/'));
+    expect(writes(files)).toEqual(EXPECTED);
+  });
+});
+
+// Overlord W2 done tests A (plan `w2-done-tests.md` DT7): `runs.closePr`, a run's own bound PR as its close measured it,
+// has ONE writer, `CoordStore.closeRun`, in the close's transaction. A second statement that writes the column, anywhere
+// under server/src, is a further entry and reds here. KNOWN WIDTH: a statement split from its verb across string pieces.
+describe('runs.closePr: one writer, CoordStore.closeRun', () => {
+  const writers = (files: readonly string[]): string[] => {
+    const out = new Set<string>();
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!text.includes('closePr')) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+        if (!/\b(?:UPDATE|INSERT)\b/.test(m[0]) || !/\bclosePr\b/.test(m[0])) continue;
+        const inner = syms.filter((s) => s.start <= m.index! && m.index! < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        out.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
+      }
+    }
+    return [...out].sort();
+  };
+
+  it('CONTROL: an UPDATE naming the column is found by its function; a SELECT and a comment are not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-closepr-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        "export function upd(): void { db.prepare('UPDATE runs SET closePr = ? WHERE id = ?'); }",
+        "export function sel(): void { db.prepare('SELECT closePr FROM runs'); }",
+        '// UPDATE runs SET closePr = NULL',
+      ].join('\n'));
+      expect(writers([f])).toEqual([`${rel(f)}#upd`]);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('its one writer, by name, under server/src', () => {
+    expect(writers(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(['server/src/coord/store.ts#CoordStore.closeRun']);
   });
 });

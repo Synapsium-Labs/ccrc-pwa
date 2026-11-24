@@ -46,6 +46,19 @@ export const INJECTED_PROMPTS = Object.freeze({
   'effort-ultracode': Object.freeze({ text: '/effort ultracode', match: 'exact', typer: 'ccd' }),
   // `_route_type_model`'s picker.
   model: Object.freeze({ text: '/model', match: 'exact', typer: 'ccd' }),
+  // The renewal act's first turn of a fresh conversation, and `carded`'s re-nudge (Overlord W1a, the renewal act:
+  // `renewalWiring.ts`'s `sendPrompt` through `SessionHost.deliver`).
+  'renewal-first-prompt': Object.freeze({
+    text: 'Read your card with `ccrc-api card`, then answer your probes with `ccrc-api probe`.', match: 'exact', typer: 'server',
+  }),
+  // A new Overlord body's first turn, sent by the designate door after the create (Overlord W1, designation A, X4:
+  // `overlordRoutes.ts` through `SessionHost.deliver`), and a renewed Overlord generation's (the renewal act's
+  // `FIRST_PROMPT_OF_ROLE`). The Overlord has no shell, so it names the door tools (door process A2): the card door is the
+  // generation's first tool call, inside which the door process claims its act key. The key is never in the line.
+  'overlord-first-prompt': Object.freeze({
+    text: 'Read your card with your card door, then answer your probes with your probe door.',
+    match: 'exact', typer: 'server',
+  }),
 });
 
 /** The rows' keys, in the list's order. */

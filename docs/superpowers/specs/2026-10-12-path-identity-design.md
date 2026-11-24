@@ -1084,12 +1084,13 @@ into a pass.
   and no control character stands anywhere but the four TABs. A body over 8320 bytes is unparseable. One regex, held
   by the one reader, `_ws_workdirid_read`, is the grammar's single definition.
 - `workdirid-pending-form`: §4.3's grammar has one form, and as built it has two. The parent writes the pending form
-  through `_spawn_workdirid_pending` directly before each of `_spawn_start`'s two `_tmux_new_session` calls, the
-  primary and the retry. The pane replaces it after its `cd` succeeds and before `exec`. A pending field whose logical
-  spelling equals the row's current `.workdir` holds every child, and its detail names the row and the remedy,
-  "stop and start that session" (`pending-hold-remedy-stops-then-starts`, below). So a pane that cannot record where
-  it entered leaves a hold, as §4.11 asks. A pending write
-  that fails unlinks the field, so a stale valid field never survives it.
+  through `_spawn_workdirid_pending` directly before each of `_spawn_start`'s two `_tmux_new_session` calls, the primary
+  and the retry. The pane replaces it after its `cd` succeeds and before `exec`. A pending field whose logical spelling
+  equals the row's current `.workdir` holds every child, and its detail names the row and the remedy, "stop and start
+  that session" (`pending-hold-remedy-stops-then-starts`, below), unless that spelling resolves `complete` to itself:
+  such a row is placed by its spelling, as a legacy row is (`pending-entry-holds-only-its-trees`, Entry placement
+  below). So a pane that cannot record where it entered leaves a hold wherever it could be, as §4.11 asks. A pending
+  write that fails unlinks the field, so a stale valid field never survives it.
 - The reader answers one of seven words in `_WS_WDID_STATE`, by rules taken in a fixed order: `legacy-absent` (no
   field), `legacy-link` (a link, whose target is never read), `unmeasured` (not a regular file, or a failed open or
   read), `legacy-unparseable` (over the cap, a failed regex, or a physical path that is not plain), `legacy-stale` (its
@@ -1209,7 +1210,11 @@ into a pass.
   birth time that could not be read holds (`unwalk`), and is never read as "none". A recorded path that is gone adds
   nothing by itself. It only tells the mismatch rule that the path does not stand.
 - A pending field holds (`unpend`), and so does a field that is not a regular file or cannot be read (`unfield`). A
-  legacy field, whatever its word, leaves its row to today's string rule plus the ancestry above.
+  legacy field, whatever its word, leaves its row to today's string rule plus the ancestry above. Since
+  `pending-entry-holds-only-its-trees` (plan 2026-11-23-ccd-pending-row-scope), a pending field whose spelling resolves
+  `complete` to itself (no link, no `..`, no gone component) does not hold by itself: its row is placed by that
+  spelling, as a legacy row is, so the string, leaf, ancestry and mount arms still refuse it at, inside or through the
+  child or a leaf. Every other pending field holds, as before.
 - The count. The reclaim audit document carries `"legacyRows"` and `"pendingRows"`: `legacyRows` counts the other
   rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`. A field that reads
   `unmeasured` is in neither, and it holds the child. `null` means not counted: the ladder never reached the rung, or the rung could not list
@@ -1495,13 +1500,24 @@ into a pass.
   child, even where R54's git-record or breadcrumb arm would release it, because the field is read before any arm can
   skip a row, and a pending field names a pane that may be entering anywhere. A spawn made while the row's tree is
   gone, such as the unit's own respawn, which does not test the workdir first, writes such a field, and the pane's
-  failing `cd` leaves it in place. It holds collection as well as reclaim and expiry, and any pending row holds every
-  child on the box, not only those of one repository (`pending-row-holds-every-child-box-wide`, below). It fails
+  failing `cd` leaves it in place. It holds collection as well as reclaim and expiry, and any pending row that its
+  spelling does not place holds every child on the box, not only those of one repository
+  (`pending-row-holds-every-child-box-wide`, below); a gone row's spelling never places it. It fails
   closed, and purging the row clears it.
-- `pending-row-holds-every-child-box-wide`: the `unpend` hold has no placement test. A row whose field reads `pending`
-  holds every child's reclaim, expiry and collection, whatever that child's tree, because a pending pane may be
-  entering anywhere. Narrowing it to rows placed by their strings would defeat the field, so it stands. It fails closed,
-  and it reaches three ways:
+- `pending-row-holds-every-child-box-wide`: since `pending-entry-holds-only-its-trees` (plan
+  2026-11-23-ccd-pending-row-scope) the `unpend` hold has one placement test. That reverses the W3 plan's reading that
+  "narrowing it to rows placed by their strings would defeat the field". A row whose field reads `pending` and whose
+  spelling resolves `complete` to itself is placed by that spelling, as a legacy row is. The argument: the pending
+  line's logical spelling is the row's current `.workdir` (a stale one reads legacy), and a pane's `cd` of a spelling
+  with no link, no `..` and no gone component enters the directory that spelling names now, so such a pane is not
+  "entering anywhere". What that row inherits is the legacy row's residual
+  (`repointed-alias-for-legacy-rows-until-respawn`): a directory moved after the pane's `cd`, or a link on the spelling
+  at the pane's `cd` that is gone again when the rung reads it, is not seen by the rows rung, and the reclaim, expiry
+  and collect cwd probes cover it while a process lives inside. Measured on a fleet box, 2026-11-22: one unrelated,
+  link-free pending row held every child reclaim on the box for 13 hours. Every other pending row (a link on its
+  spelling, an unplain form, a gone or unresolvable component) holds every child's reclaim, expiry and collection,
+  whatever that child's tree, because its pane may be entering anywhere; an unplain one holds under its own word
+  (`not-plain`, `under-proc`). It fails closed, and it reaches three ways:
   1. Any spawn's pending window can strike a tail in progress, for every spawn writes `pending` first. The tail's
      re-ask runs the rung again, so its answer becomes `worktree-remove-failed`, after the child's session was
      stopped. The server retries a reclaim.

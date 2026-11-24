@@ -251,6 +251,23 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
     ["the five-account test default roster", DEFAULT_TEST_ROSTER],
     ['the test default roster with pool tags on some accounts', POOLED_TEST_ROSTER],
     ['a roster with no explicit hues', HUELESS_ROSTER],
+    ['a roster carrying billing and continuity facts', {
+      version: 1,
+      accounts: [
+        { id: 'lane-a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+          fableBilling: 'included', continuity: { recordedAt: 1760000000 } },
+        { id: 'lane-b', label: 'B', configDirSuffix: '.b', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic',
+          fableBilling: 'credits' },
+      ],
+    }],
+    ['a roster carrying organization labels', {
+      version: 1,
+      accounts: [
+        { id: 'lane-a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic', org: 'org-a' },
+        { id: 'lane-b', label: 'B', configDirSuffix: '.b', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic', org: 'org-b' },
+        { id: 'lane-c', label: 'C', configDirSuffix: '.c', exec: { kind: 'generated' }, homeAble: true, hue: 'blue', telemetry: 'anthropic' },
+      ],
+    }],
     ['a roster carrying provider, baseUrl and models', ENRICHED_ROSTER],
     ['a roster mixing explicit and auto-assigned hues', MIXED_HUE_ROSTER],
     ['seven hueless accounts against six hues', OVERFLOW_HUE_ROSTER],
@@ -676,6 +693,17 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a non-string pool', roster(acct({ pool: 7 }))],
     ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
     ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
+    ['a written null fableBilling', roster(acct({ fableBilling: null }))],
+    ['a fableBilling outside the set', roster(acct({ fableBilling: 'free' }))],
+    ['a written null continuity', roster(acct({ continuity: null }))],
+    ['a written null org', roster(acct({ org: null }))],
+    ['an org shaped like an organization id', roster(acct({ org: 'abcdef0123456789abcdef0123456789' }))],
+    ['an org that is the clear word', roster(acct({ org: 'none' }))],
+    ['a continuity with no recordedAt', roster(acct({ continuity: {} }))],
+    ['a continuity with an extra key', roster(acct({ continuity: { recordedAt: 1, by: 'x' } }))],
+    ['a float recordedAt', roster(acct({ continuity: { recordedAt: 1.5 } }))],
+    ['a negative recordedAt', roster(acct({ continuity: { recordedAt: -1 } }))],
+    ['a string recordedAt', roster(acct({ continuity: { recordedAt: '1' } }))],
     // The leading-letter anchor and the charset, measured on BOTH sides rather than
     // on the parser alone. Three one-character drifts of the mirrored literal — a
     // first-character class that admits a hyphen or a digit, and a charset that

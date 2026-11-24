@@ -138,7 +138,7 @@ async function open(skin: string, theme: string, width: number, touch = false) {
   await opened.ctx.addInitScript(([key]) => {
     try { localStorage.setItem(key, 'project'); } catch { /* the default mode is then measured, and the box is absent */ }
   }, [GROUP_MODE_KEY] as const);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForSelector('section.pg-box', { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   await opened.page.waitForTimeout(400); // the first paint's transitions settle
@@ -384,7 +384,7 @@ describe.each(SKINS)('the programme\'s Goals page, opened from the title in %s',
               const [a, b] = [lum(rgb(k.color)), lum(rgb(bg))].sort((x, y) => y - x);
               return (a! + 0.05) / (b! + 0.05);
             };
-            const kicker = document.querySelector('.pv-head .pv-kicker')!;
+            const icon = document.querySelector('.pv-head .pv-ico')!;
             const hueProbe = document.createElement('span');
             hueProbe.style.color = 'var(--prog-cyan)';
             document.querySelector('.pv-head')!.appendChild(hueProbe);
@@ -396,7 +396,7 @@ describe.each(SKINS)('the programme\'s Goals page, opened from the title in %s',
               heading: document.querySelector('.pv-card .pv-h')?.textContent ?? '',
               rows: document.querySelectorAll('.pv .wl-item').length,
               waitingLink: [document.querySelector('.pv a.pv-waiting')?.textContent ?? '', document.querySelector('.pv a.pv-waiting')?.getAttribute('href') ?? ''],
-              nameRatio: ratio(kicker), nameColour: getComputedStyle(kicker).color, hueColour,
+              nameRatio: ratio(icon), nameColour: getComputedStyle(icon).color, hueColour,
               pending: document.querySelector('.pg-goals-pending')?.textContent ?? '',
               pendingRatio: ratio(document.querySelector('.pg-goals-pending')!),
               inShortRatio: ratio(document.querySelector('.pg-goals-text')!),
@@ -413,8 +413,8 @@ describe.each(SKINS)('the programme\'s Goals page, opened from the title in %s',
           expect(m.heading).toBe('Waiting on you');
           expect(m.rows, 'no row of the list on the Goals page').toBe(0);
           expect(m.waitingLink).toEqual(['101 waiting on you', '/waiting?programme=billing']);
-          expect(m.nameColour, 'the name is drawn in the programme\'s hue').toBe(m.hueColour);
-          expect(m.nameRatio, 'the name on the surface').toBeGreaterThanOrEqual(4.5);
+          expect(m.nameColour, 'the icon is drawn in the programme\'s hue').toBe(m.hueColour);
+          expect(m.nameRatio, 'the icon on the surface').toBeGreaterThanOrEqual(4.5);
           expect(m.inShortRatio).toBeGreaterThanOrEqual(4.5);
           expect(m.pending).toBe('spec update pending (PR #77)');
           expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);

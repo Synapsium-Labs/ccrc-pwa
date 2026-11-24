@@ -1,7 +1,10 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
-import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
-import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import type { AccountPoolWire, PoolVerdict, ProjectPoolVerdict, SessionPoolSide } from '../../shared/poolrule.js';
+import type { ProjectPlacement, ProjectPoolWire, RouteField, RouteFields, RouteReadField } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
+import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
+import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';
+import type { PoolAnswer } from '../../shared/poolset.js';
 
 /**
  * THE SERVER'S MIRROR of the pool rule (spec §5.6), ring L1: pure decisions,
@@ -107,7 +110,16 @@ export function resolvedAccountPool(
 export function poolVerdict(
   roster: Roster, wrapper: string, pool: ProjectPoolWire,
   edges: ReadonlyMap<string, readonly string[]>,
-): RosterVerdict {
+): RosterVerdict;
+/** A session's side (C46): the same precedence, over `PoolVerdict`'s set arms too. A project side takes the first overload. */
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
+): PoolVerdict | { ok: true; why: 'account-not-in-roster' };
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
+): PoolVerdict | { ok: true; why: 'account-not-in-roster' } {
   // PRECEDENCE, in the one place that can enforce it: projected beats
   // declared beats untagged (design §5.6). A central edge is authoritative —
   // it came from `pool_edges`, which is the only writer — so it is consulted
@@ -121,6 +133,19 @@ export function poolVerdict(
   if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
   const v = poolRule(declaredAccountPool(null), pool);
   return v.ok ? { ok: true, why: 'account-not-in-roster' } : v;
+}
+
+/** The side of the pool rule a SESSION answers on (C46; pool set A3's review F13): its route record's set when one stands,
+ *  `set-unreadable` when the record names `poolset` unreadable, `set-malformed` when the spelling does not parse, and the
+ *  project's side when no set stands (an empty value is a cleared set). A set never falls back to the project. */
+export function sessionPoolSideOf(
+  route: { readonly fields: RouteFields; readonly unreadable: readonly RouteReadField[] } | null, projectPool: ProjectPoolWire,
+): SessionPoolSide {
+  if (route !== null && route.unreadable.includes('poolset')) return { state: 'set-unreadable' };
+  const spelling = route?.fields.poolset;
+  if (spelling === undefined || spelling === '') return projectPool;
+  const parsed = parsePoolSet(spelling);
+  return parsed.ok ? { state: 'set', set: parsed.set } : { state: 'set-malformed' };
 }
 
 /**
@@ -158,7 +183,7 @@ export function poolVerdict(
  * not because either side reads the other's.
  */
 export function poolEligible(
-  roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
+  roster: Roster, pool: SessionPoolSide, edges: ReadonlyMap<string, readonly string[]>,
 ): AccountDef[] {
   return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a.id, a, edges), pool).ok);
 }
@@ -173,8 +198,12 @@ export function poolEligible(
  * `state === 'unreadable' || state === 'malformed'` here would be the second
  * copy that drifts the day a fifth state is added.
  */
-export function poolUndecidable(pool: ProjectPoolWire): boolean {
-  return !poolRule(declaredAccountPool(null), pool).ok;
+export function poolUndecidable(pool: SessionPoolSide): boolean {
+  // The verdict's REASON decides, not `!ok` (Overlord W1 designation A, review F8). For a project side the two are one
+  // fact: an untagged account never mismatches, so its only refusal is `pool-undecidable`. For a set without
+  // `+untagged` the same untagged account DOES mismatch, and that is a decided "no", never an undecidable one.
+  const v = poolRule(declaredAccountPool(null), pool);
+  return !v.ok && v.reason === 'pool-undecidable';
 }
 
 /**
@@ -193,3 +222,104 @@ export function poolRostered(roster: Roster, name: string): boolean {
 /** Re-exported so a reader who looks for the placement type beside the rule
  *  finds it. DECLARED in `shared/api.ts`, because the PWA renders it. */
 export type { ProjectPlacement };
+
+/** What one `ccd pool-answer` call answered, read `ran` first (the pool-set plan's Task 6, review 2085 F16). */
+export type PoolAnswerRead =
+  | { readonly kind: 'answer'; readonly answer: PoolAnswer }
+  | { readonly kind: 'not-run' }
+  | { readonly kind: 'refused'; readonly code: number }
+  | { readonly kind: 'unparsed'; readonly why: string };
+
+/** The `pool-state` words each side can print: `_project_pool_state`'s, `_acct_pool_state`'s and `_pool_ok_set`'s. */
+const POOL_ANSWER_STATES: Readonly<Record<PoolAnswer['poolSide'], readonly string[]>> = {
+  project: ['untagged', 'unreadable', 'malformed'],
+  account: ['untagged', 'unreadable', 'stale', 'malformed'],
+  set: ['unreadable', 'malformed', 'unrecognised'],
+};
+/** The `side` words that carry no name: `_session_pool_side`'s project words and its two bad-set words. */
+const POOL_ANSWER_BARE_SIDES: readonly string[] = ['untagged', 'unreadable', 'malformed', 'set-unreadable', 'set-malformed'];
+
+const isWordOf = <T extends string>(words: readonly T[], w: string): w is T => (words as readonly string[]).includes(w);
+const namedPool = (w: string): boolean => w.startsWith('named:') && POOL_NAME_RE.test(w.slice('named:'.length));
+
+/**
+ * The runner's result for one `ccd pool-answer --session <id>` call (`CCD_ARGV.poolAnswer`), read `ran` FIRST: `ran:
+ * false` (an older agent's `forbidden`, a spawn failure) is a read that did not happen, never rc 1's "no such session";
+ * `ran: true` with a non-zero code is ccd's refusal; only code 0 with ONE line that parses is an answer. The line is
+ * exact: the head word, then the six keys of `POOL_ANSWER_KEYS` once each in that order, each value a word of its
+ * vocabulary. An unknown key, a missing or repeated key, a word outside its vocabulary, a second line or an empty line
+ * is `unparsed`. Pure: no clock, no I/O.
+ */
+export function parsePoolAnswer(r: { readonly ran: boolean; readonly code: number; readonly stdout: string }): PoolAnswerRead {
+  if (!r.ran) return { kind: 'not-run' };
+  if (r.code !== 0) return { kind: 'refused', code: r.code };
+  const line = r.stdout.endsWith('\n') ? r.stdout.slice(0, -1) : r.stdout;
+  if (line.includes('\n')) return { kind: 'unparsed', why: 'more than one line' };
+  const tokens = line.split(' ');
+  if (tokens[0] !== 'pool-answer') return { kind: 'unparsed', why: 'not a pool-answer line' };
+  if (tokens.length !== POOL_ANSWER_KEYS.length + 1) return { kind: 'unparsed', why: `${tokens.length - 1} keys, not ${POOL_ANSWER_KEYS.length}` };
+  const v: Record<string, string> = {};
+  for (let i = 0; i < POOL_ANSWER_KEYS.length; i++) {
+    const key = POOL_ANSWER_KEYS[i]!;
+    const t = tokens[i + 1]!;
+    if (!t.startsWith(`${key}=`)) return { kind: 'unparsed', why: `token ${i + 1} is not ${key}=` };
+    v[key] = t.slice(key.length + 1);
+  }
+  const side = v['side']!, verdict = v['verdict']!, poolSide = v['pool-side']!, poolState = v['pool-state']!;
+  const crossing = v['crossing']!, account = v['account']!;
+  if (!(POOL_ANSWER_BARE_SIDES.includes(side) || namedPool(side)
+        || (side.startsWith('set:') && parsePoolSet(side.slice('set:'.length)).ok))) {
+    return { kind: 'unparsed', why: 'side' };
+  }
+  if (!isWordOf(POOL_ANSWER_VERDICTS, verdict)) return { kind: 'unparsed', why: 'verdict' };
+  if (!isWordOf(POOL_ANSWER_POOL_SIDES, poolSide)) return { kind: 'unparsed', why: 'pool-side' };
+  if (!(isWordOf(POOL_ANSWER_STATES[poolSide], poolState) || (poolSide === 'account' && namedPool(poolState)))) {
+    return { kind: 'unparsed', why: 'pool-state' };
+  }
+  if (!isWordOf(POOL_ANSWER_CROSSINGS, crossing)) return { kind: 'unparsed', why: 'crossing' };
+  if (!ACCOUNT_ID_RE.test(account)) return { kind: 'unparsed', why: 'account' };
+  return { kind: 'answer', answer: { side, verdict, poolSide, poolState, crossing, account } };
+}
+
+/** One row of the capability floor as the server reads it: a route field whose standing on a session needs the placing
+ *  box's ccd to advertise `word`. The twin of `ccd/ccrc#CAP_FLOOR_ROWS`' `fact|word` columns (the remedy is the box's). */
+export interface CapFloorRow { readonly fact: RouteField; readonly word: string }
+/** One session's route facts as a registry read measured them (`SessionRecord.route`): the fields it carries, read, and
+ *  those whose entry was listed but could not be read. */
+export interface CapFloorSession { readonly id: string; readonly fields: readonly string[]; readonly unreadable: readonly string[] }
+/** One row the placing box has lost: its word and fact, every session carrying the fact (sorted), and the unreadable ones. */
+export interface CapFloorLoss { readonly word: string; readonly fact: string; readonly sessions: readonly string[]; readonly unreadable: readonly string[] }
+export type PoolSetLoss = { readonly raise: false } | { readonly raise: true; readonly lost: readonly CapFloorLoss[]; readonly dedupeKey: string };
+
+/**
+ * Whether a box that places sessions has lost a capability while a session on it carries the fact that needs it (the
+ * pool-set plan's Task 10; §11.5, open question 15), for EVERY row of the floor (`rows`, the coordinator's table ruling).
+ * `caps` is what the box's `ccd caps` last answered (`null` = unmeasured, which raises nothing). An unreadable entry
+ * counts: a set the box cannot read is the fail-open the floor exists for (N11 b). The key names the build (`build`, the
+ * measured stamp sha, or `unmeasured`) and each lost word's sessions, so one loss pushes once and a new build or a new
+ * set pushes again. Pure: no clock, no I/O.
+ */
+export function poolSetLoss(rows: readonly CapFloorRow[], caps: readonly string[] | null,
+  sessions: readonly CapFloorSession[], build: string | null): PoolSetLoss {
+  if (caps === null) return { raise: false };
+  const lost: CapFloorLoss[] = [];
+  for (const row of rows) {
+    if (caps.includes(row.word)) continue;
+    const unreadable = sessions.filter((s) => s.unreadable.includes(row.fact)).map((s) => s.id).sort();
+    const carrying = sessions.filter((s) => s.fields.includes(row.fact) || s.unreadable.includes(row.fact)).map((s) => s.id).sort();
+    if (carrying.length > 0) lost.push({ word: row.word, fact: row.fact, sessions: carrying, unreadable });
+  }
+  if (lost.length === 0) return { raise: false };
+  const key = lost.map((l) => `${l.word}=${l.sessions.join(',')}`).join(';');
+  return { raise: true, lost, dedupeKey: `pool-set-lost:${build ?? 'unmeasured'}:${key}` };
+}
+
+/** The loss EPISODE's keys (fix round 1, F2, slug `loss-episode-in-the-key`): a loss that clears and recurs is a new loss,
+ *  even on the same build with the same sessions. Episode `n`'s clear is archived under `poolSetClearKey(n)`, so the
+ *  current episode is the first `n` without one (probed at most `LOSS_EPISODE_PROBE_MAX` deep, the feed's retention: a
+ *  clear past it was pruned). An episode's FIRST push is keyed by the episode alone, which marks it open across a restart;
+ *  a later loss within it (a new build or a new set) by its facts, the `poolSetLoss` key, and the episode. */
+export const LOSS_EPISODE_PROBE_MAX = 2000;
+export const poolSetClearKey = (episode: number): string => `pool-set-cleared:e${episode}`;
+export const poolSetLossKey = (episode: number, facts: string | null): string =>
+  facts === null ? `pool-set-lost:e${episode}` : `${facts}:e${episode}`;

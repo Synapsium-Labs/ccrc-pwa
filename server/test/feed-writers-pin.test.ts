@@ -571,7 +571,8 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
     expect(flushedAfterRecord(calls)).toBe(true);
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
       // The body no longer names the retired daily dial (D-7068).
-      .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5']]);
+      // D-8920: a fresh box is automatic at the seeded 3 (this rig measures no host), and 5 is an override.
+      .toEqual([['coord', '', null, 'caps changed', 'workers automatic (3, host unmeasured) → 5']]);
     expect(rec.pushes).toEqual([]);
     catchUpMatchesRing(rec);
   });
@@ -1077,6 +1078,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
     const record = { id: ID, uuid: `uuid-${ID}` } as unknown as SessionRecord;
     const deps: StopDoneSweepDeps = {
       coord: {
+        designationRead: () => ({ kind: 'not-designated' as const, row: null }),
         lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
           last: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
@@ -1084,11 +1086,13 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
           // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
           lastPlaced: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
-          openPlacedWorkers: [], parkedPlacedWorkers: [] }),
+          openPlacedWorkers: [], parkedPlacedWorkers: [], otherOpenPlacedWorkers: [] }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
+        laneArmSetting: () => ({ kind: 'absent' as const }),
+        runEvents: () => [],
       },
       runCcd: async (a) => { argv.push([...a]); return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
@@ -1102,6 +1106,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       listing: async () => [],
+      stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
       startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

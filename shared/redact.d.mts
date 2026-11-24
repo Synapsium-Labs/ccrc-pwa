@@ -37,6 +37,29 @@ export interface RedactShapes {
 /** The egress mask. */
 export const EGRESS_MASK: '[REDACTED]';
 
+/** History's PEM private-key block rule, a regular-expression source (no flags): the first arm of
+ *  `ccd/history/lib.mjs`'s shape layer. The egress profiles read `pemBlockSpans` instead. */
+export const PEM_PRIVATE_KEY_SOURCE: string;
+
+/** Every PEM private-key block in `text`, `[start, end)` each, in order and never overlapping: the egress profiles'
+ *  `pem-block` scanner, and the response masks' (`server/src/accounts/shapes.ts`). Linear in the text's length. */
+export function pemBlockSpans(text: string): [number, number][];
+
+/** A PEM block one text of a stream ends inside: the characters left of its window after that text, and whether that
+ *  text ended with a line break (so the next text starts a line). */
+export interface PemStreamCarry {
+  readonly left: number;
+  readonly lineStart: boolean;
+}
+
+/** `pemBlockSpans` over one text of a stream: `carry` is the block the last text ended inside (null: none), which runs
+ *  on from this text's start through its END line, or with none to the first blank line, within its window and never
+ *  into the next BEGIN line; the answer's `carry` is the block this text ends inside. */
+export function pemStreamSpans(text: string, carry: PemStreamCarry | null): {
+  spans: [number, number][];
+  carry: PemStreamCarry | null;
+};
+
 /** Every rule id, in table order. */
 export const RULE_IDS: readonly string[];
 

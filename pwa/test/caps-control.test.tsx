@@ -11,8 +11,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CapsControl } from '../src/fleet/CapsControl';
+import { capInForce, capIsAutomatic, capIsOverride, capSourceWords, capsUsageWords } from '../src/fleet/capsWords';
 import { ApiError } from '../src/lib/api';
 import type { CoordCapsView } from '../../shared/api';
+import type { CoordCapNow } from '../../shared/runCap';
 
 afterEach(cleanup);
 
@@ -32,6 +34,22 @@ describe('CapsControl', () => {
   it('shows usage against the cap once the read lands', async () => {
     render(<CapsControl coordCaps={READ} />);
     expect(await screen.findByText('1 / 3')).toBeInTheDocument();
+  });
+
+  it('armed, says how many runs hold a slot and how many wait (D-8792)', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(VIEW({ usage: { running: 5, waiting: 2, workingOnly: true } }))} />);
+    expect(await screen.findByText('3 / 3 working, 2 waiting')).toBeInTheDocument();
+  });
+
+  it('in shadow, says the count the cap still uses and how many of it wait (D-8792)', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(VIEW({ usage: { running: 3, waiting: 2, workingOnly: false } }))} />);
+    expect(await screen.findByText('3 / 3, 2 of them waiting')).toBeInTheDocument();
+  });
+
+  it('an older server that sends no waiting count keeps today\'s reading', async () => {
+    render(<CapsControl coordCaps={READ} />);
+    expect(await screen.findByText('1 / 3')).toBeInTheDocument();
+    expect(screen.queryByText(/waiting/)).toBeNull();
   });
 
   it('has no per-day dial: the daily brake is retired (D-7068)', async () => {
@@ -243,5 +261,214 @@ describe('CapsControl', () => {
     const { container } = render(<CapsControl
       coordCaps={() => Promise.reject(new ApiError(500, { ok: false }))} />);
     await waitFor(() => expect(container.querySelector('.caps-control')).toBeNull());
+  });
+});
+
+describe('capsUsageWords, the one reader of the waiting count (D-8792)', () => {
+  it('armed: the runs that hold a slot, then the ones left out', () => {
+    expect(capsUsageWords({ running: 4, waiting: 1, workingOnly: true }, 3)).toBe('3 / 3 working, 1 waiting');
+    expect(capsUsageWords({ running: 1, waiting: 0, workingOnly: true }, 3)).toBe('1 / 3 working, 0 waiting');
+  });
+
+  it('shadow (or no flag): the count the cap uses, and how many of it wait', () => {
+    expect(capsUsageWords({ running: 4, waiting: 1, workingOnly: false }, 3)).toBe('4 / 3, 1 of them waiting');
+    expect(capsUsageWords({ running: 4, waiting: 1 }, 3)).toBe('4 / 3, 1 of them waiting');
+  });
+
+  it('an absent or malformed count reads as today, never as a guessed zero', () => {
+    expect(capsUsageWords({ running: 2 }, 3)).toBe('2 / 3');
+    for (const waiting of [-1, 1.5, Number.NaN, '2' as unknown as number]) {
+      expect(capsUsageWords({ running: 2, waiting, workingOnly: true }, 3), String(waiting)).toBe('2 / 3');
+    }
+  });
+});
+
+// D-8920 (the operator's ruling of 2026-11-22): the run cap is derived from the machine the fleet runs
+// on. The control shows that number and what it was derived from; the box is only the operator's override.
+const GiB = 2 ** 30;
+const DERIVED = { kind: 'measured', cap: 16, bound: 'cores', memTotalBytes: 64 * GiB, cores: 16 } as const;
+const AUTOMATIC: CoordCapNow = { mode: 'automatic', cap: 16, derived: DERIVED };
+const OVERRIDE: CoordCapNow = { mode: 'override', cap: 12, derived: DERIVED };
+const UNMEASURED: CoordCapNow = { mode: 'automatic', cap: 24, derived: { kind: 'unmeasured', why: 'no-reading' } };
+/** A view from a server that derives the cap. `stored` is the number it keeps beside it. */
+const NOW = (capNow: CoordCapNow, stored = 24, running = 5): CoordCapsView =>
+  ({ caps: { maxConcurrentWorkers: stored }, usage: { running }, capNow });
+
+describe('CapsControl: automatic and override (D-8920)', () => {
+  it('automatic: says the number and what it was derived from, and shows the derived cap, not the stored one', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(AUTOMATIC))} />);
+    expect(await screen.findByText('Automatic: 16 (from 64 GB and 16 cores)')).toBeInTheDocument();
+    expect(screen.getByText('5 / 16'), 'the usage is read against the cap in force').toBeInTheDocument();
+    expect((screen.getByLabelText(/workers/i) as HTMLInputElement).value, 'the box shows the cap in force').toBe('16');
+    expect(screen.queryByText(/24/), 'the stored number is on screen as if it were the cap').toBeNull();
+    expect(screen.queryByRole('button', { name: /use automatic/i }), 'nothing to clear while automatic').toBeNull();
+  });
+
+  it('automatic, untouched: save sends nothing, so the operator who does nothing sets nothing', async () => {
+    const setCoordCaps = vi.fn(async () => NOW(AUTOMATIC));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(AUTOMATIC))} setCoordCaps={setCoordCaps} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^save$/i }));
+    expect(setCoordCaps).not.toHaveBeenCalled();
+  });
+
+  // The operator can FIX the cap at the number on screen. While the number is the server's own, a number saved from a
+  // box they typed in is always an ask, the automatic number included: comparing it with the cap in force would send
+  // nothing and say nothing, and the mode would stay automatic.
+  it('automatic: typing the automatic number itself and saving sends it as the override', async () => {
+    const setCoordCaps = vi.fn(async () => NOW({ mode: 'override', cap: 16, derived: DERIVED }, 16));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(AUTOMATIC))} setCoordCaps={setCoordCaps} />);
+    // Retyped, as a hand does it: the box is cleared to one digit and the number typed back.
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(/workers/i), { target: { value: '16' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ maxConcurrentWorkers: 16 }));
+    expect(await screen.findByText('Set by hand: 16. Automatic would be 16 (from 64 GB and 16 cores).')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use automatic/i })).toBeInTheDocument();
+  });
+
+  it('an unmeasured host: typing the stored number in use and saving makes it the override', async () => {
+    const setCoordCaps = vi.fn(async () => NOW({ mode: 'override', cap: 24, derived: { kind: 'unmeasured', why: 'agent-older' } }));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(UNMEASURED))} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/workers/i), { target: { value: '24' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ maxConcurrentWorkers: 24 }));
+  });
+
+  it('an override, or an older server: the same number typed again is still no ask (the number is the operator\'s own)', async () => {
+    const setCoordCaps = vi.fn(async () => NOW(OVERRIDE, 12));
+    const first = render(<CapsControl coordCaps={() => Promise.resolve(NOW(OVERRIDE, 12))} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText(/workers/i), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    first.unmount();
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText(/workers/i), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(setCoordCaps).not.toHaveBeenCalled();
+  });
+
+  it('a number typed over the automatic cap is sent as the override, and the answer is what is shown', async () => {
+    const setCoordCaps = vi.fn(async () => NOW(OVERRIDE, 12));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(AUTOMATIC))} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ maxConcurrentWorkers: 12 }));
+    expect(await screen.findByText('Set by hand: 12. Automatic would be 16 (from 64 GB and 16 cores).')).toBeInTheDocument();
+    expect(screen.getByText('5 / 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use automatic/i })).toBeInTheDocument();
+  });
+
+  it('use automatic clears the override: it sends the mode alone, and the control settles on the answer', async () => {
+    const setCoordCaps = vi.fn(async () => NOW(AUTOMATIC, 12));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(OVERRIDE, 12))} setCoordCaps={setCoordCaps} />);
+    fireEvent.click(await screen.findByRole('button', { name: /use automatic/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ mode: 'automatic' }));
+    expect(await screen.findByText('Automatic: 16 (from 64 GB and 16 cores)')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /use automatic/i })).toBeNull();
+    expect((screen.getByLabelText(/workers/i) as HTMLInputElement).value).toBe('16');
+  });
+
+  it('use automatic that could not be confirmed says so, and one that is refused says why', async () => {
+    const unread = vi.fn(async () => 'unreadable' as const);
+    const first = render(<CapsControl coordCaps={() => Promise.resolve(NOW(OVERRIDE, 12))} setCoordCaps={unread} />);
+    fireEvent.click(await screen.findByRole('button', { name: /use automatic/i }));
+    expect(await screen.findByText(/unconfirmed/i)).toBeInTheDocument();
+    first.unmount();
+    const refused = vi.fn(() => Promise.reject(new ApiError(400, { ok: false, error: 'bad-request', detail: 'mode must be automatic or override' })));
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(OVERRIDE, 12))} setCoordCaps={refused} />);
+    fireEvent.click(await screen.findByRole('button', { name: /use automatic/i }));
+    expect(await screen.findByText('mode must be automatic or override')).toBeInTheDocument();
+  });
+
+  it('an unmeasured host: says the stored number is in use and why, never a derived number from nowhere', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(UNMEASURED))} />);
+    expect(await screen.findByText('Automatic, but the fleet host has not been measured yet. Using the stored number, 24, until it is.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('5 / 24')).toBeInTheDocument();
+  });
+
+  it('a host whose sessions have a memory limit below the box: both figures are on screen', async () => {
+    const limited: CoordCapNow = { mode: 'automatic', cap: 8,
+      derived: { kind: 'measured', cap: 8, bound: 'session-limit', memTotalBytes: 64 * GiB, cores: 16, sessionMemLimitBytes: 24 * GiB } };
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(limited))} />);
+    expect(await screen.findByText('Automatic: 8 (from 64 GB, of which sessions may use 24 GB, and 16 cores)')).toBeInTheDocument();
+  });
+
+  it('an older server (no capNow): the stored number, no sentence and no automatic button, as before', async () => {
+    const { container } = render(<CapsControl coordCaps={READ} />);
+    expect(await screen.findByText('1 / 3')).toBeInTheDocument();
+    expect(container.querySelector('.caps-source')).toBeNull();
+    expect(screen.queryByRole('button', { name: /use automatic/i })).toBeNull();
+    expect((screen.getByLabelText(/workers/i) as HTMLInputElement).value).toBe('3');
+  });
+
+  it('the sentence is not a second live region: the note stays the one place the control announces', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(NOW(AUTOMATIC))} />);
+    await screen.findByText('Automatic: 16 (from 64 GB and 16 cores)');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status').textContent).toBe('');
+  });
+});
+
+describe('the cap words, the console\'s readers of capNow (D-8920)', () => {
+  it('the cap in force is the server\'s, and the stored number only when the server sends none', () => {
+    expect(capInForce(NOW(AUTOMATIC))).toBe(16);
+    expect(capInForce(NOW(OVERRIDE, 12))).toBe(12);
+    expect(capInForce(NOW(UNMEASURED))).toBe(24);
+    expect(capInForce({ caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 } })).toBe(3);
+    // A malformed field is an older server's absence, never a cap of its own.
+    expect(capInForce({ caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 }, capNow: { mode: 'automatic', cap: 0, derived: { kind: 'unmeasured', why: 'no-reading' } } })).toBe(3);
+  });
+
+  it('only an override can be cleared; the number is the server\'s own only under automatic; an older server is neither', () => {
+    expect([capIsOverride(NOW(OVERRIDE)), capIsAutomatic(NOW(OVERRIDE))]).toEqual([true, false]);
+    expect([capIsOverride(NOW(AUTOMATIC)), capIsAutomatic(NOW(AUTOMATIC))]).toEqual([false, true]);
+    expect([capIsOverride(NOW(UNMEASURED)), capIsAutomatic(NOW(UNMEASURED))]).toEqual([false, true]);
+    const older: CoordCapsView = { caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 } };
+    expect([capIsOverride(older), capIsAutomatic(older)]).toEqual([false, false]);
+  });
+
+  it('the measured sentences, and none for an older server', () => {
+    expect(capSourceWords(NOW(AUTOMATIC))).toBe('Automatic: 16 (from 64 GB and 16 cores)');
+    expect(capSourceWords(NOW(OVERRIDE))).toBe('Set by hand: 12. Automatic would be 16 (from 64 GB and 16 cores).');
+    expect(capSourceWords({ caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 } })).toBeNull();
+  });
+
+  // WHY there is no automatic number, one sentence per remedy: waiting only helps in the first case.
+  it.each([
+    ['no-reading', 'Automatic, but the fleet host has not been measured yet. Using the stored number, 24, until it is.',
+      'Set by hand: 12. There is no automatic number: the fleet host has not been measured yet.'],
+    ['agent-older', 'Automatic, but the fleet agent is too old to measure its host. Using the stored number, 24, until the agent is updated.',
+      'Set by hand: 12. There is no automatic number: the fleet agent is too old to measure its host.'],
+    ['read-failed', 'Automatic, but the fleet host\'s size could not be read. Using the stored number, 24.',
+      'Set by hand: 12. There is no automatic number: the fleet host\'s size could not be read.'],
+  ] as const)('an unmeasured host says why (%s), under automatic and under an override', (why, automatic, override) => {
+    expect(capSourceWords(NOW({ mode: 'automatic', cap: 24, derived: { kind: 'unmeasured', why } }))).toBe(automatic);
+    expect(capSourceWords(NOW({ mode: 'override', cap: 12, derived: { kind: 'unmeasured', why } }))).toBe(override);
+  });
+
+  it('an unmeasured answer from a server that sends no reason reads as not measured yet', () => {
+    const view = { caps: { maxConcurrentWorkers: 24 }, usage: { running: 5 }, capNow: { mode: 'automatic', cap: 24, derived: { kind: 'unmeasured' } } };
+    expect(capSourceWords(view as unknown as CoordCapsView))
+      .toBe('Automatic, but the fleet host has not been measured yet. Using the stored number, 24, until it is.');
+  });
+
+  it('a limit on the sessions\' memory below the box\'s is said beside it; one at or above the box\'s is not', () => {
+    const from = (sessionMemLimitBytes: number | undefined, bound: 'session-limit' | 'cores'): string | null => capSourceWords(NOW({ mode: 'automatic', cap: 8,
+      derived: { kind: 'measured', cap: 8, bound, memTotalBytes: 64 * GiB, cores: 16, ...(sessionMemLimitBytes === undefined ? {} : { sessionMemLimitBytes }) } }));
+    expect(from(24 * GiB, 'session-limit')).toBe('Automatic: 8 (from 64 GB, of which sessions may use 24 GB, and 16 cores)');
+    expect(from(64 * GiB, 'cores')).toBe('Automatic: 8 (from 64 GB and 16 cores)');
+    expect(from(200 * GiB, 'cores')).toBe('Automatic: 8 (from 64 GB and 16 cores)');
+    expect(from(undefined, 'cores')).toBe('Automatic: 8 (from 64 GB and 16 cores)');
+  });
+
+  it('memory is whole GB above ten and one decimal below, and one core is singular', () => {
+    const from = (memTotalBytes: number, cores: number): string | null =>
+      capSourceWords(NOW({ mode: 'automatic', cap: 1, derived: { kind: 'measured', cap: 1, bound: 'cores', memTotalBytes, cores } }));
+    expect(from(Math.round(63.6 * GiB), 16)).toBe('Automatic: 1 (from 64 GB and 16 cores)');
+    expect(from(Math.round(7.63 * GiB), 4)).toBe('Automatic: 1 (from 7.6 GB and 4 cores)');
+    expect(from(16 * GiB, 1)).toBe('Automatic: 1 (from 16 GB and 1 core)');
   });
 });

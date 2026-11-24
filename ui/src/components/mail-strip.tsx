@@ -152,6 +152,8 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // draft to wait out: with the stash working a draft never holds mail, so either word means something to look at.
   'stash-failed': "the session's input box would not stash its draft — look at the pane",
   'stash-occupied': 'the session already holds a stashed draft — ctrl+s there brings it back',
+  // Overlord W1a, the renewal act: the session's conversation is being renewed, so its mail waits for the fresh one.
+  renewing: 'the session is starting a fresh conversation — this waits for it',
 };
 
 /** An UNKNOWN member renders the raw token rather than `undefined` — an older

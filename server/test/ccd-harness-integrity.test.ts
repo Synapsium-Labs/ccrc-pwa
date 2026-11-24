@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { stringPieces } from './scan/parse.js';
 import { STUB_SEAM_GONE, stubFn } from './ccdStub.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CONTAINED_CCRC_SEAMS, ghContainedEnv, makeCcdHarness, stripCcrcKnobs, type CcdHarness } from './ccdWsHelpers.js';
 import { pythonHeredocs } from './docsHelperPy.js';
 import { REAL_PYTHON3 } from './ccdDocsHelpers.js';
 
@@ -100,6 +100,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-harness-integrity.test.ts': ['_method', '_nope', '_tmpl'],
   'ccd-split-pin.test.ts': ['_load'],
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
+  // A wrapper the suite defines so `_ws_reclaim_contained` runs the fork and prints its globals.
+  'ccd-collect-device-gone.test.ts': ['_t'],
   'ccd-die-containment.test.ts': ['_c', '_f', '_g', '_leaf', '_middle', '_top', '_v'],
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
   // The loader-globals census's fixture function: it plants every write form of the loader's globals in a tmp ccd/ccd.
@@ -232,8 +234,9 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
 describe('every python heredoc a shipped shell script holds parses and compiles (D-6051)', () => {
   /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: eight in ccd/ccd, one in
    *  ccd/lib/train-proof.sh (`_pr_train_py`, the train record's python, moved out of `_pr_py`'s, D-7463), two in
-   *  ccd-graph-sweep, one in ccgpt-runtime, three in ccrc-models-probe, one in ccd-land-probe. */
-  const PINNED_COUNT = 16;
+   *  ccd-graph-sweep, one in ccgpt-runtime, four in ccrc-models-probe (the fourth its release lookup's program, staged by `cat`, D-8743), one in
+   *  ccd-land-probe. */
+  const PINNED_COUNT = 17;
 
   const all = (): { where: string; tag: string; body: string }[] => shippedShellScripts().flatMap((rel) =>
     pythonHeredocs(fs.readFileSync(path.join(REPO, rel), 'utf8')).map((d) => ({ where: `${rel}:${d.line}`, ...d })));
@@ -275,5 +278,54 @@ describe('every python heredoc a shipped shell script holds parses and compiles 
     expect(() => pythonHeredocs("x() {\n  python3 - <<'PY'\nprint(1)\n}\n")).toThrow(/never closes/);
     expect(pythonHeredocs("# python3 - <<'PY' in a comment\necho\n")).toEqual([]);
     expect(pythonHeredocs("python3 - <<'PY'\nprint(1)\nPY\n")).toEqual([{ line: 1, tag: 'PY', body: 'print(1)\n' }]);
+  });
+});
+
+// D-8743, fix round 1 of model-class-advance wave 2 (review A9): a test that strips the ccrc knobs from a contained env
+// keeps the containment seams, so the strip has one owner, `stripCcrcKnobs` (ccdWsHelpers.ts). Each hand-written
+// `CCRC_` delete loop under server/test dropped the probe's release seam with the knobs, and the account suite met the
+// poisoned curl on CI.
+// A ONE-LINE-SHAPE GUARD (review N1, kept so by ruling): it catches a startsWith test of the CCRC_ prefix with a
+// delete after it on the same line, the `for … if (…) delete env[k]` loop and a one-line `.filter(…).forEach(… delete …)`. It does NOT
+// catch a multi-line braced delete (`if (…) {` then `delete env[k]` on the next line), a regex-form delete
+// (`/^CCRC_/.test(k)`), or the allow-list copy (`if (!k.startsWith('CCRC_')) env[k] = v`, which copies rather than
+// deletes), and the owner file is exempt by name, so a second loop inside it passes.
+describe('one strip of the CCRC_ knobs, which keeps the containment seams (D-8743)', () => {
+  const STRIP = /startsWith\(\s*['"]CCRC_['"]\s*\)[^;\n]*\bdelete\b/;
+  const OWNER = 'ccdWsHelpers.ts';
+
+  it('no file under server/test deletes CCRC_ names by hand: each strip calls stripCcrcKnobs', () => {
+    const files = (fs.readdirSync(TEST_DIR, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f) && f !== OWNER);
+    expect(files.length, 'non-vacuity: the scan reads the test tree').toBeGreaterThan(100);
+    const hits = files.flatMap((f) => fs.readFileSync(path.join(TEST_DIR, f), 'utf8').split('\n')
+      .flatMap((l, i) => (STRIP.test(l) ? [`${f}:${i + 1}`] : [])));
+    expect(hits).toEqual([]);
+  });
+
+  it('the kept list is every CCRC_ value ghContainedEnv sets, and a stripped contained env keeps both (fix round 2)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-strip-seams-'));
+    try {
+      for (const opts of [{}, { systemd: true, tmux: true, net: true }]) {
+        const set = Object.keys(ghContainedEnv(home, {}, opts)).filter((k) => k.startsWith('CCRC_')).sort();
+        expect(set, 'a CCRC_ value ghContainedEnv sets is missing from CONTAINED_CCRC_SEAMS').toEqual([...CONTAINED_CCRC_SEAMS].sort());
+        const contained = ghContainedEnv(home, { CCRC_KNOB: '1' }, opts);
+        const stripped = stripCcrcKnobs({ ...contained });
+        expect(stripped['CCRC_KNOB']).toBeUndefined();
+        expect(stripped['CCRC_MODELS_PROBE_RELEASE_FIXTURE']).toBe(path.join(home, 'no-codex-release-answer'));
+        expect(stripped['CCRC_CODEX_AUTH_BASE'], 'the strip dropped the auth library\'s closed endpoint').toBe(contained['CCRC_CODEX_AUTH_BASE']);
+        expect(stripped['CCRC_CODEX_AUTH_BASE']).toMatch(/\S/);
+      }
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it('the helper drops the knobs and keeps the seams and the names it is told to (CONTROL: the scan sees a loop)', () => {
+    expect(CONTAINED_CCRC_SEAMS).toContain('CCRC_MODELS_PROBE_RELEASE_FIXTURE');
+    const env = { CCRC_KNOB: '1', CCRC_HERE: 'here', CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' };
+    expect(stripCcrcKnobs({ ...env }, ['CCRC_HERE'])).toEqual({ CCRC_HERE: 'here', CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' });
+    expect(stripCcrcKnobs({ ...env })).toEqual({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' });
+    // Split, so this line is not itself a hit of the scan above.
+    expect(STRIP.test("for (const k of Object.keys(env)) if (k.startsWith('CCRC" + "_')) delete env[k];")).toBe(true);
+    expect(STRIP.test("for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('CCRC_')) env[k] = v;")).toBe(false);
+    expect(STRIP.test(fs.readFileSync(path.join(TEST_DIR, OWNER), 'utf8')), 'the owner holds the one loop').toBe(true);
   });
 });

@@ -41,8 +41,8 @@ const POOL = { poolset: 'pool-a,pool-b+untagged', acctorder: 'claude-a,claude-b'
 
 describe('the pool set route fields on the server (W1, PR A1)', () => {
   it('are the last two writable fields, read fields too, and lane-only, which every door parse refuses by name', () => {
-    expect(ROUTE_WRITABLE_FIELDS.slice(-2)).toStrictEqual(['poolset', 'acctorder']);
-    expect(ROUTE_LANE_ONLY_FIELDS.slice(-2)).toStrictEqual(['poolset', 'acctorder']);
+    expect(ROUTE_WRITABLE_FIELDS.slice(-5, -3)).toStrictEqual(['poolset', 'acctorder']);   // the W1 sandbox's profiledigest, the mid-turn mail hold's mailhold and the coordinator advisor's advisor follow them
+    expect(ROUTE_LANE_ONLY_FIELDS.slice(-5, -3)).toStrictEqual(['poolset', 'acctorder']);
     for (const f of Object.keys(POOL)) expect(ROUTE_READ_FIELDS, f).toContain(f);
     expect(parseRouteFields({ poolset: POOL.poolset })).toStrictEqual({ ok: false, why: 'lane-only', field: 'poolset' });
     expect(parseRouteFields({ class: 'opus', acctorder: POOL.acctorder })).toStrictEqual({ ok: false, why: 'lane-only', field: 'acctorder' });

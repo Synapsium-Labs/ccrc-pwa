@@ -11,12 +11,15 @@
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
 import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { type ParkedApprovalView } from './approval-park.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
+import type { AnswerMarksView, AskMarkRow } from './answerMarks.js';
 
-/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
- *  `secret`'s value goes to its slot, never through the answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` needs none, and its tick may carry the
+ *  operator's optional note as its answer (D-8931); a `secret`'s value goes to its slot, never through the
+ *  answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -41,6 +44,12 @@ const ITEM_ACT_MAP: Record<ItemAct, true> = {
   tick: true, confirm: true, return: true, withdraw: true, dismiss: true, act: true, decline: true, settle: true,
 };
 export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
+/** The acts an item event records besides an `ItemAct`: a raise and a blocking change, which do not move the item. An
+ *  event's act is an `ItemEventAct`; `isItemNonMove` reads this one map (Overlord W1, portfolio). */
+export type ItemNonMove = 'raise' | 'block' | 'unblock';
+export type ItemEventAct = ItemAct | ItemNonMove;
+const ITEM_NON_MOVE_MAP: Record<ItemNonMove, true> = { raise: true, block: true, unblock: true };
+export const isItemNonMove = (act: string): act is ItemNonMove => Object.prototype.hasOwnProperty.call(ITEM_NON_MOVE_MAP, act);
 const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true, ccrc: true };
 export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 
@@ -90,12 +99,40 @@ export type ItemAction =
   | { verb: 'linear-drift'; bindingId: number }
   | { verb: 'linear-initiatives'; workspaceId: string }
   | { verb: 'linear-owner'; project: string }
-  | ReleaseReviewAction;
-/** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
-export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
+  // D-8808 (review 3048 F5): inbound issues of a team key two connected workspaces hold wait because the projects that hold the
+  // key name no workspace. One open item per team key (upper-case); the remedy is the project row's Workspace on
+  // `LINEAR_PROJECTS_SETTINGS_PATH`, so the item takes no act of its own and settles itself once no waiting issue of the key
+  // depends on the workspace choice (an issue may still wait then, on its owner).
+  | { verb: 'linear-team-workspace'; teamKey: string }
+  | ReleaseReviewAction
+  // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2), narrowed by the Overlord's slug item-only-when-given-up: ccrc gave up
+  // capturing this Claude Code build. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
+  | { verb: 'untrusted-build'; build: string }
+  // D-8955: a disk cleanup lane (`lane`) has stalled under disk pressure, for `reason` (a held-by word, ccd's token, or
+  // `unknown`). One open item per lane and reason; ccrc settles it once the lane finishes one again, so it names no run and
+  // takes no act of its own.
+  | { verb: 'disk-lane-stall'; lane: string; reason: string };
+/** The disk-lane stall action's verb, the one spelling its readers bind (D-8955). */
+export const DISK_LANE_STALL_VERB = 'disk-lane-stall' as const;
+export type DiskLaneStallAction = Extract<ItemAction, { verb: 'disk-lane-stall' }>;
+export const isDiskLaneStallAction = (a: ItemAction | null): a is DiskLaneStallAction => a !== null && a.verb === DISK_LANE_STALL_VERB;
+/** The untrusted-build action's verb, the one spelling its readers bind (approvals PR 2, Task 2.2). */
+export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;
+export type UntrustedBuildAction = Extract<ItemAction, { verb: 'untrusted-build' }>;
+export const isUntrustedBuildAction = (a: ItemAction | null): a is UntrustedBuildAction => a !== null && a.verb === UNTRUSTED_BUILD_VERB;
+/** The console page the untrusted-build item's step links to (review 2752 F4): Settings' Automation section, whose Test box
+ *  build list holds the build's row and its Capture again. The item's text names it, and the console links a routed path. */
+export const UNTRUSTED_BUILD_SETTINGS_PATH = '/settings/automation';
+/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Integrations
+ *  section (D-8932; Security held it before, and an item written then still names `/settings/security`,
+ *  where a line points here). The `linear-team-workspace` item's text names it and the console links it. */
+export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/integrations';
+/** The six hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). `linear-team-workspace`
+ *  takes none: its remedy is a setting on the project's row (D-8808). */
+export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner' | 'linear-team-workspace';
 export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';
 const LINEAR_ACTION_VERB_MAP: Record<LinearActionVerb, true> = {
-  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true,
+  'linear-map': true, 'linear-report': true, 'linear-drift': true, 'linear-initiatives': true, 'linear-owner': true, 'linear-team-workspace': true,
 };
 export const isLinearActionVerb = (v: unknown): v is LinearActionVerb =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ACTION_VERB_MAP, v);
@@ -106,7 +143,7 @@ export const isLinearItemAct = (v: unknown): v is LinearItemAct =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ITEM_ACT_MAP, v);
 export const LINEAR_ITEM_ACTS: Readonly<Record<LinearActionVerb, readonly LinearItemAct[]>> = {
   'linear-map': ['approve', 'return'], 'linear-report': ['put-back', 'done'], 'linear-drift': ['hand', 'keep'],
-  'linear-initiatives': ['check-again'], 'linear-owner': ['name'],
+  'linear-initiatives': ['check-again'], 'linear-owner': ['name'], 'linear-team-workspace': [],
 };
 export type LinearItemAction = Extract<ItemAction, { verb: LinearActionVerb }>;
 export const isLinearItemAction = (a: ItemAction | null): a is LinearItemAction =>
@@ -135,6 +172,15 @@ export const releaseReviewAction = (runId: number, reviewRunId: number, sessionI
  *  `release-review` act abandons nothing. */
 export const actAbandons = (a: ItemAction | null): boolean =>
   a !== null && (a.verb === 'end-run' || (a.verb === 'close-refused' && a.doors.some((d) => ABANDONING_DOORS.includes(d))));
+/** Whether an item's action admits a move (A-1, review 2394, against D-8720). An item that carries an action ends by `act`,
+ *  `decline`, `withdraw` or `settle`: a tick, confirm or return would strand it. A persistent-drift item is closed by the operator's
+ *  Hand or Keep alone (`linear-drift`), so the generic dismiss door must not quiet it. `moveItemInTx` is the one asker; it answers
+ *  `not-open` for a refusal, as for any move the item's state does not take. */
+export function actionAdmits(action: ItemAction | null, act: ItemAct): boolean {
+  if (action === null) return true;
+  if (act === 'tick' || act === 'confirm' || act === 'return') return false;
+  return !(act === 'dismiss' && action.verb === 'linear-drift');
+}
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
 export function parseItemAction(text: string): ItemAction | null {
   let v: unknown;
@@ -159,6 +205,19 @@ export function parseItemAction(text: string): ItemAction | null {
   if (o['verb'] === 'linear-owner') {
     const project = word('project');
     return project === null ? null : { verb: 'linear-owner', project };
+  }
+  if (o['verb'] === 'linear-team-workspace') {
+    const teamKey = word('teamKey');
+    return teamKey === null ? null : { verb: 'linear-team-workspace', teamKey };
+  }
+  if (o['verb'] === UNTRUSTED_BUILD_VERB) {
+    const build = word('build');
+    return build === null ? null : { verb: UNTRUSTED_BUILD_VERB, build };
+  }
+  if (o['verb'] === DISK_LANE_STALL_VERB) {
+    const lane = word('lane');
+    const reason = word('reason');
+    return lane === null || reason === null ? null : { verb: DISK_LANE_STALL_VERB, lane, reason };
   }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
   if (o['verb'] === 'release-review') {
@@ -261,8 +320,101 @@ export interface ItemView {
   /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run`, `close-refused` or `release-review` (D-8293). `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
+  /** The row's revision (Overlord W2, spec §6.7): raised by each move of the item, 0 at its raise. A server from before W2
+   *  omits it. Nothing in the console reads it yet: the first piece that does (W3's answer doors) adds the one reader,
+   *  `rowRevisionOf`, answering a number or `'absent'`. */
+  revision?: number;
+  /** The operator's two answer marks (Overlord W1, spec §9.2.1, C70), on a `decide` or `value` item they were shown while it is
+   *  listed. ABSENT means this server cannot mark this row (an older server, or a row with no box), never "never marked"
+   *  (plan question 14): a reader goes through the console's one reader, `answerMarkWords.ts#answerMarksOf`. */
+  answerMarks?: AnswerMarksView;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
 }
+
+/** What a goals version rests on (Overlord W1, portfolio B; spec §3.8), stored as `ratifiedBy` on the pin and on each
+ *  modification. It records the SOURCE only; whether that source ratifies is `goalRatification`'s, decided at every read.
+ *  W2 adds `{ kind: 'request' }`, with the row's requestId; the parser refuses it until then. */
+export type RatifiedBy =
+  | { kind: 'coordinator' }                  // the programme's own coordinator wrote it
+  | { kind: 'item' }                         // a modification that cites an item; the id is the row's itemId
+  | { kind: 'operator' };                    // the operator's ratify door
+export type RatifiedByKind = RatifiedBy['kind'];
+const RATIFIED_BY_KIND_MAP: Record<RatifiedByKind, true> = { coordinator: true, item: true, operator: true };
+/** Whether a word off the wire is a source this build can name (a newer server may send one it cannot). */
+export const isRatifiedByKind = (raw: unknown): raw is RatifiedByKind =>
+  typeof raw === 'string' && Object.prototype.hasOwnProperty.call(RATIFIED_BY_KIND_MAP, raw);
+/** NULL is a version written before the column (`unrecorded`); any other text this build cannot read is `unreadable`. */
+export const parseRatifiedBy = (raw: string | null): RatifiedBy | 'unrecorded' | 'unreadable' =>
+  raw === null ? 'unrecorded' : isRatifiedByKind(raw) ? { kind: raw } : 'unreadable';
+export const ratifiedByText = (r: RatifiedBy): string => r.kind;
+/** What a coordinator door may record: every source but the operator's, which only the ratify door writes (review 2240 F6). */
+export type WrittenSource = Exclude<RatifiedBy, { kind: 'operator' }>;
+/** A modification's source, from the row's own `itemId` (review 2240 F6: the store derives it, never the route). */
+export const modificationSource = (itemId: number | null): WrittenSource => (itemId === null ? { kind: 'coordinator' } : { kind: 'item' });
+/** The pin's stored source, counted only when it was recorded at or after the pin's text (review 2240 F2): a build older than
+ *  the ratification columns re-pins the text and leaves the source, so a source older than `inShortAt` describes text that is
+ *  gone, and reads `unrecorded`. Every writer of this build stamps `ratifiedAt` with or after `inShortAt`. */
+export const pinSource = (ratifiedBy: string | null, ratifiedAt: number | null, inShortAt: number | null): RatifiedBy | 'unrecorded' | 'unreadable' =>
+  ratifiedBy === null || ratifiedAt === null || inShortAt === null || ratifiedAt < inShortAt ? 'unrecorded' : parseRatifiedBy(ratifiedBy);
+/** (Question 1.) Whether a coordinator's own PIN ratifies. Operator item 328 (2026-11-16) answered yes: "a coordinator's
+ *  pin counts, shown as ratified by the coordinator" (slug coordinator-pin-ratifies). The pin only: a coordinator's
+ *  modification never ratifies (review 2240 F3; a change to the definition of done is operator-only, O3). */
+export const COORDINATOR_SOURCE_RATIFIES: boolean = true;
+/** Question 3's predicate: the operator ticked the item and it was not returned since (`checking` or `done`, with a tick).
+ *  A return moves it back to `open` keeping its old `tickedAt`; `act` and a settle from `open` reach `done` with none. */
+export const itemAnswered = (item: { state: string; tickedAt: number | null }): boolean =>
+  (item.state === 'checking' || item.state === 'done') && item.tickedAt !== null;
+export type RatificationWhy = 'unrecorded' | 'unreadable' | 'source-does-not-ratify' | 'effect-unmeasured'
+  | 'item-not-answered' | 'absent';
+const RATIFICATION_WHY_MAP: Record<RatificationWhy, true> = {
+  unrecorded: true, unreadable: true, 'source-does-not-ratify': true, 'effect-unmeasured': true, 'item-not-answered': true, absent: true,
+};
+/** Whether a word off the wire is a reason this build can name (a newer server may send one it cannot). */
+export const isRatificationWhy = (raw: unknown): raw is RatificationWhy =>
+  typeof raw === 'string' && Object.prototype.hasOwnProperty.call(RATIFICATION_WHY_MAP, raw);
+export type Ratification =
+  | { ratified: true; source: RatifiedBy }
+  | { ratified: false; why: RatificationWhy; source: RatifiedBy | null };
+/** Whether a goals version's source ratifies it. Pure. `item` is the cited item as the store read it, or null when the row
+ *  cites no item of this programme. `of` says whether the version is the pin or a modification: a coordinator's source
+ *  ratifies the pin only (question 1, review 2240 F3). The `item` arm answers `effect-unmeasured` in W1, because §6.3's
+ *  effect check arrives in W3 (slug item-ratifies-with-its-effect), which replaces that one arm. */
+export function goalRatification(source: RatifiedBy | 'unrecorded' | 'unreadable',
+  item: { program: string; state: string; tickedAt: number | null } | null, program: string, of: 'pin' | 'modification'): Ratification {
+  if (source === 'unrecorded' || source === 'unreadable') return { ratified: false, why: source, source: null };
+  switch (source.kind) {
+    case 'coordinator':
+      return of === 'pin' && COORDINATOR_SOURCE_RATIFIES ? { ratified: true, source } : { ratified: false, why: 'source-does-not-ratify', source };
+    case 'item':
+      if (item === null || item.program !== program) return { ratified: false, why: 'unreadable', source };
+      return { ratified: false, why: itemAnswered(item) ? 'effect-unmeasured' : 'item-not-answered', source };
+    case 'operator':
+      return { ratified: true, source };
+    default: {
+      const never: never = source;
+      return { ratified: false, why: 'unreadable', source: never };
+    }
+  }
+}
+/** The version the operator ratifies (the ratify door's body): the pin, named by the `inShortAt` stamp they were shown, or a
+ *  modification by id. */
+export type GoalsVersion = { pin: { inShortAt: number } } | { modification: number };
+/** The ratify door's body read, exactly one of the two shapes with nothing else in it, or null. Shared so the console builds
+ *  only what the door takes. */
+export function parseGoalsVersion(raw: unknown): GoalsVersion | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const keys = Object.keys(raw);
+  if (keys.length !== 1) return null;
+  const b = raw as Record<string, unknown>;
+  if (keys[0] === 'modification') return Number.isSafeInteger(b['modification']) && (b['modification'] as number) > 0 ? { modification: b['modification'] as number } : null;
+  if (keys[0] !== 'pin') return null;
+  const pin = b['pin'];
+  if (typeof pin !== 'object' || pin === null || Array.isArray(pin) || Object.keys(pin).length !== 1) return null;
+  const at = (pin as Record<string, unknown>)['inShortAt'];
+  return Number.isSafeInteger(at) && (at as number) >= 0 ? { pin: { inShortAt: at as number } } : null;
+}
+/** The one reader of `GoalsView`'s optional verdicts: one absent from an older server is its own word, `absent`. */
+export const ratificationOf = (r: Ratification | undefined): Ratification => r ?? { ratified: false, why: 'absent', source: null };
 
 /** A programme's pinned spec and what has changed since its approval. */
 export interface GoalsView {
@@ -273,10 +425,20 @@ export interface GoalsView {
   modifications: {
     id: number; at: number; text: string; ruling: string | null;
     itemId: number | null; pr: number | null; merged: boolean;
+    /** Overlord W1, portfolio B: this row's verdict. Absent from an older server: read it through `ratificationOf`. */
+    ratification?: Ratification;
   }[];
   /** The stored definition of done (D-8126): optional on the type, always sent by the server;
    *  null when none is stored. */
   doneWhen?: readonly string[] | null;
+  /** Overlord W1, portfolio B: the pin's verdict, and the verdict of the version that wrote the current definition of done
+   *  (`doneWhenBy`). Absent from an older server: read each through `ratificationOf`. */
+  pinRatification?: Ratification;
+  doneWhenRatification?: Ratification;
+  /** Overlord W1, portfolio B (review 2240 F4): the version that wrote the stored definition of done, so the console shows
+   *  the list beside that version's verdict and Ratify control: the pin by its stamp, or a modification by id. Null when the
+   *  writer is not recorded or not readable; absent from an older server. */
+  doneWhenVersion?: GoalsVersion | null;
 }
 
 /** What a coordinator or the console reads of one programme (`GET /api/programmes/:slug/goals`, D-8126): the pin with its
@@ -297,6 +459,14 @@ export interface WaitingView {
    *  Recently cleared window. OPTIONAL on the wire: an older server omits both. ADDITIVE. */
   calls?: CallView[];
   callsCleared?: CallView[];
+  /** Overlord W1, answer marks B: the asks the operator has, each with its two marks. `asks` are the live ones, whose boxes sit
+   *  on their child's question row; `asksCleared` the rest, rows of Recently cleared. OPTIONAL and ADDITIVE: absent means this
+   *  server cannot mark an ask (an older one, or its read of the asks failed), so the console draws no ask box. */
+  asks?: AskMarkRow[];
+  asksCleared?: AskMarkRow[];
+  /** Approvals PR 3 (§3.3.2): the parked permission prompts, oldest first, each "with your coordinator", which the operator
+   *  may rule. OPTIONAL and ADDITIVE: absent means an older server, or a read that failed (never an empty list then). */
+  approvals?: ParkedApprovalView[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
@@ -415,7 +585,10 @@ export function isOneLine(v: string): boolean {
  *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
  *  never shown. */
 export function secretTailOf(value: string): string {
-  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  // A loop, not `/=+$/`: that pattern backtracks quadratically over a long run of `=` (CodeQL js/polynomial-redos).
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x3d) end--;
+  if (utf8Bytes(value.slice(0, end)) < SECRET_TAIL_MIN) return '';
   return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
 }
 
@@ -492,6 +665,15 @@ export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { o
 /** "Recently cleared" keeps the last 48 hours (D-8194; was seven days, spec D13): the server's list and the console's trail both
  *  read this one window, so neither shows what the other has dropped. */
 export const CLEARED_WINDOW_MS = 48 * 3600 * 1000;
+
+/** The hold rule (A21, D-8194), once: when the operator was first shown an item. Its `heldUntil`, or its `raisedAt` when it
+ *  was never held; null when its coordinator settled it inside the hold (closed before `heldUntil`), so it was never shown.
+ *  `ledgersStore.ts#operatorWasShown(row, now)` is `shownAt !== null && shownAt <= now`, and the portfolio's operator wait
+ *  starts here (Overlord W1, portfolio: moved from `ledgersStore.ts`). */
+export function operatorShownAt(row: { raisedAt: number; heldUntil: number | null; closedAt: number | null }): number | null {
+  if (row.heldUntil === null) return row.raisedAt;
+  return row.closedAt !== null && row.closedAt < row.heldUntil ? null : row.heldUntil;
+}
 /** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
  *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;

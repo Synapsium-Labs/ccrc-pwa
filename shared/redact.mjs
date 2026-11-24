@@ -20,8 +20,8 @@
 //   - `docs`: the native Docs reader's redactor (docs W1, design 2026-10-01 section 2 (b)). Every mask is `***`. ccd's
 //     python `REDACT_RULES` is a parity copy of its rows (`docs-parity.test.ts`).
 //   - `linear-egress`: the redactor for prose a session sends to Linear (#1444): a title, a description, a comment body,
-//     a search term. It lists only the credential-shape rules of `egress` (`jwt`, `header`, `bearer`, the two
-//     URL-userinfo rules, `secret-assigns`, `known-token`), and leaves out `token-segments`, the flag rules,
+//     a search term. It lists only the credential-shape rules of `egress` (`pem-block`, `jwt`, `header`, `bearer`, the
+//     two URL-userinfo rules, `secret-assigns`, `known-token`), and leaves out `token-segments`, the flag rules,
 //     `json-pair`, `yaml-secret`, `secret-word` and the program-scoped rules: those were built for command lines, and
 //     over a ticket they would mask a commit SHA, a UUID or a dated spec path, or read prose as argv. Every mask is
 //     `[REDACTED]`, and it takes the caller's `shapes` as `egress` does.
@@ -49,6 +49,9 @@
 // THE EGRESS SHAPES. A child's tool input is untrusted text, and it can carry a secret the child pasted into a command.
 // Before any input is stored on an approval row, mailed to a coordinator, put in a digest or shown on a surface, the
 // egress profile masks the token-shaped strings in it:
+//   - a PEM private-key block, from its BEGIN line through its END line within 64 KB; with no END line, its BEGIN line
+//     and every line after it up to the first blank line, never the text past that (overlord wave 163; reviews 2693
+//     and 2704, `maskPemBlocks`);
 //   - `Authorization:` and `Cookie:` header values (and `Proxy-Authorization:`, `Set-Cookie:`), and the value of any
 //     header named `...-Key`, `...-Token`, `...-Secret` or `...-Signature` (`X-Api-Key:`, `Private-Token:`), to the end
 //     of the value (D-5360);
@@ -88,6 +91,10 @@
 //   - a known token by its prefix, at any length: `sk_live_`, `sk_test_`, `rk_live_`, `ghp_`, `gho_`, `ghu_`, `ghs_`,
 //     `ghr_`, `github_pat_`, `glpat-`, `xox[abprs]-`, `xapp-`, `npm_`, `pypi-`, `AKIA...`, `ASIA...`, `AIza...`,
 //     `sk-...` (D-5360), a Linear API key's `lin_api_` (#1444), and a Slack webhook's path and a Telegram bot token;
+//     and, by their shapes from Gitleaks v8.30.0 (overlord wave 163; `KNOWN_TOKEN_PREFIX` says how each was read), a
+//     SendGrid `SG.` key, DigitalOcean's `dop_v1_`, `doo_v1_` and `dor_v1_` tokens, an age `AGE-SECRET-KEY-1` key,
+//     HashiCorp Vault's `hvs.` and `hvb.` tokens and a Mailgun `key-` with 32 hex, and a Google `ya29.` access token
+//     (age's post-quantum `AGE-SECRET-KEY-PQ-1` too);
 //   - every `/`-separated segment of 32 or more base64 or hex characters that holds a digit and a letter (spec section
 //     6.7; D-5360): a segment is judged on its own, so a secret inside a URL path or a base64 value with a `/` in it is
 //     masked, while a path whose segments are short or are words (`project-a-quiet-basin-with-a-long-name`) stays
@@ -104,8 +111,10 @@
 //     -t`, `rar -hp<pw>`, `smbclient -U user%pw`, `lftp -u user,pw`, `wrangler secret put X --value X`,
 //     `kubectl --from-literal=key=X`;
 //   - token shapes with no prefix rule: a Discord bot token (three dot-separated parts, each under 32 characters), a
-//     HashiCorp Vault token (`s....`, `hvs....`, `hvb....`), a `gsk_` token, a bare secret with no name in front of it
-//     that is only short `/`-separated segments;
+//     legacy HashiCorp Vault token (`s.` and 24 letters and digits, which `s.getElementsByClassName…` code also
+//     reads as), a `gsk_` token, a PGP private key block (its BEGIN line names `PGP PRIVATE KEY BLOCK`: the PEM rules
+//     read `PRIVATE KEY` alone, and history's bytes cannot change without a reindex), a bare secret with no name in front of it that is only short
+//     `/`-separated segments;
 //   - names and headers: an assignment written with spaces around `=`, a secret name the name test does not hold
 //     (`PW=`), an `X-Auth:`, `X-Password:` or `X-Api-Pass:` header, a header with no space after its colon whose name
 //     has no `-Key` / `-Token` suffix (`apikey:X`, `token:X`), a `DSN=`, `?sig=` or `?signature=` value, a cookie
@@ -182,7 +191,190 @@ const SINGLE_DASH_SECRET = new RegExp(String.raw`(^|[\s'"])(-(?!-)[A-Za-z0-9-]*(
 const CAMEL_SECRET_FLAG = new RegExp(String.raw`(^|[\s'"])(--?[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)*?(?:Token|Secret|Password|Passwd|Pass|ApiKey|Key))(\s+(?![<>-])|=)${VALUE}`, 'g');
 /** D-5360 round 8: xfreerdp's `/p:<password>`. */
 const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
-const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`;
+/** Overlord wave 163: the rows after `AIza`, but `ya29.`, take their shapes from Gitleaks v8.30.0
+ *  (https://github.com/gitleaks/gitleaks/blob/v8.30.0/config/gitleaks.toml, MIT licence:
+ *  https://github.com/gitleaks/gitleaks/blob/v8.30.0/LICENSE), from its rules `sendgrid-api-token`, `digitalocean-pat`,
+ *  `digitalocean-access-token`, `digitalocean-refresh-token`, `age-secret-key`, `vault-service-token` (its `hvs.` arm),
+ *  `vault-batch-token` and `mailgun-private-api-token`. Every departure from them:
+ *  - the left edge: Gitleaks's `\b` is this group's lookbehind, no letter or digit before, so a `_` before is allowed;
+ *    an escaped line break or an ANSI code before the token is a boundary too (`TOKEN_LEFT_ESCAPE`, overlord wave 168),
+ *    where Gitleaks's `\b` misses it;
+ *  - the right edge: Gitleaks ends a match at a quote, whitespace, `;`, an escaped line break or the end. Here the
+ *    fixed-length rows (SendGrid, DigitalOcean, age) are fenced, no letter, digit, `_` or `-` after them, so a longer
+ *    run is never cut and never leaves a tail (egress's segment rule masks it whole); the two Vault rows keep their
+ *    lower bound and drop the upper one, so a longer run is masked whole;
+ *  - SendGrid: Gitleaks reads `SG.` and 66 of a case-insensitive class holding `=` and `.`; here it is the key's own
+ *    shape, 22 then `.` then 43 base64url characters, so prose of dotted words is never cut, and a full stop after the
+ *    key is not part of it;
+ *  - DigitalOcean's refresh token is case-insensitive there, so it is spelt with both cases here (no inline `(?i:`
+ *    before Node 23); its PAT and access rows are lowercase there too;
+ *  - age: Gitleaks reads `AGE-SECRET-KEY-1`; here the post-quantum identity, `AGE-SECRET-KEY-PQ-1` (age v1.3), as well;
+ *  - Mailgun: Gitleaks needs the word `mailgun` before the key and reads it in any case; here no word is needed, the
+ *    32 hex are lowercase only, and the row is fenced on both sides (no `_` or `-` before `key-`, nothing after its 32
+ *    hex), so a `cache-key-<md5>` stays readable;
+ *  - `ya29.`: Gitleaks has no Google OAuth row, so this one is ccrc's own: the prefix, then at least 20 base64url
+ *    characters in dot-joined parts (the dots not counted), so a trailing full stop is never taken. */
+/** What may stand right before a known token though it ends in a letter (overlord wave 168, review 2693 F4): a
+ *  JSON-escaped line feed, carriage return or tab, and an ANSI CSI sequence (a colour code), raw or JSON-escaped. Each
+ *  row group's left edge reads it as a boundary, so a token at the start of an escaped line or a coloured span is
+ *  masked in `linear-egress` too, which has no segment rule behind it. Linear: the CSI's two classes are disjoint, so
+ *  each lookbehind reads back over one run of each at most. */
+const TOKEN_LEFT_ESCAPE = String.raw`(?<=\\[nrt]|(?:\x1b|\\u001[bB])\[[0-?]*[ -/]*[@-~])`;
+const KNOWN_TOKEN_PREFIX = String.raw`(?:(?<![A-Za-z0-9_-])|` + TOKEN_LEFT_ESCAPE + String.raw`)(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?:(?<![A-Za-z0-9])|` + TOKEN_LEFT_ESCAPE + String.raw`)(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
+  + String.raw`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_=-])|`
+  + String.raw`(?:do[op]_v1_[a-f0-9]{64}|[dD][oO][rR]_[vV]1_[a-fA-F0-9]{64}|AGE-SECRET-KEY-(?:PQ-)?1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58})(?![A-Za-z0-9_-])|`
+  + String.raw`hvs\.[A-Za-z0-9_-]{90,}|hvb\.[A-Za-z0-9_-]{138,}|(?<![_-])key-[a-f0-9]{32}(?![A-Za-z0-9_-])|`
+  + String.raw`ya29\.(?=(?:\.?[A-Za-z0-9_-]){20})[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|`;
+/** A PEM private-key block's BEGIN and END lines, the one spelling both rules below are built from. */
+const PEM_HEADER = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----`;
+const PEM_END = String.raw`-----END [A-Z ]*PRIVATE KEY-----`;
+/** History's PEM rule: a BEGIN line, to its END line or, with none, to the end of the text. `ccd/history/lib.mjs`'s shape
+ *  layer builds its first arm from it (`SECRET_SHAPE_RES`). Its bytes are part of every history index text, so a change
+ *  to it is a history `BELT_VERSION` bump and a reindex (the history programme's), never a change made here alone: that
+ *  is why it is not Gitleaks's `private-key` rule, which also reads a PGP private key block (a residual). */
+export const PEM_PRIVATE_KEY_SOURCE = PEM_HEADER + String.raw`[\s\S]*?(?:` + PEM_END + '|$)';
+/** How far after its BEGIN line an END line still closes a block (review 2704 F1, the coordinator's ruling). */
+const PEM_END_WINDOW = 64 * 1024;
+const PEM_HEADER_RE = new RegExp(PEM_HEADER, 'g');
+const PEM_END_RE = new RegExp(PEM_END, 'g');
+/** A blank line: nothing but spaces, tabs and carriage returns, raw or JSON-escaped. */
+const PEM_BLANK_LINE = /^(?:[ \t\r]|\\r)*$/;
+
+/** The egress profiles' PEM rule, `pem-block` (review 2693 F1 and review 2704 F1 and F2, the coordinator's rulings):
+ *  legitimately different from history's `PEM_PRIVATE_KEY_SOURCE`, for the opposite cost. History stores text and masks
+ *  a block with no END line to the end of the text; egress text is SHOWN, to whoever rules on an approval row or reads a
+ *  Linear ticket, and masking to the end hid the rest of a command or a ticket for good. It is a scanner, not a second
+ *  redactor: one step of this table, run over the same text in the same place, written as a function because no single
+ *  regular expression walks lines without recursing once per line (review 2704 F2 overflowed the stack at about 1.3
+ *  million short lines). `pemBlockSpans` finds the blocks, `[start, end)` each, and is their one finder: `pem-block`
+ *  masks each as one mark, and the response masks (`server/src/accounts/shapes.ts`, overlord wave 168) mask each row
+ *  of one on its own. From each BEGIN line a block runs:
+ *  - through the first END line within `PEM_END_WINDOW` characters, unless another BEGIN line comes first, whatever the
+ *    lines between look like (a prefix, a quote, a trailing space, CR CR LF, string concatenation, a JSON-escaped or
+ *    space-joined block);
+ *  - with no such END line, the rest of the BEGIN line and every line after it up to the first blank line, whatever its
+ *    shape; the blank line and what follows it are kept. A line ends at a line feed or at JSON's escaped `\n`, and a
+ *    carriage return before the line end is left in place.
+ *  Linear: the BEGIN, END and line-end searches only move forward, each kept once found, and every character is read a
+ *  bounded number of times. */
+export function pemBlockSpans(text) {
+  return pemScan(text, null).spans;
+}
+/** The same finder over one text of a stream (review 2729 F1, the coordinator's ruling): `carry` is the block the last
+ *  text ended inside (null: none), and the answer's `carry` is the block this text ends inside. A carried block runs on
+ *  from this text's start through its END line, or with none to the first blank line, as the scanner's do, with two
+ *  differences (review 2751 F4). It releases `PEM_END_WINDOW` characters after its BEGIN line even with no blank line,
+ *  where the scanner's walk to a blank line has no limit, so a BEGIN mention with no blank line after it masks the next
+ *  64 KB of a stream and no more. And it stops at the next BEGIN line, which starts a block of its own, where the
+ *  scanner's walk of a block with no END line runs on through a second BEGIN line to the first blank line. The response
+ *  masks' drawer keeps it per stream (`server/src/accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays
+ *  masked after its BEGIN line has left the context. */
+export function pemStreamSpans(text, carry) {
+  return pemScan(text, carry);
+}
+/** `pemBlockSpans` and `pemStreamSpans`: the blocks of `text`, and the block it ends inside. */
+function pemScan(text, carry) {
+  /** @type {[number, number][]} */
+  const spans = [];
+  /** @type {{ left: number, lineStart: boolean } | null} */
+  let open = null;
+  if (carry === null && !text.includes('PRIVATE KEY')) return { spans, carry: open };
+  // The first END line at or after `endFrom` (null: none), and the next line feed and escaped `\n` at or after `seen`
+  // (Infinity: none). Each is searched again only when a query passes it, so each search moves forward only.
+  let end = null; let endFrom = Infinity;
+  let lf = -1; let esc = -1; let seen = -1;
+  const nextEnd = (at) => {
+    if (at < endFrom || (end !== null && end.index < at)) {
+      PEM_END_RE.lastIndex = at; end = PEM_END_RE.exec(text); endFrom = at;
+    }
+    return end;
+  };
+  /** Where the line holding `at` ends, and the length of its line break (0 at the end of the text). */
+  const lineEnd = (at) => {
+    if (seen < 0 || lf < at) { const i = text.indexOf('\n', at); lf = i === -1 ? Infinity : i; }
+    if (seen < 0 || esc < at) { const i = text.indexOf('\\n', at); esc = i === -1 ? Infinity : i; }
+    seen = at;
+    if (lf === Infinity && esc === Infinity) return [text.length, 0];
+    return lf <= esc ? [lf, 1] : [esc, 2];
+  };
+  /** A block with no END line, from `from`: the rest of its first line (unless `test` and that whole line is blank),
+   *  then every line up to the first blank one, or up to the first line that starts at or past `limit`. Answers where
+   *  it stops, and whether it reached the end of the text: the line the text ends in is not known to be blank even
+   *  when it is so far (empty after a last line break, or blanks), since a stream may go on with it. */
+  const walk = (from, test, limit) => {
+    let [le, brk] = lineEnd(from);
+    if (test && brk > 0 && PEM_BLANK_LINE.test(text.slice(from, le))) return [from, false];
+    let stop = le;
+    let reached = brk === 0;
+    while (brk > 0) {
+      if (le + brk >= limit) break;
+      const [ne, nbrk] = lineEnd(le + brk);
+      if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) {
+        if (nbrk === 0) reached = true;   // the line the text ends in: blank so far
+        break;
+      }
+      stop = ne; le = ne; brk = nbrk;
+      if (brk === 0) reached = true;
+    }
+    // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
+    if (text[stop - 1] === '\r') stop -= 1;
+    else if (stop - from >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
+    return [Math.max(stop, from), reached];
+  };
+  const endsInBreak = text.endsWith('\n') || text.endsWith('\\n');   // a line feed, or JSON's escaped one
+  PEM_HEADER_RE.lastIndex = 0;
+  let first = PEM_HEADER_RE.exec(text);
+  if (carry !== null) {
+    // The block the last text ended inside runs on from this text's start.
+    const nextBegin = first === null ? Infinity : first.index;
+    const e = nextEnd(0);
+    let stop;
+    if (e !== null && e.index < nextBegin && e.index + e[0].length <= carry.left) {
+      stop = e.index + e[0].length;
+    } else {
+      const limit = Math.min(carry.left, nextBegin);
+      let reached;
+      [stop, reached] = walk(0, carry.lineStart, limit);
+      if (stop > nextBegin) stop = nextBegin;
+      if (reached && text.length < limit) open = { left: carry.left - text.length, lineStart: endsInBreak };
+    }
+    if (stop > 0) spans.push([0, stop]);
+    if (first !== null && first.index < stop) { PEM_HEADER_RE.lastIndex = stop; first = PEM_HEADER_RE.exec(text); }
+  }
+  for (let m = first; m !== null; m = PEM_HEADER_RE.exec(text)) {
+    const after = m.index + m[0].length;
+    const following = PEM_HEADER_RE.exec(text);   // the next BEGIN line, if any
+    const nextBegin = following === null ? Infinity : following.index;
+    const e = nextEnd(after);
+    let stop;
+    open = null;
+    if (e !== null && e.index < nextBegin && e.index + e[0].length - after <= PEM_END_WINDOW) {
+      stop = e.index + e[0].length;
+    } else {
+      // No END line: the rest of the BEGIN line, then every line up to the first blank one.
+      let reached;
+      [stop, reached] = walk(after, false, Infinity);
+      const left = PEM_END_WINDOW - (text.length - after);
+      if (reached && left > 0) open = { left, lineStart: endsInBreak };
+    }
+    spans.push([m.index, stop]);
+    // The next BEGIN line is found again from here, unless this block's lines took it in.
+    PEM_HEADER_RE.lastIndex = nextBegin !== Infinity && nextBegin >= stop ? nextBegin : stop;
+  }
+  return { spans, carry: open };
+}
+/** The egress profiles' `pem-block` step: each of `pemBlockSpans`' blocks as one mark. */
+function maskPemBlocks(text, tally) {
+  const spans = pemBlockSpans(text);
+  if (spans.length === 0) return text;
+  let out = ''; let from = 0;
+  for (const [a, b] of spans) {
+    out += `${text.slice(from, a)}${R}`;
+    tally.masked += 1;
+    from = b;
+  }
+  return out + text.slice(from);
+}
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
@@ -365,6 +557,7 @@ const needShape = (shapes, id) => {
 };
 
 const RULES = Object.freeze([
+  { id: 'pem-block', make: () => maskPemBlocks },
   sub('json-pair', JSON_PAIR, (m, key, sep) => (JSON_SECRET_KEY.test(key) ? `"${key}"${sep}"${R}"` : m)),
   sub('yaml-secret', YAML_SECRET, (_m, name, sep) => `${name}${sep}${R}`),
   {
@@ -422,7 +615,7 @@ export const RULE_IDS = Object.freeze(RULES.map((r) => r.id));
 /** The profiles: each a frozen list of the rule ids it runs, in order. No profile inherits another's. */
 export const PROFILES = Object.freeze({
   egress: Object.freeze([
-    'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
+    'pem-block', 'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
     'url-userinfo-quoted', 'url-userinfo', 'user-quoted', 'user-flag', 'proxy-userinfo', 'cert-pass',
     'user-empty-pass', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret', 'camel-secret-flag', 'rdp-pass',
     'pass-arg', 'slack-hook', 'telegram-bot', 'known-token', 'token-segments',
@@ -431,7 +624,7 @@ export const PROFILES = Object.freeze({
     'docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization',
   ]),
   'linear-egress': Object.freeze([
-    'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
+    'pem-block', 'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
   ]),
   'history-base': Object.freeze([
     'history-json', 'history-named-head', 'history-named-tail', 'history-named-value-v1', 'history-bearer',

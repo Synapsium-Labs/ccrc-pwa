@@ -55,158 +55,46 @@
 // 8 and is now scanned by `coord-pause-route.test.ts`'s `enumerations()`, which
 // reads the door names and the CAPS cardinal together (D-1168, closed).
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 import { ccdSource } from './ccdWsHelpers.js';
+import {
+  REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, UNGATED_DOORS, SESSION_ONLY_DOORS,
+} from './routeRegistrations.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const REPO = path.resolve(here, '..', '..');
-const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+/** The Overlord's designation doors' file (Overlord W1 designation A): three session-gated routes and no box-token lane, so no lane source. */
+const OVERLORD_SRC = read('server/src/coord/overlordRoutes.ts');
+/** The private-name list's doors (Overlord W2, private names B): a routes file of its own with NO box-token lane. Its two doors,
+ *  the upload `PUT` and the status read `GET /api/overlord/private-names`, are the operator's and session-gated:
+ *  `NAME_LIST_DOORS`. */
+const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
+/** The replay quiz's record path (Overlord W1a quiz record): a routes file of its own. Its one box-token lane is the record
+ *  door, `POST /api/continuity/quiz-runs`, whose caller is the operator's shell on the fleet box (`ccrc quiz-record`), gated
+ *  in its own onRequest; its rule door is the operator's, session-gated with a step-up: `QUIZ_SESSION_DOORS`. */
+const QUIZ_SRC = read('server/src/continuity/quizRoutes.ts');
 
-const COORD_SRC = read('server/src/coord/routes.ts');
-const SERVER_SRC = read('server/src/server.ts');
-/** The THIRD file that registers routes (update-management W2, design 2026-09-20
- *  §12 census step (a)). Without it, "the update routes are absent from every
- *  box-token lane" would be a measured zero over an empty set — this file is
- *  where a box-token call on the update surface would BE, so it is read like
- *  the two above. */
-const UPDATE_SRC = read('server/src/update/routes.ts');
-/** The FOURTH file that registers routes (box-token lifecycle, spec 4.6): the
- *  claim door and "Rotate now". Read as a lane source for the update file's
- *  reason — a box-token call there would BE a lane — and so that "neither route
- *  consults the box token" is a measured zero over a file this census reads. */
-const TOKEN_SRC = read('server/src/token/routes.ts');
-/** The NINTH file that registers routes and the sixth lane source (programme ledgers PL3): the coordinator's nine item and goals routes. Their
- *  handlers sit in a lane file of their own rather than in `coord/routes.ts` (ARCH-01, `growth-check`: that file does not take
- *  another 400 lines), and `registerCoordRoutes` registers them with its own `requireMailToken` and `requireAttribution`.
- *  Read here as a lane source so that "nine box-token lanes" is a measured count over the file that holds them and not a
- *  claim: a scan of `coord/routes.ts` alone would see none of them. */
-const LEDGER_SRC = read('server/src/coord/ledgersRoutes.ts');
-/** The EIGHTH file that registers routes and the fifth lane source (#1444, plan task LK9): the Linear proxy's twelve,
- *  every one a box-token lane. Read like the files above, so its lanes are counted where the prose counts them. */
-const LINEAR_PROXY_SRC = read('server/src/linear/proxyRoutes.ts');
-/** The TENTH file that registers routes and the seventh lane source (D-8147): the linking standard's routes. Its one
- *  box-token lane is the session's read, `GET /api/linking`; the operator's write beside it is session-gated and no lane. */
-const LINKING_SRC = read('server/src/linking/routes.ts');
-/** The ELEVENTH file that registers routes and the eighth lane source (D-8126, wave A3): the coordinator call record's one route,
- *  `POST /api/coord/programmes/:slug/calls`, a box-token machine lane. Handled like the ledgers' file: registered from
- *  `registerCoordRoutes`, written in a file of its own, so a scan of `coord/routes.ts` alone would not see it. */
-const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
-/** The TWELFTH file that registers routes and the ninth lane source (D-8181): the plan verbs' seven. `plan show` is a session-or-token
- *  read and the six writes are box-token lanes, every one consulting `checkMailToken` in its own registration. */
-const PLAN_SRC = read('server/src/coord/planRoutes.ts');
-/** The THIRTEENTH file that registers routes and the tenth lane source (Overlord W1a, the start report): the continuity routes. Its five
- *  box-token lanes are the hook's start report, `POST /api/sessions/:id/start`, the card door, `GET /api/sessions/:id/card`
- *  (the card piece), the note door's three, `POST` and `GET /api/sessions/:id/notes` and `POST /api/sessions/:id/handover`
- *  (the notes piece), the timer doors' three, `POST` and `GET /api/timers` and `POST /api/timers/:id/cancel` (the timers
- *  piece), and the probe door's two, `GET` and `POST /api/sessions/:id/probe` (the probes piece), each gated in its own
- *  onRequest as the linking read is. Its session-gated doors are `CONTINUITY_SESSION_DOORS`. */
-const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
+/** The Models sheet's write door (programme model-class-advance, wave R4): `POST /api/models/:lane`, a routes file of its own with NO
+ *  box-token lane. The operator's door, session-gated: `MODELS_DOORS`. (The read beside it, `GET /api/models/:lane`, is in `server.ts`.) */
+const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
+/** The approval census's read (approvals PR 1, Task 1.4): `GET /api/approvals/census`, a routes file of its own with NO box-token
+ *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
+const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
+
+/** The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): `GET` and `POST
+ *  /api/coord/delegation-backfill`, a routes file of its own with NO box-token lane. The operator's, session-gated:
+ *  `DELEGATION_BACKFILL_DOORS`. */
+const DELEGATION_BACKFILL_SRC = read('server/src/coord/delegationBackfillRoutes.ts');
+
+/** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
+ *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
+ *  `DECISION_MODEL_DOORS`. */
+const DECISION_MODEL_SRC = read('server/src/coord/decisionModelRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
 const CCD_SRC = ccdSource();
-
-/** The two mechanisms that count as "this handler consulted the box token" —
- *  the same pair `coord-pause-route.test.ts` and `auth-gate.test.ts` already
- *  use. Both, never one: `POST /api/mail` and its ack route gate INLINE rather
- *  than through the shared helper, and a scanner crediting only the helper
- *  reports them ungated, which is false. Arriving at eleven instead of eighteen
- *  by counting `requireMailToken` alone is exactly how D-1156's own ledger entry
- *  had to add a prose caveat about the mail pair. */
-const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
-
-/** Every fastify registration VERB this scan credits — not just `get`/`post`.
- *  F14: the two callers below (`lanesIn` and the update-surface `REGISTERED`)
- *  used to match only `get|post`, so a route registered with any other verb —
- *  or through `app.route({...})` — was invisible to both: not counted as a
- *  lane, not counted as a door, and "no route can join or leave without the
- *  literal moving" was false for exactly that shape. Measured (fix round 1,
- *  scratch copy of `update/routes.ts`): a planted `app.delete(...)` and a
- *  planted `app.route({ method: 'PUT', ... })` were both absent from
- *  `REGISTERED` before this fix, so "UPDATE_DOORS is exactly the rest" stayed
- *  GREEN over a door it never saw. */
-const ALL_VERBS = 'get|post|put|patch|delete|head|options|all';
-
-/** `app.route({ method, url, ... })` calls, brace-counted rather than regexed
- *  end to end — the handler nested inside the object routinely contains its
- *  own `{`/`}` pairs, so a naive `[\s\S]*?\}\)` would close on the FIRST inner
- *  brace followed by a `)` and silently mis-read the object's extent. `method`
- *  may be a single-quoted/double-quoted string or an array of them; each
- *  method the call registers is emitted as its own entry sharing the call's
- *  `at`, so a `body.slice(at, next.at)` still spans the whole registration.
- *  Fix round 1, dispatch E (F14, m1): `app\.route\(\s*\{` tolerates whitespace
- *  between the call and its opening brace (`app.route( {`), which the bare
- *  `app\.route\(\{` missed — measured, the residual stayed 20/20 green. */
-const routeCallsIn = (src: string): { key: string; at: number }[] => {
-  const out: { key: string; at: number }[] = [];
-  const re = /app\.route\(\s*\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src))) {
-    const openBrace = m.index + m[0].length - 1;
-    let depth = 0;
-    let close = -1;
-    for (let i = openBrace; i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') {
-        depth--;
-        if (depth === 0) { close = i; break; }
-      }
-    }
-    if (close === -1) continue;
-    const body = src.slice(openBrace + 1, close);
-    const methodMatch = /method:\s*(\[[^\]]*\]|'[^']*'|"[^"]*")/.exec(body);
-    const urlMatch = /url:\s*'([^']+)'|url:\s*"([^"]+)"/.exec(body);
-    if (!methodMatch || !urlMatch) continue;
-    const url = urlMatch[1] ?? urlMatch[2]!;
-    const methods = methodMatch[1]!.startsWith('[')
-      ? [...methodMatch[1]!.matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => (x[1] ?? x[2])!.toUpperCase())
-      : [methodMatch[1]!.replace(/['"]/g, '').toUpperCase()];
-    for (const method of methods) out.push({ key: `${method} ${url}`, at: m.index });
-  }
-  return out;
-};
-
-/** Every registration in one source file — every `app.<verb>('/path', ...)` for
- *  every fastify verb, plus every `app.route({...})` — keyed `VERB /path`, in
- *  source order. The shared extraction `lanesIn` and `REGISTERED` both build on,
- *  so a verb or shape invisible to one is invisible to the other. Fix round 1,
- *  dispatch E (F14, m1): the path capture is QUOTE-AGNOSTIC
- *  (`(['"\x60])([^'"\x60]+)\1`) — a single-quoted-only capture left
- *  `app.put("/x", …)` and `` app.put(`/x`, …) `` both unseen, measured 20/20
- *  green residuals. The backtick in the character class needs the `\x60`
- *  escape (a literal backtick is unremarkable inside `[...]`, but this file's
- *  own source is read back by OTHER regex-vs-template scans, so spelling it
- *  as a raw backtick here would itself be a stray template delimiter to
- *  anyone re-reading this literal). Fix round 2 (R14): `\s*` between the verb
- *  call's `(` and the path's quote, for EVERY verb — `app.route(\s*\{` already
- *  had this tolerance (fix round 1, m1), but the bare-verb branch required the
- *  quote to sit immediately after `(`, so a formatter-wrapped
- *  `app.put(\n  '/api/updates/x', …)` matched nothing: invisible to both
- *  `lanesIn` and `REGISTERED`, exactly F14's original failure mode, for a
- *  shape a Prettier-style reflow produces routinely. */
-const registrationsIn = (src: string): { key: string; at: number }[] => {
-  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\(\\s*(['"\\x60])([^'"\\x60]+)\\2`, 'g');
-  const verbHits = [...src.matchAll(verbRe)]
-    .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[3]!}`, at: mm.index! }));
-  return [...verbHits, ...routeCallsIn(src)].sort((a, b) => a.at - b.at);
-};
-
-/** Every handler in one source file whose body consults the box token, keyed
- *  `VERB /path`. Bodies run from a route's own registration to the next one,
- *  the same slice `auth-gate.test.ts:432-440` takes. */
-const lanesIn = (src: string): string[] => {
-  const starts = registrationsIn(src);
-  return starts
-    .filter(({ at }, i) => {
-      const body = src.slice(at, starts[i + 1]?.at ?? src.length);
-      return GATE_PATTERNS.some((re) => re.test(body));
-    })
-    .map((s) => s.key);
-};
 
 const COORD_LANES = lanesIn(COORD_SRC);
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
@@ -215,31 +103,18 @@ const LEDGER_LANES = lanesIn(LEDGER_SRC);
 const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
 const LINKING_LANES = lanesIn(LINKING_SRC);
 const CALLS_LANES = lanesIn(CALLS_SRC);
+const REMAINING_LANES = lanesIn(REMAINING_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const QUIZ_LANES = lanesIn(QUIZ_SRC);
+/** The Overlord's inbox doors (Overlord W1, inbox piece), a routes file of its own beside `overlordRoutes.ts`, which registers only the
+ *  operator's session-gated doors: three box-token machine lanes, each behind the Overlord gate. */
+const OVERLORD_INBOX_SRC = read('server/src/coord/overlordInboxRoutes.ts');
+const OVERLORD_INBOX_LANES = lanesIn(OVERLORD_INBOX_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
-
-/** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
- *  file that decides it rather than retyped — the same literal
- *  `coordinator-skill.test.ts` already harvests. */
-const harvestSet = (name: string): string[] => {
-  const src = read('server/test/coord-pause-route.test.ts');
-  const m = new RegExp(`${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(src);
-  expect(m, `the ${name} literal moved — this scan is over nothing`).not.toBeNull();
-  return [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
-};
-
-/** The four release valves (D-282). */
-const UNGATED_DOORS = harvestSet('UNGATED');
-
-/** The coordination writes that are session-gated ONLY — no box token, and not a
- *  release valve either. Derived for the same reason as the doors above: this
- *  wave's own `POST /api/coord/caps` joined the class, and the census hard-coded
- *  the OTHER member instead of reading the set (D-1231). */
-const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -260,6 +135,11 @@ const ARCHIVE = '/api/sessions/:id/archive';
  *  door, like the kickoff route). Registered in `server.ts`, so `SESSION_ONLY` cannot see it, for the kickoff route's
  *  reason; named here beside it. */
 const DIGEST_CORRECT = '/api/digest/correct';
+
+/** The console's prompt route (Overlord W1 private store B, Task 5). For the designated session it records the operator's message and
+ *  queues the nudge as system mail, so it is a coordination WRITE — session-gated, no box token (the operator's door). Registered in
+ *  `server.ts`, so `SESSION_ONLY` cannot see it, for the kickoff route's reason; named here beside it. */
+const PROMPT = '/api/sessions/:id/prompt';
 
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
@@ -290,7 +170,13 @@ const TOKEN_DOORS = ['/api/token/rotate'];
 // …and D-8076's act and decline of an end-request item: the operator's Abandon run and Keep the run, session only, no box token.
 // …and D-8194's read of one item by its id, whatever its state and age: session only, no box token.
 // …and D-8126's Seen on a big call (`/api/calls/:id/seen`), the operator's, session only, no box token.
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot'];
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot',
+  // The portfolio (Overlord W1): the operator's read and the rank door.
+  '/api/portfolio', '/api/portfolio/rank',
+  // The answer marks (Overlord W1): the operator's two marks on a Waiting on you row; they work dark and record `flag-off`.
+  '/api/answer-marks',
+  // The ratify door (Overlord W1, portfolio B): the operator ratifies a goals version; it takes the account gate, so dark it refuses.
+  '/api/programmes/:slug/goals/ratify'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The
@@ -298,11 +184,61 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
  *  lands. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's registrations and
  *  compares in both directions, and none consults the box token or sits in EXEMPT. Because `lanesIn` slices the file from
  *  each registration to the next, no helper that calls `checkMailToken(` may sit below the file's last registration. */
-const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel'];
+// The renewal backstop's two doors (Overlord W1 renewal readings A): one path, listed once per registration (GET and POST).
+const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel',
+  '/api/continuity/renewal-backstop', '/api/continuity/renewal-backstop',
+  // The renewal hand-offs (Overlord W1a, Tasks 1 and 4): the operator's Renew now, and the Setting "when soft renewals happen".
+  // `/api/coord/renewal-mode` twice: its GET and its POST are two registrations of the one path.
+  '/api/sessions/:id/renew', '/api/coord/renewal-mode', '/api/coord/renewal-mode'];
+
+/** The Overlord's designation doors (Overlord W1 designation A and C, `coord/overlordRoutes.ts`): the read, and Start and retire on the
+ *  one path (`POST` and `DELETE /api/overlord/designate`). The operator's, behind the account gate and a step-up on the two writes, no
+ *  box token, none in EXEMPT. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's
+ *  registrations and compares in both directions. */
+const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate',
+  // the Settings doors (Overlord W1 designation C): the model class and the account set, the same gate, a step-up for `fable` and a widening
+  '/api/overlord/model', '/api/overlord/account-set',
+  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
+  '/api/overlord/restore', '/api/overlord/restore/confirm'];
+
+/** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
+ *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
+ *  EXEMPT. */
+const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-names'];
+
+/** The replay quiz's rule door (Overlord W1a quiz record): the operator confirms or discards a recorded run, behind a session
+ *  and the account gate's step-up. Hand-kept for the NAME only, compared with the quiz file's registrations in both directions
+ *  below; it consults no box token and does not sit in EXEMPT. */
+const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule', '/api/continuity/quiz-runs/:id/withdraw'];
+
+/** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
+ *  harvest above can see: `POST /api/models/:lane`, revert of one class. Hand-kept for the NAME only, like
+ *  `NAME_LIST_DOORS`: the describe below derives the file's registrations and compares in both directions. The operator's, behind the
+ *  session gate, no box token, in no EXEMPT table. */
+const MODELS_DOORS = ['/api/models/:lane'];
+
+/** The approval census's read (approvals PR 1, Task 1.4), registered from `server/src/coord/approvalCensusRoutes.ts`, which no harvest
+ *  above can see: counts and redacted rows, never an input. Hand-kept for the NAME only, like `MODELS_DOORS`: the describe below
+ *  derives the file's registrations and compares in both directions. The operator's, behind the session gate, no box token, in no
+ *  EXEMPT table. */
+const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
+
+/** The one-time pass's door (session helpers S2, D-8874), registered from `server/src/coord/delegationBackfillRoutes.ts`, which no harvest
+ *  above can see: the dry run (`GET`) and the pass or its undo (`POST`), one path registered twice, so listed once per registration and
+ *  compared with the file's registrations in both directions below. The operator's, behind the session gate, no box token, in no EXEMPT
+ *  table; the pass also refuses while sign-in is dark. */
+const DELEGATION_BACKFILL_DOORS = ['/api/coord/delegation-backfill', '/api/coord/delegation-backfill'];
+
+/** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
+ *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
+const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
+  '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
+  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
+  ...DECISION_MODEL_DOORS, ...DELEGATION_BACKFILL_DOORS, ...MODELS_DOORS,...APPROVAL_CENSUS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -350,7 +286,36 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: eighty-two machine lanes in all.
   'eighty', 'eighty-one', 'eighty-two',
   // Overlord W1a, the probes piece: the probe door's two lanes in the continuity file: eighty-four machine lanes in all.
-  'eighty-three', 'eighty-four'];
+  'eighty-three', 'eighty-four',
+  // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
+  'eighty-five',
+  // Overlord W2 remaining work A: POST /api/coord/programmes/:slug/remaining, a box-token lane in the remaining-work door's file: eighty-six machine lanes in all.
+  'eighty-six',
+  // Programme work map WM0: POST /api/programmes/:slug/plan/phases/refs (`plan phase-ref`), a box-token lane in the plan file: eighty-seven machine lanes in all.
+  'eighty-seven',
+  // D-8183: the inbound path's two (`POST /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage`) in the plan file: eighty-nine machine lanes in all.
+  'eighty-eight', 'eighty-nine',
+
+  // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: ninety machine lanes in all.
+  // Overlord W1 door process A1: POST /api/sessions/:id/act-key, the door process's claim, a box-token lane in the continuity file: ninety-one machine lanes in all.
+  'ninety', 'ninety-one',
+  // Programme work map WM1: POST /api/programmes/:slug/plan/tickets/done (`plan ticket-done`), a box-token lane in the plan file: ninety-two machine lanes in all.
+  'ninety-two',
+  // Overlord W1 door process B1: POST /api/sessions/:id/report, the hook's report door, a box-token lane in the continuity file: ninety-three machine lanes in all.
+  'ninety-three',
+  // D-8186: POST /api/teams/:team/plan/map (`plan map-propose`), the per-team migration's map, a box-token lane in the plan file: ninety-four machine lanes in all.
+  'ninety-four',
+  // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-five machine lanes in all.
+  'ninety-five',
+  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-six machine lanes in all.
+  'ninety-six',
+  // Run 3212: POST /api/continuity/quiz-runs/:id/confirm (the weekly timer's unattended confirmation), POST
+  // /api/continuity/quiz-status (its tick report) and POST /api/continuity/quiz-baseline/live (the coordinator's Live on the
+  // baseline), three box-token lanes in the quiz file: ninety-nine machine lanes in all.
+  'ninety-seven', 'ninety-eight', 'ninety-nine',
+  // The Overlord's inbox doors (W1 inbox piece): GET /api/overlord/inbox, GET /api/overlord/messages/:id and POST
+  // /api/overlord/messages/:id/acknowledge, three box-token lanes in the inbox routes file: one hundred and two in all.
+  'one hundred', 'one hundred and one', 'one hundred and two'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -498,13 +463,22 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
-    // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
-    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
+    // …and the linking standard's three (D-8147 the session's read, D-8808 the coordinator's suggestion, D-8809 the Overlord's
+    // confirm), by name; the operator's write beside it is no lane.
+    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking', 'POST /api/linking/suggest', 'POST /api/linking/confirm']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'POST /api/sessions/:id/act-key', 'POST /api/sessions/:id/report', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
+    // …and the quiz file's four (Overlord W1a quiz record; run 3212): the operator's record door, the weekly timer's confirmation
+    // and tick report, and the coordinator's Live, by name.
+    expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost a box-token lane, or the rule door gained a token check')
+      .toEqual(['POST /api/continuity/quiz-runs', 'POST /api/continuity/quiz-runs/:id/confirm', 'POST /api/continuity/quiz-status',
+        'POST /api/continuity/quiz-baseline/live']);
+    // …and the Overlord's inbox doors' three (Overlord W1, inbox piece): the inbox, one message and its acknowledge, by name.
+    expect(OVERLORD_INBOX_LANES, 'coord/overlordInboxRoutes.ts lost a box-token lane, or gained a door with no census row')
+      .toEqual(['GET /api/overlord/inbox', 'GET /api/overlord/messages/:id', 'POST /api/overlord/messages/:id/acknowledge']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -528,6 +502,90 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     }
   });
 
+  it('OVERLORD_OPERATOR_DOORS is exactly what the designation doors file registers, in both directions; none is a lane or EXEMPT', () => {
+    const regs = registrationsIn(OVERLORD_SRC).map((r) => r.key);
+    expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
+      'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
+    expect(regs.length, 'the Overlord doors file registers eleven routes (five designation, four ladder and two restore)').toBe(11);
+    expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
+    for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of OVERLORD_OPERATOR_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('NAME_LIST_DOORS is exactly what the name list file registers, in both directions; none is a lane or EXEMPT (private names B)', () => {
+    const keys = registrationsIn(NAME_LIST_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'nameListRoutes.ts and NAME_LIST_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...NAME_LIST_DOORS].sort());
+    expect(lanesIn(NAME_LIST_SRC), 'a name list door consults the box token — both are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
+  it('QUIZ_SESSION_DOORS is exactly the rest of what the quiz file registers, in both directions; none is a lane or EXEMPT', () => {
+    const rest = registrationsIn(QUIZ_SRC).map((r) => r.key).filter((k) => !QUIZ_LANES.includes(k));
+    expect(rest.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'continuity/quizRoutes.ts and QUIZ_SESSION_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...QUIZ_SESSION_DOORS].sort());
+    for (const key of rest) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    expect(GATE_SRC, 'the record door is a box-token lane in EXEMPT').toContain(`  ['POST /api/continuity/quiz-runs',`);
+  });
+
+  it('MODELS_DOORS is exactly what the models routes file registers, in both directions; none is a lane or EXEMPT (model-class-advance R4)', () => {
+    const keys = registrationsIn(MODELS_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'laneModelsRoutes.ts and MODELS_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...MODELS_DOORS].sort());
+    expect(keys, 'the Models sheet\'s write door is a POST, and only that').toEqual(['POST /api/models/:lane']);
+    expect(lanesIn(MODELS_SRC), 'the models door consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of MODELS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('a box-token call planted in the models routes file is SEEN — the lane source is live (the control)', () => {
+    const LINE = "app.post('/api/models/:lane', async (req, reply) => {";
+    expect(MODELS_SRC, 'the registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = MODELS_SRC.replace(LINE, `${LINE}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['POST /api/models/:lane']);
+    }
+  });
+
+  it('APPROVAL_CENSUS_DOORS is exactly what the census routes file registers, in both directions; none is a lane or EXEMPT (approvals PR 1)', () => {
+    const keys = registrationsIn(APPROVAL_CENSUS_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'approvalCensusRoutes.ts and APPROVAL_CENSUS_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...APPROVAL_CENSUS_DOORS].sort());
+    expect(keys, 'the census read is a GET, and only that').toEqual(['GET /api/approvals/census']);
+    expect(lanesIn(APPROVAL_CENSUS_SRC), 'the census read consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of APPROVAL_CENSUS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('DELEGATION_BACKFILL_DOORS is exactly what the one-time pass\'s file registers, in both directions; none is a lane or EXEMPT (D-8874)', () => {
+    const keys = registrationsIn(DELEGATION_BACKFILL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'delegationBackfillRoutes.ts and DELEGATION_BACKFILL_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...DELEGATION_BACKFILL_DOORS].sort());
+    expect([...keys].sort(), 'the dry run is a GET, the pass and the undo one POST').toEqual(['GET /api/coord/delegation-backfill', 'POST /api/coord/delegation-backfill']);
+    expect(lanesIn(DELEGATION_BACKFILL_SRC), 'a door of the one-time pass consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of DELEGATION_BACKFILL_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('DECISION_MODEL_DOORS is exactly what the decision-model file registers, in both directions; none is a lane or EXEMPT (decision model B)', () => {
+    const keys = registrationsIn(DECISION_MODEL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'decisionModelRoutes.ts and DECISION_MODEL_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...DECISION_MODEL_DOORS].sort());
+    expect(lanesIn(DECISION_MODEL_SRC), 'a decision-model door consults the box token — all are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
   it('a route with NO box-token check is not counted as a lane', () => {
     // The direction the scan could not fail in on its own. `POST
     // /api/sessions/:id/kickoff` is a coordination WRITE registered in
@@ -537,6 +595,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(ALL_LANES).not.toContain('POST /api/sessions/:id/kickoff');
     expect(ALL_LANES).not.toContain(`POST ${ARCHIVE}`);
     expect(ALL_LANES).not.toContain(`POST ${DIGEST_CORRECT}`);
+    expect(ALL_LANES).not.toContain(`POST ${PROMPT}`);
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 
@@ -716,6 +775,12 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
         .map((r) => r.key);
     })();
     expect(requireSites.length, 'the outside-the-prefixes scan collapsed').toBeGreaterThan(2);
+    // The programme doors written in files of their own (the call record's, D-8126; the remaining-work door's, Overlord W2)
+    // are requireMailToken lanes outside both prefixes too, which the scan of `coord/routes.ts` above cannot see: each is named.
+    expect([...CALLS_LANES, ...REMAINING_LANES]).toEqual(['POST /api/coord/programmes/:slug/calls', 'POST /api/coord/programmes/:slug/remaining']);
+    for (const key of [...CALLS_LANES, ...REMAINING_LANES]) {
+      expect(bullet, `the bullet does not name ${key}, a requireMailToken lane in a file of its own`).toContain(`\`${key}\``);
+    }
     for (const key of requireSites) {
       // `toContain` on a bare key would let a LONGER sibling satisfy a shorter
       // one — `POST /api/claims` is a substring of `POST /api/claims/:id/release`
@@ -1116,23 +1181,25 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its six are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
-// hooks would gate all four routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// hooks would gate all six routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
 // `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
 // sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
 // `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
-describe('the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+describe('the docs surface: six session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
   const DOCS_SRC = read('server/src/docs/routes.ts');
   /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
    *  here. */
   const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
-  /** The four doors, by path (§3.4). Hand-kept for the NAMES only: the cases below derive the same set from the file
+  /** The six doors, by path (§3.4; the history door, rich-docs spec G4; the range door, X2 P1). Hand-kept for the NAMES only: the cases below derive the same set from the file
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
+    '/api/docs/:project/history',
+    '/api/docs/:project/range',
     '/api/docs/:project/refresh'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
@@ -1440,8 +1507,13 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
-  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
-  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. One pass, left to right: whichever
+   *  opens first wins, a comment or a string, so a `/*` inside a line comment or inside a string opens nothing, and a string
+   *  is kept whole. Blanking block comments first read a `/*` written in a line comment as a comment running to the next
+   *  `*\/`, which once hid eight lines of routes.ts from this scan (rows RLB-T4-M3 and RLB-T4-M4, review 2480). A `//` right
+   *  after a colon, a quote, a backtick or a backslash is not a comment, as before (a URL, a regex). */
+  const LAB_LEXEMES = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:'"`\\])\/\/[^\n]*/g;
+  const labCode = (s: string): string => s.replace(LAB_LEXEMES, (m) => (m.startsWith('/') ? '' : m));
   /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
   const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
   const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
@@ -1461,6 +1533,18 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
       expect(labKeeps('x', src), src).toEqual([]);
     }
+  });
+
+  // CONTROL: each planted file holds a `/*`, then a guarded call, then a later `*/`, so a scan that blanked block comments
+  // first, or that did not keep that kind of string whole, would read from the `/*` to the `*/` as one comment and miss
+  // the call between. One case per shape, so each reports on its own: the line comment and the three kinds of string.
+  it.each([
+    ['a line comment', "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;", 'x writes a log line'],
+    ['a double-quoted string', 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;', 'x loads fs'],
+    ['a single-quoted string', "const key = 'GET /*';\nconst f = require('node:fs');\n/* c */ const a = 1;", 'x loads fs'],
+    ['a template literal', "const key = `GET /*`;\nprocess.stdout.write('x');\n/* c */ const a = 1;", 'x writes a log line'],
+  ])('a `/*` inside %s opens no comment: the code after it is still read', (_where, src, seen) => {
+    expect(labKeeps('x', src), src).toEqual([seen]);
   });
 
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {

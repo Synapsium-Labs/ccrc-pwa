@@ -20,8 +20,8 @@ const UUID = '00000000-0000-4000-8000-000000000001';
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 
 /** The role card's two texts (D-8142), verbatim, as `session-hook-role-card.test.ts` holds them. */
-const FRESH = 'ccrc-role: You are this project\'s coordinator from your first turn. Load the `ccrc-coordinator` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (`docs/superpowers/programs/<slug>.md`) before you plan or ask. Your children\'s questions and permission prompts come to you first; your own go to the operator.';
-const REVIVED = 'ccrc-role: You are still this project\'s coordinator. If the `ccrc-coordinator` skill is not loaded in this context, load it now. Your children\'s questions and permission prompts come to you first; your own go to the operator.';
+const FRESH = 'ccrc-role: You are this project\'s coordinator from your first turn. Load the `ccrc-coordinator` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (`docs/superpowers/programs/<slug>.md`) before you plan or ask. Your children\'s questions and permission prompts come to you first; your own you work out from the programme\'s goals first; only operator-only decisions go to the operator.';
+const REVIVED = 'ccrc-role: You are still this project\'s coordinator. If the `ccrc-coordinator` skill is not loaded in this context, load it now. Your children\'s questions and permission prompts come to you first; your own you work out from the programme\'s goals first; only operator-only decisions go to the operator.';
 /** THE CHARACTERIZATION (Task 2 Step 1): what each SessionStart source printed for a coordinator fixture at the branch
  *  point (main at 2d503a4de), measured with the stub failing, before the anchor's edit: the role card alone. */
 const BEFORE: Readonly<Record<string, string>> = {

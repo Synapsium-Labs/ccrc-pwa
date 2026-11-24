@@ -462,3 +462,60 @@ describe('POST /api/sessions/:id/swap — each arm refuses before the queued cal
     expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
   });
 });
+
+// The early refusal reads the SESSION's side (Overlord W1 designation A, plan Task 5; pool set A3's review F13): a session
+// carrying a set answers by its set, whatever its project is tagged, and `cmd_swap` stays the authoritative gate.
+describe('POST /api/sessions/:id/swap — a session with a set', () => {
+  const swap = (wrapper: string) => app!.inject({ method: 'POST', url: `/api/sessions/${ID}/swap`, payload: { wrapper } });
+
+  it('passes a target inside its set although the project is tagged for another pool', async () => {
+    tag('demo', 'pool-a');
+    seedField(ID, 'poolset', 'pool-b');
+    app = await open();
+    const res = await swap('claude-b');
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([['swap', ID, 'claude-b']]);
+  });
+
+  it('409s a target outside its set, naming the set, and never calls ccd', async () => {
+    tag('demo', 'pool-a');
+    seedField(ID, 'poolset', 'pool-b');
+    app = await open();
+    const res = await swap('claude');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-mismatch', accountPool: 'pool-a', set: 'pool-b' });
+    expect(calls).toEqual([]);
+  });
+
+  it('409s an untagged account when the set does not admit them, with accountPool null', async () => {
+    seedField(ID, 'poolset', 'pool-b');
+    app = await open();
+    const res = await swap('claude-d');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-mismatch', accountPool: null, set: 'pool-b' });
+  });
+
+  it('503s a set that does not parse, and one that could not be read', async () => {
+    seedField(ID, 'poolset', 'Pool B');
+    app = await open();
+    const bad = await swap('claude-b');
+    expect(bad.statusCode).toBe(503);
+    expect(bad.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'malformed' });
+    await app.close();
+    seedField(ID, 'poolset', 'pool-b');
+    app = await open({ io: degradedReadIO((p) => p.endsWith(`${ID}.poolset`)) });
+    const unread = await swap('claude-b');
+    expect(unread.statusCode).toBe(503);
+    expect(unread.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+    expect(calls).toEqual([]);
+  });
+
+  it('a session with no set answers every project row as before (a cleared set is none)', async () => {
+    tag('demo', 'pool-a');
+    seedField(ID, 'poolset', '');
+    app = await open();
+    const res = await swap('claude-b');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+  });
+});

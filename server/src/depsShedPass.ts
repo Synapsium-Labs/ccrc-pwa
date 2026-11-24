@@ -202,7 +202,10 @@ async function stampOf(deps: DepsShedPassDeps, names: readonly string[], id: str
 function inputOf(deps: DepsShedPassDeps, row: FleetSession, store: DepsShedStoreRead, stamp: DepsShedStamp,
   names: readonly string[], now: number): DepsShedInput {
   return {
-    row, heldKind: heldKindOf(row.held, deps.coord), store, stamp,
+    // No session is named (D-8789): removing a sleeping worker's dependencies is not the run-done sleep, and a hold
+    // naming the worker's own newest placed run keeps holding this arm as `run-live`, so the sleep change widens nothing
+    // it removes.
+    row, heldKind: heldKindOf(row.held, deps.coord, null), store, stamp,
     optedOut: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), ...runDoneViewerFacts(deps, row.id, now),
     verb: ccdCan(deps.fleetState, 'wsShedDeps'), now,
     afterMs: deps.config.afterMs, parkedAfterMs: deps.config.parkedAfterMs,

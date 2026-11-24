@@ -2199,7 +2199,8 @@ describe('8B: the replacement fault matrix, and the interrupted-restore table (W
 describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper never changes it (W3-M40)', () => {
   it('its bytes are pinned, it names no sidecar, and it imports only node:sqlite and node:fs', () => {
     const src = readFileSync(BACKUP_COORD_PATH, 'utf8');
-    expect(createHash('sha256').update(src).digest('hex')).toBe('057ce6ade9d695cdd7971f0ca2cadbbdb535de4a7dbe446d11319fb373354f99');
+    // Re-pinned by Overlord W1 private store A: the umask narrowed to 0o077, so every snapshot it takes is 0600.
+    expect(createHash('sha256').update(src).digest('hex')).toBe('6f0cb6887579cdcbcbc140e2d24512acc7f7e8be3939764b5b07e5f9240eda28');
     expect(src).not.toMatch(/delegation|sidecar|coordination|manifest/i);
     expect([...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1])).toEqual(['node:sqlite', 'node:fs']);
   });
@@ -2230,7 +2231,8 @@ describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper ne
 // The rule is the server's, restated once on this side (it cannot import server TypeScript); the differential below holds the two together.
 import { statSync } from 'node:fs';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
-import { DelegationDurability, recoverDelegation, recoverDelegationFromFiles } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
+import { DelegationDurability, recoverDelegationFromFiles } from '../src/coord/delegation-durability.js';
 
 describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoint, an additive manifest field, and a warning', () => {
   const LAST_LINE = encodeDelegationJournalRecord(RC);
@@ -3887,4 +3889,189 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
     expect(dirListing(oldest)).toEqual(AFTER);
     expect(H.classify({ from: oldest }).kind).toBe('thinned');
   });
+});
+
+// ── Overlord W1 private store A (plan w1-private-store.md, Task 4): the private store as an optional member ──────────────
+
+const STORE = 'operator-model.db';
+const STORE_THREE = [STORE, `${STORE}-wal`, `${STORE}-shm`] as const;
+/** A live private store (a real SQLite file) and, optionally, a WAL and SHM of placeholder bytes. */
+function plantStore(home: string, marker: number, sidecars = false): void {
+  plantDb(liveFile(home, STORE), { marker });
+  if (sidecars) { writeFileSync(liveFile(home, `${STORE}-wal`), `store wal ${marker}`); writeFileSync(liveFile(home, `${STORE}-shm`), `store shm ${marker}`); }
+}
+/** The store's three live files, hashed, or null: their identity. */
+const storeState = (home: string): Record<string, string | null> =>
+  Object.fromEntries(STORE_THREE.map((n) => [n, existsSync(liveFile(home, n)) ? sha(readFileSync(liveFile(home, n))) : null]));
+/** A snapshot with the store: `backup-coord.mjs` snapshots it as `_upd_backup` does, then the capture describes it. */
+function snapshotWithStore(home: string, ts = '20261014-120000'): { dir: string; manifest: any } {
+  const dir = snapDirOf(home, ts);
+  if (existsSync(liveFile(home, 'coord.db'))) takeDbSnapshot(home, dir);
+  const r = spawnSync(process.execPath, ['--no-warnings', BACKUP_COORD_PATH, liveFile(home, STORE), path.join(dir, STORE)], { encoding: 'utf8' });
+  expect(r.status, r.stderr).toBe(0);
+  const manifest = H.capture({ home, dir, sleep: () => undefined, now: () => new Date('2026-10-14T12:00:00.000Z') });
+  return { dir, manifest };
+}
+const rewriteManifest = (dir: string, manifest: unknown): void =>
+  writeFileSync(path.join(dir, 'coordination-snapshot.json'), `${H.canonicalJson(manifest)}\n`);
+
+describe('Overlord W1 private store A: operator-model.db is an optional member, restored with coord.db as one set', () => {
+  it('capture names the store only when its snapshot exists, as a whole SQLite file, and the snapshot is a v1 one', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    expect(snapshotOf(home, '20261014-110000').manifest.members).not.toHaveProperty('operatorModel');
+    plantStore(home, 7);
+    const { dir, manifest } = snapshotWithStore(home);
+    const snap = readFileSync(path.join(dir, STORE));
+    expect(manifest.members.operatorModel).toEqual({ filename: STORE, present: true, bytes: snap.length, sha256: sha(snap) });
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'v1', data: true });
+    expect(H.SNAPSHOT_NAMES).toContain(STORE);
+    expect(H.RESTORE_SET).toEqual(expect.arrayContaining([...STORE_THREE]));
+    expect(H.SNAPSHOT_NAMES).not.toContain('privacy-journal.log');
+    expect(H.RESTORE_SET).not.toContain('privacy-journal.log');
+  });
+
+  it('a live store whose snapshot was not taken refuses the capture, and a snapshot that is not SQLite is refused too; no manifest either way', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    plantStore(home, 7);
+    const dir = snapDirOf(home);
+    takeDbSnapshot(home, dir);
+    expect(outcome(() => H.capture({ home, dir, sleep: () => undefined }))).toMatchObject({ ok: false, code: 'store-snapshot-missing' });
+    writeFileSync(path.join(dir, STORE), 'not a database');
+    expect(outcome(() => H.capture({ home, dir, sleep: () => undefined }))).toMatchObject({ ok: false, code: 'store-snapshot-invalid' });
+    expect(existsSync(path.join(dir, 'coordination-snapshot.json'))).toBe(false);
+  });
+
+  it('the manifest: one without operatorModel still validates, one naming another filename is invalid, and a store file it does not declare is invalid', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    plantStore(home, 7);
+    const { dir, manifest } = snapshotWithStore(home);
+    rewriteManifest(dir, { ...manifest, members: { ...manifest.members, operatorModel: { ...manifest.members.operatorModel, filename: 'coord.db' } } });
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('does not name operator-model.db') });
+    const { operatorModel: _dropped, ...older } = manifest.members;
+    rewriteManifest(dir, { ...manifest, members: older });
+    expect(H.classify({ from: dir })).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('member-undeclared') });
+    rmSync(path.join(dir, STORE));
+    expect(H.classify({ from: dir }).kind).toBe('v1');
+    const bare = snapDirOf(home, '20261014-120009');
+    writeFileSync(path.join(bare, STORE), 'x');
+    expect(H.classify({ from: bare })).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('without a manifest') });
+  });
+
+  it('thin removes the store\'s copy and records it', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    plantStore(home, 7);
+    const dirs = ['20261014-120003', '20261014-120002', '20261014-120001'].map((ts) => snapshotWithStore(home, ts).dir);
+    const r = H.thinBackups({ own: dirs[0], dirs: dirs.slice(1), keep: 2, by: 'backup', out: () => undefined });
+    expect(r).toMatchObject({ kept: 2, thinned: 1, refused: 0 });
+    const dropped = JSON.parse(readFileSync(path.join(dirs[2]!, 'coordination-thinned.json'), 'utf8')).dropped;
+    expect(dropped.map((d: { filename: string }) => d.filename)).toContain(STORE);
+    expect(dirListing(dirs[2]!)).toEqual(['coordination-thinned.json']);
+  });
+
+  it('restore --from a snapshot with the store replaces the live store and removes its -wal and -shm, with coord.db', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    plantStore(home, 7);
+    const { dir } = snapshotWithStore(home);
+    setLive(home, { journal: J2, checkpoint: CP2, db: { marker: 1 }, wal: 'w', shm: 's' });
+    plantStore(home, 8, true);
+    H.restore({ home, from: dir, probe: inactive });
+    expect(readFileSync(liveFile(home, STORE))).toEqual(readFileSync(path.join(dir, STORE)));
+    expect(existsSync(liveFile(home, `${STORE}-wal`))).toBe(false);
+    expect(existsSync(liveFile(home, `${STORE}-shm`))).toBe(false);
+    expect(readFileSync(liveFile(home, 'coord.db'))).toEqual(readFileSync(path.join(dir, 'coord.db')));
+    expect(dirListing(path.join(liveDir(home), H.RESTORE_FOREIGN_DIR))).toEqual([]);
+  });
+
+  it('a crash at every operation of a restore with the store, then recover: the store is all-old or all-new, never mixed', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    plantStore(home, 7);
+    const { dir } = snapshotWithStore(home);
+    const fresh = (): string => {
+      const t = mkHome();
+      setLive(t, { journal: J2, checkpoint: CP2, db: { marker: 1 }, wal: 'w', shm: 's' });
+      plantStore(t, 8, true);
+      return t;
+    };
+    const baseline = fresh();
+    const oldStore = storeState(baseline);
+    const trace = loggedFs(baseline);
+    H.restore({ home: baseline, from: dir, probe: inactive, fs: trace.fs });
+    const newStore = storeState(baseline);
+    for (let crashAt = 0; crashAt < trace.log.mutating.length; crashAt++) {
+      const t = fresh();
+      const fault = loggedFs(t, { crashAt });
+      outcome(() => H.restore({ home: t, from: dir, probe: inactive, fs: fault.fs }));
+      H.recover({ home: t, probe: inactive });
+      expect([oldStore, newStore], `store after crash ${crashAt}`).toContainEqual(storeState(t));
+      expect(H.recover({ home: t, probe: inactive })).toBe('none');
+    }
+  }, 300_000);
+
+  it('the absent member: a manifest written before the store (no operatorModel key) replaces coord.db and leaves the live store\'s three files byte-identical', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    const { dir, manifest } = snapshotOf(home);
+    expect(manifest.members).not.toHaveProperty('operatorModel');
+    setLive(home, { journal: J2, checkpoint: CP2, db: { marker: 1 } });
+    plantStore(home, 8, true);
+    const before = storeState(home);
+    const r = H.restore({ home, from: dir, probe: inactive });
+    expect(storeState(home)).toEqual(before);
+    expect(r.removed).not.toContain(STORE);
+    expect(readFileSync(liveFile(home, 'coord.db'))).toEqual(readFileSync(path.join(dir, 'coord.db')));
+    expect(dirListing(path.join(liveDir(home), H.RESTORE_FOREIGN_DIR))).toEqual([]);
+  });
+
+  it('the absent member: present:false moves the live store\'s three files into coordination-restore.foreign/<id>/ and deletes nothing', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    const { dir, manifest } = snapshotOf(home);
+    rewriteManifest(dir, { ...manifest, members: { ...manifest.members, operatorModel: { filename: STORE, present: false } } });
+    expect(H.classify({ from: dir }).kind).toBe('v1');
+    setLive(home, { journal: J2, checkpoint: CP2, db: { marker: 1 } });
+    plantStore(home, 8, true);
+    const bytes = Object.fromEntries(STORE_THREE.map((n) => [n, readFileSync(liveFile(home, n))]));
+    H.restore({ home, from: dir, probe: inactive });
+    for (const n of STORE_THREE) expect(existsSync(liveFile(home, n)), n).toBe(false);
+    const foreign = path.join(liveDir(home), H.RESTORE_FOREIGN_DIR);
+    const ids = dirListing(foreign);
+    expect(ids).toHaveLength(1);
+    expect(dirListing(path.join(foreign, ids[0]!))).toEqual([...STORE_THREE].sort());
+    for (const n of STORE_THREE) expect(readFileSync(path.join(foreign, ids[0]!, n))).toEqual(bytes[n]);
+  });
+
+  it('recover reads a marker whose old lacks the store\'s names: a restore of a pre-store manifest, interrupted anywhere, recovers', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 2 } });
+    const { dir } = snapshotOf(home);
+    const fresh = (): string => {
+      const t = mkHome();
+      setLive(t, { journal: J2, checkpoint: CP2, db: { marker: 1 } });
+      plantStore(t, 8, true);
+      return t;
+    };
+    const baseline = fresh();
+    const keep = storeState(baseline);
+    const trace = loggedFs(baseline);
+    H.restore({ home: baseline, from: dir, probe: inactive, fs: trace.fs });
+    let sawMarker = false;
+    for (let crashAt = 0; crashAt < trace.log.mutating.length; crashAt++) {
+      const t = fresh();
+      outcome(() => H.restore({ home: t, from: dir, probe: inactive, fs: loggedFs(t, { crashAt }).fs }));
+      const markerPath = liveFile(t, H.RESTORE_MARKER_FILE);
+      if (existsSync(markerPath)) {
+        sawMarker = true;
+        expect(Object.keys(JSON.parse(readFileSync(markerPath, 'utf8')).old)).not.toContain(STORE);
+      }
+      expect(() => H.recover({ home: t, probe: inactive }), `recover after crash ${crashAt}`).not.toThrow();
+      expect(storeState(t), `store after crash ${crashAt}`).toEqual(keep);
+    }
+    expect(sawMarker).toBe(true);
+  }, 300_000);
 });

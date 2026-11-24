@@ -4,7 +4,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CollectLaneView, StallWatchView, UpdatesView } from '../../shared/api';
 import type { SettingsView } from '../src/screens/settings/SettingsDataProvider';
-import { sectionStatus, UNREAD_STATUS, type SectionStatus } from '../src/screens/settings/sectionStatus';
+import { INTEGRATIONS_GITHUB_STATUS, sectionStatus, UNREAD_STATUS, type SectionStatus } from '../src/screens/settings/sectionStatus';
+import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
+import type { LinearWorkspacesRead } from '../src/lib/api';
 import { dismissRelease, resetDismissalForTests } from '../src/fleet/releaseDismissal';
 import { boxToken, node, updatesView } from './settingsViewFixture';
 
@@ -180,5 +182,51 @@ describe('Security', () => {
   it('is a skeleton before the auth read lands, and could not be read after it failed', () => {
     expect(of('security', settings({ auth: { kind: 'pending' } }))).toEqual({ kind: 'skeleton' });
     expect(text(of('security', settings({ auth: { kind: 'failed' } })))).toBe(`Sign-in ${UNREAD_STATUS}`);
+  });
+});
+
+// D-8932: Settings' sixth section. Its line is the Linear keys from the frame's one Linear read, then
+// how GitHub is reached today (a fact of the build, not a reading).
+describe('Integrations', () => {
+  const key = (state: string): LinearWorkspaceView => ({ state, id: `id-${state}`, name: 'ws-a', urlKey: null, user: null, teams: [], keyTail: null, checkedAt: null } as unknown as LinearWorkspaceView);
+  const linear = (view: Partial<LinearWorkspacesRead> | null, failure: 'failed' | null = null): Partial<SettingsView> =>
+    ({ linear: { view: view === null ? null : { store: 'ok', workspaces: [], legacy: null, ...view }, failure, reload: noop, settle: noop } });
+
+  it('is a skeleton until the Linear read lands, and could not be read after it failed', () => {
+    expect(of('integrations', settings(linear(null)))).toEqual({ kind: 'skeleton' });
+    const failed = of('integrations', settings(linear(null, 'failed')));
+    expect(text(failed)).toBe(`Linear ${UNREAD_STATUS}`);
+    expect(tone(failed)).toBe('amber');
+  });
+
+  it('counts the connected workspaces, and says how GitHub is reached', () => {
+    expect(text(of('integrations', settings(linear({}))))).toBe(`Linear: no key yet · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(text(of('integrations', settings(linear({ workspaces: [key('connected')] }))))).toBe(`Linear: 1 workspace connected · ${INTEGRATIONS_GITHUB_STATUS}`);
+    const two = of('integrations', settings(linear({ workspaces: [key('connected'), key('connected')] })));
+    expect(text(two)).toBe(`Linear: 2 workspaces connected · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(tone(two)).toBe('calm');
+    expect(INTEGRATIONS_GITHUB_STATUS).toBe("GitHub: the fleet box's own sign-in");
+  });
+
+  it('is amber while a key needs attention, and counts those keys', () => {
+    const one = of('integrations', settings(linear({ workspaces: [key('connected'), key('key-rejected')] })));
+    expect(text(one)).toBe(`Linear: 1 of 2 keys needs attention · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(tone(one)).toBe('amber');
+    const both = of('integrations', settings(linear({ workspaces: [key('unreachable'), key('details-unknown')] })));
+    expect(text(both)).toBe(`Linear: 2 of 2 keys need attention · ${INTEGRATIONS_GITHUB_STATUS}`);
+  });
+
+  it('counts the key saved before workspaces while it stands alone, never one a workspace has taken over, never an absent one', () => {
+    const legacy = (state: string, superseded: boolean): LinearLegacyRow => ({ view: { state } as LinearLegacyRow['view'], workspace: null, superseded });
+    expect(text(of('integrations', settings(linear({ legacy: legacy('connected', false) }))))).toBe(`Linear: 1 workspace connected · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(text(of('integrations', settings(linear({ workspaces: [key('connected')], legacy: legacy('key-rejected', true) })))))
+      .toBe(`Linear: 1 workspace connected · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(text(of('integrations', settings(linear({ legacy: legacy('not-connected', false) }))))).toBe(`Linear: no key yet · ${INTEGRATIONS_GITHUB_STATUS}`);
+  });
+
+  it('says the keys could not be read when the box cannot list them, never "no key yet"', () => {
+    const s = of('integrations', settings(linear({ store: 'unreadable' })));
+    expect(text(s)).toBe(`Linear keys ${UNREAD_STATUS} · ${INTEGRATIONS_GITHUB_STATUS}`);
+    expect(tone(s)).toBe('amber');
   });
 });

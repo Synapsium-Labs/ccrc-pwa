@@ -752,7 +752,7 @@ else:
 `);
 
 const S_T10 = 'docs/superpowers/specs';
-const SECTION_PATHS_T10 = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions'];
+const SECTION_PATHS_T10 = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions', 'docs/vision', 'docs/promise'];
 
 vT10.describe('docs listing: parse_ls_tree_long (§2 (f) Committed step 2)', () => {
   let h: HarnessT10;
@@ -838,7 +838,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
   });
   vT10.afterAll(() => { h.cleanup(); });
 
-  vT10.it('answers all four sections in SECTIONS order, each present or absent, and never lists a path outside them', () => {
+  vT10.it('answers every section in SECTIONS order, each present or absent, and never lists a path outside them', () => {
     const c = commitRowsT10(h, demo, [
       ['100644', B, `${S_T10}/a.md`],
       ['100644', B, 'docs/product-design/m.html'],
@@ -854,17 +854,20 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
       { slug: 'plans', path: 'docs/superpowers/plans', state: 'absent', count: 0 },
       { slug: 'product-design', path: 'docs/product-design', state: 'present', count: 1 },
       { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+      { slug: 'vision', path: 'docs/vision', state: 'absent', count: 0 },
+      { slug: 'promise', path: 'docs/promise', state: 'absent', count: 0 },
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['specs', 'a.md'], ['product-design', 'm.html']]);
     vT10.expect(r.blobs.map((b) => [b[0], b[1]])).toEqual([['product-design', 'm.html'], ['specs', 'a.md']]);
     vT10.expect(r.unlisted).toEqual({ count: 0, byReason: {} });
   });
 
-  vT10.it('answers a commit with no docs at all as four absent sections and no entries: not an error (§2 (h) 7)', () => {
+  vT10.it('answers a commit with no docs at all as every section absent and no entries: not an error (§2 (h) 7)', () => {
     const r = listT10(h, 'demo', commitRowsT10(h, demo, [['100644', B, 'README.md']]));
     vT10.expect(r.failure).toBeUndefined();
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'absent', 0], ['plans', 'absent', 0], ['product-design', 'absent', 0], ['conventions', 'absent', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries).toEqual([]);
     vT10.expect(r.blobs).toEqual([]);
@@ -880,6 +883,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     const r = listT10(h, 'demo', c);
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'absent', 0], ['plans', 'absent', 0], ['product-design', 'present', 1], ['conventions', 'absent', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['product-design', 'm.html']]);
   });
@@ -896,6 +900,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'not-a-directory', 0], ['plans', 'present', 1],
       ['product-design', 'not-a-directory', 0], ['conventions', 'not-a-directory', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['plans', 'p.md']]);
     vT10.expect(r.blobs.map((b) => [b[0], b[1]])).toEqual([['plans', 'p.md']]);
@@ -958,7 +963,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     vT10.expect(r.entries).toEqual([]);
   });
 
-  vT10.it('makes ONE git call, the fixed ls-tree over the four section paths, under the read env', () => {
+  vT10.it('makes ONE git call, the fixed ls-tree over the section paths, under the read env', () => {
     const g = makeHarnessT10('ccd-docs-');
     try {
       const dir = g.makeRepo('demo');
@@ -969,7 +974,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
       const lsTree = rec.calls().filter((k) => k.argv.includes('ls-tree'));
       vT10.expect(lsTree).toHaveLength(1);
       const argv = lsTree[0]!.argv;
-      // The caller's commit is the one value in it, after --end-of-options; the pathspecs are this file's own four.
+      // The caller's commit is the one value in it, after --end-of-options; the pathspecs are this file's own.
       vT10.expect(argv.slice(argv.indexOf('ls-tree'))).toEqual([
         'ls-tree', '-r', '-z', '--long', '--full-tree', '--end-of-options', c, '--', ...SECTION_PATHS_T10,
       ]);
@@ -1825,7 +1830,7 @@ import { hostFilterCaveat as t14hostFilterCaveat, unitJson as t14unitJson } from
 import { plantGitRecorder as t14plantGitRecorder } from './ccdDocsHelpers.js';
 
 const T14_S = 'docs/superpowers/specs/';
-const T14_SECTION_PATHS = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions'];
+const T14_SECTION_PATHS = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions', 'docs/vision', 'docs/promise'];
 const t14sha = (b: string | Buffer): string => t14createHash('sha256').update(b).digest('hex');
 /** A python string literal for an ASCII value (every fixture path here is ASCII). */
 const t14q = (s: string): string => JSON.stringify(s);
@@ -1908,8 +1913,11 @@ function t14cannedStatus(canned: string): string[] {
 const t14row = (state: string, facts: Record<string, unknown>, trust = 'status'): Record<string, unknown> =>
   ({ state, ...facts, trust });
 const T14_ABSENT = { kind: 'absent', size: null, fp: null };
+/** A regular file's facts carry its modified time (X2 P1.5, `mtimeNs`): a decimal string, whatever its value. The value
+ *  itself is pinned against `fstat` in "docs-tree draft entries carry mtimeNs" at the end of this file. */
+const T14_MTIME = expect.stringMatching(/^(?:0|[1-9][0-9]{0,18})$/);
 const t14file = (body: string): Record<string, unknown> =>
-  ({ kind: 'file', size: Buffer.byteLength(body), fp: t14sha(body) });
+  ({ kind: 'file', size: Buffer.byteLength(body), fp: t14sha(body), mtimeNs: T14_MTIME });
 const t14withheld = (kind: string): Record<string, unknown> => ({ kind, size: null, fp: null });
 
 describe('docs draft snapshot (docs W1a Task 14)', () => {
@@ -1955,7 +1963,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
         'specs:c.md': t14row('deleted', T14_ABSENT),
         'specs:d.md': t14row('deleted', T14_ABSENT),
         'specs:e.md': t14row('typechange', t14withheld('symlink')),
-        'specs:f.md': t14row('conflicted', { kind: 'file', size: conflicted.length, fp: t14sha(conflicted) }),
+        'specs:f.md': t14row('conflicted', { kind: 'file', size: conflicted.length, fp: t14sha(conflicted), mtimeNs: T14_MTIME }),
         'specs:g.md': t14row('added', t14file('g new\n')),
         'specs:i.md': t14row('untracked', t14file('i.md body\n')),
       });
@@ -2279,7 +2287,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       t14fs.writeFileSync(t14path.join(wt, T14_S, 'big.md'), 'y'.repeat(2000));
       const low = t14phase({ served: head, env: { CCD_DOCS_MAX_FILE_BYTES: '1000' } });
-      expect(low.rows['specs:big.md']).toEqual(t14row('untracked', { kind: 'file', size: 2000, fp: null }));
+      expect(low.rows['specs:big.md']).toEqual(t14row('untracked', { kind: 'file', size: 2000, fp: null, mtimeNs: T14_MTIME }));
       const ctl = t14phase({ served: head });
       expect(ctl.rows['specs:big.md']).toEqual(t14row('untracked', t14file('y'.repeat(2000))));
     }, 60000);
@@ -2654,7 +2662,7 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     ].join('\n'));
     expect(got).toEqual([
       [{ kind: 'unreadable', size: null, fp: null, errno: 'EIO' }, null],
-      [{ kind: 'file', size: 11, fp: null }, null],
+      [{ kind: 'file', size: 11, fp: null, mtimeNs: T14_MTIME }, null],
       'budget-spent',
     ]);
   }, 60000);
@@ -2843,7 +2851,7 @@ type T15Answer = Record<string, unknown> & {
 const t15sha = (b: string): string => t15createHash('sha256').update(b).digest('hex');
 /** A draft row for a regular file the snapshot read whole, as `status` classified it. */
 const t15row = (state: string, body: string): Record<string, unknown> =>
-  ({ state, kind: 'file', size: Buffer.byteLength(body), fp: t15sha(body), trust: 'status' });
+  ({ state, kind: 'file', size: Buffer.byteLength(body), fp: t15sha(body), mtimeNs: T14_MTIME, trust: 'status' });
 const t15write = (dir: string, rel: string, body: string): void => {
   t15fs.mkdirSync(t15path.dirname(t15path.join(dir, rel)), { recursive: true });
   t15fs.writeFileSync(t15path.join(dir, rel), body);
@@ -2936,6 +2944,8 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
         { slug: 'plans', path: 'docs/superpowers/plans', state: 'present', count: 1 },
         { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
         { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+        { slug: 'vision', path: 'docs/vision', state: 'absent', count: 0 },
+        { slug: 'promise', path: 'docs/promise', state: 'absent', count: 0 },
       ]);
       expect(t.drafts).toEqual({
         state: 'holder', branch: 'main', worktree: { path: real, head, class: 'main' },
@@ -3730,5 +3740,65 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(rest).toEqual({ rc: 0, signals: [15, 9] });
     expect(s).toBeGreaterThanOrEqual(1.9);
     expect(s).toBeLessThan(2.7);
+  }, 60000);
+});
+
+vT10.describe('six sections (rich-docs spec G1, W5b)', () => {
+  let h: HarnessT10;
+  let demo: string;
+  vT10.beforeAll(() => {
+    h = makeHarnessT10('ccd-docs-');
+    demo = h.makeRepo('demo');
+  });
+  vT10.afterAll(() => { h.cleanup(); });
+
+  vT10.it('lists vision and promise after the four, in DOC_SECTIONS order, and lists their entries recursively', () => {
+    const B = blobT10(h, demo, 'hello\n');
+    const c = commitRowsT10(h, demo, [
+      ['100644', B, 'docs/vision/v.md'],
+      ['100644', B, 'docs/promise/p.md'],
+      ['100644', B, 'docs/promise/sub/q.md'],
+    ]);
+    const r = listT10(h, 'demo', c);
+    vT10.expect(r.failure).toBeUndefined();
+    vT10.expect(r.sections).toEqual([
+      { slug: 'specs', path: 'docs/superpowers/specs', state: 'absent', count: 0 },
+      { slug: 'plans', path: 'docs/superpowers/plans', state: 'absent', count: 0 },
+      { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
+      { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+      { slug: 'vision', path: 'docs/vision', state: 'present', count: 1 },
+      { slug: 'promise', path: 'docs/promise', state: 'present', count: 2 },
+    ]);
+    vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([
+      ['vision', 'v.md'], ['promise', 'p.md'], ['promise', 'sub/q.md'],
+    ]);
+  });
+});
+
+// X2 P1.5 (ccd half), spec 2026-11-18 section 4.3 "Where the time comes from": a draft entry carries the leaf's modified
+// time as `mtimeNs`, a decimal string, from the same fstat its size comes from. Appended with its own names, as the
+// blocks above are.
+describe('docs-tree draft entries carry mtimeNs (X2 P1.5)', () => {
+  it('docs-tree: a draft entry carries mtimeNs as a decimal string', () => {
+    const { wt } = t15fixture();
+    t15write(wt, `${T15_SPECS}/big.md`, 'y'.repeat(2000));
+    const mtimeOf = (rel: string): string => t15fs.statSync(t15path.join(wt, T15_SPECS, rel), { bigint: true }).mtimeNs.toString();
+    // The CCD_DOCS_MAX_FILE_BYTES knob lowers the hash ceiling to 1000, so big.md is above it: size kept, fp null.
+    const t = t15tree(['--ref', 'refs/heads/ws/a'], { CCD_DOCS_MAX_FILE_BYTES: '1000' });
+    const drafts = t15drafted(t) as Record<string, { size: number | null; fp: string | null; mtimeNs?: unknown }>;
+    expect(Object.keys(drafts).sort()).toEqual(['specs:a.md', 'specs:big.md', 'specs:new.md']);
+    for (const [key, rel] of [['specs:a.md', 'a.md'], ['specs:new.md', 'new.md'], ['specs:big.md', 'big.md']] as const) {
+      const d = drafts[key]!;
+      expect(typeof d.mtimeNs, `${key}: a string, never a number`).toBe('string');
+      expect(d.mtimeNs, `${key} equals the file's st_mtime_ns`).toBe(mtimeOf(rel));
+      expect(d.mtimeNs).toMatch(/^(?:0|[1-9][0-9]{0,18})$/);
+    }
+    expect(drafts['specs:big.md']).toMatchObject({ size: 2000, fp: null });
+    expect(drafts['specs:a.md']!.fp).toMatch(/^[0-9a-f]{64}$/);
+    // A deleted draft has no leaf to stat: no mtimeNs.
+    t15fs.rmSync(t15path.join(wt, T15_SPECS, 'a.md'));
+    const gone = t15drafted(t15tree(['--ref', 'refs/heads/ws/a'])) as Record<string, Record<string, unknown>>;
+    expect(gone['specs:a.md']).toMatchObject({ state: 'deleted', kind: 'absent' });
+    expect(gone['specs:a.md']).not.toHaveProperty('mtimeNs');
   }, 60000);
 });

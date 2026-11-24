@@ -146,6 +146,14 @@ const ROUTES = [
   { name: 'add', url: '/api/accounts', body: ADD_BODY, stepUp: true, cap: true },
   { name: 'credential', url: `/api/accounts/${LANE}/credential`, body: { credential: SECRET }, stepUp: true, cap: true },
   { name: 'set', url: `/api/accounts/${LANE}/set`, body: { placement: 'overflow' }, stepUp: false, cap: true },
+  // The two serviceability facts (plan 2026-11-14 Task 3, F10): a widening value steps up, whatever is stored.
+  { name: 'set credits', url: `/api/accounts/${LANE}/set`, body: { fableBilling: 'credits' }, stepUp: false, cap: true },
+  { name: 'set continuity off', url: `/api/accounts/${LANE}/set`, body: { continuity: 'off' }, stepUp: false, cap: true },
+  { name: 'set included', url: `/api/accounts/${LANE}/set`, body: { fableBilling: 'included' }, stepUp: true, cap: true },
+  { name: 'set continuity on', url: `/api/accounts/${LANE}/set`, body: { continuity: 'on' }, stepUp: true, cap: true },
+  // The organization label (account organization A3): a preference, so neither a label nor a clear steps up.
+  { name: 'set org', url: `/api/accounts/${LANE}/set`, body: { org: 'org-a' }, stepUp: false, cap: true },
+  { name: 'set org none', url: `/api/accounts/${LANE}/set`, body: { org: 'none' }, stepUp: false, cap: true },
   { name: 'remove', url: `/api/accounts/${LANE}/remove`, body: { mode: 'remove', confirmId: LANE }, stepUp: true, cap: true },
   { name: 'discard', url: `/api/accounts/${LANE}/remove`, body: { mode: 'discard' }, stepUp: true, cap: true },
   { name: 'remove check', url: `/api/accounts/${LANE}/remove`, body: { mode: 'check' }, stepUp: false, cap: true },
@@ -545,6 +553,86 @@ describe('set and the revoke tick', () => {
     }
     expect(r.argv()).toHaveLength(before);
     expect(r.argv().filter((l) => l.startsWith('account set'))).toHaveLength(2);
+  });
+
+  // The serviceability facts (plan 2026-11-14 Task 3; F10): a narrowing value rides the plain gate, a widening one steps up.
+  it('set {fableBilling, continuity}: narrowing runs on a plain session, widening needs a step-up, and the answer carries the facts', async () => {
+    const r = await openApp();
+    const cookie = await login(r.app);
+    const roster = r.roster();
+    const withFacts = { ...roster, accounts: roster.accounts.map((a) => (a['id'] === LANE
+      ? { ...a, fableBilling: 'credits', continuity: { recordedAt: 1794000000 } } : a)) };
+    r.stub('set', { out: { ok: true, roster: withFacts, fleetIdentity: NODE } });
+    const narrow = await post(r, `/api/accounts/${LANE}/set`, { fableBilling: 'credits' }, cookie);
+    expect(narrow.statusCode, narrow.body).toBe(200);
+    expect(r.argv()).toEqual([`account set --id=${LANE} --fable-billing=credits`]);
+    const lane = (narrow.json() as { roster: { id: string; fableBilling?: string; continuity?: unknown }[] }).roster.find((x) => x.id === LANE);
+    expect(lane).toMatchObject({ fableBilling: 'credits', continuity: { recordedAt: 1794000000 } });
+
+    const rowsBefore = r.rows.length;
+    for (const body of [{ fableBilling: 'included' }, { continuity: 'on' }, { fableBilling: 'credits', continuity: 'on' }]) {
+      const res = await post(r, `/api/accounts/${LANE}/set`, body, cookie);
+      expect(res.statusCode, JSON.stringify(body)).toBe(REFUSAL_STATUS['step-up-required']);
+    }
+    expect(r.argv()).toHaveLength(1);
+    expect(r.rows).toHaveLength(rowsBefore);
+
+    const up = await fresh(r.app);
+    const all = await post(r, `/api/accounts/${LANE}/set`, { stated: 'someone@example.invalid', placement: 'full', fableBilling: 'included', continuity: 'on' }, up);
+    expect(all.statusCode, all.body).toBe(200);
+    expect(r.argv()).toHaveLength(2);
+    expect(r.argv()[1]).toBe(`account set --id=${LANE} --placement=full --fable-billing=included --continuity=on --stated=-`);
+    expect(r.calls.filter((c) => c === 'set')).toHaveLength(2);
+  });
+
+  // The organization label (account organization A3): no step-up, because a label widens no authority.
+  it('set {org}: a label or none runs on a plain session with no step-up, and the answer carries the label', async () => {
+    const r = await openApp();
+    const cookie = await login(r.app);
+    const roster = r.roster();
+    const withOrg = { ...roster, accounts: roster.accounts.map((a) => (a['id'] === LANE ? { ...a, org: 'org-a' } : a)) };
+    r.stub('set', { out: { ok: true, roster: withOrg, fleetIdentity: NODE } });
+    const set = await post(r, `/api/accounts/${LANE}/set`, { org: 'org-a' }, cookie);
+    expect(set.statusCode, set.body).toBe(200);
+    expect(r.argv()).toEqual([`account set --id=${LANE} --org=org-a`]);
+    const lane = (set.json() as { roster: { id: string; org?: string }[] }).roster.find((x) => x.id === LANE);
+    expect(lane).toMatchObject({ org: 'org-a' });
+    const cleared = await post(r, `/api/accounts/${LANE}/set`, { org: 'none' }, cookie);
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(r.argv()[1]).toBe(`account set --id=${LANE} --org=none`);
+  });
+
+  it('set {org}: an id-shaped label is org-looks-like-an-id, an off-shape one bad-request, each with one audit row and no op', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    let n = 0;
+    for (const [org, word] of [['abcdef0123456789abcdef0123456789', 'org-looks-like-an-id'],
+      ['0f8e2c1a-1b2c-4d3e-8f90-123456789abc', 'org-looks-like-an-id'], ['Org-A', 'bad-request'], [7, 'bad-request'],
+      [null, 'bad-request'], ['', 'bad-request']] as const) {
+      const res = await post(r, `/api/accounts/${LANE}/set`, { org }, cookie);
+      expect(res.json(), String(org)).toEqual({ ok: false, error: word });
+      n += 1;
+      expect(r.rows).toHaveLength(n);
+      expect(r.rows[n - 1]).toMatchObject({ act: 'set', laneId: LANE, outcome: 'refused', code: word });
+    }
+    expect(r.calls).toEqual([]);
+    expect(r.argv()).toEqual([]);
+  });
+
+  it('set: a fact off its vocabulary is bad-request with one audit row and no op', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    let n = 0;
+    for (const body of [{ fableBilling: 'free' }, { fableBilling: true }, { continuity: 'maybe' }, { continuity: true }, { continuity: 1 },
+      { fableBilling: 'Included' }]) {
+      const res = await post(r, `/api/accounts/${LANE}/set`, body, cookie);
+      expect(res.json(), JSON.stringify(body)).toEqual({ ok: false, error: 'bad-request' });
+      n += 1;
+      expect(r.rows).toHaveLength(n);
+      expect(r.rows[n - 1]).toMatchObject({ act: 'set', laneId: LANE, outcome: 'refused', code: 'bad-request' });
+    }
+    expect(r.calls).toEqual([]);
+    expect(r.argv()).toEqual([]);
   });
 
   it('revoke-ack writes one revoke-acknowledged row with no value, for a lane that may be gone, and runs no op', async () => {

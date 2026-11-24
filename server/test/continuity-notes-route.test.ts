@@ -3,8 +3,13 @@
 // newest first, each with its key's fact; `POST …/handover` stores one handover note per generation, only while the
 // caller's generation is `checkpointed` as `effectiveGeneration` reads it. Fixture HOMEs only.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
+import path from 'node:path';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { registerContinuityRoutes } from '../src/continuity/routes.js';
+import { passGate } from './overlordGateFixture.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
@@ -446,5 +451,103 @@ describe('GET /api/sessions/:id/notes: paged, every page under the tool result c
       const res = await get(app, q);
       expect([res.statusCode, res.json().error], JSON.stringify(q)).toEqual([400, 'bad-request']);
     }
+  });
+});
+
+// ── the designation (Overlord W1 designation A, Task 3, X5) ──────────────────────────────────────────────────────────
+
+describe('liveGenerationOf reads the generation identity of the designation', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const boundAs = (id: string, pending: DesignationView['pending'] = null): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' }, pending }) });
+  /** A generation of `identity` for this session, minted the way the lane does. */
+  const mintAs = (identity: string, role: 'overlord' | 'coordinator'): GenRow => {
+    reports += 1;
+    const start = c().insertStart({ sessionId: ID, reportId: `report-${reports}`, uuid: UUID, source: 'resume', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+    if (!start.ok) throw new Error('start');
+    const held = c().liveGenerations();
+    if (!held.ok) throw new Error(held.detail);
+    const prev = held.rows.find((g) => g.identity === identity) ?? null;
+    const m = c().mintGeneration({ identity, sessionId: ID, role, term: 5, rowIncarnation: null, startId: start.id, startReportedAt: NOW,
+      resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW }, prev === null ? null : genExpectOf(prev), true);
+    if (!m.ok) throw new Error(m.kind);
+    return c().liveGenerations().ok ? (c().liveGenerations() as { rows: GenRow[] }).rows.find((g) => g.identity === identity)! : (() => { throw new Error('gens'); })();
+  };
+  const noteGen = (id: number): unknown => (c().db.prepare('SELECT generationId FROM continuity_notes WHERE id = ?').get(id) as { generationId: number | null }).generationId;
+
+  // Gates B (plan w1-gates.md Task 6, slug overlord-note-case-moves-behind-the-gate): the bound session's note now runs the
+  // gate order first. Its incarnation is checked at step 1 (this fixture's registry holds none, a measured absence), and a
+  // write needs `continuity-v1`, the act key and a witness. Door process B1 bound the witness (`continuity/witnessPorts.ts`),
+  // but this fixture presents no incarnation and no act key, so the door refuses it and writes nothing; which generation a
+  // passing note records is `liveGenerationOf`'s, pinned by its own characterization (`live-generation.test.ts`), and the
+  // passing path by the gate's suites.
+  it('a restart of the Overlord: the bound session\'s note is refused by the gate and writes nothing', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs(ID);
+    mintAs('overlord', 'overlord');
+    const res = await post(app, note({ kind: 'run', id: run }));
+    expect([res.statusCode, res.json().error]).toEqual([403, 'not-the-overlord']);
+    expect(rows()).toEqual([]);
+  });
+
+  // The passing path, behind a gate that passes (the gate's own answers are held by `overlord-gate-doors.test.ts`): the door
+  // records the generation of the designation's identity (review 2803 F4; the case this replaced pinned it before gates B).
+  it('a restart of the Overlord: the bound session\'s note, past a passing gate, records its overlord generation', async () => {
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const a = Fastify({ logger: false });
+    registerContinuityRoutes(a, {
+      coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => time.ports.clock.wall(),
+      attributeReader: async () => ({ ok: true }), gate: passGate(),
+      cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
+      setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
+    });
+    await a.ready();
+    app = a;
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs(ID);
+    const gen = mintAs('overlord', 'overlord');
+    const res = await post(a, note({ kind: 'run', id: run }));
+    expect(res.statusCode).toBe(202);
+    expect(noteGen(res.json().id as number)).toBe(gen.id);
+  });
+
+  it('a generations read that fails is the door\'s own 502 unmeasured, on a note and on a handover, and nothing is written', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().liveGenerations = () => ({ ok: false, detail: 'x' });
+    const n = await post(app, note({ kind: 'run', id: run }));
+    expect([n.statusCode, n.json().error]).toEqual([502, 'unmeasured']);
+    const h = await handover(app, goodHandover(run));
+    expect([h.statusCode, h.json().error]).toEqual([502, 'unmeasured']);
+    expect(rows()).toEqual([]);
+    expect(c().db.prepare('SELECT COUNT(*) AS n FROM continuity_handovers').get()).toEqual({ n: 0 });
+  });
+
+  it('a rebind with the old body live: the pending body\'s note finds no generation under its own id, never the old body\'s overlord row', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs('overlord-old-owl', { sessionId: ID, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null });
+    mintAs('overlord', 'overlord');
+    const id = (await post(app, note({ kind: 'run', id: run }))).json().id as number;
+    expect(noteGen(id)).toBeNull();
+  });
+
+  // Gates B (question 13, ruled start-doors-fail-closed-on-an-unread-designation): the gate refuses every caller first.
+  it('an unmeasured designation is refused by the gate: 503 unavailable on a note and on a handover, and nothing is written', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    mintAs('overlord', 'overlord');
+    for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'x' }), (): DesignationRead => { throw new Error('locked'); }]) {
+      c().designationRead = bad;
+      const n = await post(app, note({ kind: 'run', id: run }));
+      expect([n.statusCode, n.json().error]).toEqual([503, 'unavailable']);
+      const h = await handover(app, goodHandover(run));
+      expect([h.statusCode, h.json().error]).toEqual([503, 'unavailable']);
+    }
+    expect(rows()).toEqual([]);
   });
 });

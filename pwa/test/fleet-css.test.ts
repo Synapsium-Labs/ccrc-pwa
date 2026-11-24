@@ -241,18 +241,16 @@ describe('fleet density and alignment', () => {
     // column, one row of which already exceeds the 44px floor on its own —
     // was not, so opening the disclosure on a row with no ask summary put the
     // status dot ~4px below the workspace name again, the exact defect the
-    // preceding fix round removed.
+    // preceding fix round removed. The subagent list has left the row (D-8771)
+    // and the session panel (H3, D-8875), so `.sess-ask` is the one line left.
     const group = selectorsOf(css, '.sess-line:has(.sess-ask) .sess-lamp');
-    for (const line of ['.sess-ask', '.sess-subagent-list']) {
-      // `normSel` on both sides: `selectorsOf` returns the group already
-      // normalised, and that normalisation eats the descendant space after a
-      // `)`, so a raw literal never matches one of these.
-      expect(group).toContain(normSel(`.sess-line:has(${line}) .sess-lamp`));
-    }
-    // And it is the CLAMPED three-line variant they share, not the base
-    // formula: max(0px, …) is what makes one rule correct for a list of N
-    // rows and for a row carrying both extra lines.
-    const rule = ruleFor('.sess-line:has(.sess-subagent-list) .sess-lamp');
+    // `normSel` on both sides: `selectorsOf` returns the group already
+    // normalised, and that normalisation eats the descendant space after a
+    // `)`, so a raw literal never matches one of these.
+    expect(group).toEqual([normSel('.sess-line:has(.sess-ask) .sess-lamp')]);
+    // And it is the CLAMPED three-line variant, not the base formula:
+    // max(0px, …) is what makes one rule correct for a taller third line.
+    const rule = ruleFor('.sess-line:has(.sess-ask) .sess-lamp');
     expect(rule).toContain('max(0px');
     expect(rule).toContain('var(--fs-2xs)');
   });
@@ -284,32 +282,12 @@ describe('fleet density and alignment', () => {
     }
   });
 
-  // Whole-branch review, finding 7. The subagent disclosure — the branch's
-  // headline new interaction — shipped as a ~22×15px box with `padding: 0`,
-  // the first row-level button in this file to skip the --tap-min pattern
-  // entirely, inside a 44px surface whose click forwarder NAVIGATES. A thumb
-  // landing a few px low did not miss quietly; it opened the session.
-  describe('the subagent disclosure is a real target', () => {
-    it('grows its hit area with an overlay instead of its visible box', () => {
-      // The visible box must not grow: .sess-meta is a flex row, so padding
-      // there raises the whole line and throws .sess-lamp's centring formula
-      // out on every row in the fleet.
-      const rule = ruleFor('.sess-subagents');
-      expect(rule).toContain('position: relative');
-      expect(rule).toContain('padding: 0');
-
-      const overlay = ruleFor('.sess-subagents::before');
-      expect(overlay).toContain('position: absolute');
-      // --tap-min WIDE — the axis with room. Vertically --sp-6 (WCAG 2.2 SC
-      // 2.5.8's 24px floor): a 44px-tall overlay would reach 14.5px up over
-      // .sess-open's whole line box, so taps on the workspace name would
-      // toggle the disclosure — a WRONG control, worse than the near-miss.
-      expect(overlay).toContain('var(--tap-min)');
-      expect(overlay).toContain('var(--sp-6)');
-      expect(norm(stripComments(overlay))).not.toContain('44px');
-    });
-
-    it('lets the label win the strip they overlap', () => {
+  // Whole-branch review, finding 7. The subagent disclosure shipped as a
+  // ~22×15px box inside a 44px surface whose click forwarder NAVIGATES. The
+  // disclosure has left the row (D-8771) and the session panel (H3, D-8875);
+  // what it taught the row's cells stays pinned here.
+  describe('the row\'s cells stay real targets', () => {
+    it('lets the label win the strip a later cell\'s overlay would overlap', () => {
       // Both are positioned, and the overlay comes later in tree order, so
       // `position: relative` alone would still lose. The explicit z-index is
       // what keeps a tap on the name opening the session.
@@ -1569,16 +1547,20 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
 // Delegation visibility (the plan's Global Constraints, "CSS"): the two new list surfaces take the floor `.proj-card`
 // takes. Each is an item of a grid or flex container whose automatic minimum is its min-content width, and its rows'
 // words are `white-space: nowrap`, so without `min-width: 0` one long row widens the track and scrolls the pane.
-describe('the fleet foot\'s region and the header\'s entry list shrink below their rows (delegation visibility)', () => {
+describe('the session\'s worktree section shrinks below its rows (delegation visibility)', () => {
   const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
 
-  it('VIS-CSS2: the header\'s entry list is a full-width flex item of .chat-facts with a min-width of 0', () => {
-    const rule = ruleIn(chatCss, '.chat-facts .sess-entries');
+  it('SW-CSS1 (D-8782, review 2864 F6): the session\'s worktree section is a full-width flex item of .chat-facts with a min-width of 0, and Refined\'s rail wraps for it', () => {
+    const rule = ruleIn(chatCss, '.chat-facts .sess-worktrees');
     expect(declValue(rule, 'flex-basis')).toBe('100%');
     expect(declValue(rule, 'min-width')).toBe('0');
-  });
-
-  it('VIS-CSS1: the fleet foot\'s region is a grid item of .fleet-list with the card\'s floor, a min-width of 0', () => {
-    expect(declValue(ruleFor('.fleet-unlisted'), 'min-width')).toBe('0');
+    expect(declValue(rule, 'padding'), 'room for the focus ring inside a clipping rail').toBe('var(--sp-1)');
+    expect(declValue(ruleIn(chatCss, '.chat-facts .sess-worktrees > .proj-work'), 'flex-wrap'), 'a row wraps: its controls drop under its words').toBe('wrap');
+    // H3 (D-8875): the row's free-text part is its path, which wraps anywhere rather than sizing the header to its length.
+    const pathRule = ruleIn(chatCss, '.chat-facts .sess-worktrees .proj-work-name-text');
+    expect([declValue(pathRule, 'white-space'), declValue(pathRule, 'overflow-wrap')], 'the path wraps, anywhere').toEqual(['normal', 'anywhere']);
+    const refined = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'refined', 'refined.css'), 'utf8');
+    expect(declValue(ruleIn(refined, '.chat-head .ref-chip-rail:has(.sess-worktrees)'), 'flex-wrap')).toBe('wrap');
+    expect(declValue(ruleIn(refined, '.chat-head .ref-chip-rail .sess-worktrees .chat-fact'), 'white-space')).toBe('normal');
   });
 });

@@ -12,14 +12,17 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
+import { renewalDue } from '../src/continuity/renewalDue.js';
+import { renewalReadingsOf } from '../src/continuity/renewalReadingsWiring.js';
 import {
-  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
+  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, renewalInputsOf, softTimesOf,
   type CompactionsMemo, type EmptyTries, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
 import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
@@ -45,6 +48,8 @@ interface Fixture {
    *  `listedAt` says when; each `proc` keeps its own memo of held starts, as a server process does. */
   pass(readings?: ReadonlyMap<number, GenReadings>, proc?: string, listedAt?: number): ReturnType<typeof generationsPass>;
   start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
+  /** The pass's latch raise (renewal readings PR C), when a case sets one: absent, the pass has none. */
+  latch?: GenerationsDeps['latch'];
 }
 
 function fixture(): Fixture {
@@ -61,11 +66,12 @@ function fixture(): Fixture {
   const deps = (proc: string): GenerationsDeps => {
     if (!memos.has(proc)) memos.set(proc, new Set());
     if (!empties.has(proc)) empties.set(proc, new Map());
-    // The continuity row is gated until the renewal act ships; these cases drive its live walk, so they open the gate
-    // (review 2006 N1). The case below holds that the real gate keeps a stored Live shadow.
-    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null };
+    // The renewal act lifted the continuity row's gate; these cases still pass an open one, so they never depend on the
+    // card's words (review 2006 N1). The case below holds that the real gate is open too.
+    return { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc, log: (l) => logs.push(l), retried: memos.get(proc)!, emptyTries: empties.get(proc)!, gate: () => null,
+      ...(f.latch === undefined ? {} : { latch: f.latch }) };
   };
-  return {
+  const f: Fixture = {
     s, t, logs, registry,
     pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt }),
     start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
@@ -76,6 +82,7 @@ function fixture(): Fixture {
       return r.id;
     },
   };
+  return f;
 }
 const all = (s: CoordStore): Record<string, unknown>[] =>
   s.db.prepare('SELECT identity, n, state, shadowState, outcome, startId FROM continuity_generations ORDER BY id').all() as Record<string, unknown>[];
@@ -115,14 +122,14 @@ describe('the pass mints and ends generations from the starts (Task 2)', () => {
     expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'carded', shadowState: null, outcome: null, startId: 1 }]);
   });
 
-  it('a Live stored on the gated continuity row is shadow: the real gate keeps the mint\'s `state` active (review 2006 N1)', () => {
+  it('the renewal act lifted the continuity row\'s gate: with the real gate, a stored Live walks the mint\'s `state` (review 2003 F3)', () => {
     const f = fixture();
     f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
     f.start('startup', U1);
     const r = generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(), emptyTries: new Map() },
       { registry: f.registry, listedAt: f.t.ports.clock.wall() + 1, readings: new Map() });
-    expect(r).toMatchObject({ live: false, minted: 1 });
-    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'active', shadowState: 'carded', outcome: null, startId: 1 }]);
+    expect(r).toMatchObject({ live: true, minted: 1 });
+    expect(all(f.s)).toEqual([{ identity: COORD, n: 1, state: 'carded', shadowState: null, outcome: null, startId: 1 }]);
   });
 
   it('a compact start mints nothing; a fork start mints nothing and leaves the live generation', () => {
@@ -536,7 +543,7 @@ const SNAPSHOT_FACTS: CardFacts = {
 };
 const SNAPSHOT = snapshotFactsJson(SNAPSHOT_FACTS);
 /** A usage reading; `ts` is the statusline's clock in epoch SECONDS (1 by default: older than any compaction line). */
-const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
 const lines = (n: number, at: number): CompactionsRead => ({ kind: 'lines', skipped: 0, eventsAbsent: false,
@@ -1069,6 +1076,17 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 62_000]]);
   });
 
+  it('a restarted Overlord\'s notes, keyed by its session id, reach its spot round (review 2349 F2)', () => {
+    const f = active();
+    const g = gen(f);
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+    expect(f.pass(at(f, usage(62_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+  });
+
   /** A live coordinator proven active by a passed start round. */
   const active = (): Fixture => {
     const f = probing();
@@ -1162,6 +1180,30 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     { at: pre, trigger: 'auto', phase: 'pre', transcript: null, scope: 'main' },
     ...(post === undefined ? [] : [{ at: post, trigger: 'auto' as const, phase: 'post' as const, transcript: null, scope: 'main' as const }]),
   ] });
+
+  it('a spot round opened while live plans its mail; a start round plans none, and in shadow a spot round plans none (review 2149 F16)', () => {
+    // The start round, opened live: no notice (only a spot round is announced).
+    const s0 = fixture();
+    s0.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    s0.start('startup', U1);
+    s0.pass();
+    readCardOf(s0);
+    const opened = s0.pass();
+    expect(opened).toMatchObject({ roundsOpened: 1 });
+    expect(opened.planned.map((p) => p.act.kind)).not.toContain('spot-probe');
+    // A spot round opened live: one notice, for that generation.
+    const f = active();
+    threeNotes(f);
+    const live = f.pass(at(f, usage(60_000, 1_000_000), turn('idle')));
+    expect(live).toMatchObject({ live: true, roundsOpened: 1 });
+    expect(live.planned.filter((p) => p.act.kind === 'spot-probe').map((p) => p.target.genId)).toEqual([gen(f).id]);
+    // The same in shadow: the round opens and nothing is planned.
+    const g = active();
+    g.s.setLaneArm(CONTINUITY_LANE, 'shadow', 2);
+    threeNotes(g);
+    const shadow = g.pass(at(g, usage(60_000, 1_000_000), turn('idle')));
+    expect(shadow).toMatchObject({ live: false, roundsOpened: 1, planned: [] });
+  });
 
   it('after a compaction the baseline is the context newer than it, or 0: a spot round opens about 50k into the new context, not at 221k (review 2068 F1)', () => {
     const f = active();
@@ -1321,6 +1363,70 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
   });
 });
 
+describe('the renewal readings\' seam (Overlord W1, renewal readings PR A)', () => {
+  const W1_FIELDS = ['fittedCeilingTokens', 'turns', 'backstopDue', 'modelDrift', 'termRaised', 'accountOutsideSet',
+    'classUnservable', 'accountLoadMove', 'classChanged', 'notLocal'] as const;
+  const W1 = { kind: 'unmeasured', why: 'W1' };
+  const unknown = { kind: 'unmeasured', why: 'unread' } as const;
+  function oneGen(): GenRow {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    return live(f.s)[0]!;
+  }
+
+  it('with no `w1`, each of the ten fields reads `W1` as before', () => {
+    const g = oneGen();
+    const i = renewalInputsOf(g, readings(usage(1, 2)), unknown, 0, unknown);
+    for (const k of W1_FIELDS) expect(i[k], k).toEqual(W1);
+  });
+
+  it('a `w1` naming one field changes only that field; an undefined field keeps `W1`', () => {
+    const g = oneGen();
+    const base = renewalInputsOf(g, readings(usage(1, 2)), unknown, 0, unknown);
+    const one = renewalInputsOf(g, { ...readings(usage(1, 2)), w1: { backstopDue: { kind: 'measured', value: true }, notLocal: undefined } },
+      unknown, 0, unknown);
+    expect(one).toEqual({ ...base, backstopDue: { kind: 'measured', value: true } });
+  });
+
+  it('`renewalDue` over a measured soft ceiling past 60% fires `soft-ceiling` for the Overlord, and is blind on it with no `w1`', () => {
+    const g: GenRow = { ...oneGen(), role: 'overlord' };
+    const r = readings(usage(70_000, 200_000));
+    const blind = renewalDue(renewalInputsOf(g, r, unknown, 0, unknown));
+    expect(blind.due).toBe(false);
+    expect(blind.blind).toContain('soft-ceiling');
+    const due = renewalDue(renewalInputsOf(g, { ...r, w1: { fittedCeilingTokens: { kind: 'measured', value: 100_000 } } }, unknown, 0, unknown));
+    expect(due).toMatchObject({ due: true, cls: 'soft', why: 'soft-ceiling' });
+  });
+
+  it('the gather asks `w1` with the base readings of the same sample and carries its `w1` and `soft`; with no port, neither', async () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    const asked: GenReadings[] = [];
+    const base: GatherPorts = {
+      usage: async () => usage(5, 10), eventsStamp: async () => ({ ok: false, reason: 'absent' }), journalStamp: async () => ({ ok: false, reason: 'absent' }),
+      compactions: async () => ({ kind: 'absent' }), turnMark: async () => ({ ok: false, reason: 'absent' }) as never,
+      processStartedAt: async () => 100, release: async () => ({ kind: 'none' }),
+    };
+    const without = (await gatherGenerationReadings(f.s, base, new Map())).get(g.id)!;
+    expect('w1' in without || 'soft' in without).toBe(false);
+    const ceiling = { kind: 'measured', value: 7 } as const;
+    const quiet = { kind: 'measured', value: 1 } as const;
+    const withPort = (await gatherGenerationReadings(f.s, { ...base, w1: async (gen, b) => {
+      asked.push(b);
+      expect(gen.id).toBe(g.id);
+      return { w1: { fittedCeilingTokens: ceiling }, soft: { operatorQuietObservedMs: quiet } };
+    } }, new Map())).get(g.id)!;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.usage).toEqual(usage(5, 10));
+    expect(withPort.w1).toEqual({ fittedCeilingTokens: ceiling });
+    expect(withPort.soft).toEqual({ operatorQuietObservedMs: quiet });
+    expect(withPort.usage).toEqual(usage(5, 10));
+  });
+});
+
 describe('shadow is structural: the lane imports nothing that sends', () => {
   it('its value imports are within the allowed list', () => {
     const allowed = ['../../../shared/lane-arm.js', '../../../shared/continuity.js', '../../../shared/models.js', '../coord/laneArm.js',
@@ -1328,9 +1434,276 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       '../roleOf.js', '../time/observed.js', './compactions.js', './continuityStore.js', './generationMachine.js', './generationStart.js',
       './renewalDue.js',
       // The probes piece: the round's composition and schedule (L1) and the snapshot's reader (L1); none of them sends.
-      '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js'];
+      '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js',
+      // The renewal act: the walk's deciders (L1). The acts are planned here and taken by `renewalActs.ts`, never imported.
+      './softRenewal.js', './renewalOrder.js', './renewalFeed.js',
+      // The renewal hand-offs: Renew now's and the mark's readers and the PreCompact field's decider (L1); none of them sends.
+      './renewNow.js', './operatorMark.js', './precompact.js',
+      // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
+      '../../../shared/accountOrg.js',
+      // Renewal readings PR C: the mint's stamp and the latch's decider (L1). The latch itself is a port the wiring binds.
+      './renewalReadings.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
   });
+});
+
+describe('the pass reads the designation (Overlord W1 designation A, Task 3, X5)', () => {
+  const BODY = 'overlord-quiet-otter';
+  const NEW_BODY = 'overlord-new-owl';
+  const U4 = '44444444-4444-4444-8444-444444444444';
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const bound = (id = BODY, pending: DesignationView['pending'] = null): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' }, pending }) });
+  const pendingOf = (id: string, kind: 'designate' | 'rebind'): NonNullable<DesignationView['pending']> =>
+    ({ sessionId: id, kind, deadlineAt: 9, since: 1, actor: 'op', generation: null });
+  const withBody = (f: Fixture, id: string, uuid: string): void => { f.registry.push({ id, uuid, lane: 'lane-a', child: { kind: 'none' } }); };
+  const rows = (f: Fixture) => live(f.s).map((g) => ({ identity: g.identity, sessionId: g.sessionId, role: g.role, term: g.term, n: g.n }));
+
+  it('a bound start mints as the identity overlord with the row\'s term, and a coordinator\'s mints as before', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound();
+    withBody(f, BODY, U3);
+    f.start('startup', U1);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 2, unread: null });
+    expect(rows(f)).toEqual([
+      { identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, n: 1 },
+      { identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 },
+    ]);
+  });
+
+  it('a pending designate body reads the Overlord too: its first start mints under overlord', () => {
+    const f = fixture();
+    f.s.designationRead = () => ({ kind: 'not-designated', row: view({ pending: pendingOf(BODY, 'designate') }) });
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 1 });
+    expect(rows(f)).toEqual([{ identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 }]);
+  });
+
+  it('a restart of the Overlord mints against its own live generation: no Superseded, the old one ends, the next stands', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound();
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 1, superseded: 0 });
+    f.t.advance(30_000);
+    f.start('resume', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ read: 1, minted: 1, superseded: 0, unread: null });
+    expect(rows(f)).toEqual([{ identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 2 }]);
+    expect(all(f.s).filter((g) => g['identity'] === 'overlord').map((g) => [g['n'], g['state']])).toEqual([[1, 'ended'], [2, 'active']]);
+  });
+
+  it('a rebind with the old generation live: the pending body\'s start mints under its own id, and the old body\'s overlord row stands', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(BODY);
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    f.pass();
+    f.s.designationRead = () => bound(BODY, pendingOf(NEW_BODY, 'rebind'));
+    withBody(f, NEW_BODY, U4);
+    f.t.advance(30_000);
+    f.start('startup', U4, undefined, NEW_BODY);
+    expect(f.pass()).toMatchObject({ minted: 1, superseded: 0 });
+    expect(rows(f).sort((a, b) => a.identity.localeCompare(b.identity))).toEqual([
+      { identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 },
+      { identity: NEW_BODY, sessionId: NEW_BODY, role: 'overlord', term: 1, n: 1 },
+    ]);
+  });
+
+  it('an unmeasured designation fails the mint step closed: nothing mints, the starts stay, and the next pass reads them again', () => {
+    for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'the row is unreadable' }),
+      (): DesignationRead => { throw new Error('locked'); }]) {
+      const f = fixture();
+      f.s.designationRead = bad;
+      f.start('startup', U1);
+      const r = f.pass();
+      expect(r).toMatchObject({ read: 0, minted: 0, unread: 'designation' });
+      expect(f.logs.some((l) => l.includes('designation'))).toBe(true);
+      expect(all(f.s)).toEqual([]);
+      f.s.designationRead = () => ({ kind: 'not-designated', row: null });
+      expect(f.pass()).toMatchObject({ read: 1, minted: 1, unread: null });
+    }
+  });
+});
+
+describe('the renewal readings PR C: the class a mint stamps, and the probes-failed-twice latch', () => {
+  const BODY = 'overlord-quiet-otter';
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 2, designatedTerm: 1, model: 'fable', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const bound = (id: string): DesignationRead => ({ kind: 'designated', sessionId: id, term: 2, row: view({ bound: { sessionId: id, generation: 'g1' } }) });
+  const classes = (f: Fixture) => live(f.s).map((g) => ({ identity: g.identity, role: g.role, designatedClass: g.designatedClass }))
+    .sort((a, b) => a.identity.localeCompare(b.identity));
+
+  it('the mint stamps the designated class for the Overlord (bound or a pending designate), and null for a coordinator', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(BODY);
+    f.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    f.start('startup', U1);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 2, unread: null });
+    expect(classes(f)).toEqual([
+      { identity: COORD, role: 'coordinator', designatedClass: null },
+      { identity: 'overlord', role: 'overlord', designatedClass: 'fable' },
+    ]);
+    const p = fixture();
+    p.s.designationRead = () => ({ kind: 'not-designated', row: view({ pending: { sessionId: BODY, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+    p.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    p.start('startup', U3, undefined, BODY);
+    p.pass();
+    expect(classes(p)).toEqual([{ identity: 'overlord', role: 'overlord', designatedClass: 'fable' }]);
+  }, 60_000);
+
+  it('a rebind\'s pending body mints under its own id, and stamps null', () => {
+    const f = fixture();
+    f.s.designationRead = () => ({ kind: 'designated', sessionId: COORD, term: 2,
+      row: view({ bound: { sessionId: COORD, generation: 'g1' }, pending: { sessionId: BODY, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) });
+    f.registry.push({ id: BODY, uuid: U3, lane: 'lane-a', child: { kind: 'none' } });
+    f.start('startup', U3, undefined, BODY);
+    f.pass();
+    expect(classes(f)).toEqual([{ identity: BODY, role: 'overlord', designatedClass: null }]);
+  }, 60_000);
+
+  it('renewalDue: a raised term makes term-raised due (hard) and a changed class makes class-changed due (soft); with no w1 both are blind', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(COORD);
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    expect(g.role).toBe('overlord');
+    const unknown = { kind: 'unmeasured', why: 'unread' } as const;
+    const r = readings(usage(1_000, 1_000_000));
+    const blind = renewalDue(renewalInputsOf(g, r, unknown, 0, unknown));
+    expect(blind.blind).toEqual(expect.arrayContaining(['term-raised', 'class-changed']));
+    expect(renewalDue(renewalInputsOf(g, { ...r, w1: { termRaised: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
+      .toMatchObject({ due: true, cls: 'hard', why: 'term-raised' });
+    expect(renewalDue(renewalInputsOf(g, { ...r, w1: { classChanged: { kind: 'measured', value: true } } }, unknown, 0, unknown)))
+      .toMatchObject({ due: true, cls: 'soft', why: 'class-changed' });
+  }, 60_000);
+
+  /** The Overlord (`COORD` designated) live in probing with its first round open, its latch recorded. */
+  const overlordProbing = (live = true): { f: Fixture; latched: { cause: string; detail: string }[] } => {
+    const f = fixture();
+    const latched: { cause: string; detail: string }[] = [];
+    f.latch = (cause, detail) => { latched.push({ cause, detail }); return { ok: true }; };
+    f.s.designationRead = () => bound(COORD);
+    if (live) f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    feedCard(f);
+    f.pass();
+    return { f, latched };
+  };
+  const feedCard = (f: Fixture): void => {
+    const id = `snap-rr${f.t.ports.clock.wall()}`;
+    const hash = `${'c'.repeat(56)}${String(f.t.ports.clock.wall()).slice(-8)}`;
+    if (!f.s.insertSnapshot({ id, sessionId: COORD, at: f.t.ports.clock.wall(), facts: SNAPSHOT, hash }).ok) throw new Error('snapshot');
+    if (!f.s.insertCardRead({ sessionId: COORD, uuid: U1, snapshotId: id, hash, pages: 1, at: f.t.ports.clock.wall() }).ok) throw new Error('read');
+  };
+  const failRound = (f: Fixture): void => {
+    const open = f.s.openProbeRound(COORD);
+    if (!open.ok || open.rows.length === 0) throw new Error('no open round');
+    const w = f.s.answerRound(open.rows[0]!.roundId, COORD, open.rows.map((r) => ({ qid: r.qid, answer: 'x', grade: 'fail' as const })), 'unmeasured', f.t.ports.clock.wall());
+    if (!w.ok) throw new Error(w.kind);
+  };
+  const twoFailedRounds = (f: Fixture, state: 'state' | 'shadowState', beforeSecondFeed?: () => void): ReturnType<Fixture['pass']> => {
+    failRound(f);
+    f.pass();
+    f.t.advance(5_000);
+    feedCard(f);
+    f.pass();
+    failRound(f);
+    beforeSecondFeed?.();
+    const result = f.pass();
+    expect(live(f.s)[0]![state]).toBe('degraded');
+    return result;
+  };
+
+  it('a live Overlord degraded by two failed rounds raises the latch once, and later passes raise nothing more', () => {
+    const { f, latched } = overlordProbing();
+    expect(live(f.s)[0]).toMatchObject({ role: 'overlord', state: 'probing' });
+    twoFailedRounds(f, 'state');
+    expect(latched).toEqual([{ cause: 'probes-failed-twice', detail: expect.stringContaining('two failed probe rounds') }]);
+    f.pass(); f.pass();
+    expect(latched).toHaveLength(1);
+  }, 60_000);
+
+  it('a first failed round raises nothing', () => {
+    const { f, latched } = overlordProbing();
+    failRound(f);
+    f.pass();
+    expect(live(f.s)[0]).toMatchObject({ state: 'probing', probeRounds: 1 });
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a shadow walk degraded the same way raises nothing', () => {
+    const { f, latched } = overlordProbing(false);
+    expect(live(f.s)[0]).toMatchObject({ role: 'overlord', shadowState: 'probing' });
+    twoFailedRounds(f, 'shadowState');
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a live walk that fails its second round after the lane is lowered still latches', () => {
+    const { f, latched } = overlordProbing();
+    const result = twoFailedRounds(f, 'state', () => {
+      expect(live(f.s)[0]).toMatchObject({ walk: 'live', state: 'probing', probeRounds: 1 });
+      f.s.setLaneArm(CONTINUITY_LANE, 'shadow', f.t.ports.clock.wall());
+    });
+    expect(result).toMatchObject({ live: false, probesFed: 1 });
+    expect(live(f.s)[0]).toMatchObject({ state: 'degraded', shadowState: null });
+    expect(latched).toEqual([{ cause: 'probes-failed-twice', detail: expect.stringContaining('two failed probe rounds') }]);
+  }, 60_000);
+
+  it('a shadow walk that fails its second round under a live lane does not latch', () => {
+    const { f, latched } = overlordProbing(false);
+    const result = twoFailedRounds(f, 'shadowState', () => {
+      expect(live(f.s)[0]).toMatchObject({ walk: 'shadow', shadowState: 'probing', probeRounds: 1 });
+      // The clear can miss its compare-and-set; the probes feed can still write the in-flight shadow walk.
+      vi.spyOn(f.s, 'clearShadowWalk').mockReturnValue({ changed: false });
+      f.s.setLaneArm(CONTINUITY_LANE, 'live', f.t.ports.clock.wall());
+    });
+    expect(result).toMatchObject({ live: true, probesFed: 1 });
+    expect(live(f.s)[0]).toMatchObject({ state: 'active', shadowState: 'degraded' });
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  it('a coordinator degraded by two failed rounds raises nothing', () => {
+    const f = fixture();
+    const latched: string[] = [];
+    f.latch = (cause) => { latched.push(cause); return { ok: true }; };
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    feedCard(f);
+    f.pass();
+    twoFailedRounds(f, 'state');
+    expect(latched).toEqual([]);
+  }, 60_000);
+
+  const refusedCase = (latch: NonNullable<Fixture['latch']>, word: string) => () => {
+    const { f } = overlordProbing();
+    f.latch = latch;
+    failRound(f); f.pass(); f.t.advance(5_000); feedCard(f); f.pass(); failRound(f);
+    expect(f.pass()).toMatchObject({ unread: null, probesFed: 1 });
+    expect(live(f.s)[0]!.state).toBe('degraded');
+    expect(f.logs.some((l) => l.includes('probes-failed-twice latch') && l.includes(word))).toBe(true);
+  };
+  it('a refused raise is logged with its word, and the pass goes on', refusedCase(() => ({ ok: false, why: 'journal-unreadable' }), 'journal-unreadable'), 60_000);
+  it('a throwing raise is logged, and the pass goes on', refusedCase(() => { throw new Error('locked'); }, 'locked'), 60_000);
+
+  it('bound to the wiring\'s raise, the latch lands as the ladder\'s row: cap chat, raised by the renewal lane', () => {
+    const { f } = overlordProbing();
+    f.latch = renewalReadingsOf({ time: { clock: f.t.ports.clock, entropy: f.t.ports.entropy } }, f.s, []).latch;
+    twoFailedRounds(f, 'state');
+    expect(f.s.db.prepare('SELECT cause, cap, raisedBy, clearedAt FROM overlord_latches').all()).toEqual([
+      { cause: 'probes-failed-twice', cap: 'chat', raisedBy: 'renewal-lane', clearedAt: null },
+    ]);
+  }, 60_000);
 });

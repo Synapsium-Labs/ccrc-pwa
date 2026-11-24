@@ -183,7 +183,7 @@ afterAll(async () => {
 async function openDesk(view: AppView, fixture: AppFixture = FIXTURE): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, fixture);
   await seedStripExpanded(opened.ctx);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
     && document.querySelector('.ref-bar-new, .ins-new') !== null, undefined, { timeout: 30_000 });
   await opened.page.waitForTimeout(300); // layout settles
@@ -355,7 +355,7 @@ describe('in Refined with a release waiting the update row sits below the banner
       try {
         await seedStripExpanded(ctx); // the row's cards are counted below: every lane
         const answers = await answerViewThenFail(page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
           && document.querySelector('.shell-banners .update-indicator-dismiss') !== null
           && document.querySelector('.shell-banners .halt-banner') !== null, undefined, { timeout: 30_000 });
@@ -415,7 +415,7 @@ describe('under coarse emulation every card and All accounts (at a desk) is at l
       const { ctx, page, errors } = opened;
       try {
         if (!phone) await seedStripExpanded(ctx); // every card is measured, not just the folded line's
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, phone ? 4 : want, { timeout: 30_000 });
         await page.waitForTimeout(300);
         if (phone) {
@@ -558,8 +558,12 @@ describe('on /accounts at 1280, in both skins, opened from a card, the document 
   }
 });
 
-// Review 940 O5's reach: the meter track's ring is an inset box-shadow (no layout), and `WorkflowStrip` on the session screen
-// draws a `Meter` per workflow row, which nothing had rendered. Its rows come from the session socket's `workflows` frame.
+// Review 940 O5's reach: the meter track's ring is an inset box-shadow (no layout), and the Helpers section on the session
+// screen (session helpers H2, D-8872, which replaced `WorkflowStrip` in place) draws a `Meter` per running workflow row, which
+// nothing had rendered. Its rows come from the session socket's `workflows` frame. Under the transcript the section is
+// collapsed by default and its glance draws no meter, so the block opens it first (review 3072 F1). `HELPER_METER` finds the
+// track once it is open.
+const HELPER_METER = '.helpers-strip .helper-bar .limit-track';
 const RING_SESSION = fleetSession({ id: 'project-a-lanes-ring', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a', workspace: 'lanes-ring', status: 'busy', bucket: 'working' });
 const RING_FIXTURE: AppFixture = { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [RING_SESSION] }] };
 const workflow = (id: string, name: string, done: number): WorkflowView => ({
@@ -573,7 +577,7 @@ const RING_VIEWS: AppView[] = [
   ...SKINS.map((skin) => ({ skin, theme: PHOSPHOR, width: 390 })),
 ];
 
-describe("the meter's inset ring reaches WorkflowStrip on the session screen", () => {
+describe("the meter's inset ring reaches the Helpers section on the session screen", () => {
   for (const view of RING_VIEWS) {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, RING_FIXTURE);
@@ -583,15 +587,19 @@ describe("the meter's inset ring reaches WorkflowStrip on the session screen", (
           ws.send(JSON.stringify({ type: 'workflows', workflows: WORKFLOWS }));
         });
         await page.goto(`${server!.origin}/s/${RING_SESSION.id}`);
-        const reached = await page.waitForSelector('.workflow-line .limit-track', { timeout: 20_000 }).then(() => true, () => false);
-        expect(reached, "the Workflows strip drew no meter: the session socket's workflows frame did not reach WorkflowStrip").toBe(true);
+        const section = await page.waitForSelector('.helpers-strip', { timeout: 20_000 }).then(() => true, () => false);
+        expect(section, "the session socket's workflows frame did not reach the Helpers section").toBe(true);
+        // Collapsed under the transcript: it opens from its head, which must be there.
+        await page.locator('.chat-strips .helpers-strip button[aria-expanded="false"]').first().click();
+        const reached = await page.waitForSelector(HELPER_METER, { timeout: 20_000 }).then(() => true, () => false);
+        expect(reached, 'the Helpers section drew no meter for a running workflow row').toBe(true);
         await page.waitForTimeout(300);
-        const found = await page.evaluate(() => {
+        const found = await page.evaluate((sel) => {
           const probe = document.body.appendChild(document.createElement('i'));
           probe.style.color = 'var(--ink-tertiary)';
           const ink = getComputedStyle(probe).color;
           probe.remove();
-          const tracks = [...document.querySelectorAll<HTMLElement>('.workflow-line .limit-track')];
+          const tracks = [...document.querySelectorAll<HTMLElement>(sel)];
           const faults: string[] = [];
           for (const [i, t] of tracks.entries()) {
             const r = t.getBoundingClientRect();
@@ -603,7 +611,7 @@ describe("the meter's inset ring reaches WorkflowStrip on the session screen", (
             if (r.width < 1 || r.height < 1) faults.push(`track ${i} has no box (${r.width} x ${r.height})`);
           }
           return { count: tracks.length, ink, faults };
-        });
+        }, HELPER_METER);
         expect(found.count, 'both workflow rows draw a meter').toBe(WORKFLOWS.length);
         expect(found.faults).toEqual([]);
         expect(errors).toEqual([]);
@@ -638,7 +646,7 @@ const FOLDED_CARDS: Readonly<Record<number, number>> = { 900: 2, 1280: 3, 1920: 
 async function openFoldedDesk(view: AppView, expanded = false): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, FOLD_FIXTURE);
   if (expanded) await seedStripExpanded(opened.ctx);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForFunction((all) => document.querySelector('header.shell-accounts .accounts-end [aria-expanded]') !== null
     && document.querySelector('.sess-line') !== null
     && (!all || document.querySelectorAll('header.shell-accounts .account-gauge').length === 17), expanded, { timeout: 30_000 });

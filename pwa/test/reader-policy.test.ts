@@ -1,6 +1,9 @@
 // Docs W8a Task 5: the reader's L1 decisions (`docs/reader/policy.ts`, `readerText.ts`), the enumerable storage port
 // in `lib/storage.ts` and `replaceFragment` in `lib/router.ts`. Every page is a placeholder (`demo`, `a/b.md`,
 // `example-org/example-repo`); control characters are built with `String.fromCharCode`, never written raw.
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { ts } from '../../server/test/scan/parse';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
@@ -11,7 +14,7 @@ import { replaceFragment } from '../src/lib/router';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
   copyDecision, docsDrawFor, oneBarTools, READER_E17_MERMAID, readerBarTitle, readerBodyReducer, readerChromeFor,
-  readerDocKey, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
+  readerDocKey, readerMountFocusFor, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
   type ReaderBodyState, type ReaderChrome, type ReaderE17Reading, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { THEMES } from '@ccrc/ui';
@@ -28,7 +31,7 @@ afterEach(() => {
 /** The page every case routes on: `a/b.md` of `demo`, in the first section, with `a/c.md` in the tree. */
 function ctx(): DocLinkContextValue {
   return {
-    project: 'demo', pageRef: null, view: 'committed', section: SECTION, path: 'a/b.md',
+    project: 'demo', pageRef: null, pageAt: null, view: 'committed', section: SECTION, path: 'a/b.md',
     tree: treeOk({ entries: [entry(SECTION, 'a/b.md'), entry(SECTION, 'a/c.md')] }), pageSource: 'committed',
     urls: new WeakMap(), onFragment: vi.fn(),
   };
@@ -99,8 +102,15 @@ describe('routeReaderLink', () => {
     expect(routeReaderLink(ctx(), external('javascript:alert(1)', 'c.a.example'), 'b.a.example')).toEqual({ kind: 'inert' });
   });
 
-  it('a link to this same page with a fragment becomes a hash', () => {
-    expect(routeReaderLink(ctx(), { kind: 'relative', path: 'b.md', fragment: 'h' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'h' });
+  it('a link to this same page with a fragment becomes a hash that reopens the frame (the frame sent it to the host as a navigate)', () => {
+    expect(routeReaderLink(ctx(), { kind: 'relative', path: 'b.md', fragment: 'h' }, 'b.a.example'))
+      .toEqual({ kind: 'hash', id: 'h', reopen: true });
+  });
+
+  it('a relative link to another page stays in-app, and carries no reopen', () => {
+    const r = routeReaderLink(ctx(), { kind: 'relative', path: 'c.md', fragment: 'h' }, 'b.a.example');
+    expect(r.kind).toBe('in-app');
+    expect(r).not.toHaveProperty('reopen');
   });
 
   it('the comparison is exact and lower-cased', () => {
@@ -118,8 +128,23 @@ describe('routeReaderLink', () => {
     expect(r).toMatchObject({ scheme: 'https', host: 'github.com', foreign: true });
   });
 
-  it('a fragment link becomes a hash', () => {
-    expect(routeReaderLink(ctx(), { kind: 'fragment', id: 'sec' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'sec' });
+  it('a fragment link becomes a hash that does not reopen (the frame scrolls to an anchor it finds by itself)', () => {
+    expect(routeReaderLink(ctx(), { kind: 'fragment', id: 'sec' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'sec', reopen: false });
+  });
+});
+
+describe('readerMountFocusFor', () => {
+  it('the Docs reader focuses its frame at mount when no outside element owns focus', () => {
+    expect(readerMountFocusFor(undefined, false)).toBe(true);
+  });
+
+  it('the Docs reader leaves focus alone when an element outside the reader owns it', () => {
+    expect(readerMountFocusFor(undefined, true)).toBe(false);
+  });
+
+  it('the reader lab focuses unconditionally, whoever owns focus', () => {
+    expect(readerMountFocusFor('lab-draw', false)).toBe(true);
+    expect(readerMountFocusFor('lab-draw', true)).toBe(true);
   });
 });
 
@@ -380,7 +405,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan(undefined, 100, chrome, e17))
-          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome });
+          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true });
       }
     }
   });
@@ -389,7 +414,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan('lab-draw', 100, chrome, e17))
-          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' });
+          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false });
       }
     }
   });
@@ -411,5 +436,202 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     expect(readerBarTitle('Path identity design', 'a.md')).toBe('Path identity design');
     expect(readerBarTitle(null, 'a.md')).toBe('a.md');
     expect(readerBarTitle('  ', 'a.md')).toBe('a.md');
+  });
+});
+
+// The policy ring (the architecture spec's L1, completion plan Task 13): `policy.ts` is pure deciders, so nothing it reaches
+// at run time may be a `.tsx`, a module that imports `react` or `react-dom` (a hook module), a store, `lib/api.ts` or
+// `@ccrc/ui`. The walk follows every runtime import and re-export through relative specifiers, reading the declarations
+// with the TypeScript compiler API; `import type` / `export type` declarations are erased and skipped. Bare package
+// specifiers are leaves, but `react`, `react-dom` and `@ccrc/ui` are each a break: `@ccrc/ui` is the design system,
+// consumed as source, and its one entry loads its React components (review 2480's A3). A declaration whose named
+// specifiers are all `type` is NOT erased: under the package's `verbatimModuleSyntax` it compiles to `import {} from` (or
+// `export {} from`), which still loads the module (review of Task 13, minor 2). `docLinkTarget` once lived in
+// `docsLinks.ts`, which imports `pinFor` from the `useDocsVisit.ts` hook module: that chain is what this walk turns red on.
+const PWA_ROOT = path.join(import.meta.dirname, '..');
+const POLICY_FILE = path.join(PWA_ROOT, 'src', 'docs', 'reader', 'policy.ts');
+
+/** The runtime module specifiers one source file names: every import and export declaration but an `import type` or an
+ *  `export type` one (an inline `type` on each specifier still leaves an empty import that loads the module), `import x =
+ *  require()` and literal dynamic `import()`. */
+function runtimeSpecifiers(file: string, text: string): string[] {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+      if (n.importClause?.isTypeOnly !== true) out.push(n.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(n) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)) {
+      if (!n.isTypeOnly) out.push(n.moduleSpecifier.text);
+    } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference)
+      && ts.isStringLiteral(n.moduleReference.expression) && !n.isTypeOnly) {
+      out.push(n.moduleReference.expression.text);
+    } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword
+      && n.arguments.length > 0 && ts.isStringLiteral(n.arguments[0]!)) {
+      out.push((n.arguments[0] as ts.StringLiteral).text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** The file a relative specifier names, from `from`'s directory: the path itself when it is a file, else with `.ts`, `.tsx`,
+ *  `/index.ts` or `/index.tsx`; a `.js` spelling (the shared files' own) also tries its `.ts` and `.tsx` source; `null` when
+ *  none exists. `exists` is the walk's file system. */
+function resolveRelative(from: string, spec: string, exists: (p: string) => boolean): string | null {
+  const base = path.resolve(path.dirname(from), spec);
+  const stem = base.endsWith('.js') ? base.slice(0, -3) : null;
+  const sources = stem === null ? [] : [`${stem}.ts`, `${stem}.tsx`];
+  for (const c of [base, ...sources, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]) {
+    if (exists(c)) return c;
+  }
+  return null;
+}
+
+/** What breaks the ring, found by walking from `entry`. Each line names the offending path and the chain that reached it. */
+function ringBreaks(entry: string, root: string, fs: { read(p: string): string | null }): string[] {
+  const rel = (p: string): string => path.relative(root, p).split(path.sep).join('/');
+  const parsed = (p: string): boolean => /\.(?:ts|tsx|mts|js|mjs)$/.test(p);
+  const exists = (p: string): boolean => fs.read(p) !== null && /\.[a-z]+$/.test(p);
+  const breaks: string[] = [];
+  const seen = new Set<string>([entry]);
+  const queue: string[][] = [[entry]];
+  while (queue.length > 0) {
+    const chain = queue.shift()!;
+    const file = chain[chain.length - 1]!;
+    const via = chain.map(rel).join(' -> ');
+    const r = rel(file);
+    if (file.endsWith('.tsx')) breaks.push(`${r} is a .tsx (${via})`);
+    if (r.startsWith('src/stores/')) breaks.push(`${r} is a store (${via})`);
+    if (r === 'src/lib/api.ts') breaks.push(`${r} is lib/api.ts (${via})`);
+    const text = fs.read(file);
+    if (text === null || !parsed(file)) continue;
+    for (const spec of runtimeSpecifiers(file, text)) {
+      if (!spec.startsWith('.')) {
+        if (spec === 'react' || spec === 'react-dom' || spec.startsWith('react/') || spec.startsWith('react-dom/')) {
+          breaks.push(`${r} imports ${spec}, so it is a hook module (${via})`);
+        } else if (spec === '@ccrc/ui') {
+          breaks.push(`${r} imports ${spec}, the design system, whose one entry loads React components (${via})`);
+        }
+        continue;
+      }
+      const next = resolveRelative(file, spec, exists);
+      if (next === null) {
+        breaks.push(`${r} imports ${spec}, which resolves to no file (${via})`);
+        continue;
+      }
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push([...chain, next]);
+    }
+  }
+  return breaks;
+}
+
+const diskFs = { read: (p: string): string | null => (existsSync(p) && !p.endsWith('/') ? safeRead(p) : null) };
+function safeRead(p: string): string | null {
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a hook module, a store, lib/api.ts or @ccrc/ui', () => {
+  it('the real walk finds nothing', () => {
+    expect(ringBreaks(POLICY_FILE, PWA_ROOT, diskFs)).toEqual([]);
+  });
+
+  it('the walk reaches the shared kernel and the limits files it is meant to cover', () => {
+    // A walk that stops at the first hop would pass the test above for the wrong reason.
+    const reached: string[] = [];
+    const spy = { read: (p: string): string | null => { const t = diskFs.read(p); if (t !== null) reached.push(path.relative(PWA_ROOT, p).split(path.sep).join('/')); return t; } };
+    ringBreaks(POLICY_FILE, PWA_ROOT, spy);
+    expect(reached).toEqual(expect.arrayContaining([
+      'src/docs/reader/policy.ts', 'src/lib/markdownLimits.ts', 'src/lib/readerLimits.ts', '../shared/docs.ts',
+    ]));
+  });
+
+  // A planted control on a virtual tree (no disk): each shape the walk must find or must skip.
+  const root = '/v';
+  const at = (p: string): string => `${root}/${p}`;
+  const treeOf = (files: Record<string, string>) => ({ read: (p: string): string | null => files[path.relative(root, p)] ?? null });
+  const entry = at('src/docs/reader/policy.ts');
+
+  it('a runtime import of a hook module two hops down is found, with the chain', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': "import { a } from '../links';\nexport const x = a;",
+      'src/docs/links.ts': "import { pin } from './useVisit';\nexport const a = pin;",
+      'src/docs/useVisit.ts': "import { useState } from 'react';\nexport const pin = useState;",
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/docs/useVisit.ts imports react, so it is a hook module (src/docs/reader/policy.ts -> src/docs/links.ts -> src/docs/useVisit.ts)',
+    ]);
+  });
+
+  it('a re-export, an export star, a dynamic import and an import-equals each count', () => {
+    for (const line of [
+      "export { b } from '../comp';", "export * from '../comp';", "export const lazy = () => import('../comp');",
+      "import comp = require('../comp');",
+    ]) {
+      const fs = treeOf({ 'src/docs/reader/policy.ts': line, 'src/docs/comp.tsx': 'export const b = 1;' });
+      expect(ringBreaks(entry, root, fs), line).toEqual([
+        'src/docs/comp.tsx is a .tsx (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+      ]);
+    }
+  });
+
+  it('a store and lib/api.ts are found; a directory index resolves', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': "import { s } from '../../stores';\nimport { f } from '../../lib/api';\nexport const x = [s, f];",
+      'src/stores/index.ts': 'export const s = 1;',
+      'src/lib/api.ts': 'export const f = 1;',
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/stores/index.ts is a store (src/docs/reader/policy.ts -> src/stores/index.ts)',
+      'src/lib/api.ts is lib/api.ts (src/docs/reader/policy.ts -> src/lib/api.ts)',
+    ]);
+  });
+
+  it('import type and export type are erased and skipped', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': [
+        "import type { A } from '../comp';", "export type { B } from '../comp';", "import type React from 'react';",
+        "export type { A, B };",
+      ].join('\n'),
+      'src/docs/comp.tsx': "import { useState } from 'react';\nexport const z = useState;",
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([]);
+  });
+
+  it('an import or export whose specifiers are each marked type still loads its module (verbatimModuleSyntax keeps the empty import)', () => {
+    for (const line of ["import { type C, type D } from '../comp';", "export { type E } from '../comp';"]) {
+      const fs = treeOf({
+        'src/docs/reader/policy.ts': line,
+        'src/docs/comp.tsx': "import { useState } from 'react';\nexport const z = useState;",
+      });
+      expect(ringBreaks(entry, root, fs), line).toEqual([
+        'src/docs/comp.tsx is a .tsx (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+        'src/docs/comp.tsx imports react, so it is a hook module (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+      ]);
+    }
+  });
+
+  it('a runtime import of @ccrc/ui, the design system consumed as source, is found with the chain; a type import of it is erased', () => {
+    const through = (line: string) => treeOf({
+      'src/docs/reader/policy.ts': "import { a } from '../links';\nexport const x = a;",
+      'src/docs/links.ts': `${line}\nexport const a = 1;`,
+    });
+    expect(ringBreaks(entry, root, through("import { cn } from '@ccrc/ui';"))).toEqual([
+      'src/docs/links.ts imports @ccrc/ui, the design system, whose one entry loads React components (src/docs/reader/policy.ts -> src/docs/links.ts)',
+    ]);
+    expect(ringBreaks(entry, root, through("import type { SkinId } from '@ccrc/ui';"))).toEqual([]);
+  });
+
+  it('a relative specifier that resolves to no file is reported, so the walk cannot go quiet on a typo', () => {
+    const fs = treeOf({ 'src/docs/reader/policy.ts': "import { q } from './missing';\nexport const x = q;" });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/docs/reader/policy.ts imports ./missing, which resolves to no file (src/docs/reader/policy.ts)',
+    ]);
   });
 });

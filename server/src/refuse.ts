@@ -1,5 +1,6 @@
 import type { FastifyReply } from 'fastify';
 import type { AdvanceRefusal } from './coord/advance.js';
+import { decideOtherLane, type OtherLane, type OtherLaneReads } from './coord/otherLanes.js';
 import { ADVANCE_REJECT_STATUS, REFUSAL_STATUS, RUN_REFUSAL_STATUS, type OpenRunConflict, type RouteRefusal } from '../../shared/refusal.js';
 
 /**
@@ -45,3 +46,15 @@ export const refuseRun = (
 export const refuseAdvance = (reply: FastifyReply, r: AdvanceRefusal): FastifyReply =>
   'reject' in r ? reply.code(ADVANCE_REJECT_STATUS[r.reject.code]).send({ ok: false, reject: r.reject })
     : refuseRoute(reply, r.error, 'detail' in r ? { detail: r.detail } : {});
+
+/** The other write lanes' one sender (Overlord W1 other lanes; spec §3.5, H10): asks `decideOtherLane` and refuses
+ *  through `refuseRoute`, writing no row (Table 11.1e: no store; slug `other-lane-refusals-unrecorded`). Answers whether
+ *  the lane may go on. L4: it owns the reply and decides nothing. */
+export const refuseOtherLane = async (
+  reply: FastifyReply, lane: OtherLane, callerId: string, reads: OtherLaneReads,
+): Promise<boolean> => {
+  const v = await decideOtherLane(lane, callerId, reads);
+  if (v.kind !== 'refuse') return true;
+  refuseRoute(reply, v.word, { detail: v.detail });
+  return false;
+};

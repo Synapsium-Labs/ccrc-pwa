@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRoster } from '../../shared/roster.js';
-import { poolEligible, poolRostered, poolUndecidable, poolVerdict } from '../src/poolrule.js';
+import { poolEligible, poolRostered, poolUndecidable, poolVerdict, sessionPoolSideOf } from '../src/poolrule.js';
 import {
   POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, POOLED_TEST_ROSTER, isSetCase, type PoolRuleCase,
 } from './fixtures/poolRule.js';
@@ -273,6 +273,11 @@ describe('poolUndecidable and poolRostered', () => {
 // That import is the whole point (the rule and its one adapter are spelled
 // once), so the assertion below pins it EXACTLY: one value import statement,
 // and it must be that one, naming only symbols from the L0 module.
+// The pool set's `parsePoolAnswer` (Overlord W1 pool set, plan Task 6) adds two
+// more, each from an L0 module that imports nothing outside `shared/`: the
+// `ccd pool-answer` line's words and the set's one parser from `poolset.js`,
+// and the account-id and pool-name patterns from `roster.js`. The pin lists all
+// three exactly, so a fourth value import still reds it.
 describe('poolrule.ts is the pure L1 module its own docstring says it is', () => {
   const SRC = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'poolrule.ts'),
@@ -307,11 +312,87 @@ describe('poolrule.ts is the pure L1 module its own docstring says it is', () =>
       .not.toMatch(/CoordStore|\bstore\s*\.|FleetIO/);
   });
 
-  it('takes exactly ONE value import statement, and it is L0 poolrule.js', () => {
+  it('takes exactly its three L0 value import statements: the rule, the pool answer\'s words, the two patterns', () => {
     const imports = [...code().matchAll(/^\s*import\b[^\n]*/gm)].map((m) => m[0]!.trim());
     expect(imports.length, 'no imports found — the scan is over nothing').toBeGreaterThan(0);
     const values = imports.filter((l) => !/^import\s+type\b/.test(l));
     expect(values, 'poolrule.ts takes a value import that is not the L0 module')
-      .toEqual(["import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';"]);
+      .toEqual([
+        "import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';",
+        "import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';",
+        "import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';",
+      ]);
+  });
+});
+
+// The widening to a session's side (Overlord W1 designation A, plan Task 2; review F8). A project side answers as the
+// rows above; a set side answers from the set.
+describe('poolEligible and poolUndecidable over a session side (C46)', () => {
+  const r = parseRoster(POOLED_TEST_ROSTER);
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const ids = (side: Parameters<typeof poolEligible>[1]): string[] => poolEligible(r, side, NO_EDGES).map((a) => a.id);
+
+  it('a set admits the accounts in its pools, and an untagged account only by its +untagged', () => {
+    expect(ids({ state: 'set', set: { pools: ['pool-a'], untagged: false } })).toEqual(['claude', 'claude-a']);
+    expect(ids({ state: 'set', set: { pools: ['pool-a'], untagged: true } })).toEqual(['claude', 'claude-a', 'claude-d']);
+    expect(ids({ state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: false } })).toEqual(['claude', 'claude-a', 'claude-b']);
+    expect(ids({ state: 'set', set: { pools: [], untagged: false } })).toEqual([]);
+  });
+  it('an unreadable or malformed set admits nobody', () => {
+    expect(ids({ state: 'set-unreadable' })).toEqual([]);
+    expect(ids({ state: 'set-malformed' })).toEqual([]);
+  });
+  it('a set is undecidable only when it could not be read, never because an untagged account mismatches', () => {
+    expect(poolUndecidable({ state: 'set', set: { pools: ['pool-a'], untagged: false } })).toBe(false);
+    expect(poolUndecidable({ state: 'set', set: { pools: [], untagged: false } })).toBe(false);
+    expect(poolUndecidable({ state: 'set-unreadable' })).toBe(true);
+    expect(poolUndecidable({ state: 'set-malformed' })).toBe(true);
+  });
+  it('a project side still answers byte for byte as before', () => {
+    expect(poolUndecidable({ state: 'unreadable' })).toBe(true);
+    expect(poolUndecidable({ state: 'malformed' })).toBe(true);
+    expect(poolUndecidable({ state: 'untagged' })).toBe(false);
+    expect(poolUndecidable({ state: 'tagged', name: 'pool-a' })).toBe(false);
+    expect(ids({ state: 'tagged', name: 'pool-b' })).toEqual(['claude-b', 'claude-d']);
+  });
+});
+
+// `sessionPoolSideOf` and `poolVerdict` over a session's side (Overlord W1 designation A, plan Task 5).
+describe('sessionPoolSideOf and poolVerdict over a set side', () => {
+  const r = parseRoster(POOLED_TEST_ROSTER);
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const project = { state: 'tagged', name: 'pool-a' } as const;
+  const route = (fields: Record<string, string>, unreadable: string[] = []) =>
+    ({ fields, unreadable }) as unknown as Parameters<typeof sessionPoolSideOf>[0];
+
+  it('answers the set when the route record carries one', () => {
+    expect(sessionPoolSideOf(route({ poolset: 'pool-b' }), project)).toEqual({ state: 'set', set: { pools: ['pool-b'], untagged: false } });
+    expect(sessionPoolSideOf(route({ poolset: 'pool-a,pool-b+untagged' }), project))
+      .toEqual({ state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: true } });
+  });
+  it('answers set-unreadable when the record names the set unreadable, set-malformed when it does not parse', () => {
+    expect(sessionPoolSideOf(route({}, ['poolset']), project)).toEqual({ state: 'set-unreadable' });
+    expect(sessionPoolSideOf(route({ poolset: 'pool-b' }, ['poolset']), project)).toEqual({ state: 'set-unreadable' });
+    expect(sessionPoolSideOf(route({ poolset: 'Not A Pool' }), project)).toEqual({ state: 'set-malformed' });
+  });
+  it('answers the project side when no set stands: no route, no field, or a cleared (empty) one', () => {
+    expect(sessionPoolSideOf(null, project)).toBe(project);
+    expect(sessionPoolSideOf(route({ class: 'opus' }), project)).toBe(project);
+    expect(sessionPoolSideOf(route({ poolset: '' }), project)).toBe(project);
+    expect(sessionPoolSideOf(route({ class: 'opus' }, ['acctorder']), project)).toBe(project);
+  });
+  it('poolVerdict over a set: in-set, outside it, an untagged account by its +untagged, and undecidable', () => {
+    const set = { state: 'set', set: { pools: ['pool-b'], untagged: false } } as const;
+    expect(poolVerdict(r, 'claude-b', set, NO_EDGES)).toMatchObject({ ok: true, why: 'in-set' });
+    expect(poolVerdict(r, 'claude-a', set, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-mismatch', side: 'set', set: 'pool-b' });
+    expect(poolVerdict(r, 'claude-d', set, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-mismatch', side: 'set', account: { untagged: true } });
+    expect(poolVerdict(r, 'claude-d', { state: 'set', set: { pools: ['pool-b'], untagged: true } }, NO_EDGES)).toMatchObject({ ok: true, why: 'untagged-in-set' });
+    expect(poolVerdict(r, 'claude-b', { state: 'set-malformed' }, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-undecidable', side: 'set', state: 'malformed' });
+    expect(poolVerdict(r, 'nobody', set, NO_EDGES)).toMatchObject({ ok: false, side: 'set' });
+  });
+  it('a central edge wins over the declared tag under a set, as under a project', () => {
+    const edges = new Map<string, readonly string[]>([['claude-b', ['pool-a']]]);
+    const set = { state: 'set', set: { pools: ['pool-b'], untagged: false } } as const;
+    expect(poolVerdict(r, 'claude-b', set, edges)).toMatchObject({ ok: false, side: 'set', account: { pool: 'pool-a' } });
   });
 });

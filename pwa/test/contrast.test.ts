@@ -170,7 +170,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.sess-state--waiting',
   '.sess-state--working',
   '.sess-state--exited',
-  '.sess-subagent-row',
   '.sess-ctxpressure',
   '.sess-ctxpressure[data-wedge]',
   '.sess-warn',
@@ -1162,13 +1161,16 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/docs/export/export.css', // Export's own chrome (W5 Export): never imported by the app; read into every export's <style>
       'src/face/splash.css', // the splash (Overlord face Task 9): a still layer on --bg-page, tokens only
+      'src/fleet/archiveUnownedWork.css', // the Archive's Work no session owns section (desktop polish H4, D-8828): layout and ink only, every ink on the Section card's --bg-surface (or the head's --bg-page)
       'src/fleet/fleet.css',
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
+      'src/ledgers/migration.css',  // the migration map and report bodies' structure lists (D-8186): spacing and wrapping only, no colour
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/readerLab/readerLab.css', // the reader lab page (reader lab plan, Task 10): layout only, no colour of its own
       'src/screens/run-find.css', // the run board's search (D-8072): layout and ink only, grounded on --bg-page
       'src/screens/run-detail.css', // one run's page (D-8072): layout and ink only, grounded on --bg-page
+      'src/accounts/models-sheet.css', // the Models sheet (model-class-advance R4): the body on --bg-sheet and each card on --bg-raised, self-grounded
       'src/fleet/group-abandon.css', // the group abandon sheet (D-8074): layout and ink only, on .abandon-sheet's own ground (fleet.css); the refusal ink is .abandon-sheet .abandon-error's
       'src/screens/programme-card.css', // the programme cards, quiet fold and Finished (D-8075): layout and ink only, every ink on its own --bg-surface
       'src/screens/run-close.css', // Advanced's lane rows (D-8077): grounded on --bg-surface by the row and the sheet's own rule, ink only
@@ -1176,6 +1178,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
+      'src/session/pasteChips.css', // the composer's paste-chip row (desktop-polish wave 169): grounded on --bg-raised; its controls' ink is measured in the browser leg
       'src/skins/instrument/instrument.css', // Instrument's shell (W2 Task S9, D-5472): the top bar door's tooltip is self-grounded
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
       'src/styles/base.css',
@@ -2317,12 +2320,14 @@ describe('the programme box\'s hues (Task G2)', () => {
     }
   });
 
-  it('measures the kicker on the tint and the workers\' slugs on the surface, through the stylesheet, in every palette', () => {
+  it('measures the kicker on the tint, the workers\' slugs and the coordinator\'s badge on the surface, through the stylesheet, in every palette', () => {
     for (const h of PROG_HUES) {
       for (const [key, pair] of [
         [`.pg-kicker [as .pg-kicker[data-hue='${h}']]`, 'var(--pg) on var(--pg-tint)'],
         [`.pg-tray [data-hue='${h}'] .sess-pw-prog [in .pg-tray]`, `var(--prog-${h}) on var(--bg-surface)`],
         [`.pg-elsewhere [data-hue='${h}'] .sess-pw-prog [in .pg-elsewhere]`, `var(--prog-${h}) on var(--bg-surface)`],
+        // D-8817: the coordinator's badge in its programme's hue, on the coordinator band's ground, the card's surface.
+        [`.pg-box[data-hue='${h}'] .pg-coord .sess-role [in .pg-coord]`, `var(--prog-${h}) on var(--bg-surface)`],
       ] as const) {
         const rows = rowsFor(key);
         expect(rows, key).toHaveLength(THEME_COUNT);
@@ -2366,6 +2371,32 @@ describe('the programme box\'s hues (Task G2)', () => {
 // beside its ink, so the audit measures every pair in every palette through the stylesheet and none falls into the
 // uncovered census. The programme's name sits on its hue's own tint (the pair `.pg-kicker` is gated on) through
 // `--pg-ink`, which is ink on the surface when the programme has no hue.
+// The Models sheet's two kinds of note (model-class-advance R4, F11): a definite refusal in the error ink and a note that the
+// act MAY have run in the attention ink, each on its card's own ground (--bg-raised), in every palette.
+describe('the Models sheet\'s notes are measured in every palette', () => {
+  it.each([
+    ['.acct-models-class .acct-models-refusal--refused', 'var(--status-dead-text)', 'var(--bg-raised)'],
+    ['.acct-models-class .acct-models-refusal--unknown', 'var(--status-attention-text)', 'var(--bg-raised)'],
+    ['.acct-models .acct-models-failed', 'var(--status-dead-text)', 'var(--bg-sheet)'],
+    ['.acct-models .acct-models-names li', 'var(--ink-primary)', 'var(--bg-sheet)'],
+  ])('%s reads %s on %s at 4.5:1 or better', (key, ink, ground) => {
+    const rows = rowsFor(key + ' [in ' + (ground === 'var(--bg-raised)' ? '.acct-models-class' : '.acct-models') + ']');
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.detail, row.label).toContain(ground);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('the two kinds are not painted the same ink', () => {
+    const css = readFileSync(path.join(ROOT, 'src/accounts/models-sheet.css'), 'utf8');
+    const inkOf = (kind: string): string => new RegExp(`--${kind}\\s*\\{\\s*color:\\s*([^;]+);`).exec(css)?.[1] ?? '';
+    expect(inkOf('refused')).not.toBe('');
+    expect(inkOf('unknown')).not.toBe('');
+    expect(inkOf('refused')).not.toBe(inkOf('unknown'));
+  });
+});
+
 describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () => {
   const HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
   const SHEET = 'src/ledgers/ledgers.css';
@@ -2435,9 +2466,11 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
     }
   });
 
-  it('measures the programme\'s name on the surface in each hue, in every palette', () => {
+  // WM4's fix round 1 amendment (D-8823 `head-icon-not-word`): the head's word is gone and its programme icon stands in the programme's hue on the
+  // same surface, so the row is the icon's, one per hue, as the box's badge is pinned.
+  it('measures the programme\'s icon on the surface in each hue, in every palette', () => {
     for (const h of HUES) {
-      const key = `.pv-head .pv-kicker [in .pv-head] [as .pv-head[data-hue='${h}']]`;
+      const key = `.pv-head .pv-ico [in .pv-head] [as .pv-head[data-hue='${h}']]`;
       const rows = rowsFor(key);
       expect(rows, key).toHaveLength(THEME_COUNT);
       for (const row of rows) {

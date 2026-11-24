@@ -18,6 +18,8 @@ import { createElement, Fragment, useCallback, useEffect, useId, useRef, useStat
 import type { FocusEvent, MouseEvent, ReactNode } from 'react';
 import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
 import { PLAIN_AUTO_MEMORY_TEXT } from '../../../shared/plainAutoMemory';
+import { COORDINATOR_ADVISOR_TEXT } from '../../../shared/coordinatorAdvisor';
+import type { RenewalMode } from '../../../shared/continuity';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
@@ -42,6 +44,7 @@ export const SETTINGS_INDEX_TEXT = {
     automation: 'What the server does to the fleet by itself: checking on quiet workers, abandoning dispatches that never '
       + 'came back, and clearing what dead sessions leave behind.',
     security: 'Who can open this console, and the key the fleet box uses to call this server.',
+    integrations: 'The services ccrc works with: the Linear keys, the Linear team each project is linked to, and GitHub.',
   } satisfies Record<SettingsSectionId, string>,
   /** The two diagnostic rows under the five sections (library 1.1 take-up, Task 9): pages under Settings that are not
    *  sections, so they are not `purpose` keys. */
@@ -285,6 +288,19 @@ export type SettingsScope = (typeof SETTINGS_SCOPE)[keyof typeof SETTINGS_SCOPE]
 /** One card's head: whose it is, its name, and what it is for. */
 export interface SettingsCardText { scope: SettingsScope; title: string; purpose: string }
 
+/** Overlord W1a hand-offs: the soft-renewal mode's words (Table 11.1d). One sentence each; the choices are L0's. */
+export const RENEWAL_MODE_TEXT = {
+  legend: 'When soft renewals happen',
+  purpose: 'When a coordinator\'s conversation is renewed for a soft reason (two compactions, a new install). '
+    + 'Nothing changes while the continuity lane is in shadow.',
+  choices: { 'when-away': 'When I\'m away', 'on-schedule': 'On schedule' } satisfies Record<RenewalMode, string>,
+  notes: {
+    'when-away': 'A long-lived session renews at a break in your activity.',
+    'on-schedule': 'A long-lived session renews when due, waiting at most 30 minutes for a break.',
+  } satisfies Record<RenewalMode, string>,
+  unread: 'The server could not read this row, so soft renewals follow the default.',
+} as const;
+
 /** Each card's head, by section, in §3.3's order. A section page renders its cards from its own list here, so the
  *  order is written once (Updates' list is C5's one-line insert point for the Claude Code card). */
 export const SETTINGS_CARDS = {
@@ -348,6 +364,14 @@ export const SETTINGS_CARDS = {
     plainMemory: {
       scope: SETTINGS_SCOPE.fleet, title: PLAIN_AUTO_MEMORY_TEXT.legend, purpose: PLAIN_AUTO_MEMORY_TEXT.purpose,
     },
+    /** The coordinator advisor (D-8967), after Auto memory for plain sessions. */
+    coordinatorAdvisor: {
+      scope: SETTINGS_SCOPE.fleet, title: COORDINATOR_ADVISOR_TEXT.legend, purpose: COORDINATOR_ADVISOR_TEXT.purpose,
+    },
+    /** Overlord W1a hand-offs: when soft renewals happen, after Auto memory for plain sessions. */
+    renewalMode: {
+      scope: SETTINGS_SCOPE.fleet, title: RENEWAL_MODE_TEXT.legend, purpose: RENEWAL_MODE_TEXT.purpose,
+    },
     /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
     browser: {
       scope: SETTINGS_SCOPE.fleet, title: 'Browser tools',
@@ -402,11 +426,24 @@ export const SETTINGS_CARDS = {
       purpose: 'The sign-in this browser holds now.',
     },
     // Box token's purpose line names the rotation interval, so it is built beside the card from the interval
-    // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here.
-    // The Linear card (named workspaces S4b; one key per workspace since #1444, spec §10.2) follows Box token: the keys
-    // are credentials this box holds, so its scope is the box's, and it sits after the reserved "Recent account
-    // changes" slot and Box token so adding it moves neither. Its body, the state sentences and the controls are
-    // `LinearSection.tsx`'s.
+    // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here. Linear and Project linking
+    // followed it until D-8932 moved them to the Integrations section, below.
+    // D-8382: the approvals topology, one read-only line, last: where approval rulings are minted and signed, and what the
+    // single-box opt-in does on this box. Its body is `ApprovalsTopologyCard.tsx`'s.
+    approvals: {
+      scope: SETTINGS_SCOPE.box, title: APPROVALS_TOPOLOGY_TEXT.title, purpose: APPROVALS_TOPOLOGY_TEXT.purpose,
+    },
+    // Approvals plan 2026-11-18 §3.1 (M38): the permission-prompt counter, after the approvals line. Body: `ApprovalCensusSection.tsx`.
+    approvalCensus: {
+      scope: SETTINGS_SCOPE.box, title: 'Permission prompts (M38)',
+      purpose: 'How many permission prompts reached you, per programme-day, and which route each one took. Read only. '
+        + 'Moves beside M1 on the Week page when that page is built.',
+    },
+  },
+  /** D-8932: the services ccrc works with, a section of their own (they sat on Security). */
+  integrations: {
+    // The Linear card (named workspaces S4b; one key per workspace since #1444, spec §10.2): the keys are credentials this
+    // box holds, so its scope is the box's. Its body, the state sentences and the controls are `LinearSection.tsx`'s.
     linear: {
       scope: SETTINGS_SCOPE.box, title: 'Linear',
       purpose: 'Linear keys let every session on this fleet read and write Linear through ccrc, and show real ticket titles. Add one key for each Linear workspace. Sessions never see a key.',
@@ -418,13 +455,21 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.box, title: 'Project linking',
       purpose: 'How each project\'s pull requests reach their Linear ticket. A private repository carries the ticket id in its branch, pull request and commits. A public one never does: the pull request is linked from Linear instead.',
     },
-    // D-8382: the approvals topology, one read-only line, last: where approval rulings are minted and signed, and what the
-    // single-box opt-in does on this box. Its body is `ApprovalsTopologyCard.tsx`'s.
-    approvals: {
-      scope: SETTINGS_SCOPE.box, title: APPROVALS_TOPOLOGY_TEXT.title, purpose: APPROVALS_TOPOLOGY_TEXT.purpose,
+    // The GitHub card: read-only. What ccrc uses for GitHub today and what the readings say of it (`GitHubCard.tsx`,
+    // `githubWords.ts`). The sign-in is the fleet box's, and every session and every project rides it.
+    github: {
+      scope: SETTINGS_SCOPE.fleet, title: 'GitHub',
+      purpose: 'How ccrc reaches GitHub.',
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
+
+/** Security's pointer for a link that still opens it for Linear (D-8932): a Waiting on you item
+ *  written before the move names `/settings/security` in its text. */
+export const SECURITY_MOVED_TEXT = {
+  note: 'Linear keys and project linking are now in Integrations.',
+  link: 'Open Integrations',
+} as const;
 
 /** Box token's head without its purpose line (above). */
 export const BOX_TOKEN_CARD = { scope: SETTINGS_SCOPE.box, title: 'Box token' } as const;

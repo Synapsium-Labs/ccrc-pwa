@@ -6,6 +6,9 @@ import {
 } from '../../shared/api.js';
 import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { HostReport, PeerFacts } from '../../shared/isolation.js';
+import type { CoordStore } from './coord/store.js';
+import { buildInfoOfRow } from './update/inventory.js';
 
 // One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
 // because `FleetHealth` (the wire shape) needs it and L0 may not import from
@@ -146,6 +149,17 @@ export interface FleetState {
    *  The runtime substitute for the compile error is the same whole-object
    *  `toEqual` in `remote-connect.test.ts`. */
   agentOps?: readonly string[];
+  /** Overlord W1, the isolation word (§7.4): what the agent's ready frame said of its host, through its one reader
+   *  `readHostReport` — the report, `'absent'` (an older agent) or `'malformed'`. Optional for `observedEpoch`'s reason:
+   *  `undefined` is "no ready yet", which the decider reads as `no-agent`, the honest answer for every fixture that
+   *  predates it. Never serialized: no route returns this object. */
+  hostReport?: HostReport | 'absent' | 'malformed';
+  /** The link's peer as the server measured it on the socket that delivered the ready (`measurePeer`); `undefined`
+   *  before any ready. The address is never kept. */
+  peer?: PeerFacts;
+  /** How many readies this link has had since boot, the key epoch of the renewal readings' carrier (`wakingHostKey`):
+   *  two carriers compare only under one ready. `undefined` before any ready. */
+  readySerial?: number;
 }
 
 /** One answer about `ccd caps`, as its source gives it. `'ready'` is the agent's ready frame: what it carries is the
@@ -325,6 +339,50 @@ export function derivedBuilds(sources: readonly BuildSource[]): { own: BuildInfo
   const own = sources.find((s) => s.role === 'server' || s.role === 'both');
   const fleet = sources.find((s) => s.role === 'fleet');
   return { own: own?.build ?? null, fleet: fleet?.build ?? null };
+}
+
+/**
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
+ * from, derived from the inventory rows (design 2026-09-20 §14): each live
+ * row's role and its five `current*` columns as one `BuildInfo`
+ * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
+ * is only this input now — the `FleetHealth.builds` wire field that once
+ * carried it was retired in wave 33. Composition only — which row is which
+ * side is decided there. The one reader of the inventory's builds: the health
+ * route and `inventoryBuildAgreement` both read it (moved here from server.ts,
+ * Overlord W1 sandbox, review 2135 F5, slug build-agreement-reader-moved-to-fleetstate).
+ * `oneBox` says the inventory's live box is a `both` row with no `fleet` row
+ * beside it: one box is both ends.
+ *
+ * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
+ * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
+ * nothing in the health route's remote arm touched coord.db, and the banner
+ * route must not gain a new way to 500. It deliberately does NOT fall back to
+ * `fleetState.build` — spec §8: the handshake sample is never read as the
+ * current build where an inventory is wired. The fold of "unreadable" into
+ * "no rows yet" is honest for the one word decided from it (`unknown`);
+ * `GET /api/updates` is where the distinction is shown.
+ */
+export function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null; oneBox: boolean } {
+  let rows: ReturnType<CoordStore['nodes']>;
+  try {
+    rows = coord.nodes();
+  } catch {
+    return { own: null, fleet: null, oneBox: false };
+  }
+  const sources = rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) }));
+  return { ...derivedBuilds(sources), oneBox: sources.some((x) => x.role === 'both') && !sources.some((x) => x.role === 'fleet') };
+}
+
+/** `buildAgreement` over `inventoryBuilds`: the launch-profile lane's read of whether the fleet node runs the server's build
+ *  (Overlord W1 sandbox Task 2, question 5). A box that is both ends (`oneBox`, a `both` row with no `fleet` row) agrees with
+ *  itself once its stamp reads, as `fleetCarriesRunsAttribution` treats `both`: the same build by construction (review 2135
+ *  F2, slug a-both-box-agrees-with-itself; the spec keeps today's single box a supported case of every rule). A `both` row
+ *  beside a `fleet` row is compared with that row like a server row. An unreadable stamp, or a throwing `nodes()`, answers
+ *  `unknown`, which the lane reads as unmeasured and holds `profiledigest` at its old value. */
+export function inventoryBuildAgreement(coord: Pick<CoordStore, 'nodes'>): BuildAgreement {
+  const b = inventoryBuilds(coord);
+  return b.oneBox && b.own !== null ? 'agreed' : buildAgreement(b.fleet, b.own);
 }
 
 /**

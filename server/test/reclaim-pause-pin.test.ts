@@ -584,12 +584,16 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
           // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
           lastPlaced: asked.map((sessionId) => ({ sessionId, runId: 10, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'acct-a-project-a' })),
-          openPlacedWorkers: [], parkedPlacedWorkers: [] }),
+          openPlacedWorkers: [], parkedPlacedWorkers: [], otherOpenPlacedWorkers: [] }),
+        // The sleep hold reads the designation once a pass; no row, so no worker here is the Overlord's body.
+        designationRead: () => ({ kind: 'not-designated' as const, row: null }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: () => undefined,
         runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
         run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
+        laneArmSetting: () => ({ kind: 'absent' as const }),
+        runEvents: () => [],
       } as unknown as StopDoneSweepDeps['coord'],
       runCcd: async (a) => { argv.push([...a]); return { ran: true as const, ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
       fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
@@ -602,6 +606,7 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       listing: async () => [],
+      stallNotice: () => ({ queued: false, why: 'duplicate' as const }),
       startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };

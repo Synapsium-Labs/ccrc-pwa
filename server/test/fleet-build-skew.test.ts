@@ -21,8 +21,8 @@ import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
-import { buildAgreement, derivedBuilds, type BuildSource, type FleetState } from '../src/fleetstate.js';
-import { CoordStore, type NodeMeasurement } from '../src/coord/store.js';
+import { buildAgreement, derivedBuilds, inventoryBuildAgreement, type BuildSource, type FleetState } from '../src/fleetstate.js';
+import { CoordStore, type NodeMeasurement, type NodeRow } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { FLEET_LABEL, sweepInventory } from '../src/update/inventory.js';
 import type { NodeRole } from '../../shared/api.js';
@@ -228,6 +228,36 @@ describe('derivedBuilds — the pair as a view of the node rows (design 2026-09-
     // `nodes.role` reads `null` for a token a newer build wrote (D-3181); it is not this box and
     // not the fleet box, so it must not be either.
     expect(derivedBuilds([{ role: null, build: A }])).toEqual({ own: null, fleet: null });
+  });
+});
+
+describe('inventoryBuildAgreement — the launch-profile lane\'s read (Overlord W1 sandbox; review 2135 F2, slug a-both-box-agrees-with-itself)', () => {
+  /** A live inventory row: only the role and the stamp columns `buildInfoOfRow` reads matter here. */
+  const row = (role: NodeRole, sha: string | null, dirty = false): NodeRow => ({
+    role, stampRead: sha === null ? 'missing' : 'ok', currentSha: sha, currentRef: 'main', currentBuiltAt: '2026-08-15T00:00:00Z',
+    currentDirty: dirty, currentVersion: null,
+  }) as unknown as NodeRow;
+  const of = (rows: NodeRow[]): string => inventoryBuildAgreement({ nodes: () => rows });
+
+  it('a lone both row agrees with itself: one box is both ends, the same build by construction, dirty or not', () => {
+    expect(of([row('both', 'aaaaaaa')])).toBe('agreed');
+    expect(of([row('both', 'aaaaaaa', true)])).toBe('agreed');
+  });
+  it('a lone both row whose stamp does not read is unknown, never agreed', () => {
+    expect(of([row('both', null)])).toBe('unknown');
+  });
+  it('a both row beside a fleet row is compared with it, as a server row is: agreed on one clean sha, else skewed', () => {
+    expect(of([row('both', 'aaaaaaa'), row('fleet', 'aaaaaaa')])).toBe('agreed');
+    expect(of([row('both', 'aaaaaaa'), row('fleet', 'bbbbbbb')])).toBe('skewed');
+    expect(of([row('fleet', 'aaaaaaa'), row('both', 'aaaaaaa', true)])).toBe('skewed');
+    expect(of([row('both', 'aaaaaaa'), row('fleet', null)])).toBe('unknown');
+  });
+  it('the two-box shape is unchanged, and no rows or a throwing read is unknown', () => {
+    expect(of([row('server', 'aaaaaaa'), row('fleet', 'aaaaaaa')])).toBe('agreed');
+    expect(of([row('server', 'aaaaaaa'), row('fleet', 'bbbbbbb')])).toBe('skewed');
+    expect(of([row('server', 'aaaaaaa')])).toBe('unknown');
+    expect(of([])).toBe('unknown');
+    expect(inventoryBuildAgreement({ nodes: () => { throw new Error('locked'); } })).toBe('unknown');
   });
 });
 

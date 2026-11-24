@@ -39,6 +39,7 @@ import {
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
 import type { AuthStatus, FleetSession, RunSummary } from '../../../shared/api';
+import type { MapCounts, MapEntry, MigrationView } from '../../../shared/plan';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
@@ -49,16 +50,21 @@ import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
+import { AnswerMarkBoxes } from './AnswerMarkBox';
+import { HandledElsewhere } from '../responses/HandledElsewhere';
+import { useOpenedReceipt } from '../responses/useOpenedReceipt';
 import { SECRET_INPUT } from '../lib/secretInput';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
 import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
+import { MigrationBody } from './MigrationBody';
 import { ageWords, closedItemWords, itemNumber, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
   readonly item: ItemWire;
-  /** Tick the item. `decide` and `value` pass the answer; `do` passes none. Rejects with the route's `ApiError` on a refusal. */
+  /** Tick the item. `decide` and `value` pass the answer; `do` passes its optional note when one was typed, and nothing
+   *  otherwise (D-8931). Rejects with the route's `ApiError` on a refusal. */
   readonly onTick: (answer?: string) => Promise<void>;
   readonly onDismiss: () => Promise<void>;
   /** The programme has an open run (`programmeIsLive`). When it has none no coordinator is waiting: a tick is refused
@@ -97,6 +103,9 @@ export interface ItemViewProps {
   /** The page of an item a reference in the text names ("item 12"), or null for a number that is no item (D-8194). Absent, every
    *  reference stays text. The route decides; this file names no route. */
   readonly itemHref?: (id: number) => string | null;
+  /** A map approval's or migration report's body (D-8737, D-8186): counts, entries, each programme's epics and checkpoints, and the
+   *  report's lists. `ItemRoute` reads it from `GET /api/migrations/:id`. Absent, such an item draws its why and how with its controls. */
+  readonly migration?: { readonly counts: MapCounts; readonly entries: readonly MapEntry[]; readonly structure?: MigrationView['structure']; readonly report?: MigrationView['report'] };
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -364,6 +373,12 @@ function History({ item, now, homeProject, itemHref }: {
 /** What joins a note to the choice inside the one `answer` string: the tick carries `{answer}` and no more, and the route
  *  takes any decide answer of 1 to `ANSWER_MAX` characters, so a note travels inside it (departure pl5a-note-in-answer). */
 const NOTE_JOIN = '\n\nNote: ';
+/** The label of the optional note, on a decide item (where it rides inside the answer, above) and on a do item (where it is
+ *  the whole answer, D-8931). */
+const NOTE_LABEL = 'Note to the coordinator (optional)';
+/** Under a do item's note: why the field is there, and what happens after the tick. A coordinator may ask for a note in the
+ *  item's steps, and a tick that could carry none was sent back every time (D-8931). */
+const DO_NOTE_HINT = 'Some items ask for one, such as who did each step and when. The coordinator checks the result itself and either closes the item or sends it back with what it found.';
 /** The radio value of "Your own answer"; an option's is `o<index>`, so no option's words can collide with it. */
 const OWN = 'own';
 const OWN_WORD = 'Your own answer';
@@ -395,8 +410,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true, runs = null, acts }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current' | 'runs'> & { acts: ItemActs }): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true, runs = null, acts, onActed, stuck = false }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current' | 'runs' | 'onActed'> & { acts: ItemActs; stuck?: boolean }): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -421,11 +436,15 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
     : item.kind === 'value' ? typed.trim() : null;
   const noteText = note.trim();
   const noteCost = noteText === '' ? 0 : NOTE_JOIN.length + noteText.length;
-  const answer: string | null = choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
+  // A do item's note is its whole answer, and an empty one is no answer at all (D-8931); a decide's note is joined
+  // to its choice.
+  const answer: string | null = item.kind === 'do' ? (noteText === '' ? null : noteText)
+    : choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
   const tooLong = answer !== null && answer.length > ANSWER_MAX;
   const needsAnswer = decide || item.kind === 'value';
   // A decision is an option, or own text that is not empty: a note alone is not one (it would send the coordinator "Note: …" with no choice).
-  const ready = !needsAnswer || (choice !== null && choice !== '' && !tooLong);
+  // A do item needs nothing, so only a note past the limit holds it.
+  const ready = needsAnswer ? choice !== null && choice !== '' && !tooLong : !tooLong;
 
   const run = async (act: () => Promise<void>): Promise<void> => {
     // A saved copy sends nothing, whatever reached this (the buttons are disabled too).
@@ -449,7 +468,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   // Why the acts are off on a saved copy, said once, and only where there is an act to be off.
   const notCurrent = !current && (mayTick || ended || secretOpen || removable);
   return (
-    <section className="wi-card wi-act" aria-label="Your move">
+    <section className="wi-card wi-act" aria-label="Your move" {...(stuck ? { 'data-sticky': 'foot' } : {})}>
       {closed !== null && <p className="wi-status" data-closed={item.state}>{closed}</p>}
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
       {mayTick && decide && (
@@ -470,7 +489,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
                          ]}
                          value={pick} onPick={setPick} />
           {pick === OWN && <Field label={OWN_WORD} value={own} onChange={setOwn} maxLength={ANSWER_MAX - noteCost} />}
-          <Field label="Note to the coordinator (optional)" value={note} onChange={setNote}
+          <Field label={NOTE_LABEL} value={note} onChange={setNote}
                  maxLength={Math.max(0, ANSWER_MAX - (choice?.length ?? 0) - NOTE_JOIN.length)} />
         </>
       )}
@@ -478,11 +497,11 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         <Field label="Your value" value={typed} onChange={setTyped} maxLength={ANSWER_MAX}
                hint="An ordinary value: it is sent to the coordinator and may be written into the programme ledger." />
       )}
-      {mayTick && needsAnswer && answer !== null && (
-        <span className="wi-hint">{`${answer.length} of ${ANSWER_MAX} characters`}</span>
-      )}
       {mayTick && item.kind === 'do' && (
-        <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
+        <Field label={NOTE_LABEL} value={note} onChange={setNote} maxLength={ANSWER_MAX} hint={DO_NOTE_HINT} />
+      )}
+      {mayTick && answer !== null && (
+        <span className="wi-hint">{`${answer.length} of ${ANSWER_MAX} characters`}</span>
       )}
       {secretOpen && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} current={current} />}
       {checking && item.kind === 'secret' && saved !== null && <SecretState set={saved} />}
@@ -505,22 +524,28 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       )}
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
       {notCurrent && <p className="wi-hint" data-current="false">{NOT_CURRENT_ACTS_WORD}</p>}
+      {/* The operator's two answer marks (Overlord W1), before and after the answer; off on a saved copy. */}
+      <AnswerMarkBoxes item={item} current={current} />
       <div className="wi-actions">
-        {acting && <ItemControls item={item} runs={runs} acts={acts} enabled={current} />}
+        {acting && <ItemControls item={item} runs={runs} acts={acts} enabled={current} {...(onActed === undefined ? {} : { onActed })} />}
         {mayTick && (
           <Button variant="primary" size="fit" disabled={busy || !ready || !current}
-                  onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>
+                  onClick={() => void run(() => (answer === null ? onTick() : onTick(answer)))}>Mark done</Button>
         )}
         {ended && (
           <Button variant="ghost" size="fit" disabled={busy || !current} onClick={() => void run(onDismiss)}>Dismiss</Button>
         )}
       </div>
+      {/* The operator's own response (Overlord W1, C69): apart from the answer marks' boxes above, off on a saved copy. */}
+      {current && <HandledElsewhere target={{ kind: 'item', id: item.id }} />}
     </section>
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed, itemHref }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed, itemHref, migration }: ItemViewProps): ReactNode {
   const { acts, sheets } = useItemActs(sessions, onActed);
+  const opened = useMemo(() => [{ kind: 'item' as const, id: item.id }], [item.id]);
+  useOpenedReceipt(opened);
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   const href = programme?.href ?? null;
@@ -552,12 +577,17 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
               <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><Linked text={s} homeProject={home} itemHref={itemHref} /></li>)}</ol>
             </section>
           )}
+          {migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report') && (
+            <MigrationBody kind={item.action.verb === 'linear-map' ? 'map' : 'report'} counts={migration.counts} entries={migration.entries}
+                           {...(migration.structure === undefined ? {} : { structure: migration.structure })} {...(migration.report === undefined ? {} : { report: migration.report })} />
+          )}
           <section>
             <h3 className="wi-h">History</h3>
             <History item={item} now={now} homeProject={home} itemHref={itemHref} />
           </section>
         </div>
         <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current} runs={runs} acts={acts}
+               {...(onActed === undefined ? {} : { onActed })} stuck={migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report')}
                {...(saveSecret === undefined ? {} : { saveSecret })} {...(removeSecret === undefined ? {} : { removeSecret })}
                {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
                {...(authStatus === undefined ? {} : { authStatus })} />

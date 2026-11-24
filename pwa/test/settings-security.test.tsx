@@ -10,7 +10,8 @@ import { authLost, clearAuthLost, onAuthPostureChanged } from '../src/lib/auth';
 import { PasskeyNotice } from '../src/fleet/PasskeyNotice';
 import { navigate } from '../src/lib/router';
 import { SETTINGS_SECTIONS } from '../src/lib/routes';
-import { SETTINGS_CARDS, SIGN_IN_GATE_TEXT } from '../src/fleet/settingsText';
+import { SECURITY_MOVED_TEXT, SETTINGS_CARDS, SIGN_IN_GATE_TEXT } from '../src/fleet/settingsText';
+import { LINEAR_PROJECTS_SETTINGS_PATH } from '../../shared/ledgers';
 import { renderSettings } from './settingsHost';
 import { SettingsDataProvider, useSettingsView, type SettingsPageView } from '../src/screens/settings/SettingsDataProvider';
 import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
@@ -68,23 +69,45 @@ const security = async (answer: Parameters<typeof authStatus>[0], hostname = 'cc
   return gateCard();
 };
 
-describe('the Project linking card (D-8147)', () => {
-  it('the Project linking card follows the Linear card, scoped to This box', async () => {
+describe('Linear and Project linking moved to Integrations (D-8932)', () => {
+  it('Security draws neither card and reads no project list or hierarchy for them', async () => {
+    const projects = vi.spyOn(api, 'projects');
+    const hierarchy = vi.spyOn(api, 'hierarchy');
     await security({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
-    const linking = await screen.findByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    await screen.findByRole('region', { name: 'Box token' });
     const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
-    expect(titles.indexOf(SETTINGS_CARDS.security.linking.title)).toBe(titles.indexOf('Linear') + 1);
-    expect(within(linking).getByText('This box')).toBeInTheDocument();
+    expect(titles).not.toContain(SETTINGS_CARDS.integrations.linear.title);
+    expect(titles).not.toContain(SETTINGS_CARDS.integrations.linking.title);
+    expect(document.querySelector('[data-linking="section"]')).toBeNull();
+    expect(projects).not.toHaveBeenCalled();
+    expect(hierarchy).not.toHaveBeenCalled();
+  });
+
+  it('an old link to Security for Linear lands on Integrations: the place the cards held says where they went, and its link opens it', async () => {
+    await security({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
+    await screen.findByRole('region', { name: 'Box token' });
+    const moved = document.querySelector<HTMLElement>('[data-security-moved]')!;
+    expect(moved).toHaveTextContent(SECURITY_MOVED_TEXT.note);
+    expect(SECURITY_MOVED_TEXT.note).toBe('Linear keys and project linking are now in Integrations.');
+    const link = within(moved).getByRole('link', { name: SECURITY_MOVED_TEXT.link });
+    expect(link).toHaveAttribute('href', '/settings/integrations');
+    expect(link.getAttribute('href')).toBe(LINEAR_PROJECTS_SETTINGS_PATH);
+    // It follows Box token, where the Linear card was.
+    expect(screen.getByRole('region', { name: 'Box token' }).compareDocumentPosition(moved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => { fireEvent.click(link); });
+    expect(location.pathname).toBe('/settings/integrations');
+    expect(await screen.findByRole('heading', { level: 2, name: 'Integrations' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 3, name: SETTINGS_CARDS.integrations.linear.title })).toBeInTheDocument();
   });
 });
 
 describe('the Sign-in gate card, per state (spec §5.5)', () => {
-  it('is the first card on Security, scoped to This box, before Box token (and the Linear, Project linking and Approvals cards, which follow it)', async () => {
+  it('is the first card on Security, scoped to This box, before Box token (and the Approvals cards, which follow it)', async () => {
     await security({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
     await screen.findByRole('region', { name: 'Box token' });
     const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     expect(titles[0]).toBe('Sign-in gate');
-    expect(titles.slice(-4)).toEqual(['Box token', 'Linear', 'Project linking', 'Approvals']);
+    expect(titles.slice(-3)).toEqual(['Box token', 'Approvals', 'Permission prompts (M38)']);
     expect(within(gateCard()).getByText('This box')).toBeInTheDocument();
   });
 
@@ -286,10 +309,10 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     await settle();
   };
 
-  it('Security renders seven cards in order when the gate is armed', async () => {
+  it('Security renders six cards in order when the gate is armed', async () => {
     await armed();
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token', 'Linear', 'Project linking', 'Approvals']);
+      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token', 'Approvals', 'Permission prompts (M38)']);
     expect(within(signInCard()).getByText('You')).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'This session' })).getByText('This browser')).toBeInTheDocument();
     expect(within(signInCard()).getByRole('heading', { level: 4, name: 'Passkeys' })).toBeInTheDocument();

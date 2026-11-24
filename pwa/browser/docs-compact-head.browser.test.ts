@@ -543,34 +543,72 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       const inJump = (): Promise<boolean> => frame.evaluate(() => document.querySelector('.jump')?.contains(document.activeElement) === true);
       const contents = page.getByRole('button', { name: DOCS_TOOL_TEXT.contents });
       const jump = page.getByRole('button', { name: DOCS_TOOL_TEXT.jump });
-      // Fix round 2 (item 6): the Quick jump focus wait timed out once in five runs (CI attempt 1 of run 43676134505).
-      // Its bound stays 5 s; when a wait here expires, the case first prints what holds focus in the host and in the
-      // frame, so the next failure says where the focus went.
+      // #2903: the Quick jump wait timed out about one run in five (fix round 2, item 6, first saw it; its report then
+      // read "frame activeElement body; frame hasFocus true" every time). The frame is sandboxed, so Chrome runs it in a
+      // process of its own. A press that moved the focus to ccrc's button sent the frame its loss of the focus apart
+      // from the command the tap posts; when the loss arrived second, it took the focus back out of Quick jump's field
+      // after the dialog had opened (measured: the field's focusin, the dialog's open, then the field's focusout and the
+      // frame window's blur and focus). The tools now take no focus on a press (DocsHead's keepFrameFocus). So the case
+      // counts every focus a tool takes in ccrc's page over all four taps, and it must stay 0: a press that takes the
+      // focus again goes red on every run, in either order of arrival. (The frame's window is not watched for a blur:
+      // the library's own Contents close blurs it once as it hands the focus back, even when the press took none.)
+      await page.evaluate(() => {
+        const w = window as unknown as { __toolFocus: number };
+        w.__toolFocus = 0;
+        document.addEventListener('focusin', (e) => {
+          if (e.target instanceof Element && e.target.closest('.docs-tool') !== null) w.__toolFocus += 1;
+        }, true);
+      });
+      // Each tap is watched from inside the frame: armed before the tap, the watch settles on the first focus change or
+      // class change that reaches the state the tap should set (an event, never a timed poll), or on its 5 s bound, which
+      // is there only for the report: a watch that runs out prints where the focus is, in the host and in the frame.
+      type Want = 'toc-open' | 'toc-closed' | 'in-jump' | 'out-of-jump';
       const say = (el: Element | null): string => el === null ? 'null'
         : `${el.tagName.toLowerCase()}${el.id === '' ? '' : `#${el.id}`}${el.className === '' || typeof el.className !== 'string' ? '' : `.${el.className.trim().split(/\s+/).join('.')}`}${el.getAttribute('aria-label') === null ? '' : `[${el.getAttribute('aria-label')}]`}`;
-      const waitOrSay = async (what: string, fn: () => boolean): Promise<void> => {
-        try {
-          await frame.waitForFunction(fn, undefined, { timeout: 5000 });
-        } catch (err) {
-          const host = await page.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
-          const inner = await frame.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
-          const frameHasFocus = await frame.evaluate(() => document.hasFocus()).catch(() => 'unreadable');
-          console.log(`L11-FOCUS-TIMEOUT ${what}: host activeElement ${String(host)}; frame activeElement ${String(inner)}; frame hasFocus ${String(frameHasFocus)}`);
-          throw err;
-        }
+      const tap = async (button: typeof jump, want: Want): Promise<void> => {
+        await frame.evaluate((wanted: Want) => {
+          const holds = (): boolean => {
+            const open = document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true;
+            const inField = document.querySelector('.jump')?.contains(document.activeElement) === true;
+            return wanted === 'toc-open' ? open : wanted === 'toc-closed' ? !open : wanted === 'in-jump' ? inField : !inField;
+          };
+          const w = window as unknown as { __tap: Promise<boolean> };
+          w.__tap = new Promise<boolean>((resolve) => {
+            const watch = new MutationObserver(() => check());
+            const settle = (reached: boolean): void => {
+              watch.disconnect();
+              document.removeEventListener('focusin', soon, true);
+              document.removeEventListener('focusout', soon, true);
+              resolve(reached);
+            };
+            const check = (): void => { if (holds()) settle(true); };
+            // A focusout is dispatched before the focus has moved, so it checks again once the move is done.
+            const soon = (): void => { check(); setTimeout(check, 0); };
+            watch.observe(document.documentElement, { attributes: true, attributeFilter: ['class'], subtree: true });
+            document.addEventListener('focusin', soon, true);
+            document.addEventListener('focusout', soon, true);
+            setTimeout(() => settle(holds()), 5000);
+          });
+        }, want);
+        await button.click();
+        if (await frame.evaluate(() => (window as unknown as { __tap: Promise<boolean> }).__tap)) return;
+        const host = await page.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
+        const inner = await frame.evaluate(`(${say.toString()})(document.activeElement)`).catch(() => 'unreadable');
+        const frameHasFocus = await frame.evaluate(() => document.hasFocus()).catch(() => 'unreadable');
+        console.log(`L11-FOCUS-TIMEOUT ${want}: host activeElement ${String(host)}; frame activeElement ${String(inner)}; frame hasFocus ${String(frameHasFocus)}`);
+        throw new Error(`the tap did not reach ${want} within 5 s`);
       };
-      await contents.click();
-      await waitOrSay('contents opens', () => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') === true);
+      await tap(contents, 'toc-open');
       expect(await tocOpen(), 'the first tap opens Contents').toBe(true);
-      await contents.click();
-      await waitOrSay('contents closes', () => document.querySelector('[data-docreader-root]')?.classList.contains('toc-open') !== true);
+      await tap(contents, 'toc-closed');
       expect(await tocOpen(), 'the second tap closes it').toBe(false);
-      await jump.click();
-      await waitOrSay('focus in Quick jump', () => document.querySelector('.jump')?.contains(document.activeElement) === true);
+      await tap(jump, 'in-jump');
       expect(await inJump(), 'the first tap puts focus in Quick jump').toBe(true);
-      await jump.click();
-      await waitOrSay('focus out of Quick jump', () => document.querySelector('.jump')?.contains(document.activeElement) !== true);
+      await tap(jump, 'out-of-jump');
       expect(await inJump(), 'the second tap takes it out').toBe(false);
+      const toolFocus = await page.evaluate(() => (window as unknown as { __toolFocus: number }).__toolFocus);
+      console.log(`L11-FIGURE refined 412x915 tools-focus ${JSON.stringify({ toolFocus })}`);
+      expect(toolFocus, 'no press on a tool took the focus in ccrc\'s page, so the frame kept it (#2903)').toBe(0);
       console.log('L11-FIGURE refined 412x915 tools {"contents":"toggles","jump":"toggles"}');
       expect(app.errors, 'no page error').toEqual([]);
     } finally {

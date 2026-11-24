@@ -987,7 +987,7 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     // Review 1669 A2: the precedents' row (pane-scope-stop, testbox-remote), with one exact allowance: the launcher's
     // `is_protected` tuple names the verb to start it protected (review 1665 N1). Nothing wider is allowed.
     const ALLOWED: readonly [string, string][] = [['ccd/ccd-entry.py',
-      "    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):"]];
+      "    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):"]];
     const strays = (file: string, lines: string[]): string[] => lines
       .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))
       .filter((l) => !ALLOWED.some(([f, a]) => f === file && a === l)).map((l) => `${file}: ${l.trim()}`);
@@ -1131,7 +1131,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     const close = all.findIndex((l, i) => i > open && l === '}');
     const named = all.map((l, i) => ({ l, i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
     expect(named).toHaveLength(2);
-    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" ||');
+    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" "$REG/$id.loadpending" "$REG/$id.loadlast" ||');
     expect(named[1]!.l.trim()).toContain('_reg_set "$id" deleg "$kept"');
     expect(named[1]!.i > open && named[1]!.i < close, 'the compaction write is inside _inflight_write').toBe(true);
   });

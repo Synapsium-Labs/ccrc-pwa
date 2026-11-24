@@ -15,7 +15,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { loadConfigFromFile } from 'vite';
 import { DIST_KEY, removeDist, sealDist } from '../browser/dist';
 import { buildOnce } from '../browser/globalSetup';
-import { sharedDist } from '../browser/app';
+import { openApp, sharedDist } from '../browser/app';
+import type { Browser, BrowserContextOptions } from 'playwright-core';
 
 const PWA = path.join(import.meta.dirname, '..');
 const BROWSER = path.join(PWA, 'browser');
@@ -155,5 +156,35 @@ describe('sealDist and removeDist', () => {
 describe('sharedDist: only a run whose global setup provided the build can read it', () => {
   it('throws, naming the global setup, when nothing was provided (this hermetic run provides nothing)', () => {
     expect(() => sharedDist()).toThrow(/browser\/globalSetup\.ts/);
+  });
+});
+
+describe('openApp blocks service workers, unless a view opts in (reader lab 10, completion plan Task 13)', () => {
+  /** The options `openApp` opens its context with, over a stand-in browser that records them. */
+  async function contextOptions(view: Parameters<typeof openApp>[1]): Promise<BrowserContextOptions> {
+    let seen: BrowserContextOptions | undefined;
+    const ctx = {
+      addInitScript: async (): Promise<void> => undefined, route: async (): Promise<void> => undefined,
+      routeWebSocket: async (): Promise<void> => undefined, newPage: async (): Promise<{ on: () => void }> => ({ on: () => undefined }),
+    };
+    const browser = { newContext: async (o: BrowserContextOptions): Promise<typeof ctx> => { seen = o; return ctx; } };
+    await openApp(browser as unknown as Browser, view, { api: {}, fleetFrames: [] });
+    if (seen === undefined) throw new Error('openApp opened no context');
+    return seen;
+  }
+
+  it('a view that does not name serviceWorkers gets them blocked', async () => {
+    expect((await contextOptions({ width: 1280, skin: 'refined', theme: 'light' })).serviceWorkers).toBe('block');
+    expect((await contextOptions({ width: 390, skin: 'refined', theme: 'light', touch: true })).serviceWorkers).toBe('block');
+  });
+
+  it('a view that opts in with \'allow\' gets them allowed, and the option has no other value', async () => {
+    expect((await contextOptions({ width: 1280, skin: 'refined', theme: 'light', serviceWorkers: 'allow' })).serviceWorkers).toBe('allow');
+    expect(readFileSync(path.join(BROWSER, 'app.ts'), 'utf8')).toMatch(/readonly serviceWorkers\?: 'allow';/);
+  });
+
+  it('exactly one browser file opts in: the reader frame\'s lab 10', () => {
+    const optedIn = browserFiles().filter((f) => /serviceWorkers\s*:\s*'allow'/.test(textOf(f)));
+    expect(optedIn).toEqual(['reader-frame.browser.test.ts']);
   });
 });

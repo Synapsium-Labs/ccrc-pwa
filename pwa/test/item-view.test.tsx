@@ -14,12 +14,33 @@ import { MIN, NOW, itemView } from './ledgersFixture';
 
 afterEach(cleanup);
 
+/** The hint under a Do item's optional note (D-8931). */
+const DO_NOTE_HINT = 'Some items ask for one, such as who did each step and when. The coordinator checks the result itself and either closes the item or sends it back with what it found.';
+
 const show = (item = itemView(), over: Partial<React.ComponentProps<typeof ItemView>> = {}) => {
   const onTick = vi.fn(async () => {});
   const onDismiss = vi.fn(async () => {});
   render(<ItemView item={item} onTick={onTick} onDismiss={onDismiss} programmeLive={true} now={NOW} {...over} />);
   return { onTick, onDismiss };
 };
+
+describe('the item view\'s migration body', () => {
+  it('is handed the structure and the report, and draws both', () => {
+    show(itemView({ action: { verb: 'linear-report', migrationId: 3 } }), { migration: {
+      counts: { created: 1, moved: 1, closed: 0, left: 0, skipped: 1 }, entries: [],
+      structure: [{ programme: 'prog-a', title: null, backlog: false, declared: false, epics: [] }],
+      report: { skipped: ['AAA-5'], waiting: ['AAA-6'], movedSince: [], milestonesLeft: [] },
+    } });
+    expect([...document.querySelectorAll('[data-report-list]')].map((l) => l.getAttribute('data-report-list'))).toEqual(['skipped', 'waiting']);
+  });
+  it('a map item draws the structure it is handed', () => {
+    show(itemView({ action: { verb: 'linear-map', migrationId: 3 } }), { migration: {
+      counts: { created: 1, moved: 1, closed: 0, left: 0, skipped: 0 }, entries: [],
+      structure: [{ programme: 'prog-a', title: 'Programme A', backlog: true, declared: false, epics: [] }], report: null,
+    } });
+    expect(document.querySelector('[data-structure-programme="prog-a"]')).not.toBeNull();
+  });
+});
 
 describe('the item view', () => {
   it('shows what, why and the how as numbered steps', () => {
@@ -134,11 +155,65 @@ describe('the item view', () => {
     await waitFor(() => expect(onTick).toHaveBeenCalledWith('4'));
   });
 
-  it('Do posts no answer', async () => {
+  // D-8931: a Do item's tick may carry an optional note, because a coordinator may ask for one in the item's steps.
+  it('a Do item offers an optional note to the coordinator, with the hint that some items ask for one', () => {
+    show(itemView({ kind: 'do' }));
+    // The label wraps its hint, as the value field's does, so the name starts with the label's words.
+    const note = screen.getByRole('textbox', { name: /^Note to the coordinator \(optional\)/ }) as HTMLInputElement;
+    expect(note.maxLength).toBe(ANSWER_MAX);
+    expect(note.value).toBe('');
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    expect(within(panel).getAllByRole('textbox')).toEqual([note]);
+    expect(panel.textContent).toContain(DO_NOTE_HINT);
+    expect(panel.textContent).not.toContain('Nothing to fill in');
+    // The note is optional: Mark done is on with the field empty, and no count is drawn for a note that is not there.
+    expect((screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(panel.textContent).not.toContain(`of ${ANSWER_MAX} characters`);
+  });
+
+  it('Do posts no answer when the note is left empty, or holds only spaces', async () => {
     const { onTick } = show(itemView({ kind: 'do' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
     await waitFor(() => expect(onTick).toHaveBeenCalledTimes(1));
-    expect(onTick).toHaveBeenCalledWith();
+    expect(onTick.mock.calls[0]).toEqual([]);
+    cleanup();
+    const spaced = show(itemView({ kind: 'do' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(spaced.onTick).toHaveBeenCalledTimes(1));
+    expect(spaced.onTick.mock.calls[0]).toEqual([]);
+  });
+
+  it('Do posts the note, trimmed, when one is typed, and nothing joined to it', async () => {
+    const { onTick } = show(itemView({ kind: 'do' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: '  An administrator did step 1 at 14:05 UTC.  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(onTick).toHaveBeenCalledTimes(1));
+    expect(onTick.mock.calls[0]).toEqual(['An administrator did step 1 at 14:05 UTC.']);
+  });
+
+  it('a Do note has the limit and the count too, and a note past the limit is not sent', () => {
+    const { onTick } = show(itemView({ kind: 'do' }));
+    const note = screen.getByRole('textbox', { name: /note to the coordinator/i }) as HTMLInputElement;
+    const done = screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement;
+    fireEvent.change(note, { target: { value: ' 1234 ' } });
+    expect(screen.getByText(`4 of ${ANSWER_MAX} characters`)).toBeTruthy();
+    expect(done.disabled).toBe(false);
+    // a paste can outrun maxLength in some browsers
+    fireEvent.change(note, { target: { value: 'x'.repeat(ANSWER_MAX + 1) } });
+    expect(done.disabled).toBe(true);
+    fireEvent.click(done);
+    expect(onTick).not.toHaveBeenCalled();
+    fireEvent.change(note, { target: { value: 'x'.repeat(ANSWER_MAX) } });
+    expect(done.disabled).toBe(false);
+  });
+
+  it('a Do item that is being checked, or whose programme has ended, offers no note field', () => {
+    show(itemView({ kind: 'do', state: 'checking', tickedAt: NOW - MIN, answer: 'Done at noon.' }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    cleanup();
+    show(itemView({ kind: 'do' }), { programmeLive: false });
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 
   it('a refused tick shows the refusal sentence and leaves the button enabled', async () => {
@@ -173,8 +248,9 @@ describe('the item view', () => {
       'wrong-actor', // an operator's own tick and dismiss are never the wrong actor
     ];
     const operatorCodes = [...Object.values(LEDGER_ROUTE_REFUSALS), ...ITEM_MOVE_REFUSALS].filter((c) => !COORDINATOR_ONLY.includes(c));
-    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store.
-    const generic = ['bad-request', 'duplicate', 'not-configured'];
+    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store; and
+    // the two asks' words the answer-mark door's ask arm sends (answer marks B), which are the question lane's, not the ledger's.
+    const generic = ['bad-request', 'duplicate', 'not-configured', 'unknown-ask', 'ask-unreadable'];
     expect([...new Set([...operatorCodes, ...generic])].sort()).toEqual(Object.keys(LEDGER_REFUSAL_TEXT).sort());
   });
 
@@ -566,5 +642,37 @@ describe('item references and a closed item (D-8194)', () => {
     show(itemView({ kind: 'decide', options: ['A', 'B'], state: 'done', closedAt: NOW - MIN, answer: 'A' }));
     expect(screen.queryByRole('radio')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
+  });
+});
+
+describe('the answer marks on an item\'s page (Overlord W1)', () => {
+  const MARKS = { couldAnswer: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true }, unsure: { state: 'never' as const } };
+  it('draws both boxes in its panel when the item carries answerMarks, before and after the answer', () => {
+    show(itemView({ kind: 'value', answerMarks: MARKS }));
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    const boxes = within(panel).getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([[true, false], [false, false]]);
+    cleanup();
+    show(itemView({ kind: 'value', state: 'done', closedAt: NOW - MIN, answerMarks: MARKS }));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+  });
+  it('draws none when the field is absent, and disables both on a saved copy', () => {
+    show(itemView({ kind: 'decide' }));
+    expect(screen.queryAllByRole('checkbox')).toEqual([]);
+    cleanup();
+    show(itemView({ kind: 'value', answerMarks: MARKS }), { current: false });
+    for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+  // Answer marks C (#2900): a task's page draws one box, worded for a task, open and cleared.
+  it('a do item draws one box, "The Overlord could handle this", open and done, and none for unsure', () => {
+    for (const o of [{}, { state: 'done' as const, closedAt: NOW - MIN }]) {
+      show(itemView({ kind: 'do', ...o, answerMarks: { couldAnswer: MARKS.couldAnswer } }));
+      const panel = screen.getByRole('region', { name: 'Your move' });
+      const boxes = within(panel).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([[true, false]]);
+      expect(within(panel).getByLabelText('The Overlord could handle this')).toBe(boxes[0]);
+      expect(within(panel).queryByLabelText("I'm not sure of my answer")).toBeNull();
+      cleanup();
+    }
   });
 });

@@ -22,10 +22,28 @@ export const CLAUDE_BUILD_CAPTURES: readonly ClaudeBuildCapture[] = Object.keys(
 export type ClaudeBuildSource = 'rig' | 'fleet';
 export const CLAUDE_BUILD_SOURCE_MAP: Record<ClaudeBuildSource, true> = { rig: true, fleet: true };
 
-/** Why the queue's last try at a build sent no job. `no-test-box`: no box answers. `no-runner`: the box has no capture
- *  runner. A job that went out and got no answer is not one of these: it was sent, and counts as an attempt. */
-export type BuildCaptureNotSent = 'no-test-box' | 'no-runner';
-export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = { 'no-test-box': true, 'no-runner': true };
+/** Why the queue's last try at a build sent no job, each its own word (capture runner spec 2026-11-22 §2.2, §2.5 Table 6).
+ *  `no-test-box`: no box answers. `no-runner`: the box has no capture runner. `build-absent`: the box holds no checked copy of
+ *  the build, and the copy that follows it (below) did not change that. `path-refused`: the box's write guard refused a path
+ *  the capture would write. `not-started`: the frame never left the server (the agent link was down). `busy`: the fleet agent
+ *  is waiting on another capture. The copy's own three: `copy-refused` (the fleet's copy is not one ccrc sends: absent, not a
+ *  regular file, or over the size cap), `copy-failed` (it did not arrive intact, or the lane failed on the way) and
+ *  `no-admin-lane` (no admin lane is connected to carry it). A job that went out and got no answer is not one of these: it
+ *  was sent, and counts as an attempt. */
+export type BuildCaptureNotSent =
+  | 'no-test-box' | 'no-runner' | 'build-absent' | 'path-refused' | 'not-started' | 'busy'
+  | BuildCopyFailure;
+
+/** Why the copy of a build to the test box did not place it (spec §2.2): the not-sent words a failed copy leaves. */
+export type BuildCopyFailure = 'copy-refused' | 'copy-failed' | 'no-admin-lane';
+const BUILD_COPY_FAILURE_MAP: Record<BuildCopyFailure, true> = {
+  'copy-refused': true, 'copy-failed': true, 'no-admin-lane': true,
+};
+
+export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = {
+  'no-test-box': true, 'no-runner': true, 'build-absent': true, 'path-refused': true, 'not-started': true, busy: true,
+  ...BUILD_COPY_FAILURE_MAP,
+};
 
 /** What the queue's try at a build did: a job went out (`sent`, answered or not), or none could (why). */
 export type BuildCaptureTry = 'sent' | BuildCaptureNotSent;
@@ -46,8 +64,12 @@ export interface ClaudeBuildRecord {
   /** Why that last try sent nothing; null when it sent a job, or before any try. */
   readonly notSent: BuildCaptureNotSent | null;
   readonly verdictAt: number | null;
-  /** The replay output's tail, at most {@link BUILD_CAPTURE_OUTPUT_MAX} characters; null before a verdict. */
+  /** The replay output's tail, at most {@link BUILD_CAPTURE_OUTPUT_MAX} characters; null before a verdict. An automatic
+   *  retry keeps the last one while the build is queued again. */
   readonly output: string | null;
+  /** How many capture verdicts for the build failed, the retry ceiling's count (slug capture-retry-ceiling). 0 from a server
+   *  that predates it, which retries nothing: {@link captureStandingOf} reads its failed row as given up. */
+  readonly fails: number;
 }
 
 // ── the decider ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -71,7 +93,7 @@ export function buildTrustOf(records: readonly ClaudeBuildRecord[] | null, versi
   if (records === null) return { kind: 'untrusted', reason: 'record-unreadable' };
   const row = records.find((r) => r.build === version);
   if (row === undefined) return { kind: 'untrusted', reason: 'not-captured' };
-  if (row.capture === 'pass') return { kind: 'trusted', cwd: row.cwd };
+  if (captureStandingOf(row).kind === 'trusted') return { kind: 'trusted', cwd: row.cwd };
   return { kind: 'untrusted', reason: row.capture === 'fail' ? 'capture-failed' : 'capture-queued' };
 }
 
@@ -112,8 +134,81 @@ export function nextCaptureJob(records: readonly ClaudeBuildRecord[], now: numbe
   return due.map((r) => r.build).sort(newestFirst)[0] ?? null;
 }
 
+/** How many failed verdicts ccrc takes before it stops capturing a build again by itself and asks the operator (slug
+ *  capture-retry-ceiling). A replay that fails three times, an hour and then two apart, is the build's, not the box's. */
+export const BUILD_CAPTURE_FAIL_CEILING = 3;
+
+/** How long after its `fails`-th failed verdict a build is captured again: {@link BUILD_CAPTURE_RETRY_MS}, doubling. */
+export function captureRetryAfterMs(fails: number): number {
+  return BUILD_CAPTURE_RETRY_MS * 2 ** Math.max(0, fails - 1);
+}
+
+/** Where a build's capture stands for the operator: `trusted`; `queued` (ccrc is capturing it); `retrying` (its capture
+ *  failed and ccrc captures it again `at`, the `fails`-th of {@link BUILD_CAPTURE_FAIL_CEILING}); `given-up` (ccrc has stopped
+ *  retrying, so only the operator's Capture again sends it). Only `given-up` waits on the operator. */
+export type CaptureStanding =
+  | { readonly kind: 'trusted' | 'queued' }
+  | { readonly kind: 'retrying'; readonly fails: number; readonly at: number }
+  | { readonly kind: 'given-up'; readonly fails: number };
+
+/** THE STANDING's one decider, and the one home of "a passed capture is trusted", which {@link buildTrustOf} reads (review
+ *  3234 F16). A failed row with no count (a server that predates the ceiling) is given up: nothing retries it. */
+export function captureStandingOf(r: ClaudeBuildRecord): CaptureStanding {
+  if (r.capture === 'pass') return { kind: 'trusted' };
+  if (r.capture === 'queued') return { kind: 'queued' };
+  if (r.fails < 1 || r.fails >= BUILD_CAPTURE_FAIL_CEILING) return { kind: 'given-up', fails: r.fails };
+  return { kind: 'retrying', fails: r.fails, at: (r.verdictAt ?? 0) + captureRetryAfterMs(r.fails) };
+}
+
+/** Whether ccrc has stopped capturing the build by itself: only the operator's Capture again sends it now. */
+export function captureGivenUp(r: ClaudeBuildRecord): boolean {
+  return captureStandingOf(r).kind === 'given-up';
+}
+
+/** The failed builds ccrc captures again at `now` by itself: each `retrying` one whose time has come and that a session still
+ *  runs (`versions`, the sessions' builds), newest first. A build no session runs is not retried (review 3234 F5). */
+export function capturesToRetry(records: readonly ClaudeBuildRecord[], now: number, versions: readonly (string | null)[]): string[] {
+  return records.filter((r) => { const s = captureStandingOf(r); return s.kind === 'retrying' && now >= s.at && versions.includes(r.build); })
+    .map((r) => r.build).sort(newestFirst);
+}
+
+/** Whether ccrc tells the operator it gave up on `r`: given up, and a session still runs the build. One no session runs gives
+ *  up quietly, with no push and no item (review 3234 F5). */
+export function givenUpToTell(r: ClaudeBuildRecord, versions: readonly (string | null)[]): boolean {
+  return captureGivenUp(r) && versions.includes(r.build);
+}
+
+// ── one pass's acts (spec §2.2, D7) ─────────────────────────────────────────────────────────────────────────────
+
+/** What one act of a capture pass came to: a capture that went out (`sent`, answered or not), one that did not (its
+ *  not-sent word), or the copy (`copied`, or the copy's word). */
+export type CapturePassStep = 'sent' | BuildCaptureNotSent | 'copied';
+
+/** The lane's next act in a pass: send the capture, copy the build over the admin lane, or stop and record the pass. */
+export type CaptureNextAct = 'send' | 'copy' | 'stop';
+const CAPTURE_NEXT_ACT_MAP: Record<CaptureNextAct, true> = { send: true, copy: true, stop: true };
+export const CAPTURE_NEXT_ACTS = Object.keys(CAPTURE_NEXT_ACT_MAP) as CaptureNextAct[];
+
+/** THE COPY RULE, decided here and carried out by the lane (`server/src/buildCaptureLane.ts`): send the capture first; copy
+ *  only after the box refused it `build-absent`, once a pass, then send it again. Any other answer stops the pass. So a build
+ *  the box already holds is never copied, and a pass makes at most two sends and one copy, whatever the answers. */
+export function captureNextAct(steps: readonly CapturePassStep[]): CaptureNextAct {
+  const last = steps[steps.length - 1];
+  if (last === undefined || last === 'copied') return 'send';
+  const copied = steps.some((s) => s === 'copied' || has(BUILD_COPY_FAILURE_MAP, s));
+  return last === 'build-absent' && !copied ? 'copy' : 'stop';
+}
+
+/** What a stopped pass records as its try: its last act, a send's answer or the copy's failure. The rule always sends first
+ *  and sends again after a copy that placed the build, so a pass never ends empty or on `copied`; were it to, nothing went
+ *  out, and it reads as `not-started`. */
+export function captureTryOf(steps: readonly CapturePassStep[]): BuildCaptureTry {
+  const last = steps[steps.length - 1];
+  return last === undefined || last === 'copied' ? 'not-started' : last;
+}
+
 /** Why the queue cannot capture anything right now, read from the record alone: the queued build it tried last sent
- *  nothing, for want of a box or of a runner. Null when no queued build was tried, or the last try sent a job. The console
+ *  nothing, and why (its not-sent word). Null when no queued build was tried, or the last try sent a job. The console
  *  says it, so the operator is never left waiting on a capture that cannot happen. */
 export function captureBlockedBy(records: readonly ClaudeBuildRecord[]): BuildCaptureNotSent | null {
   let last: ClaudeBuildRecord | null = null;
@@ -161,6 +256,8 @@ export interface ClaudeBuildsView { readonly ok: true; readonly claudeBuilds: re
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 const isStamp = (v: unknown): v is number | null => v === null || isCount(v);
+/** `fails` is additive on the wire: absent (an older server) reads as 0, anything else must be a count. */
+const failsOf = (v: unknown): number | null => (v === undefined ? 0 : isCount(v) ? v : null);
 const has = <T extends string>(map: Record<T, true>, v: unknown): v is T => typeof v === 'string' && Object.prototype.hasOwnProperty.call(map, v);
 
 /** The wire list's ONE reader: every row well formed, or null. */
@@ -174,9 +271,11 @@ export function readClaudeBuildRecords(v: unknown): ClaudeBuildRecord[] | null {
       || typeof r['cwd'] !== 'boolean' || !isCount(r['seenAt']) || !isCount(r['attempts']) || !isStamp(r['lastAttemptAt'])
       || !isStamp(r['verdictAt']) || !(r['output'] === null || typeof r['output'] === 'string')
       || !(r['notSent'] === null || has(BUILD_CAPTURE_NOT_SENT_MAP, r['notSent']))) return null;
+    const fails = failsOf(r['fails']);
+    if (fails === null) return null;
     out.push({
       build: r['build'], source: r['source'], capture: r['capture'], cwd: r['cwd'], seenAt: r['seenAt'], attempts: r['attempts'],
-      lastAttemptAt: r['lastAttemptAt'], notSent: r['notSent'] as BuildCaptureNotSent | null, verdictAt: r['verdictAt'], output: r['output'] as string | null,
+      lastAttemptAt: r['lastAttemptAt'], notSent: r['notSent'] as BuildCaptureNotSent | null, verdictAt: r['verdictAt'], output: r['output'] as string | null, fails,
     });
   }
   return out;

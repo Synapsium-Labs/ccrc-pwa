@@ -12,12 +12,12 @@ import type { FleetState } from '../fleetstate.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { RunVerdict } from './runVerdicts.js';
 import {
-  abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
+  NO_CHILD_GATE, abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
   type RequestPlan,
 } from './closeDecide.js';
 import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
-import { verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
+import { doneRunOf, verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
 import {
   type AdvanceResult, type CoordStore, type LandingLandResult, type OpenSiblingsResult, type RunRow,
 } from './store.js';
@@ -31,7 +31,7 @@ import {
 import { queueSystemMail } from './rundefsTx.js';
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
-import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
+import { closePrFactsOf, mergedFactsOf, type CcdPrLine } from '../prstate.js';
 import type { NoticeSink } from '../notice.js';
 import { closeLandingOf } from './landed.js';
 import { raiseLandedNotice } from './landedLane.js';
@@ -75,7 +75,8 @@ export interface CloseRunDeps {
 export type CloseOutcome =
   | { ok: true; id: number; state: 'done' | 'failed';
       /** Is the workspace's claim GONE as a result of this close? `true` only
-       *  after a `ws-release` that actually succeeded.
+       *  after a `ws-release` that actually succeeded, or one not sent because
+       *  the registry positively listed the session as absent (D-8664).
        *
        *  `false` IS NOT ONE FACT — it is the negation of one, and a reader
        *  that renders a single sentence from it alone will be wrong. All five
@@ -288,19 +289,46 @@ function fleetArgv(deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort
   }
 }
 
-/** The check, (the caller's last look,) the act and ccd's answer for one composed fleet verb, in that order. */
+/** A fleet step that let the close go on: `gone` when the act was a release of a session the registry positively
+ *  lists as absent, so nothing was sent (D-8664). */
+interface FleetDone { readonly ok: true; readonly gone: boolean }
+
+/** The check, (the caller's last look,) the registry's answer for a release, the act and ccd's answer for one composed
+ *  fleet verb, in that order. */
 async function actOnFleet(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sessionId: string, act: FleetAct,
   /** Run between the check and the act: the sweep's gate, which must read the world right before ccd is asked. */
   before: () => Promise<CloseHalt | null> = async () => null,
-): Promise<CloseHalt | null> {
+): Promise<CloseHalt | FleetDone> {
   const verb = fleetArgv(deps, id, sessionId, act);
   const can = decideClose({ step: 'verb', verb: act.verb, can: verb.can });
   if (can.kind !== 'go') return stopped(deps, can);
   const held = await before();
   if (held !== null) return held;
+  const gone = await decideClose({ step: 'gone', verb: act.verb,
+    read: async () => (await readSessionRecord(deps.io, deps.cfg, sessionId)).kind });
+  if (gone.kind !== 'go') return stopped(deps, gone);
+  if (gone.plan.gone) return { ok: true, gone: true };
   const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });
-  return done.kind === 'go' ? null : stopped(deps, done);
+  return done.kind === 'go' ? { ok: true, gone: false } : stopped(deps, done);
+}
+
+/** D-6096: the answer of a close or abandon that composes no fleet act (an in-place run): nothing was sent, and the session
+ *  was not found gone, so no `fleet-act-omitted` row is written. */
+const NO_FLEET_ACT: FleetDone = { ok: true, gone: false };
+
+/** D-6096: an in-place run's abandon, in the fleet act's place: the sweep's gate alone, asked once. */
+async function noFleetAct(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sweep: SweepCloseGuard | undefined,
+): Promise<CloseHalt | FleetDone> {
+  const held = await sweepGateOf(deps, id, sweep);
+  return held !== null ? held : NO_FLEET_ACT;
+}
+
+/** D-8664: the trail of a release that was not sent because the session was already gone, written only after the
+ *  store's close committed (the `fleet-act-omitted:bad-session` convention). */
+function noteGone(deps: { coord: WatcherCoordPort }, id: number, causedBy: CloseCause, fleet: FleetDone): void {
+  if (fleet.gone) deps.coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:session-absent');
 }
 
 /** The sweep's gate (`decideClose`'s `sweep` step), or nothing for a door that has no guard. */
@@ -375,14 +403,20 @@ async function abandonRun(
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
   if (act.kind !== 'go') return stopped(deps, act);
-  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
-  if (halt !== null) return halt;
+  // D-6096: an in-place run composes no fleet act; the sweep's gate is still asked once, in the act's place, so the
+  // dead-coordinator lane's compare-and-set and re-measure bind this path as they bind every other.
+  const fleet = act.plan.fleet === null ? await noFleetAct(deps, id, sweep)
+    : await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
+  if (!fleet.ok) return fleet;
   if (sweep !== undefined) {
-    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released });
+    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released,
+      acted: act.plan.fleet !== null });
     if (after.kind !== 'go') return stopped(deps, after);
   }
   const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);
-  return late ?? { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
+  if (late !== null) return late;
+  noteGone(deps, id, causedBy, fleet);
+  return { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
 }
 
 /**
@@ -406,7 +440,7 @@ async function closeWorkRun(
   if (plan.verify) {
     const measured = await verifyDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId, project: run.project, branch: run.branch ?? '' }, plan.claim);
+      doneRunOf({ ...run, sessionId }), plan.claim);
     const verdict = decideClose({ step: 'verified', verdict: measured });
     if (verdict.kind !== 'go') return stopped(deps, verdict, run);
     line = verdict.plan.line;
@@ -421,14 +455,18 @@ async function closeWorkRun(
     branch: run.branch });
   if (ledger.kind !== 'go') return stopped(deps, ledger);
   coord.foldPrLineage(id, ledger.plan.entries);
-  const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet);
-  if (halt !== null) return halt;
+  const fleet = act.plan.fleet === null ? NO_FLEET_ACT : await actOnFleet(deps, id, sessionId, act.plan.fleet);   // D-6096: none for an in-place run
+  if (!fleet.ok) return fleet;
   // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
-  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
+  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281). The run's own bound PR,
+  // from the line `verifyDone` already measured, rides the same transaction (Overlord W2 done tests A, DT7); a close
+  // that measured no line, or whose verified claim names no PR or another one, records none (review 2377 F1), and
+  // nothing here reads the fleet again.
   const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: recordedHandoff(plan, verified),
-    program: run.program, viaClosing: true });
+    program: run.program, viaClosing: true, closePr: line === null ? null : closePrFactsOf(line, plan.claim.prNumber) });
   const committed = decideClose({ step: 'commit', closed, acted: true });
   if (committed.kind !== 'go') return stopped(deps, committed);
+  noteGone(deps, id, causedBy, fleet);
   if (line !== null) landOnClose(deps, run, state, line, Date.now());
   return { ok: true, id, state, released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
 }
@@ -531,7 +569,7 @@ async function closeReviewRun(
     }
     const verdict = await verifyReviewDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
+      doneRunOf({ ...work, sessionId: work.sessionId }),
       // Non-null: `state !== 'failed'` here means `state === 'done'`, and
       // `fpRequired` above was true in exactly that case — the guard already
       // refused a null `validFp` on that path.
@@ -592,8 +630,6 @@ async function closeReviewRun(
 
 /** What a close decided about the child, and the request it would hand off. */
 export interface ChildGate { readonly decision: ChildReclaimDecision; readonly request: ChildReclaimRequest | null }
-
-const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
 
 /**
  * Read both authorities and ask `childReclaimDecision`, inside the mutex and

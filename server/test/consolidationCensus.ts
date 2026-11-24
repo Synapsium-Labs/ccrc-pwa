@@ -108,7 +108,7 @@ export function ccdLauncherIn(root: string = REPO): string {
 /** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
  *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
  *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
-export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh'];
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh', 'ccd/lib/model-aliases.sh'];
 
 /** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
 export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
@@ -263,6 +263,8 @@ export const RAN_NARROW_WINDOW = 12;
 /** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
 export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+  // The `ccd route --set` answer's reader (`server/src/routeSetOutcome.ts`, mid-turn mail PR 4): `ran === false` is `unreachable` first.
+  'routeSetOutcome',
   // The project add's reader (`server/src/projectAdd.ts`), `classifyAddFailure`'s shape: `ran === false` is `other` first.
   'classifyProjectAddFailure',
   // The landed reader's call decider (`server/src/coord/landed.ts`): `ran === false` is `not-ran` first, the lane acts on it.
@@ -306,6 +308,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/coord/dispatch.ts', text: 'const holdRes = await deps.runCcd(holdArgv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/dispatch.ts', text: 'const routeRes = await deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
+  { file: 'server/src/coord/fingerprint.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/coord/routes.ts', text: 'const res = await deps.runCcd(argv);', nth: 3, arm: 'ok-only' },
@@ -314,6 +317,8 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsTree(call.project, call.ref === null ? null : docsRefText(call.ref))),', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsShowRange(call.project, call.target.where, call.target.section,', nth: 1, arm: 'carried' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
@@ -326,6 +331,9 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },
   { file: 'server/src/watch.ts', text: 'const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/watch.ts', text: 'const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));', nth: 1, arm: 'ok-only' },
+  // The renewal act's adapter (Overlord W1a): its call runs inside the serialiser's wrapper, then reads `res.ran === false`
+  // before any word of the runner's (`unreachable`, never a ccd answer).
+  { file: 'server/src/continuity/ccdSessionHost.ts', text: 'try { res = await (deps.around === undefined ? deps.runCcd(argv) : deps.around(sessionId, () => deps.runCcd(argv))); }', nth: 1, arm: 'explicit' },
 ];
 
 /** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */

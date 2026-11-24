@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { canonicalize, checkCcrcSwitchStat, checkPath, checkSteerOnStat, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
@@ -269,8 +270,10 @@ describe('whitelist.checkPath', () => {
     });
   });
 
-  // D-8406: a lane's class registry and catalogue, the two files the session's model picker reads, by exact name.
-  describe('the lane model files in ~/.ccrc/models — two exact names per lane, READ mode only', () => {
+  // R3b (model-class-advance wave 5): the lane-models read grant (D-8406) is retired. A lane's class registry and its
+  // catalogue are refused like every other file under ~/.ccrc, present or absent, so the server can read a lane's
+  // models only through the `models` op. Each case reds the day the grant comes back, in any of its old shapes.
+  describe('the lane model files in ~/.ccrc/models — refused since R3b', () => {
     function seedModels(): string {
       seed();
       const dir = path.join(home, '.ccrc', 'models');
@@ -278,53 +281,47 @@ describe('whitelist.checkPath', () => {
       return dir;
     }
 
-    it('admits a lane\'s registry and catalogue for read, absent or present, at the canonical path', async () => {
+    it('refuses a lane\'s registry and catalogue, absent or present, for read and for write', async () => {
       const dir = seedModels();
       const cfg = { home, projectsRoot };
-      const canonicalDir = await canonicalize(dir);
-      for (const b of ['lane-a.classes.json', 'lane-a.json']) {
+      for (const b of ['lane-a.classes.json', 'lane-a.json', 'a.json', 'lane-b.classes.json']) {
         const p = path.join(dir, b);
-        expect(await checkPath(p, cfg, 'read'), `${b} (absent)`).toBe(path.join(canonicalDir, b));
+        expect(await checkPath(p, cfg, 'read'), `${b} (absent) must NOT be readable`).toBeNull();
         writeFileSync(p, '{}\n');
-        expect(await checkPath(p, cfg, 'read'), `${b} (present)`).toBe(path.join(canonicalDir, b));
+        expect(await checkPath(p, cfg, 'read'), `${b} (present) must NOT be readable`).toBeNull();
         expect(await checkPath(p, cfg, 'write'), `${b} must NOT be writable`).toBeNull();
       }
     });
 
-    it('refuses the directory, every sibling file, a reserved word, and the same names anywhere else', async () => {
+    it('refuses the directory and every sibling file', async () => {
       const dir = seedModels();
       const cfg = { home, projectsRoot };
-      for (const r of ['lane-a.effort.json', 'lane-a.windows.json', 'lane-a.advance.json', 'lane-a.classes.tsv',
-        'lane-a.aliases.json', 'litellm.json', 'lane-a.json.tmp', 'Lane-a.json']) {
+      for (const r of ['lane-a.effort.json', 'lane-a.windows.json', 'lane-a.advance.json', 'lane-a.classes.tsv', 'litellm.json']) {
         writeFileSync(path.join(dir, r), '{}\n');
         expect(await checkPath(path.join(dir, r), cfg, 'read'), `${r} must NOT be readable`).toBeNull();
       }
       expect(await checkPath(dir, cfg, 'read'), '~/.ccrc/models itself must NOT be readable').toBeNull();
-      expect(await checkPath(path.join(home, '.ccrc', 'lane-a.json'), cfg, 'read')).toBeNull();
-      expect(await checkPath(path.join(home, '.ccrc', 'models-x', 'lane-a.json'), cfg, 'read')).toBeNull();
-      expect(await checkPath(path.join(home, '.ccrc', 'models', 'sub', 'lane-a.json'), cfg, 'read')).toBeNull();
-      expect(await checkPath(path.join(outside, 'models', 'lane-a.json'), cfg, 'read')).toBeNull();
     });
 
-    it('a live symlink at a lane file\'s name, or a models directory that is a symlink, is refused', async () => {
-      const dir = seedModels();
-      const cfg = { home, projectsRoot };
-      writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
-      writeFileSync(path.join(dir, 'lane-b.json'), '{}\n');
-      symlinkSync(path.join(home, '.ccrc', 'agent.env'), path.join(dir, 'lane-a.classes.json'));
-      // Canonical-path membership alone would admit this one: it resolves onto another lane's real catalogue.
-      symlinkSync(path.join(dir, 'lane-b.json'), path.join(dir, 'lane-a.json'));
-      for (const b of ['lane-a.classes.json', 'lane-a.json']) {
-        expect(await checkPath(path.join(dir, b), cfg, 'read'), `${b} (a symlink) must NOT be readable`).toBeNull();
-      }
-      expect(await checkPath(path.join(dir, 'lane-b.json'), cfg, 'read'), 'the real file keeps its grant').not.toBeNull();
+    /** Every `.ts` file under `dir`, at any depth (F4), that names one of the grant's helpers or a model file's name. */
+    const modelFileHolders = (dir: string): string[] => readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => /\b(isLaneModelsReadName|isLaneModelsFile|registryFileName|catalogueFileName|MODELS_DIR_NAME)\b/
+        .test(readFileSync(path.join(dir, f), 'utf8')))
+      .sort();
 
-      seed();
-      const real = mkTmp('ccrc-wl-models-real-');
-      mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-      symlinkSync(real, path.join(home, '.ccrc', 'models'));
-      writeFileSync(path.join(real, 'lane-a.json'), '{}\n');
-      expect(await checkPath(path.join(home, '.ccrc', 'models', 'lane-a.json'), { home, projectsRoot }, 'read')).toBeNull();
+    it('CONTROL: the scan finds a planted name at the top and in a subdirectory, and passes a clean file', () => {
+      const dir = mkTmp('ccrc-wl-models-scan-');
+      mkdirSync(path.join(dir, 'sub', 'deeper'), { recursive: true });
+      writeFileSync(path.join(dir, 'top.ts'), "import { MODELS_DIR_NAME } from 'x';\n");
+      writeFileSync(path.join(dir, 'sub', 'deeper', 'planted.ts'), "const p = registryFileName('lane-a');\n");
+      writeFileSync(path.join(dir, 'sub', 'clean.ts'), 'export const x = 1;\n');
+      expect(modelFileHolders(dir)).toEqual(['sub/deeper/planted.ts', 'top.ts'].map((f) => path.join(...f.split('/'))));
+    });
+
+    it('the agent\'s source names no lane model file, at any depth: the grant\'s helpers are gone', () => {
+      const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+      expect(modelFileHolders(srcDir)).toEqual([]);
     });
   });
 });
@@ -543,6 +540,16 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['pr-template'])).toBe(false);
   });
 
+  // THE SKILL SELF-INSTALL (D-8126): one account named first, and nothing after it but the id.
+  it('grants skill-ensure ONLY with --wrapper, in both directions', () => {
+    expect(isExecAllowed('ccd', ['skill-ensure', '--wrapper', 'lane-a'])).toBe(true);
+    expect(isExecAllowed('ccd', ['skill-ensure'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', 'lane-a'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', 'lane-a', '--wrapper'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure-x', '--wrapper', 'lane-a'])).toBe(false);
+  });
+
   it('grants project-pool ONLY with --project, in both directions', () => {
     // The flag is not a confirmation token here, it is the verb's whole
     // argument surface — and prefix matching leaves everything after it
@@ -569,7 +576,12 @@ describe('whitelist.isExecAllowed', () => {
       '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo'])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'])).toBe(true);
-    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch']) {
+    // One doc's history (docs W5b): 8 tokens after the verb, granted on `--project` alone.
+    expect(isExecAllowed('ccd', ['docs-log', '--project', 'demo', '--commit', sha, '--section', 'specs', '--path',
+      'a.md'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-log', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-log', '--commit', sha, '--project', 'demo'])).toBe(false);
+    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log']) {
       expect(isExecAllowed('ccd', [verb]), verb).toBe(false);
     }
     expect(isExecAllowed('ccd', ['docs-tree', 'demo'])).toBe(false);

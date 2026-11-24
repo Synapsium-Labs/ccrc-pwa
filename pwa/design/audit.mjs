@@ -963,7 +963,7 @@ export const INHERITED_GROUNDS = {
   // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
   '.proj-pending, .proj-work': {
     under: ['var(--bg-surface)'],
-    why: "the pending spawn's row and, since delegation broker wave 4, a delegated activity's, worktree's or unowned tree's line: one rule, the same inert nested line in .proj-nest inside .proj-card-body, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
+    why: "the pending spawn's row and the delegation entry's line (the session header's entry list and its worktrees; the fleet list draws none since D-8782): one rule, the same inert line, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
   },
   '.proj-work-parts > *:not(:first-child)::before': {
     under: ['var(--bg-surface)'],
@@ -997,6 +997,25 @@ export const INHERITED_GROUNDS = {
   '.archive-project': {
     under: ['var(--bg-surface)'],
     why: "the row's project cell, inside .archive-row on the same Section card ground (D-5102)",
+  },
+  // ── /archive's "Work no session owns" section (desktop polish H4, D-8828) ─
+  // Its rows and subheads sit inside ArchiveUnownedWork's <Section> (the page's own card, --bg-surface by SECTION_CARD), so every
+  // ink is measured on that ground. None of these selectors names a painted ancestor, so no route could ground them.
+  '.archive-unowned-sub': {
+    under: ['var(--bg-surface)'],
+    why: "the section's subhead band (`No single owner`, `Neither session listed`), inside ArchiveUnownedWork's <Section>, whose card paints var(--bg-surface) (SECTION_CARD in @ccrc/ui's section.tsx: utilities, so no CSS selector names it)",
+  },
+  '.archive-unowned-row': {
+    under: ['var(--bg-surface)'],
+    why: "an unowned tree's or a worktree's row, inside ArchiveUnownedWork's <Section> card on var(--bg-surface); it paints no ground of its own",
+  },
+  '.archive-unowned-meta': {
+    under: ['var(--bg-surface)'],
+    why: "a row's second line (the verdict and the age, or the disposition), inside .archive-unowned-row on the Section card's var(--bg-surface); the tertiary ink is .archive-size's, on the same ground",
+  },
+  '.archive-unowned-count': {
+    under: ['var(--bg-page)', 'var(--bg-surface)'],
+    why: "a count, or the presence sentence, beside the section's title or a subhead. The title sits in the Section's head, above its card on the page's var(--bg-page); a subhead sits inside the card on var(--bg-surface). The tertiary ink is the one the Section's own scope line (SECTION_SCOPE) draws on the page ground",
   },
   '.fleet-archived-row, .fleet-runs-row': {
     under: ['var(--bg-page)', 'var(--bg-surface)'],
@@ -1111,6 +1130,35 @@ export const INHERITED_GROUNDS = {
   '.msg-plain-note': {
     under: ['var(--bg-page)'],
     why: "the one-line note under a chat message shown as plain text (lib/markdown.tsx's MsgPlain, a <p> after the <pre className=\"msg-plain\">). It is a child of .msg-assist, which paints no background, inside .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .settings-back reasoning. Its selector names no painted ancestor, so no route could ground it. An opened compaction recap puts the same note on .compaction's --bg-surface, where --ink-secondary measures higher still (tokens.css: 8.67:1 dark, 7.41:1 light); the auditor takes one ground per rule",
+  },
+  // ── desktop polish wave 168: the tool-activity row ────────────────────
+  '.tool-activity-row': {
+    under: ['var(--bg-page)'],
+    why: "the row, a button with no background: its default ink. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-title': {
+    under: ['var(--bg-page)'],
+    why: "the title, 'Tool activity'. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-sep': {
+    under: ['var(--bg-page)'],
+    why: "the separator dot between the row's words. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-state': {
+    under: ['var(--bg-page)'],
+    why: "the running state, in the busy status ink. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-latest': {
+    under: ['var(--bg-page)'],
+    why: "the newest call's one-line summary. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-wait': {
+    under: ['var(--bg-page)'],
+    why: "the wait line of the current turn's newest row, in the attention status ink, beside its control. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
+  },
+  '.tool-activity-answer': {
+    under: ['var(--bg-page)'],
+    why: "the wait line's control, a bordered button with no background. chat's tool-activity row (desktop polish wave 168, ToolActivityRow.tsx): it sets an ink and paints no ground of its own, and neither do .tool-activity or the list's .chat-item; it sits in .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .msg-plain-note reasoning. Its selector names no painted ancestor, so no route could ground it",
   },
   '.build-line': {
     under: ['var(--bg-surface)'],

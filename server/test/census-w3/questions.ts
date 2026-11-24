@@ -228,13 +228,25 @@ export function questionDoorIns(root: string = REPO): DoorInSite[] {
 
 /** The `CoordStore` question methods, a CLOSED list (slug question-census): every public `CoordStore` method whose
  *  name says ask, approval or question is on it, or on `NOT_QUESTION_STORE_METHODS`, and the census test reds on a
- *  method on neither (`coordStoreQuestionShapedMethods`). 32. */
+ *  method on neither (`coordStoreQuestionShapedMethods`). 43 (answer marks B added `askMarkTargets` and `askMarkRead`;
+ *  approvals PR 1 `approvalRowsForCensus`, which the census read reaches through `questions.ts#censusSources`; approvals PR 3
+ *  the park's eight). */
 export const QUESTION_STORE_METHODS: readonly string[] = [
   'askById', 'insertAsk', 'asksForParent', 'heldAskFor', 'currentAskFor', 'currentAsksFor', 'takeAskForAnswer', 'untakeAsk',
   'settleAsk', 'releaseAsk', 'declineAsk', 'staleAsk', 'restampAsk', 'heldQuestionRows', 'heldApprovalRowsByChild',
   'approvalById', 'approvalsForChild', 'heldApprovalsFor', 'approvalsInState', 'insertApproval', 'takeApprovalForRule',
   'declineApproval', 'lapseApproval', 'markApprovalOperator', 'markApprovalOperatorRows', 'staleApproval',
   'pruneApprovalInputs', 'pruneAskQuestions', 'digestAsks', 'digestApprovals', 'askForCorrection', 'driftHeldQuestions',
+  // Overlord W1, answer marks B: the reads of the asks the operator has, reached through `questions.ts#markableAsks` and
+  // `questions.ts#askForMark`.
+  'askMarkTargets', 'askMarkRead',
+  // Approvals PR 1: the census read's minted rows, reached through `questions.ts#censusSources`.
+  'approvalRowsForCensus',
+  // Approvals PR 3, the park (each reached only from the questions owner, over `approvalParkStore.ts`): the mint with its
+  // park step, the one write of `parked`, the last-poll move's read, the ruling read's `fetchedAt`, the park's read, its
+  // ruling's record and spend, and its prune.
+  'insertApprovalAt', 'parkApprovalRow', 'approvalsUnfetchedLive', 'markApprovalFetched', 'approvalPark',
+  'recordApprovalParkRuling', 'meetApprovalParkRuling', 'pruneApprovalParks',
 ];
 
 /** Public `CoordStore` methods whose names look like a question method and are not one, each with why. */
@@ -242,10 +254,13 @@ export const NOT_QUESTION_STORE_METHODS: Readonly<Record<string, string>> = {
   raiseReviewCapAsk: "the review cap's own raise row (D-6795), not the asks table",
   digestDay: "the digest's send ledger, not a question table",
   claimDigestDay: "the digest's send ledger, not a question table",
+  insertDigestResponses: "the response record's digest lines (Overlord W1 responses B), not a question table",
+  approvalPushSources: "the push outbox's source column counted for the approval census (approvals PR 1), not a question table",
 };
 
 /** The public `CoordStore` methods (no `private`) whose name says ask, approval, question or digest: the set
- *  `QUESTION_STORE_METHODS` and `NOT_QUESTION_STORE_METHODS` must partition. */
+ *  `QUESTION_STORE_METHODS` and `NOT_QUESTION_STORE_METHODS` must partition. An overloaded method's signatures are one
+ *  method, named once (slug overloads-count-once). */
 export function coordStoreQuestionShapedMethods(root: string = REPO): string[] {
   const abs = path.join(root, 'server/src/coord/store.ts');
   if (!existsSync(abs)) return [];
@@ -254,7 +269,7 @@ export function coordStoreQuestionShapedMethods(root: string = REPO): string[] {
     .filter((s) => s.kind === 'method' && s.name.startsWith('CoordStore.')
       && !/^\s*(?:(?:static|async|override)\s+)*private\b/.test(parsed.text.slice(s.start, s.start + 40)))
     .map((s) => s.name.slice('CoordStore.'.length))
-    .filter((n) => /ask|approv|question|digest/i.test(n))
+    .filter((n, i, all) => /ask|approv|question|digest/i.test(n) && all.indexOf(n) === i)
     .sort();
 }
 

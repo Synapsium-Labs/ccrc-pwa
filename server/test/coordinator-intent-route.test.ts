@@ -27,11 +27,10 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DelegationDurability,
   decodeDelegationCheckpoint,
-  type DelegationDurabilityDeps,
-  type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
+import { DelegationDurability, type DelegationDurabilityDeps } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   COORDINATOR_INTENT_ACTIONS,

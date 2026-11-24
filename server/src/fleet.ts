@@ -1,4 +1,5 @@
 import type { CcrcConfig } from './config.js';
+import { advisorReadoutsOf } from './continuity/advisorReadout.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import { pidFromListing, verdictFromListing, type PaneListing } from './tickPlan.js';
 import type { Tmux } from './exec.js';
@@ -84,7 +85,13 @@ export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | nu
 /** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
  *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
 export function wireHookAsk(ask: HookAsk): HookAsk {
-  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
+  return 'approval' in ask ? {
+    approval: {
+      tool: ask.approval.tool, summary: redactCommand(ask.approval.summary),
+      // Approvals PR 2: a subagent's envelope says so, for the console's "one of its subagents asks" line.
+      ...(ask.approval.thread === 'subagent' ? { thread: 'subagent' as const } : {}),
+    },
+  } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {
@@ -639,6 +646,8 @@ export async function assembleFleetWithPanePids(
   // Workspace lifecycle §5.1: ONE run read for the whole assembly, like the placement read above.
   const released = readReleased(coord, recs.map((r) => r.id));
   const nowMs = now * 1000;
+  // The coordinator advisor's readout (plan 2026-11-23-coordinator-advisor PR D): ONE batched read, like the two above.
+  const advisors = advisorReadoutsOf(coord, recs, nowMs);
   const sessions = await Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
@@ -869,7 +878,8 @@ export async function assembleFleetWithPanePids(
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       // D-5296: the quiet "with coordinator" state, from the same row.
       withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs, approvalsByChild.get(r.id) ?? null),
-      subagents: hs?.subagents ?? null,
+      // H1b (D-8862): the roster's `id` is server-internal; the wire and the state cache keep `{name, startedAt}`.
+      subagents: hs?.subagents.map(({ name, startedAt }) => ({ name, startedAt })) ?? null,
       // `background-aware-working` (D-5231): the delegated work a main Stop
       // left running, and ONLY when the live file's own word covers that work
       // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
@@ -890,6 +900,9 @@ export async function assembleFleetWithPanePids(
       hibernatedAt: r.hibernatedAt,
       // D-8121: the spawn's browser MCP record, carried as is; null when the row has none.
       browserMcp: r.browserMcp ?? null,
+      // The coordinator advisor (D-8967): both absent for a row the advisor never touched, so its shape is unchanged.
+      ...(r.advisorSpawn === undefined ? {} : { advisorSpawn: r.advisorSpawn }),
+      ...((a) => (a === undefined ? {} : { advisor: a }))(advisors.get(r.id)),
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

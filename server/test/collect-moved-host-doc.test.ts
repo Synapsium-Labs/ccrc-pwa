@@ -8,7 +8,7 @@ import { parseCollectAudit } from '../src/collectLane.js';
 const ID = 'project-a-quiet-reef';
 const TOKEN = 'b'.repeat(64);
 /** A collectable document in the order ccd prints it, `witness` key optional. */
-const doc = (o: { witness?: string; resume?: string; verdict?: string } = {}): string => JSON.stringify({
+const doc = (o: { witness?: string; resume?: string; verdict?: string; recordedDevice?: string } = {}): string => JSON.stringify({
   session: ID, mode: 'collect', exists: true,
   collect: {
     leaf: `/fixture-home/.cc-tmp/${ID}`,
@@ -17,6 +17,7 @@ const doc = (o: { witness?: string; resume?: string; verdict?: string } = {}): s
   },
   ...(o.resume === undefined ? {} : { resume: o.resume }),
   ...(o.witness === undefined ? {} : { witness: o.witness }),
+  ...(o.recordedDevice === undefined ? {} : { recordedDevice: o.recordedDevice }),
   verdict: o.verdict ?? 'collectable', detail: '',
   ...((o.verdict ?? 'collectable') === 'collectable' ? { token: TOKEN } : {}),
 });
@@ -39,5 +40,29 @@ describe('the collect lane reads a released leaf’s document as it reads any ot
       .toEqual(parseCollectAudit(ID, true, doc({ resume: 'moved' }), ''));
     expect(parseCollectAudit(ID, true, doc({ witness: 'moved-host', verdict: 'in-use' }), ''))
       .toEqual(parseCollectAudit(ID, true, doc({ verdict: 'in-use' }), ''));
+  });
+});
+
+// THE SAME FOR A RECORDED DEVICE THAT IS GONE (D-8948). `ws-audit --collect` says
+// `"recordedDevice":"gone"` at the top of its document when it believed an absence although the witness or the record
+// names another device, because that device is proven gone from the box; and a record on such a device answers the
+// resume phase `restart`. The reader ignores the first and takes any word as a phase, so the lane needs no change.
+describe('the collect lane reads a gone recorded device’s document as it reads any other', () => {
+  it('a collectable document carrying recordedDevice: gone classifies as the same document without it', () => {
+    expect(parseCollectAudit(ID, true, doc({ recordedDevice: 'gone' }), ''))
+      .toEqual(parseCollectAudit(ID, true, doc(), ''));
+  });
+
+  it('the phase `restart` is read as a resume, as `moved` is, with the key or without it', () => {
+    const restart = parseCollectAudit(ID, true, doc({ resume: 'restart', recordedDevice: 'gone' }), '');
+    expect(restart).toEqual({ ...parseCollectAudit(ID, true, doc({ resume: 'moved' }), ''), resume: 'restart' });
+    expect(restart).toEqual(parseCollectAudit(ID, true, doc({ resume: 'restart' }), ''));
+  });
+
+  it('a refusal and an unmeasured answer carrying the key read the same as without it', () => {
+    expect(parseCollectAudit(ID, true, doc({ recordedDevice: 'gone', verdict: 'quarantine-kept' }), ''))
+      .toEqual(parseCollectAudit(ID, true, doc({ verdict: 'quarantine-kept' }), ''));
+    expect(parseCollectAudit(ID, true, doc({ recordedDevice: 'gone', verdict: 'paused' }), ''))
+      .toEqual(parseCollectAudit(ID, true, doc({ verdict: 'paused' }), ''));
   });
 });

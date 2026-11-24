@@ -33,7 +33,7 @@ import {
   ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, parseItemActBody, refusedCloseDetail, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
-  nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  nextItemState, outsideDocLink, parseGoalsVersion, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -43,23 +43,38 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { CloseOutcome } from './close.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
-import { callViewOf } from './coordCalls.js';
+import { callViewOf, clearedCallViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
+import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
+import { portfolioFor } from './portfolio.js';
+import type { SpendUsageRead } from './portfolioStore.js';
+import type { LiveAskRead } from './ports.js';
+import { deviceActor } from '../ccdargv.js';
+import type { CallerIdentity } from '../auth/callerIdentity.js';
+import { consoleSubject } from '../auth/attributionIdentity.js';
+import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
+import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
+import type { AnswerMarksRead } from './answerMarkStore.js';
+import { askForMark, markableAsks, parkedApprovalsView } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, operatorSecretLaneId, slotChains, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
+import type { BoundRowRef } from './pushOutboxStore.js';
+import { WAITING_URL } from '../pushOutbox.js';
+import { itemBoundOf, type OutboxView } from '../pushSender.js';
+import type { OtherLane } from './otherLanes.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
 export interface LedgerCoordinatorDeps {
   coord: CoordStore | undefined;
   requireMailToken: (req: FastifyRequest, reply: FastifyReply, route: string) => boolean;
-  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
+  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid', lane?: OtherLane) => Promise<boolean>;
   notice: NoticeSink;
   bus: Bus;
   now: () => number;
@@ -68,10 +83,11 @@ export interface LedgerCoordinatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
   /** A secret item's slot state for its view (plan PL6): the coordinator learns only that it is set. */
   secretOf: SecretMetaOf;
+  /** The push outbox (Overlord W1, Task 5): the sender's view, from which an item's bound write is built (`itemBoundOf`)
+   *  and its bound send re-reads its source. Absent (a narrow test), an item writes no row and pushes as before. */
+  outbox?: OutboxView | undefined;
 }
 
-/** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
-const WAITING_URL = '/waiting';
 /** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
 const RULING_MAX = 600;
 /** The coordinator's note when it sends an item back (spec §3.3). */
@@ -93,7 +109,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot, action: row.action,
+    secretSlot: row.secretSlot, action: row.action, revision: row.revision,
     secretSet: secret === null ? null
       : 'unreadable' in secret ? { unreadable: true }
         // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review
@@ -105,12 +121,22 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
   };
 }
 
+/** What an item's view is given of the operator's answer marks (Overlord W1, plan w1-delegation-marks.md Task 3, F13): the
+ *  store's read of these rows, or `'none'` for the coordinator's box-token read (`GET /api/programmes/:slug/items`), which
+ *  never carries a mark: a coordinator never sees the operator's unsure marks. Every operator answer passes a read, and
+ *  `itemMarksView` (L1) decides whether the item carries the field. */
+export type MarksOf = 'none' | AnswerMarksRead;
+const NO_RECORDS = { couldAnswer: null, unsure: null } as const;
+/** One row's marks from a read of many: its newest records (none: both `never`), or the read's failure. */
+const marksOfRow = (marks: AnswerMarksRead, id: number): ItemMarkRead => (marks.ok ? { ok: true, ...(marks.newest.get(id) ?? NO_RECORDS) } : marks);
+
 /** THE ONE BUILDER of an `ItemView` (plan PL4, review 1331 A3): the coordinator's list, the operator's routes and the
  *  `/ws/fleet` frame all come through here, so a label cannot differ between them. It MEASURES the inputs of `itemIsStale`
  *  (the newest tick mail's delivery state, the coordinator's presence) and hands them to that L1 decider; it decides
  *  nothing itself. Only a `checking` item is measured: an item with no coordinator at all reads `absent`. */
 export function viewOfItem(
-  coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
+  coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf,
+  marks: MarksOf,
 ): ItemView {
   let stale = false;
   if (row.state === 'checking') {
@@ -124,7 +150,10 @@ export function viewOfItem(
     });
   }
   const secret = row.kind === 'secret' && row.secretSlot !== null ? secretOf(row.program, row.secretSlot) : null;
-  return itemViewOf(row, coord.itemHistory(row.id), stale, secret);
+  const view = itemViewOf(row, coord.itemHistory(row.id), stale, secret);
+  if (marks === 'none') return view;
+  const answerMarks = itemMarksView(row, now, marksOfRow(marks, row.id));
+  return answerMarks === undefined ? view : { ...view, answerMarks };
 }
 
 /** The goals read's window on a programme's big calls (D-8126). */
@@ -136,20 +165,35 @@ const GOALS_BIG_CALLS_MAX = 20;
 const RUN_ALREADY_CLOSED_NOTE = 'The run had already closed.';
 
 export function waitingViewOf(
-  coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
+  coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, liveAsk: LiveAskRead,
+  secretOf: SecretMetaOf = NO_SECRETS,
 ): WaitingView {
   // A death between the operator's act and its item leaves an open end request on a closed run: the next read closes it.
   coord.settleEndRequestsOfClosedRuns(RUN_ALREADY_CLOSED_NOTE, now);
   const { open, cleared } = coord.itemsFor(null, now);
   const groups = coord.callsForOperator(now);
   const programmes = [...new Set([...open.map((i) => i.program), ...cleared.map((i) => i.program), ...coord.pinnedProgrammes()])].sort();
+  // One read of every listed item's marks; a failed read gives each markable item `unmeasured` and never blocks the list.
+  const marks = coord.answerMarksOf('item', [...open, ...cleared].map((r) => r.id));
   return {
-    items: open.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
-    cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
+    items: open.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf, marks)),
+    cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf, marks)),
     goals: programmes.map((p) => coord.goalsFor(p)),
     calls: groups.open.map(callViewOf),
-    callsCleared: groups.cleared.map(callViewOf),
+    callsCleared: groups.cleared.map((r) => clearedCallViewOf(r, now)),
+    ...asksViewOf(coord, now, liveAsk),
+    ...parkedApprovalsView(coord, now),
   };
+}
+
+/** The asks the operator has, with their marks (answer marks B, plan Task 5): one read of the asks and one of their marks. A
+ *  failed read of the asks leaves both lists absent, "this server cannot mark an ask now", never an empty list that reads as
+ *  "none"; a failed mark read gives each row both marks `unmeasured`. Neither blocks the list. */
+function asksViewOf(coord: CoordStore, now: number, liveAsk: LiveAskRead): Pick<WaitingView, 'asks' | 'asksCleared'> {
+  const targets = markableAsks(coord, now, liveAsk);
+  if (!targets.ok) return {};
+  const marks = coord.answerMarksOf('ask', targets.rows.map((a) => a.id));
+  return askListsView(targets.rows, (id) => marksOfRow(marks, id));
 }
 
 /** One programme's goals read, once for every door (`GET /api/programmes/:slug/goals`): the pin and the programme's open items
@@ -167,6 +211,15 @@ type Body = Record<string, unknown>;
 const isObject = (v: unknown): v is Body => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown, max: number): string | null =>
   typeof v === 'string' && v.trim() !== '' && v.length <= max ? v.trim() : null;
+/** A text the body may leave out (D-8931; a do item's note). Three answers, told apart: no text (absent, `null`,
+ *  or a text that is empty once trimmed), the text itself, trimmed, or a refusal (not a text, or longer than `max`, counted
+ *  before the trim as `text` counts it). */
+const optionalText = (v: unknown, max: number): { ok: true; text: string | null } | { ok: false } => {
+  if (v === undefined || v === null) return { ok: true, text: null };
+  if (typeof v !== 'string' || v.length > max) return { ok: false };
+  const trimmed = v.trim();
+  return { ok: true, text: trimmed === '' ? null : trimmed };
+};
 const posInt = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 ? v : null);
 
 /** The attribution pair, from a body or a query. Both must be non-empty strings. */
@@ -270,12 +323,19 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
 
   /** A blocking item must reach the operator. It is a `coord` notice with no session: a `run` notice naming the
    *  coordinator's session is held back while the operator views that session, and a `run` notice with an empty
-   *  session is the review-cap notice's shape alone (D-6911). */
-  const pushBlocking = (item: ItemRow): void => {
+   *  session is the review-cap notice's shape alone (D-6911). `push` names its two rowless arms apart (review 2150 F9):
+   *  `held`, an item held at its raise, gets nothing now (the held drain stamps it at `heldUntil`), and `unwired`, a
+   *  composition with no push outbox, sends today's unbound push. */
+  const pushBlocking = (item: ItemRow, push: { readonly row: BoundRowRef } | 'held' | 'unwired'): void => {
+    if (push === 'held') return;
     // `url` is the list a tap opens (review 1331 F1; review 1332 F6 measured that `opts.url` reaches `sendPush`). The feed
-    // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's.
+    // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's. With the push outbox the
+    // item's row, written by its move, carries the copy (`itemPushPayload`), and the funnel sends that row (I2).
+    const outbox = deps.outbox;
     deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
-      { tag: `item-${item.id}`, url: WAITING_URL });
+      push === 'unwired' || outbox === undefined ? { tag: `item-${item.id}`, url: WAITING_URL } : { bound: {
+        row: { id: push.row.id, source: 'item', sourceId: item.id }, due: push.row.due, viewing: push.row.viewing, settledOf: outbox.settledOf,
+      } });
   };
 
   /** The refusal of a text that links a document outside the console (`outsideDocLink`, spec D28): the raise route's and the
@@ -301,7 +361,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
     if (outside !== null) return refuseOutsideDocLink(reply, outside);
-    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
+    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid', 'itemRaise'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
     if (v.runId !== null) {
@@ -311,8 +371,12 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (read.run.program !== slug) return bad(reply, `run ${v.runId} belongs to another programme`);
     }
     const now = deps.now();
-    const id = coord.raiseItem({ program: slug, raisedBy: who.byId, ...v }, now);
-    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow);
+    const input = { program: slug, raisedBy: who.byId, ...v };
+    const { id, row } = deps.outbox === undefined ? { id: coord.raiseItem(input, now), row: null }
+      : coord.raiseItemReached(input, now, 'coordinator', itemBoundOf(deps.outbox.deps, v, 'reach'));
+    if (v.neededBy === 'blocking') {
+      pushBlocking(coord.itemById(id) as ItemRow, deps.outbox === undefined ? 'unwired' : row === null ? 'held' : { row });
+    }
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -327,7 +391,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const { open, cleared } = coord.itemsFor(slug, deps.now());
-    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf, deps.secretOf)) });
+    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf, deps.secretOf, 'none')) });
   });
 
   // ── one item: confirm, send back, withdraw, and the blocking switch ─────────────────────────────────────────────────
@@ -428,11 +492,13 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const item = ownedItem(coord, reply, head);
     if (item === null) return;
     const blocking = flag === true;
-    const res = coord.setBlocking(item.id, blocking, deps.now());
+    const res = coord.setBlocking(item.id, blocking, deps.now(),
+      deps.outbox && itemBoundOf(deps.outbox.deps, { title: item.title, neededBy: 'blocking' }, 'arm'));
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} is closed` });
     // The store decides, inside its transaction, whether the level moved; the push and the emit follow its answer.
     if (res.changed) {
-      if (blocking) pushBlocking(item);
+      // A move to blocking always arms the row, so with the outbox `row` is never null here; were it, a push is the safe side.
+      if (blocking) pushBlocking(item, 'row' in res && res.row !== null ? { row: res.row } : 'unwired');
       changed();
     }
     return reply.code(200).send({ ok: true });
@@ -470,7 +536,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
         return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'this programme already has a definition of done; change it with goals modify, citing a ruling or an itemId' });
       }
     }
-    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen, { kind: 'coordinator' });
     changed();
     return reply.code(200).send({ ok: true });
   });
@@ -516,6 +582,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
+    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
     const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
@@ -548,6 +615,9 @@ export interface LedgerOperatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
   /** The account gate (D-5511): the secret's route is a credential act, so it asks for a step-up first (plan PL6). */
   gate: AccountGate;
+  /** The caller identity port (Overlord W1 gates A, Q17): the ratify door's gate actor at `operator` strength, and the rank
+   *  door's console arm (signed in, no device, or dark). */
+  identity: Pick<CallerIdentity, 'operator' | 'console'>;
   /** Where the operator-secret slots live (`cfg.ccrcDir`, `coord/ledgersSecrets.ts`). */
   ccrcDir: string;
   /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`), `beside` the lane's rows when
@@ -571,6 +641,13 @@ export interface LedgerOperatorDeps {
   slotWaitMs?: number;
   /** D-8558: the plan tables' port (`Deps.plan`), whose `closePlan` the operator's programme end calls. Absent, no plan is closed. */
   plan?: PlanStorePort;
+  /** The live signal for an open ask (Overlord W1, portfolio): the watcher's `liveAskKey`, or a reader answering `unmeasured`
+   *  when no watcher runs, so a released ask then counts as unmeasured, never as live. */
+  liveAsk: LiveAskRead;
+  /** The usage sweep's reading of an open run's session for the portfolio's spend read (Overlord W2 forecasts B): the
+   *  watcher's `liveSpendReading`. Absent (a test, or no watcher): every reading is `not-ready`, so live spend reads as
+   *  unmeasured, never 0. */
+  liveSpend?: SpendUsageRead;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -582,9 +659,8 @@ const PROGRAMME_UNCLAIMED_SENTENCE =
  *  escape), the `{"value":""}` around it and room to spare (plan PL6; review 1391 A-9: 16384 refused a value the panel takes).
  *  On the secret's route the body IS the secret, so its body errors are fixed words (`credentialBodyRoute`). */
 export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
-/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
- *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
-export const SLOT_WAIT_MS = 30_000;
+/** How long an act on a slot waits for that slot's previous act (`SLOT_WAIT_MS`, `ledgersSecrets.ts`, review 1391 A-3). */
+export { SLOT_WAIT_MS };
 
 /** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
  *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
@@ -635,6 +711,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return /^[1-9][0-9]{0,15}$/.test(raw) ? Number(raw) : null;
   };
   const secretOf: SecretMetaOf = (program, slot) => readOperatorSecretMeta(deps.ccrcDir, program, slot);
+  /** One item's view as an operator answer carries it (F13): its marks read after the move, so an item the move took off the
+   *  list (dismissed, declined) carries none, and a secret item, which carries no box, carries none. */
+  const operatorView = (coord: CoordStore, row: ItemRow, now: number): ItemView =>
+    viewOfItem(coord, row, now, deps.presenceOf, secretOf, coord.answerMarksOf('item', [row.id]));
   // On start, before any route below can write: every slot's leftover temp files across the store (review 1416 A-S6).
   sweepOperatorSecretTemps(deps.ccrcDir);
 
@@ -683,7 +763,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.get('/api/waiting', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, deps.liveAsk, secretOf) });
   });
 
   // D-8194: one item by its id, whatever its state and however long ago it closed, so an item opened by its number (a link in
@@ -698,7 +778,84 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const now = deps.now();
     const item = coord.itemById(id);
     if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, item, now, deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, item: operatorView(coord, item, now) });
+  });
+
+  // The portfolio (Overlord W1, spec §5.6 H38, plan w1-portfolio.md Task 3): the operator's read and the rank door, both
+  // session-gated only, no box token (`LEDGER_OPERATOR_DOORS`). The read composes `portfolioFor` (L1) over the facts read; a
+  // throw from the read is `runs-unreadable`, never an empty portfolio. The rank door confers no authority, so it calls no
+  // account gate and works while sign-in is dark, recording `flag-off` then (slug rank-works-dark), as the `lane-arm` and
+  // `run-close` switches do; armed, it records the session's device actor. It awaits nothing between its read and its
+  // write, so `setPortfolioRank`'s revision check inside one transaction is the whole guard against a stale tab.
+  const portfolioView = (coord: CoordStore, now: number): PortfolioView =>
+    portfolioFor(coord.portfolioFacts(now, deps.liveAsk, deps.liveSpend ?? (() => ({ kind: 'not-ready' as const }))), now);
+  app.get('/api/portfolio', (_req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    let portfolio: PortfolioView;
+    try { portfolio = portfolioView(coord, deps.now()); } catch (err) {
+      return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    return reply.code(200).send({ ok: true, portfolio });
+  });
+
+  app.post('/api/portfolio/rank', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    // The console arm of the identity port (gates A, question 11), mapped by its one owner (`consoleSubject`): the device's
+    // actor, `unmeasured`, or `flag-off` dark; an answer the port did not make refuses (gates B, ladder review F4).
+    const actor = consoleSubject(deps.identity.console(deps.authEnabled, deps.authEnabled ? deps.sessionAuth(req).device : null));
+    if (actor === null) return refuseRoute(reply, 'internal', { detail: 'the console answer was not the identity port\'s' });
+    const parsed = parseRankWrite(req.body);
+    if (!parsed.ok) return bad(reply, parsed.detail);
+    const now = deps.now();
+    const res = coord.setPortfolioRank(parsed.write, actor, now);
+    if (!res.ok && 'unknownSlug' in res) return refuseRoute(reply, 'not-found', { detail: `no programme ${res.unknownSlug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.rankChanged, { revision: res.revision, detail: `the rank is at revision ${res.revision}: read it again` });
+    return reply.code(200).send({ ok: true, revision: res.revision, portfolio: portfolioView(coord, now) });
+  });
+
+  // The answer marks (Overlord W1, spec §9.2.1 C70, plan w1-delegation-marks.md Tasks 3 and 5): the operator's two boxes on a row of
+  // Waiting on you, "the Overlord could answer this" and "I'm not sure of my answer"; a task (`do`) carries the first alone, as
+  // "the Overlord could handle this" (answer marks C, #2900), and `unsure` on it is `not-markable`. Session-gated only, no box token
+  // (`LEDGER_OPERATOR_DOORS`), and no `ccrc-api` row: no session has a path to it while sign-in is armed. A MARK GRANTS
+  // NOTHING AND IS NEVER AN ANSWER, so the door calls no account gate and takes no step-up, and it works while sign-in is dark
+  // (slug answer-mark-door-works-dark), as the rank door does. Dark, any local process that reaches the server can call it,
+  // exactly as for the tick door (plan question 12): every such mark records `flag-off`, so it is told apart and is the weaker
+  // basis (§9.2.1). The read side is the same: dark, the waiting view, the item view and the waiting frame are open to any
+  // local process, marks included, so a coordinator is kept from the marks only while sign-in is armed, when all three are
+  // session-gated. An item the operator was never shown is `unknown-item`, as `GET /api/items/:id` answers it (D-8194's
+  // no-oracle rule), and an ask never shown is `unknown-ask`. Whether the row is markable is `itemMarkable`'s or
+  // `askMarkable`'s, and the view is `markViewOf`'s; the door decides nothing. It awaits nothing between its read and its write, so the writer's transaction is the whole guard.
+  app.post('/api/answer-marks', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const actor = deps.authEnabled ? deviceActor(deps.sessionAuth(req).device) : DARK_MARK_ACTOR;
+    const parsed = parseAnswerMarkWrite(req.body);
+    if (!parsed.ok) return bad(reply, parsed.detail);
+    const { write } = parsed;
+    const now = deps.now();
+    let may: Markable;
+    if (write.kind === 'ask') {
+      // The ask arm (plan Task 5): an unreadable row is `ask-unreadable`, never absent. The read and `askMarkable` decide,
+      // with the view's own statement (review 2217 F4). An ask that never reached the operator (held, or moved on with no reach
+      // stamp) is `unknown-ask`, as an item never shown is `unknown-item` (slugs never-shown-ask-is-unknown,
+      // reached-is-the-reach-stamp).
+      const read = askForMark(coord, write.id, now, deps.liveAsk);
+      if (!read.ok) return refuseRoute(reply, 'ask-unreadable', { detail: read.detail });
+      if (read.found === null || (!read.found.may.markable && read.found.may.reason === 'not-shown')) {
+        return refuseRoute(reply, 'unknown-ask', { detail: `no ask ${write.id}` });
+      }
+      may = read.found.may;
+    } else {
+      const item = coord.itemById(write.id);
+      if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
+      may = itemMarkable(item, now, write.mark);
+    }
+    if (!may.markable) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notMarkable, { detail: may.reason });
+    const res = coord.recordAnswerMark(write, actor, now);
+    if (res.changed) deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, mark: write.mark, answerMark: markViewOf(res.newest) });
   });
 
   // EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-8126): a live session OR the box token, 401 only when both fail, and before
@@ -719,6 +876,29 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
+  });
+
+  // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
+  // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
+  // (`LEDGER_OPERATOR_DOORS`). The body names the version by the stamp the operator was shown (`parseGoalsVersion`); a pin
+  // that moved since is `goals-changed`, so text they were not shown is never ratified. Whether the version already reads
+  // ratified is `goalRatification`'s, asked inside `ratifyGoalsVersion`'s transaction; the door decides nothing and awaits
+  // nothing between the read and the write. A change emits the waiting frame, as the tick door does; the coordinator is not
+  // mailed, and reads the verdict through its goals read.
+  app.post('/api/programmes/:slug/goals/ratify', (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const slug = (req.params as { slug: string }).slug;
+    const version = parseGoalsVersion(req.body);
+    if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
+    // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), deps.identity.operator(g.actor).subject);
+    if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
+    if (res.changed) deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, changed: res.changed, goals: coord.goalsFor(slug) });
   });
 
   app.post('/api/items/:id/tick', (req, reply) => {
@@ -744,7 +924,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const given = body['answer'];
     let answer: string | null = null;
     if (item.kind === 'do') {
-      if (given !== undefined && given !== null) return bad(reply, 'a do item takes no answer');
+      // D-8931: a do item's tick may carry the operator's note, because a coordinator may ask for one in the
+      // item's steps (who did a step, and when). It is optional, and it is the tick's `answer` from here on: the mail and the
+      // stored answer are the ones a decide or value answer takes. No note is `null`, which clears an earlier tick's.
+      const note = optionalText(given, ANSWER_MAX);
+      if (!note.ok) return bad(reply, `a do item's note is a text of at most ${ANSWER_MAX} characters`);
+      answer = note.text;
     } else {
       answer = text(given, ANSWER_MAX);
       if (answer === null) return bad(reply, `a ${item.kind} item needs an answer of 1 to ${ANSWER_MAX} characters`);
@@ -755,7 +940,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const res = tickNow(coord, id, answer, plan, now);
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
     deps.bus.emit('waiting');
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, item: operatorView(coord, res.item, now) });
   });
 
   /**
@@ -792,7 +977,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       const moved = coord.moveItem(id, 'act', 'operator', {}, now, { programmeHasOpenRun: true });
       if (!moved.ok) return refuseRoute(reply, moved.why, { detail: `item ${id} cannot be released from here` });
       deps.bus.emit('waiting');
-      return reply.code(200).send({ ok: true, released: true, item: viewOfItem(coord, moved.item, now, deps.presenceOf, secretOf) });
+      return reply.code(200).send({ ok: true, released: true, item: operatorView(coord, moved.item, now) });
     }
     return deps.withAbandon(coord, async (abandon) => {
       // Read again inside the hold: the item may have moved while this act waited for it.
@@ -871,7 +1056,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be declined from here` });
     deps.bus.emit('waiting');
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, item: operatorView(coord, res.item, now) });
   });
 
   /** D-8126: the operator's Seen on a big call. Session-gated like the tick; no box token. Idempotent: a second Seen answers the
@@ -902,7 +1087,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const res = coord.moveItem(id, 'dismiss', 'operator', {}, now, { programmeHasOpenRun: coord.programmeHasOpenRun(item.program) });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be dismissed from here` });
     deps.bus.emit('waiting');
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, item: operatorView(coord, res.item, now) });
   });
 
   /**
@@ -930,32 +1115,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
    * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
    */
-  const slotChains = new Map<string, Promise<void>>();
-  /** Runs `act` once the slot's previous act has finished, or answers `busy` when that takes longer than the deadline (review
-   *  1391 A-3). A waiter that gives up releases its own place at once, so the one after it waits only for the act still
-   *  running, and the map entry stays until that act is done: the deadline never lets two acts of one slot run together. */
-  const slotWait = deps.slotWaitMs ?? SLOT_WAIT_MS;
-  const underSlot = async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
-    const before = slotChains.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const mine = new Promise<void>((resolve) => { release = resolve; });
-    const chain = before.then(() => mine);
-    slotChains.set(key, chain);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), slotWait); });
-    const first = await Promise.race([before.then(() => 'ready' as const), late]);
-    clearTimeout(timer);
-    if (first === 'late') {
-      release();
-      return busy();
-    }
-    try {
-      return await act();
-    } finally {
-      release();
-      if (slotChains.get(key) === chain) slotChains.delete(key);
-    }
-  };
+  /** Each act on a slot runs once that slot's previous act has finished, or answers `busy` past the deadline (`slotChains`,
+   *  `ledgersSecrets.ts`, review 1391 A-3). */
+  const underSlot = slotChains(deps.slotWaitMs ?? SLOT_WAIT_MS);
   /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
    *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
   const noStore = noStoreRoute.onRequest;
@@ -1018,7 +1180,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       }
       let view: ItemView;
       try {
-        view = viewOfItem(coord, ticked, setAt, deps.presenceOf, secretOf);
+        view = operatorView(coord, ticked, setAt);
       } catch {
         deps.bus.emit('waiting');
         return storedNotTicked(reply, id);

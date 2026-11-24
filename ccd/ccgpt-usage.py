@@ -190,6 +190,9 @@ _FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # The originator each mode's request sends: D-6373 for a litellm lane, D27 for
 # a direct one (the bridge's own, `ccd/codexbridge/backend.py`'s ORIGINATOR).
 _ORIGINATOR = {"litellm": "codex_cli_rs", "direct": "ccrc"}
+# The user-agent this poll sent before it said a version (usage-user-agent), kept for one case only: an auth library
+# placed without the version reader (`_user_agent`), so a mismatched install still publishes.
+_UNVERSIONED_USER_AGENT = "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown"
 
 
 def _required_env(name: str) -> str:
@@ -526,7 +529,20 @@ _OPENER = urllib.request.build_opener(_NoRedirectHandler)
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
-def _fetch_headers(model: str, token: str, account_id=None, originator: str = _ORIGINATOR["litellm"]):
+def _user_agent(lib) -> str:
+    """The user-agent this poll sends: the Codex client version the catalogue probe asks as (D-8743), in the probe's
+    form. Both come from the auth library, the one owner of the floor and of the box's release cache
+    (`cached_client_version`, `client_user_agent`): this poll reads that one small file, never asks npm, and says the
+    floor when the file is absent, unreadable or malformed. Never raises: a library without the two readers (an
+    install caught between its files) gives the user-agent this file sent before, so the version cannot stop a poll."""
+    try:
+        return lib.client_user_agent(lib.cached_client_version())
+    except Exception:
+        return _UNVERSIONED_USER_AGENT
+
+
+def _fetch_headers(model: str, token: str, account_id=None, originator: str = _ORIGINATOR["litellm"], *,
+                   user_agent: str):
     """Make one minimal probe request and return the response headers —
     from a normal 200, or from a 429 that still carries the usage headers
     (task-10 property 4).
@@ -585,9 +601,10 @@ def _fetch_headers(model: str, token: str, account_id=None, originator: str = _O
         "accept": "text/event-stream",
         "originator": originator,
         # The same on both modes: a direct lane's poll pairs `originator: ccrc` with this user-agent, not the
-        # bridge's ccrc one (`ccd/codexbridge/backend.py`'s `user_agent`, which needs a version this file does not
-        # know); `server/test/ccgpt-usage.test.ts` pins the pair, so a first live check of D27 measures it too.
-        "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
+        # bridge's ccrc one (`ccd/codexbridge/backend.py`'s `user_agent`, which carries ccrc's own version);
+        # `server/test/ccgpt-usage.test.ts` pins the pair, so a first live check of D27 measures it too. Since
+        # usage-user-agent it says the Codex client version the catalogue probe asks as (`_user_agent`).
+        "user-agent": user_agent,
         "session_id": "00000000-0000-0000-0000-000000000000",
     }
     if account_id:
@@ -786,8 +803,10 @@ def main() -> None:
     token_dir = _token_dir(lane)
     # Read, never refreshed (codex-bridge Stage 1, Task 7): see `_require_logged_in`. The token is a fixture's
     # synthetic one in every test. This file never stores or logs a credential, and no refusal formats one.
-    reading = _require_logged_in(_load_auth_library(), token_dir)
-    headers = _fetch_headers(model, reading.access_token, reading.account_id, _ORIGINATOR[mode])
+    lib = _load_auth_library()
+    reading = _require_logged_in(lib, token_dir)
+    headers = _fetch_headers(model, reading.access_token, reading.account_id, _ORIGINATOR[mode],
+                             user_agent=_user_agent(lib))
     out = _build_row(headers)
     _publish(out)
     print(f"ccgpt-usage: {ACCOUNT_ID} {out['five']}%/5h {out['seven']}%/7d")

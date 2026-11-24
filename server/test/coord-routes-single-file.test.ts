@@ -45,7 +45,19 @@ const registrations = (): Reg[] => {
 
 /** Coordination routes whose handlers live in a lane file of their own (growth-checked `coord/routes.ts` cannot take them),
  *  registered from `registerCoordRoutes` with its own gate and sender check. Named, so a stray is still a stray. */
-const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/programmes/:slug/calls']);
+const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/programmes/:slug/calls',
+  // Overlord W1a, the renewal hand-offs: the Setting "when soft renewals happen", an operator dial registered beside Renew now
+  // in the continuity routes (slug renewal-mode-door-in-continuity-routes). It is the roll-idle door's shape, which the skill
+  // test's EXEMPT list leaves unnamed (a coordinator told about it would be told how to time its own renewal), so no corpus
+  // names it either way; `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` pins it in both directions.
+  'continuity/routes.ts GET /api/coord/renewal-mode', 'continuity/routes.ts POST /api/coord/renewal-mode',
+  'coord/programmeRemainingRoute.ts POST /api/coord/programmes/:slug/remaining',
+  // Session helpers S2 (D-8874, slug route-trigger-own-file): the one-time pass's door, the dry run and the pass (or its
+  // undo), an operator door in a routes file of its own because `coord/routes.ts` is held. Like the adoption switch's door,
+  // which the skill test's EXEMPT list leaves unnamed, no skill names it (a coordinator never runs the pass), and
+  // `box-token-census.test.ts`'s `DELEGATION_BACKFILL_DOORS` pins both routes in both directions.
+  'coord/delegationBackfillRoutes.ts GET /api/coord/delegation-backfill',
+  'coord/delegationBackfillRoutes.ts POST /api/coord/delegation-backfill']);
 
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 

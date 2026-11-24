@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD as CCD_PATH, makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -420,5 +420,131 @@ describe('D-8120: a lane with no 5h window swaps on its weekly figure alone', ()
     expect(target('claude')).toBe('rc=0');
     fiveLess('claude', 99);
     expect(target('claude')).toBe('claude-a rc=0');
+  });
+});
+
+// The asking session's id reaches every gate that holds one (serviceability plan Task 2): a session whose side is a set
+// is held to the lane's continuity record and, for fable, its billing fact; a session with no set is not.
+describe('the asking session\'s id reaches the class gate', () => {
+  const REC = 1_790_000_000;
+  const facts = (billing: 'included' | 'credits', recorded: readonly string[]): void => {
+    seedAccountsSh(h.home, rosterWithFacts(Object.fromEntries(
+      ['claude', 'claude-a', 'claude-b', 'claude-d'].map((w) => [w, { fableBilling: billing, ...(recorded.includes(w) ? { continuity: REC } : {}) }]))));
+  };
+  const setSide = (): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.poolset`), 'pool-a+untagged'); };
+
+  it('_swap_target: a set-side session skips a candidate with no continuity record and picks the next', () => {
+    facts('included', ['claude', 'claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus'); setSide();
+    expect(target('claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target: the same fleet and class for a session with no set picks the least-loaded, record or none (the control)', () => {
+    facts('included', ['claude', 'claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus');
+    expect(target('claude')).toBe('claude-a rc=0');
+  });
+  it('_swap_target: a set-side session whose HOME has no record must leave it (the stay gate asks with the id)', () => {
+    facts('included', ['claude-b']);
+    limits('claude', 10, 10); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus'); setSide();
+    expect(target('claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target: away from home, home recovered and recorded: go home; home unrecorded: stay on the recorded cur', () => {
+    facts('included', ['claude', 'claude-a', 'claude-b']);
+    limits('claude', 10, 10); limits('claude-a', 20, 20); limits('claude-b', 30, 30);
+    seedRow('claude-a', 'opus'); setSide();
+    expect(target('claude-a', '', 'claude')).toBe('claude rc=0');
+    facts('included', ['claude-a', 'claude-b']);
+    expect(target('claude-a', '', 'claude')).toBe('rc=0');
+  });
+  it('_swap_target (F3): away from home with home down, a set-side session on an UNRECORDED cur moves (the cur-still-works gate asks with the id)', () => {
+    facts('included', ['claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude-a', 'opus');
+    expect(target('claude-a', '', 'claude'), 'the control: no set, cur stays').toBe('rc=0');
+    setSide();
+    expect(target('claude-a', '', 'claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target (F3): a forced rescue never returns an unmeasured, UNRECORDED home as the fallback (the hfb gate asks with the id)', () => {
+    facts('included', ['claude-a', 'claude-b', 'claude-d']);
+    limits('claude-a', 99, 99); limits('claude-b', 99, 99); limits('claude-d', 99, 99);   // no row for home: unmeasured, and no candidate has room
+    seedRow('claude-a');   // no class: the gate without an id answers 0 for every lane
+    expect(target('claude-a', '1', 'claude'), 'the control: no set, the unmeasured home is the fallback').toBe('claude rc=0');
+    setSide();
+    const out = target('claude-a', '1', 'claude');
+    expect(out).toBe('rc=1');
+  });
+  it('_affinity_cur_serves: a lane that bills credits does not serve a set-side fable session, and does serve a plain one', () => {
+    facts('credits', ['claude']);
+    limits('claude', 10, 10); sweep({ claude: 0.1 }); seedRow('claude', 'fable');
+    const ask = (): string => h.sh(`_affinity_cur_serves ${ID} claude clean ''; echo $?`);
+    expect(ask()).toBe('0');
+    setSide();
+    expect(ask()).toBe('1');
+    facts('included', ['claude']);
+    expect(ask()).toBe('0');
+  });
+  it('_class_gate with an id and a default class: 1 on a lane with no record for a set-side session, 0 with a record, 0 for a session with no set', () => {
+    facts('included', []);
+    seedRow('claude');
+    const gate = (cls: string, id: string): string => h.sh(`_class_gate claude '${cls}' ${id}; echo $?`);
+    expect(gate('default', ID)).toBe('0');          // no poolset entry
+    setSide();
+    expect(gate('default', ID)).toBe('1');
+    expect(gate('', ID)).toBe('1');
+    expect(h.sh('_class_gate claude default; echo $?'), 'no id: today').toBe('0');
+    facts('included', ['claude']);
+    expect(gate('default', ID)).toBe('0');
+  });
+  it('_class_gate with an id keeps the rc 2 of an unmeasured figure for a set-side session on a recorded lane', () => {
+    facts('included', ['claude']);
+    limits('claude', 10, 10); seedRow('claude', 'fable'); setSide();   // no sweep: unmeasured
+    expect(h.sh(`_class_gate claude fable ${ID}; echo $?`)).toBe('2');
+  });
+});
+
+// F9: the id-less placers (`_place_for_class`, `_ws_least_loaded`, `_ws_lane_why`) never ask the continuity or billing
+// arms, because they take no session id. A row carrying a `poolset` must therefore never reach them: `cmd_ws_add`'s
+// `--route` refuses `poolset` before placement (`_route_argv_check`, pinned by ccd-route-argv.test.ts), and
+// `_auto_swap_check`'s rehome arm runs only for a session whose side is not a set. These scans red on a NEW id-less
+// caller or on the rehome call leaving its guard, so the next placement path has to take an id.
+describe('F9: a row carrying a poolset never reaches the id-less placement path', () => {
+  const lines = fs.readFileSync(CCD_PATH, 'utf8').split('\n');
+  /** The top-level function enclosing each CODE line (comments and the definitions themselves left out) that names `sym`. */
+  const callersOf = (sym: string): string[] => {
+    const out = new Set<string>();
+    let fn = '';
+    for (const l of lines) {
+      const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(l);
+      if (def) { fn = def[1]!; if (def[1] === sym) continue; }
+      if (l.trimStart().startsWith('#')) continue;
+      if (new RegExp(`(^|[^A-Za-z0-9_])${sym}([^A-Za-z0-9_]|$)`).test(l)) out.add(fn);
+    }
+    return [...out].sort();
+  };
+  it('_place_for_class is called from cmd_ws_add alone', () => {
+    expect(callersOf('_place_for_class')).toEqual(['cmd_ws_add']);
+  });
+  it('_ws_least_loaded is called from _auto_swap_check (the rehome arm) and _place_for_class alone', () => {
+    expect(callersOf('_ws_least_loaded')).toEqual(['_auto_swap_check', '_place_for_class']);
+  });
+  it('_ws_lane_why is called from _ws_wrapper_why and cmd_ws_add alone', () => {
+    expect(callersOf('_ws_lane_why')).toEqual(['_ws_wrapper_why', 'cmd_ws_add']);
+  });
+  it('the _auto_swap_check call of _ws_least_loaded sits inside the branch guarded by `"$pps" != "set "*`', () => {
+    const at = lines.findIndex((l) => /new=\$\(_ws_least_loaded "\$project"\)/.test(l));
+    expect(at).toBeGreaterThan(0);
+    // walk up to the nearest enclosing `if` of lesser indent and check it is the set-side guard
+    const indent = (l: string): number => l.length - l.trimStart().length;
+    const callIndent = indent(lines[at]!);
+    const enclosing: string[] = [];
+    for (let i = at - 1, want = callIndent; i >= 0 && !/^[A-Za-z_]\w*\(\) \{/.test(lines[i]!); i--) {
+      const l = lines[i]!;
+      if (l.trim() === '' || l.trimStart().startsWith('#')) continue;
+      if (indent(l) < want && /^\s*if /.test(l)) { enclosing.push(l.trim()); want = indent(l); }
+    }
+    expect(enclosing.some((l) => l.includes('"$pps" != "set "*')), enclosing.join(' | ')).toBe(true);
   });
 });

@@ -604,14 +604,15 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
-`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, and `jq_regex` (no session hook
-runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, `model-advance-held-back`,
+`model-held-behind`, `model-sessions-behind`, `model-advance-blocked`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
 | `model-default` | each Anthropic lane's `settings.json` default model (`env.ANTHROPIC_MODEL`, else `model`, else `env.ANTHROPIC_DEFAULT_MODEL`), read as Claude Code reads it — trimmed, any case, `[1m]` in any case: a WARN when it is Fable (`fable`, `fable[1m]`, `best` — Fable where the account is entitled to it — an id carrying `-fable-`, or an alias the lane's own `env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL` points at such an id), because a session there with no routing record, or class `default`, starts on Fable; a file it cannot read or parse, a reader (node) that fails, or a lane with no config dir is a WARN, unmeasured (never a FAIL, no `--fix`: ccrc does not own the key). Not measured: the remap of the account's implicit default when no key names a model |
+| `model-advance-held-back`, `model-held-behind`, `model-sessions-behind`, `model-advance-blocked` | the automatic model advance ("Classes follow new releases", under `ccrc models`), read through `deploy/models-op.mjs advance-health`, which writes nothing and never takes or opens a lane's lock: a class whose last advance failed its canary or its move (it clears on a later advance, or when the candidate leaves the catalogue); a held class whose hold has come due to end by the evidence (a model newer than the one its Revert left, or its held pin gone from the catalogue past the retirement grace, or on an Anthropic lane the alias, seen after the hold began, naming a third id) and which still stands 90 minutes after the refresh that saw it, while a hold still waiting for something newer PASSes; a running session that still renders a model a move replaced a day or more ago, in a turn begun after the move, named with the time of its last reply, the time its turn began and how long ago the move was (a running session does not always pick up a re-pin by itself: once it is idle, `ccd stop <id>` then `ccd start <id>` relaunches it and resumes its conversation, though one with no class in its routing record may come back on its old model), with a count, on the same line, of the sessions it could not measure and why (a session on a lane whose registry or advance file cannot be read among them); and a lane or class that cannot advance, by cause, with one remedy per cause (an Anthropic lane's four are `alias-source-absent`, `alias-cache-stale`, `aliases-file-unreadable` and `aliases-file-invalid`, read from its aliases file, and a class waiting out the retirement grace names `pin-missing`): its advance file, registry, catalogue or windows file present and unreadable (the advance file's remedy is a repair, never `rm`: removing it loses its holds and history, and the next hourly refresh refills every emptied class), a pin outside `<vendor>-<version>-<family>`, two classes on one family, a lane that is not `exec.kind: "codex"`, or a lane-files lock path or lock directory this account cannot use (a symlink, a FIFO or anything else standing where the lock belongs, a lock file it cannot write, or a lock directory another account owns). Each is a WARN, never a FAIL; each SKIPs on a `server`-role box, without `jq`, when the op gives no answer within `CCRC_DOCTOR_GH_TIMEOUT`, and when no lane has a model registry |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
 | `jq_regex` | jq's regex engine can match a lookbehind, which the session hook's merge deny needs to read a command (a jq without Oniguruma leaves the deny failing open); a SKIP with no jq on `PATH`, which `jq`'s own row owns |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
@@ -1073,10 +1074,14 @@ failed with its word), whether a rotation is owed and why, whether the fleet con
 generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
-(`POST /api/token/rotate`, session-only). A **Linear** card follows it (#1444): the Linear keys ccrc holds, one per
+(`POST /api/token/rotate`, session-only). The services ccrc works with have a section of their own,
+**Integrations** (`/settings/integrations`), with three cards. **Linear** (#1444): the Linear keys ccrc holds, one per
 workspace, each row with its workspace's name, teams, key tail and last check, **Add a workspace** to add a key, and
 the older single key as a legacy row; every session reaches Linear through these keys alone, by way of `ccrc-api
-linear` (below), and never signs in to Linear itself. Settings then has
+linear` (below), and never signs in to Linear itself. **Project linking** ("Linking PRs to Linear", below). **GitHub**, which
+is read-only: ccrc holds no GitHub key and reaches GitHub through the GitHub CLI signed in on the fleet box, and the
+card says when GitHub last answered that box, or that it refused its sign-in, from the visibility readings the project
+list already carries. Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
@@ -1500,17 +1505,28 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the eighty-four machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
-the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
-the hook's start report (`POST /api/sessions/:id/start`), the card door (`GET /api/sessions/:id/card`), the note door
+the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
+`POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,tickets/done,phases/refs,epics/drop,close,take}`, and the inbound triage `POST /api/teams/:team/plan/triage`),
+the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the door process's act-key claim (`POST /api/sessions/:id/act-key`), the hook's report door (`POST /api/sessions/:id/report`: the witness, readers and picked-up reports), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
-(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`),
+(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`), the replay quiz's record door
+(`POST /api/continuity/quiz-runs`, which the operator's `ccrc quiz-record` reaches through `ccrc-api` and which records a run
+as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up), the weekly
+unattended run's confirmation (`POST /api/continuity/quiz-runs/:id/confirm`, which `ccrc quiz-record --confirm` reaches through
+`ccrc-api` and which confirms a recorded run when its record's single-use key and the sha its report printed match, and
+refuses otherwise) and its tick report
+(`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
+(`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
+the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
+`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -1667,7 +1683,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_org`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1677,7 +1693,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity, org}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -1767,6 +1783,9 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
 | `exec.bridge` | `CODEX_BRIDGE_MODES` on a `codex` lane, absent reading its first word, `litellm`; rendered into `lane.json` | `CODEX_BRIDGE_MODES` | “a codex lane with an unknown exec.bridge” |
 | `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
+| `fableBilling` | `FABLE_BILLINGS` (included or credits), optional; a written `null` is refused; emitted into accounts.sh | `FABLE_BILLINGS` | “a fableBilling outside the set” |
+| `continuity` | an object whose one key is `recordedAt`, non-negative integer epoch seconds, optional; a written `null` is refused; emitted into accounts.sh | `recordedAt` | “a continuity with an extra key” |
+| `org` | `orgLabelVerdict`: `POOL_NAME_RE`'s shape, never `ORG_CLEAR_WORD` or one of `ORG_ID_SHAPES` (an organization id), optional; a written `null` is refused; emitted into accounts.sh | `orgLabelVerdict` | “an org shaped like an organization id” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
@@ -1980,7 +1999,7 @@ ccrc account seed --id <id>                # the first-run seed on its own: onbo
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
-ccrc account set --id <id> [--stated -] [--placement overflow|full]   # a token lane's stated account; placement
+ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off] [--org <label>|none]   # a token lane's stated account; placement; its billing and continuity facts; its organization label
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
     [--keep-codex-auth | --delete-codex-auth]
 ```
@@ -2133,7 +2152,9 @@ may need the new id.
 
 **A session asks for a class; a lane says what the class means there.** Sessions route by four classes —
 `haiku`, `sonnet`, `opus`, `fable`. On a lane whose roster `telemetry` is `"anthropic"` those are Claude
-Code's own aliases and there is nothing to classify: `show` answers read-only and every change is refused.
+Code's own aliases and there is no registry to classify: `show` answers, and `set-class`, `set-subagent`,
+`set-effort`, `set-window`, `discovery` and `init` are refused. What ccrc keeps there is an aliases file, below, and
+the Revert, `hold` and `release` verbs.
 That includes every lane `ccrc account add` creates, whose key lanes route through their own `--models` map
 (`exec.models`) instead. A lane whose `telemetry` is `"codex"`, `"openrouter"` or `"none"` — a Codex lane, an OpenRouter
 lane, or an Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
@@ -2200,28 +2221,41 @@ the lane's own tier refreshes it on its next request. It never starts a device-c
 lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs on a catalogue that is stale,
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
-than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA surface in this build.
+than guess which was meant. `ccrc models` needs `node` and `jq`. The console's Models sheet (a lane card's fold, in the account sheet) shows each
+lane's classes, pins and advance state, and offers Revert on a class that has something to put back, through
+`POST /api/models/:lane` (body `{action: 'revert', class}`, session-gated). The route reads the lane fresh first and
+writes only when the fleet box says, as the literal `true`, that it ends a revert's hold by itself; otherwise it refuses
+with nothing written, and the sheet says Revert is not offered until the fleet box is updated. A Codex lane's confirm
+names the model it puts back. An Anthropic lane's names none, because the fleet box picks it from its own record, and
+the sheet shows the result of the fresh read made after the act.
 
 **The context window.** The eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, follows one rule. A lane may record a
 measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
 older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
 from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
-every model the lane's classes name has a measured window, the key is the smallest of them, rounded down to 1,000
-and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
-When any of them has none, the key keeps the default rule, `min(catalogue context, 200000)` for the lane's default
-model, or is left out when the catalogue cannot say; so a class moved to a new model falls back to the default until
-the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
+every model the lane's classes name has a window, the key is the smallest of them, capped at 1,000,000 (a measured window is
+rounded down to 1,000; an advertised one is used as listed), because Claude Code applies one value to every model in the session, subagents included.
+A model's window is, in order, its measured one; else the window its fresh catalogue advertises (the provider's
+promise, operator ruling 2026-11-13); else unknown. So a class moved to a model with no measurement takes the
+catalogue's window and no longer halves the lane. An unknown model counts at Claude Code's own default,
+200,000, so the key never rises above it while any class model is unknown, and is left out when every class model is
+unknown. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
 models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
-carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+carry on as if no window were measured, on the catalogue's window or else Claude Code's own default (a measured key left in `settings.json` shows as drift until the next materialise
 replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
-`rm` reaps the file with the rest. A new window reaches sessions started after it; whether a session already running
-re-reads `settings.json` has not been measured.
+`rm` reaps the file with the rest. A stale catalogue's advertised windows are not read, so on a lane where one class
+model has a measured window and another has none, the key falls to Claude Code's own default window whenever that is
+below the smallest measured one; `show`, `lanes` and doctor's `models` check name that lane, with a refresh
+(`ccrc models refresh <id>`) or a `set-window` for the unmeasured model as the remedies. A class that moved to a
+model with no measurement, and so lowered the window below the old model's measured one, is named the same way, with
+`set-window` as the remedy. A new window reaches sessions
+started after it; whether a session already running re-reads `settings.json` has not been measured.
 A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
 refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
-puts the lane on the default rule.
+leaves the lane with no measured window, on the catalogue's window or else Claude Code's own default.
 
 **A refusal lowers the window (`direct` Codex lanes).** On a lane in `direct` mode ("A `direct` lane: the bridge",
 below) the bridge records each context refusal in its stats file: the model, the prompt size it estimated, and when.
@@ -2249,9 +2283,10 @@ the family the class follows (the last part of a `<vendor>-<version>-<family>` m
 model the class had before its last automatic advance, and its last ten moves. `init codex` writes it, with a
 family for every class, an empty one included. `set-class` records the move and takes the family from the new pin,
 and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
-`hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
-model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
-on record it refuses `no-previous`. Every write to a lane's model files — every per-lane verb but `show`, and
+`revert <class>` puts back the model the class had before its last automatic advance, with its effort level, and
+holds it there until a newer model appears (below); with no advance on record it refuses `no-previous`. Classes
+always advance, so the Models sheet offers Revert alone. `hold <class>` and `release <class>`, which keep a class where
+it is and let it move again, remain shell and agent verbs only: the sheet and its write endpoint never send them. Every write to a lane's model files — every per-lane verb but `show`, and
 the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
 finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
 before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
@@ -2265,9 +2300,12 @@ catalogue lists as visible and the lane's discovery scope includes, whose id is 
 family is its last part), with versions compared part by part as integers. A class follows the family of the model it
 names or, when it is empty, the family stored for it. The model must be newer than the one the class names; two ids of
 one version are never chosen, nor is a model another class already names; and when the newest model of the family is one
-another class already names, the class does not move at all, not even to the next one down. A class whose own model has
-left a fresh catalogue moves to the newest eligible model its family still lists, and on a stale catalogue (a failed
-probe) nothing advances. Before it moves a class the step sends one "reply OK" request (the canary) for the new model
+another class already names, the class does not move at all, not even to the next one down. A normal advance goes strictly forward, to a version above the class's pin, and never waits. The one step that can
+choose an older model is the retirement of a pin the catalogue no longer lists: the class moves to the newest eligible model its family
+still lists only after six hours of continuous fresh catalogue sightings of that absence, timed by the catalogue's own
+fetch times and never by the wall clock, and after a passing canary like any move; a gap of more than 90 minutes
+between sightings, or a stale catalogue (a failed probe), restarts the count, and on a stale catalogue nothing advances. The same retirement
+ends a hold on that pin. Before it moves a class the step sends one "reply OK" request (the canary) for the new model
 through the lane's own shim (the loopback listener Claude Code talks to, on its `proxyPort`; see "A ChatGPT/Codex lane",
 below), at the lowest effort level the model offers, and only after the shim has answered a probe as that lane: a
 listener that answers as another lane, as no lane, or with more than 4 KiB gets no key, and the canary reports
@@ -2275,9 +2313,14 @@ listener that answers as another lane, as no lane, or with more than 4 KiB gets 
 an argument list or the environment, and only a 200 that carries text moves the class. Then the lane's files are
 re-materialised, the model the class had is kept for `revert`, and one push says so (`<id>: <class> <old> → <new>`).
 The class keeps its effort level when the new model offers it, and otherwise takes the highest level the new model
-offers below it, or its lowest when none is below. A held class never moves (`ccrc models <id> hold <class>`), and a
-hold set while a canary is out wins; `revert <class>` puts the previous model back and holds it, and a class you emptied
-by hand stays empty. A candidate the step cannot carry safely (a malformed row, or an effort level that begins with
+offers below it, or its lowest when none is below. A held class does not move while its hold stands, and a
+Revert made while a canary is out wins. A Revert's hold records the model it moved the class away from, and the refresh
+ends it, in the same write as the move, once a model newer than that one appears (a newer version of the same
+family); the class then advances to it, canary first. A hand hold records no such model: it ends at the first model
+newer than the one it holds. A Revert an older build wrote has no recorded model either: the refresh reads the newest
+successful Revert in the class's history for it (a Revert to the same model, or one that changed only the effort,
+does not count), and with none usable it records the class's current candidate as that model, which does not end the
+hold on that pass; the hold then waits for a model newer than that one. A class you emptied by hand stays empty. A candidate the step cannot carry safely (a malformed row, or an effort level that begins with
 `--`) is skipped for that run and never blocks the lane.
 
 **When the step runs.** It runs after the refresh has probed, re-materialised and re-rendered every lane, so it never
@@ -2300,8 +2343,8 @@ else the default, 250 (an empty value is the default too); a whole number is rea
 timer and a hand `ccrc models refresh` (the one `ccrc doctor`'s remedies name included) both honour it. A drop-in
 (`systemctl --user edit ccrc-models.service`, then `[Service]` and `Environment=CCRC_MODELS_ADVANCE_BUDGET_S=0`; without
 the `[Service]` line systemd ignores the assignment) still works as an override for that one unit, because a set
-environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. To
-keep one class still under every run, hold it. The
+environment wins. A `ccrc.env` line ccrc cannot read turns the step off for that run and says why on standard error. A hand hold
+keeps a class still only until a newer model appears. The
 step also does nothing where there is no `flock`, where the lock directory is absent and `mkdir` is not to be had, or
 where `timeout` cannot escalate to KILL.
 
@@ -2318,8 +2361,8 @@ with one tier up and one down (FAIL), a tier it cannot measure (WARN), and a Lit
 runs on the lane (WARN). A lane with both tiers down and no live session passes, and a starting tier shows only in the
 check's tier words. `ccrc models <id> show` lists a model that is still unclassified and any held class, `show --json`
 carries each class's recent moves, and `ccrc codex status <id>` shows each tier's state; a newer model still listed as
-unclassified, with no recent move, is the sign of a lane that keeps waiting. To keep a class where it is whatever
-arrives, hold it.
+unclassified, with no recent move, is the sign of a lane that keeps waiting. A hold keeps a class where it is only until a newer
+model arrives.
 
 **On a `direct` lane** the step asks the bridge instead of the two tiers: it moves a class only when the lane's bridge
 answers as the lane's own (its `direct`-shaped `/ccgpt/lane` answer and the pid its command line proves), and runs no
@@ -2354,13 +2397,31 @@ whichever comes first: the next refresh whose step reaches that lane's backfill,
 `revert` or `set-class`. A `set-class` stopped after it wrote the registry is recorded the same way, as the hand change
 it was, and sends no push.
 
+**Classes follow the alias (Anthropic lanes).** An Anthropic lane's sessions already launch on whatever Claude Code's own
+`opus`, `sonnet` and `haiku` aliases resolve to, so ccrc never re-pins a class there. It reads which id each alias
+resolves to, from Claude Code's model catalogue cache in the lane's home or from a fresh launch ccd marked, and the
+hourly `ccrc models refresh` records the answer in `~/.ccrc/models/<id>.aliases.json`, under the lane lock, beside the
+advance file. From it come the class labels, the effort levels each model offers and the Models sheet. A class whose id
+changes gets a history entry and a `previous`, so Revert has something to put back, and one push. There is no canary:
+the first launch on the new id is the proof. A class's first id is not a move. A session's effort stays keyed by its class, so it
+keeps its level when the id moves, and ccd carries a level the home saved under an older id to the new one at launch,
+for that session only, when the session's routing record says the lane decides. The model id each launch used is kept in the session's record. A Revert holds the class by
+launching its sessions with the held id in their environment, the one case where ccrc puts a concrete model id on an
+Anthropic lane, and a hold ends when the alias, seen after the hold began, names a third id. A session already running
+on a replaced id is not given a typed command: the existing automatic roll relaunches it when it is idle, resuming the
+same conversation, and a session whose model is not behind is left alone. This is the roll's own behaviour; ccrc claims
+nothing about it beyond that. Doctor's four model-advance checks read the aliases file too: the blocked causes on
+an Anthropic lane are `alias-source-absent` (no class has an id; a WARN only once the box's ccd marks alias launches,
+a note before), `alias-cache-stale`, `aliases-file-unreadable` and `aliases-file-invalid`. A refusal writes nothing and
+the refresh never writes over a file it cannot read: move it aside to start again.
+
 **The push.** It is requested through the box's `notify.sh` hook, called with `--push`, which asks the server for a phone
 push as well as the banner in an open console. A phone push also needs the push setup the console already needs
 ("Turning push on", in [Attention, notifications and answering](#attention-notifications-and-answering)); with no VAPID
-keys the banner is all there is. The server grants it only for a model-class line from a lane that is codex-kind in the
+keys the banner is all there is. The server grants it only for a model-class line from a lane that is codex-kind or anthropic-kind in the
 roster the server itself holds, and tags it `models-advance:<lane>:<class>`, so one class's notice does not replace
 another's on the phone. A line over 300 characters (a failure line with long model ids) gets the banner only, so
-delivery is not promised. So does a line from a lane that is unknown to the server's roster, or not codex-kind there, and
+delivery is not promised. So does a line from a lane that is unknown to the server's roster, or neither codex-kind nor anthropic-kind there, and
 the server then logs a warning that names the lane and the remedy, in its own log (`ccrc logs` on the server box, which
 tails `ccrc.service`). That roster is the server box's roster file, `~/.ccrc/accounts.json` or the file `CCRC_ACCOUNTS`
 (in `~/.ccrc/ccrc.env`) names, read when the server starts. Nothing re-reads it for an `exec.kind`-only change: the
@@ -2373,8 +2434,9 @@ row has `exec.kind: "codex"`, `exec.provider: "openai"`, an `exec.authDir` and t
 fleet box's roster, which a later roster answer from the fleet box replaces wholesale.
 
 A running session may keep the old model until it picks the new one up by itself or is relaunched, and nothing is typed
-into one. A planned `ccrc doctor` check, `model-sessions-behind`, will name a live session still on the old model a day
-after the move; this build has no such check.
+into one. `ccrc doctor`'s `model-sessions-behind` WARNs on a running session still on the old model a day after the
+move, in a turn begun after it; once the session is idle, relaunch it with `ccd stop <id>` then `ccd start <id>`, which
+resumes its conversation.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3746,7 +3808,14 @@ A **public** repository never carries a tracker id anywhere: the PR is linked fr
 linear link <REF> --url …`, and its body cites the ticket's GitHub mirror issue (`Closes #n` or `Refs #n`). The PR sheet
 refuses a public project's title or body that names the project's own team key, and says which id to remove.
 
-The inputs are set in the console. **Settings → Security → Project linking** has one row per project: its **Team key**
+The inputs are set in the console. **Settings → Integrations → Project linking** lists every project, and says the
+counts once at its head. A project that waits for a decision comes first, open: a suggested team, a key two workspaces
+hold, a key two projects share in one workspace with no owning project, a map waiting, or inbound issues with no live
+owner. Each reason is said in words with the one control that settles it under it; the rest of the row is behind "More
+settings". A linked project is one line: its name, its team (key and name), how it was linked, who owns the team now,
+where its migration stands, and a few words where it differs from a quiet row (inbound issues waiting, a public
+repository, no PR template). Projects with no team sit behind one line, "N projects not linked to Linear". A row opens
+to its controls: its **Team key**
 (the Linear team's key, such as `KEY`; empty clears it), the repository's **visibility** as ccrc last read it ("Private,
 read 3h ago", "Not read yet", "Couldn't read: …") with an **override** (Automatic, Private or Public) that wins over the
 reading, and whether the repository has `.github/pull_request_template.md`. For a private project with a key and no
@@ -3787,6 +3856,14 @@ when Settings' release-notification choice selects it. Ask nudges to a coordinat
 replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move to `closing` are recorded in `/mail`
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
+
+**Every push is recorded** (the push outbox, `push-outbox-v1`). Each push the server sends is first a row of
+`push_outbox` in `coord.db`, and one sender sends it and records each subscription's answer. A push that every
+subscription refused for a reason that can pass (a 429, a 5xx, a network error before the request left the box) is
+retried, 30 s and then doubling, for the push's own ten-minute lifetime; one the push service may have taken (a reset or
+a timeout after the request was written) is never sent again, so no device shows it twice. A push still unsent when the
+server stopped is sent at its next boot if it is inside those ten minutes. A question or a Waiting on you item that
+reaches you also gets the time it reached you (`reachedOperatorAt`), with or without push keys.
 
 A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
 marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of
@@ -3943,6 +4020,12 @@ general remote-shell:
   `127.0.0.1`), never `0.0.0.0`. Every connection must send a valid `hello`
   frame with the bearer token within 3 s, or the socket is closed; a wrong
   token closes with code `4401`.
+- **Host report** (Overlord W1, the isolation word, spec 2026-11-09 §7.4): every `ready` frame carries the agent's
+  uid and two digests of its host ids, HMAC-SHA-256 under the bearer of the machine id and of the kernel's boot id,
+  never the ids themselves. The server reads it beside its own measurement of the link (whether the peer is on this
+  host, and the kernel's uid for the peer's socket) to decide the `server-isolation` word: either side narrows it, and
+  only the two together widen it. An older agent sends no report, so it cannot prove isolation: its link reads
+  `unmeasured`, or `shared-user` when another measured fact already shows it.
 - **Exec whitelist**: only `tmux` (`has-session`, `list-panes`,
   `capture-pane`, `send-keys`, `resize-window`) and `ccd`, matched against the
   exact bare command name (no path components) and an argv **prefix** — a
@@ -4044,7 +4127,7 @@ general remote-shell:
   Every granted verb outside that bare-token handful, unlike `stop`, requires a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
+  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size`/`keep-awake` need `--session`;
   `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
@@ -4058,7 +4141,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`, `delegation-adopt`,
-  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`, `keep-awake`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -4400,10 +4483,15 @@ what it cannot.
    `409 heir-is-a-worker` (below).
 5. **The caps dial.** Beside the pause banner, `CapsControl` reads
    `GET /api/coord/caps` and shows the concurrency cap beside its current use,
-   the running workers. A save (`POST /api/coord/caps`) sends the dial only when
-   you moved it, and afterwards the dial shows what the server stored, not what
-   you typed. There is no daily dial: the daily dispatch brake is retired
-   (operator ruling 2026-10-26).
+   the running workers. The cap is automatic: the server derives it from the
+   fleet host's memory and cores, and the control says so (`Automatic: 16 (from
+   64 GB and 16 cores)`), so nobody has to set a number. When the host has not
+   been measured it says why, and which number is used meanwhile. The number
+   box is your override: a save (`POST /api/coord/caps`) sends the number you
+   typed (while the cap is automatic, the number on screen included), afterwards
+   the dial shows what the server answered, not what you typed, and
+   `use automatic` clears the override. There is no daily dial: the daily
+   dispatch brake is retired (operator ruling 2026-10-26).
 6. **What a run warns about.** Under an open run's row, one line names trouble
    the server measured: mail to the run that gave up retrying (`N parked`), a
    delivery replayed many times (`replayed N×`), a dispatch that queued no brief
@@ -4896,7 +4984,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty-two
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twenty clauses,
@@ -4961,7 +5049,9 @@ functions, inherited shell options) stripped, and the body refuses them
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
-`ws-audit --session <id> --collect` are decided the same way.
+`ws-audit --session <id> --collect` are decided the same way. `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`,
+`roll` and `claude` start under `bash -p` too, so an inherited `nocasematch` cannot fold a case variant into one of them;
+the body does not refuse them when it was started another way.
 
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
 directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
@@ -5122,6 +5212,13 @@ listing on the same connection shows the file absent and records its retirement 
 such a snapshot, make sure the legacy file is gone. A restore that rolls both files back together, a whole home or a
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
+
+The Overlord's private store, `operator-model.db` (the operator's messages and the read ledger), is snapshotted beside
+`coord.db` at mode 0600, in a backup directory made 0700, and `ccrc coordination-snapshot restore` puts both back as one set.
+A backup taken before the store existed has no `operatorModel` member in its manifest, and its restore leaves the live
+store in place; a manifest that names the store as absent moves the live store into `coordination-restore.foreign/<id>/`
+and deletes nothing. As with the landing journal, no backup copies `~/.ccrc/privacy-journal.log`: leave it in place when a
+snapshot goes back, so the next message id starts above every id it records and none is issued twice.
 
 **Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
 owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
@@ -5521,8 +5618,28 @@ never neither, and naming both is refused `400 bad-request`. `GET /api/feed?prog
 the full event archive, with no outstanding/history split. Both join through the
 run row; an event with no run behind it is programless and shows only unfiltered.
 
-**Caps and pause.** The single-row `coordinator_state` table holds
-`maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
+**Caps and pause.** The run cap is DERIVED from the machine the fleet runs on
+(the operator's ruling of 2026-11-22; `server/src/coord/caps.ts#deriveCap`): the
+smallest of what the fleet host's memory allows (its memory less 8 GiB kept for
+everything that is not a run, at 3 GiB a run), what the sessions' own memory
+limit allows when they have one (the limit at 3 GiB a run), and its core count,
+never below 1 or above 64. A host with 64 GiB and 16 cores derives 16; the same
+host with its sessions limited to 24 GiB (the session slice's shipped default)
+derives 8, and the control shows both figures. The agent measures these facts
+on its `pressure` op (in local mode the server measures its own box) and
+decides nothing about them, and the pressure beat holds the last reading. The
+operator may set a number in its place, an override that stands until they
+choose automatic again (`POST /api/coord/caps` with
+`{"maxConcurrentWorkers": n}`, or `{"mode": "automatic"}`). The single-row
+`coordinator_state` table holds that number, `maxConcurrentWorkers`, and what it
+is, `capMode`: under `automatic` the stored number is used only while the host
+is unmeasured, and the caps view says which reason applies (nothing has
+answered yet, the fleet agent is too old to say, or its read failed). An
+upgrade moves no cap somebody set: a number an operator had set stays the cap,
+as an override, and only a box still on the untouched default (3) becomes
+automatic. An automatic cap that differs from the stored number is recorded in
+the feed once (`caps changed`, `workers 3 → automatic (16)`). What the
+cap counts is unchanged (runs currently dispatched and in an
 ACTIVE state, `dispatched`, `working` or `unknown` (and any state token this build
 cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
@@ -5533,11 +5650,12 @@ anything else is touched. It is the only cap. The daily dispatch brake,
 dispatch alike, reviews and warm resumes included, refused a coordinator with
 nothing to wake it, and never measured memory. Its column stays in the row,
 unread, and a caps write that still carries the field is accepted and the field
-ignored. The cap is an operator control: `GET`/`POST /api/coord/caps` reads it
-beside its current usage and writes it, bounds-checked, and the `/runs` board
-renders the dial. (For a stretch of this build's history there was no route at all and
-an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
-caller in the server for as long as it did.) Like every other same-origin PWA
+ignored. `GET`/`POST /api/coord/caps` reads the cap in force (`capNow`: its mode,
+the derived cap and what it was derived from) beside its current usage and
+writes the override, bounds-checked, and Runs > Advanced renders the dial. (For
+a stretch of this build's history there was no route at all and an operator
+edited the row with `sqlite3` — hence `CoordStore.setCaps` having no caller in
+the server for as long as it did.) Like every other same-origin PWA
 write the caps route carries **no box token**; unlike the operator doors named
 above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
 `/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to
@@ -5631,7 +5749,8 @@ stays awake), no pane menu, background work or subagents, a turn marker that rea
 exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
 event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
 worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
-swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`sleepLane.ts`,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate` (written by hand, or by `ccd keep-awake` on
+the Overlord's body, its one writer in the tree). The sweep (`sleepLane.ts`,
 every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
 operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
 hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
@@ -5662,7 +5781,16 @@ session whose lane runs nothing newer is never rolled for the build, and a sessi
 reach is not rolled for it again (in this server process). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
 `server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
 (the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
-`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). Under the
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). `ccd keep-awake` is
+the one writer of both markers in the tree, on the Overlord's body: it writes the stamp `keep-awake v1`, and `off` removes
+only a marker holding exactly that stamp. The renewal's fresh start (`ccd hibernate --roll --fresh`) passes a `.no-roll`
+holding exactly that stamp, and nothing else; a plain `--roll` refuses every `.no-roll`, a dangling link included. When
+its route record carries an ordered account list (`acctorder`, written only for the Overlord), that fresh start also
+picks the account it wakes on, last in its re-measure (`_fresh_pick_to`, `ccd/lib/long-lived.sh`): the first listed
+account under 70% load that serves its class, then for a Fable class the same on Opus, then the least loaded, else its
+current account; when none can take it, it refuses at exit 3 with `unplaced` and stops nothing, and a proven move writes
+one `swap` journal row (reason `fresh-pick`) and never `home`. A
+`touch` keeps the stamp, so an operator opts the Overlord's body out by writing other bytes into the marker. Under the
 `Coordinators only` setting a session that is not a coordinator (an unreadable `.child` counts as a child) is never
 rolled, and picks the release up when it next starts for another reason. The act is a row of the
 sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
@@ -5714,13 +5842,17 @@ test jobs; tested in
 `server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
 file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
 ledger-branch name existed). A pull request ADDS a per-task note instead,
-`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+`docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
 ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
 escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
 trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
-commit does not), which passes and is written to the step summary. The
-guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
-(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
+commit does not), which passes and is written to the step summary. Its layout arm (D-8719) holds every branch,
+ledger branches included, with no trailer escape, to the repo's review judge's layout: a file added, copied or
+renamed in under `docs/superpowers/specs/` or `docs/superpowers/plans/` is a dated spec
+(`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`) or a dated plan (`YYYY-MM-DD-<slug>.md`),
+directly in that directory. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs in enforce mode
+(`LEDGER_GUARD_MODE: enforce` in `ci.yml`), so a violation of either arm fails the check.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
@@ -7467,9 +7599,14 @@ box guards secrets, so a change to it asks for the step-up too. With sign-in off
    the fleet host and the fleet-side settings land in the overlay `~/.ccrc/testbox.env`, never in `ccrc.env`. The card
    shows each phase with its time and survives a reload; it ends in **Connected** or in the failing phase with its code
    and **Try again**. A fleet host whose `ccrc.env` already sets a pairing key refuses, naming the keys to remove.
-6. **Parity.** **Run parity** runs, in the tests slice on the fleet host, each repository row's five most recent merged
-   pull requests and the test box spec's section 6 fixtures (git state, socket, workers); it needs `gh` signed in on the
-   fleet host. The switch shows beside it, disabled, until the record passes.
+6. **Parity.** **Run parity** runs, in the tests slice on the fleet host, each repository row's newest merged pull
+   request over a sample of its tests, and the test box spec's section 6 fixtures (git state, socket, workers); it
+   needs `gh` signed in on the fleet host. The sample is the tests the pull request changed, the known load flakes
+   (`server/load-flakes.txt`) and a fixed spread of the rest, kept to about four CI minutes by CI's per-file times
+   (no file over 30 s), so the whole check takes about ten minutes on a loaded box and never runs the whole suite
+   there. Without CI's times (a repository whose CI keeps none, or gh failing) it is smaller still: at most four
+   changed tests and eight others, and no flake. The same sample runs on the fleet host and on the box, and the log
+   says how many test files were compared. The switch shows beside it, disabled, until the record passes.
 
 **Connected.** The card shows the address as set (never its text), the pinned fingerprint and the last act, and offers
 four controls, plus **Settings** (fleet-side keys apply at once; a change to a box setting is refused while a run is in
@@ -7485,6 +7622,22 @@ file is checked before a byte is written. "No run in progress" is the fleet's ow
 units instead. An act whose unit is gone (a reboot, an OOM kill, a stopped unit) reads `running` only for the first 45
 seconds: after that, with its lock free, the status ends it as failed with the code `interrupted` and the card offers its
 controls again.
+
+No act holds the lock without a ceiling. One table (`TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin`, mirrored as
+`TESTBOX_ADMIN_DEADLINE_S` in `shared/testbox-admin.ts`) gives every detached act its limit, and the system manager
+enforces it on the unit (`RuntimeMaxSec`): Connect 58 minutes; Repair, Apply release and a box settings edit 30 minutes;
+parity 25 minutes. An Apply when idle has one limit for its 6-hour wait and its edit together, so an edit that hangs
+after a short wait is stopped only when that whole limit ends. An act stopped at its limit reads `interrupted` at the
+next status read, or when the next act begins. A parity act that is only slow ends before its limit by itself: its
+tool starts nothing in the last five minutes and each of its steps (an install, the times fetch, or one run on one
+side) is stopped after 7 minutes, so the act ends `parity-differs` with a record, and the log says which steps did not
+run. The fleet host's run may also wait up to 5 minutes for a heavy-test slot first; one stopped while still waiting is
+logged as a busy fleet host, not as a difference. While an act
+holds the lock, another act's `busy` answer names it: which act, when it began and the latest time it can end, and the
+status says the same latest end on its running act (`deadlineAt`), which the card shows. A server older than this
+build cannot read a status that carries it, so roll this build out with `ccrc rollout --server-first`. `ccrc
+testbox-admin cancel` ends a parity act that is still running its legs, as it ends an Apply when idle that is still
+waiting.
 
 - **Repair** re-pushes the release recorded on the box, verified again on the fleet host, and re-runs the installer from
   it with the box's current settings file. It never changes the tag.
@@ -7789,7 +7942,10 @@ you need to reason about one.*
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
   `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
-  route fields `poolset` and `acctorder`); `ccrc`, the box
+  route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
+  `keep-awake` verb's region) and `lib/door.sh` (the Overlord's door process: its registry directory's purge and its
+  program's pin check) and `lib/model-aliases.sh` (the model-class Anthropic arm: a lane's aliases and holds, the launch
+  marker and the model id the routing record carries); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -7966,6 +8122,7 @@ implements — that list is the authority; the table below is a map:
 | `clip <png> [id]` | file an image under `~/.cc-clips` and type its path into the input box of the session the most recently active attached client is on, or of the id given |
 | `route --session <id> --set <field>=<value>… [--apply]` | write a session's routing record (model class, effort, …); `--apply` also applies it to an idle live pane |
 | `win-size --session <id> --mode smallest\|canonical` | un-pin / pin one session's window size |
+| `keep-awake --session <id> --state on\|off` | the server's set / clear of one session's two sleep markers, `.no-hibernate` and `.no-roll`, holding its own stamp (the Overlord's body; never run by hand or by a session) |
 | `ws-add [--no-rc] [--route <field>=<value>]… <project> [slug]` · `ws-rename --session <id> --branch <name>` | a new worktree, branch and session for a project; rename a workspace's branch before it is pushed |
 | `ws-hold --session <id> --reason <text>` · `ws-release --session <id>` | declare / end a program's claim on a workspace |
 | `ws-title --session <id> (--title <text> \| --clear)` | set or clear a workspace's operator title and its `named` marker (the slug and branch never change); `--clear` hands the row back to the ai-title sweep |
@@ -8022,7 +8179,8 @@ The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
-`SessionStart` and `SessionEnd`; `Notification` is not among them. Every managed entry but
+`SessionStart`, `SessionEnd`, `PreModelSwitch` and `PostModelSwitch` (the model events: report-only, never refused);
+`Notification` is not among them. Every managed entry but
 `SessionEnd`'s carries `"timeout": 600` (the installer's `HOOK_TIMEOUT_S`, Claude Code's own default
 for a command hook, so it moves no path's fail-open point and bounds the open above); `SessionEnd`'s
 carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget, which a
@@ -8555,6 +8713,10 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-door.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-door.sh ~/.local/libexec/ccrc/lib/door.sh   # its sixth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-model-aliases.sh ~/.local/libexec/ccrc/lib/model-aliases.sh   # its seventh library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-door-process.mjs ] || restore ~/ccrc-backups/<ts>/ccd-door-process.mjs ~/.local/libexec/ccrc/door-process.mjs   # the door program, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8876,7 +9038,9 @@ arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by ha
 The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
 after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
 (the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
-only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+only recording, paused, or not read) with every count (but for the would-keep figure after a pass that could not read
+everything it needs, where it says the card cannot say how many until the next pass), whether the fleet box's keep switch
+and its change check are available,
 missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
 each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
@@ -8929,9 +9093,13 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth; each is treated the same way, their pins
-  `__CCD_LIB_TRAIN_SHA256=stamp-at-install`, `__CCD_LIB_LEASE_SHA256=stamp-at-install` and
-  `__CCD_LIB_POOLSET_SHA256=stamp-at-install`; the body reads and checks all four before it evaluates any.
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth, and `ccd/lib/door.sh` (the Overlord's door process) the sixth, and `ccd/lib/model-aliases.sh` (the model-class Anthropic arm) the seventh;
+  each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
+  `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` and `__CCD_LIB_DOOR_SHA256=stamp-at-install` and `__CCD_LIB_ALIASES_SHA256=stamp-at-install`; the body reads and checks all seven before it evaluates any.
+  `ccd/door-process.mjs` (the Overlord's door program, a Node program: not a library, not a launcher) is installed beside the body at
+  `~/.local/libexec/ccrc/door-process.mjs` (mode 644, not on `PATH`) and pinned the same way (`__CCD_DOOR_SHA256=stamp-at-install`, rendered from the
+  installed bytes in the same run, like the redactor's two files); the updater's backup carries it as `ccd-door-process.mjs`.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
@@ -8942,7 +9110,7 @@ These conventions carry more weight here than style:
   `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
-  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  add a new `docs/superpowers/programs/<programme>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
   trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to

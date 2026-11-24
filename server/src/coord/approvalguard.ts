@@ -122,7 +122,7 @@ export interface ApprovalCtx extends ApprovalRoots {
  *  operator's `claude …` switch verbs join it, so a session never rolls, installs or selects a Claude Code build.
  *  No account verb is here: account switching and the auto-swap are never blocked (operator ruling 2026-10-19). */
 export const FORBIDDEN_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 // ── roots ──────────────────────────────────────────────────────────────────
 
@@ -350,6 +350,13 @@ const runsWorktreePrune = (t: string): boolean => {
   return !modeledQuotes(t) || PRUNE_ANCHOR.test(quoteAware(t, 1, true)) || pruneReading(quoteAware(t, 1));
 };
 
+/** A segment whose program is the account verb's script (`deploy/account-op.mjs`), bare or after a runtime, by any path:
+ *  the roster's other writer, which the session hook's account arm refuses the same way (`AOPRUN`). A read of the script
+ *  (`grep x deploy/account-op.mjs`) is not a run. The roster files themselves are already `a registry path`. */
+const ACCOUNT_OP_RUN = new RegExp(String.raw`^\s*(?:[(\x60{]\s*){0,4}(?:(?:then|do|else|if|while|!)\s+){0,2}(?:[A-Za-z_]\w*=\S*\s+){0,8}`
+  + String.raw`(?:(?:exec|env|time|nohup|command)\s+){0,2}(?:(?:\S*/)?(?:node|nodejs|bun|deno)\s+(?:-\S*\s+){0,8})?(?:\S*/)?account-op\.mjs(?![\w.-])`);
+const runsAccountOp = (t: string): boolean => /account-op/.test(t) && t.replace(/['"]/g, '').split(/[\n;&|]/).some((s) => ACCOUNT_OP_RUN.test(s));
+
 /** Every forbidden shape, matched anywhere in a Bash command's text (spec §6.5 "forbidden"). Each test is linear in
  *  the text's length (D-5299). */
 export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test: (text: string) => boolean }[] = [
@@ -365,11 +372,14 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     return { why: `ccd ${v}`, test: (t: string) => headBeforeTail(t, /[;&|]/, head, tail) };
   }),
   { why: 'git worktree prune', test: runsWorktreePrune },
+  { why: 'a direct run of the account verb script', test: runsAccountOp },
   ...[
     { why: 'tmux', re: new RegExp(`${WB}tmux(?=$|[\\s;&|)'"])`) },
     { why: 'a registry path', re: /\/\.(?:cc-sessions|cc-limits|ccrc)(?![\w.-])/ },
     { why: 'reboot or shutdown', re: new RegExp(`${WB}(?:reboot|shutdown|poweroff|halt)(?=$|[\\s;&|)'"])`) },
-    { why: 'ccrc update or rollback', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback)(?![\\w-])`) },
+    // `rollout` joined (pool set B2, fix round 1): it forwards `--below-cap` and `--force --downgrade` to each box. An accident
+    // guard, like every row here: a script file or another interpreter runs past it (CLAUDE.md's residuals).
+    { why: 'ccrc update, rollback or rollout', re: new RegExp(`${WB}ccrc['"]?\\s+(?:-\\S+\\s+)*(?:update|rollback|rollout)(?![\\w-])`) },
     // D-6202 (spec §3.1): the account-management verbs are forbidden on every session's prompt, so no approval can
     // rule them; the hook's `fmatch` holds the same three rows (`ACCTV` is its copy of `ACCOUNT_DENY_SUBS`). Never a swap verb (the operator's Q8 ruling).
     ...ACCOUNT_DENY_SUBS.map((v) => ({
@@ -918,5 +928,67 @@ export function approvalClass(tool: string, input: Record<string, unknown>, rawC
     return 'ordinary';
   } catch {
     return 'escalate';                                                         // every doubt goes to the operator
+  }
+}
+
+// ── the census's two facts (approvals plan 2026-11-18, §3.1 and Task 1.4; F7) ─────────────────────────────────
+
+/** The plain Bash command a census fact reads, or `null`: the same ceilings `approvalClass` keeps before it parses
+ *  (size, non-ASCII, a credential path, a NUL), so no fact is computed over a request the classifier left unread. */
+function censusCommand(tool: string, input: Record<string, unknown>): string | null {
+  if (tool !== 'Bash') return null;
+  if (stringLeaves(input).reduce((n, s) => n + s.length, 0) > APPROVAL_INPUT_MAX_BYTES) return null;
+  const command = input.command;
+  if (typeof command !== 'string' || command.includes('\0')) return null;
+  if (stringLeaves(input).some((s) => NON_ASCII.test(s)) || CREDENTIAL_RE.test(command)) return null;
+  return command;
+}
+
+/** A request's statements' command words, in order, from the classifier's own statement list (`parse(lex(…))`): the
+ *  plain command name of each simple command, and `=` for a standalone assignment. `null` when the command is not one
+ *  the statement grammar can list (a pipeline, a substitution, a quoted command name, any other tool): the
+ *  census keeps the words, never an operand. */
+export function approvalCommandWords(tool: string, input: Record<string, unknown>): readonly string[] | null {
+  const command = censusCommand(tool, input);
+  if (command === null) return null;
+  try {
+    return parse(lex(command)).flatMap((ao) => ao.cmds.map((c) => (c.assign !== null ? '=' : commandName(c.words[0]))));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `literalInRoot` (§3.1, F7): EVERY ARGUMENT IS A LITERAL PATH INSIDE A ROOT. Computed once, at mint, beside the class;
+ * PR 6's family decider reuses it for its literal rule, so the census's gate and the family never disagree.
+ *  - Bash only, and only a command the statement grammar lists (no pipeline, substitution or unquoted expansion).
+ *  - No assignment and no redirect in any statement.
+ *  - Every word after a command's name is a literal: no glob (`cat *`), no variable (`cat "$X"`), no `~` (`cat ~/x`).
+ *  - A literal that starts with `-` is an option word, not a path, and stands as it is.
+ *  - Every other literal has no `..` component and resolves, from the request's trusted `cwd` when relative, AT or
+ *    inside one of the child's own roots (a read of the worktree itself is in it). Lexical, as the classifier is.
+ * Any doubt is `false`. It never widens the class: it is a fact for the census, and a precondition PR 6 adds to.
+ */
+export function literalInRoot(tool: string, input: Record<string, unknown>, rawCtx: ApprovalCtx): boolean {
+  const command = censusCommand(tool, input);
+  if (command === null) return false;
+  const ctx: ApprovalCtx = { ...rawCtx, cwd: rawCtx.cwd !== null && isAbsNormal(rawCtx.cwd) ? rawCtx.cwd : null };
+  try {
+    for (const ao of parse(lex(command))) {
+      for (const c of ao.cmds) {
+        if (c.assign !== null || c.redirs.length > 0) return false;
+        commandName(c.words[0]);
+        for (const w of c.words.slice(1)) {
+          const t = litText(w);
+          if (t === null) return false;
+          if (t.startsWith('-')) continue;
+          if (t === '' || /(?:^|\/)\.\.(?:\/|$)/.test(t)) return false;
+          if (!insideRoots(resolvePath(t, ctx.cwd, ctx), ctx, false)) return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
   }
 }

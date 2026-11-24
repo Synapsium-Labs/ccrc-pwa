@@ -351,6 +351,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(docsCss, '.docs-door'), ruleIn(docsCss, '.docs-back'), ruleIn(docsCss, '.docs-crumb'),
       ruleIn(docsCss, '.docs-row'), ruleIn(docsCss, '.docs-fresh'), ruleIn(docsCss, '.docs-copy'),
       ruleIn(docsCss, '.docs-action'), ruleIn(docsCss, '.docs-filter'), ruleIn(docsCss, '.docs-nodocs > summary'),
+      ruleIn(docsCss, '.docs-mockup-fold > summary'),
       ruleIn(docsCss, '.btn-ghost.docs-banner-action'), ruleIn(docsCss, '.doc-img-link'),
       ruleIn(docsCss, '.docs-more'),
       ruleIn(docsCss, '.docs-title'), ruleIn(docsCss, '.docs-tool'),
@@ -379,7 +380,7 @@ describe('.settings-index-row — the Settings index, one row per section (setti
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     renderSettings(null);
     const rows = screen.getAllByRole('link').filter((a) => a.hasAttribute('data-section'));
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     for (const row of rows) expect(row).toHaveClass('settings-index-row');
     navigate('/');
   });
@@ -661,7 +662,7 @@ describe('every strip head keeps the height it had on main — the whole chrome,
     ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
     ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
     ['fleet.css', '.hotfiles-head', fleetCss],
-    ['workflow-strip.css', '.workflow-strip .workflow-head', readUi('components', 'workflow-strip.css')],
+    ['workflow-strip.css', '.helpers-strip .helpers-head', readUi('components', 'workflow-strip.css')],
   ];
 
   // THE FLOOR IS CHOSEN IN ONE COMPONENT, PER STRIP. All three heads declared
@@ -1078,7 +1079,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     it('is at least one tap tall, off the shared token', () => {
       expect(floorIn(docsCss, '.docs-leaf-action')).toBe('var(--tap-min)');
     });
-    it('is the class both rendered buttons of the html stand-in carry', async () => {
+    it('is the class both rendered buttons of the html leaf carry', async () => {
       const r = fileResponse('<p>a</p>');
       openDocs('/docs/demo/specs/x.html', fakeLoaders({
         tree: okTree(treeOk({ entries: [entry('specs', 'x.html')] })),
@@ -1086,6 +1087,24 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       }));
       expect(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.source })).toHaveClass('docs-leaf-action');
       expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toHaveClass('docs-leaf-action');
+    });
+  });
+
+  describe('.docs-mockup-fold > summary — the mockup viewer’s census and links list', () => {
+    it('is at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-mockup-fold > summary')).toBe('var(--tap-min)');
+    });
+    it('is the element each rendered fold opens with, and the in-app and external link lines carry .docs-hint-link', async () => {
+      const html = '<img src="a.png"><a href="x.md">x</a><a href="https://ext.example/p">e</a>';
+      const r = fileResponse(html);
+      openDocs('/docs/demo/specs/x.html', fakeLoaders({
+        tree: okTree(treeOk({ entries: [entry('specs', 'x.html'), entry('specs', 'a.png')] })),
+        file: { s: 'ok', value: { ...r, contentClass: 'html', show: { ...r.show, path: 'x.html', size: html.length } } },
+      }));
+      await waitFor(() => expect(document.querySelectorAll('details.docs-mockup-fold > summary')).toHaveLength(2));
+      const links = document.querySelector<HTMLDetailsElement>('details.docs-mockup-links')!;
+      act(() => { links.open = true; links.dispatchEvent(new Event('toggle')); });
+      expect(document.querySelectorAll('.docs-mockup-links li a.docs-hint-link')).toHaveLength(2);
     });
   });
 
@@ -1313,7 +1332,7 @@ describe('the one bar: the rendered bar carries .docs-title and .docs-tool (docs
         inputs.push(input);
         return { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() } as unknown as ReaderMount;
       }),
-      images: vi.fn(async () => ({ urls: {}, drafts: 0 })),
+      images: vi.fn(async () => ({ urls: {}, drafts: 0, auth: 0 })),
     } as unknown as ReaderDeps;
     const f = markdownLeaf('# A\n');
     navigate('/docs/demo/specs/a.md');

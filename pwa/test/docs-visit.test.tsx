@@ -173,13 +173,13 @@ describe('pinFor: the leaf the tree implies (spec 4.3 item 5)', () => {
 describe('fileKey: a committed body by its blob, a draft by its whole pin (spec 4.3 item 2)', () => {
   it('a committed key names the blob and its place, never the commit', () => {
     const tree = treeOk();
-    expect(fileKey(committedPin('a.md'), tree)).toBe(['blob', BLOB_1, 'specs', 'a.md'].join(NUL));
-    expect(fileKey(committedPin('a.md', COMMIT_B), tree)).toBe(fileKey(committedPin('a.md'), tree));
+    expect(fileKey(committedPin('a.md'), tree, false)).toBe(['blob', BLOB_1, 'specs', 'a.md'].join(NUL));
+    expect(fileKey(committedPin('a.md', COMMIT_B), tree, false)).toBe(fileKey(committedPin('a.md'), tree, false));
   });
 
   it('a draft key names branch, head, section, path and fingerprint', () => {
     const pin: DocPin = { kind: 'draft', branch: 'main', head: COMMIT_A, section: 'specs', path: 'a.md', fp: FP_1 };
-    expect(fileKey(pin, treeOk())).toBe(['draft', 'main', COMMIT_A, 'specs', 'a.md', FP_1].join(NUL));
+    expect(fileKey(pin, treeOk(), false)).toBe(['draft', 'main', COMMIT_A, 'specs', 'a.md', FP_1].join(NUL));
   });
 });
 
@@ -920,5 +920,72 @@ describe('Review 439 F19: the automatic re-list is a fetch that starts after the
     await act(async () => settleNext(okTree(moved)));
     await flush();
     expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+});
+
+describe('the range read\'s share of the one automatic re-list (X2 P1, review F2)', () => {
+  const URL = '/docs/demo/specs/a.md';
+
+  it.each([...DOCS_RELIST_WORDS])('a refused range read with %s re-lists once; the next one is "changing", with no GET', async (word) => {
+    const f = fakeLoaders();
+    const { result } = visit(f.loaders, URL);
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    let first: string | undefined;
+    act(() => { first = result.current.rangeFailed(word); });
+    await flush();
+    expect(first).toBe('relist');
+    expect(f.tree, 'the re-list').toHaveBeenCalledTimes(2);
+    let second: string | undefined;
+    act(() => { second = result.current.rangeFailed(word); });
+    await flush();
+    expect(second).toBe('changing');
+    expect(f.tree, 'the one-shot is spent').toHaveBeenCalledTimes(2);
+  });
+
+  it('a read that gives its bytes re-arms it, as an ok file read does', async () => {
+    const f = fakeLoaders();
+    const { result } = visit(f.loaders, URL);
+    await flush();
+    act(() => { result.current.rangeFailed('draft-changed'); });
+    await flush();
+    act(() => { result.current.rangeRead(); });
+    let again: string | undefined;
+    act(() => { again = result.current.rangeFailed('draft-changed'); });
+    await flush();
+    expect(again).toBe('relist');
+    expect(f.tree).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares the file route\'s one-shot: a file read\'s spent re-list leaves the range read none', async () => {
+    const f = fakeLoaders();
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    const { result } = visit(f.loaders, URL);
+    await flush();
+    expect(f.tree, 'the file route re-listed once').toHaveBeenCalledTimes(2);
+    const calls = f.tree.mock.calls.length;
+    let word: string | undefined;
+    act(() => { word = result.current.rangeFailed('unknown-commit'); });
+    await flush();
+    expect(word).toBe('changing');
+    expect(f.tree).toHaveBeenCalledTimes(calls);
+  });
+
+  it('a word that is no re-list word, and any word on a version page, are none of its business', async () => {
+    const f = fakeLoaders();
+    const plain = visit(f.loaders, URL);
+    await flush();
+    let a: string | undefined;
+    act(() => { a = plain.result.current.rangeFailed('snapshot-gone'); });
+    expect(a).toBe('other');
+    const version = visit(f.loaders, `${URL}?at=${COMMIT_B}`);
+    await flush();
+    const before = f.tree.mock.calls.length;
+    let b: string | undefined;
+    act(() => { b = version.result.current.rangeFailed('unknown-commit'); });
+    await flush();
+    expect(b).toBe('other');
+    expect(f.tree).toHaveBeenCalledTimes(before);
   });
 });

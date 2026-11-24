@@ -1,7 +1,8 @@
 import path from 'node:path';
+import type { AdvisorSpawnRecord } from '../../shared/coordinatorAdvisor.js';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
-import { readHookState } from './hookstate.js';
+import { readHookState, type HookState } from './hookstate.js';
 import { mapBounded } from './bounded.js';
 import type { RegistryRowCache } from './registryRowCache.js';
 import { rowTemperature, hotRowReuse, type RowKey } from './rowTemperature.js';
@@ -437,6 +438,12 @@ export interface SessionRecord {
    */
   browserMcp?: BrowserMcpApplied;
   /**
+   * `$REG/<id>.advisorspawn` — what ccd's last spawn applied for the coordinator advisor (D-8967, `_advisor_spawn_compose`):
+   * the model and the spawn's epoch, `off`, or `off fastdeath` (D-8968); `unreadable` when listed but not of that grammar.
+   * Absent: no record (the advisor never touched this row). Read only when listed.
+   */
+  advisorSpawn?: AdvisorSpawnRecord | 'unreadable';
+  /**
    * `$REG/<id>.limitwait` — the limit watchdog's "no account has measured room" record (D-8123), the Waiting on you item's
    * source: `state=open since=<epoch> reset=<epoch|-> account=<w> sign=<sign>[ choice=wait at=<epoch>[ by=auto]]`, epoch SECONDS here
    * (the frame converts to ms, as for `stranded`). Read only when listed, THREE-VALUED like `.stranded`: an item, `null`
@@ -687,6 +694,18 @@ export function browserMcpOf(read: MeasuredRead | null): BrowserMcpApplied | nul
   return read.ok && (read.content === 'on' || read.content === 'off') ? read.content : 'unreadable';
 }
 
+/** `$REG/<id>.advisorspawn`'s ONE reader (coordinator advisor, D-8967): `null` for an unlisted field; the record when it
+ *  is exactly ccd's grammar (`<fable|opus> <epoch>`, `off <epoch>`, `off fastdeath <epoch>`), else `unreadable`. */
+const ADVISOR_SPAWN_LINE = /^(?:(fable|opus)|off( fastdeath)?) ([0-9]{1,12})$/;
+export function advisorSpawnOf(read: MeasuredRead | null): AdvisorSpawnRecord | 'unreadable' | null {
+  if (read === null) return null;
+  if (!read.ok) return read.reason === 'absent' ? null : 'unreadable';
+  const m = ADVISOR_SPAWN_LINE.exec(read.content);
+  if (m === null) return 'unreadable';
+  const at = Number(m[3]);
+  return m[1] === 'fable' || m[1] === 'opus' ? { kind: 'applied', model: m[1], at } : { kind: 'off', at, fastDeath: m[2] !== undefined };
+}
+
 /** `$REG/<id>.limitwait`'s ONE reader (D-8123): `null` for an unlisted field, one that vanished between the listing and the read, a closed record, an empty one or one that does
  *  not match the whole line grammar ccd writes (a torn or hand-edited record is matched, never evaluated); `'unreadable'` for a
  *  listed field whose bytes did not come back. The grammar is `_limitwait_open`'s and `_limitwait_choose`'s (` by=auto`: ccd chose the wait
@@ -721,6 +740,18 @@ function packedStamp(raw: string | null): { at: number; rest: string } | null {
   const at = numOrNull(sp === -1 ? trimmed : trimmed.slice(0, sp));
   if (at === null) return null;
   return { at, rest: sp === -1 ? '' : trimmed.slice(sp + 1).trim() };
+}
+
+/** `$REG/<id>.spawn`'s ONE parser (D-8126 wave A7, review 2807 F2): `<epoch> <rc>`, exactly the grammar ccd's own
+ *  readers hold (`_ws_lane_cannot_spawn`: two unsigned integers, whitespace around them). `_spawn` writes the record
+ *  ALWAYS, before returning, so any other shape (an empty or torn write, a hand edit, a sign, an exponent, a fraction)
+ *  is no record: never a verdict, and never `rc: NaN`, which renders `null` on the wire while typing as `number`. */
+const SPAWN_RECORD_RE = /^\s*(\d+)\s+(\d+)\s*$/;
+export function spawnRecordOf(raw: string | null): { at: number; rc: number } | null {
+  const m = raw === null ? null : SPAWN_RECORD_RE.exec(raw);
+  if (m === null) return null;
+  const at = Number(m[1]); const rc = Number(m[2]);
+  return Number.isSafeInteger(at) && Number.isSafeInteger(rc) ? { at, rc } : null;
 }
 
 function manifestBytes(raw: string | null): number | null {
@@ -910,7 +941,7 @@ async function buildRecord(
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
     routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRead,
-    namedRead, titleRaw, browserRead, limitWaitRead] = await Promise.all([
+    namedRead, titleRaw, browserRead, limitWaitRead, advisorSpawnRead] = await Promise.all([
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
     // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
     // the listing, and a file created after it is seen on the next read.
@@ -962,6 +993,8 @@ async function buildRecord(
     listedOnlyMeasured('browsermcp'),
     // D-8123: the limit watchdog's no-room record, read only when listed — a row that never had one costs no read.
     listedOnlyMeasured('limitwait'),
+    // The coordinator advisor's spawn record (D-8967), read only when listed — a row the advisor never touched costs no read.
+    listedOnlyMeasured('advisorspawn'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.has(id + '.uuid')`
@@ -1055,8 +1088,6 @@ async function buildRecord(
   // `listedField`'s own remembering, for the one plain field read measured: a failed read is never cached.
   if (hibernatedRead !== null && !hibernatedRead.ok && hibernatedRead.reason === 'unreadable') plainUnreadable = true;
   const swapStamp = packedStamp(swapBlockedRaw);
-  const spawnStamp = packedStamp(spawnRaw);
-  const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
 
   const lifecycleUnmeasured: LifecycleField[] = [];
   for (const [f, read] of [
@@ -1279,12 +1310,8 @@ async function buildRecord(
                 : { at: p.at, reason: p.rest === '' ? STRANDED_NO_REASON : p.rest };
             })())
       : (strandedRead.reason === 'absent' ? null : (strandedListed ? { at: 0, reason: STRANDED_UNREADABLE } : null)),
-    // An rc that does not parse is not a verdict. `_spawn` writes the stamp
-    // ALWAYS, before returning, so an unparseable one means the stamp never
-    // landed whole, not an ambiguous outcome — and `rc: NaN` on the wire
-    // renders as `null` while
-    // typing as `number`, the silent lie `numOrNull` exists to refuse.
-    spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
+    // A record that does not parse is not a verdict (`spawnRecordOf`, the one parser).
+    spawn: spawnRecordOf(spawnRaw),
     lastEnd: parseLastEnd(lastEndRaw),
     hibernatedAt: hibernatedAtOf(hibernatedRead, stopStamp),
     lifecycleUnmeasured,
@@ -1296,6 +1323,8 @@ async function buildRecord(
     ...(shellRead === null ? {} : { childShell: childShellOf(shellRead) }),
     ...(browserRead === null ? {} : { browserMcp: browserMcpOf(browserRead)! }),
     ...(limitWaitRead === null ? {} : { limitWait: limitWaitOf(limitWaitRead) }),
+    // Listed, then gone before the read: no record, the `limitwait` rule.
+    ...((a) => (a === null ? {} : { advisorSpawn: a }))(advisorSpawnOf(advisorSpawnRead)),
   };
 }
 
@@ -1679,25 +1708,32 @@ export const UNMEASURED_ASK_AT = -1;
  * for a six-line pure-registry+hookstate read.
  */
 export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<number> {
+  const hs = await freshHookState(io, cfg, childId);
+  return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+}
+
+/** The child's hook state read fresh from its registry row and file, the ladder `freshAskAt` answers from: null when the
+ *  row, its identity or the file cannot be measured. The operator's press asks it too (approvals PR 3c, review 3022 F1):
+ *  whether hook state still names the prompt a held entry was held for, at the press, not as the last tick cached it. */
+export async function freshHookState(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<HookState | null> {
   const read = await readSessionRecord(io, cfg, childId);
   switch (read.kind) {
     case 'found': break;
-    case 'absent': case 'unmeasurable': case 'unlistable': return UNMEASURED_ASK_AT;
+    case 'absent': case 'unmeasurable': case 'unlistable': return null;
     // An id `isRegistryId` refuses (spec §2.3) is a child this box did not
     // measure, exactly as the two above: it answers as they do, by design.
     // Its pins are `readSessionRecord`'s zero-listing case and, end to end,
     // `POST /api/questions/ask-<n>/rule`'s `child-unmeasurable` for a stored
     // non-registry `childId`.
-    case 'bad-id': return UNMEASURED_ASK_AT;
+    case 'bad-id': return null;
     default: {
       const _x: never = read;
       return _x;
     }
   }
   const identity = measuredIdentity(read.record);
-  if (identity === null) return UNMEASURED_ASK_AT;
-  const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
-  return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
+  if (identity === null) return null;
+  return readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
 }
 
 /** `$REG/<id>.hibernated`'s body (D-5242): `<epoch-seconds>` and, after one space, the idle hours `ccd hibernate`
@@ -1733,7 +1769,8 @@ export function isCleanRecord(rec: SessionRecord): boolean {
     && rec.denySettings?.kind !== 'unreadable'
     && rec.childShell?.kind !== 'unreadable'
     && rec.browserMcp !== 'unreadable'
-    && rec.limitWait !== 'unreadable';
+    && rec.limitWait !== 'unreadable'
+    && rec.advisorSpawn !== 'unreadable';
 }
 
 /** The project a registry read names, or null when it names none: the record was not found, or `.project` did not read as

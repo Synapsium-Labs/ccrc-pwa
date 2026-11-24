@@ -31,6 +31,8 @@ interface Result { code: number; stdout: string; stderr: string }
 function plantHost(home: string, host: string, o: {
   role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean;
   caps?: string; floor?: string; checkState?: string; oldCheck?: boolean; channelLine?: string;
+  /** The pool set B1 (F6): the check line's needs= word (absent: no needs= field, as a ccrc before B1 prints). */
+  needs?: string;
   /** Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
    *  fix round 1 (I1): the RAW bytes at this host's `~/.ccrc/update.json`,
    *  under a FAKE home the ssh stub really `bash -c`s the printed remote
@@ -66,6 +68,7 @@ function plantHost(home: string, host: string, o: {
   optional('check-state', o.checkState);
   optional('old-check', o.oldCheck === true ? 'yes' : undefined);
   optional('channel-line', o.channelLine);
+  optional('needs', o.needs);
   // The fake box home the ssh stub redirects HOME to before running the
   // exit-3 detail command for real. Cleared and rebuilt on every plant, the
   // same "no stale state from an earlier plant" rule the files above follow.
@@ -137,8 +140,9 @@ function plantBox(home: string): void {
     '    caps=verify,node-id,floor; [ -f "$d/caps" ] && IFS= read -r caps < "$d/caps"',
     '    floor=none; [ -f "$d/floor" ] && IFS= read -r floor < "$d/floor"',
     '    [ -f "$d/check-state" ] && IFS= read -r state < "$d/check-state"',
+    '    needs=""; [ -f "$d/needs" ] && IFS= read -r needs < "$d/needs"',
     '    if [ -f "$d/old-check" ]; then echo "check: box=$box sha=$sha target=$tgt state=$state"',
-    '    else echo "check: box=$box sha=$sha target=$tgt caps=$caps floor=$floor state=$state"; fi',
+    '    else echo "check: box=$box sha=$sha target=$tgt caps=$caps floor=$floor ${needs:+needs=$needs }state=$state"; fi',
     '    [ "$state" = current ] && exit 0; exit 1 ;;',
     '  "ccrc update --to "*)',
     '    case " $cmd " in *" --from "*) [ -f "$d/old-check" ] && { echo "ccrc: unknown argument: --from" >&2; exit 2; } ;; esac',
@@ -701,6 +705,30 @@ describe('ccrc rollout: the W4 check line, a box one wave older, the floor and t
     expect(updates(home)).toEqual([]);
   });
 
+  it('the capability floor (pool set B1, F6): a box whose standing fact needs a ccd word may only move FIRST — --server-first refuses before either box moves; the default order, none and an older line proceed', () => {
+    const home = twoBoxFleet('ccrc-rollout-needs-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'pool-set' });
+    let r = run(home, ['--server-first']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toContain("rollout: the fleet box has a standing fact that needs ccd's pool-set, which its own update checks against the target only after server has moved — run it first (drop --server-first), or clear the fact there; nothing was touched");
+    expect(updates(home)).toEqual([]);
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'unmeasured' });
+    r = run(home, ['--server-first']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("needs ccd's unmeasured");
+    expect(updates(home)).toEqual([]);
+    // The fleet box first (the default order): its own update reads the target's ccdCaps and decides.
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', needs: 'pool-set' });
+    r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const needs of ['none', undefined]) {
+      const h2 = twoBoxFleet(`ccrc-rollout-needs-${needs ?? 'absent'}-`);
+      plantHost(h2, FLEET, { role: 'fleet', version: 'v1.0.0', ...(needs === undefined ? {} : { needs }) });
+      r = run(h2, ['--server-first']);
+      expect(r.code, `${needs}: ${r.stderr}`).toBe(0);
+    }
+  });
+
   it('--check reports a below-floor box and touches nothing (exit 1, no refusal — a measurement)', () => {
     const home = twoBoxFleet('ccrc-rollout-belowfloor-check-');
     plantHost(home, FLEET, { role: 'fleet', version: 'v3.0.0', floor: 'v3.0.0', checkState: 'below-floor' });
@@ -780,6 +808,95 @@ describe('ccrc rollout: the W4 check line, a box one wave older, the floor and t
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--check and --allow-unsigned are exclusive/);
     expect(sshCalls(home)).toEqual([]);
+  });
+});
+
+describe('ccrc rollout --below-cap (pool set B2, Task 9): only to boxes that list below-cap, refused before any box moves', () => {
+  const BC = 'verify,node-id,floor,update-json,below-cap';
+  /** Every word of this ccrc's floor table, read from it, so a row a later piece adds keeps these cases true. */
+  const FLOOR_WORDS = [...(/^CAP_FLOOR_ROWS=\(\n([\s\S]*?)\n\)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1] ?? '')
+    .matchAll(/^\s*'[^'|]+\|([^'|]+)\|/gm)].map((m) => m[1]).join(',');
+  const UPD = (box: string, flags: string): string => `${box} ccrc update --to v2.0.0${flags}`;
+  const bcFleet = (prefix: string): string => {
+    const home = twoBoxFleet(prefix);
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', caps: BC });
+    plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', caps: BC });
+    return home;
+  };
+
+  it('a box whose check line lacks below-cap refuses the whole rollout at exit 2 before EITHER box moves, naming that box', () => {
+    const home = bcFleet('ccrc-rollout-bc-gate-');
+    plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', caps: 'verify,node-id,floor,update-json' });
+    const r = run(home, ['--below-cap', 'pool-set']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toContain("rollout: --below-cap needs a ccrc that lists below-cap in its caps, and these boxes' do not: server — move them without --below-cap, or clear the standing fact there if that move is refused; nothing was touched");
+    expect(updates(home)).toEqual([]);
+    // Without the flag nothing is gated: the older box moves as it always did.
+    expect(run(home).code).toBe(0);
+  });
+
+  it('every box lists below-cap: the flag reaches each box\'s move, before --from rollout', () => {
+    const home = bcFleet('ccrc-rollout-bc-pass-');
+    const r = run(home, ['--below-cap', 'pool-set', '--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(updates(home)).toEqual([
+      UPD(FLEET, ' --force --below-cap pool-set --from rollout'),
+      UPD(SERVER, ' --force --below-cap pool-set --from rollout'),
+    ]);
+  });
+
+  it('B1\'s one gate, lifted only for the named word: a later box needing pool-set (or unmeasured) proceeds with --below-cap pool-set; a word the flag does not name still refuses', () => {
+    expect(FLOOR_WORDS.split(',')).toContain('pool-set');
+    // `unmeasured` asks every word of the table, so its flag names them all.
+    for (const [needs, words] of [['pool-set', 'pool-set'], ['unmeasured', FLOOR_WORDS]] as const) {
+      const home = bcFleet(`ccrc-rollout-bc-needs-${needs}-`);
+      plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', caps: BC, needs });
+      let r = run(home, ['--server-first']);
+      expect(r.code, needs).toBe(2);
+      r = run(home, ['--server-first', '--below-cap', words]);
+      expect(r.code, `${needs}: ${r.stderr}`).toBe(0);
+      expect(updates(home)).toEqual([
+        UPD(SERVER, ` --below-cap ${words} --from rollout`),
+        UPD(FLEET, ` --below-cap ${words} --from rollout`),
+      ]);
+    }
+    const home = bcFleet('ccrc-rollout-bc-needs-other-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', caps: BC, needs: 'pool-set,table-word-v1' });
+    const r = run(home, ['--server-first', '--below-cap', 'pool-set']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("needs ccd's pool-set,table-word-v1");
+    expect(updates(home)).toEqual([]);
+  });
+
+  it('a box whose move exits 2 stops the rollout with the usage sentence: it changed nothing and took no backup', () => {
+    const home = twoBoxFleet('ccrc-rollout-rc2-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 2 });
+    const r = run(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("rollout: the fleet box's update exited 2, a usage error from that box's ccrc: it changed nothing and took no backup — stopped here. The server box was not touched.");
+    expect(r.stderr).not.toContain('name the backup taken');
+    expect(updates(home)).toEqual([UPD(FLEET, '')]);
+  });
+
+  it('a word outside the table and --check beside --below-cap are usage errors before any ssh', () => {
+    const home = bcFleet('ccrc-rollout-bc-usage-');
+    let r = run(home, ['--below-cap', 'something-else']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('--below-cap names capability floor words, comma-joined: pool-set');
+    expect(r.stderr).toContain(' (got: something-else)');
+    r = run(home, ['--check', '--below-cap', 'pool-set']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('rollout: --check and --below-cap are exclusive');
+    expect(sshCalls(home)).toEqual([]);
+  });
+
+  it('a Claude Code session (CLAUDECODE set) is refused the flag at exit 2 before any ssh: the operator\'s flag (fix round 1, F1)', () => {
+    const home = bcFleet('ccrc-rollout-bc-session-');
+    const r = run(home, ['--below-cap', 'pool-set'], { CCRC_TEST_CLAUDECODE: '1' }); // the harness's knob (ccdWsHelpers.ts#containedAuthBase)
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain("--below-cap is the operator's flag, typed in their own shell: a Claude Code session never passes the capability floor; nothing was changed");
+    expect(sshCalls(home)).toEqual([]);
+    expect(updates(home)).toEqual([]);
   });
 });
 

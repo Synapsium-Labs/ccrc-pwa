@@ -1,5 +1,5 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, parsedFile, symbolOf } from '../scan/symbols.js';
+import { identifierReferences, stringExpressions } from '../scan/parse.js';
 import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
 
 
@@ -49,7 +50,9 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
       'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
+      'server/src/coord/overlordInbox.ts', // the inbox wake's hold named for the marker it honours (the Overlord W1 inbox piece)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
+      'server/src/stopDone.ts',         // run-done's hold word for the waiting case under that marker (D-8791); `sleep.ts` holds it by the constant
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
     ]);
@@ -1625,12 +1628,94 @@ describe('the trigger table has one definition (Overlord §9.7)', () => {
       expect(holders).toEqual([HOME]);
     });
   }
-  it('TRIGGER_TABLE is derived from STALL_ARMS and OVERLORD_REFUSAL_WORDS, never a hand list', () => {
+  it('TRIGGER_TABLE is derived from STALL_ARMS, OVERLORD_REFUSAL_WORDS and PROGRAMME_HEALTH_WORDS, never a hand list', () => {
     const b = parsedFile(HOME).bindings.filter((x) => x.name === 'TRIGGER_TABLE');
     expect(b, 'one binding').toHaveLength(1);
     expect(b[0]!.init).toMatch(/\bSTALL_ARMS\b/);
     expect(b[0]!.init).toMatch(/\bOVERLORD_REFUSAL_WORDS\b/);
+    expect(b[0]!.init).toMatch(/\bPROGRAMME_HEALTH_WORDS\b/);
     // No row is spelled by hand: neither kind's name appears in the list as a string with a key beside it.
     expect(b[0]!.init).not.toMatch(/key:\s*['"]/);
   });
+});
+
+// — Session helpers H1b (D-8862; review 2961 F6, review 2978 F5): the agent id rule and its one guard —
+describe('the agent id rule is defined once, and so is the guard over it', () => {
+  // The hook's rule for an agent id it keeps, `[A-Za-z0-9_-]{1,64}`. `shared/continuity-reports.ts` holds the one
+  // `AGENT_ID_RE` and the one guard over it (`isAgentId`); the hook state reader, the continuity hook reports and the helpers'
+  // `isHelperId` read it. A source written with the same pattern for ANOTHER id is named here, never silently passed:
+  // `continuity/routes.ts`'s `ROUND_ID_RE` is a round id, which only happens to share the grammar today.
+  const RULE = '/^[A-Za-z0-9_-]{1,64}$/';
+  const codeOf = (f: string): string => readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+  it('the pattern is written in exactly the shared definition and the one named other id', () => {
+    const holders = ALL.filter((f) => codeOf(f).includes(RULE)).map(rel).sort();
+    expect(holders).toEqual(['server/src/continuity/routes.ts', 'shared/continuity-reports.ts']);
+  });
+
+  it('the guard `AGENT_ID_RE.test(` is written once, in the shared file: every reader calls `isAgentId` (or its alias)', () => {
+    const holders = ALL.filter((f) => codeOf(f).includes('AGENT_ID_RE.test(')).map(rel).sort();
+    expect(holders).toEqual(['shared/continuity-reports.ts']);
+  });
+});
+
+// — Overlord W1, the isolation word (plan `w1-isolation.md` Task 1, question 13): the host report's one reader and the one
+// host measurer. ccd's history library (`ccd/history/lib.mjs`) reads the boot id too, to stamp its op markers across a
+// reboot: another package, run by ccd, with another job, and outside this scan's roots on purpose. —
+describe('the isolation word: one report reader, one host measurer', () => {
+  const ISO_ROOTS = ['shared/', 'server/src/', 'agent/src/'];
+  const inRoots = (f: string): boolean => ISO_ROOTS.some((r) => rel(f).startsWith(r));
+  /** Every call of `name` across the source roots, as `file#symbol`: the innermost named unit holding the call, or
+   *  `<module>` for one at a file's top level. Parsed, so a comment or a string naming it is not a call. */
+  const callersOf = (name: string): string[] => ALL.flatMap((f) => {
+    const parsed = parsedFile(f);
+    return parsed.calls.filter((c) => c.name === name).map((c) => {
+      const holders = parsed.symbols.filter((sy) => sy.start <= c.start && c.end <= sy.end).sort((a, b) => (a.end - a.start) - (b.end - b.start));
+      return `${rel(f)}#${holders[0]?.name ?? '<module>'}`;
+    });
+  }).sort();
+  // Every pin below reads every source root parsed; the parse is cached per file, so it is paid once, here, on its own budget.
+  beforeAll(() => { for (const f of ALL) parsedFile(f); }, 180_000);
+
+  it('readHostReport is defined only in shared/isolation.ts', () => {
+    const holders = ALL.filter((f) => parsedFile(f).symbols.some((s) => s.name === 'readHostReport' && s.kind === 'function')).map(rel);
+    expect(holders).toEqual(['shared/isolation.ts']);
+  });
+
+  // The plan's call-site pins (Global Constraints), review F2: each name has the one caller the plan gives it.
+  it("readHostReport is called once, by the client's ready handler", () => {
+    expect(callersOf('readHostReport')).toEqual(['server/src/remote/client.ts#FleetClient.onReady']);
+  });
+
+  it("measurePeer is called once, by the client's ready handler", () => {
+    expect(callersOf('measurePeer')).toEqual(['server/src/remote/client.ts#FleetClient.onReady']);
+  });
+
+  it('measureServerFacts is called once, at boot, by the composition root', () => {
+    expect(callersOf('measureServerFacts')).toEqual(['server/src/index.ts#<module>']);
+  });
+
+  it('isolationWord, the one decider of the fleet word, is called only by the reader', () => {
+    expect(callersOf('isolationWord').map((c) => c.split('#')[0])).toEqual(['server/src/isolationFacts.ts']);
+    expect(callersOf('isolationWord').every((c) => c.split('#')[1]!.startsWith('makeIsolationReader'))).toBe(true);
+  });
+
+  it('IsolationWordLog, the one holder of the last logged reading, is made once, by wireIsolation, which index.ts calls once', () => {
+    const made = ALL.flatMap((f) => identifierReferences(parsedFile(f).text, f, new Set(['IsolationWordLog']))
+      .filter((r) => r.context.startsWith('new IsolationWordLog(')).map(() => rel(f)));
+    expect(made).toEqual(['server/src/isolationLog.ts']);
+    expect(callersOf('wireIsolation')).toEqual(['server/src/index.ts#<module>']);
+  });
+
+  it("the live host's peer reads (realPeerSeams) are handed out only by the composition root (review F7)", () => {
+    expect(callersOf('realPeerSeams')).toEqual(['server/src/index.ts#<module>']);
+  });
+
+  for (const needle of ['machine-id', 'random/boot_id']) {
+    it(`the ${needle} path is spelled only in shared/host-identity.mjs`, () => {
+      const holders = [...ALL, ...ALL_MJS].filter(inRoots)
+        .filter((f) => stringExpressions(parsedFile(f).text, f).some((e) => e.text.includes(needle))).map(rel).sort();
+      expect(holders).toEqual(['shared/host-identity.mjs']);
+    });
+  }
 });

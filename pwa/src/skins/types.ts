@@ -40,6 +40,12 @@ export interface SkinSet {
   readonly StatusBar: Part;
   /** A phone's bottom navigation, inside a `<nav>` (S11). */
   readonly PhoneNav: Part;
-  /** Data, not logic: `ChatList` applies the shared `groupToolRun` when this says so (S13b). */
+  /** Data, not logic: `ChatList` applies the shared `groupToolRun` when this says so (S13b). With `toolActivity` on, it
+   *  is the grouping INSIDE each tool-activity row, which an expanded row shows unchanged. */
   readonly transcriptGrouping: 'tool-runs' | 'none';
+  /** Data, not logic: `ChatList` folds each stretch of a turn's tool activity into one collapsed row with the shared
+   *  `foldToolActivity` when this says `'stretches'` (desktop polish wave 168), above `transcriptGrouping`. The row is the
+   *  shared `ToolActivityRow`, which a `TranscriptRow` part draws for a `tool-activity` item, as the frame does when the
+   *  set has no row part. */
+  readonly toolActivity: 'stretches' | 'none';
 }

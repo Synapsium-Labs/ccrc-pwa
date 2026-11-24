@@ -95,11 +95,24 @@ export type ScopeSweepBusyNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)
  *  `['delegation-adopt']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g28-delegation-adopt-without-state.ts` is the other side. */
 export type DelegationAdoptNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['delegation-adopt'], '--state'>>;
+/** The pool answer (Overlord W1 pool set, plan Task 6). Deleting this ENROLMENT turns `['pool-answer','--session']` into
+ *  a bare `['pool-answer']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g29-pool-answer-without-session.ts` is the other side. */
+export type PoolAnswerNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['pool-answer'], '--session'>>;
+/** The sleep markers' verb (Overlord W1 ccd arms, plan Task 3). Deleting this ENROLMENT turns `['keep-awake','--session']`
+ *  into a bare `['keep-awake']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g30-keep-awake-without-session.ts` is the other side. */
+export type KeepAwakeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['keep-awake'], '--session'>>;
 
 /** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
  *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g26-project-add-without-name.ts` is the other side. */
 export type ProjectAddNeedsName = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['project-add'], '--name'>>;
+
+/** The skill self-install (D-8126). Deleting this ENROLMENT turns `['skill-ensure','--wrapper']` into a bare `['skill-ensure']`
+ *  with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g31-skill-ensure-without-wrapper.ts` is the other side. */
+export type SkillEnsureNeedsWrapper = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['skill-ensure'], '--wrapper'>>;
 
 /** The pane-scope stop's switch (D-7902). Deleting this ENROLMENT turns `['pane-scope-stop','--state']` into a bare
  *  `['pane-scope-stop']` with every subset test still green; asserted here, losing it stops this project compiling.

@@ -24,7 +24,7 @@
 import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
-import { delegatedWords, isWorker, operatorAsk, summaryParts, type RolledRow } from './rollup';
+import { operatorAsk, summaryParts, type RolledRow } from './rollup';
 import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle, runLastMove } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
@@ -101,11 +101,10 @@ type LeadFacts = { slug: string; title: string } & Pick<ProgrammeBoxView, 'more'
 
 const WAITING: ReadonlySet<RunState> = new Set<RunState>(['awaiting-review', 'merging']);
 
-/** The run a row is doing: a spawn's own, or the session's open bound run (`boundOpenRun`, the wire's binding). A row
- *  of delegated work, a worktree or a group (wave 4) does no run: it is in no programme, and takes no programme's hue. */
+/** The run a row is doing: a spawn's own, or the session's open bound run (`boundOpenRun`, the wire's binding). */
 export function rowRun(row: FleetRow, runs: readonly RunSummary[]): RunSummary | null {
   if (row.kind === 'pending') return row.run;
-  return row.kind === 'session' ? boundOpenRun(runs, row.session) : null;
+  return boundOpenRun(runs, row.session);
 }
 
 /** One card's boxes, the workers of programmes elsewhere, and the rows in no programme. `rows` is the card's tree
@@ -309,26 +308,22 @@ export function trayOf(rolled: readonly RolledRow[], coordinatorId: string): Tra
 const workersWord = (n: number): string => (n === 1 ? 'worker' : 'workers');
 
 /** The footer's words, the existing children toggle's: folded, `2 more workers · 1 working` over the workers the tray
- *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. A box's
- *  delegated work and worktrees (wave 4) are never counted as workers: after the worker words, the rollup's own
- *  `n delegated` and `n worktree(s)` (`delegatedWords`) over the same rows. */
+ *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. Every child
+ *  of a box is a worker (a session or a spawn): no delegation row is one (D-8782). */
 export function footerWords(b: ProgrammeBoxView, tray: Tray): readonly string[] | null {
   if (tray.summary === null) return null;
   if (tray.summary.expanded) {
-    const n = b.children.filter(isWorker).length;
-    const d = delegatedWords(b.children);
-    if (n === 0) return d.length === 0 ? null : [`hide ${d[0]!}`, ...d.slice(1)];
-    return [`hide ${n} ${workersWord(n)}`, ...d];
+    const n = b.children.length;
+    return n === 0 ? null : [`hide ${n} ${workersWord(n)}`];
   }
   const shown = new Set(tray.rows.map(fleetRowKey));
   const hidden = b.children.filter((r) => !shown.has(fleetRowKey(r)));
   if (hidden.length === 0) return null;
-  const workers = hidden.filter(isWorker);
+  const workers = hidden;
   const working = summaryParts(workers).slice(1).find((p) => p.word === 'working');
   return [
     ...(workers.length > 0 ? [`${workers.length} more ${workersWord(workers.length)}`] : []),
     ...(working ? [`${working.n} working`] : []),
-    ...delegatedWords(hidden),
   ];
 }
 

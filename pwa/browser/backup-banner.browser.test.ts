@@ -65,7 +65,7 @@ describe('the backup banner: failed and stale fit at every width, skin and theme
       it(`${c}: ${named(view)}`, async () => {
         const { ctx, page, errors } = await openApp(browser!, view, fixture(c));
         try {
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           await page.waitForSelector('[data-banner="backup"] [role="status"]', { timeout: 20_000 });
           const m = await page.evaluate(() => {
             const banners = [...document.querySelectorAll<HTMLElement>('[data-banner="backup"] [role="status"]')]
@@ -110,7 +110,7 @@ describe('a healthy backup and a box without backups draw no banner (D-7860)', (
         try {
           // The health poll's answer is the evidence: the banner is judged after it landed, never before.
           const landed = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/fleet/health', { timeout: 20_000 });
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           await landed;
           await page.waitForTimeout(500);
           expect(await page.locator('[data-banner="backup"] [role="status"]').count()).toBe(0);

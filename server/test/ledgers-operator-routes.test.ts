@@ -80,6 +80,8 @@ const mailRows = (r: Rig): { fromId: string; toId: string; runId: number | null;
   ).all() as never;
 const closeRuns = (r: Rig, program: string): void => { r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = ?").run(program); };
 const stateOf = (r: Rig, id: number): string | undefined => r.coord.itemById(id)?.state;
+/** The tick mail's line when the tick carried no answer, which only a do item's can (D-8931): its note is optional. */
+const NO_NOTE_LINE = 'no answer: the operator ticked it with no note (a do item\'s note is optional)';
 
 describe('POST /api/items/:id/tick (plan PL4)', () => {
   it('queues exactly one mail to the programme\'s coordinator and moves the item to checking', async () => {
@@ -93,8 +95,119 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     const mail = mailRows(r);
     expect(mail).toHaveLength(1);
     expect(mail[0]).toMatchObject({ fromId: 'operator', toId: 'lane-a', runId: null, kind: 'answer', subject: itemMailSubject(r.coord.itemById(id)!) });
-    expect(mail[0]!.body).toContain('no answer: this item takes none');
+    expect(mail[0]!.body).toContain(NO_NOTE_LINE);
+    expect(mail[0]!.body).not.toContain("The operator's answer:");
+    expect(r.coord.itemById(id)!.answer).toBeNull();
     expect(mail[0]!.body).toContain(`ccrc-api items confirm|return ${id}`);
+    expect(r.waiting()).toBe(1);
+  });
+
+  // D-8931: a do item's tick may carry the operator's optional note. It travels as a decide or value answer
+  // does: the tick's mail to the coordinator and the item's stored `answer`, which the coordinator's list reads.
+  it('a do tick with a note stores it on the item, mails it to the coordinator and shows it on the coordinator\'s list', async () => {
+    const r = await rig();
+    const id = raise(r);
+    const note = 'An administrator did step 1 at 14:05 UTC and confirmed step 2.';
+    const res = await tick(r, id, { answer: `  ${note}  ` });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((res.json() as { item: ItemView }).item).toMatchObject({ id, kind: 'do', state: 'checking', answer: note });
+    // A note is no answer to a question: the task still carries `couldAnswer` alone, and no `unsure` box (answer marks C).
+    expect((res.json() as { item: ItemView }).item.answerMarks).toHaveProperty('couldAnswer');
+    expect((res.json() as { item: ItemView }).item.answerMarks).not.toHaveProperty('unsure');
+    expect(r.coord.itemById(id)!.answer).toBe(note);
+    const mail = mailRows(r);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ fromId: 'operator', toId: 'lane-a', runId: null, kind: 'answer' });
+    expect(mail[0]!.body).toContain(`The operator's answer: ${note}`);
+    expect(mail[0]!.body).not.toContain(NO_NOTE_LINE);
+    const list = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a', headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN } });
+    expect(list.statusCode, list.body).toBe(200);
+    expect((list.json() as { items: ItemView[] }).items.find((i) => i.id === id)).toMatchObject({ kind: 'do', state: 'checking', answer: note });
+    expect(r.waiting()).toBe(1);
+  });
+
+  it('a do tick whose note is absent, null, empty or only spaces is a tick with no note, never a refusal', async () => {
+    const r = await rig();
+    for (const body of [undefined, {}, { answer: null }, { answer: '' }, { answer: ' \t\n ' }]) {
+      const id = raise(r, { title: `Flip it ${JSON.stringify(body)}` });
+      const res = await tick(r, id, body);
+      expect(res.statusCode, `${JSON.stringify(body)}: ${res.body}`).toBe(200);
+      expect(r.coord.itemById(id)!, JSON.stringify(body)).toMatchObject({ state: 'checking', answer: null });
+      const mail = mailRows(r).at(-1)!;
+      expect(mail.body, JSON.stringify(body)).toContain(NO_NOTE_LINE);
+      expect(mail.body, JSON.stringify(body)).not.toContain("The operator's answer:");
+    }
+  });
+
+  it('a do tick takes a note of exactly ANSWER_MAX characters, and one over it or one that is no text is refused 400 bad-request', async () => {
+    const r = await rig();
+    const id = raise(r);
+    for (const answer of ['x'.repeat(ANSWER_MAX + 1), 7, true, ['a note'], { text: 'a note' }]) {
+      const res = await tick(r, id, { answer });
+      expect(res.statusCode, JSON.stringify(answer).slice(0, 40)).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+      expect(r.coord.itemById(id)!).toMatchObject({ state: 'open', answer: null });
+    }
+    expect(mailRows(r)).toEqual([]);
+    expect(r.waiting()).toBe(0);
+    const full = await tick(r, id, { answer: 'x'.repeat(ANSWER_MAX) });
+    expect(full.statusCode, full.body).toBe(200);
+    expect(r.coord.itemById(id)!.answer).toBe('x'.repeat(ANSWER_MAX));
+  });
+
+  it('a do item sent back for its note is ticked again with one, and a later tick with none clears the stored note', async () => {
+    const r = await rig();
+    const id = raise(r);
+    const acknowledge = (): void => { r.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run(); };
+    const sendBack = (at: number): void => {
+      expect(r.coord.moveItem(id, 'return', 'coordinator', { note: 'The tick had no note.' }, at, { programmeHasOpenRun: true }).ok).toBe(true);
+    };
+    expect((await tick(r, id)).statusCode).toBe(200);
+    acknowledge();
+    sendBack(NOW0 + 1);
+    const noted = await tick(r, id, { answer: 'Done by an administrator, 14:05 UTC.' });
+    expect(noted.statusCode, noted.body).toBe(200);
+    expect(r.coord.itemById(id)!.answer).toBe('Done by an administrator, 14:05 UTC.');
+    expect(mailRows(r)).toHaveLength(2);
+    expect(mailRows(r)[1]!.body).toContain("The operator's answer: Done by an administrator, 14:05 UTC.");
+    acknowledge();
+    sendBack(NOW0 + 2);
+    // The stored answer is the newest tick's: a tick with no note does not leave the earlier note standing as if it were said again.
+    expect((await tick(r, id)).statusCode).toBe(200);
+    expect(r.coord.itemById(id)!.answer).toBeNull();
+    expect(mailRows(r)[2]!.body).toContain(NO_NOTE_LINE);
+  });
+
+  // The note opens no door (D-8931): every refusal a tick met before it still stands when the tick carries one,
+  // and a refused tick stores no note and queues no mail.
+  it('a note changes no refusal: an item with an action, a held item, an item already ticked and an ended programme refuse as before', async () => {
+    const r = await rig();
+    const note = { answer: 'Done by an administrator, 14:05 UTC.' };
+    const acting = raise(r, { title: 'Choose the workspace', action: { verb: 'linear-team-workspace', teamKey: 'ABC' } });
+    const held = raise(r, { title: 'Held for now', heldUntil: Date.now() + 3_600_000 });
+    for (const id of [acting, held]) {
+      const res = await tick(r, id, note);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'not-open' });
+      expect(r.coord.itemById(id)!).toMatchObject({ state: 'open', answer: null, tickedAt: null });
+    }
+    expect(mailRows(r)).toEqual([]);
+    // A second tick never replaces the note the first one stored.
+    const ticked = raise(r, { title: 'Ticked once' });
+    expect((await tick(r, ticked, { answer: 'The first note.' })).statusCode).toBe(200);
+    const again = await tick(r, ticked, { answer: 'A second note.' });
+    expect(again.statusCode, again.body).toBe(409);
+    expect(again.json()).toMatchObject({ ok: false, error: 'not-open' });
+    expect(r.coord.itemById(ticked)!).toMatchObject({ state: 'checking', answer: 'The first note.' });
+    expect(mailRows(r)).toHaveLength(1);
+    // No coordinator is waiting once the programme's last run closed: the note is not stored for nobody to read.
+    const ended = raise(r, { title: 'After the end' });
+    closeRuns(r, 'prog-a');
+    const late = await tick(r, ended, note);
+    expect(late.statusCode, late.body).toBe(409);
+    expect(late.json()).toMatchObject({ ok: false, error: LEDGER_ROUTE_REFUSALS.programmeEnded });
+    expect(r.coord.itemById(ended)!).toMatchObject({ state: 'open', answer: null });
+    expect(mailRows(r)).toHaveLength(1);
     expect(r.waiting()).toBe(1);
   });
 
@@ -168,13 +281,13 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     expect(mailRows(r)).toEqual([]);
   });
 
-  it('an answer outside the rules is refused 400 bad-request: over ANSWER_MAX, empty, missing on a value item, given to a do item', async () => {
+  it('an answer outside the rules is refused 400 bad-request: over ANSWER_MAX, empty, missing on a value item, no text on a do item', async () => {
     const r = await rig();
     const dec = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main is what ships.' });
     const val = raise(r, { kind: 'value', title: 'What is the limit' });
     const doo = raise(r, { kind: 'do', title: 'Flip it' });
     const cases: readonly (readonly [number, unknown])[] = [
-      [dec, { answer: 'x'.repeat(ANSWER_MAX + 1) }], [dec, {}], [dec, { answer: '   ' }], [val, {}], [val, { answer: 7 }], [doo, { answer: 'yes' }],
+      [dec, { answer: 'x'.repeat(ANSWER_MAX + 1) }], [dec, {}], [dec, { answer: '   ' }], [val, {}], [val, { answer: 7 }], [doo, { answer: 7 }],
     ];
     for (const [id, body] of cases) {
       const res = await tick(r, id, body);
@@ -259,14 +372,14 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
   it('a pinned programme with no item still has its goals in the list', async () => {
     const r = await rig();
     r.coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-c', 'C', 0, 'active')").run();
-    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const w = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
     expect(w.goals.map((g) => g.program)).toContain('prog-c');
   });
 
   it('serves one programme\'s goals', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const res = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'What it builds.' } });
@@ -274,7 +387,7 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
 
   it('the read answers the goals and the programme\'s open items, and nothing else of an item (the goals-read-v1 shape)', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
     const open = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main ships.', neededBy: 'blocking' });
     raise(r, { program: 'prog-b', runId: null, raisedBy: 'lane-b', title: 'Another programme' });
     const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true; goals: unknown } & GoalsRead;
@@ -323,7 +436,7 @@ async function armed(): Promise<{ app: FastifyInstance; coord: CoordStore }> {
   const base = testDeps(home, recorder().run);
   app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: BOX, coord });
   coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'A', 0, 'active')").run();
-  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
   return { app, coord };
 }
 
@@ -369,6 +482,18 @@ describe('GET /api/items/:id (D-8194)', () => {
   it('a malformed id is a bad request', async () => {
     const r = await rig();
     for (const id of ['0', 'abc', '-1', '01']) expect((await read(r, id)).statusCode).toBe(400);
+  });
+
+  it("answers the item's revision, here and on GET /api/waiting, raised after a tick (Overlord W2 row revisions, Task 4)", async () => {
+    const r = await rig();
+    const id = raise(r);
+    const waitingItem = async (): Promise<unknown> =>
+      ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting.items.find((i) => i.id === id);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'open', revision: 0 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 0 });
+    expect((await tick(r, id)).statusCode).toBe(200);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'checking', revision: 1 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 1 });
   });
 });
 
@@ -424,7 +549,9 @@ describe('the tick mail (plan PL4)', () => {
   });
   it('the body names the item, the answer or that none is taken, and the re-measure line', () => {
     const none = itemMailBody(item(), null);
-    expect(none).toContain('no answer: this item takes none');
+    expect(none).toContain(NO_NOTE_LINE);
+    // A do item's note rides the same line a decide or value answer does (D-8931).
+    expect(itemMailBody(item(), 'done at noon').split('\n')[1]).toBe("The operator's answer: done at noon");
     expect(none).toContain('Re-measure before you confirm; return it with what you found if it does not hold. ccrc-api items confirm|return 7');
     expect(itemMailBody(item({ kind: 'value', answer: 'forty' }), 'forty')).toContain('forty');
   });
@@ -832,6 +959,23 @@ describe('big calls on the waiting view, the goals read and the run record (D-81
     const w = await waitingOf(r);
     expect(w.calls).toEqual([]);
     expect(w.callsCleared!.map((c) => c.id)).toEqual([old]);
+  });
+
+  // Fix round 1 of A4 (review 2792 F3, the coordinator's ruling): a cleared row carries when it left the group, read by
+  // `callClearedAt`, its one owner: the Seen for a seen call, the ageing time for an aged one. An open row carries none.
+  it('a cleared call carries clearedAt from callClearedAt; an open call carries none', async () => {
+    const r = await rig();
+    const madeAt = Date.now() - 8 * 86_400_000;
+    const aged = record(r, {}, madeAt);
+    const open = record(r);
+    const seenOne = record(r, { chosen: 'demo-w1' });
+    expect((await seen(r, seenOne)).statusCode).toBe(200);
+    const seenAt = r.coord.callById(seenOne)!.seenAt!;
+    const w = await waitingOf(r);
+    expect(w.calls!.map((c) => [c.id, 'clearedAt' in c])).toEqual([[open, false]]);
+    const byId = new Map(w.callsCleared!.map((c) => [c.id, c.clearedAt]));
+    expect(byId.get(aged)).toBe(madeAt + 7 * 86_400_000);
+    expect(byId.get(seenOne)).toBe(seenAt);
   });
 
   it('the goals read\'s bigCalls holds at most 20 of the programme\'s big calls, newest first', async () => {

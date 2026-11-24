@@ -5,10 +5,13 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { VIEWER_OPEN_TTL_MS, type FleetSession, type RunState } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
-import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
+import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
+import { LANE_MODELS_KEEP_MS, ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
-import { ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
+import { ENTRY_PENDING_ROLL_MS, ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
+import type { CleanupHeldByItem, HeldByWord } from '../../shared/api.js';
+import type { EntryPendingEpisode } from '../src/cleanupHeldBy.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, type HibernateMark } from '../src/coord/hibernate.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { CcdResult } from '../src/lifecycle.js';
@@ -17,7 +20,10 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { withBindingsOf } from './bindingsFake.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import type { FleetState } from '../src/fleetstate.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
+import { CLASSES, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../shared/models.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -74,6 +80,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
       openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => coord.openRunsForSession(...a),
       activeClaims: () => coord.activeClaims(),
       outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n),
+      designationRead: () => coord.designationRead(),
     }),
     targets: () => set.targets,
     release: async () => o.release ?? { kind: 'installed', at: INSTALLED },
@@ -89,7 +96,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   };
   return { deps, coord, lines, calls, wakes, refunds, set };
 }
-const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() });
+const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map(), entryPending: { rows: new Map(), seenAt: null } });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
   rollPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
 
@@ -143,6 +150,20 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(await pass(f)).toEqual([]);
     expect(f.calls).toEqual([]);
     expect(f.lines).toEqual([]);
+  });
+
+  it('a coordinator current on its release whose route asks for an advisor its spawn did not apply is rolled (advisor-stale, D-8970)', async () => {
+    const route = { fields: { advisor: 'fable' }, degraded: null, inert: [], unreadable: [] };
+    // The act asks the verdict again of the row it re-reads: the same row here.
+    const withRow = (f: Fake, r: FleetSession): RollSweepDeps =>
+      ({ ...f.deps, act: { ...f.deps.act, rowAtAct: async () => ({ ok: true as const, row: r }) } }) as RollSweepDeps;
+    const f = fake({ startedAt: INSTALLED + MIN });
+    const stale = row(COORD, { route } as never);
+    expect(await rollPass(withRow(f, stale), mem(), [stale], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, advisor: true }]);
+    expect(f.lines.join('\n')).toContain('advisor-stale');
+    const g = fake({ startedAt: INSTALLED + MIN });
+    const applied = row(COORD, { route, advisorSpawn: { kind: 'applied', model: 'fable', at: NOW / 1000 - 3600 } } as never);
+    expect(await rollPass(withRow(g, applied), mem(), [applied], [rec(COORD)], [])).toEqual([]);
   });
 
   it('a busy coordinator is not rolled', async () => {
@@ -832,5 +853,368 @@ describe('rollPass: behind on the Claude Code build (D-8276)', () => {
     const opted = fresh();
     expect(await buildPass(opted, rows, [`${COORD2}.no-roll`])).toEqual([{ id: COORD2, kind: 'skipped', reason: 'no-roll' }]);
     expect(opted.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  const recOf = (id: string, child: SessionRecord['child'] = { kind: 'none' }): SessionRecord =>
+    ({ id, uuid: `uuid-${id}`, wrapper: 'lane-a', child }) as unknown as SessionRecord;
+  const claimRun = (f: Fake, id: string): void => {
+    f.coord.db.exec("INSERT OR IGNORE INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 1, 'active')");
+    f.coord.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 2, 'project-a', 'working', ?, 1)").run(id);
+  };
+  const live = (f: Fake): void => { f.coord.setLaneArm(CONTINUITY_LANE, 'live', 1); };
+  const handoff = (f: Fake, rows: FleetSession[]) =>
+    rollPass({ ...f.deps, continuity: f.coord }, mem(), rows, rows.map((r) => recOf(r.id)), []);
+
+  it('continuity live: a coordinator claiming an open run is skipped renewal-owns, and nothing is called', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a session the renewal lane holds a live generation for is renewal-owns, though it claims no open run', async () => {
+    const f = fake();
+    live(f);
+    const s = f.coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: 'u', source: 'startup', model: null, rowIncarnation: 'inc',
+      reportedAt: 1, receivedAt: 1 });
+    if (!s.ok) throw new Error('start');
+    f.coord.mintGeneration({ identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, rowIncarnation: 'inc', startId: s.id,
+      startReportedAt: 1, resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'woken', mono: 1, proc: 'p1', now: 1 }, null, true);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a plain session (no open run, no generation) is rolled as today', async () => {
+    const f = fake();
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('continuity shadow: a coordinator claiming an open run is rolled as today', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+  });
+
+  it('continuity live, the designation unreadable: every long-life stays unread (null), so a plain session is held role-unknown', async () => {
+    // Designation A made the designation a role fact; `handoffOf` reads the pass's, and an unmeasured one fails closed. A
+    // long-life read as false instead would pass the hand-off and be skipped later, as designation-unreadable.
+    const f = fake();
+    live(f);
+    f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'role-unknown' }]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the Overlord and the designation (Overlord W1 designation A, Task 3)', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const boundTo = (id: string): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' } }) });
+  const pendingTo = (id: string): DesignationRead => ({
+    kind: 'not-designated',
+    row: view({ pending: { sessionId: id, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }),
+  });
+  const read = (f: Fake, d: DesignationRead): void => { f.deps.coord!.designationRead = () => d; };
+
+  it.each([['bound', boundTo], ['pending', pendingTo]] as const)('the %s id is skipped overlord, and nothing is called', async (_n, mk) => {
+    const f = fake();
+    read(f, mk(COORD));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'overlord' }]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([`ccrc-server: roll-skip ${COORD}: overlord`]);
+  });
+
+  it('every other row is rolled as before, and an ordinary session\'s idle gate does not hold unmeasured', async () => {
+    const f = fake();
+    read(f, boundTo(COORD2));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('an unmeasured read skips every row designation-unreadable, and the lane reads the designation once a pass', async () => {
+    const f = fake();
+    let reads = 0;
+    f.deps.coord!.designationRead = () => { reads++; return { kind: 'unmeasured', why: 'fixture' }; };
+    const rows = [row(COORD), row(COORD2)];
+    expect(await pass(f, rows)).toEqual([
+      { id: COORD, kind: 'skipped', reason: 'designation-unreadable' },
+      { id: COORD2, kind: 'skipped', reason: 'designation-unreadable' },
+    ]);
+    expect(f.calls).toEqual([]);
+    expect(reads).toBe(1);
+  });
+
+  it('a read that throws is unmeasured too', async () => {
+    const f = fake();
+    f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'designation-unreadable' }]);
+  });
+});
+
+// ── behind its class's model (model-class follow-up typed-repick) ─────────────────────────────────────────────────────
+describe('rollPass: a session behind its class\'s model (typed-repick)', () => {
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const X3 = 'claude-opus-9-3';
+  /** Its pane started after the node's install: behind on nothing but its model. It has been quiet 100 minutes, and its
+   *  status line last rendered a minute before that, after its pane started (fix round 1). */
+  const AFTER = INSTALLED + MIN;
+  const QUIET = 100 * MIN;
+  const RENDER_S = Math.floor((NOW - QUIET - MIN) / 1000);
+  const mrow = (id: string, model: string, o: Partial<FleetSession> = {}, ts = RENDER_S): FleetSession => row(id, {
+    wrapper: 'lane-a',
+    route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+    usage: { ts, model, class: 'opus', effort: null, ctxPct: null, cost: null, stale: true },
+    ...o,
+  } as Partial<FleetSession>);
+  const lane = (opusId: string, o: { seenId?: string | null } = {}): LaneModelsRead => {
+    const classes = {} as Record<ModelClass, LaneClassModel>;
+    const adv = {} as Record<ModelClass, LaneClassAdvance>;
+    for (const c of CLASSES) {
+      classes[c] = { model: null, label: null, efforts: null } as LaneClassModel;
+      adv[c] = { family: null, hold: null, previous: null, revertable: false, lastMove: null };
+    }
+    classes.opus = { model: opusId, label: null, efforts: null, seenId: o.seenId === undefined ? opusId : o.seenId } as LaneClassModel;
+    return { kind: 'read', classes, advance: { state: 'ok', detail: null, pending: null, classes: adv } };
+  };
+  /** The fake with an Anthropic lane-a whose models answer `answer()`, counting every read; the act's re-read row is `rows`'. */
+  function modelFake(rows: FleetSession[], answer: () => LaneModelsRead | Promise<LaneModelsRead>, o: { anthropic?: boolean } = {}) {
+    const f = fake({ startedAt: AFTER });
+    f.set.age = QUIET;
+    const reads: string[] = [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const act = { ...f.deps.act!, rowAtAct: async (r: SessionRecord) => ({ ok: true as const, row: byId.get(r.id) ?? row(r.id) }) } as RollActPort;
+    const deps: RollSweepDeps = {
+      ...f.deps, act,
+      laneModels: async (l) => { reads.push(l); return answer(); },
+      anthropicLane: (l) => (o.anthropic ?? true) && l === 'lane-a',
+    };
+    return { f, deps, reads, byId };
+  }
+  const run = (deps: RollSweepDeps, rows: FleetSession[], m = mem()) => rollPass(deps, m, rows, rows.map((r) => rec(r.id)), []);
+
+  it('an idle session on the id its class left is rolled once, its line naming the reason and the target', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps, reads } = modelFake(rows, () => lane(X2));
+    const m = mem();
+    expect(await run(deps, rows, m)).toEqual([{ id: COORD, kind: 'rolled', idleMs: QUIET, model: { class: 'opus', from: X1, to: X2 } }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(reads).toEqual(['lane-a']);
+    expect(f.lines.join('\n')).toContain(`rolled ${COORD} onto the current release (behind its class's model: opus ran ${X1}, its target is ${X2})`);
+    expect(m.modelFor.get(COORD)).toBe(X2);
+  });
+
+  it('a relaunch that kept the old id is not rolled again for that target; a newer target rolls it again', async () => {
+    const rows = [mrow(COORD, X1)];
+    let target = X2;
+    let now = NOW;
+    const { f, deps } = modelFake(rows, () => lane(target));
+    const timed: RollSweepDeps = { ...deps, now: () => now };
+    const m = mem();
+    await run(timed, rows, m);
+    f.calls.length = 0;
+    now = NOW + LANE_MODELS_KEEP_MS;
+    expect(await run(timed, rows, m), 'same target, read again: current, nothing written').toEqual([]);
+    expect(f.calls).toEqual([]);
+    // The newer target is seen at the next read, once the kept one has had its hour.
+    target = X3;
+    now = NOW + 2 * LANE_MODELS_KEEP_MS;
+    expect((await run(timed, rows, m)).map((o) => o.kind)).toEqual(['rolled']);
+    expect(m.modelFor.get(COORD)).toBe(X3);
+  });
+
+  it('the lane is read once a pass however many of its sessions pass the gates', async () => {
+    const rows = [mrow(COORD, X2), mrow(COORD2, X2)];
+    const { f, deps, reads } = modelFake(rows, () => lane(X2));
+    expect(await run(deps, rows)).toEqual([]);
+    expect(reads).toEqual(['lane-a']);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('on the new id, on an unseen id, or with an unreadable read, nothing is rolled and nothing is written', async () => {
+    const rows = [mrow(COORD, X1)];
+    let answer: () => LaneModelsRead = () => lane(X1);
+    const { f, deps, reads } = modelFake(rows, () => answer());
+    for (const a of [() => lane(X1), () => lane(X2, { seenId: X1 }), (): LaneModelsRead => ({ kind: 'unreadable' }),
+      (): LaneModelsRead => { throw new Error('link down'); }]) {
+      answer = a;
+      reads.length = 0;
+      expect(await run(deps, rows)).toEqual([]);
+      expect(f.calls).toEqual([]);
+      expect(f.lines).toEqual([]);
+      expect(reads).toEqual(['lane-a']);
+    }
+  });
+
+  it('no lane is read for a session held at a gate, on a lane that is not Anthropic, or unrouted', async () => {
+    const quiet = [mrow(COORD, X1)];
+    const { f, deps, reads } = modelFake(quiet, () => lane(X2));
+    f.set.age = ROLL_QUIET_MS - MIN;
+    expect(await run(deps, quiet), 'held as current, not a skip').toEqual([]);
+    expect(reads).toEqual([]);
+    f.set.age = QUIET;
+    expect(await run({ ...deps, anthropicLane: () => false }, quiet)).toEqual([]);
+    expect(reads).toEqual([]);
+    const unrouted = [mrow(COORD, X1, { route: null } as Partial<FleetSession>)];
+    expect(await run(deps, unrouted)).toEqual([]);
+    expect(reads).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a session behind on its model is still held by name at a gate (.no-roll)', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps } = modelFake(rows, () => lane(X2));
+    expect(await rollPass(deps, mem(), rows, rows.map((r) => rec(r.id)), [`${COORD}.no-roll`])).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a reading from before its pane started is no candidate, and no lane is read for it (fix round 1)', async () => {
+    const stale = [mrow(COORD, X1, {}, Math.floor((AFTER - MIN) / 1000))];
+    const { f, deps, reads } = modelFake(stale, () => lane(X2));
+    expect(await run(deps, stale)).toEqual([]);
+    expect(reads).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a successful read stands for the hour: a second pass within it reads nothing, one after it reads again (fix round 1)', async () => {
+    const rows = [mrow(COORD, X2)];
+    let now = NOW;
+    let answer: () => LaneModelsRead = () => lane(X2);
+    const { deps, reads } = modelFake(rows, () => answer());
+    const timed: RollSweepDeps = { ...deps, now: () => now };
+    const m = mem();
+    expect(await run(timed, rows, m)).toEqual([]);
+    expect(reads).toEqual(['lane-a']);
+    now = NOW + LANE_MODELS_KEEP_MS - MIN;
+    expect(await run(timed, rows, m)).toEqual([]);
+    expect(reads, 'within the hour').toEqual(['lane-a']);
+    now = NOW + LANE_MODELS_KEEP_MS;
+    expect(await run(timed, rows, m)).toEqual([]);
+    expect(reads, 'after the hour').toEqual(['lane-a', 'lane-a']);
+    // An answer that is not a read is never kept: the next pass asks again.
+    answer = () => ({ kind: 'busy' });
+    m.laneReads.clear();
+    await run(timed, rows, m);
+    await run(timed, rows, m);
+    expect(reads.length).toBe(4);
+  });
+
+  it('with no lane-models read wired, no session is behind on its model', async () => {
+    const rows = [mrow(COORD, X1)];
+    const { f, deps } = modelFake(rows, () => lane(X2));
+    const bare: RollSweepDeps = { ...deps, laneModels: undefined };
+    expect(await run(bare, rows)).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: an entry identity that stays pending (D-8955)', () => {
+  /** Started after the node's install, so it is behind on nothing else. */
+  const STARTED_AT = INSTALLED + MIN;
+  const fresh = (): Fake => fake({ startedAt: STARTED_AT });
+  const held = (rowId: string, word: HeldByWord = 'entry-pending', reclaim = 3): CleanupHeldByItem => ({
+    rowId, word, sentence: 'held', holds: { reclaim, expire: 0, collect: 0 }, act: 'recheck',
+  });
+  const withHeld = (f: Fake, items: () => readonly CleanupHeldByItem[] | null): RollSweepDeps => ({ ...f.deps, heldBy: items });
+  /** A memory whose last pass was at `seenAt`, with `rows` as its episodes. */
+  const memAt = (seenAt: number | null, rows: [string, EntryPendingEpisode][] = []): RollSweepMemory => {
+    const m = mem();
+    m.entryPending.seenAt = seenAt;
+    for (const [id, e] of rows) m.entryPending.rows.set(id, e);
+    return m;
+  };
+  const LATER = STARTED_AT + 30 * MIN;
+
+  it('a row newly named after an earlier pass is a fresh read: ten minutes on, the idle session is rolled', async () => {
+    const f = fresh();
+    const m = memAt(LATER);
+    const deps = withHeld(f, () => [held(COORD)]);
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m.entryPending.rows.get(COORD)).toEqual({ since: NOW, holds: 3, freshAfter: LATER });
+    expect(m.entryPending.seenAt).toBe(NOW);
+    expect(f.calls).toEqual([]);
+    m.entryPending.rows.set(COORD, { since: NOW - ENTRY_PENDING_ROLL_MS, holds: 3, freshAfter: LATER });
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(f.lines.join('\n')).toMatch(/entry identity stayed pending/);
+    expect(m.entryPending.rows.get(COORD)?.since, 'the episode is kept: the restarted process started after it').toBe(NOW - ENTRY_PENDING_ROLL_MS);
+  });
+
+  it('a naming that no later read repeated never rolls, however long it stands: it may be the spawn\'s own (review 3)', async () => {
+    // The first pass to see it had no pass before it, and the row holds no more than it did: no read since says pending.
+    const f = fresh();
+    const first = memAt(null);
+    await rollPass(withHeld(f, () => [held(COORD)]), first, [row(COORD)], [rec(COORD)], []);
+    expect(first.entryPending.rows.get(COORD)?.freshAfter).toBeNull();
+    const m = memAt(NOW - 5 * MIN, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: null }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(f.calls).toEqual([]);
+    // A spawn-window naming: first seen after a pass taken before the pane could have written its entry.
+    const early = memAt(NOW - 5 * MIN, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: STARTED_AT }]]);
+    expect(await rollPass(withHeld(fresh(), () => [held(COORD)]), early, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+  });
+
+  it('a row that holds more than it did was named by a new read: that is the fresh read, and the session is rolled', async () => {
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, { since: NOW - HOUR, holds: 1, freshAfter: null }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD, 'entry-pending', 4)]), m, [row(COORD)], [rec(COORD)], []))
+      .toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(m.entryPending.rows.get(COORD)).toEqual({ since: NOW - HOUR, holds: 4, freshAfter: LATER });
+  });
+
+  it('a process that started after the first naming is not rolled again for the same episode', async () => {
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, { since: INSTALLED, holds: 3, freshAfter: LATER }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a server restart forgets the episode, so a session still pending can be rolled once more (review 8)', async () => {
+    // The memory is in-process: after a restart the held-by facts are re-read one audit at a time, the row is newly named
+    // after the new process's first pass, and the session whose restart did not clear it is rolled once more.
+    const f = fresh();
+    const restarted = memAt(null);
+    expect(await rollPass(withHeld(f, () => []), restarted, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(restarted.entryPending.seenAt).toBe(NOW);
+    restarted.entryPending.seenAt = LATER;
+    await rollPass(withHeld(f, () => [held(COORD)]), restarted, [row(COORD)], [rec(COORD)], []);
+    restarted.entryPending.rows.set(COORD, { ...restarted.entryPending.rows.get(COORD)!, since: NOW - ENTRY_PENDING_ROLL_MS });
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), restarted, [row(COORD)], [rec(COORD)], []))
+      .toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+  });
+
+  it('another held-by word is no pending; a row no read names any more is forgotten; an unread frame keeps the memory', async () => {
+    const ep = { since: NOW - HOUR, holds: 3, freshAfter: LATER };
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(f, () => null), m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(m.entryPending.seenAt, 'a pass that read no frame observed nothing').toBe(LATER);
+    const m2 = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(fresh(), () => [held(COORD, 'not-plain')]), m2, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m2.entryPending.rows.has(COORD)).toBe(false);
+    const m3 = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(fresh(), () => []), m3, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m3.entryPending.rows.size).toBe(0);
+  });
+
+  it('the watcher hands the roll the last coord frame\'s holding rows, null before the first frame', () => {
+    expect(sourceOfSymbol(path.join(import.meta.dirname, '../src/watch.ts'), 'FleetWatcher.sweepRoll'))
+      .toContain('heldBy: () => (this.coord === null ? null : this.coord.cleanupHeldBy ?? [])');
+  });
+
+  it('a busy session whose entry is pending is held by the idle gate, by name', async () => {
+    const f = fresh();
+    f.set.word = 'busy';
+    const m = memAt(LATER, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: LATER }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:live-word' }]);
+    expect(f.calls).toEqual([]);
   });
 });

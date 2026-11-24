@@ -169,6 +169,24 @@ export interface Box {
   readonly env: NodeJS.ProcessEnv;
 }
 
+/** The push user's forced command as the installer writes it into its `authorized_keys` line's `command=` (D-8956):
+ *  sshd runs it as `git-shell -c "<command>"`, and git-shell runs a bare name from $HOME/git-shell-commands only. The
+ *  box package suite pins it against the installer's own output; the transport suite's sshd stand-in runs it. */
+export const pushForced = (repos: string): string => `push-command ${repos}`;
+
+/** The real git-shell (git's exec path), the push user's login shell, or null with a printed notice where this host
+ *  has none. Each suite that skips on null also has a row that fails on null under CI on Linux (gitShellRequired), so
+ *  the arbiter never drops the D-8956 rows silently. */
+export function gitShell(suite: string): string | null {
+  const r = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+  const p = r.status === 0 ? path.join(r.stdout.trim(), 'git-shell') : '';
+  if (p !== '' && existsSync(p)) return p;
+  console.warn(`${suite}: no git-shell beside git on this host; the forced command's runs through git-shell are skipped`);
+  return null;
+}
+/** Where a missing git-shell is a failure rather than a skip: CI on Linux, the arbiter for the box-side rows. */
+export const gitShellRequired = (): boolean => process.platform === 'linux' && (process.env.CI ?? '') !== '';
+
 /** The box's own network units, running on a fixture box before the installer starts. */
 export const INFRA_UNITS = ['tailscaled.service', 'systemd-resolved.service', 'systemd-timesyncd.service'];
 

@@ -1138,12 +1138,12 @@ export const checkLine = (s: string): string => s.split('\n').find((l) => l.star
 
 /** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them:
  *  W1's three, W4's four, W6's `versions` and the box-token lifecycle's
- *  `token-sync`, and `detach` and box settings' `settings` (D-6915) on Linux
+ *  `token-sync`, the pool set B2's `below-cap`, and `detach` and box settings' `settings` (D-6915) on Linux
  *  only (decision 17). A literal, not a read of ccd/ccrc — a pin derived from the
  *  list it pins cannot red. */
 export const CAPS_NOW = process.platform === 'darwin'
-  ? 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync'
-  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,detach,settings';
+  ? 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,below-cap'
+  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,below-cap,detach,settings';
 /** The machine line as key → value. Values never contain a space or `=`
  *  (caps= joins its words with commas), so one split per field is exact. */
 export const parseCheck = (s: string): Record<string, string> =>
@@ -1522,6 +1522,9 @@ export function rollbackRun(home: string, args: string[] = [], extraEnv: NodeJS.
     TMPDIR: join(home, 'tmp'),
     CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
     CCRC_UPDATE_HEALTH_S: '0',
+    // `--from watchdog` is the unattended watchdog's word (pool set B1, F1): it names its own pid, the run's parent,
+    // and this process is the parent of the ccrc spawned below.
+    ...(args.includes('watchdog') ? { CCRC_WATCHDOG_CALLER: String(process.pid) } : {}),
     ...extraEnv,
   };
   delete env['CCRC_UPDATE_LOCK_HELD'];

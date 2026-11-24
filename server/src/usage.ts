@@ -2,6 +2,8 @@ import path from 'node:path';
 import type { FleetIO } from './io.js';
 import { tokenCountOf, type SessionUsage } from '../../shared/api.js';
 import { familyClassOf } from '../../shared/models.js';
+import type { SpendTurnRead } from '../../shared/programmeFacts.js';
+import type { TurnMarkRead } from './coord/stall.js';
 
 /** A sidecar older than this is STALE: carried, but flagged. Thirty minutes,
  *  the bound `HOOKSTATE_FRESH_MS` gives the hook state, in the sidecar's own
@@ -9,7 +11,10 @@ import { familyClassOf } from '../../shared/models.js';
 export const USAGE_FRESH_S = 30 * 60;
 
 export type UsageRead =
-  | { kind: 'reading'; usage: SessionUsage }
+  /** `uuid`: the sidecar's `session_id`, the conversation the reading was taken in (Overlord W2 forecasts B: the spend
+   *  arm counts a reading only in the run's own conversation, `clear-restarts-cost-by-session-id`); null when the
+   *  sidecar has none. Beside `usage`, not inside it, so the fleet wire's `SessionUsage` is unchanged. */
+  | { kind: 'reading'; usage: SessionUsage; uuid: string | null }
   | { kind: 'absent' }
   | { kind: 'unreadable' }
   | { kind: 'malformed' };
@@ -36,7 +41,7 @@ export function parseUsageSidecar(content: string, nowS: number): Extract<UsageR
   const ts = num(o['ts']);
   if (ts === null) return { kind: 'malformed' };
   const model = str(o['model']);
-  return { kind: 'reading', usage: {
+  return { kind: 'reading', uuid: str(o['uuid']), usage: {
     ts, model,
     class: model === null ? null : familyClassOf(model),
     effort: str(o['effort']),
@@ -67,4 +72,19 @@ export async function readUsageMeasured(io: FleetIO, registryDir: string, id: st
 export async function readUsage(io: FleetIO, registryDir: string, id: string, nowS: number): Promise<SessionUsage | null> {
   const r = await readUsageMeasured(io, registryDir, id, nowS);
   return r.kind === 'reading' ? r.usage : null;
+}
+
+/** The turn marker of each session with a usage reading (Overlord W2 forecasts B, fix round 1, F2), judged against the
+ *  registry's conversation the reading was taken beside (`conversations`, the usage sweep's own map): `read` with its
+ *  newest turn's start and its newest Stop's live background count (fix round 2, F2-b), or `unread` for any answer that
+ *  cannot vouch (absent, unmeasured, malformed, foreign, a throw).
+ *  `readMark` is the marker's one reader (`turnmark.ts#readTurnMarkMeasured`), handed in by the watcher. */
+export async function readSpendTurns(readMark: (id: string, registryUuid: string) => Promise<TurnMarkRead>,
+  conversations: ReadonlyMap<string, { readonly registry: string }>): Promise<Map<string, SpendTurnRead>> {
+  const out = new Map<string, SpendTurnRead>();
+  await Promise.all([...conversations].map(async ([id, c]) => {
+    const mark = await readMark(id, c.registry).catch((): TurnMarkRead => ({ ok: false, reason: 'unmeasured' }));
+    out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt, background: mark.bg } : { kind: 'unread' });
+  }));
+  return out;
 }

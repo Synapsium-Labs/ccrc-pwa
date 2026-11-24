@@ -311,6 +311,15 @@ each slice exercises are listed per task.
     `delegationLeaseDoor.ts`, `routes.ts` with +1 line, and `watch.ts`) and 19 tests. `routes.ts` and `watch.ts` are
     listed files at 40 per PR.
 - **Pins it exercises:** all six from Task 1 Step 4, the `checkpointNs` named import, and the kebab census.
+- **The run (2026-11-15, on `origin/main` `2b082b91f`):**
+  - [x] Step 1: Preflight. 19 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 26 moved, `destContexts` `["C5"]`, `sourceUsesDest` `[]`, `problems` `[]`.
+  - [x] Step 3: Move, then the L3 header above the marker.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 27 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 26 moved, `differing: []`, `newlyExported` as expected above; the
+    19 tests change on import lines alone.
 
 ### Task 4: Slice 2, the SQLite projection port and its repair → `server/src/coord/delegation-db-projection.ts`
 
@@ -327,6 +336,17 @@ each slice exercises are listed per task.
     `delegation-recovery` and `lease-routes`.
 - **Pins it exercises:** the `DELEGATION_REPAIR_FULL_MS` named imports from Task 1 Step 6. Without them, `plan` refuses
   with "a namespace import … uses DELEGATION_REPAIR_FULL_MS".
+- **The run (2026-11-16, on `origin/main` `17e86164e`):**
+  - [x] Step 1: Preflight. 18 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 8 moved, `destContexts` `["C5"]`, `destUsesSource` `sessionKeyOf` and `DelegationEvidenceCounts`,
+    `sourceUsesDest` `[]`, `problems` `[]`.
+  - [x] Step 3: Move, then the L3 header above the marker.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 11 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 8 moved, `differing: []`, `newlyExported` empty;
+    `delegation-durability.ts` (+1) and the 8 tests change on import lines alone. The source measures 1,260 code lines
+    (delta -149 against the merge-base).
 
 ### Task 5: Slice 3, recovery → `server/src/coord/delegation-recovery.ts`
 
@@ -342,6 +362,19 @@ each slice exercises are listed per task.
     `delegationCarrierCheckpoints.ts` and `delegationOldRuleFixture.ts` among them.
 - **Pins it exercises:** the "pure/impure split" row's pure-homes clause, where `DelegationRecovery`'s file must name no
   filesystem, SQLite or store.
+- **The run (2026-11-16, on `origin/main` `9cf263d44`):**
+  - [x] Step 1: Preflight. 19 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 11 moved, `destContexts` `["C5"]`, `destUsesSource` `refuse`, `DelegationCheckpointBuilder`,
+    `decodeDelegationCheckpoint`, `validateDelegationCheckpoint` and `DelegationCheckpointError`, `sourceUsesDest` `[]`,
+    `problems` `[]`.
+  - [x] Step 3: Move. No header: the module is L1 by its facts.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 15 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 11 moved, `differing: []`, `newlyExported` empty;
+    `delegation-durability.ts` and `delegation-db-projection.ts` (+1 each) and the 11 tests and fixtures change on
+    import lines alone. The source measures 1,039 code lines (delta -221 against the merge-base), and
+    `delegation-recovery.ts` 229.
 
 ### Task 6: The closing PR: the caps, and the prose the moves could not touch
 

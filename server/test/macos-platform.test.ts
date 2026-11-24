@@ -24,7 +24,7 @@ import { execFileSync, spawnSync } from 'node:child_process'; import { randomByt
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD, ccdSource } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
+import { CCD, ccdSource, stripCcrcKnobs } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
@@ -336,7 +336,7 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
     const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
     if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
-    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, ''));
+    if (name === 'ccrc-testbox-admin' || name === 'testbox-build-copy') return executableText(src.replace(BOX_SIDE, ''));
     return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
@@ -378,6 +378,19 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/ccrc-testbox-admin').not.toBe('');
     expect([...region.matchAll(/^(_tba_[a-z_]+)\(\) \{/gm)].map((m) => m[1])).toEqual(['_tba_box_manifest_ok', '_tba_box_file_sha', '_tba_box_tcp']);
     expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['bare timeout', 'sha256sum', 'sha256sum']);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
+  });
+
+  // The build copy's box programs (capture runner spec 2026-11-22 §2.2) run on the test box too, in one marked region of
+  // ccd/testbox-build-copy cut by the same BOX_SIDE expression: exactly its two programs, and exactly one GNU line (the hash
+  // the copy takes of the bytes it hands over, in the same root step), so the region cannot grow quietly.
+  it('ccd/testbox-build-copy\'s box-side region holds exactly its two programs and one GNU line, and the cut leaves none outside it', () => {
+    const src = readFileSync(path.join(ccdRoot, 'testbox-build-copy'), 'utf8');
+    const region = BOX_SIDE.exec(src)?.[0] ?? '';
+    expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/testbox-build-copy').not.toBe('');
+    expect([...region.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1])).toEqual(['TBA_BUILD_COPY_SH', 'TBA_BUILD_WRITE_SH']);
+    expect([...region.matchAll(/^(\w+)\(\) \{/gm)]).toEqual([]);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0])).toEqual(['sha256sum']);
     expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
   });
 
@@ -1727,7 +1740,7 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
     writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
       { mode: 0o755 });
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
-    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    stripCcrcKnobs(env);
     // A constant script: the source and the platform arrive in the environment, never in the command or its argv.
     env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
     env['A11_OS'] = os;
@@ -1768,7 +1781,7 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
       writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
         { mode: 0o755 });
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
-      for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+      stripCcrcKnobs(env);
       env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
       env['A11_OS'] = os;
       const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; _inst_lane_state'],

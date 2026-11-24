@@ -65,3 +65,29 @@ export function parsePoolSet(spelling: string): { readonly ok: true; readonly se
   }
   return { ok: true, set: { pools, untagged } };
 }
+
+// ---------- `ccd pool-answer` (the pool-set plan's Task 6) ----------
+// The read-only answer for a session's current account, one line on stdout:
+//   pool-answer side=<side> verdict=<verdict> pool-side=<pool side> pool-state=<state> crossing=<crossing> account=<id>
+// A value that holds a space in ccd's own words carries `:` for it (`named:pool-a`, `set:pool-a,pool-b`), so every token
+// is `key=value`. These are the line's words, one vocabulary for `server/src/poolrule.ts#parsePoolAnswer` and its readers
+// (the renewal rows piece, the designation piece's door); `ccd/lib/pool-set.sh#cmd_pool_answer` is the other spelling.
+
+/** The rule's three answers, as `_pool_ok`'s rc 0, 1 and 2 print them. */
+export const POOL_ANSWER_VERDICTS = ['serve', 'mismatch', 'undecidable'] as const;
+/** Which side the answer was decided on (`POOL_OK_SIDE`). */
+export const POOL_ANSWER_POOL_SIDES = ['project', 'account', 'set'] as const;
+/** `_crosspool_valid`'s three answers for the account the session runs on: rc 0, 1 and 2. */
+export const POOL_ANSWER_CROSSINGS = ['valid', 'none', 'unreadable'] as const;
+/** The line's keys, in the one order ccd prints them. */
+export const POOL_ANSWER_KEYS = ['side', 'verdict', 'pool-side', 'pool-state', 'crossing', 'account'] as const;
+
+/** One parsed `ccd pool-answer` line. `side` and `poolState` keep ccd's words with `:` for the space. */
+export type PoolAnswer = {
+  readonly side: string;
+  readonly verdict: (typeof POOL_ANSWER_VERDICTS)[number];
+  readonly poolSide: (typeof POOL_ANSWER_POOL_SIDES)[number];
+  readonly poolState: string;
+  readonly crossing: (typeof POOL_ANSWER_CROSSINGS)[number];
+  readonly account: string;
+};

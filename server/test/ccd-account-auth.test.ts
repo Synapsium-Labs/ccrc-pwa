@@ -222,7 +222,7 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   const REGION_TO = '# THAT SKIP IS THE LOOP';
   const CARDINAL = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
     'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN',
-    'EIGHTEEN', 'NINETEEN', 'TWENTY', 'TWENTY-ONE', 'TWENTY-TWO', 'TWENTY-THREE'];
+    'EIGHTEEN', 'NINETEEN', 'TWENTY', 'TWENTY-ONE', 'TWENTY-TWO', 'TWENTY-THREE', 'TWENTY-FOUR'];
 
   /** What a scan for `$REG/.<name>` literals CANNOT see, each with its reason
    *  — and each SELF-CHECKED below, so this cannot quietly become the memory
@@ -669,7 +669,9 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
   // `pure-bash-arm-mint-stdin` (D-8345 fix round 1): on a box with neither
   // `timeout` nor `gtimeout`, `_auth_timeout`'s `"$@" &` gave the sign-in
   // /dev/null for stdin, so the code went down fd 9 to nobody and the run
-  // expired. The spawn now hands its stdin over on fd 5 as well.
+  // expired. The spawn now hands its stdin over on fd 5 as well. Since D-8658
+  // the arm passes stdin through itself, so this case no longer separates the
+  // fd-5 handover from its absence; it stays as the call site's regression case.
   it('on _auth_timeout\'s pure-bash arm, the code still reaches the sign-in, and it reaches done', () => {
     plantLauncher('claude', LOGIN_REPLAY);
     const r = loginWithCode('claude-a', 'fixture-code-123', true);
@@ -2270,6 +2272,8 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     // can tell (review 1849, F3). That arm runs the reader as `"$@" &`, and bash
     // gives an asynchronous command /dev/null for stdin, so a drain fed fd 8 on
     // stdin reads an instant, empty end of file there while the GNU arm passes.
+    // Since D-8658 the arm passes stdin through (`"$@" <&0 &`), so a drain on
+    // stdin would pass here too; the case stays as `-u 8`'s regression case.
     it(`${os}: on _auth_timeout's pure-bash arm the drain still reads fd 8, not stdin (D-8345)`, () => {
       const r = drive(os, {
         mint: 'echo line-one; echo line-two; printf tail-no-newline; exit 0', secs: '3', grace: '3',
@@ -2285,6 +2289,7 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     // THE SAME ARM'S /dev/null, ON THE MINT (`pure-bash-arm-mint-stdin`, D-8345
     // fix round 1). The spawn's `<in.child` sat on the `_auth_timeout` call, and
     // that arm's `"$@" &` replaced it with /dev/null, so the code never arrived.
+    // The arm passes stdin through since D-8658; the fd-5 handover stays as it is.
     it(`${os}: on _auth_timeout's pure-bash arm the operator's code still reaches the mint (D-8345)`, () => {
       const r = drive(os, {
         mint: 'read -r c; [ "$c" = SECRET-42 ] && exit 0 || exit 9', code: 'SECRET-42', pureBashArm: true,

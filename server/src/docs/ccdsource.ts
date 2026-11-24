@@ -27,16 +27,24 @@
 // here can recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
 // wave's lever is the runner budget invariant that `docs-budget.test.ts` holds, so the agent never kills ccd first).
 import { createHash } from 'node:crypto';
-import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import { CCD_ARGV, DOCS_SECTIONS_CAP, capSupported, ccdCan } from '../ccdargv.js';
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
-  DOCS_CCD_FAILURES, docsRefText, redactDocsText,
-  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsRefSpec,
+  DOCS_CCD_FAILURES, docsFailureBlob, docsRefText, redactDocsText,
+  type DocFilePin, type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
+  type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
+  DOCS_RANGE_MAX_BYTES, docsRangePinText, type DocsRangeFrameOk, type DocsRangePin, type DocsRangePreparedOk,
 } from '../../../shared/docs.js';
-import { LISTING_JOB, type DocsJob } from './policy.js';
-import type { DocsFetchRun, DocsFetcher, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
+import {
+  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, docsRangeAnswerShape, rangeFrameJob, type DocsJob,
+  type DocsRangeFrameAsk,
+  type DocsRangeTarget,
+} from './policy.js';
+import type {
+  DocsFetchRun, DocsFetcher, DocsLogRead, DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowAsk, DocsShowRead,
+} from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
  *  refreshes `ccdVerbs` from `ccd caps`); `undefined` means only "this server holds no fleet state object", which
@@ -72,7 +80,9 @@ const ON_REF_WORDS: Readonly<Record<NonNullable<DocsShowOk['onRef']>, true>> =
 type DocsReadCall =
   | { verb: 'docs-index' }
   | { verb: 'docs-tree'; project: string; ref: DocsRefSpec | null }
-  | { verb: 'docs-show'; project: string; pin: DocPin; ask: DocsShowAsk };
+  | { verb: 'docs-show'; project: string; pin: DocFilePin; ask: DocsShowAsk }
+  | { verb: 'docs-log'; project: string; log: DocsLogAsk }
+  | { verb: 'docs-show-range'; project: string; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null };
 
 /** What a gated executor hands back: the run's raw result, or the gate's own failure body. */
 type DocsRan = { ok: true; res: CcdResult } | DocsFailureBody;
@@ -105,6 +115,13 @@ function stderrHeadOf(s: string): string {
   return utf8Head(redactDocsText(s), STDERR_HEAD_BYTES);
 }
 
+/** Whether this box's ccd serves the sections that came with `DOCS_SECTIONS_CAP` (rich-docs spec G1, W5b), refusing on
+ *  no evidence. Module-level on purpose: a `capSupported(` inside `readDocs` would read to `verb-gate.test.ts` as a gate
+ *  for every docs argv there, and hide a lost `ccdCan(` row gate. */
+function docsSectionsServed(state: CcdDocsDeps['fleetState']): boolean {
+  return capSupported(state, DOCS_SECTIONS_CAP);
+}
+
 /**
  * The gated read executor: the gate, then ONE `switch` that builds and runs each read argv (refinement (c)). The two
  * gate lines are section 2 (a)'s, literally, and both answers are decided before any exec:
@@ -113,14 +130,25 @@ function stderrHeadOf(s: string): string {
  * - a measured list without `docs-v1`: `unsupported`. Asked as `ccdCan` of the call's own row (D-5866), whose token is
  *   `docs-v1` and which refuses on no evidence: a box can echo the four verb names without the token, and
  *   `verbSupported` would permit it.
+ * - a section that needs `DOCS_SECTIONS_CAP`, on a measured list without it: `unsupported` too (rich-docs spec G1), asked through `docsSectionsServed`.
  */
 async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan> {
   const verbs = deps.fleetState?.ccdVerbs ?? null;
   if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
   const can = ccdCan(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'
     : call.verb === 'docs-tree' ? 'docsTree'
-      : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
+      : call.verb === 'docs-log' ? 'docsLog'
+        : call.verb === 'docs-show-range' ? 'docsShowRange'
+          : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
   if (!can) return fail('unsupported');
+  // The rich-docs spec's G1 (W5b): a section that came with DOCS_SECTIONS_CAP is named to ccd only on a box that lists
+  // that token, so a new server only ever under-calls an old fleet. `null`: this call names no section. Decided before
+  // any exec, like the two answers above.
+  const section = call.verb === 'docs-show' ? call.pin.section : call.verb === 'docs-log' ? call.log.section
+    : call.verb === 'docs-show-range' ? call.target.section : null;
+  if (section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {
+    return fail('unsupported');
+  }
   switch (call.verb) {
     case 'docs-index':
       return { ok: true, res: await deps.runCcd(CCD_ARGV.docsIndex()) };
@@ -137,6 +165,17 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
             call.ask.maxBytes)
           : CCD_ARGV.docsShowDraft(call.project, call.pin.branch, call.pin.head, call.pin.section, call.pin.path,
             call.pin.fp, call.ask.maxBytes)),
+      };
+    case 'docs-log':
+      return {
+        ok: true,
+        res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),
+      };
+    case 'docs-show-range':
+      return {
+        ok: true,
+        res: await deps.runCcd(CCD_ARGV.docsShowRange(call.project, call.target.where, call.target.section,
+          call.target.path, docsRangePinText(call.target.pin), call.frame ?? 'prepare')),
       };
   }
 }
@@ -227,6 +266,9 @@ function parseLine(verb: DocsVerb, stdout: string): DocsLine {
  *  `Object.fromEntries` defines each key as an own property, so a `__proto__` key in the line stays a plain key. */
 function ccdFailureBody(line: Readonly<Record<string, unknown>>): DocsFailureBody {
   const carried = Object.fromEntries(Object.entries(line).filter(([key]) => !ENVELOPE_ONLY_KEYS.has(key)));
+  // The one context key held to a grammar: a `blob` that is no full sha is dropped, never passed on (X2 P1, review Q4),
+  // because the PWA pins a range read by it.
+  if ('blob' in carried && docsFailureBlob(carried) === null) delete carried['blob'];
   return { ...carried, ok: false } as unknown as DocsFailureBody;
 }
 
@@ -269,6 +311,49 @@ function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; 
   if (ask.listedBlob !== null && ans.blob !== ask.listedBlob) return showFault('pin');
   if (!(typeof ans.onRef === 'string' && Object.hasOwn(ON_REF_WORDS, ans.onRef))) return showFault('schema');
   return { ok: true, bytes };
+}
+
+/**
+ * The shape check both range checks run first (`docsRangeAnswerShape`, L1), so a field of the wrong type answers its own
+ * word (`schema`) and never `pin` or `integrity` for a comparison it should not have reached. A shape fault is NOT
+ * answered here: it is handed on as it is, and the route, which believes an answer only after the same check, answers
+ * and logs it, as it does for the tree and the log. `null` is "shape holds", so the checks after it read typed fields.
+ */
+function rangeShapeFault(step: 'prepare' | 'frame', ans: unknown): DocsFailureBody | null {
+  const shape = docsRangeAnswerShape(step, ans);
+  return shape.ok ? null : shape;
+}
+
+/**
+ * A range frame held to its ask (the range analogue of check 8), after its shape (`rangeShapeFault`), in this order,
+ * the first fault winning, each `malformed-answer`: the frame echoes the snapshot and offset it was asked for
+ * (`{why:'pin'}`); its `bytesB64` is canonical base64 (it re-encodes to exactly itself, so no stray character, padding
+ * or bits ride along) holding EXACTLY the asked length (ccd's contract is exact, so a short frame is a broken ccd, not a
+ * short file), its sha256 is `digest`, and `total` is at most `DOCS_RANGE_MAX_BYTES` and at least the end of the asked
+ * range (`{why:'integrity'}`). The browser checks the same digest again on its side; this is the server's own, so a
+ * broken ccd is named here and not by every client.
+ */
+function checkRangeFrame(ans: DocsRangeFrameOk, ask: DocsRangeFrameAsk): DocsRangeFrameOk | DocsFailureBody {
+  if (rangeShapeFault('frame', ans) !== null) return ans;
+  if (ans.snapshot !== ask.snapshot || ans.offset !== ask.offset) return showFault('pin');
+  const bytes = Buffer.from(ans.bytesB64, 'base64');
+  if (bytes.toString('base64') !== ans.bytesB64 || bytes.length !== ask.length) return showFault('integrity');
+  if (createHash('sha256').update(bytes).digest('hex') !== ans.digest) return showFault('integrity');
+  if (ans.total > DOCS_RANGE_MAX_BYTES || ans.total < ask.offset + ask.length) return showFault('integrity');
+  return ans;
+}
+
+/**
+ * A range prepare held to the pin it was sent (after its shape, `rangeShapeFault`): an `fp` pin names the file's sha256,
+ * so the answer's `digest` is that fingerprint; a `stat` pin names its size, so the answer's `size` is that size; a
+ * `blob` pin names neither (a git blob id is not the file's sha256, and the size is not in it). Any other answer is
+ * `malformed-answer {why:'pin'}`, the word a show answer that is not the pin it was asked for gets.
+ */
+function checkRangePrepared(ans: DocsRangePreparedOk, pin: DocsRangePin): DocsRangePreparedOk | DocsFailureBody {
+  if (rangeShapeFault('prepare', ans) !== null) return ans;
+  if (pin.kind === 'fp' && ans.digest !== pin.sha) return showFault('pin');
+  if (pin.kind === 'stat' && ans.size !== pin.size) return showFault('pin');
+  return ans;
 }
 
 /** The deepest level the second redaction pass walks, counting a failure body's own values as level 1 (a leaf counts
@@ -328,6 +413,30 @@ export function ccdDocsReader(deps: CcdDocsDeps): DocsReader {
         const shown = checkShow(answer, pin, ask);
         return shown.ok ? { ok: true, answer, bytes: shown.bytes } : shown;
       }),
+    // Rich-docs spec G4: the answer must echo the ask, as check 8 holds a show to its pin; L1's `docsAnswerShape` checks
+    // the entries where the route believes it.
+    log: async (src, ask): Promise<DocsLogRead> => settle(
+      await readDocs(deps, { verb: 'docs-log', project: src.project, log: ask }), 'docs-log', HISTORY_JOB, (line) => {
+        const answer = line as unknown as DocsLogOk;
+        return answer.commit === ask.commit && answer.section === ask.section && answer.path === ask.path
+          ? { ok: true, answer } : fail('malformed-answer', { why: 'pin' });
+      }),
+    // X2 P1: both calls name the same verb through `readDocs`' one gate, so each runs the `docsShowRange` row's check (no
+    // `docs-range-v1`, no exec). A prepare is held to `RANGE_PREPARE_JOB`'s wire bound, a frame to its own length's.
+    range: {
+      prepare: async (src, target): Promise<DocsRangePrepareRead> => settle(
+        await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame: null }), 'docs-show-range',
+        RANGE_PREPARE_JOB, (line) => {
+          const checked = checkRangePrepared(line as unknown as DocsRangePreparedOk, target.pin);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
+      frame: async (src, target, frame): Promise<DocsRangeFrameRead> => settle(
+        await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame }), 'docs-show-range',
+        rangeFrameJob(frame.length), (line) => {
+          const checked = checkRangeFrame(line as unknown as DocsRangeFrameOk, frame);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
+    },
   };
 }
 

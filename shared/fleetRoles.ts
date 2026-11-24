@@ -47,6 +47,33 @@ export interface LaunchProfile {
     /** The auto-compact point sits this many points of the window above the hard cap. */
     readonly aboveHardCapPts: number;
   } | null;
+  /** The Overlord's tool surface (spec §3.6 H1; index question 12, slug `launch-profile-gains-typed-surface`): `null` on
+   *  every row but `overlord`. ccd renders it, whole or not at all, only when the route carries `profiledigest`. */
+  readonly surface: LaunchSurface | null;
+}
+
+/** The Overlord's tool surface (spec §3.6 H1, index question 12). Literals only; ccd puts them on an argv. ccd maps the
+ *  `stagedSkills` and `memory` kinds to Claude Code's paths; this file names no path in Claude Code's layout. */
+export interface LaunchSurface {
+  /** `--tools`: the main thread's built-in tools. */
+  readonly tools: readonly string[];
+  /** `permissions.deny`, merged into the one `--settings`. */
+  readonly deny: readonly string[];
+  /** `--agents`: the declared reader types, each with one tool and its model. */
+  readonly readerTypes: Readonly<Record<string, { readonly description: string; readonly prompt: string;
+    readonly model: 'sonnet'; readonly tools: readonly string[] }>>;
+  /** The one tool server, under `--strict-mcp-config`. Its launch is the door process piece's. */
+  readonly toolServer: 'door';
+  /** `--setting-sources`. */
+  readonly settingSources: readonly ('project' | 'local')[];
+  /** The skills the session may list beside Claude Code's own. */
+  readonly skills: readonly string[];
+  /** Skills ccd links into the workspace: the skill's name, and its target under `~/.cc-sessions`. */
+  readonly stagedSkills: Readonly<Record<string, string>>;
+  /** The workspace memory file ccd links: its target under `~/.cc-sessions`. */
+  readonly memory: string;
+  /** sha256 of `ccd/lib/overlord-constitution.md`, held equal to the file by `overlord-constitution.test.ts`. */
+  readonly constitutionSha256: string;
 }
 
 /** The long-lived roles' compaction columns (C39): idle compaction off, the auto-compact point 10 points above the cap. */
@@ -63,7 +90,24 @@ const compactText = (label: string, keeps: string): string => `Compaction instru
 /** `plain`'s text, which `auditor` and `replay` reuse. */
 const PLAIN_COMPACT = compactText('plain', 'every id, path and sha you were given, and every instruction the operator gave, in its words');
 /** Every short-lived role's profile: auto memory off and nothing else (H14). */
-const MEMORY_OFF: LaunchProfile = { env: {}, settings: {}, autoMemory: 'off', compaction: null };
+const MEMORY_OFF: LaunchProfile = { env: {}, settings: {}, autoMemory: 'off', compaction: null, surface: null };
+/** The Overlord's surface (spec §3.6 H1, W0-15 to W0-19, the W0 results' proposals 1, 3 and 5): its doors' tools only,
+ *  every other tool denied (the cron tools included, proposal 3), one reader type on `sonnet` with one read tool (C55),
+ *  the project source alone, and the staged `ccrc-overlord` skill and the constitution, linked by ccd. */
+const OVERLORD_SURFACE: LaunchSurface = {
+  tools: ['Agent', 'Skill'],
+  deny: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'SendMessage', 'ListAgents', 'Workflow',
+    'CronCreate', 'CronList', 'CronDelete'],
+  readerTypes: { 'overlord-reader': { description: 'Reads one record through the door and reports what it found',
+    prompt: 'You read records through the door read tool and report what they say. You change nothing.',
+    model: 'sonnet', tools: ['mcp__door__read'] } },
+  toolServer: 'door',
+  settingSources: ['project'],
+  skills: ['ccrc-overlord'],
+  stagedSkills: { 'ccrc-overlord': 'overlord-skill' },
+  memory: 'lib/overlord-constitution.md',
+  constitutionSha256: '18a4028e19ec73a4bfbe63917ad0288b093762c03f24a3aba0bee0187fea5ebb',
+};
 
 export interface FleetRoleRow {
   readonly longLived: boolean;
@@ -87,7 +131,15 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
   overlord: {
     longLived: true,
     sessionRole: 'coordinator',
-    launchProfile: { env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' }, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
+    launchProfile: {
+      env: { CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' },
+      // `skipDangerousModePermissionPrompt`: Task 1's M3 measured no bypass dialog with it in `--settings` (proposal 5).
+      // `crossSessionInbound`: the fleet pin carries it too, and the row says it itself (§3.6 H1).
+      settings: { enableWorkflows: false, switchModelsOnFlag: true, skipDangerousModePermissionPrompt: true,
+        crossSessionInbound: 'refuse', remoteControlAtStartup: false },
+      autoMemory: 'off', compaction: LONG_LIVED_COMPACTION, surface: OVERLORD_SURFACE,
+    },
     cardRenderer: 'overlord',
     compactInstructions: compactText('overlord', `${COORDINATOR_KEEPS}, every mail you have not answered, every request id, and every operator message id you answered or owe an answer`),
     // Every class, spelled out rather than `PROBE_CLASSES`: this file takes only type imports of its siblings (the header).
@@ -134,7 +186,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
   coordinator: {
     longLived: true,
     sessionRole: 'coordinator',
-    launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION },
+    launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: LONG_LIVED_COMPACTION, surface: null },
     cardRenderer: 'coordinator',
     compactInstructions: compactText('coordinator', `${COORDINATOR_KEEPS}, and every mail you have not answered`),
     probeSet: ['fact', 'temporal', 'abstention', 'continuation'],
@@ -143,7 +195,7 @@ export const FLEET_ROLES: Readonly<Record<FleetRole, FleetRoleRow>> = {
   plain: {
     longLived: false,
     sessionRole: 'coordinator',
-    launchProfile: { env: {}, settings: {}, autoMemory: 'switch', compaction: null },
+    launchProfile: { env: {}, settings: {}, autoMemory: 'switch', compaction: null, surface: null },
     cardRenderer: 'plain',
     compactInstructions: PLAIN_COMPACT,
     probeSet: [],

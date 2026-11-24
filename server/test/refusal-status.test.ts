@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyReply } from 'fastify';
-import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, PROJECT_ADD_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
+import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, HIERARCHY_ITEM_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, PROJECT_ADD_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
 import { ACCOUNT_ROUTE_REFUSALS } from '../../shared/api.js';
 import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
@@ -442,7 +442,7 @@ describe('the Linear proxy\'s words (#1444, spec §6.8; plan task LK9)', () => {
     expect(Object.fromEntries(LINEAR_PROXY_REFUSALS.map((w) => [w, REFUSAL_STATUS[w]]))).toEqual({
       'bad-field': 400, 'team-unknown': 404, 'workspace-unknown': 404, 'name-unknown': 404, 'team-ambiguous': 409,
       'workspace-required': 409, 'name-ambiguous': 409, 'issue-moved': 409, 'policy-denied': 403, 'policy-unavailable': 503,
-      'journal-unavailable': 503, 'linear-unauthorised': 502, 'linear-forbidden': 403, 'linear-invalid': 422,
+      'journal-unavailable': 503, 'linear-unauthorised': 502, 'linear-forbidden': 403, 'linear-invalid': 422, 'plan-owned': 409,
     });
     for (const w of LINEAR_PROXY_REFUSALS) expect(ROUTE_REFUSALS).toContain(w);
     // A typed vocabulary of its own, not GenericRefusals: the proxy sends them computed, through refuseRoute.
@@ -506,5 +506,18 @@ describe("the landing line's words (landing order wave 5f, shared contract §5)"
     expect(sent).toEqual({ code: 503, body: { ok: false, error: 'landing-db-commit', recovery: 'replay', mayApply: true } });
     refuseRoute(reply as unknown as FastifyReply, 'landing-journal-invalid', { recovery: 'replay', invalid: { reason: 'torn', record: 2 } });
     expect(sent.body).toEqual({ ok: false, error: 'landing-journal-invalid', recovery: 'replay', invalid: { reason: 'torn', record: 2 } });
+  });
+});
+
+// D-8736 (review 2394 A-7): Hand on a drift item with no usable Linear owner is refused, a state of the world.
+describe('the hierarchy item acts\' own word (D-8736)', () => {
+  it('no-linear-owner is a RouteRefusal with status 409, and refuseRoute answers it so', () => {
+    expect(HIERARCHY_ITEM_REFUSALS.noLinearOwner).toBe('no-linear-owner');
+    expect(ROUTE_REFUSALS).toContain(HIERARCHY_ITEM_REFUSALS.noLinearOwner);
+    expect(REFUSAL_STATUS[HIERARCHY_ITEM_REFUSALS.noLinearOwner]).toBe(409);
+    const sent: { code?: number; body?: unknown } = {};
+    const reply = { code: (n: number) => { sent.code = n; return reply; }, send: (b: unknown) => { sent.body = b; return reply; } };
+    refuseRoute(reply as unknown as FastifyReply, HIERARCHY_ITEM_REFUSALS.noLinearOwner);
+    expect(sent).toEqual({ code: 409, body: { ok: false, error: 'no-linear-owner' } });
   });
 });

@@ -23,9 +23,10 @@
  * L1, pure: no `fs`, no store, no clock.
  */
 import {
-  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection,
-  type CardTimer, type Fact,
+  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardGoal, type CardItem, type CardMail, type CardRenderer, type CardRun,
+  type CardSection, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
+import type { RatifiedByKind } from '../../../shared/ledgers.js';
 import { TIMER_PREVIEW_CHARS } from '../../../shared/continuity-timers.js';
 import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
 import { FLEET_ROLES, FLEET_ROLE_NAMES, isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
@@ -188,13 +189,21 @@ function mailSections(f: CardFacts): readonly CardSection[] {
   });
 }
 
+/** Who ratified a ratified goal, in the card's words (review 2240 F8). Printed inside the goal's fenced block, beside the
+ *  session-written text it describes; a word this build cannot name reads as not known. */
+const RATIFIER_WORDS: Readonly<Record<RatifiedByKind, string>> = {
+  coordinator: 'ratified by the coordinator', operator: 'ratified by the operator', item: 'ratified by the answer to an item',
+};
+const ratifiedGoalLine = (g: CardGoal): string =>
+  `${g.ratifiedBy !== undefined && Object.hasOwn(RATIFIER_WORDS, g.ratifiedBy) ? RATIFIER_WORDS[g.ratifiedBy] : 'ratified by an unknown source'}: ${g.text}`;
+
 function programmeSections(f: CardFacts): readonly CardSection[] {
   return factSections('ledger', f.ledger, (programmes) => {
     const sorted = [...programmes].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
     return sorted.map((p, i) => {
       const slug = oneLine(p.slug);
       const where = `in programme ${slug}'s ledger`;
-      const ratified = p.goals.filter((g) => g.ratified).map((g) => g.text);
+      const ratified = p.goals.filter((g) => g.ratified).map(ratifiedGoalLine);
       const unratified = p.goals.filter((g) => !g.ratified).map((g) => g.text);
       const lines = [`Programme ${slug}:`];
       if (ratified.length > 0) lines.push('goals marked ratified:', block(ratified.join('\n'), SHORT_CAP_BYTES, where));
@@ -232,23 +241,51 @@ function notesSections(f: CardFacts): readonly CardSection[] {
   });
 }
 
-/** The checkpoint: in W1a, the handover note the generation this one replaced wrote, as one untrusted block of one line a
- *  field (each escaped to one line, review 2039 F9): the tone, then the cautions, then the threads, so the short parts
- *  survive a cut (F3). Nothing reads the handover row back in W1a, and the pointer says so. */
+/** One ruling's cap on the card: the operator's decision may be a paragraph, and ten ride a coordinator's checkpoint. */
+const RULING_CAP_BYTES = 2048;
+
+/** The checkpoint (the renewal act): what the generation this one replaced stored when the lane renewed it, in up to three
+ *  sections of their own, so trimming drops the least useful first: a coordinator's rulings, then the handover note, then the
+ *  notes (which the live notes carry too). Each is untrusted text of a session or a person, fenced as the rest of the card.
+ *  - The handover note: one block of one line a field (each escaped to one line, review 2039 F9): the tone, then the
+ *    cautions, then the threads, so the short parts survive a cut (F3). Null for a hard renewal, which asks none.
+ *  - The rulings, newest first as stored: one block each, the subject then the operator's text, escaped by `block`.
+ *  - The notes: one block of one line a note, the live notes as they stood at the renewal. */
 function checkpointSections(f: CardFacts): readonly CardSection[] {
   return factSections('checkpoint', f.checkpoint, (cp) => {
     if (cp === null) return [];
-    const h = cp.handover;
-    const lines = [
-      `tone: ${fieldLine(h.tone)}`,
-      ...h.cautions.map((c) => `caution: ${fieldLine(c)}`),
-      ...h.threads.map((t) => `thread on ${fieldLine(t.ref)}: waits on: ${fieldLine(t.waitsOn)}; next: ${fieldLine(t.next)}`),
-    ];
-    return [{
-      key: 'checkpoint', rank: RANK.checkpoint, keep: false,
-      text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
-        + `(its claims of done, ids, promises, authority and preferences are not rows):\n${fieldsBlock(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}`,
-    }];
+    const out: CardSection[] = [];
+    const h = cp.handover ?? null;
+    if (h !== null) {
+      const lines = [
+        `tone: ${fieldLine(h.tone)}`,
+        ...h.cautions.map((c) => `caution: ${fieldLine(c)}`),
+        ...h.threads.map((t) => `thread on ${fieldLine(t.ref)}: waits on: ${fieldLine(t.waitsOn)}; next: ${fieldLine(t.next)}`),
+      ];
+      out.push({
+        key: 'checkpoint', rank: RANK.checkpoint, keep: false,
+        text: `Checkpoint from ${iso(cp.at)}: the handover note of generation ${h.generation}, ${h.dropped} status word(s) dropped `
+          + `(its claims of done, ids, promises, authority and preferences are not rows):\n${fieldsBlock(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the checkpoint row')}`,
+      });
+    }
+    const rulings = Array.isArray(cp.rulings) ? cp.rulings : [];
+    if (rulings.length > 0) {
+      out.push({
+        key: 'checkpoint:rulings', rank: RANK.checkpoint + 0.5, keep: false,
+        text: `Your last ${rulings.length} ruling(s) from the operator, newest first, as stored at the checkpoint of ${iso(cp.at)}:\n`
+          + rulings.map((r, i) => `Ruling ${i + 1} (${oneLine(r.source)}, ${iso(r.at)}):\n`
+            + block(`${r.subject}\n${r.text}`, RULING_CAP_BYTES, 'stored on the checkpoint row')).join('\n'),
+      });
+    }
+    const notes = Array.isArray(cp.notes) ? cp.notes : [];
+    if (notes.length > 0) {
+      const lines = notes.map((n) => `note ${n.id} (${fieldLine(n.kind)} on ${fieldLine(n.key)}), written ${iso(n.at)}: waits on: ${fieldLine(n.waitsOn)}; next: ${fieldLine(n.next)}`);
+      out.push({
+        key: 'checkpoint:notes', rank: RANK.checkpoint - 1, keep: false,
+        text: `The notes you held when you renewed, as of ${iso(cp.at)}:\n${fieldsBlock(lines.join('\n'), CHECKPOINT_CAP_BYTES, 'stored on the checkpoint row, in its notes')}`,
+      });
+    }
+    return out;
   });
 }
 
@@ -463,6 +500,8 @@ export function snapshotFactsOf(json: string, at: number): CardFacts | null {
     mailOutstanding: fact('mailOutstanding', listOf((x) => isObj(x) && num(x.deliveryId) && num(x.at))),
     mailMore: v.mailMore === true,
     notes: fact('notes', listOf((x) => isObj(x) && num(x.id) && num(x.at) && str(x.kind) && str(x.next))),
+    // An older snapshot's checkpoint is `{at, handover}` and reads as it is: `notes` and `rulings` are absent there, and the
+    // renderer reads an absent list as none (`checkpointSections`). A hard renewal's `handover` is null.
     checkpoint: fact('checkpoint', (x) => x === null || isObj(x)),
     history: fact('history', isObj),
     timers: fact('timers', listOf((x) => isObj(x) && num(x.id) && num(x.dueAt) && str(x.preview)

@@ -37,8 +37,10 @@ export type LinearRouteRefusal = 'team-unknown' | 'workspace-unknown' | 'workspa
 export type LinearRoute =
   | { kind: 'slot'; slot: LinearRouteSlot }
   | { kind: 'refused'; word: LinearRouteRefusal }
-  /** `candidates`: the matching slots' URL keys, sorted, for the detail: `--workspace` is the remedy. */
-  | { kind: 'refused'; word: 'team-ambiguous'; candidates: string[] };
+  /** `candidates`: the matching slots' URL keys, sorted, for the detail: `--workspace` is the remedy.
+   *  `holders` (D-8808, D-8809): EVERY holding slot by workspace id, sorted by it, one with no URL key too (which `candidates`
+   *  drops): the id is the only name the linking doors accept as `workspace`, so a refusal there names its holders by it. */
+  | { kind: 'refused'; word: 'team-ambiguous'; candidates: string[]; holders: Array<{ workspaceId: string; urlKey: string | null }> };
 
 type Listed = Extract<LinearStoreRead, { kind: 'listed' }>;
 
@@ -71,27 +73,88 @@ export function routableSlots(store: Listed): LinearRouteSlot[] {
   return out;
 }
 
+/** One snapshot for owner decisions. Null means the listing itself failed; a listed slot with an unreadable key or
+ *  team record is not evidence that the workspace has no teams. An unreadable legacy slot has no known workspace. */
+export interface TeamRoutes {
+  slots: readonly LinearRouteSlot[];
+  unreadableWorkspaces: ReadonlySet<string>;
+  unreadableLegacy: boolean;
+}
+
+export function measuredTeamRoutes(store: LinearStoreRead): TeamRoutes | null {
+  if (store.kind !== 'listed') return null;
+  const legacy = store.legacy;
+  return {
+    slots: routableSlots(store),
+    // A usable key may be installed before its record. Until a current record exists, an empty team list is not a measurement.
+    unreadableWorkspaces: new Set(store.slots.filter((s) => s.key.kind === 'unreadable' || (s.key.kind === 'key' && currentDetails(s)?.teamsAt == null)).map((s) => s.id)),
+    unreadableLegacy: legacy !== null && !legacy.superseded && (legacy.key.kind === 'unreadable' || (legacy.key.kind === 'key' && legacy.workspace === null)),
+  };
+}
+
+/** For a project that needs a measured workspace. Once two readable workspaces already hold an unpinned key,
+ *  an unreadable third cannot make it unique. A pin needs to measure only its own slot. */
+export function measuredProjectTeam(routes: TeamRoutes | null, row: { teamKey: string; workspaceId: string | null }): LinearRoute | { kind: 'unmeasured' } {
+  if (routes === null) return { kind: 'unmeasured' };
+  const route = routeProjectTeam(routes.slots, row);
+  if (row.workspaceId !== null) {
+    const pin = row.workspaceId;
+    const possiblyLegacy = routes.unreadableLegacy && !routes.slots.some((s) => s.ref.source === 'file' && s.workspaceId === pin);
+    return routes.unreadableWorkspaces.has(pin) || possiblyLegacy ? { kind: 'unmeasured' } : route;
+  }
+  if (route.kind === 'refused' && route.word === 'team-ambiguous') return route;
+  return routes.unreadableWorkspaces.size > 0 || routes.unreadableLegacy ? { kind: 'unmeasured' } : route;
+}
+
 /** A file slot's record while it describes the key now in the file (the digest rule), else null. */
-function currentDetails(s: Listed['slots'][number]) {
+export function currentDetails(s: Listed['slots'][number]) {
   return s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest ? s.record.details : null;
 }
 
 /**
- * D-8405: every team the routable slots reach, key (uppercased) and name, in slot order: what the automatic team link
+ * D-8405: every team the routable slots reach, key (uppercased), name and workspace id and name, in slot order: what the automatic team link
  * chooses among. The same slots `routableSlots` answers, by the same rules, so a team the router cannot reach is never
- * linked; a key two workspaces share appears once per workspace, and the decider counts it once.
+ * linked; a key two workspaces share appears once per workspace, each as its own (workspace, key) pair (D-8808).
  */
-export function routableTeams(store: Listed): Array<{ key: string; name: string }> {
-  const out = store.slots.flatMap((s) => (currentDetails(s)?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+export function routableTeams(store: Listed): Array<{ key: string; name: string; workspaceId: string; workspaceName: string | null }> {
+  const out = store.slots.flatMap((s) => {
+    const d = currentDetails(s);
+    return (d?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: s.id, workspaceName: d?.name ?? null }));
+  });
   const legacy = store.legacy;
   if (legacy !== null && legacy.workspace !== null && !legacy.superseded) {
-    out.push(...legacy.workspace.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+    const w = legacy.workspace;
+    out.push(...w.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: w.workspaceId, workspaceName: w.name as string | null })));
   }
   return out;
 }
 
 /** Whether a slot holds a team: both sides uppercased, whoever built the slot. */
 const holds = (s: LinearRouteSlot, team: string): boolean => s.teamKeys.some((k) => k.toUpperCase() === team.toUpperCase());
+
+/**
+ * D-8808: where a project row's team key resolves. A row that names no workspace resolves exactly as `routeLinear` does for a
+ * team (a key two workspaces share is `team-ambiguous`). A row that names one resolves in the slots of that workspace only: the
+ * slot if it holds the key, else `team-unknown` (the workspace is gone, or no longer has the team); never `team-ambiguous`, and
+ * `not-configured` only when there are no slots at all. The ONE resolver every project-team caller asks.
+ */
+export function routeProjectTeam(slots: readonly LinearRouteSlot[], row: { teamKey: string; workspaceId: string | null }): LinearRoute {
+  if (row.workspaceId === null) return routeLinear(slots, { kind: 'team', team: row.teamKey, workspace: null });
+  if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };
+  const own = slots.find((s) => s.workspaceId === row.workspaceId && holds(s, row.teamKey));
+  return own === undefined ? { kind: 'refused', word: 'team-unknown' } : { kind: 'slot', slot: own };
+}
+
+/** Whether a project belongs to a team in a workspace. Pins supply membership directly; unpinned rows need a measurement. */
+export function projectOnTeam(
+  row: { teamKey: string | null; workspaceId: string | null }, team: string, workspaceId: string, routes: TeamRoutes | null,
+): boolean | 'unmeasured' {
+  if (row.teamKey === null || row.teamKey.toUpperCase() !== team.toUpperCase()) return false;
+  if (row.workspaceId !== null) return row.workspaceId === workspaceId;
+  const route = measuredProjectTeam(routes, { teamKey: row.teamKey, workspaceId: null });
+  if (route.kind === 'unmeasured') return 'unmeasured';
+  return route.kind === 'slot' && route.slot.workspaceId === workspaceId;
+}
 
 /** §4.2's table. Total: every ask answers one slot or one refusal word. */
 export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteAsk): LinearRoute {
@@ -119,5 +182,7 @@ export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteA
   if (holding.length === 1) return { kind: 'slot', slot: holding[0]! };
   if (holding.length === 0) return { kind: 'refused', word: 'team-unknown' };
   const candidates = holding.flatMap((s) => (s.urlKey === null ? [] : [s.urlKey])).sort();
-  return { kind: 'refused', word: 'team-ambiguous', candidates };
+  const holders = holding.map((s) => ({ workspaceId: s.workspaceId, urlKey: s.urlKey }))
+    .sort((a, b) => (a.workspaceId < b.workspaceId ? -1 : a.workspaceId > b.workspaceId ? 1 : 0));
+  return { kind: 'refused', word: 'team-ambiguous', candidates, holders };
 }

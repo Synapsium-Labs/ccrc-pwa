@@ -1,5 +1,9 @@
 // The plan verbs' routes (Linear hierarchy design 2026-11-10 §4.3, D-8181): `plan put`, `plan show`, `plan met`,
-// `plan ticket-add`, `plan ticket-move`, `plan epic-drop` and `plan close`. L4: they own the reply and decide nothing;
+// `plan ticket-add`, `plan ticket-move`, `plan epic-drop` and `plan close`, `plan phase-ref` (programme work map WM0,
+// D-8715), with the phases `plan put` stores and `plan show` answers, `plan ticket-done` (WM1, D-8727), and the inbound
+// path's two (D-8183): `plan triage` (the team's Linear owner decides an issue filed in Linear) and `plan take` (a
+// programme's coordinator takes, closes or returns one). Neither calls Linear: the drift lane's inbound lane makes the one
+// write (`linear/inboundLane.ts`). L4: they own the reply and decide nothing;
 // `planPolicy.ts` parses the bodies and judges the diff, the caller and the programme's end, and `planStore.ts` (through the
 // `PlanStorePort`, never `coord.db`) is the table. The box token comes first, then the identity pair from the QUERY, then the
 // registry's attribution, then the caller check. Every plan WRITE runs its checks and its store write inside `serial`, the
@@ -8,25 +12,43 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GateDecision } from '../auth/gate.js';
 import { linearEgressText } from '../linear/ops.js';
-import { routableSlots, routeLinear } from '../linear/route.js';
+import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, upkeepLookupOf, type InboundRecheck } from '../linear/inboundPolicy.js';
+import { insertSystemMailTx } from './rundefsTx.js';
+import { isLinearTeamKey } from '../../../shared/linear.js';
+import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { measuredTeamRoutes, measuredProjectTeam, type TeamRoutes } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
-import { refuseRoute, refuseRun } from '../refuse.js';
+import type { LinearMigration } from '../linear/migration.js';
+import { mapProposerVerdict } from '../linear/migrationPolicy.js';
+import type { RouteRefusal } from '../../../shared/refusal.js';
+import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
+import type { OtherLane, OtherLaneReads } from './otherLanes.js';
 import {
-  LINEAR_SYNC_PROGRAMME, isPlanKey,
-  type CheckpointView, type EpicView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
+  LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, isPlanKey,
+  type CheckpointView, type EpicView, type InboundState, type PhaseView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
 } from '../../../shared/plan.js';
 import { programmeNameFromSlug } from '../../../shared/api.js';
 import { publicTextVerdict } from '../linking/policy.js';
+import { textFactOfTeam } from '../linear/planSyncPolicy.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import type { AttributionRead } from './openRun.js';
+import { evidenceLinksOf } from './planRunFacts.js';
 import type { CoordStore } from './store.js';
 import type { CoordRoutesHandle } from './routes.js';
-import type { BindingRow, PlanStorePort, StoredPlan } from './planStore.js';
+import type { BindingRow, InboundRow, PhaseRow, PlanStorePort, StoredPlan } from './planStore.js';
 import {
-  diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPut, parsePlanTicketAdd, parsePlanTicketMove,
-  dropEpicInto, planCallerVerdict, ticketIsHeld,
+  diffPhases, diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPhaseRef, parsePlanPut, parsePlanTake, parsePlanTicketAdd,
+  parsePlanTicketDone, parsePlanTicketMove, parsePlanTriage, dropEpicInto, linearOwnerOfTeam, phaseNumbers, phaseRefVerdict,
+  planCallerVerdict, teamOwnerProject, teamOwnerDiagnostic, ticketDoneVerdict, ticketIsHeld, landedFactOf, triageVerdict, handedRowOf,
+  triageLookup, triageChoice, teamHolders, type TicketDoneFacts,
+  followUpTicketMail,
 } from './planPolicy.js';
+import { inboundRetirable } from '../linear/inboundRetire.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
+import type { RunVerdicts } from './runVerdicts.js';
+import { withLastMoves } from './runWire.js';
+import { doneEvidenceVerdict, verdictsReadOf, workMapOf, type DoneEvidenceFacts, type EvidenceVerdict } from './workMap.js';
+import { WORK_READ_FAILED, type WorkAnswer } from '../../../shared/plan.js';
 
 export interface PlanRouteOpts {
   /** The coordination store, for the programme rows and the project's team key; undefined (a test, a script): `unavailable`. */
@@ -39,6 +61,8 @@ export interface PlanRouteOpts {
   mailToken: () => string | BoxTokenHolder | null;
   /** The box-token lanes' sender check (`attributionVerdict` over the registry). */
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
+  /** Overlord W1 other lanes (H10): the reads `door` asks, after attribution, whether the caller is the Overlord's body. */
+  otherLaneReads: OtherLaneReads;
   /** The gate's session verdict, for `plan show`'s session-or-token read. */
   sessionAuth: (req: FastifyRequest) => GateDecision;
   authEnabled: boolean;
@@ -49,6 +73,18 @@ export interface PlanRouteOpts {
   now: () => number;
   /** The installer's private tracker keys (`CcrcConfig.privateTrackerKeys`), refused in every public plan text; absent: none. */
   privateTrackerKeys?: readonly string[];
+  /** The session standing the console shows; the triage route needs only the owner's id, so absent reads `unmeasured`. */
+  presenceOf?: (id: string) => CoordinatorPresence;
+  /** The run verdicts reader (`RunVerdicts`, the watcher's), for the work map's stuck and blocked rows (programme work map WM2,
+   *  D-8779). Absent (a test, a server with no watcher) or empty (before its first pass) reads `not-read`. */
+  runVerdicts?: Pick<RunVerdicts, 'all'>;
+  /** The by-id re-read of a stored inbound row's issue (review 2457 F4, D-8733): the lane's, through the one rate service. `plan take`
+   *  and `plan triage` ask it BEFORE they act (outside the run writers' mutex), so an issue that left the managed teams is never
+   *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable` for a decision that binds the
+   *  issue only (a take into an epic, an Upkeep placement, a hand; `inboundDoorVerdict`): a close, a raise or a return goes on. */
+  inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
+  /** The per-team migration's propose (D-8186, Task 7.2); absent (a test, a script): `plan map-propose` answers `unavailable`. */
+  migration?: Pick<LinearMigration, 'waitingWorkspaces' | 'readOpen' | 'storeProposal'>;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -64,6 +100,11 @@ const mask = linearEgressText;
 const maskPut = (p: PlanPutBody): PlanPutBody => ({
   ...p,
   ...(p.title === undefined ? {} : { title: mask(p.title) }),
+  ...(p.phases === undefined ? {} : {
+    phases: p.phases.map((ph) => ({
+      ...ph, title: mask(ph.title), summary: mask(ph.summary), ...(ph.droppedWhy === undefined ? {} : { droppedWhy: mask(ph.droppedWhy) }),
+    })),
+  }),
   epics: p.epics.map((e) => ({
     ...e, title: mask(e.title), summary: mask(e.summary),
     ...(e.droppedWhy === undefined ? {} : { droppedWhy: mask(e.droppedWhy) }),
@@ -85,23 +126,48 @@ const syncOf = (rows: readonly BindingRow[] | undefined): Sync => {
   return { sync: 'bound', syncWord: null };
 };
 
-/** One programme's plan as the wire says it (`PlanView`): the stored plan, each object's sync word from its bindings. */
-export function planViewOf(stored: StoredPlan, doneWhen: readonly string[], bindings: readonly BindingRow[]): PlanView {
+/** The phases as the wire says them, in order: each reference by its object's key, a carry by its target phase's key, and the
+ *  number `phaseNumbers` derives. A reference whose object is not in the plan any more is left out. */
+function phaseViewsOf(stored: StoredPlan, phases: readonly PhaseRow[]): PhaseView[] {
+  const numbers = phaseNumbers(phases.map((p) => ({ key: p.key, dropped: p.droppedWhy !== null })));
+  const epicKey = new Map(stored.epics.map((e) => [e.id, e.key]));
+  const ticketKey = new Map(stored.epics.flatMap((e) => e.tickets.map((t) => [t.id, t.key] as const)));
+  const phaseKey = new Map(phases.map((p) => [p.id, p.key]));
+  return phases.map((p) => ({
+    key: p.key, number: numbers.get(p.key) ?? null, title: p.title, summary: p.summary, dropped: p.droppedWhy !== null,
+    refs: p.refs.flatMap((r) => {
+      const key = (r.kind === 'epic' ? epicKey : ticketKey).get(r.refId);
+      return key === undefined ? [] : [{
+        kind: r.kind, key, carriedTo: r.carriedTo === null ? null : (phaseKey.get(r.carriedTo) ?? null), carriedAt: r.carriedAt,
+      }];
+    }),
+  }));
+}
+
+/** One programme's plan as the wire says it (`PlanView`): the stored plan, each object's sync word from its bindings, and its
+ *  phases when it declares any (absent otherwise, so a plan with no phases reads exactly as before WM0). */
+export function planViewOf(
+  stored: StoredPlan, doneWhen: readonly string[], bindings: readonly BindingRow[], teamKeyOf?: (project: string) => string | null,
+  phases: readonly PhaseRow[] = [],
+): PlanView {
+  /** A record whose project has no team key reads `unsynced`: the sync sends nothing for it, its bindings stay untouched. */
+  const syncFor = (project: string, rows: readonly BindingRow[] | undefined): Sync =>
+    teamKeyOf !== undefined && teamKeyOf(project) === null ? { sync: 'unsynced', syncWord: null } : syncOf(rows);
   const by = new Map<string, BindingRow[]>();
   for (const b of bindings) by.set(`${b.localKind}:${b.localId}`, [...(by.get(`${b.localKind}:${b.localId}`) ?? []), b]);
   const epics: EpicView[] = stored.epics.map((e) => {
     const checkpoints: CheckpointView[] = e.checkpoints.map((c) => ({
       key: c.key, title: c.title, kind: c.kind, state: c.state, proves: c.proves, metAt: c.metAt, evidence: c.evidence, url: null,
-      ...syncOf(by.get(`checkpoint:${c.id}`)),
+      ...syncFor(e.project, by.get(`checkpoint:${c.id}`)),
     }));
     const tickets: TicketView[] = e.tickets.map((t) => ({
       key: t.key, kind: t.kind, title: t.title, project: t.project,
       checkpoint: e.checkpoints.find((c) => c.id === t.checkpointId)?.key ?? null, source: t.source, state: t.state,
-      runId: t.runId, identifier: by.get(`ticket:${t.id}`)?.[0]?.identifier ?? null, url: null, ...syncOf(by.get(`ticket:${t.id}`)),
+      runId: t.runId, identifier: by.get(`ticket:${t.id}`)?.[0]?.identifier ?? null, url: null, ...syncFor(t.project, by.get(`ticket:${t.id}`)),
     }));
     return {
       key: e.key, title: e.title, summary: e.summary, project: e.project, waves: e.waves, state: e.state, url: null,
-      ...syncOf(by.get(`epic:${e.id}`)), checkpoints, tickets,
+      ...syncFor(e.project, by.get(`epic:${e.id}`)), checkpoints, tickets,
     };
   });
   const live = stored.epics.filter((e) => e.state !== 'dropped');
@@ -111,16 +177,30 @@ export function planViewOf(stored: StoredPlan, doneWhen: readonly string[], bind
       const proving = live.flatMap((e) => e.checkpoints).filter((c) => c.state !== 'dropped' && c.proves.includes(i));
       return { text, proved: proving.length > 0 && proving.every((c) => c.state === 'met') };
     }),
+    ...(phases.length === 0 ? {} : { phases: phaseViewsOf(stored, phases) }),
   };
 }
 
 // ── Registration ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-type Refused = { refuse: PlanRefusal; detail: string };
-type Work = (c: {
+/** A door's refusal: a plan word, or `unreachable`, the Linear read's existing 503 (a stored inbound row's issue could not be re-read). */
+type Refused = { refuse: PlanRefusal | 'unreachable'; detail: string };
+type Work = ((c: {
   coord: CoordStore; plan: PlanStorePort; slug: string; caller: string; body: unknown; stored: StoredPlan; owner: string | null;
-  ws: ReadonlyMap<string, string | null>;
-}) => Promise<Refused | { ok: true; plan: PlanView }>;
+  ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null; rechecks: ReadonlyMap<string, InboundRecheck>;
+}) => Promise<Refused | { ok: true; plan: PlanView }>) & { candidates?: TakeCandidates };
+
+type TeamWork = ((c: {
+  coord: CoordStore; plan: PlanStorePort; team: string; caller: string; body: unknown; ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null; rechecks: ReadonlyMap<string, InboundRecheck>;
+}) => Promise<Refused | { reserved: true } | { ok: true; state: InboundState }>) & { candidates?: TriageCandidates };
+
+/** The stored rows a door will judge, named before the mutex so their issues can be re-read by id outside it (review 2457 F4). */
+type TakeCandidates = (c: { coord: CoordStore; plan: PlanStorePort; slug: string; caller: string; body: unknown; ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null }) => InboundRow[];
+type TriageCandidates = (c: { coord: CoordStore; plan: PlanStorePort; team: string; caller: string; body: unknown; ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null }) => InboundRow[];
+
+/** A door's work with the rows it may re-read named (review 2457 F4): the door reads them before the mutex. */
+const workWith = (candidates: TakeCandidates, fn: (c: Parameters<Work>[0]) => ReturnType<Work>): Work => Object.assign(fn, { candidates });
+const teamWorkWith = (candidates: TriageCandidates, fn: (c: Parameters<TeamWork>[0]) => ReturnType<TeamWork>): TeamWork => Object.assign(fn, { candidates });
 
 export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): void {
   const slugOf = (req: FastifyRequest): string | null => {
@@ -128,19 +208,24 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     return isPlanKey(s) ? s : null;
   };
 
+  const readTeamSnapshot = async () => {
+    const store = await opts.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    return { store, routes: measuredTeamRoutes(store) };
+  };
+
   /** Each project's workspace id, from its team key and the Linear store: null where either is unknown. */
-  const workspaces = async (projects: ReadonlySet<string>): Promise<Map<string, string | null>> => {
+  const workspaces = async (projects: ReadonlySet<string>): Promise<{ ws: Map<string, string | null>; routes: TeamRoutes | null }> => {
     const out = new Map<string, string | null>();
-    if (opts.coord === undefined || projects.size === 0) return out;
-    let store: LinearStoreRead | null = null;
-    try { store = await opts.readLinearStore(); } catch { store = null; }
+    // The store is read whenever a coord store stands, even for no project: a readable store never answers `unreachable` (F10).
+    if (opts.coord === undefined) return { ws: out, routes: null };
+    const { routes } = await readTeamSnapshot();
     for (const p of projects) {
-      const team = opts.coord.linkingOf(p).teamKey;
-      if (team === null || store === null || store.kind !== 'listed') { out.set(p, null); continue; }
-      const r = routeLinear(routableSlots(store), { kind: 'team', team, workspace: null });
+      const l = opts.coord.linkingOf(p);
+      if (l.teamKey === null) { out.set(p, null); continue; }
+      const r = measuredProjectTeam(routes, { teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null });
       out.set(p, r.kind === 'slot' ? r.slot.workspaceId : null);
     }
-    return out;
+    return { ws: out, routes };
   };
   const projectsIn = (body: unknown, stored: StoredPlan, home: string | null): Set<string> => {
     const found = new Set<string>();
@@ -159,17 +244,79 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   };
 
   const viewOf = (plan: PlanStorePort, coord: CoordStore, slug: string): PlanView =>
-    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug));
+    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug), (p) => coord.linkingOf(p).teamKey,
+      plan.phasesOf(slug));
 
-  const refuse = (reply: FastifyReply, word: PlanRefusal, detail: string): FastifyReply => refuseRoute(reply, word, { detail });
+  /** The plan read's `work` (programme work map WM2, D-8779; spec §7, D2 and D19): every read behind the map, gathered here and
+   *  handed to `workMapOf`, which decides. The plan itself is `view`, read already. A read that fails answers its word, and
+   *  the plan is still served (F15). */
+  const workOf = (plan: PlanStorePort, coord: CoordStore, slug: string, view: PlanView): WorkAnswer => {
+    try {
+      const stored = plan.planOf(slug);
+      const read = coord.programmeWorkRuns(slug);
+      if (!read.ok) {
+        console.warn(`ccrc-server: the work map of ${slug} could not read its runs (${read.kind}: ${read.detail})`);
+        return { unreadable: read.kind };
+      }
+      const runs = withLastMoves(coord, read.runs, (d) => console.warn(`ccrc-server: the work map of ${slug} could not read the runs' last moves (${d})`));
+      const verdicts = verdictsReadOf(opts.runVerdicts?.all());
+      const open = coord.itemsFor(slug, opts.now()).open;
+      const openIds = new Set(open.map((i) => i.id));
+      const checkpointItems = new Map<string, number>();
+      for (const e of stored.epics) {
+        for (const c of e.checkpoints) if (c.itemId !== null && openIds.has(c.itemId)) checkpointItems.set(`${e.key}/${c.key}`, c.itemId);
+      }
+      const facts = plan.doneFactsOf(slug);
+      const storedEvidence = facts.flatMap((d) => (d.evidence === null ? [] : [{ project: d.project, evidence: d.evidence }]));
+      const evidence = new Map<string, EvidenceVerdict>();
+      const prLinks = new Map<string, TicketDoneFacts['links']>();
+      for (const d of facts) {
+        if (d.evidence === null) continue;
+        let run: DoneEvidenceFacts['run'] = null;
+        let landed: DoneEvidenceFacts['landed'] = null;
+        if (d.evidence !== 'malformed' && 'runId' in d.evidence) {
+          const r = coord.run(d.evidence.runId);
+          if (!r.ok) {
+            console.warn(`ccrc-server: the work map of ${slug} could not read evidence run ${d.evidence.runId} (${r.kind}: ${r.detail})`);
+            return { unreadable: r.kind };
+          }
+          run = r.run === null ? null
+            : { program: r.run.program, kind: r.run.kind, state: r.run.state, ticketKey: plan.ticketOfRun(r.run.id)?.key ?? null };
+        } else if (d.evidence !== 'malformed') {
+          const l = coord.readLanding(d.project);
+          landed = l.ok ? landedFactOf(l.facts.entries, d.evidence.pr) : { kind: 'unreadable', detail: l.error };
+          // The runs that carried this pull request, each with the ticket it holds, for the fold (review 2795 F2).
+          prLinks.set(d.key, evidenceLinksOf(coord, plan, d.evidence, d.project, storedEvidence));
+        }
+        evidence.set(d.key, doneEvidenceVerdict({ program: slug, ticketKey: d.key, evidence: d.evidence, run, landed }));
+      }
+      return workMapOf({
+        plan: {
+          ...view, declared: stored.planBy !== null, end: plan.planEndOf(slug),
+          done: new Map(facts.map((d) => [d.key, { at: d.doneAt, evidence: d.evidence }])),
+        },
+        runs, verdicts, openItems: open.map((i) => ({ id: i.id, runId: i.runId })), checkpointItems, evidence, prLinks,
+        // The hierarchy's close with a reason (its Task 4.3, F10) stores no programme ticket apart from a drop yet
+        // (`plan take`'s close drops an Upkeep ticket), so no ticket reads closed until it does (D-8779).
+        closed: new Map(),
+      });
+    } catch (e) {
+      console.warn(`ccrc-server: the work map of ${slug} could not be read (${e instanceof Error ? e.message : String(e)})`);
+      return { unreadable: WORK_READ_FAILED };
+    }
+  };
+
+  const refuse = (reply: FastifyReply, word: Refused['refuse'], detail: string): FastifyReply => refuseRoute(reply, word, { detail });
 
   /** D-8181 (design §4.3): the public-text check on every text a plan verb is about to store, each judged by its own
    *  project's linking mode and team key (a project with no reading is `unknown`, which is public). Runs before the write, so
    *  a refused text stores nothing. The detail names the class (and a tracker id's ids), never the text. */
-  const textRefusal = (coord: CoordStore, texts: ReadonlyArray<readonly [project: string, text: string | undefined]>): Refused | null => {
-    for (const [project, text] of texts) {
+  const textRefusal = (coord: CoordStore, texts: ReadonlyArray<readonly [project: string | null, text: string | undefined, teamKey?: string]>): Refused | null => {
+    for (const [project, text, issueTeam] of texts) {
       if (text === undefined || text === '') continue;
-      const l = coord.linkingOf(project);
+      // no project to read a linking mode from (round 5 A5): the mode is `unknown`, which design §6.1 treats as public; the
+      // issue's own team key stands for the project's
+      const l = textFactOfTeam(project === null ? null : coord.linkingOf(project), issueTeam ?? null);
       const v = publicTextVerdict(text, l.teamKey, l.mode, opts.privateTrackerKeys);
       if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
     }
@@ -181,29 +328,115 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   const refuseToken = (reply: FastifyReply, verdict: ReturnType<typeof checkMailToken>): FastifyReply | undefined =>
     verdict === 'ok' ? undefined : refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
 
+  /** The identity pair from the QUERY, the stores' availability and the registry's attribution: the caller, or the reply that
+   *  refused (every box-token door's first three checks, in this order). */
+  const callerOf = async (req: FastifyRequest, reply: FastifyReply):
+  Promise<{ ok: true; id: string; coord: CoordStore; plan: PlanStorePort } | { ok: false; reply: FastifyReply }> => {
+    const q = (typeof req.query === 'object' && req.query !== null ? req.query : {}) as Record<string, unknown>;
+    const id = q['byId'];
+    if (typeof id !== 'string' || !IDENTITY_RE.test(id)) return { ok: false, reply: refuseRoute(reply, 'bad-request', { detail: 'byId' }) };
+    const uuid = q['byUuid'];
+    if (typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) return { ok: false, reply: refuseRoute(reply, 'bad-request', { detail: 'byUuid' }) };
+    const { coord, plan } = opts;
+    if (coord === undefined || plan === undefined) return { ok: false, reply: refuseRoute(reply, 'unavailable') };
+    const attributed = await opts.attribute(id, uuid);
+    if (!attributed.ok) return { ok: false, reply: refuseRoute(reply, attributed.error, { detail: attributed.detail }) };
+    return { ok: true, id, coord, plan };
+  };
+
+  /** The by-id re-read of each row a door may act on (`inboundRetirable` rows only), keyed by the row's issue id. A reader that is absent
+   *  or throws answers `unmeasured`: the door then refuses a decision that binds the issue (`inboundDoorVerdict`), so no row is bound
+   *  unseen; a close, a raise or a return goes on, and the lane's close re-reads before it writes in Linear. */
+  const recheckRows = async (rows: readonly InboundRow[]): Promise<Map<string, InboundRecheck>> => {
+    const out = new Map<string, InboundRecheck>();
+    for (const row of rows) {
+      if (!inboundRetirable(row)) continue;
+      let answer: InboundRecheck = { kind: 'unmeasured', word: null };
+      try { if (opts.inboundRecheck !== undefined) answer = await opts.inboundRecheck(row); } catch { /* unmeasured */ }
+      out.set(row.linearId, answer);
+    }
+    return out;
+  };
+  /** What a door does with a row after its issue was re-read (`inboundDoorVerdict`): null to go on; else the refusal, the row retired
+   *  first when its issue left the managed teams, was completed or canceled. A retire writes only the state and its cause. */
+  const recheckRefusal = (plan: PlanStorePort, row: InboundRow, rechecks: ReadonlyMap<string, InboundRecheck>, binds: boolean): Refused | null => {
+    if (!inboundRetirable(row)) return null;
+    const v = inboundDoorVerdict(rechecks.get(row.linearId), binds);
+    if (v.kind === 'go') return null;
+    if (v.kind === 'refuse') return { refuse: v.word, detail: 'Linear could not be read to confirm the issue is still inbound' };
+    plan.retireInbound(row.linearId, v.why);
+    return { refuse: v.word, detail: `${row.identifier} is no longer inbound` };
+  };
+  /** `plan take`'s row: the rows handed to THIS programme under the identifier (round 4 A2: the issue's workspace is its own, never
+   *  the programme's), told apart by the programme home's workspace (`handedRowOf`, review 2457 F2). One reading for the candidates
+   *  and the work. */
+  const takeRowOf = (coord: CoordStore, plan: PlanStorePort, slug: string, issue: string, ws: ReadonlyMap<string, string | null>):
+  { row: InboundRow | null; undecided: boolean; homeWorkspace: string | null } => {
+    const home = coord.programHome(slug);
+    const homeWorkspace = home === null ? null : ws.get(home) ?? null;
+    const rows = plan.handedInboundByIdentifier(slug, issue);
+    const row = handedRowOf(rows, homeWorkspace);
+    // rows are handed but the home does not decide: nothing is chosen, and the Upkeep lookup is not reached (review 2524 A1)
+    return { row, undecided: rows.length > 0 && row === null, homeWorkspace };
+  };
+  /** `plan triage` (D-8808): reads and acts only. The lookup (which workspaces to read) and the choice (which row, whose owner)
+   *  are the policy's: `planPolicy.ts#triageLookup`, `planPolicy.ts#triageChoice`. */
+  const triageOf = (plan: PlanStorePort, team: string, issue: string, caller: string, ws: ReadonlyMap<string, string | null>, routes: TeamRoutes | null):
+  { row: InboundRow | null; owner: ReturnType<typeof linearOwnerOfTeam> } => {
+    const rows = plan.hierarchyProjectsOf();
+    const found = triageLookup(team, rows, ws, routes).map((w) => plan.inboundByIdentifier(w, issue)).filter((r): r is InboundRow => r !== null);
+    return triageChoice(team, caller, found, rows, ownerFacts(plan), routes);
+  };
+
   /** A plan write's handler, after the route's own `onRequest` has checked the box token: the slug, the identity pair from the
    *  query, attribution, then the work inside `serial`. Each route is registered with its path spelled out (the gate's and the
    *  census's scans read registrations as literals) and hands its work to this. */
-  const door = (work: Work) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+  const door = (lane: OtherLane, work: Work) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const slug = slugOf(req);
     if (slug === null) return refuseRoute(reply, 'bad-request', { detail: 'slug' });
-    const q = (typeof req.query === 'object' && req.query !== null ? req.query : {}) as Record<string, unknown>;
-    const id = q['byId'];
-    if (typeof id !== 'string' || !IDENTITY_RE.test(id)) return refuseRoute(reply, 'bad-request', { detail: 'byId' });
-    const uuid = q['byUuid'];
-    if (typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) return refuseRoute(reply, 'bad-request', { detail: 'byUuid' });
-    const { coord, plan } = opts;
-    if (coord === undefined || plan === undefined) return refuseRoute(reply, 'unavailable');
-    const attributed = await opts.attribute(id, uuid);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const who = await callerOf(req, reply);
+    if (!who.ok) return who.reply;
+    const { coord, plan, id } = who;
+    // Overlord W1 other lanes (H10): before the reserved programme, the Linear store read and `serial`, so a refused
+    // plan write reads no plan, takes no mutex and writes nothing.
+    if (!(await refuseOtherLane(reply, lane, id, opts.otherLaneReads))) return reply;
     if (slug === LINEAR_SYNC_PROGRAMME) return refuseRun(reply, 'reserved-programme');
     // The Linear store is read here, outside the mutex; the work below reads each project's workspace from it.
-    const ws = await workspaces(projectsIn(req.body, plan.planOf(slug), coord.programHome(slug)));
+    const { ws, routes } = await workspaces(projectsIn(req.body, plan.planOf(slug), coord.programHome(slug)));
+    // The re-read of a stored inbound row's issue is made here, outside the mutex: it waits on the rate service (review 2457 F4).
+    const rechecks = work.candidates === undefined ? new Map<string, InboundRecheck>() : await recheckRows(work.candidates({ coord, plan, slug, caller: id, body: req.body, ws, routes }));
     try {
       return await opts.serial(async () => {
         const stored = plan.planOf(slug);
-        const out = await work({ coord, plan, slug, caller: id, body: req.body, stored, owner: plan.planOwnerOf(slug), ws });
+        const out = await work({ coord, plan, slug, caller: id, body: req.body, stored, owner: plan.planOwnerOf(slug), ws, routes, rechecks });
         return 'refuse' in out ? refuse(reply, out.refuse, out.detail) : out;
+      });
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  /** `plan triage`'s handler: the team key from the path, the identity pair, attribution, then the work inside `serial`. The
+   *  Linear store is read first for the workspaces of the owner's project and of the programme a hand names. */
+  const teamDoor = (lane: OtherLane, work: TeamWork) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+    const raw = (req.params as { team?: unknown }).team;
+    if (!isLinearTeamKey(raw)) return refuseRoute(reply, 'bad-request', { detail: 'team' });
+    const team = raw.toUpperCase();
+    const who = await callerOf(req, reply);
+    if (!who.ok) return who.reply;
+    const { coord, plan, id } = who;
+    // Overlord W1 other lanes (H10), as `door` does: before the Linear store read and `serial`.
+    if (!(await refuseOtherLane(reply, lane, id, opts.otherLaneReads))) return reply;
+    const named = typeof req.body === 'object' && req.body !== null && isPlanKey((req.body as Record<string, unknown>)['programme']) ? (req.body as Record<string, string>)['programme']! : null;
+    const projects = new Set<string>(named === null ? [] : plan.planOf(named).epics.map((e) => e.project));
+    // every holder of the key (D-8808, final review I1): a key two workspaces share is triaged in the workspace of the issue's row
+    for (const holder of teamHolders(team, plan.hierarchyProjectsOf())) projects.add(holder.project);
+    const { ws, routes } = await workspaces(projects);
+    const rechecks = work.candidates === undefined ? new Map<string, InboundRecheck>() : await recheckRows(work.candidates({ coord, plan, team, caller: id, body: req.body, ws, routes }));
+    try {
+      return await opts.serial(async () => {
+        const out = await work({ coord, plan, team, caller: id, body: req.body, ws, routes, rechecks });
+        return 'reserved' in out ? refuseRun(reply, 'reserved-programme') : 'refuse' in out ? refuse(reply, out.refuse, out.detail) : out;
       });
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
@@ -213,6 +446,25 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** The verdict of a programme verb (the owner's alone) or a follow-up (a worker's, into its own run's epic). */
   const ownerVerdict = (caller: string, owner: string | null) =>
     planCallerVerdict(caller, owner, 'programme', opts.runOfSession(caller));
+
+  /** The rows `plan triage` may re-read before the mutex: only the team's Linear owner causes a read, any other caller is refused by
+   *  the work with no Linear call. */
+  const triageCandidates: TriageCandidates = ({ plan, team, caller, body, ws, routes }) => {
+    // only the team's Linear owner may cause a read: any other caller is refused by the work with no Linear call
+    const parsed = parsePlanTriage(body);
+    if (!parsed.ok) return [];
+    const { row, owner } = triageOf(plan, team, parsed.triage.issue, caller, ws, routes);
+    return row === null || owner.kind !== 'owner' || owner.id !== caller ? [] : [row];
+  };
+  /** The rows `plan take` may re-read before the mutex: only the programme's coordinator causes a read. */
+  const takeCandidates: TakeCandidates = ({ coord, plan, slug, caller, body, ws, routes }) => {
+    // only the programme's coordinator may cause a read: any other caller is refused by the work with no Linear call
+    const parsed = parsePlanTake(body);
+    if (!parsed.ok || !ownerVerdict(caller, plan.planOwnerOf(slug)).ok) return [];
+    const { row } = takeRowOf(coord, plan, slug, parsed.take.issue, ws);
+    if (row === null || (!('epic' in parsed.take) && teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf(), row.workspaceId, routes).kind === 'unmeasured')) return [];
+    return [row];
+  };
 
   const epicOf = (stored: StoredPlan, key: string) => stored.epics.find((e) => e.key === key && e.state !== 'dropped');
   const ticketOf = (stored: StoredPlan, key: string) => {
@@ -228,7 +480,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planDeclare', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const exists = coord.programs().some((p) => p.slug === slug);
     const storedHome = exists ? coord.programHome(slug) : null;
     const parsed = parsePlanPut(body, { doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, home: { stored: exists ? storedHome : null } });
@@ -239,6 +491,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const home = storedHome ?? parsed.put.home;
     if (home === undefined) return { refuse: 'plan-bad-body', detail: 'the programme has no home project' };
     const texts: [string, string | undefined][] = [[home, parsed.put.title]];
+    for (const ph of parsed.put.phases ?? []) texts.push([home, ph.title], [home, ph.summary], [home, ph.droppedWhy]);
     for (const e of parsed.put.epics) {
       const ep = e.project ?? home;
       texts.push([ep, e.title], [ep, e.summary], [ep, e.droppedWhy]);
@@ -255,8 +508,10 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const put = maskPut(parsed.put);
     const d = diffPlan(stored, put, { home, doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, workspaceOfProject: (p) => ws.get(p) ?? null });
     if (!d.ok) return { refuse: d.word, detail: d.detail };
+    const ph = diffPhases(stored, plan.phasesOf(slug), put);
+    if (!ph.ok) return { refuse: ph.word, detail: ph.detail };
     const newRow = exists ? null : { home, title: put.title ?? programmeNameFromSlug(slug) };
-    plan.applyPlanChanges(slug, d.changes, caller, opts.now(), newRow);
+    plan.applyPlanChanges(slug, ph.changes === undefined ? d.changes : { ...d.changes, phases: ph.changes }, caller, opts.now(), newRow);
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
@@ -264,7 +519,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/met', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/met')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planMet', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanMet(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -286,7 +541,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/tickets', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planTickets', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const parsed = parsePlanTicketAdd(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const { epic: epicKey, ticket } = parsed.add;
@@ -308,6 +563,11 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       program: slug, epicKey, checkpointKey: ticket.checkpoint ?? null, key: ticket.key, kind: ticket.kind, title: mask(ticket.title),
       body: mask(ticket.body ?? ''), project, source: caller === owner || owner === null ? 'plan' : 'worker',
     }, opts.now());
+    // Wave 6 review 3 F4, carried to wave 7 (D-8186): a worker's follow-up is told to the programme's coordinator, once.
+    const told = followUpTicketMail({ slug, key: ticket.key, title: mask(ticket.title), epic: epicKey, caller, owner });
+    if (told !== null) {
+      plan.inTransaction(() => insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: told.to, runId: null, kind: 'status', subject: told.subject, body: told.body }));
+    }
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
@@ -315,7 +575,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/tickets/move', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets/move')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planTicketsMove', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const parsed = parsePlanTicketMove(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -354,11 +614,52 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
+  // `plan ticket-done` (programme work map WM1, D-8727; spec §4.1 D11): a ticket finished another way is recorded done with
+  // evidence that verifies. The route gathers the facts (the run and its own ticket, the landing line of the ticket's own
+  // project, the evidence the programme's tickets already hold); `ticketDoneVerdict` decides; `markTicketDone` writes.
+  app.post('/api/programmes/:slug/plan/tickets/done', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets/done')),
+  }, door('planTicketsDone', async ({ coord, plan, slug, caller, body, stored, owner }) => {
+    const parsed = parsePlanTicketDone(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const verdict = ownerVerdict(caller, owner);
+    if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator records a ticket done' };
+    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    const { ticket: key, evidence } = parsed.done;
+    const found = ticketOf(stored, key);
+    if (found === undefined) return { refuse: 'unknown-ticket', detail: `no ticket ${key}` };
+    const t = found.ticket;
+    let run: TicketDoneFacts['run'] = null;
+    if ('runId' in evidence) {
+      const read = coord.run(evidence.runId);
+      if (!read.ok) return { refuse: 'evidence-unverified', detail: `run ${evidence.runId} could not be read (${read.kind})` };
+      const own = read.run === null ? null : plan.ticketOfRun(evidence.runId);
+      run = read.run === null || own === null ? null
+        : { program: read.run.program, kind: read.run.kind, state: read.run.state, ticketId: own.ticketId, ticketKey: own.key };
+    }
+    let landed: TicketDoneFacts['landed'] = null;
+    if ('pr' in evidence) {
+      const read = coord.readLanding(t.project);
+      landed = read.ok ? landedFactOf(read.facts.entries, evidence.pr) : { kind: 'unreadable', detail: read.error };
+    }
+    // Every stored evidence goes to the verdict as the reader gave it, `malformed` included: the verdict decides (review 2712 F3).
+    const storedEvidence = plan.doneFactsOf(slug).flatMap((d) =>
+      d.evidence === null ? [] : [{ ticketId: d.ticketId, key: d.key, project: d.project, evidence: d.evidence }]);
+    const v = ticketDoneVerdict({
+      program: slug, ticket: { id: t.id, key: t.key, project: t.project, state: t.state, runId: t.runId }, evidence, run, landed,
+      stored: storedEvidence, links: evidenceLinksOf(coord, plan, evidence, t.project, storedEvidence),
+    });
+    if (!v.ok) return { refuse: v.word, detail: v.detail };
+    plan.markTicketDone(t.id, evidence, opts.now());
+    return { ok: true, plan: viewOf(plan, coord, slug) };
+  }));
+
   // `plan epic-drop`
   app.post('/api/programmes/:slug/plan/epics/drop', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/epics/drop')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planEpicsDrop', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanEpicDrop(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -377,11 +678,27 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
+  // `plan phase-ref` (programme work map WM0, D17): add or remove one reference of a phase, or carry a ticket to a later one.
+  app.post('/api/programmes/:slug/plan/phases/refs', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/phases/refs')),
+  }, door('planPhaseRefs', async ({ coord, plan, slug, caller, body, stored, owner }) => {
+    const parsed = parsePlanPhaseRef(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const verdict = ownerVerdict(caller, owner);
+    if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator changes its phases' };
+    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    const v = phaseRefVerdict(parsed.move, stored, plan.phasesOf(slug));
+    if (!v.ok) return { refuse: v.word, detail: v.detail };
+    if (v.write.kind !== 'none') plan.writePhaseRef(v.write, opts.now());
+    return { ok: true, plan: viewOf(plan, coord, slug) };
+  }));
+
   // `plan close`
   app.post('/api/programmes/:slug/plan/close', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/close')),
-  }, door(async ({ coord, plan, slug, caller, body, owner }) => {
+  }, door('planClose', async ({ coord, plan, slug, caller, body, owner }) => {
     const parsed = parsePlanClose(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -400,6 +717,238 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
+  // ── The inbound path (D-8183, design §7.5) ──
+
+  /** The row's text as it is judged and stored on a ticket: shape-redacted for Linear, as every plan text is. */
+  const rowTextUnfit = (coord: CoordStore, project: string, row: InboundRow): Refused | null =>
+    textRefusal(coord, [[project, row.title], [project, row.body ?? '']]);
+  /** An issue in another workspace than the destination project's cannot be bound there (the sync would fail it). */
+  const wsClash = (ws: ReadonlyMap<string, string | null>, project: string, workspaceId: string): boolean => {
+    const w = ws.get(project) ?? null;
+    return w !== null && w !== workspaceId;
+  };
+  const ownerFacts = (plan: PlanStorePort) => ({
+    latestProgrammeCoordinator: (p: string) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf ?? ((): CoordinatorPresence => 'unmeasured'),
+  });
+
+  /** Guard the existing workspace of a Linear binding before it follows a ticket into an epic. */
+  const destinationRefusal = (coord: CoordStore, project: string, epic: string, issue: string, workspaceId: string, routes: TeamRoutes | null): Refused | null => {
+    const link = coord.linkingOf(project);
+    if (link.teamKey === null) return null;
+    const route = measuredProjectTeam(routes, { teamKey: link.teamKey, workspaceId: link.teamWorkspace ?? null });
+    if (route.kind === 'unmeasured') return { refuse: 'unreachable', detail: `the workspace of epic ${epic} could not be measured` };
+    if (route.kind === 'slot' && route.slot.workspaceId !== workspaceId) return {
+      refuse: 'ticket-workspace-mismatch', detail: `issue ${issue} is in another workspace than epic ${epic}`,
+    };
+    return null;
+  };
+
+  /** THE ONE TAKE of an inbound issue into an epic (`plan take` of a handed issue, and a `hand` to the owner's own programme,
+   *  D-8706): the epic and checkpoint must be live, the reporter's text is judged by the epic's project, the issue's workspace
+   *  must be the epic's, and then the ticket, its adopted binding and the row's `taken` are one transaction. */
+  const takeInto = (c: { coord: CoordStore; plan: PlanStorePort; slug: string; row: InboundRow; epic: string; checkpoint?: string; routes: TeamRoutes | null }):
+  Refused | { ok: true; state: 'taken' } => {
+    const stored = c.plan.planOf(c.slug);
+    const epic = epicOf(stored, c.epic);
+    if (epic === undefined) return { refuse: 'unknown-epic', detail: `no epic ${c.epic}` };
+    const cp = c.checkpoint === undefined ? null : epic.checkpoints.find((x) => x.key === c.checkpoint && x.state !== 'dropped') ?? null;
+    if (c.checkpoint !== undefined && cp === null) return { refuse: 'unknown-checkpoint', detail: `no checkpoint ${c.checkpoint} in epic ${c.epic}` };
+    const unfit = rowTextUnfit(c.coord, epic.project, c.row);
+    if (unfit !== null) return unfit;
+    const destination = destinationRefusal(c.coord, epic.project, c.epic, c.row.identifier, c.row.workspaceId, c.routes);
+    if (destination !== null) return destination;
+    const done = c.plan.takeInboundIntoEpic({ linearId: c.row.linearId, program: c.slug, epicId: epic.id, checkpointId: cp?.id ?? null, project: epic.project, now: opts.now(), mask });
+    return done.ok ? { ok: true, state: 'taken' } : { refuse: done.refused, detail: `issue ${c.row.identifier} is no longer inbound` };
+  };
+
+  // `plan triage`: the team's Linear owner decides an inbound issue.
+  app.post('/api/teams/:team/plan/triage', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/teams/:team/plan/triage')),
+  }, teamDoor('planTriage', teamWorkWith(triageCandidates, async ({ coord, plan, team, caller, body, ws, routes, rechecks }) => {
+    const parsed = parsePlanTriage(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const t = parsed.triage;
+    // the row first, then its owner in the row's own workspace (`triageOf`, D-8808 final review I1)
+    const { row, owner } = triageOf(plan, team, t.issue, caller, ws, routes);
+    const verdict = triageVerdict(caller, owner.kind === 'owner' ? owner : { id: null }, row, owner.kind === 'unmeasured' ? owner.possibleIds : []);
+    if (!verdict.ok) {
+      const detail = verdict.word === 'unreachable' ? 'the Linear workspaces could not be read'
+        : verdict.word === 'not-linear-owner' ? `only the Linear owner of team ${team} triages its issues` : `${t.issue} is not waiting for triage in team ${team}`;
+      return { refuse: verdict.word, detail };
+    }
+    if (row === null || owner.kind !== 'owner') return { refuse: 'issue-not-inbound', detail: `${t.issue} is not waiting for triage in team ${team}` };
+    // the issue was re-read by id before the mutex (review 2457 F4): one that left the managed teams is retired, never decided
+    const left = recheckRefusal(plan, row, rechecks, t.decision === 'upkeep' || t.decision === 'hand');
+    if (left !== null) return left;
+    const now = opts.now();
+    switch (t.decision) {
+      case 'hand': {
+        const slug = t.programme!;
+        if (slug === LINEAR_SYNC_PROGRAMME) return { reserved: true };
+        if (!coord.programs().some((p) => p.slug === slug)) return { refuse: 'plan-bad-body', detail: `no programme ${slug}` };
+        if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+        const coordinator = plan.planOwnerOf(slug);
+        if (coordinator === null) return { refuse: 'plan-bad-body', detail: `the programme ${slug} has no coordinator` };
+        if (coordinator === caller) {
+          // D-8706: a hand to the owner's own programme takes the issue at once, so the epic is required.
+          if (t.epic === undefined) return { refuse: 'plan-bad-body', detail: 'a hand to your own programme is taken at once: name the epic' };
+          return takeInto({ coord, plan, slug, row, epic: t.epic, ...(t.checkpoint === undefined ? {} : { checkpoint: t.checkpoint }), routes });
+        }
+        const m = handedMail(row, slug, t.note === undefined ? undefined : mask(t.note));
+        plan.inTransaction(() => {
+          insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: coordinator, runId: null, kind: 'question', subject: m.subject, body: m.body });
+          plan.setInboundState(row.linearId, { state: 'handed', handedTo: slug });
+        });
+        return { ok: true, state: 'handed' };
+      }
+      case 'upkeep': {
+        const unfit = rowTextUnfit(coord, owner.project, row);
+        if (unfit !== null) return unfit;
+        if (wsClash(ws, owner.project, row.workspaceId)) return { refuse: 'ticket-workspace-mismatch', detail: `issue ${row.identifier} is in another workspace than project ${owner.project}` };
+        const done = plan.placeInboundInUpkeep({ linearId: row.linearId, project: owner.project, now, mask });
+        return done.ok ? { ok: true, state: 'placed' } : { refuse: done.refused, detail: `${t.issue} is no longer inbound` };
+      }
+      case 'close': {
+        const reason = t.reason!;
+        const unfit = textRefusal(coord, [[owner.project, reason]]);
+        if (unfit !== null) return unfit;
+        plan.setInboundState(row.linearId, { state: 'closed', reason: mask(reason) });
+        return { ok: true, state: 'closed' };
+      }
+      case 'raise': {
+        coord.raiseItemWithMail(raisedItemInput(row, t.note === undefined ? undefined : mask(t.note)), now, 'ccrc',
+          (itemId) => plan.setInboundState(row.linearId, { state: 'raised', itemId }));
+        return { ok: true, state: 'raised' };
+      }
+    }
+  })));
+
+  // `plan map-propose` (D-8186, Task 7.2): the team's Linear owner sends the migration map. Only that owner causes a Linear read;
+  // the team's open issues are read before the mutex (lane `migration`), and `checkMap` and the store's write run inside it,
+  // where the owner is judged again (`LinearMigration#storeProposal`).
+  app.post('/api/teams/:team/plan/map', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/teams/:team/plan/map')),
+  }, async (req, reply) => {
+    const raw = (req.params as { team?: unknown }).team;
+    if (!isLinearTeamKey(raw)) return refuseRoute(reply, 'bad-request', { detail: 'team' });
+    const team = raw.toUpperCase();
+    const who = await callerOf(req, reply);
+    if (!who.ok) return who.reply;
+    if (!(await refuseOtherLane(reply, 'planMap', who.id, opts.otherLaneReads))) return reply;
+    const migration = opts.migration;
+    if (migration === undefined) return refuseRoute(reply, 'unavailable');
+    // D-8808: a key two workspaces hold has one owner and one waiting migration each; the caller is judged in the workspaces that wait.
+    const snapshot = await readTeamSnapshot();
+    const { routes } = snapshot;
+    const rows = who.plan.hierarchyProjectsOf();
+    const holders = [...new Set(teamHolders(team, rows).map((r) => r.workspaceId ?? null))];
+    const facts = ownerFacts(who.plan);
+    const verdict = mapProposerVerdict(who.id, migration.waitingWorkspaces(team), holders,
+      (ws) => ws === null ? teamOwnerDiagnostic(team, rows, facts) : linearOwnerOfTeam(team, rows, facts, ws, routes));
+    if (!verdict.ok) {
+      if (verdict.word === 'unreachable') return refuse(reply, 'unreachable', 'the Linear owner could not be measured');
+      if (verdict.word === 'team-ambiguous') return refuseRoute(reply, 'team-ambiguous', { detail: `team ${team} has a migration waiting for a map in more than one workspace you own, so ccrc cannot tell which this map is for (only one team migrates at a time, so the migrations need the operator's look)` });
+      return refuse(reply, verdict.word, verdict.word === 'plan-bad-body' ? `no migration of team ${team} is waiting for a map` : `only the Linear owner of team ${team} proposes its map`);
+    }
+    const open = await migration.readOpen(team, verdict.workspaceId, snapshot);
+    if (!open.ok) return refuseRoute(reply, open.word as RouteRefusal, { detail: open.detail });
+    try {
+      return await opts.serial(async () => {
+        const out = migration.storeProposal(team, who.id, req.body, open);
+        return out.ok ? out : refuse(reply, out.word as PlanRefusal, out.detail);
+      });
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // `plan take`: a programme's coordinator takes a handed issue or an Upkeep ticket into an epic of its plan, closes it, or returns it.
+  app.post('/api/programmes/:slug/plan/take', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/take')),
+  }, door('planTake', workWith(takeCandidates, async ({ coord, plan, slug, caller, body, stored, owner, ws, routes, rechecks }) => {
+    const parsed = parsePlanTake(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const verdict = ownerVerdict(caller, owner);
+    if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator takes an issue' };
+    const t = parsed.take;
+    const now = opts.now();
+    // the row handed to THIS programme (round 4 A2, review 2457 F2): `takeRowOf`, none chosen when the home does not decide
+    const { row: handed, undecided, homeWorkspace } = takeRowOf(coord, plan, slug, t.issue, ws);
+    if (undecided) return { refuse: 'issue-not-inbound', detail: `${t.issue} was handed to ${slug} in more than one workspace and the programme's home does not say which` };
+    const teamOwner = handed === null || 'epic' in t ? null
+      : linearOwnerOfTeam(handed.teamKey, plan.hierarchyProjectsOf(), ownerFacts(plan), handed.workspaceId, routes);
+    if (teamOwner?.kind === 'unmeasured') return { refuse: 'unreachable', detail: 'the Linear owner could not be measured' };
+    if (handed !== null) {
+      // the issue was re-read by id before the mutex (review 2457 F4): one that left the managed teams is retired, never taken
+      const left = recheckRefusal(plan, handed, rechecks, 'epic' in t);
+      if (left !== null) return left;
+    }
+    // no handed row, a take into an epic or a close: the Upkeep ticket is looked up in the measured home workspace only (review 2571 F10)
+    let lookupIn: string | null = homeWorkspace;   // a return keeps its current path
+    if (handed === null && ('epic' in t || 'close' in t)) {
+      const home = coord.programHome(slug);
+      const where = upkeepLookupOf({ home, homeTeamKey: home === null ? null : coord.linkingOf(home).teamKey, homeWorkspace });
+      if (where.kind === 'refuse') return { refuse: where.word, detail: where.detail };
+      lookupIn = where.workspace;
+    }
+    const parked = handed === null ? plan.upkeepTicketByIdentifier(lookupIn, t.issue) : null;
+    const upkeep = parked !== null && parked.state === 'open' ? parked : null;
+    if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
+    const ok = (): { ok: true; plan: PlanView } => ({ ok: true, plan: viewOf(plan, coord, slug) });
+    if ('epic' in t) {
+      if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+      if (handed !== null) {
+        const out = takeInto({ coord, plan, slug, row: handed, epic: t.epic, ...(t.checkpoint === undefined ? {} : { checkpoint: t.checkpoint }), routes });
+        return 'refuse' in out ? out : ok();
+      }
+      const epic = epicOf(stored, t.epic);
+      if (epic === undefined) return { refuse: 'unknown-epic', detail: `no epic ${t.epic}` };
+      const cp = t.checkpoint === undefined ? null : epic.checkpoints.find((x) => x.key === t.checkpoint && x.state !== 'dropped') ?? null;
+      if (t.checkpoint !== undefined && cp === null) return { refuse: 'unknown-checkpoint', detail: `no checkpoint ${t.checkpoint} in epic ${t.epic}` };
+      const unfit = textRefusal(coord, [[epic.project, upkeep!.title], [epic.project, upkeep!.body]]);
+      if (unfit !== null) return unfit;
+      const bound = plan.bindingsOf(`${UPKEEP_DUE_PREFIX}${upkeep!.project}`).find((b) => b.localKind === 'ticket' && b.localId === upkeep!.id);
+      if (bound !== undefined) {
+        const destination = destinationRefusal(coord, epic.project, t.epic, t.issue, bound.workspaceId, routes);
+        if (destination !== null) return destination;
+      }
+      plan.takeUpkeepTicket({ ticketId: upkeep!.id, program: slug, epicId: epic.id, checkpointId: cp?.id ?? null, now });
+      return ok();
+    }
+    if ('close' in t) {
+      // a handed issue's project is its team's owning project in the issue's own workspace (D-8808, final review I1)
+      const project = upkeep?.project ?? (teamOwner?.kind === 'owner' ? teamOwner.project : null);
+      // a handed row's team that no project claims is judged as unknown, public (round 5 A5, review 2834 F1): never the programme home's mode
+      const unfit = textRefusal(coord, [[project, t.close.why, handed?.teamKey]]);
+      if (unfit !== null) return unfit;
+      if (handed !== null) plan.setInboundState(handed.linearId, { state: 'closed', reason: mask(t.close.why) });
+      else plan.updateTicket(upkeep!.id, { state: 'dropped', droppedWhy: mask(t.close.why) }, now);
+      return ok();
+    }
+    // return: a handed issue goes back to the team's Linear owner; an Upkeep ticket has no one to return to.
+    if (handed === null) return { refuse: 'plan-bad-body', detail: 'an Upkeep ticket is not handed to anyone: take it or close it' };
+    const owner2 = teamOwner;
+    if (owner2?.kind !== 'owner' || owner2.id === null || owner2.gone) {
+      // the return is kept (review 2443 A3, D-8734): the lane mails it, with its note, to the owner once there is a live one
+      const note = mask(t.return.note);
+      plan.inTransaction(() => {
+        plan.setInboundState(handed.linearId, { state: 'waiting', handedTo: null, mailedTo: null, mailedAt: null });
+        plan.setInboundNote(handed.linearId, { kind: 'returned', program: slug, note, at: now });
+      });
+    } else {
+      const toId = owner2.id;
+      const m = returnedMail(handed, slug, mask(t.return.note));
+      plan.inTransaction(() => {
+        insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId, runId: null, kind: 'question', subject: m.subject, body: m.body });
+        plan.setInboundState(handed.linearId, { state: 'mailed', handedTo: null, mailedTo: toId, mailedAt: now });
+      });
+    }
+    return ok();
+  })));
+
   // `plan show`: EXEMPT-BUT-AUTHENTICATED (the goals read's stance): a live session OR the box token, before anything is read.
   app.get('/api/programmes/:slug/plan', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -416,7 +965,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (slug === null) return refuseRoute(reply, 'bad-request', { detail: 'slug' });
     const { coord, plan } = opts;
     if (coord === undefined || plan === undefined) return refuseRoute(reply, 'unavailable');
-    return reply.code(200).send({ ok: true, plan: viewOf(plan, coord, slug) });
+    const view = viewOf(plan, coord, slug);
+    return reply.code(200).send({ ok: true, plan: view, work: workOf(plan, coord, slug, view) });
   });
 
 }

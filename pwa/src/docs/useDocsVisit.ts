@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, parseDocsPage,
-  type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
+  type DocListPin, type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
@@ -32,7 +32,10 @@ export type TreeSlot =
  *  - `none`: no file request is due here: the tree slot is not `ok`, the page is not a leaf of this tree, `pinFor`
  *    answered null, or the leaf is a raster (`DocImage` loads its bytes through `loaders.raster`) or of class `other`
  *    within its cap (spec 4.4: "No preview" and Download, which reads the bytes itself when tapped).
- *  - `too-large`: the listed size is over `DOCS_CLASS_CAP` for the path's class; nothing was requested (spec 4.4).
+ *  - `too-large`: the listed size is over `DOCS_CLASS_CAP` for the path's class; nothing was requested (spec 4.4). The
+ *    leaf reads it by range up to `DOCS_RANGE_MAX_BYTES` (X2 P1, spec 4.3).
+ *  - `stat-pinned`: a draft the listing could not fingerprint (X2 P1, spec 4.3): the file route cannot read it, so
+ *    nothing was requested; the leaf reads it by range, whatever its size.
  *  - `changing`: a read answered a word that means the listing moved (`DOCS_RELIST_WORDS`) after the one automatic
  *    re-list was spent; the page offers Retry.
  *  - `ok`: `pin` is the OPENED pin. After a re-list it can be older than `pinFor`'s answer only while the new pin's
@@ -42,7 +45,8 @@ export type FileSlot =
   | { s: 'loading'; pin: DocPin }
   | { s: 'ok'; pin: DocPin; answer: DocsFileResponse; receivedAt: number }
   | { s: 'failed'; pin: DocPin; body: DocsFailureBody }
-  | { s: 'too-large'; pin: DocPin; size: number; cap: number }
+  | { s: 'too-large'; pin: DocListPin; size: number; cap: number }
+  | { s: 'stat-pinned'; pin: DocListPin; size: number }
   | { s: 'changing'; pin: DocPin; word: DocsFailure }
   | (DocsClientSlot & { pin: DocPin });
 
@@ -81,9 +85,14 @@ function findEntry(tree: DocsTreeOk, section: DocPin['section'], path: string): 
 
 /** A file body's key (spec 4.3 item 2). A committed body is keyed by its blob (and its place, since the class comes
  *  from the path), so a file unchanged across a moving branch is not downloaded again; a committed pin whose entry
- *  is not committed in `tree` falls back to the exact commit. A draft is keyed by every field of its pin. */
-export function fileKey(pin: DocPin, tree: DocsTreeOk): string {
-  if (pin.kind === 'draft') return ['draft', pin.branch, pin.head, pin.section, pin.path, pin.fp].join(NUL);
+ *  is not committed in `tree` falls back to the exact commit. A draft is keyed by every field of its pin, and the
+ *  body of a version page (`version`) by its pin's commit, which the listing's moving cannot change. */
+export function fileKey(pin: DocPin, tree: DocsTreeOk, version: boolean): string {
+  if (pin.kind === 'draft') {
+    return ['draft', pin.branch, pin.head, pin.section, pin.path, pin.fp].join(NUL);
+  }
+  // A version page's body is keyed by its pin's commit: the listing's blob is the tip's, and the listing can move under it.
+  if (version) return ['commit', pin.commit, pin.section, pin.path].join(NUL);
   const blob = findEntry(tree, pin.section, pin.path)?.committed?.blob;
   return blob === undefined
     ? ['commit', pin.commit, pin.section, pin.path].join(NUL)
@@ -93,11 +102,19 @@ export function fileKey(pin: DocPin, tree: DocsTreeOk): string {
 /** The pin the tree implies for the page's leaf (spec 4.3 item 5; pure). Null has one meaning: the page opens no
  *  file in this tree (not a leaf page, no such entry, or `entryView` opens nothing for it). The default view
  *  (`page.ref === null`) never opens a draft; `view=committed` opens the committed side of a draft row, or nothing
- *  when there is none. */
-export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocPin | null {
+ *  when there is none. A version page (`at`) opens the committed bytes at `at`, or nothing. */
+export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocListPin | null {
   if (page.kind !== 'path' || page.dirSlash) return null;
   const entry = findEntry(tree, page.section, page.path);
   if (entry === undefined) return null;
+  // The version view (rich-docs spec G6; refinement (p)): the committed bytes at `at`, for a doc the served listing holds
+  // as a committed file. Never a draft: a version is a commit.
+  if (page.at !== null) {
+    const kind = entry.committed?.kind;
+    return kind === 'file' || kind === 'exec'
+      ? { kind: 'committed', commit: page.at, servedRef: tree.ref.served, section: page.section, path: page.path }
+      : null;
+  }
   const view = entryView(entry, tree.drafts, page.ref === null ? 'default' : 'ref');
   if (view.opens === 'none') return null;
   const committed: DocPin = {
@@ -107,12 +124,20 @@ export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocPin | null 
   if (page.view === 'committed') return view.offersCommitted ? committed : null;
   const drafts = tree.drafts;
   const fp = entry.draft?.fp;
-  // entryView opens a draft only for an admitted holder's regular file with a fingerprint.
-  if (drafts.state !== 'holder' || fp === undefined || fp === null) {
-    throw new Error('pinFor: a draft opened with no holder or fingerprint');
+  // entryView opens a draft only for an admitted holder's regular file, with a fingerprint or (X2 P1) a stat pin.
+  if (drafts.state !== 'holder' || fp === undefined) {
+    throw new Error('pinFor: a draft opened with no holder');
   }
-  return { kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: page.section, path: page.path, fp };
+  const where = { kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: page.section, path: page.path } as const;
+  if (fp !== null) return { ...where, fp };
+  // X2 P1 (spec 4.3): a draft the listing could not fingerprint is pinned by its size and modified time until its
+  // prepare answers; never a throw (the carry from X2's review): the leaf reads it by range.
+  if (view.pin?.kind === 'stat') return { ...where, fp: null, stat: { size: view.pin.size, mtimeNs: view.pin.mtimeNs } };
+  throw new Error('pinFor: a draft opened with neither a fingerprint nor a stat pin');
 }
+
+/** What `DocsVisit.rangeFailed` answers a failed range read (see there). */
+export type RangeStale = 'relist' | 'changing' | 'other';
 
 /** One visit, as the Docs views read it. */
 export interface DocsVisit {
@@ -134,6 +159,23 @@ export interface DocsVisit {
   retryTree(): void;
   /** Read the current leaf again: after `changing`, re-list first; after any other failure, read again. */
   retryFile(): void;
+  /** A range read of the current leaf was refused with `word`. The one owner of the automatic re-list for a read that
+   *  went by range, beside the file route's (`relist`: the word asked for it and the visit just took the page's one
+   *  re-list, so the leaf waits for the new pin; `changing`: it asked and the re-list is spent, so the leaf says the
+   *  listing changed and offers Read it through `rangeRetry`; `other`: not a re-list word, or a version page). On
+   *  `relist` the read waits as a file read does: the re-list that STARTS after this call and answers moves
+   *  `rangeRelists`, whatever pin it gives. A hand-built visit in a test takes the stub of `docsFixtures.ts`. */
+  rangeFailed(word: DocsFailure): RangeStale;
+  /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
+  rangeRead(): void;
+  /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
+  rangeRetry(): void;
+  /** How many re-lists of this page's listing served a range read that waited for one: a leaf that waits restarts when
+   *  it moves, with the pin it was given or an identical one (a worktree that moved and came back). */
+  readonly rangeRelists: number;
+  /** Whether a range read of this page waits for a re-list now (`rangeFailed` took one that has not answered): a leaf that
+   *  mounts meanwhile holds the stale pin, so it waits for `rangeRelists` to move instead of reading it. */
+  readonly rangeWaiting: boolean;
   /** The freshness chip's tap: one manual POST, only while the tree slot is ok and no POST is in flight. */
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
@@ -147,12 +189,13 @@ type Target = { readonly project: string; readonly ref: DocsRefSpec | null };
 /** `relistAfter`: null = the read waits for no re-list; a number = it does, and is the request number in force when the
  *  word landed, so only a GET numbered above it (one that STARTED after the word) can release it. */
 type FileEntry = {
-  slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' }>; treeKey: string; relistAfter: number | null;
+  slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' } | { s: 'stat-pinned' }>; treeKey: string; relistAfter: number | null;
 };
 type Wanted =
   | { kind: 'none' }
   | { kind: 'too-large'; slot: FileSlot }
-  | { kind: 'read'; target: Target; tKey: string; fKey: string; leaf: string; pin: DocPin };
+  | { kind: 'stat-pinned'; slot: FileSlot }
+  | { kind: 'read'; target: Target; tKey: string; fKey: string; leaf: string; pin: DocPin; version: boolean };
 
 interface Store {
   alive: boolean;
@@ -162,7 +205,7 @@ interface Store {
   readonly refreshInflight: Set<string>;
   readonly freshness: Map<string, Freshness>;
   readonly files: Map<string, FileEntry>;
-  /** Per leaf (tree key, section, path, view): the file key last shown `ok`. */
+  /** Per leaf (tree key, section, path, view, at): the file key last shown `ok`. */
   readonly shown: Map<string, string>;
   readonly updatedTo: Map<string, string>;
   readonly timers: Set<ReturnType<typeof setTimeout>>;
@@ -174,6 +217,10 @@ interface Store {
    *  of the answer that last set the slot: an older answer landing later is not applied. */
   seq: number;
   readonly slotSeq: Map<string, number>;
+  /** Per page (`relistPageKey`): a range read waiting for the re-list that starts after its failure, as a file entry's
+   *  `relistAfter` does; and the count of re-lists that served such a read (`DocsVisit.rangeRelists`). */
+  readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number }>;
+  readonly rangeRelists: Map<string, number>;
 }
 
 function newStore(): Store {
@@ -181,6 +228,7 @@ function newStore(): Store {
     alive: false, targets: new Map(), trees: new Map(), treeInflight: new Set(), refreshInflight: new Set(),
     freshness: new Map(), files: new Map(), shown: new Map(), updatedTo: new Map(),
     timers: new Set(), refreshTimers: new Map(), aborts: new Map(), seq: 0, slotSeq: new Map(),
+    rangeWaits: new Map(), rangeRelists: new Map(),
   };
 }
 
@@ -198,14 +246,34 @@ function autoRetryId(scope: string, key: string, word: string): string {
   return [scope, key, word].join(NUL);
 }
 
+/** The page the one automatic re-list belongs to: tree key, section, path. It is never a file key, which carries a
+ *  fingerprint or a stat pin that can move on every listing (a per-key one-shot would then re-list without end). */
+function relistPageKey(tKey: string, section: string, path: string): string {
+  return [tKey, section, path].join(NUL);
+}
+
+/** Whether a failed read's word asks for the one automatic re-list: a word that means the listing moved, off a version
+ *  page (a version's commit is the URL's own, so no re-list can change its answer). The file route and the range read
+ *  both ask it. */
+function relistsOn(word: DocsFailure, version: boolean): boolean {
+  return DOCS_RELIST_WORDS.has(word) && !version;
+}
+
 /** Whether two pins name the same bytes: every field equal; a committed pin never equals a draft pin. Share compares a
  *  leaf's opened pin with `pinFor`'s answer through it (spec 4.16). */
-export function samePin(a: DocPin, b: DocPin): boolean {
+export function samePin(a: DocListPin, b: DocListPin): boolean {
   if (a.kind === 'committed' && b.kind === 'committed') {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
   }
   if (a.kind === 'draft' && b.kind === 'draft') {
-    return a.branch === b.branch && a.head === b.head && a.section === b.section && a.path === b.path && a.fp === b.fp;
+    const place = a.branch === b.branch && a.head === b.head && a.section === b.section && a.path === b.path;
+    // X2 P1: a stat-pinned draft's listing pin (`fp: null`) is the same bytes as the pin it opened at, which carries the
+    // snapshot's digest as `fp` and the same stat; two pins that both name a digest compare by it.
+    if (a.fp === null || b.fp === null) {
+      return place && a.stat !== undefined && b.stat !== undefined
+        && a.stat.size === b.stat.size && a.stat.mtimeNs === b.stat.mtimeNs;
+    }
+    return place && a.fp === b.fp;
   }
   return false;
 }
@@ -216,21 +284,23 @@ function wantedFile(slot: TreeSlot | null, page: DocsPageLocation | null, target
   const pin = pinFor(tree, page);
   if (pin === null || contentClass(page.path) === 'raster') return { kind: 'none' };
   const entry = findEntry(tree, page.section, page.path);
-  const size = pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
+  // A version's size is not the listing's (the listing is the served commit's): the class cap is ccd's answer there.
+  const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
   const cap = DOCS_CLASS_CAP[contentClass(page.path)];
   if (typeof size === 'number' && size > cap) return { kind: 'too-large', slot: { s: 'too-large', pin, size, cap } };
+  if (pin.kind === 'draft' && pin.fp === null) return { kind: 'stat-pinned', slot: { s: 'stat-pinned', pin, size: pin.stat.size } };
   if (contentClass(page.path) === 'other') return { kind: 'none' };
   const tKey = treeKey(target.project, target.ref);
-  const leaf = [tKey, page.section, page.path, page.view].join(NUL);
-  return { kind: 'read', target, tKey, fKey: fileKey(pin, tree), leaf, pin };
+  const leaf = [tKey, page.section, page.path, page.view, page.at ?? ''].join(NUL);
+  return { kind: 'read', target, tKey, fKey: fileKey(pin, tree, page.at !== null), leaf, pin, version: page.at !== null };
 }
 
 /** The page a pending fragment is meant for: a leaf's project, ref, section and path, never its view, slash or frame
- *  (a link drops the view, and a canonical fix moves the slash, without changing the page). Null: a page that holds no
- *  body to scroll in (the index, a project, a section, a directory, or a URL that did not parse). */
+ *  (a link drops the view, and a canonical fix moves the slash, without changing the page); its version, yes. Null: a
+ *  page that holds no body to scroll in (the index, a project, a section, a directory, or a URL that did not parse). */
 function fragmentKey(page: DocsPageLocation | null): string | null {
   if (page === null || page.kind !== 'path') return null;
-  return [treeKey(page.project, page.ref), page.section, page.path].join(NUL);
+  return [treeKey(page.project, page.ref), page.section, page.path, page.at ?? ''].join(NUL);
 }
 
 /** `fragmentKey` of the page an in-app URL (`/docs/...` plus an optional `?search`) names; null if it names none. */
@@ -241,7 +311,7 @@ function fragmentKeyOfHref(href: string): string | null {
 }
 
 /** The commit a pin reads at: a committed pin's commit, a draft pin's holder HEAD. */
-export function pinCommit(pin: DocPin): string {
+export function pinCommit(pin: DocListPin): string {
   return pin.kind === 'committed' ? pin.commit : pin.head;
 }
 
@@ -306,15 +376,37 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   const hasRelistWaiters = (tKey: string): boolean => {
     for (const e of st.files.values()) if (e.relistAfter !== null && e.treeKey === tKey) return true;
+    for (const w of st.rangeWaits.values()) if (w.treeKey === tKey) return true;
     return false;
   };
 
   /** Drop every file entry that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
-   *  started, so the next render reads its leaf again. A GET that started before the word is not the re-list. */
+   *  started, so the next render reads its leaf again; a range read that waited is released the same way, by moving its
+   *  page's counter (`rangeRelists`). A GET that started before the word is not the re-list. */
   const releaseRelistWaiters = (tKey: string, seq: number): void => {
     for (const [fKey, e] of st.files) {
       if (e.relistAfter !== null && e.relistAfter < seq && e.treeKey === tKey) st.files.delete(fKey);
     }
+    releaseRangeWaiters(tKey, seq);
+  };
+
+  /** Release the range reads that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
+   *  started (a listing that FAILED releases them all: `Infinity`, so the leaf reads again and says "changing").
+   *  A save is never carried across: it answers its own tap, in the leaf that took it. */
+  const releaseRangeWaiters = (tKey: string, seq: number): void => {
+    for (const [pk, w] of st.rangeWaits) {
+      if (w.relistAfter < seq && w.treeKey === tKey) {
+        st.rangeWaits.delete(pk);
+        st.rangeRelists.set(pk, (st.rangeRelists.get(pk) ?? 0) + 1);
+      }
+    }
+  };
+
+  /** A range read waits for a re-list that starts after now (the file route's `relistAfter`), whatever pin the new listing
+   *  gives: a same-pin answer is released too. */
+  const awaitRelist = (t: Target, pk: string): void => {
+    st.rangeWaits.set(pk, { treeKey: treeKey(t.project, t.ref), relistAfter: st.seq });
+    listTree(t);
   };
 
   const setTreeOk = (key: string, seq: number, answer: DocsTreeResponse): void => {
@@ -440,6 +532,12 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       changed();
     }, (err: unknown) => {
       st.treeInflight.delete(key);
+      // A listing that failed serves no waiting range read: release them as a failure, so no leaf waits for good (an
+      // unmounted visit has no leaf, as on the success path).
+      if (st.alive) {
+        releaseRangeWaiters(key, Number.POSITIVE_INFINITY);
+        changed();
+      }
       throw err;
     });
   };
@@ -506,7 +604,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     // The one automatic re-list belongs to the PAGE (tree key, section, path), never to the file key: a draft's key
     // carries its fingerprint, which can move on every listing, and a per-key one-shot would then re-list without end.
     // A body that reads ok re-arms it for the page's next move; a manual Retry does not, since it re-lists itself.
-    const page = [tKey, pin.section, pin.path].join(NUL);
+    const page = relistPageKey(tKey, pin.section, pin.path);
     if (a.s === 'ok') {
       autoRetried.current.delete(autoRetryId('relist', page, ''));
       put({ s: 'ok', pin, answer: a.value, receivedAt: Date.now() });
@@ -517,7 +615,9 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       return;
     }
     const word = a.body.failure;
-    if (DOCS_RELIST_WORDS.has(word)) {
+    // A version's commit is the URL's, so a word that would mean "the listing moved" is that commit's own answer: no
+    // re-list can change it (refinement (p)).
+    if (relistsOn(word, w.version)) {
       // Spec 4.3 item 1: the listing moved under the read. Re-list once automatically, then "changing, Retry".
       if (takeAutoRetry('relist', page, '')) {
         put({ s: 'loading', pin }, st.seq);
@@ -528,6 +628,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       return;
     }
     const failed = put({ s: 'failed', pin, body: a.body });
+    // A version's re-list word is that commit's own answer (refinement (p)): reading it again cannot change it either.
+    if (w.version && DOCS_RELIST_WORDS.has(word)) return;
     const plan = docsRetryPlan(a.body);
     if (plan.kind === 'auto' && takeAutoRetry('file', fKey, word)) {
       later(plan.afterMs, () => {
@@ -622,7 +724,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   let file: FileSlot = { s: 'none' };
   let updatedTo: string | null = null;
-  if (wanted.kind === 'too-large') file = wanted.slot;
+  if (wanted.kind === 'too-large' || wanted.kind === 'stat-pinned') file = wanted.slot;
   if (wanted.kind === 'read') {
     updatedTo = st.updatedTo.get(wanted.leaf) ?? null;
     const e = st.files.get(wanted.fKey);
@@ -643,6 +745,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     freshness,
     updatedTo,
     pendingFragment,
+    rangeRelists: tKey === null || page?.kind !== 'path' ? 0 : st.rangeRelists.get(relistPageKey(tKey, page.section, page.path)) ?? 0,
+    rangeWaiting: tKey !== null && page?.kind === 'path' && st.rangeWaits.has(relistPageKey(tKey, page.section, page.path)),
     retryTree: () => {
       const t = targetOf(pageRef.current);
       if (t === null) return;
@@ -663,6 +767,30 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
         st.files.delete(w.fKey);
       }
       changed();
+    },
+    rangeFailed: (word) => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path' || !relistsOn(word, p.at !== null)) return 'other';
+      const pk = relistPageKey(treeKey(t.project, t.ref), p.section, p.path);
+      // The same one-shot as the file route's: one automatic re-list per page, spent here too.
+      if (!takeAutoRetry('relist', pk, '')) return 'changing';
+      awaitRelist(t, pk);
+      changed();
+      return 'relist';
+    },
+    rangeRetry: () => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path') return;
+      awaitRelist(t, relistPageKey(treeKey(t.project, t.ref), p.section, p.path));
+      changed();
+    },
+    rangeRead: () => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path') return;
+      autoRetried.current.delete(autoRetryId('relist', relistPageKey(treeKey(t.project, t.ref), p.section, p.path), ''));
     },
     refreshManual: () => {
       const t = targetOf(pageRef.current);

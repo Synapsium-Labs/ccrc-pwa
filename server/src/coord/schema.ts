@@ -2683,7 +2683,7 @@ export const MIGRATIONS: readonly string[] = [
   // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
   // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
   // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
-  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `coord/claudeBuildsStore.ts`; its trust reader is `shared/claudeBuildTrust.ts#buildTrustOf` (and later the capture standing beside it). The seed is the four builds
   // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
   //
   // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
@@ -3151,6 +3151,1293 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE push_outbox_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
   ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
   ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
+  `,
+
+  // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 76` takes rule 3 and boots.
+  // The anchor took 74 and the push outbox 75, so this entry is 76 (the coordinator's word at landing). RE-MEASURE the slot
+  // before the PR and before merge (it must print 75 before this entry is counted; renumber on the coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
+
+  // ── 77: user_version 76 -> 77 ─────────────────────────────────────────────
+  // The replay quiz (Overlord spec §3.3.9 C52, §12 M13; W1a, plan `w1a-replay-quiz.md` Task 1; W0-28 ruled B):
+  // `continuity_quiz_runs`, one row per replay quiz run the operator ran by hand and recorded. ONE writer,
+  // `continuity/quizStore.ts#insertQuizRun`, which sets `baseline` by `continuity/quiz.ts#quizBaseline` in its own
+  // transaction. A row holds the score and its interval only, never a PASS or a benefit. `reportSha` is unique, so a resend
+  // is one row. The anchor took 74, the push outbox 75 and the portfolio 76, so this entry is 77 (the coordinator's
+  // word at landing).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 77` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 76 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_runs (
+    id            INTEGER PRIMARY KEY,
+    measuredAt    INTEGER NOT NULL,     -- wall ms the quiz was measured (the report's)
+    recordedAt    INTEGER NOT NULL,     -- wall ms the row was written
+    recordedBy    TEXT NOT NULL,        -- who recorded it (attribution, not authentication)
+    reportSha     TEXT NOT NULL UNIQUE, -- the report's sha256
+    questionsSha  TEXT NOT NULL,        -- the frozen question list's sha256
+    questions     INTEGER NOT NULL,
+    families      INTEGER NOT NULL,
+    score         REAL NOT NULL,
+    lo            REAL NOT NULL,        -- the score's interval
+    hi            REAL NOT NULL,
+    judgeModel    TEXT NOT NULL,
+    ccrcRelease   TEXT NOT NULL,
+    claudeBuilds  TEXT NOT NULL,        -- the Claude Code builds, a JSON list
+    steerArmed    TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    agentsOnArmed TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
+  );
+  `,
+
+  // ── 78: user_version 77 -> 78 ─────────────────────────────────────────────
+  // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
+  // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
+  // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
+  // body changes nothing, and a second body that differs sets `conflicted`, which every reader reads as every property
+  // unmeasured. No verdict is stored: every reader computes one from the newest start's row and the server's own profile.
+  // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
+  // resume-carries-its-own-start).
+  //
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 78` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
+  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, the portfolio (#2842) 76
+  // and the replay quiz (#2839) 77, so this is 78 (the coordinator's word at landing, 2026-11-15). RE-MEASURE the slot
+  // before the PR and before merge (it must print 77 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_start_loads (
+    startId        INTEGER PRIMARY KEY REFERENCES continuity_starts(id),
+    profileRole    TEXT,               -- from CCRC_LAUNCH_PROFILE, or NULL when the session had none
+    profileDigest  TEXT,               -- 64 lowercase hex, or NULL
+    launchRc       TEXT,               -- CCRC_LAUNCH_RC: on | off, or NULL
+    claudeVersion  TEXT,               -- the build, or NULL
+    permissionMode TEXT,               -- the hook payload's word, or NULL
+    cwdInWorkspace INTEGER,            -- 1 | 0, or NULL when unmeasured
+    loaded         TEXT NOT NULL,      -- JSON: per known kind, its sorted list or "unmeasured"
+    carriedFrom    TEXT,               -- the reportId a resume carried from, or NULL
+    bodySha256     TEXT NOT NULL,      -- the first report's narrowed body, reportedAt left out
+    conflicted     INTEGER NOT NULL DEFAULT 0,  -- 1 once a second, different body arrived for this start
+    reportedAt     INTEGER NOT NULL,   -- the hook's clock, ms
+    receivedAt     INTEGER NOT NULL    -- the server's clock, ms
+  );
+  `,
+
+  // ── 79: user_version 78 -> 79 ─────────────────────────────────────────────
+  // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
+  // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
+  // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
+  // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a try of one
+  // renewal (an episode: a generation that went back to active may renew again), inserted BEFORE the call (a crash then
+  // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
+  // the soft budget's count across generations.
+  //
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 78` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names any of them, and boots. Every earlier entry is frozen.
+  // The push outbox (#2838) took 75, the portfolio (#2842) 76, the replay quiz (#2839) 77 and the loads report (#2847) 78,
+  // so this entry is 79, the next free slot, pinned to the entry before it (the coordinator's word at landing).
+  // RE-MEASURE the slot before the PR and before merge (it must print 78 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_checkpoints (
+    generationId INTEGER PRIMARY KEY,   -- the generation the checkpoint was assembled for (continuity_generations.id)
+    notes        TEXT NOT NULL,         -- JSON array: the identity's live notes as stored
+    rulings      TEXT NOT NULL,         -- JSON array: a coordinator's last ten rulings, newest first; [] for any other role
+    handover     TEXT,                  -- JSON: the handover note (with its generation and dropped count), or NULL
+    at           INTEGER NOT NULL       -- wall ms the lane stored it
+  );
+  CREATE TABLE continuity_renew_calls (
+    generationId INTEGER NOT NULL,
+    episode      INTEGER NOT NULL,      -- the renewal: wall ms its generation entered clearing (set once on entry)
+    try          INTEGER NOT NULL,      -- the try within the renewal (1-based)
+    at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
+    answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
+    PRIMARY KEY (generationId, episode, try)
+  );
+  CREATE TABLE continuity_soft_renewals (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,
+    term         INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,      -- the generation whose soft due was fed
+    observedMs   INTEGER NOT NULL       -- the identity's accumulator when it was fed
+  );
+  CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
+  `,
+
+  // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
+  // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
+  // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
+  // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
+  // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
+  // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
+  // Sandbox A took 78 and the renewal act (#2852) 79, so this entry is 80, the next free slot (the coordinator's word).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 79 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE answer_marks (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,                       -- AnswerMarkKind; read through isAnswerMarkKind, never a cast
+    rowId  INTEGER NOT NULL,                    -- operator_items.id or asks.id, by kind; no copy of either row
+    mark   TEXT NOT NULL,                       -- AnswerMarkName; read through isAnswerMarkName, never a cast
+    value  INTEGER NOT NULL CHECK (value IN (0, 1)),
+    at     INTEGER NOT NULL,                    -- wall ms of the change
+    actor  TEXT NOT NULL                        -- the session's device actor, or flag-off
+  );
+  CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
+  `,
+
+  // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
+  // The Overlord authority journal's head row (spec §7.6, Table 7.6a; plan `w1-authority-journal.md` Task 3, question 5): the
+  // position of the last record of `~/.ccrc/overlord-authority.jsonl` whose row committed. ONE writer, the apply step of
+  // `overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx`, in the transaction of the authority row it records. Boot
+  // coherence compares the file's head with it. It landed first, so it keeps 81 and responses A takes 82 (the
+  // coordinator's word). A NEW TABLE: an older build at `user_version 81` takes rule 3 and never names it. RE-MEASURE the slot:
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_authority_head (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence   INTEGER NOT NULL,
+    journalId  TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    at         INTEGER NOT NULL     -- the record's acceptedAt, as epoch milliseconds
+  );
+  `,
+
+  // ── 82: user_version 81 -> 82 ─────────────────────────────────────────────
+  // The response record (Overlord spec §4.3 C66, C67; W1, plan `w1-responses.md` Task 2): `operator_responses`, one row per
+  // message ccrc put in front of the operator, sealed once by the response lane; `response_receipts`, what a device reported
+  // of it, written only by the receipts door; `response_boots`, one row per boot of this server (question 17). One writer
+  // for each fact, named in `responsesStore.ts` and `writers-map.test.ts`. Each kind's reference is one partial unique index
+  // over columns its own CHECKs make non-null, and every insert names its conflict, so a repeat is nothing and a CHECK throws.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 82` takes rule 3, never names
+  // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too: the renewal act (#2852) took 79,
+  // answer marks A (#2879) 80 and authority journal A (#2895) 81, so this is 82 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 81 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE operator_responses (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, pushId TEXT UNIQUE,
+    refKind TEXT, refId INTEGER, refKey TEXT, carriesKind TEXT, carriesId INTEGER, hasActions INTEGER NOT NULL DEFAULT 0,
+    tag TEXT, delivery TEXT NOT NULL, state TEXT NOT NULL, acceptedSubs TEXT NOT NULL DEFAULT '[]',
+    sends INTEGER NOT NULL DEFAULT 0, bootMeasured INTEGER NOT NULL, bootEpoch INTEGER,
+    restoreMeasured INTEGER NOT NULL, restoreGeneration INTEGER, insertedAt INTEGER NOT NULL, admittedAt INTEGER,
+    deliveredAt INTEGER, windowCapAt INTEGER, shownAt INTEGER, openedAt INTEGER, actedAt INTEGER,
+    outcome TEXT, how TEXT, why TEXT, sealedAt INTEGER, handledAt INTEGER,
+    CHECK ((bootMeasured = 1) = (bootEpoch IS NOT NULL)),
+    CHECK ((restoreMeasured = 1) = (restoreGeneration IS NOT NULL)),
+    CHECK ((kind = 'push') = (pushId IS NOT NULL)), CHECK ((carriesKind IS NULL) = (carriesId IS NULL)),
+    CHECK ((kind = 'waiting') = (refKind IS NOT NULL)), CHECK ((kind IN ('waiting', 'reply')) = (refId IS NOT NULL)),
+    CHECK ((kind = 'digest') = (refKey IS NOT NULL)));
+  CREATE UNIQUE INDEX operator_responses_one_waiting ON operator_responses(refKind, refId) WHERE kind = 'waiting';
+  CREATE UNIQUE INDEX operator_responses_one_digest ON operator_responses(refKey) WHERE kind = 'digest';
+  CREATE UNIQUE INDEX operator_responses_one_reply ON operator_responses(refId) WHERE kind = 'reply';
+  CREATE INDEX operator_responses_open ON operator_responses(state, windowCapAt);
+  CREATE INDEX operator_responses_by_insert ON operator_responses(insertedAt);
+  CREATE TABLE response_receipts (id INTEGER PRIMARY KEY, responseId INTEGER NOT NULL, receipt TEXT NOT NULL,
+    source TEXT NOT NULL, version INTEGER, endpointHash TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL,
+    CHECK ((source = 'worker') = (version IS NOT NULL)));
+  CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
+  CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
+  `,
+
+  // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // What each goals version rests on (Overlord spec §3.8, Table 11.1a; W1, plan `w1-portfolio.md` Task 4): `ratifiedBy`
+  // (a `RatifiedBy` word: `coordinator`, `item` or `operator`) and `ratifiedAt` on the pin (`programs`) and on each
+  // modification, `ratifiedActor` beside them (the account gate's actor of the operator's ratify, its device label and
+  // session hash, because an act that confers authority keeps its device; NULL for every other source, review 2240 F7), and
+  // `programs.doneWhenBy` (`pin` or `mod:<id>`), the version that wrote the current definition of done.
+  // The source only: whether it ratifies is `goalRatification`'s, decided at every read. Writers, all in `ledgersStore.ts`:
+  // `setSpecPin` and `ratifyGoalsVersion` on `programs`, `addModification` and `ratifyGoalsVersion` on the modifications,
+  // and `doneWhenBy` only in the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). The pin's source counts only
+  // when `ratifiedAt >= inShortAt` (`pinSource`, review 2240 F2), so an older build's re-pin reads unrecorded. Nothing is back-filled:
+  // NULL is a version nobody recorded, read as `unrecorded`. Responses A (#2884) landed 82, so this is 83 (the coordinator's
+  // word, 2026-11-16).
+  //
+  // SEVEN NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 83` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), names none of them and boots. Its re-pin or modification leaves these columns as they
+  // stand. For the pin that is closed (the stamp rule above). For the definition of done it is ACCEPTED: an older build's
+  // modification with a list leaves `doneWhenBy` naming the version before it, so after a roll-forward that list reads that
+  // version's verdict until this build's next write (slug done-when-provenance-survives-a-rollback).
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;                  -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER;               -- wall ms the pin's source was recorded
+  ALTER TABLE programs ADD COLUMN doneWhenBy TEXT;                  -- 'pin' or 'mod:<id>'; NULL is unrecorded
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT;   -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER;
+  ALTER TABLE programs ADD COLUMN ratifiedActor TEXT;               -- the operator's ratify: the gate's actor; else NULL
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT; -- the operator's ratify: the gate's actor; else NULL
+  `,
+
+  // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
+  // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
+  // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
+  // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE response_settings (id INTEGER PRIMARY KEY CHECK (id = 1), retentionDays INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL);
+  INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
+  `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // Overlaps and goal conflicts (Overlord spec §5.5 H23, §5.6 H38, Table 11.1a; W2, plan `w2-overlaps.md` Task 3, questions
+  // 4 and 8). `claim_collisions`: one row per conflicting path and holder of a REFUSED claim, written only by
+  // `claimCollisions.ts#recordCollisions` after the claim's own transaction committed, in a transaction of its own, and pruned
+  // there after 48 hours. `programme_pairs`: one row per EPISODE of a pair key (`<kind>:<a>:<b>`), at most one standing
+  // (closedAt NULL), written by `programmePairsStore.ts`. Every column PR B writes (mailedAt, ruled, ruledAt, ruledBy) is here.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 85` takes rule 3, never names
+  // them. The next slot on the main this branch merged (84 there, responses B's); other open PRs hold 85 too, so the second
+  // to land renumbers at landing, on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must
+  // print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claim_collisions (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL,
+    claimedPath TEXT NOT NULL, requesterId TEXT NOT NULL, requesterRun INTEGER, holderClaimId INTEGER NOT NULL);
+  CREATE INDEX claim_collisions_at ON claim_collisions (at);
+  CREATE TABLE programme_pairs (id INTEGER PRIMARY KEY, pairKey TEXT NOT NULL, kind TEXT NOT NULL, progA TEXT NOT NULL,
+    progB TEXT NOT NULL, episode INTEGER NOT NULL, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL,
+    evidence TEXT NOT NULL, goalsA TEXT, goalsB TEXT, closedAt INTEGER, closedWhy TEXT, mailedAt INTEGER, ruled TEXT,
+    ruledAt INTEGER, ruledBy TEXT, UNIQUE (pairKey, episode));
+  CREATE UNIQUE INDEX programme_pairs_standing ON programme_pairs (pairKey) WHERE closedAt IS NULL;
+  `,
+
+  // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
+  // The decision-model records and day counts (Overlord spec §3.7 H6, Table 11.1a; W2, plan `w2-decision-model.md` Task 4):
+  // `decision_records`, one answer per key ("never asked twice"; the key holds the host kind and origin and the line the row
+  // was gathered under, review 2262 F20), refs and non-private inline fields only, never an operator message's text
+  // (question 7); `decision_days`, each row's HTTP attempts per UTC day by serve and maintain, the calls reserved by requests
+  // in flight, and M19's time unavailable. Writers in `decisionModelStore.ts` alone: `recordDecision`, and
+  // `reserveDecisionCalls` and `settleDecisionCalls` (the anchor columns are PR B's `recordAnchorRun`). NEW TABLES, nothing
+  // on an existing table: an older build ignores them (Table 11.1a). Nothing reads or writes them until PR B wires the caller.
+  // The slot is positional: overlaps A (#2949) took 85, so this is 86 (the coordinator's word, 2026-11-17, mail 22345).
+  `
+  CREATE TABLE decision_records (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, modelId TEXT NOT NULL,
+    hostKind TEXT NOT NULL, origin TEXT NOT NULL, stateHash TEXT NOT NULL, lineGen INTEGER NOT NULL, verdict TEXT NOT NULL,
+    p REAL NOT NULL, band TEXT NOT NULL, ms INTEGER NOT NULL, refs TEXT NOT NULL, inline TEXT, at INTEGER NOT NULL,
+    UNIQUE (row, revision, modelId, hostKind, origin, stateHash, lineGen));
+  CREATE TABLE decision_days (row TEXT NOT NULL, day TEXT NOT NULL, serve INTEGER NOT NULL DEFAULT 0,
+    maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
+    anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
+  `,
+
+  // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
+  // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
+  // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
+  // default (question 2). ONE writer, its door's `continuityStore.ts#setBackstop`; `backstopRead` narrows it. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 88` takes rule 3 and never names it. Overlaps A (#2949)
+  // landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word,
+  // 2026-11-17); other open PRs hold 88 too, and whoever lands second renumbers on the coordinator's word. RE-MEASURE the
+  // slot before the PR and before merge (it must print 87 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE renewal_backstop_settings (id INTEGER PRIMARY KEY CHECK (id = 1), hour INTEGER NOT NULL, zone TEXT NOT NULL,
+    isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
+  INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
+  `,
+  // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
+  // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
+  // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
+  // reason, at the plan when `runId` is null or at that run's wave boundary); `programme_edges`, what the programme waits
+  // on, each a `needs-landed` or `needs-decision` edge whose `target` is the canonical JSON of an `EdgeTarget`
+  // (`shared/programmeFacts.ts#edgeTargetKey`), so the partial unique index sees two equal targets as one open edge. ONE
+  // writer of both inserts, `programmeFactsStore.ts#insertRemaining`, in the statement's transaction; the edge's state
+  // columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's edge arm's alone. NEW TABLES only:
+  // an older build at this `user_version` takes rule 3 and never names them. Renewal readings A (#2962) landed 88, so this is
+  // 89 by position (the coordinator's standing license, 2026-11-17); whoever of the open PRs holding 89 lands second
+  // renumbers at landing, on the coordinator's word. RE-MEASURE the slot:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_remaining (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    byId TEXT NOT NULL, runId INTEGER, lo INTEGER NOT NULL, hi INTEGER NOT NULL, reason TEXT NOT NULL, build TEXT
+  );
+  CREATE INDEX programme_remaining_by_program ON programme_remaining (program, id);
+  CREATE TABLE programme_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    statementId INTEGER NOT NULL REFERENCES programme_remaining(id), kind TEXT NOT NULL, target TEXT NOT NULL,
+    why TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', openedAt INTEGER NOT NULL, endedAt INTEGER, evidence TEXT,
+    unmeasuredSince INTEGER
+  );
+  CREATE UNIQUE INDEX programme_edges_one_open ON programme_edges (program, kind, target) WHERE state = 'open';
+  CREATE INDEX programme_edges_by_program ON programme_edges (program, state);
+  `,
+
+  // ── 90: user_version 89 -> 90 ─────────────────────────────────────────────
+  // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
+  // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
+  // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
+  // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
+  // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
+  // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 90` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // ROLLBACK EXPOSURE (review 2335 F1): `resumed-other-org` is the first trigger word added after the vocabulary shipped.
+  // An older build's `genRowOf` refuses a row whose `dueWhy` or `blind` carries a word it does not know, and
+  // `liveGenerations` is all-or-failure, so one such row fails that build's whole generations read (fail-closed by design,
+  // review 2003 F13). It takes a rollback below this PR onto a database that already holds such a row.
+  // Overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+  // (#2962) 88 and remaining work A (#2951) 89, so this is 90 (the coordinator's word, 2026-11-17). RE-MEASURE the slot
+  // before the PR and before merge (it must print 89 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
+  `,
+
+  // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
+  // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
+  // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 91`
+  // takes rule 3, never names it. Renewal readings A (#2962) landed 88, remaining work A (#2951) 89 and account organization D (#2958) 90, so this is 91; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 90 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_designation (id INTEGER PRIMARY KEY CHECK (id = 1), sessionId TEXT, generation TEXT,
+    pendingId TEXT, pendingGeneration TEXT, pendingKind TEXT CHECK (pendingKind IN ('designate','rebind')),
+    pendingSince INTEGER, pendingDeadlineAt INTEGER, pendingActor TEXT,
+    term INTEGER NOT NULL CHECK (term >= 0), designatedTerm INTEGER NOT NULL CHECK (designatedTerm >= 0),
+    model TEXT NOT NULL CHECK (model IN ('fable','opus')), accountPools TEXT NOT NULL,
+    pastIds TEXT NOT NULL DEFAULT '[]', actor TEXT NOT NULL, attemptId TEXT, attemptOutcome TEXT, attemptAt INTEGER,
+    stopsOwed TEXT NOT NULL DEFAULT '[]', updatedAt INTEGER NOT NULL,
+    CHECK ((sessionId IS NULL) = (generation IS NULL)), CHECK ((pendingId IS NULL) = (pendingKind IS NULL)),
+    CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
+    CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
+  `,
+
+  // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
+  // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
+  // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
+  // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
+  // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
+  // nothing on an existing table: an older build opening a file at `user_version 93` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
+  // (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 first, so WM0 took the next slot each time (the
+  // coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 92 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_phases (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL, key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, droppedWhy TEXT, UNIQUE (program, key));
+  CREATE TABLE plan_phase_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, phaseId INTEGER NOT NULL REFERENCES plan_phases(id),
+    kind TEXT NOT NULL CHECK (kind IN ('epic', 'ticket')), refId INTEGER NOT NULL, carriedTo INTEGER REFERENCES plan_phases(id),
+    carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
+    CHECK (carriedTo IS NULL OR kind = 'ticket'));
+  `,
+
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
+  // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3; spec §5.6 H38, Table 11.1a row "Sealed
+  // forecasts (85% dates)"): `programme_forecasts`, one row per closed work run (its wave boundary, `closingRunId` UNIQUE),
+  // computed as of `asOf` from the statement it names (`statementId`, NULL when none stood) and replayable from `seed`;
+  // `outcome` is `open` until the forecast lane scores it at `p85At`. Writers: `programmeFactsStore.ts#sealForecast` (the
+  // INSERT, `ON CONFLICT DO NOTHING`) and `#scoreForecast` (`outcome` and `scoredAt` only, on an `open` row), each called
+  // only by its arm of the forecast lane. NEW TABLE only: an older build at this `user_version` takes rule 3 and never
+  // names it. Account organization D (#2958) landed 90, the Overlord's designation (#2950) 91, done tests A (#2964) 92 and the
+  // programme's phases (#2974) 93, so this is 94 by position (the coordinator's standing renumber license, 2026-11-17);
+  // whoever lands second renumbers. RE-MEASURE the slot (it must print 93 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    closingRunId INTEGER NOT NULL UNIQUE REFERENCES runs(id), sealedAt INTEGER NOT NULL, asOf INTEGER NOT NULL,
+    statementId INTEGER REFERENCES programme_remaining(id), lo INTEGER, hi INTEGER, kind TEXT NOT NULL, reason TEXT,
+    source TEXT, n INTEGER, seed INTEGER, medianAt INTEGER, p85At INTEGER, outcome TEXT NOT NULL DEFAULT 'open', scoredAt INTEGER
+  );
+  CREATE INDEX programme_forecasts_by_program ON programme_forecasts (program, id);
+  `,
+
+  // ── 95: user_version 94 -> 95 ─────────────────────────────────────────────
+  // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
+  // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark for each changed* kind (the
+  // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped; D-8723) and when it
+  // last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
+  // `linear_bindings.id`), whether ccrc put it back, and when it commented; `value` and `actor` hold LINEAR TEXT, read only
+  // under `untrusted`, and `actor` is always the literal `not read` in this build (the changed* documents select no actor and
+  // `ops.ts` is frozen; D-8703). `linear_migrations`: one row per team migration (`state` is a `MigrationState` word, `map` the
+  // approved map, `itemId` the operator item that asks for it, `reportItemId` the report's), and `linear_migration_moves`: one
+  // row per subject it moves, with the object before and after, unique per (migration, subject) so a re-run never doubles a move.
+  // `linear_inbound`: an issue a person filed in a managed team, seen by the inbound sweep; `state` is `waiting | mailed |
+  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason (with the refusal's marker when
+  // ccrc gave the close up), `actedAt` when the close's Linear writes landed or were given up, and `itemId` the operator item a
+  // `raise` made (the one fact that links a raised row to its answer); those three are D-8723's. `title` and `body` are the
+  // reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the plan's ticket bounds, so `plan triage upkeep`
+  // and `plan take` make the ticket without calling Linear (D-8705).
+  // `linear_sync_streaks` and `linear_probe_settled` (D-8723) persist the plan sync's D-8701 episode streaks and its settled-probe marks,
+  // which wave 3 kept in process memory (its carried findings 1 and 6).
+  //
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 95` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; row revisions (#2965) took 87, renewal readings A (#2962) 88, remaining work A (#2951)
+  // 89, account organization D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92 and the work map's phases
+  // (#2974) 93 and forecasts A (#2987) 94, so this is 95, and it is renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 94 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_marks (workspaceId TEXT PRIMARY KEY, initiatives TEXT NOT NULL, projects TEXT NOT NULL,
+    milestones TEXT NOT NULL, issues TEXT NOT NULL, passAt INTEGER NOT NULL);
+  CREATE TABLE linear_drift_events (id INTEGER PRIMARY KEY AUTOINCREMENT, bindingId INTEGER NOT NULL, at INTEGER NOT NULL,
+    field TEXT NOT NULL, value TEXT NOT NULL, actor TEXT NOT NULL, restored INTEGER NOT NULL, commentedAt INTEGER);
+  CREATE TABLE linear_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    state TEXT NOT NULL, map TEXT, itemId INTEGER, reportItemId INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+    appliedAt INTEGER, putBackAt INTEGER);
+  CREATE TABLE linear_migration_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, migrationId INTEGER NOT NULL,
+    subject TEXT NOT NULL, kind TEXT NOT NULL, linearId TEXT, identifier TEXT, before TEXT, after TEXT NOT NULL,
+    appliedAt INTEGER, revertedAt INTEGER);
+  CREATE UNIQUE INDEX linear_migration_moves_one ON linear_migration_moves(migrationId, subject);
+  CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    identifier TEXT NOT NULL, title TEXT NOT NULL, body TEXT, seenAt INTEGER NOT NULL, mailedTo TEXT, mailedAt INTEGER,
+    handedTo TEXT, reason TEXT, actedAt INTEGER, state TEXT NOT NULL, itemId INTEGER);
+  CREATE TABLE linear_sync_streaks (key TEXT PRIMARY KEY, keyDigest TEXT NOT NULL, since INTEGER NOT NULL,
+    lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
+  CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
+  `,
+
+  // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
+  // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
+  // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
+  // and written by `overlordDesignationStore.ts`'s writers from one `RecordedActor`. The CHECK lists are the L0 maps' keys
+  // (`designation-actor.test.ts` holds them). The defaults are MEASURED, not guessed: only the account gate's doors wrote
+  // the row before this, so every row reads operator, account-gate, operator, and a pending actor standing is filled the same.
+  // SIX COLUMNS on an existing table: an older build opening a file at `user_version 96` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names them, and its writers leave the pending three as they were. A standing attempt with
+  // a half actor reads `unmeasured` (fail closed); an old-build clear of pendingId and pendingActor reads cleared even when
+  // metadata remains. WM0 (#2974) took 93, forecasts A (#2987) took 94 and Linear hierarchy (#2982) took 95, so this takes 96. Sibling pieces add migrations too, so this
+  // number is renumbered at landing. RE-MEASURE the slot before the PR and before merge (it must print 95 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE overlord_designation ADD COLUMN actorKind TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorIssuer TEXT NOT NULL DEFAULT 'account-gate'
+    CHECK (actorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorStrength TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorStrength IN ('attributed','workload','operator'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorKind TEXT
+    CHECK (pendingActorKind IS NULL OR pendingActorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorIssuer TEXT
+    CHECK (pendingActorIssuer IS NULL OR pendingActorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorStrength TEXT
+    CHECK (pendingActorStrength IS NULL OR pendingActorStrength IN ('attributed','workload','operator'));
+  UPDATE overlord_designation SET pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'
+    WHERE pendingActor IS NOT NULL;
+  `,
+
+  // ── 97: user_version 96 -> 97 ─────────────────────────────────────────────
+  // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
+  // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
+  // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
+  // `continuity` row was live at the press, and the lane never turns a shadow press into a due (ruling F1 on review 2312). `operator_marks`: the
+  // `operator-at-programme` mark, its `at` written only by the console's prompt route; `operator_mark_quiet`: the mark's
+  // observed quiet, written only by the generations lane, keyed on the `at` it was kept for (the coordinator's ruling F5 on
+  // review 1902: a row of the lane's own, so the route and the lane never write one row, and a `quiet` kept for an older `at`
+  // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
+  // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
+  // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
+  // opening a file at `user_version 97` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92, the programme work map WM0 (#2974) 93, forecasts A (#2987) 94, Linear hierarchy W4 (#2982) 95 and gates A (#2993) 96, so this is 97 (the coordinator's word, 2026-11-18, mail 24004); others may hold 97 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 96 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_renew_requests (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, actor TEXT NOT NULL, at INTEGER NOT NULL,
+    live INTEGER NOT NULL CHECK (live IN (0, 1)));
+  CREATE INDEX continuity_renew_requests_by_session ON continuity_renew_requests(sessionId, id);
+  CREATE TABLE operator_marks (programme TEXT PRIMARY KEY, at INTEGER NOT NULL);
+  CREATE TABLE operator_mark_quiet (programme TEXT PRIMARY KEY, at INTEGER NOT NULL, quiet TEXT NOT NULL);
+  CREATE TABLE renewal_mode_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    mode      TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 98: user_version 97 -> 98 ────────────────────────────────────────────
+  // The decision model's arming, host and lines (Overlord spec §3.7 H6, Table 11.1a and 11.1d; W2, plan `w2-decision-model.md`
+  // Task 6). `decision_rows`, each row's switch (`off`, `shadow`, `armed`), its daily ceiling, an armed gate's line and the
+  // server's hold: in `OVERLORD_AUTHORITY_TABLES`, so it is NEVER SEEDED (a row with no journal head reads `missing` at boot
+  // and rolls authority back); an absent row reads `DECISION_ROW_DEFAULT`, and the first move inserts it, journal record
+  // first. `decision_host`, the one host (kind, endpoint, origin, model id; the key itself is in the `.server` slot, never
+  // here). `decision_lines`, every admitted line, newest per row and key current, with its canary and its anchors' baseline.
+  // ONE writer each, in `decisionModelStore.ts`: `moveDecisionRowInTx`, `setDecisionHostInTx`, and `admitDecisionLine` with
+  // `recordCanary` for the canary columns. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names
+  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90, designation A (#2950) 91, done tests A (#2964) 92, the
+  // programme work map WM0 (#2974) 93, forecasts A (#2987) 94, Linear hierarchy W4 (#2982) 95, gates A (#2993) 96 and
+  // handoffs (#2934) 97, so this is 98 by position (the coordinator's standing license, 2026-11-17; renumbered at the landing
+  // merge). RE-MEASURE the slot before the PR and before merge (it must print 97 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE decision_rows (row TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK (mode IN ('off', 'shadow', 'armed')),
+    ceiling INTEGER NOT NULL, armedLineId INTEGER, armedLineValue REAL, heldCause TEXT, heldAt INTEGER,
+    updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_host (id INTEGER PRIMARY KEY CHECK (id = 1), kind TEXT NOT NULL, endpoint TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, keySetAt INTEGER, updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_lines (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, hostKind TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, line REAL NOT NULL, labelled INTEGER NOT NULL, errors INTEGER NOT NULL,
+    bound REAL NOT NULL, canaryExpected INTEGER NOT NULL, canaryAsked INTEGER NOT NULL DEFAULT 0,
+    canaryCrossed INTEGER NOT NULL DEFAULT 0, baseline TEXT NOT NULL, admittedAt INTEGER NOT NULL);
+  CREATE INDEX decision_lines_by_key ON decision_lines (row, hostKind, origin, modelId, revision, id);
+  `,
+
+  // ── 99: user_version 98 -> 99 ─────────────────────────────────────────────
+  // The Overlord's ladder (spec §7.5, H25; W1, plan `w1-ladder.md` Task 2): `overlord_ladder`, the operator's rung (one row, none
+  // seeded: an absent row reads `chat`), and `overlord_latches`, one row per latch with its cause and cap (a cleared row stays as
+  // history; one cause has at most one standing row). The rung words carry no CHECK: `shared/overlord-ladder.ts#RUNGS` is their one
+  // home. One writer each, named in `overlordLadderStore.ts`. NEW TABLES ONLY, nothing on an existing table: an older build opening
+  // a file at `user_version 99` takes rule 3, never names them. The slot is POSITIONAL, so it is renumbered at landing on the
+  // coordinator's word, as sibling W1 pieces add migrations too. RE-MEASURE the slot before the PR and before merge (it must print
+  // 98 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_ladder (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    operatorRung   TEXT NOT NULL,
+    actor          TEXT NOT NULL,
+    updatedAt      INTEGER NOT NULL,
+    recordSequence INTEGER,
+    recordFrom     TEXT,
+    narrowedAt     INTEGER,
+    CHECK ((recordSequence IS NULL) OR (recordFrom IS NULL))
+  );
+  CREATE TABLE overlord_latches (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    cause          TEXT NOT NULL,
+    cap            TEXT NOT NULL,
+    detail         TEXT NOT NULL,
+    raisedAt       INTEGER NOT NULL,
+    raisedBy       TEXT NOT NULL,
+    raiseSequence  INTEGER,
+    clearedAt      INTEGER, clearedBy TEXT, clearSequence INTEGER,
+    CHECK ((clearedAt IS NULL) = (clearedBy IS NULL)),
+    CHECK ((clearedAt IS NULL) = (clearSequence IS NULL))
+  );
+  CREATE UNIQUE INDEX overlord_latches_standing ON overlord_latches(cause) WHERE clearedAt IS NULL;
+  `,
+
+  // ── 100: user_version 99 -> 100 ───────────────────────────────────────────
+  // The replay quiz's record path (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` Task 7, §5; slug
+  // quiz-run-pending-until-confirmed): `continuity_quiz_runs` gains the run's state, the single-arm report's counts, its mode
+  // and the interval's method, and the operator's ruling. `continuity/quizStore.ts#insertQuizRun` (the one inserter, from the
+  // record door) writes `pending` with no baseline; `continuity/quizStore.ts#ruleQuizRun` is the ONE writer of `state`,
+  // `ruledAt`, `ruledBy` and `baseline`. An existing row reads `confirmed` (none exist live: the record door never shipped
+  // before this entry), and the new count columns are NULL on it.
+  // COLUMNS ON AN EXISTING TABLE, nullable or defaulted: an older build opening a file at `user_version 100` takes rule 3 (it
+  // warns, reads as-is and migrates nothing), never names them, and boots. Its `quizBaselineRead` reads `baseline = 1` alone,
+  // and a pending row carries 0 there, so it still never counts an unconfirmed run. Done tests A (#2964) landed 92, the
+  // programme's phases (#2974) 93, forecasts A (#2987) 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96,
+  // the renewal hand-offs (#2934) 97, decision model B (#2990) 98 and the ladder (#2994) 99, so this is 100 by position
+  // (the coordinator's standing renumber license); whoever lands second renumbers.
+  // RE-MEASURE the slot before the PR and before merge (it must print 99 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_quiz_runs ADD COLUMN state TEXT NOT NULL DEFAULT 'confirmed';   -- pending | confirmed | discarded
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledAt INTEGER;      -- wall ms of the operator's confirm or discard
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledBy TEXT;         -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN answered INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN correct INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN runFailed INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN absent INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN arm TEXT;             -- treatment: recall on, the one arm run
+  ALTER TABLE continuity_quiz_runs ADD COLUMN settingsMode TEXT;    -- restricted | fallback
+  ALTER TABLE continuity_quiz_runs ADD COLUMN pilot TEXT;           -- skipped-by-ruling
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ci INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN method TEXT;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN bootstrapB INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN inputs TEXT;          -- the report's four input shas, a JSON object
+  `,
+
+  // ── 101: user_version 100 -> 101 ──────────────────────────────────────────
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
+  // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
+  // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
+  // a day. `run_spend`: one row per closed run, `measured` (a fresh reading inside the run's window), `absent` or
+  // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
+  // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
+  // of the forecast lane. `runs.dispatchConversation` (fix round 1, F3): the registry's conversation id the run was
+  // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
+  // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
+  // older build at this `user_version` takes rule 3 and never names them.
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96, the renewal hand-offs
+  // (#2934) 97, decision model B (#2990) 98, the ladder (#2994) 99 and the quiz record (#2991) 100, so this is 101 by
+  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 100 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    word TEXT NOT NULL, evidence TEXT NOT NULL, noticed INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX programme_health_by_program ON programme_health (program, id);
+  CREATE TABLE run_spend (
+    runId INTEGER PRIMARY KEY REFERENCES runs(id), at INTEGER NOT NULL, state TEXT NOT NULL, cost REAL, class TEXT,
+    readAt INTEGER, startCost REAL
+  );
+  ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
+  `,
+
+  // ── 102: user_version 101 -> 102 ──────────────────────────────────────────
+  // The stale deny digest (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's
+  // plan-review ruling F5, 2026-11-18). `approvals.denyCurrent`: 1 when the child's deny digest was the managed deny
+  // file's current one at mint, 0 when the installer's digest history named it instead (a child spawned under an older
+  // deny file, which a running Claude Code never re-reads). The row's `class` stays the classifier's; the rule door
+  // refuses an allow on a 0 row (`approvalAllowRefusal`), while a deny or a hand-over stays open. ONE writer, the store's
+  // `insertApproval`, called by the raise.
+  // ONE ADDITIVE COLUMN with a constant default and a CHECK, and nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
+  // store 1. Its rule door does not read the column, but a rollback is a restart, which empties the held inputs, so it
+  // refuses a 0 row's allow `guard-escalate` (the PR's note says so). The slot is the next free one by position: the quiz record (#2991) took
+  // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN denyCurrent INTEGER NOT NULL DEFAULT 1 CHECK (denyCurrent IN (0, 1));
+  `,
+
+  // ── 103: user_version 102 -> 103 ──────────────────────────────────────────
+  // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
+  // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
+  // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
+  // `server/src/continuity/actKeyStore.ts`: `issueActKey` (the row), `noteRefusedClaim` (`claimsRefused`, `lastRefusedAt`) and
+  // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
+  // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
+  // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
+  // column reads null. The ladder (#2994) landed 99, the quiz record (#2991) 100,
+  // forecasts B (#3003) 101 and approvals PR 0 (#3045) 102 first, so this is 103 by position (the coordinator's brief,
+  // 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 102 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_act_keys (generationId INTEGER PRIMARY KEY, nonceSha256 TEXT NOT NULL UNIQUE, keySha256 TEXT NOT NULL,
+    issuedAt INTEGER NOT NULL, counter INTEGER NOT NULL DEFAULT 0, claimsRefused INTEGER NOT NULL DEFAULT 0, lastRefusedAt INTEGER);
+  ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
+  `,
+  // ── 104: user_version 103 -> 104 ─────────────────────────────────────────
+  // The approval census (approvals plan 2026-11-18, §3.1, Tasks 1.3 and 1.4): `approval_census`, one row per permission
+  // prompt that leaves no approvals row (Table 2a's paths 1, 2, 6 and 7, and `unmeasured` with its `why` for a prompt
+  // the census cannot place), written ONLY by the questions owner's census
+  // (`approvalCensusStore.ts#insertCensusRow`, through `coord/questions.ts`) the first time it sees the prompt, keyed by
+  // the session and the sighting so a repeat sighting writes none (`approval_census_one_per_sighting`). `summary` is the
+  // envelope's summary through the egress masker and the redactor, cleared at `APPROVAL_INPUT_RETENTION_DAYS` as an
+  // approvals row's input is. Two facts each minted approvals row keeps from mint, never an operand: `commandWords` (the
+  // classifier's statement list's command words, JSON, NULL when it cannot list them) and `literalInRoot` (0 or 1). And
+  // `push_outbox.pushSource`, the approval push's source (`approval:<n>` or `census:<n>`), written by the unbound insert.
+  // NEW TABLE AND THREE NULLABLE COLUMNS: an older build opening a file at `user_version 104` takes rule 3 and boots, its
+  // inserts naming none of them. The slot is POSITIONAL, renumbered at this PR's landing merge on the coordinator's word
+  // (quiz PR 2, #2991, landed 100; forecasts B, #3003, landed 101; approvals PR 0, #3045, landed 102; door A1, #3035, landed 103; the Linear follow-up
+  // (#3021) takes 105 by the coordinators' agreement). RE-MEASURE the slot before the PR and before merge (it
+  // must print 103 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE approval_census (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sessionId   TEXT    NOT NULL,
+    sightingKey TEXT    NOT NULL,
+    path        TEXT    NOT NULL,
+    why         TEXT,
+    route       TEXT,
+    thread      TEXT    CHECK (thread IS NULL OR thread IN ('main', 'subagent')),
+    tool        TEXT,
+    summary     TEXT,
+    runId       INTEGER,
+    seenAt      INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX approval_census_one_per_sighting ON approval_census(sessionId, sightingKey);
+  CREATE INDEX approval_census_by_time ON approval_census(seenAt);
+  ALTER TABLE approvals ADD COLUMN commandWords TEXT;
+  ALTER TABLE approvals ADD COLUMN literalInRoot INTEGER CHECK (literalInRoot IS NULL OR literalInRoot IN (0, 1));
+  ALTER TABLE push_outbox ADD COLUMN pushSource TEXT;
+  `,
+
+  // ── 105: user_version 104 -> 105 ──────────────────────────────────────────
+  // The mail idempotency key (Overlord wave 164, note `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+  // `mail.clientKey`: the optional key a sender named on `POST /api/mail`, so a retried send answers the mail it already
+  // made (`coord/mailKey.ts#mailKeyVerdict`). `mail_client_key_once` makes "one mail per (`fromId`, `clientKey`)" a fact of the
+  // database as well as of the route. `mail.inReplyTo`: the delivery id the send named, as sent, which the key compares
+  // (review 2725 F1); NULL when it named none. One writer for both, `insertMail`, from the mail ingress only. NULL = no key,
+  // which is every row written before this entry and every send that names none.
+  // TWO NULLABLE COLUMNS ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never these,
+  // so a row it writes carries no key, and the index admits any number of those. The slot is the next free one by
+  // position: door A1 (#3035) landed 103 and approvals PR 1 (#3043) 104, so this is 105, which the Linear follow-up (#3021)
+  // was promised too; whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before merge
+  // (it must print 104 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN clientKey TEXT;
+  ALTER TABLE mail ADD COLUMN inReplyTo INTEGER;
+  CREATE UNIQUE INDEX mail_client_key_once ON mail(fromId, clientKey) WHERE clientKey IS NOT NULL;
+  `,
+
+  // ── 106: user_version 105 -> 106 ──────────────────────────────────────────
+  // A ticket's done time and evidence (programme work map WM1, D-8727; spec 2026-11-16 §4.1, D11): `plan_tickets.doneAt`
+  // and `doneEvidence`, JSON `{ runId }` or `{ pr }`. Written by `planStore.ts` alone (the done arm of `onRunAdvancedInTx`
+  // and `markTicketDone`), and by this migration's back-fill: every `done` ticket that names a run gets `{ runId }` from
+  // it and `doneAt` from that run's `closedAt` (NULL when the run has none). Measured on main before this entry: the done
+  // arm is the only writer of `done` and leaves `runId` set, so every done ticket names its done run (review 2268 F1).
+  // The JSON is spelled as `JSON.stringify({ runId })` spells it. TWO NULLABLE COLUMNS on an existing table: an older
+  // build opening a file at `user_version 106` takes rule 3, never names them, and its done arm leaves them NULL, which
+  // the work map reads as "no evidence stored". WM0 (#2974) took 93, main reached 102 with the approvals PR 0's
+  // denyCurrent, the door process A1 (#3035) took 103, the approval census (#3043) 104 and the mail idempotency key
+  // (#3056) 105, so this is 106 by position at WM1's fourth merge of main (c5b4d587c); whoever lands second renumbers.
+  // RE-MEASURE the slot before the PR and before merge (it must print 105 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE plan_tickets ADD COLUMN doneAt INTEGER;      -- when the ticket was done; NULL is unknown or not done
+  ALTER TABLE plan_tickets ADD COLUMN doneEvidence TEXT;   -- {"runId":n} or {"pr":n}; NULL is none stored
+  UPDATE plan_tickets SET doneEvidence = '{"runId":' || runId || '}',
+    doneAt = (SELECT r.closedAt FROM runs r WHERE r.id = plan_tickets.runId)
+    WHERE state = 'done' AND runId IS NOT NULL;
+  `,
+
+  // ── 107: user_version 106 -> 107 ──────────────────────────────────────────
+  // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
+  // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
+  // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
+  // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
+  // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
+  // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
+  // inbound issue must say beyond the first mail, one row per issue, kept while its row is `waiting`: the inbound lane deletes it in
+  // the transaction that mails it to a live owner, and any other move of the row out of `waiting` (a triage, a take, a retire)
+  // deletes it in that move's own transaction: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
+  // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
+  // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
+  // build, D-8735: a word in a TEXT column, no schema change, and an older build reads such a row as a state none of its sweeps
+  // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
+  // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
+  //
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 107` warns, reads as-is, names none of these and boots
+  // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
+  // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
+  // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99, the quiz
+  // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102, door A1 (#3035)
+  // took 103, approvals PR 1 (#3043) took 104, the mail idempotency key (#3056) took 105 and the plan's done evidence
+  // (#2997) took 106, so this, the twelfth lander, takes 107. RE-MEASURE the slot before the PR and before merge (it must
+  // print 106 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_cursors (workspaceId TEXT NOT NULL, kind TEXT NOT NULL, since TEXT NOT NULL, after TEXT NOT NULL,
+    newest TEXT, startedAt INTEGER NOT NULL, PRIMARY KEY (workspaceId, kind));
+  CREATE TABLE linear_inbound_notes (linearId TEXT PRIMARY KEY, kind TEXT NOT NULL, program TEXT, note TEXT, at INTEGER NOT NULL);
+  ALTER TABLE linear_inbound ADD COLUMN retiredWhy TEXT;
+  `,
+
+  // ── 108: user_version 107 -> 108 ──────────────────────────────────────────
+  // Urgent mail (mid-turn mail PR 2, plan `docs/superpowers/plans/2026-11-19-mid-turn-mail.md` Task 2.2, P1).
+  // `mail.urgentAs`: the sender's role for an urgent mail, `coordinator` or `overlord`, decided by
+  // `coord/urgentMail.ts#urgentSenderVerdict` and written once by `insertMail`, its one writer, from the mail ingress only.
+  // NULL = not urgent, which is every row written before this entry and every send that does not ask. Stored as the role
+  // rather than a boolean, so a later designation or a closed run never changes what an old mail says. `mail_urgent` is
+  // a partial index over the urgent rows only, so the hold's read (`urgentHolds`) and the one-outstanding test scan them
+  // and not the whole table.
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX: an older build opening a file at this `user_version` takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its INSERT names its columns and never this one, so a row it writes is not urgent.
+  // The slot is POSITIONAL: the mail idempotency key (#3056) landed 105, the work map's done evidence (#2997) 106 and the
+  // Linear wave 4 follow-ups (#3021) 107 first, so this is 108; whoever lands second renumbers (the coordinator's standing
+  // license). RE-MEASURE the slot before merge (it must print 107 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN urgentAs TEXT CHECK (urgentAs IS NULL OR urgentAs IN ('coordinator', 'overlord'));
+  CREATE INDEX mail_urgent ON mail(urgentAs) WHERE urgentAs IS NOT NULL;
+  `,
+
+  // ── 109: user_version 108 -> 109 ──────────────────────────────────────────
+  // The gate's fence refusals (Overlord W1 gates B, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 5,
+  // slug witness-after-the-fence): a refused `stale-generation` write at an Overlord door, recorded as a counted fact for a
+  // later cause row, since a forger without the act key never reaches the witness. `why` is the fence's reason word
+  // (no-live-generation, generation-mismatch, key-unissued, key-mismatch, no-key, fork, ended); `generationId` is NULL when
+  // no live generation was read. One writer, `overlordGateStore.ts#recordFenceRefusal`, which prunes rows older than 30
+  // days in the same transaction. The act key is never a column. ONE NEW TABLE AND ITS INDEX, nothing else: an older build
+  // opening a file at this `user_version` takes rule 3 and never names the table. The slot is the next free one by
+  // position: WM1 (#2997) took 106 the Linear wave 4 follow-ups (#3021) 107 and the mid-turn mail PR 2 (#3073) 108, so this is 109; whoever lands second renumbers (the coordinator's standing license).
+  `
+  CREATE TABLE overlord_fence_refusals (
+    id           INTEGER PRIMARY KEY,
+    sessionId    TEXT    NOT NULL,
+    generationId INTEGER,
+    door         TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    at           INTEGER NOT NULL
+  );
+  CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
+  `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The session hook's reports and the witness checks (Overlord W1 door process B1, plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-door-process.md` Task 7). `continuity_hook_reports`: what the hook says
+  // its session did (a door tool call's witness, a reader's start and stop, a quiet turn's end clearing the readers, a model
+  // switch), one row a report; `receivedAt` is the server's clock and the one every window reads, `at` the hook's own. One
+  // writer, `hookReportStore.ts#insertHookReport`, which prunes its own rows past their keep (witness 24 h, the rest 7 days) in
+  // the same transaction. `picked-up` is never a row: it moves the operator's message. Its id is AUTOINCREMENT, so a pruned
+  // witness's id is never handed to a new one, whose check would then read `used` (review 2870 F2). `continuity_witness_checks`:
+  // gates B's check of a witness (Task 9), written by `recordWitnessCheck`; its `witnessId` is UNIQUE so a witness is used once.
+  // TWO NEW TABLES AND ONE INDEX, nothing else: an older build opening a file at this `user_version` takes rule 3 and never names
+  // them. The slot is the next free one by position (after 109); whoever lands second renumbers (the standing license).
+  `
+  CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT,
+    agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);
+  CREATE INDEX continuity_hook_reports_by_key ON continuity_hook_reports (sessionId, kind, key, receivedAt);
+  CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
+    witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
+  `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; door B1 took 110 first, so this entry moved up to
+  // 111; approvals PR 3 builds on the slots after 110 too, so whoever lands second moves up. RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
+
+  // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
+  // The dispatch cap counts only working workers (waiting workers spec 2026-11-19, Part 3; D-8792): the seed row
+  // `cap-counts-working` = `shadow` adds the cap's switch to the Shadow lanes card. Shadow, the cap counts every active run
+  // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
+  //
+  // `OR IGNORE`: a file that already holds the row (a replay over a database rolled back one version, as
+  // decision-model-records.test.ts does) keeps the operator's choice, and the entry is a no-op there rather than a refusal.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`: door B1 took 110 and capacity Task 2 took 111 first, so this
+  // entry moved up to 112; approvals PR 3 builds on the slots after 111 too, so whoever lands second moves up (the
+  // coordinator's standing license). RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  `,
+
+  // ── 113: user_version 112 -> 113 ──────────────────────────────────────────
+  // The admission wait (D-6095, fleet-capacity W1-4): a coordinator whose dispatch, or send-back of a parked run, the
+  // concurrency cap refused is mailed when the cap has room again. `admissionWaitSince` is the OLDEST refusal and only
+  // orders the queue; `lastRefusedAt` is the newest refusal and re-arms the wake; `admissionWokenAt` is when the
+  // `admissionWake` lane last mailed for it. The writers are `CoordStore`'s `stampAdmissionWait` (the first two),
+  // `markAdmissionWoken` (the third) and `clearAdmissionWait`, which `advanceInner` calls on every state move, so a
+  // dispatched, sent-back, closed or abandoned run is never mailed.
+  //
+  // THREE NULLABLE COLUMNS, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at this `user_version`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names them, and boots. Every earlier entry is frozen.
+  // The slot is POSITIONAL: the next free one after capacity Task 3's seed (112), which this branch stacks on; door B1 took
+  // 110 and capacity Task 2 took 111 (the stack took 52, the draft 107, and this entry 111 before them); whoever lands
+  // second renumbers (the coordinator's standing license).
+  // RE-MEASURE the slot before the PR and before merge (with Task 3 landed it must print 112 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN admissionWaitSince INTEGER;
+  ALTER TABLE runs ADD COLUMN lastRefusedAt INTEGER;
+  ALTER TABLE runs ADD COLUMN admissionWokenAt INTEGER;
+  `,
+
+  // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
+  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
+  // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
+  // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
+  // lists beyond the move rows, as JSON (issues skipped as changed, issues of a live programme still waiting, and after put back
+  // the issues that moved since and the milestones left under their canceled project); `putBackAskedAt`, when the operator asked
+  // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
+  // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
+  // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
+  // admission wait's columns (113) are the last on main, so this is 114, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 113 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE linear_migrations ADD COLUMN project TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN report TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN putBackAskedAt INTEGER;
+  ALTER TABLE linear_migrations ADD COLUMN reportDoneAt INTEGER;
+  `,
+
+  // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
+  // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
+  // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
+  // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
+  // canonical `[tool_name, cwd, tool_input]`), `fetchedAt` (the ruling read's first serve of a ruling, F8-c) and `wouldPark`
+  // (the shadow's record, 1 when a `shadow` row lapsed where a `live` one would have parked). `approval_parks`, one row per
+  // key, written only through `approvalParkStore.ts` from the questions owner: the slots its `live` rows reserve at mint
+  // (at most three), its retries, its first park and horizon (`state` `open` or `void`), a principal's ruling and its one
+  // use (`rulingUses` 0 or 1), and the coordinator's verdicts on the key (F3). The Shadow lanes card's `approval-park` row,
+  // seeded `shadow`, gated in this build until PR 3v (`lane-arm.ts`).
+  // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
+  // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
+  // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112, capacity Task 4
+  // (#3117) 113 and the per-team Linear migration (#3109) 114 first, so this is 115. RE-MEASURE the slot before merge (it
+  // must print 114 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN parkWord TEXT;
+  ALTER TABLE approvals ADD COLUMN parkKey TEXT;
+  ALTER TABLE approvals ADD COLUMN fetchedAt INTEGER;
+  ALTER TABLE approvals ADD COLUMN wouldPark INTEGER;
+  CREATE INDEX approvals_by_park_key ON approvals(parkKey) WHERE parkKey IS NOT NULL;
+  CREATE TABLE approval_parks (
+    parkKey TEXT PRIMARY KEY, childId TEXT NOT NULL, runId INTEGER NOT NULL,
+    slots INTEGER NOT NULL DEFAULT 0, retries INTEGER NOT NULL DEFAULT 0,
+    firstRowId INTEGER, parkedAt INTEGER, horizon INTEGER, state TEXT NOT NULL DEFAULT 'open',
+    rulingVerdict TEXT, rulingAuthority TEXT, rulingBy TEXT, rulingReason TEXT, rulingClass TEXT, rulingRowId INTEGER,
+    rulingAt INTEGER, rulingUses INTEGER NOT NULL DEFAULT 0,
+    coordDeclined INTEGER NOT NULL DEFAULT 0, coordDenied INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  `,
+
+  // ── 116: user_version 115 -> 116 ──────────────────────────────────────────
+  // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
+  // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
+  // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
+  // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
+  // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113, wave 7's per-team migration 114 and
+  // the approvals park (#3106) 115 first, so this entry moved up to 116; whoever lands second renumbers (the coordinator's
+  // standing license). RE-MEASURE the slot before the PR and before merge (it must print 115, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate
+  -- only: nothing in the pass or the decider reads it, and every writer that sets a key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamSuggestions TEXT;
+  -- Task 8.5 (D-8809): the call that recorded the Overlord's link (a coordinator_calls id); NULL: none. Migration 64's CHECK on
+  -- teamSource cannot widen without a table rebuild, so the Overlord's link is stored as teamSource 'auto' with this id set, and
+  -- ONE reader derives its source (linkingStore.ts's linkSourceOf). Every writer that sets or changes the key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamCallId INTEGER;
+  `,
+  // ── 117: user_version 116 -> 117 ─────────────────────────────────────────────
+  // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
+  // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
+  // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
+  // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
+  // whose workspace is the coordinator's own (`closeDecide.ts`).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 117` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 116 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN inPlace INTEGER;
+  `,
+
+  // ── 118: user_version 117 -> 118 ──────────────────────────────────────────
+  // What a broker activity's end rests on (session helpers S1, D-8830; spec 2026-11-19-session-helpers-design.md §7.1,
+  // Table 9): `endBasis` is `observed`, `task-report` (an Agent's final task notification) or `backfill-unmeasured` (S2's
+  // one-time pass). NULL means `observed`: every row written before this entry, and every row the fold ends observed (it
+  // writes the basis as absence). The CHECK holds the three words and Table 9's two rules, which
+  // `delegation-end-basis.ts#endBasisDefect` mirrors for the checkpoint: a task report has an `endedAt`, a backfill has none.
+  // ONE NULLABLE COLUMN, nothing else: SQLite tests an added column's CHECK against every row, and every row is NULL here.
+  // An older build opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing); its
+  // reads and writes name their columns and never this one. The slot is the next free one by position on `main`
+  // (66c63606c3 holds 117; this entry took 112 at d0b7467b9 and 116 at 5041cf1733, and moved up each time other entries
+  // landed first); whoever lands second renumbers (the coordinator rules a collision at landing). RE-MEASURE the slot
+  // before merge (it must print 117, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE delegation_activities ADD COLUMN endBasis TEXT CHECK (
+    endBasis IS NULL
+    OR endBasis = 'observed'
+    OR (endBasis = 'task-report' AND endedAt IS NOT NULL)
+    OR (endBasis = 'backfill-unmeasured' AND endedAt IS NULL)
+  );
+  `,
+
+  // ── 119: user_version 118 -> 119 ──────────────────────────────────────────
+  // A new Claude Code build needs no operator (Overlord, `docs/superpowers/programs/overlord/claude-release-unattended.md`,
+  // slug capture-retry-ceiling): `claude_builds.fails` counts a build's failed capture verdicts. Its one writer is
+  // `recordClaudeBuildVerdict`; its reader is `shared/claudeBuildTrust.ts#captureStandingOf`, which captures a failed build
+  // again by itself until the count reaches the ceiling, and only then asks the operator. The UPDATE counts the one
+  // failure every failed row already carries, so a build that failed before this entry is retried like any other.
+  // ONE COLUMN WITH A DEFAULT, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its reads and writes name their columns and never this one, and the default 0 covers
+  // every row it inserts (a new build's row then reads as never failed, which is what it is). The slot is the next free
+  // one by position on `main` (77a1fefe46 holds 118); whoever lands second renumbers. RE-MEASURE the slot before merge (it
+  // must print 118, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_builds ADD COLUMN fails INTEGER NOT NULL DEFAULT 0;
+  UPDATE claude_builds SET fails = 1 WHERE capture = 'fail';
+  `,
+
+  // ── 120: user_version 119 -> 120 ──────────────────────────────────────────
+  // The weekly unattended replay quiz's last word (run 3212; the operator's ruling of 2026-11-22: the quiz runs, records and
+  // confirms itself): `continuity_quiz_status`, ONE row (`id` 1), what `deploy/history-quiz-unattended.mjs`'s last tick on
+  // the fleet box reported through `POST /api/continuity/quiz-status`. ONE writer, `continuity/quizStore.ts#writeQuizStatus`;
+  // `mailedKey` is the week and word the coordinator was last mailed for, so a stop word is mailed once a week. The Shadow
+  // lanes card reads it. The coordinator allotted slot 120 to this entry beside run 3213's 119, which landed first (#3170);
+  // it is the next free one by position on `main`.
+  //
+  // Review 3232 (fix round 1) adds the confirmation's binding to the record and the operator's withdraw to the runs table:
+  // `confirmKeyHash` is the sha256 of the single-use key the record door answered an unattended record (NULL for a hand
+  // record; a ruled run's hash is never read, because the ruler reads the key only while the run is pending), so only the caller that recorded a run can have the server confirm it; `withdrawnAt` and
+  // `withdrawnBy` are the operator's withdraw of a wrong baseline (state `withdrawn`); `wokeAt` is when the coordinator was
+  // mailed that this run became the baseline, keyed on the run so a lost wake is sent again on a later tick. The status row
+  // gains the runner's trace and the waiting streak that mails `setup-account-gone` once.
+  //
+  // A NEW TABLE and nullable columns on one existing table: an older build opening a file at this entry's version takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the new table, inserts runs by named columns (each new
+  // one NULL) and reads an unknown state as no state. Every earlier entry is frozen. RE-MEASURE the slot
+  // before merge (it must print 119 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // Since run 3538 the status row's `account` is the week's account when the week's folder records one, else the setup's.
+  // The SQL comment on that column says "the setup's account id": it is stored text of this frozen entry, so it stays.
+  `
+  CREATE TABLE continuity_quiz_status (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    week        TEXT,                  -- the ISO week (UTC) the tick worked, or NULL before any week
+    act         TEXT NOT NULL,         -- the act the tick reached
+    outcome     TEXT NOT NULL,         -- ok | waiting | refused | failed
+    word        TEXT,                  -- the stop's word, or NULL
+    detail      TEXT,                  -- one line, or NULL
+    account     TEXT,                  -- the setup's account id, or NULL before setup
+    at          INTEGER NOT NULL,      -- wall ms of the tick (the runner's)
+    receivedAt  INTEGER NOT NULL,      -- wall ms the server stored it
+    mailedKey   TEXT,                  -- '<week> <word>' the coordinator was last mailed for, or NULL
+    reportedBy  TEXT,                  -- the runner's trace ('quiz-unattended <user> <role> <time>')
+    waitingSince TEXT,                 -- the ISO week the current run of waiting ticks began, or NULL
+    goneMailedKey TEXT                 -- the waitingSince week setup-account-gone was mailed for, or NULL
+  );
+  ALTER TABLE continuity_quiz_runs ADD COLUMN confirmKeyHash TEXT;  -- sha256 of the unattended record's single-use key
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnAt INTEGER;  -- wall ms of the operator's withdraw
+  ALTER TABLE continuity_quiz_runs ADD COLUMN withdrawnBy TEXT;     -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN wokeAt INTEGER;       -- wall ms the coordinator was mailed this baseline
+  `,
+
+  // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The run cap is derived from the machine (D-8920; the operator's ruling of 2026-11-22, task note
+  // `docs/superpowers/programs/overlord/run-cap-derived.md`): `coordinator_state.capMode` says what the stored
+  // `maxConcurrentWorkers` IS. `automatic`: the cap is derived from the fleet host's memory and cores
+  // (`caps.ts#deriveCap`), and the stored number is only what is used while the host is unmeasured. `override`: the
+  // operator set the stored number, and it is the cap. ONE writer, `CoordStore.setCaps`; one reader, `CoordStore.capMode`.
+  //
+  // THE UPGRADE MOVES NO CAP SOMEBODY SET. A fresh box, and a box that still holds the untouched seed (3, never
+  // written: `updatedAt` 0), is `automatic`: nobody chose that number. A row somebody wrote (`updatedAt > 0`, the caps
+  // route's stamp) or edited by hand to another number becomes `override`: that number bounded things the formula does
+  // not measure (other tenants of the box, disk per worktree, account usage), and it may have been LOWERED on purpose,
+  // so an upgrade must not raise it, or drop it, with no operator act. The control then says "Set by hand: N.
+  // Automatic would be M" and offers `use automatic`: one tap, and a recorded one. The UPDATE below is that rule;
+  // `run-cap-derived.test.ts` reds without it.
+  //
+  // AN OLDER BUILD opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing);
+  // its reads and writes name their columns and never this one, so it enforces the stored number as it always did: an
+  // override if one stands, else the number the box ran on before. A number it WRITES leaves the mode as it was. STILL
+  // OPEN: after a roll forward, a number set by the older build under `automatic` is not an override until it is set
+  // again, so a cap lowered during a rollback is replaced by the derived one. It is recorded when it happens (the
+  // automatic cap's feed line, `caps.ts#capAutomaticNotice`, keyed on that write), and nothing prevents it.
+  //
+  // The slot is the next free one by position on `main` (b33a9ae13 holds 120); whoever lands second renumbers.
+  // RE-MEASURE the slot before merge (it must print 120, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE coordinator_state ADD COLUMN capMode TEXT NOT NULL DEFAULT 'automatic'
+    CHECK (capMode IN ('automatic', 'override'));
+  UPDATE coordinator_state SET capMode = 'override' WHERE updatedAt > 0 OR maxConcurrentWorkers <> 3;
+  `,
+
+  // ── 122: user_version 121 -> 122 ──────────────────────────────────────────
+  // The class the Overlord's generation was minted under (Overlord W1 renewal readings PR C, plan `w1-renewal-readings.md`
+  // Task 5, slug designated-class-stamped-at-mint): `designatedClass` on `continuity_generations`, the designation's model
+  // class when the generation was minted as the Overlord, so `classChanged` asks whether the operator changed the class
+  // after the mint and never compares the class the generation runs (a fallback generation runs another). ONE writer,
+  // `continuityStore.ts#mintGeneration`. Nothing is back-filled: NULL is a coordinator's or a plain session's generation, an
+  // Overlord generation minted before this entry or by an older build, and `classChanged` reads it unmeasured.
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 122` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // RE-MEASURE the slot before merge (it must print 121 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
+  `,
+
+  // ── 123: user_version 122 -> 123 ──────────────────────────────────────────
+  // The coordinator advisor (plan `2026-11-23-coordinator-advisor.md`, D-8967, D-8970, D-8971). `advisor_settings` is the
+  // Settings row "Coordinator advisor": ONE ROW, `CHECK (id = 1)`, the `plain_memory_settings` idiom. `choice` (an
+  // `AdvisorChoice`), `cap` and `scope` (an `AdvisorScope` as JSON) are read back through `coordinatorAdvisorOf`'s
+  // narrowings, never cast, so NO CHECK on them: a word a newer build writes reads as unknown, and the lane writes nothing
+  // from it. Its one writer is `CoordStore.setCoordinatorAdvisor` (`POST /api/coord/coordinator-advisor`), its one reader
+  // `CoordStore.coordinatorAdvisorSettings`. `advisor_calls` holds one row per advisor call a coordinator's transcript
+  // carried, keyed by the session and the call's own id, so a duplicate streamed line or a transcript a swap carried
+  // counts once; `day` is the UTC day of the line's timestamp, and the four token columns are the `advisor_message`
+  // usage of the call's message (NULL until a line carries it). `advisor_reads` is the forward reader's place in each
+  // coordinator's transcript and what it saw since the spawn it last read for, and `droppedDay` the UTC day of a drop,
+  // which outlives a new spawn. ONE writer of both: the count lane
+  // (`advisorStore.ts#recordAdvisorRead`). Rows older than 14 days are pruned by it.
+  // THREE NEW TABLES: an older build opening a file at `user_version 123` takes rule 3 (it warns, reads as-is, migrates
+  // nothing) and never names them.
+  // RE-MEASURE the slot before merge (it must print 122 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE advisor_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    choice TEXT NOT NULL,
+    cap INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO advisor_settings (id, choice, cap, scope, updatedAt) VALUES (1, 'off', 12, '{"kind":"all"}', 0);
+  CREATE TABLE advisor_calls (
+    sessionId TEXT NOT NULL,
+    callId TEXT NOT NULL,
+    day TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    model TEXT,
+    inputTokens INTEGER,
+    outputTokens INTEGER,
+    cacheReadTokens INTEGER,
+    cacheWriteTokens INTEGER,
+    PRIMARY KEY (sessionId, callId)
+  );
+  CREATE INDEX advisor_calls_by_day ON advisor_calls (sessionId, day);
+  CREATE TABLE advisor_reads (
+    sessionId TEXT PRIMARY KEY,
+    file TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    spawnAt INTEGER NOT NULL,
+    requests INTEGER NOT NULL,
+    lastMessageId TEXT,
+    available TEXT,
+    availableAt INTEGER,
+    lastCallAt INTEGER,
+    unreadable INTEGER NOT NULL,
+    droppedDay TEXT,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 124: user_version 123 -> 124 ──────────────────────────────────────────
+  // The capture's not-sent words widen (capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md
+  // §2.2, §2.5 Table 6; the coordinator's ruling on PR 1's fix round 1): `claude_builds.notSent` keeps its CHECK, now over
+  // `shared/claudeBuildTrust.ts#BUILD_CAPTURE_NOT_SENT_MAP`'s nine words, so the box's `build-absent` and `path-refused`, a frame
+  // that never left (`not-started`), a fleet agent busy with another capture (`busy`) and the three a failed copy leaves are
+  // each recorded as themselves instead of folded into `no-runner` or `no-test-box`. SQLite cannot alter a CHECK, so the table
+  // is rebuilt: the same columns in the same order, every row copied as it stands, the old table dropped and the new one
+  // renamed. No index, trigger, view or foreign key names `claude_builds`. An older build opening a file at this entry's
+  // version takes rule 3 (it warns, reads as-is and migrates nothing): it reads a word it does not know as no reason
+  // (`claudeBuildsStore.ts#claudeBuildRecords`), and every word it writes is still allowed. The rebuild preserves the failed
+  // verdict counter from migration 119. The slot is the next free one by position on `main` (c7f7e84bca holds 123).
+  // RE-MEASURE the slot before merge (it must print 123, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_builds_124 (
+    build         TEXT    PRIMARY KEY,
+    source        TEXT    NOT NULL CHECK (source IN ('rig', 'fleet')),
+    capture       TEXT    NOT NULL CHECK (capture IN ('queued', 'pass', 'fail')),
+    cwd           INTEGER NOT NULL DEFAULT 0,
+    seenAt        INTEGER NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    lastAttemptAt INTEGER,
+    notSent       TEXT    CHECK (notSent IS NULL OR notSent IN ('no-test-box', 'no-runner', 'build-absent', 'path-refused',
+                    'not-started', 'busy', 'copy-refused', 'copy-failed', 'no-admin-lane')),
+    verdictAt     INTEGER,
+    output        TEXT,
+    fails         INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO claude_builds_124 (build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails)
+    SELECT build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails FROM claude_builds;
+  DROP TABLE claude_builds;
+  ALTER TABLE claude_builds_124 RENAME TO claude_builds;
   `,
 ];
 

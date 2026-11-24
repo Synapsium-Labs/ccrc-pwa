@@ -3001,3 +3001,35 @@ describe.skipIf(!PY)('half_life_s: when the designated refresher refreshes (code
     ]);
   });
 });
+
+// usage-user-agent, review 2825 F7: `read_client_release` opens the release cache without blocking and closes the
+// descriptor on every path. A directory at the path made `os.fdopen` raise with the descriptor still open (measured:
+// one leaked a call). Each shape is read twenty times in one process, and the count of open descriptors is the same
+// after as before.
+describe.skipIf(PY === null || !existsSync('/proc/self/fd'))('the client release read closes what it opens (review 2825 F7)', () => {
+  it('a directory, a FIFO and a regular file at the cache path each leave no descriptor open', () => {
+    const home = mkTmp('codex-client-release-fd-');
+    const dir = join(home, 'a-directory');
+    mkdirSync(dir);
+    const fifo = join(home, 'a-fifo');
+    expect(spawnSync('mkfifo', [fifo]).status, 'mkfifo').toBe(0);
+    const file = join(home, 'a-file.json');
+    writeFileSync(file, '{"version": "9.9.9"}');
+    const prog = [
+      'import importlib.util, json, os, sys',
+      'spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])',
+      'lib = importlib.util.module_from_spec(spec)',
+      'sys.modules["ccgpt_auth"] = lib',
+      'spec.loader.exec_module(lib)',
+      'out = []',
+      'for p in sys.argv[2:]:',
+      '    n = len(os.listdir("/proc/self/fd"))',
+      '    got = [lib.read_client_release(p) for _ in range(20)]',
+      '    out.append([len(os.listdir("/proc/self/fd")) - n, got[0]])',
+      'print(json.dumps(out))',
+    ].join('\n');
+    const r = spawnSync(PY!, ['-I', '-c', prog, AUTH_LIB, dir, fifo, file], { encoding: 'utf8', timeout: 20_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([[0, {}], [0, {}], [0, { version: '9.9.9' }]]);
+  });
+});

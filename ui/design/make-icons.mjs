@@ -67,6 +67,8 @@ const NAMES = [
   'share',
   'download',
   'ellipsis',
+  // The coordinator's badge (desktop polish C50, D-8817): a hub with its spokes, the role the word named.
+  'network',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);

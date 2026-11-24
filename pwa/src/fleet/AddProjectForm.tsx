@@ -12,7 +12,8 @@
 // while the operator types.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { OptionRow, RadioFieldset, toast } from '@ccrc/ui';
+import { OptionRow, RadioFieldset, Select, toast } from '@ccrc/ui';
+import { HIERARCHY_TEXT, coordinatorWords, hierarchyAbsent } from './hierarchyWords';
 import type { ProjectAddBody, ProjectAddSource } from '../../../shared/projectAdd';
 import type { ProjectAddOutcome } from './useProjectRows';
 import { NAME_FIELD_CLASS, PlainTextField } from './WorkspaceNameField';
@@ -43,6 +44,8 @@ export interface ProjectAddFormHost {
   /** Show the two optional linking fields (D-8147): a Linear team key, and for a clone the template pull request. The
    *  add-project sheet only; the new-session sheet's inline add leaves it off and shows neither. */
   linking?: boolean;
+  /** The coordinators the owner select offers (D-8184), read when the form opens, as the follow-up acts are injected; absent: no owner field. */
+  loadCoordinators?: () => Promise<readonly { id: string; live: boolean }[]>;
 }
 
 export interface ProjectAddFormState {
@@ -69,7 +72,7 @@ const SOURCES: { value: ProjectAddSource; label: string }[] = [
  *  sheet body scrolls, so it clips, and a focused field that is the form's last child would lose its ring's bottom edge. */
 const FORM_CLASS = `${NAME_FIELD_CLASS.sheetBody} pb-1`;
 
-export function useProjectAddForm({ active, add, adding, onAdded, linking = false }: ProjectAddFormHost): ProjectAddFormState {
+export function useProjectAddForm({ active, add, adding, onAdded, linking = false, loadCoordinators }: ProjectAddFormHost): ProjectAddFormState {
   const [form, setForm] = useState<ProjectAddForm>(EMPTY_FORM);
   /** The operator typed the name: the repository stops prefilling it. */
   const [named, setNamed] = useState(false);
@@ -79,8 +82,20 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
   /** The linking fields (D-8147), held beside the form: the key as typed (upper-cased) and the template box. */
   const [teamKey, setTeamKey] = useState('');
   const [template, setTemplate] = useState(false);
+  /** The hierarchy fields (D-8184): the owner chosen (empty: the default), the initiatives toggle, and the coordinators to choose from. */
+  const [owner, setOwner] = useState('');
+  const [initiatives, setInitiatives] = useState(true);
+  const [coordinators, setCoordinators] = useState<readonly { id: string; live: boolean }[] | 'pending' | 'unread' | 'absent'>('pending');
+  const ownerId = useId();
   // Bumped whenever the form stops showing: an answer issued under an older generation belongs to a form that is gone.
   const generation = useRef(0);
+
+  useEffect(() => {
+    if (!active || !linking || loadCoordinators === undefined) return;
+    let live = true;
+    loadCoordinators().then((c) => { if (live) setCoordinators(c); }, (err: unknown) => { if (live) setCoordinators(hierarchyAbsent(err) ? 'absent' : 'unread'); });
+    return () => { live = false; };
+  }, [active, linking, loadCoordinators]);
 
   useEffect(() => {
     if (active) return;
@@ -91,6 +106,10 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
     setRefusal(null);
     setTeamKey('');
     setTemplate(false);
+    setOwner('');
+    setInitiatives(true);
+    // The sheet stays mounted: a second opening must not draw the last read's coordinators while its own read is pending (D-8186 A3).
+    setCoordinators('pending');
   }, [active]);
 
   const plan = formVerdict(form);
@@ -108,7 +127,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
     setRefusal(null);
     // What the linking fields hold NOW goes with the add: the form may be reset before the answer lands.
     const key = teamKey.trim().toUpperCase();
-    const choice: LinkingChoice = { teamKey: key === '' ? null : key, template: verdict.body.source === 'github' && template };
+    const choice: LinkingChoice = { teamKey: key === '' ? null : key, template: verdict.body.source === 'github' && template, owner: owner === '' ? null : owner, initiativesOff: !initiatives };
     const outcome = await add(verdict.body);
     if (outcome.kind === 'busy') return;
     const dismissed = mine !== generation.current;
@@ -186,6 +205,18 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
             onBlur={() => undefined}
             onEnter={submit}
           />
+          {coordinators === 'unread' && <p role="status" className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.ownersUnread}</p>}
+          {coordinators !== 'pending' && coordinators !== 'unread' && coordinators !== 'absent' && coordinators.length > 0 && (
+            <div className="grid gap-1">
+              <label htmlFor={ownerId} className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.owner}</label>
+              <Select id={ownerId} value={owner} disabled={adding} onChange={(e) => setOwner(e.target.value)}>
+                <option value="">{LINKING_ADD_TEXT.ownerDefault}</option>
+                {coordinators.map((c) => <option key={c.id} value={c.id}>{coordinatorWords(c)}</option>)}
+              </Select>
+            </div>
+          )}
+          {/* An older server has no hierarchy route: no controls whose save would 404, and nothing said. Nothing is drawn until the read settles (M7), so that server's 404 never flashes the toggle. */}
+          {coordinators !== 'absent' && (coordinators !== 'pending' || loadCoordinators === undefined) && <OptionRow label={HIERARCHY_TEXT.initiatives} checked={initiatives} disabled={adding} onClick={() => setInitiatives((v) => !v)} />}
           {form.source === 'github' && (
             <OptionRow label={LINKING_ADD_TEXT.template} checked={template} disabled={adding} onClick={() => setTemplate((t) => !t)} />
           )}
