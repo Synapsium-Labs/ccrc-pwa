@@ -40,6 +40,7 @@ import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../
 import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { CoordinatorAdvisorSetting, CoordinatorAdvisorView } from '../../../shared/coordinatorAdvisor';
 import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
@@ -1074,6 +1075,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
     setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
       postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET`/`POST /api/coord/coordinator-advisor` (D-8967): Settings › Automation › Coordinator advisor (`setting` null when
+     *  the server could not read its row). Session-gated when armed; no box token. `postJsonOr`, for `setCoordCaps`' reason. */
+    coordinatorAdvisor: () => getJson<CoordinatorAdvisorView & { readonly ok: true }>('/api/coord/coordinator-advisor'),
+    setCoordinatorAdvisor: (setting: CoordinatorAdvisorSetting) =>
+      postJsonOr<(CoordinatorAdvisorView & { readonly ok: true }) | 'unreadable'>('/api/coord/coordinator-advisor', 'unreadable', setting),
     /** `GET /api/coord/renewal-mode` (Overlord W1a hand-offs): Settings › Automation › When soft renewals happen, `when-away`
      *  or `on-schedule` (`mode` null when the stored word could not be read). Session-gated when armed; no box token. */
     renewalMode: () => getJson<RenewalModeView & { readonly ok: true }>('/api/coord/renewal-mode'),

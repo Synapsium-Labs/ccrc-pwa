@@ -21,6 +21,7 @@ import { StallWatchSection } from '../StallWatchSection';
 import { OverridesSection } from '../../fleet/OverridesSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
 import { PlainAutoMemorySection } from '../../fleet/PlainAutoMemorySection';
+import { CoordinatorAdvisorSection } from '../../fleet/CoordinatorAdvisorSection';
 import { RenewalModeSection } from '../../fleet/RenewalModeSection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
 import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
@@ -45,6 +46,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       <BrowserToolsSection nodes={view.updates.view?.nodes ?? null} />
       <RollIdleSection />
       <PlainAutoMemorySection />
+      <CoordinatorAdvisorSection />
       <RenewalModeSection />
       <PaneScopeStopSection />
       <ScopeSweepSection poll={view.scopeSweep} />
