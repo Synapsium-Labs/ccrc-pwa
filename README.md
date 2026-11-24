@@ -7914,8 +7914,9 @@ you need to reason about one.*
   database, `~/.ccrc/coord.db`, opened with `node:sqlite` (`DatabaseSync`,
   WAL, `user_version` migrations that refuse to start rather than open
   empty) — holding programmes, runs and their event trail, work items, mail
-  and its deliveries, claims, asks, the deviation ledger's allocations and
-  floors, the durable feed, the ingested lifecycle journal, the central pool
+  and its deliveries, claims, asks, the retired deviation allocator's
+  allocations and floors (written no more; read only by `GET /api/ledger`),
+  the durable feed, the ingested lifecycle journal, the central pool
   edges, the update control plane's intent, release catalogue and node
   inventory, and coordinator state. This repeals "No database," deliberately
   and in writing: the deferral had an owner and a named trigger
