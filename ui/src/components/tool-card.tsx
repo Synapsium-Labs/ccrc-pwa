@@ -428,7 +428,7 @@ function GenericToolCard({
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >
-        <span className={dot === '' ? 'tool-dot' : `tool-dot ${dot}`} aria-hidden="true" />
+        <span className={`tool-dot ${dot}`} aria-hidden="true" />
         {result?.isError && <span className="tool-fail">{TOOL_FAILED_WORD}</span>}
         <span className="tool-name">{use.name}</span>
         <span className="tool-sum">{summary}</span>

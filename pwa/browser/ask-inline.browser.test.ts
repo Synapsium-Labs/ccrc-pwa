@@ -721,11 +721,26 @@ const CALL = {
   input: JSON.stringify({ questions: [{ question: 'Which cache should the service use?', header: 'Cache', multiSelect: false,
     options: [{ label: 'Redis' }, { label: 'In-process' }] }] }),
 };
+/** The live call for `frames`: the one asking the live question's own words (the hook envelope's questions, else the
+ *  pane's transcript copy), so the transcript ties the wait to it (desktop polish wave 168, review 3478 F2: a call is
+ *  singled out only when the live wait identifies it, by its words). A fixture whose wait names no call (an unreadable or
+ *  unparsed menu, an approval) keeps `CALL`, and its wait is raised from the tool-activity row's wait line instead. */
+const callFor = (frames: object[]): object => {
+  const asked = frames.find((f) => (f as { type?: string }).type === 'ask') as { ask?: { questions?: unknown[] } } | undefined;
+  const pane = frames.find((f) => (f as { type?: string }).type === 'dialog') as { dialog?: { ask?: { question?: string } } } | undefined;
+  const words = pane?.dialog?.ask?.question;
+  const questions = asked?.ask?.questions ?? (words === undefined ? null : [{ question: words, options: [] }]);
+  return questions === null ? CALL : { ...CALL, input: JSON.stringify({ questions }) };
+};
 /** `frames` (fixture 1's, with the forty-line question, unless a case names another) with that call in the backlog. */
 const WITH_CALL = (frames: object[] = FRAMES()): object[] =>
   frames.map((f) => ((f as { type?: string }).type === 'backlog'
-    ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
+    ? { ...BACKLOG, events: [...BACKLOG.events, callFor(frames)] }
     : f));
+/** The transcript's one control for the live wait at the desk: "Go to question" on the card of the call the wait
+ *  identifies, else "Go to the prompt" on the tool-activity row's wait line (review 3478 F2); both raise the inline card. */
+const GO_TO = '.tool-ask .ask-state button, .tool-activity-wait .tool-activity-answer';
+const GO_TO_WORD = /^(Go to question|Go to the prompt)$/;
 
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
@@ -747,8 +762,9 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
-      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
+      const button = opened.page.locator(GO_TO, { hasText: GO_TO_WORD });
       expect(await button.count(), 'premise: the transcript card offers Go to question').toBe(1);
+      expect(await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).count(), 'on the card').toBe(1);
       expect(await opened.page.locator('.tool-ask .ask-state', { hasText: 'waiting for you, below' }).count(), 'beside the word').toBe(1);
 
       // Premise: nothing of the card is focused, and every scroller the layout has is at the far end from the options.
@@ -904,7 +920,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
         await opened.page.waitForTimeout(100);
       }
       const before = await opened.page.evaluate(STAND, CARD);
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).click();
       await opened.page.waitForTimeout(300);
       // A script focus that follows a mouse click is not `:focus-visible`, so no ring is drawn yet. A modifier alone does
       // nothing to the card (no digit, arrow or Escape), and makes Chrome match `:focus-visible` on the focused option, so
@@ -1010,7 +1026,7 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
       expect(answers.length, 'premise: one answer is in flight').toBe(1);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).click();
       await opened.page.waitForTimeout(300);
       const after = await opened.page.evaluate((card) => {
         const el = document.querySelector<HTMLElement>(card)!;
@@ -1113,8 +1129,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
         await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
       }
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
-      expect(await button.count(), `premise: the transcript card offers Go to question (fixture ${n})`).toBe(1);
+      const button = opened.page.locator(GO_TO, { hasText: GO_TO_WORD });
+      expect(await button.count(), `premise: the transcript offers one control for the wait (fixture ${n})`).toBe(1);
       if (o.how === 'key') {
         await button.focus();
         await opened.page.keyboard.press('Enter');
@@ -1192,7 +1208,7 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).focus();
+      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).focus();
       await opened.page.keyboard.press('Enter');
       await opened.page.waitForTimeout(300);
       const got = await opened.page.evaluate((card) => {
@@ -1668,7 +1684,9 @@ const AGED_FRAMES = (): object[] => [
   ...askFixture(2).frames,
 ];
 const DESK_VIEW: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
-const GTQ = '.tool-ask .ask-state button';
+/** The transcript's one control for the wait (`GO_TO`): the card's while its question is the live one, the wait line's
+ *  once the pane moves on to a question the call does not ask (review 3478 F2). */
+const GTQ = GO_TO;
 const Q2_TEXT = HOOK_QUESTIONS[1]!.question;
 
 /** An opened desk page over aged fixture 2, with the page-side request control and logs installed. */
@@ -2016,14 +2034,14 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.page.keyboard.press('1');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
         await a.mark();
-        await a.page.evaluate(async (w) => {
+        await a.page.evaluate(async ({ w, sel }) => {
           const probe = window as unknown as Probe;
-          const b = [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((x) => x.textContent === 'Go to question')!;
+          const b = [...document.querySelectorAll<HTMLButtonElement>(sel)].find((x) => /^(Go to question|Go to the prompt)$/.test(x.textContent ?? ''))!;
           b.click();
           if (w === 'next microtask') await Promise.resolve();
           if (w === 'one frame') await new Promise((r) => requestAnimationFrame(() => r(null)));
           probe.__reply();
-        }, when);
+        }, { w: when, sel: GTQ });
         await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
         await a.page.waitForTimeout(400);
         const s = await a.snap();
@@ -2031,7 +2049,7 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.page.keyboard.press('2');
         await a.page.waitForTimeout(300);
         expect(await a.posts(), 'a digit sends nothing').toBe(1);
-        await a.page.locator(GTQ, { hasText: 'Go to question' }).click();
+        await a.page.locator(GTQ, { hasText: GO_TO_WORD }).click();
         await a.page.waitForTimeout(300);
         await a.page.keyboard.press('2');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);

@@ -319,7 +319,7 @@ describe('the live row fits a phone column with its flags (review 3450 F4)', () 
         // approval's sheet is up over the transcript, which the app hides from assistive technology behind it; the
         // transcript's control is what the reader uses once they close the sheet, so it is measured then.
         await page.keyboard.press('Escape');
-        await expect.poll(() => page.locator('[role="dialog"]').count(), 'the sheet did not close').toBe(0);
+        await expect.poll(() => page.locator('[role="dialog"]').count()).toBe(0); // the sheet closed
         await page.locator('.tool-activity-row').last().focus();
         await page.keyboard.press('Tab');
         const focus = await page.evaluate(() => {
@@ -329,12 +329,16 @@ describe('the live row fits a phone column with its flags (review 3450 F4)', () 
             isControl: el.matches('.tool-activity-wait .tool-activity-answer'),
             visible: el.matches(':focus-visible'),
             outline: style!.outlineStyle === 'none' ? 0 : Number.parseFloat(style!.outlineWidth),
+            ring: style!.outlineStyle,
             hidden: el.closest('[aria-hidden="true"], [inert]') !== null,
           };
         });
         expect(focus?.isControl, 'Tab from the row does not reach the wait control').toBe(true);
         expect(focus?.visible, 'the control\'s focus is not visible').toBe(true);
-        expect(focus?.outline, 'the control draws no focus ring').toBeGreaterThan(0);
+        // The app's 2px solid ring (the control's `FOCUS_RING`, which base.css's `:focus-visible` rule draws too), not the
+        // browser's default one.
+        expect(focus?.ring, 'the control draws the browser\'s default ring, not the app\'s').toBe('solid');
+        expect(focus?.outline, 'the control draws no focus ring').toBeGreaterThanOrEqual(2);
         expect(focus?.hidden, 'the control is hidden from assistive technology').toBe(false);
         expect(await page.locator('.tool-activity-wait').last().getByRole('button', { name: 'Answer', exact: true }).count(),
           'the control has no accessible name "Answer"').toBe(1);
