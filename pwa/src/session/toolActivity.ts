@@ -12,11 +12,14 @@
 // ends at anything that is not a tool entry (assistant prose, a user prompt, a mail or task card, a divider, a pending
 // send, the working pulse), so every item keeps its place.
 //
-// NOTHING THAT WANTS THE READER IS HIDDEN. Unlike `groupToolRun`, a failed call, an open question or a call waiting on
-// the reader's approval does not end a stretch: it sits inside it in order, and it is listed on the item's `attention`,
-// which the row surfaces while collapsed (a count, and the first such entry drawn as its own actionable card).
+// NOTHING THAT WANTS THE READER IS HIDDEN. Unlike `groupToolRun`, a failed call or the question asked now does not end a
+// stretch: it sits inside it in order, and it is listed on the item's `attention`, which the row surfaces while collapsed
+// (a count, and the first such entry drawn as its own card). A live wait the transcript cannot tie to one call (an
+// approval, a menu, a question it does not single out) is not on `attention`: it is the row's `waiting` line.
 //
 // L1: pure, no I/O, no React.
+import { askQuestions } from '@ccrc/ui';
+import type { AskSource } from './askLive';
 import type { ChatItem } from './chatItems';
 import { groupToolRun, toolSummary, type RunItem } from './toolSummary';
 
@@ -52,17 +55,47 @@ export interface ToolActivityItem {
    *  turn does not single out). Set on the newest stretch of the current turn only, which draws it as a line of its own
    *  with the transcript's answer control. */
   waiting: boolean;
+  /** The stretch is in an earlier turn: the reader has prompted since, so nothing in it runs or waits, and a call with no
+   *  result is a result never recorded (review 3478 F4). */
+  past: boolean;
 }
 
 /** What a transcript renders: plain items, folded runs, and stretches of a turn's tool activity folded into one row,
  *  whose expansion holds the first two. Declared here, not in `toolSummary.ts`, so the two L1 modules import one way. */
 export type TranscriptItem = RunItem | ToolActivityItem;
 
-/** What the fold reads besides the items: the set's inner grouping, whether the session holds a live ask or dialog
- *  (`askSource`, the one decider; the screen's `askPending`), and whether it is working a turn (the list's `busy`). */
+/** The session's live wait, as the fold reads it (review 3478 F2): none; Claude's own question, in its words; or a wait
+ *  of any other kind (an approval, a menu, the ask's review screen, an ask the pane shows unreadably), which names no
+ *  call. */
+export type LiveWait =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'question'; readonly questions: readonly string[] }
+  | { readonly kind: 'other' };
+
+const NO_WAIT: LiveWait = { kind: 'none' };
+const OTHER_WAIT: LiveWait = { kind: 'other' };
+
+/** The live wait of what the ask surface shows (`askSource`, the one decider). Only a structured question carries words a
+ *  call can be matched by; every other kind is a wait no call is identified as. */
+export function liveWaitOf(source: AskSource): LiveWait {
+  switch (source.kind) {
+    case 'none': return NO_WAIT;
+    case 'structured': return { kind: 'question', questions: source.questions.map((q) => q.question.trim()) };
+    default: return OTHER_WAIT;
+  }
+}
+
+/** One string per wait, equal exactly when two waits are: what a list keys its fold on, so a screen render that hands it
+ *  an equal wait in a new object folds nothing again. */
+export function waitKey(wait: LiveWait): string {
+  return wait.kind === 'question' ? `question:${JSON.stringify(wait.questions)}` : wait.kind;
+}
+
+/** What the fold reads besides the items: the set's inner grouping, the session's live wait (`liveWaitOf`), and whether it
+ *  is working a turn (the list's `busy`). */
 export interface ActivityFold {
   readonly runs: 'tool-runs' | 'none';
-  readonly askPending: boolean;
+  readonly wait: LiveWait;
   readonly busy: boolean;
 }
 
@@ -75,18 +108,25 @@ function isPrompt(item: ChatItem): boolean {
 
 const failed = (e: ToolItem): boolean => e.result != null && e.result.isError === true;
 
+/** Whether an ask call asks exactly these questions, in this order (its input read by the card's own parser). */
+function asks(entry: ToolItem, questions: readonly string[]): boolean {
+  const own = askQuestions(entry.use.input);
+  return own !== null && own.length === questions.length && own.every((q, i) => q === questions[i]);
+}
+
 /** Fold each stretch of consecutive tool entries into one `tool-activity` item. Every other item passes through
  *  untouched, in order.
  *
  *  WHAT IS LIVE IS THE CURRENT TURN'S. The turn the session is in starts after the last user prompt; nothing before it
  *  runs, waits or holds a live control, whatever its calls lack.
  *
- *  A LIVE ASK OR DIALOG IS TIED TO A CARD ONLY WHEN THE TRANSCRIPT SINGLES ONE OUT. The live state (`askPending`) says
- *  that the session waits, not on which call: an approval names a tool, never a call, so no card is inferred for it.
- *  The one card it singles out is a question: the current turn's only AskUserQuestion with no result, whose own card
- *  carries Answer into the same sheet. Every other wait is the current turn's newest row's `waiting` line, and with no
- *  row in the current turn yet (a new prompt before its first call) the transcript draws none: the session's own
- *  surfaces carry it. So one live wait is drawn once, never twice. */
+ *  A LIVE WAIT IS TIED TO A CARD ONLY WHEN THE SOURCE IDENTIFIES ONE (review 3478 F2). The live wait names no call: an
+ *  approval names a tool, a menu names nothing. The one wait a call can be identified by is Claude's own question, by its
+ *  words: the current turn's AskUserQuestion with no result that asks exactly those questions, when exactly one does,
+ *  whose own card carries Answer into the same sheet. Every other wait is the current turn's newest row's `waiting`
+ *  line, and no question is counted against a call for it. With no row in the current turn yet (a new prompt before its
+ *  first call) the transcript draws none: the session's own surfaces carry it. So one live wait is drawn once, never
+ *  twice. */
 export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold): (ChatItem | ToolActivityItem)[] {
   let turnStart = 0;
   items.forEach((item, i) => { if (isPrompt(item)) turnStart = i + 1; });
@@ -98,8 +138,10 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
     newestCurrent = i;
     if (item.use.name === ASK && item.result == null) openAsks.push(item);
   }
-  const question = fold.askPending && openAsks.length === 1 ? openAsks[0]! : null;
-  const waitingRow = fold.askPending && question === null;
+  const { wait } = fold;
+  const named = wait.kind === 'question' ? openAsks.filter((e) => asks(e, wait.questions)) : [];
+  const question = named.length === 1 ? named[0]! : null;
+  const waitingRow = wait.kind !== 'none' && question === null;
 
   const out: (ChatItem | ToolActivityItem)[] = [];
   let stretch: ToolItem[] = [];
@@ -123,6 +165,7 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       attention,
       // The stretch holding the current turn's newest call; no stretch spans a prompt, so it is in the current turn.
       waiting: waitingRow && newestCurrent >= from && newestCurrent < to,
+      past: !current,
     });
     stretch = [];
   };
@@ -137,6 +180,25 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
   });
   close(items.length);
   return out;
+}
+
+/** The live wait a list folds by: the screen's own when it hands one over, else what `askPending` alone can say (a wait
+ *  that names no call). */
+export function waitOf(askWait: LiveWait | undefined, askPending: boolean): LiveWait {
+  return askWait ?? (askPending ? OTHER_WAIT : NO_WAIT);
+}
+
+/** What a tool-activity row's own rows answer to (review 3478 F1, F4): only the call the fold singled out takes the live
+ *  wait's pending state, so no other card offers a control for it; and in a past stretch a call with no result is
+ *  settled, never running. */
+export interface RowScope {
+  /** The key of the entry the fold singled out as the question asked now, or null. */
+  readonly asked: string | null;
+  readonly past: boolean;
+}
+
+export function rowScope(item: ToolActivityItem): RowScope {
+  return { asked: item.attention.find((a) => a.kind === 'question')?.entry.key ?? null, past: item.past };
 }
 
 /** The words of an attention count, by kind, in this order: what the reader can act on now before the failures. */

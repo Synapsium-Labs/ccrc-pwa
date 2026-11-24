@@ -27,8 +27,9 @@ export interface TranscriptRowValue {
   readonly renderRow: (item: TranscriptItem) => ReactNode;
   /** Which tool-activity rows the reader opened, kept for as long as the session view is open (`ExpansionMemo`). */
   readonly expansion: ExpansionMemo;
-  /** The transcript's answer control, which a tool-activity row offers beside a call waiting on the reader's approval:
-   *  `onAnswer` raises the sheet (or, with `askBelow`, the inline card below the transcript) and answers nothing itself. */
+  /** The transcript's answer control, which a tool-activity row offers on its line for a live wait no call is identified
+   *  as (an approval, a menu, a question it does not single out): `onAnswer` raises the sheet (or, with `askBelow`, the
+   *  inline card below the transcript) and answers nothing itself. */
   readonly answer: AnswerControl;
 }
 

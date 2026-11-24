@@ -59,6 +59,7 @@ import { modelOptions, effortOptions, lanePickerNote, type PickOption } from '..
 import { useLaneModelsView } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
+import { liveWaitOf } from '../session/toolActivity';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
 import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
 
@@ -198,7 +199,11 @@ export function SessionScreen({
   // reconnect's gap is different: the sheet there is the held surface, but the card follows the connection, not the hold,
   // so while `askFrameSeen` is down it reads unanswered without its Answer control until the new connection decides.
   // The sheet's own hold through the gap is `DialogSheet`'s.
-  const askPending = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen }).kind !== 'none';
+  const liveSource = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen });
+  const askPending = liveSource.kind !== 'none';
+  // Desktop polish wave 168, review 3478 F2: what KIND of wait it is, so the transcript ties it to a call only when it
+  // identifies one (an approval or a menu names none).
+  const askWait = liveWaitOf(liveSource);
   // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
   // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
   const answerLabel = answerControlLabel(liveDialog);
@@ -701,6 +706,7 @@ export function SessionScreen({
               onRetry={onRetry}
               onDiscard={onDiscard}
               askPending={askPending}
+              askWait={askWait}
               askBelow={askInline}
               answerLabel={answerLabel}
               onAnswer={onAnswer}

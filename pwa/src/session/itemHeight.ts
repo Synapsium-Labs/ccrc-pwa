@@ -223,10 +223,11 @@ export function wellLines(text: string): number {
  *
  * `activity` is the tool-activity row (desktop polish wave 168): one stretch of
  * a turn's tool calls folded into one collapsed line, `.tool-activity`, with the
- * first call that wants the reader (a failed call, an open question, a call
- * waiting on approval) drawn under it as its own card. Its lines are the line
- * and that card's, so a row with a card is priced above one without. Expanded,
- * it is never sampled either.
+ * first call that wants the reader (the question asked now, else a failed call)
+ * drawn under it as its own card, and a live wait no call is identified as (an
+ * approval, a menu) drawn as a line of its own. Its lines are the row's, the
+ * wait line's and that card's, so a row with either is priced above one
+ * without. Expanded, it is never sampled either.
  *
  * THE RECORD IS THE VOCABULARY. `HEIGHT_BUCKETS` derives from it rather than
  * restating it, so a new bucket is a compile error here, not an unsized row.
