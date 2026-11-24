@@ -28,6 +28,7 @@ import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
 import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
@@ -69,12 +70,12 @@ function notOkSentence(answer: DocsNotOk): string {
 }
 
 /** Where back goes (spec 4.4: "up one level"): a leaf or a directory to its parent directory or its section, a
- *  section to its project, a project to the index, the index to the fleet (`/`). The page's ref is kept; `view` is
+ *  section to its project, a project to the index, the index to the fleet (`FLEET_PATH`). The page's ref is kept; `view` is
  *  dropped. */
 export function docsUpHref(page: DocsPageLocation): string {
   switch (page.kind) {
     case 'index':
-      return '/';
+      return FLEET_PATH;
     case 'project':
       return docsPageUrl(docsLocation(page, { kind: 'index' }));
     case 'section':
@@ -1017,7 +1018,7 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
       className="docs-back"
       aria-label={DOCS_HEAD_TEXT.back}
       onClick={() => navigate(up)}
-      {...(up === '/' ? doorMark('go-fleet') : {})}
+      {...(up === FLEET_PATH ? doorMark('go-fleet') : {})}
     >
       ‹
     </button>

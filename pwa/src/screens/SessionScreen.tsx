@@ -18,6 +18,7 @@ import { backgroundTasksClause } from '../lib/refusalWords';
 import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 import { ack } from '../lib/seen';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -574,7 +575,7 @@ export function SessionScreen({
     coordination,
     facts,
     onInterrupt: (source) => void interrupt(source),
-    onBack: () => navigate('/'),
+    onBack: () => navigate(FLEET_PATH),
     queuedField,
     // PL11 (D-7986; spec §2, D30): the Goals door, for a session in a programme, read off its row and the runs it already holds,
     // named by the programme's title (review 1537 A10).
@@ -817,7 +818,7 @@ export function SessionScreen({
         session={live}
         open={reapOpen}
         onClose={() => setReapOpen(false)}
-        onReaped={() => { setReapOpen(false); navigate('/'); }}
+        onReaped={() => { setReapOpen(false); navigate(FLEET_PATH); }}
       />
     </div>
     </SessionFlows>

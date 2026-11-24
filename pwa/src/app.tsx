@@ -1,5 +1,7 @@
-// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/` is the
-// fleet, and every other route fills the detail pane. On phones this is a
+// Router shell. The routes are `lib/routes.ts`'s table (D-5466): `/fleet` is
+// the fleet, `/` is the home (Overlord W1 home: it replaces itself with the
+// place `homePlace` answers, the Fleet's or the Overlord's, `HomeRoute`), and
+// every other route fills the detail pane. On phones this is a
 // full-screen swap (one pane at a time); on desktop it's a two-pane
 // master–detail — the fleet as a persistent sidebar beside the active detail
 // pane (styles/shell.css does the responsive layout, the same DOM serves
@@ -57,6 +59,9 @@ import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRout
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
+import { useOverlordStore } from './stores/overlord';
+import { HomeRoute } from './overlord/HomeRoute';
+import { OverlordRoute } from './overlord/OverlordRoute';
 import './styles/shell.css';
 
 export { navigate } from './lib/router';
@@ -87,6 +92,9 @@ export function App(): ReactNode {
     // dialog badges. connect() is idempotent; the socket survives navigation.
     useFleetStore.getState().connect();
   }, []);
+  // The Overlord's reads (Overlord W1 home, Task 2): one store, started once at the shell, so the bars, the home route and the
+  // place read one answer. Its stop ends the poll when the shell unmounts.
+  useEffect(() => useOverlordStore.getState().start(), []);
   // The shell holds no subscription to `sessions` (C6, D-6438): a fleet frame that changes one row re-renders the
   // readers of that row, not the frame, the ladder and every sibling mounted here. `/archive` subscribes locally.
   // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
@@ -184,7 +192,12 @@ export function App(): ReactNode {
   const loading = (screen: ReactNode): ReactNode => (
     <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}>{screen}</Suspense>
   );
-  const ladder = sessionId !== null ? loading(
+  const ladder = route === 'home' ? (
+    // `/` decides the home and replaces itself with the place it answers (Overlord W1 home, plan question 1).
+    <HomeRoute />
+  ) : route === 'overlord' ? (
+    <OverlordRoute />
+  ) : sessionId !== null ? loading(
     // key remounts per session so per-session UI state (terminal drawer,
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />

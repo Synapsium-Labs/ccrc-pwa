@@ -131,7 +131,7 @@ describe('the + sheet', () => {
       const { ctx, page } = await openCards(view);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.getByRole('button', { name: /New workspace on project-a/ }).click();
         await settle(page);
         const where = named(view);
@@ -170,7 +170,7 @@ describe('the + sheet', () => {
     try {
       await answerCreate(ctx, 409, { ok: false, error: 'slug-taken' });
       await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.goto(server!.origin + '/');
+      await page.goto(server!.origin + '/fleet');
       await page.getByRole('button', { name: /New workspace on project-a/ }).click();
       await settle(page);
       await page.getByLabel('Name or Linear ticket').fill('ENG-1234');
@@ -192,7 +192,7 @@ describe('the new-session sheet', () => {
       const { ctx, page } = await openCards(view);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.getByRole('button', { name: /new session/i }).first().click();
         await settle(page);
         await page.getByRole('button', { name: /team·alt/ }).click();
@@ -231,7 +231,7 @@ describe('the new-session sheet', () => {
     try {
       await answerCreate(ctx, 409, { ok: false, error: 'account-refused', reason: 'claude9:auth-dead' });
       await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.goto(server!.origin + '/');
+      await page.goto(server!.origin + '/fleet');
       await page.getByRole('button', { name: /new session/i }).first().click();
       await settle(page);
       await page.getByRole('button', { name: /team·alt/ }).click();
@@ -254,7 +254,7 @@ describe('the new-session sheet', () => {
       try {
         await answerCreate(ctx, 409, { ok: false, error: 'slug-taken' });
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.getByRole('button', { name: /new session/i }).first().click();
         await settle(page);
         await page.getByRole('button', { name: /team·alt/ }).click();
@@ -279,7 +279,7 @@ describe('the new-session sheet', () => {
     const { ctx, page } = await openCards(view);
     try {
       await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.goto(server!.origin + '/');
+      await page.goto(server!.origin + '/fleet');
       await page.getByRole('button', { name: /new session/i }).first().click();
       await settle(page);
       await page.getByRole('button', { name: /^gpt/ }).click();
@@ -353,7 +353,7 @@ describe('a request in flight', () => {
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
         });
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         if (door === 'the + sheet') {
           await page.getByRole('button', { name: /New workspace on project-a/ }).click();
           await settle(page);
@@ -400,7 +400,7 @@ describe('a lookup answer does not move the sheet', () => {
         try {
           await answerResolve(ctx);
           await page.emulateMedia({ reducedMotion: 'reduce' });
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           if (door === 'the + sheet') {
             await page.getByRole('button', { name: /New workspace on project-a/ }).click();
             await settle(page);

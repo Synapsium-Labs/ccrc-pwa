@@ -183,7 +183,7 @@ afterAll(async () => {
 async function openDesk(view: AppView, fixture: AppFixture = FIXTURE): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, fixture);
   await seedStripExpanded(opened.ctx);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
     && document.querySelector('.ref-bar-new, .ins-new') !== null, undefined, { timeout: 30_000 });
   await opened.page.waitForTimeout(300); // layout settles
@@ -355,7 +355,7 @@ describe('in Refined with a release waiting the update row sits below the banner
       try {
         await seedStripExpanded(ctx); // the row's cards are counted below: every lane
         const answers = await answerViewThenFail(page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
           && document.querySelector('.shell-banners .update-indicator-dismiss') !== null
           && document.querySelector('.shell-banners .halt-banner') !== null, undefined, { timeout: 30_000 });
@@ -415,7 +415,7 @@ describe('under coarse emulation every card and All accounts (at a desk) is at l
       const { ctx, page, errors } = opened;
       try {
         if (!phone) await seedStripExpanded(ctx); // every card is measured, not just the folded line's
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n, phone ? 4 : want, { timeout: 30_000 });
         await page.waitForTimeout(300);
         if (phone) {
@@ -646,7 +646,7 @@ const FOLDED_CARDS: Readonly<Record<number, number>> = { 900: 2, 1280: 3, 1920: 
 async function openFoldedDesk(view: AppView, expanded = false): Promise<Awaited<ReturnType<typeof openApp>>> {
   const opened = await openApp(browser!, view, FOLD_FIXTURE);
   if (expanded) await seedStripExpanded(opened.ctx);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForFunction((all) => document.querySelector('header.shell-accounts .accounts-end [aria-expanded]') !== null
     && document.querySelector('.sess-line') !== null
     && (!all || document.querySelectorAll('header.shell-accounts .account-gauge').length === 17), expanded, { timeout: 30_000 });

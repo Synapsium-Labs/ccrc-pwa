@@ -81,7 +81,7 @@ afterAll(async () => {
 
 async function open(theme: string, width: number, touch: boolean) {
   const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, FIXTURE);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForSelector('.ins-group-seen', { timeout: 20_000 });
   await opened.page.waitForTimeout(600); // the first paint's transitions and the fleet frame settle
   return opened;

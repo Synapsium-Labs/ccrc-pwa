@@ -96,7 +96,7 @@ const open = async (view: AppView, hierarchy404 = false) => {
   const answered404 = new Promise<void>((resolve) => { seen404 = resolve; });
   if (hierarchy404) await app.ctx.route('**/api/hierarchy', async (route) => { await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }); seen404(); });
   else seen404();
-  await app.page.goto(server!.origin + '/');
+  await app.page.goto(server!.origin + '/fleet');
   await app.page.getByRole('button', { name: PROJECT_ADD_TEXT.open }).first().click();
   const sheet = app.page.getByRole('dialog');
   await sheet.getByRole('heading', { name: PROJECT_ADD_TEXT.title }).waitFor({ timeout: 30_000 });

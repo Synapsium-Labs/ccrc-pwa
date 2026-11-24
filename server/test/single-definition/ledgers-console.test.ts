@@ -47,8 +47,12 @@ describe('the ledgers console has one owner of each reader, builder and list (ca
     // and N19), not by reading the route file as text, which the literal-source ratchet (ARCH-06) refuses.
   });
 
-  it("the console's places are listed in places.ts alone, and their badges decided in navBadges.ts alone (PL10)", () => {
-    for (const name of ['PLACES', 'DESK_PLACES', 'phoneBarShown']) expect(holders(decl(name)), name).toEqual(['pwa/src/lib/places.ts']);
+  it("the console's places are derived in places.ts alone, and their badges decided in navBadges.ts alone (PL10; Overlord W1 home F7)", () => {
+    for (const name of ['placesFor', 'deskPlacesFor', 'phoneDoorsFit', 'phoneBarShown']) {
+      expect(holders(decl(name)), name).toEqual(['pwa/src/lib/places.ts']);
+    }
+    // The constant lists are gone: a list kept beside the derived one could drift from the designation's state.
+    for (const name of ['PLACES', 'DESK_PLACES']) expect(holders(decl(name)), name).toEqual([]);
     expect(holders(decl('placeBadge'))).toEqual(['pwa/src/fleet/navBadges.ts']);
     // The list Refined's bar kept of its own until PL10 is gone, not kept beside the shared one.
     expect(holders(decl('TAB_IDS'))).toEqual([]);

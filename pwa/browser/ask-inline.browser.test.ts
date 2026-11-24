@@ -2175,6 +2175,9 @@ describe('a tapped row answers through the question family\'s door on a question
 // W7 C7g (D-7185, D-7485) read `GET /health` when the sheet mounted to choose the door, and these rows held a tap's POST
 // issued at once, never behind a stalled re-read. Since C7p (D-7194, D-7540) there is one door and no read: whatever
 // `/health` does (it stalls, or it fails), the sheet never reads it, and the tap's POST goes at once to the family's door.
+// The app itself reads `/health` once at start, before any sheet: the Overlord store's capability read (Overlord W1 home, the
+// console's one reader of the caps). So the sheet's reads are counted from the moment it is drawn, and the start read is held
+// to one.
 describe('a tap\'s answer is issued at once on the family\'s door, and /health is never read (W7 C7p)', () => {
   const HOLD_VIEWS: AppView[] = [
     { skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: REFINED, theme: PHOSPHOR, width: 1280 },
@@ -2208,12 +2211,14 @@ describe('a tap\'s answer is issued at once on the family\'s door, and /health i
           await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
           const option = view.width >= 1280 ? `${CARD} button.opt` : '.sheet-panel button.opt';
           await opened.page.waitForSelector(option, { timeout: 30_000 });
+          const atSheet = healthReads;
+          expect(atSheet, "the app's one read at start, the Overlord store's capability read").toBeLessThanOrEqual(1);
           await opened.page.waitForTimeout(800);
           await opened.page.locator(option).nth(1).click();
           await expect.poll(() => family.length, { timeout: 3_000, interval: 50 }).toBe(1);
           expect(JSON.parse(family[0]!), 'the second row answers option 2, on the family\'s door').toMatchObject({ kind: 'dialog', optionIndex: 2 });
           expect(old, 'nothing goes to the old door').toEqual([]);
-          expect(healthReads, 'the sheet reads no /health').toBe(0);
+          expect(healthReads - atSheet, 'the sheet reads no /health').toBe(0);
           expect(opened.errors).toEqual([]);
         } finally {
           await opened.ctx.close();

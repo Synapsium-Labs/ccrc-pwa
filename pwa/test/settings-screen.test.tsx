@@ -104,11 +104,11 @@ describe('SettingsScreen — the shell', () => {
 
   it('has a back affordance that returns to the fleet', () => {
     // Starts ON /settings, so the assertion cannot pass by the route never
-    // having moved (accounts-screen.test.tsx's own back case starts on '/').
+    // having moved (accounts-screen.test.tsx's own back case starts on '/', which is no longer the Fleet's path).
     navigate('/settings');
     renderSettings(null);
     fireEvent.click(screen.getByRole('button', { name: /back to fleet/i }));
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
   });
 });
 
