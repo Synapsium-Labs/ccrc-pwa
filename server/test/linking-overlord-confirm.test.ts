@@ -7,6 +7,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import path from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -82,11 +83,20 @@ function fresh(): { gen: GenRow; key: string } {
 interface Rig { app: FastifyInstance; notices: Array<{ title: string; body: string; mode: string }>; waiting: () => number; act: () => Record<string, string> }
 /** The live Linear store the confirm re-reads (final review I3): `both` ws-a holding AAA and ws-b BBB; `shared` ws-b holding AAA
  *  too; `lost-a` only ws-b (ws-a's slot is gone); `throw` and `unreadable` a store that cannot be read. */
-type Linear = 'both' | 'shared' | 'lost-a' | 'throw' | 'unreadable';
+type Linear = 'both' | 'shared' | 'lost-a' | 'throw' | 'unreadable' | 'none' | 'a-unread' | 'b-unread';
 async function linearOf(kind: Linear): Promise<() => Promise<LinearStoreRead>> {
   if (kind === 'throw') return async () => { throw new Error('the store is gone'); };
   if (kind === 'unreadable') return async () => ({ kind: 'unreadable', code: 'EIO' }) as LinearStoreRead;
   const ccrcDir = path.join(mkTmp('ccrc-link-confirm-linear-'), '.ccrc');
+  // `none`: a listed store with no slot. `a-unread` and `b-unread`: that workspace has a usable key and no record yet, so what its
+  // teams are is not known (`measuredTeamRoutes`' `unreadableWorkspaces`).
+  if (kind === 'none') return () => readLinearStore(ccrcDir);
+  const keyOnly = (id: string): void => {
+    mkdirSync(path.join(ccrcDir, 'linear'), { recursive: true });
+    writeFileSync(path.join(ccrcDir, 'linear', `${id}.key`), `lin_api_${'u'.repeat(40)}\n`, { mode: 0o600 });
+  };
+  if (kind === 'a-unread') { keyOnly(WS_A); await seedSlot(ccrcDir, 'b'); return () => readLinearStore(ccrcDir); }
+  if (kind === 'b-unread') { await seedSlot(ccrcDir, 'a'); keyOnly(WS_B); return () => readLinearStore(ccrcDir); }
   if (kind !== 'lost-a') await seedSlot(ccrcDir, 'a');
   await seedSlot(ccrcDir, 'b', kind === 'shared' ? { teams: [...WS.b.teams, { id: 'bbbbbbbb-1111-4000-8000-0000000000b2', key: 'AAA', name: 'Team A' }] } : {});
   return () => readLinearStore(ccrcDir);
@@ -296,7 +306,12 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     const r = await rig({ linear: 'shared' });
     s.recordLinkingReading('project-a', MEASURED);
     expect(s.recordTeamSuggestion('project-a', { by: 'lane-c', key: 'AAA', workspaceId: null, workspaceName: null, teamName: 'Team A', why: 'the branches say so', at: 1 })).toBe('written');
-    refused(await confirm(r, { team: 'AAA', workspace: null }), 'team-ambiguous');
+    const ambiguous = await confirm(r, { team: 'AAA', workspace: null });
+    refused(ambiguous, 'team-ambiguous');
+    // Review 3482 F1, F6: the detail lists the holders by id and URL key, and never tells the caller to resend one of them as
+    // `workspace`, which this door would answer `team-unknown` (the candidate stored with none is named by null only).
+    expect(ambiguous.json().detail).toBe(
+      `more than one connected Linear workspace holds the key, and the candidate names none of them: ${WS_A} (ws-a), ${WS_B} (ws-b)`);
     unlinked();
     // The same key named with its workspace is a pair the store holds: it links.
     s.recordTeamCandidates('project-a', [ALPHA]);
@@ -336,4 +351,41 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     unlinked();
     expect((s.db.prepare('SELECT COUNT(*) AS n FROM overlord_fence_refusals').get() as { n: number }).n).toBe(0);
   });
+});
+
+// D-8808, D-8809: what the confirm answers when a workspace cannot be read, or none is connected. One row a case, so a later
+// change of the door's behaviour changes single cells. A named pair is a candidate stored with that workspace; an unnamed one
+// is a suggestion stored with none (`workspaceId` null).
+describe('characterization: unread and unconnected workspaces (w8-confirm-unmeasured)', () => {
+  /** [case, store, candidate team, candidate workspace (null: stored with none), status, the error or the workspace linked] */
+  const CASES: ReadonlyArray<readonly [string, Linear, string, string | null, number, string]> = [
+    ['(a) held, named', 'both', 'AAA', WS_A, 200, WS_A],
+    ['(a) held, unnamed', 'both', 'BBB', null, 200, WS_B],
+    ['(b) held by none, named', 'lost-a', 'AAA', WS_A, 404, 'team-unknown'],
+    ['(b) held by none, unnamed', 'lost-a', 'AAA', null, 404, 'team-unknown'],
+    ['(c) only possible slot unread, named', 'a-unread', 'AAA', WS_A, 503, 'unavailable'],
+    ['(c) only possible slot unread, unnamed', 'a-unread', 'AAA', null, 503, 'unavailable'],
+    ['(d) none connected, named', 'none', 'AAA', WS_A, 501, 'not-configured'],
+    ['(d) none connected, unnamed', 'none', 'AAA', null, 501, 'not-configured'],
+    ['(e) one holder, another unread, named', 'b-unread', 'AAA', WS_A, 200, WS_A],
+    ['(e) one holder, another unread, unnamed', 'b-unread', 'AAA', null, 503, 'unavailable'],
+  ];
+  for (const [name, linear, team, workspace, status, expected] of CASES) {
+    it(name, async () => {
+      const r = await rig({ linear });
+      s.recordLinkingReading('project-a', MEASURED);
+      expect(s.recordTeamSuggestion('project-a', {
+        by: 'lane-c', key: team, workspaceId: workspace, workspaceName: null, teamName: `Team ${team}`, why: 'the branches say so', at: 1,
+      })).toBe('written');
+      const res = await confirm(r, { team, workspace });
+      expect(res.statusCode, res.body).toBe(status);
+      if (status === 200) {
+        expect(res.json().link).toMatchObject({ key: team, workspaceId: expected });
+        expect(s.linkingOf('project-a')).toMatchObject({ teamKey: team, teamWorkspace: expected });
+      } else {
+        refused(res, expected);
+        unlinked();
+      }
+    });
+  }
 });

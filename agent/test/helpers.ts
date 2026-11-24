@@ -41,6 +41,9 @@ export async function boot(fixture: Fixture, extra: Partial<AgentOpts> = {}): Pr
     // Overlord W1 (R10): the ready frame's `overlord-history` check reads the platform; Linux here, so every runner's real-agent
     // `ops` pins see one list. A case that passes its own `historySeams` replaces this whole object.
     historySeams: { platform: 'linux' },
+    // Overlord W1, the isolation word: the host report reads synthetic roots that hold no ids, so no agent test reads the
+    // live host's machine id or boot id; a case that measures them passes its own `hostRoots`.
+    hostRoots: { procRoot: fixture.outside, etcRoot: fixture.outside, platform: 'linux' },
     ...extra,
   });
 }

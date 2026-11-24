@@ -14,6 +14,9 @@ import { MIN, NOW, itemView } from './ledgersFixture';
 
 afterEach(cleanup);
 
+/** The hint under a Do item's optional note (D-8931). */
+const DO_NOTE_HINT = 'Some items ask for one, such as who did each step and when. The coordinator checks the result itself and either closes the item or sends it back with what it found.';
+
 const show = (item = itemView(), over: Partial<React.ComponentProps<typeof ItemView>> = {}) => {
   const onTick = vi.fn(async () => {});
   const onDismiss = vi.fn(async () => {});
@@ -152,11 +155,65 @@ describe('the item view', () => {
     await waitFor(() => expect(onTick).toHaveBeenCalledWith('4'));
   });
 
-  it('Do posts no answer', async () => {
+  // D-8931: a Do item's tick may carry an optional note, because a coordinator may ask for one in the item's steps.
+  it('a Do item offers an optional note to the coordinator, with the hint that some items ask for one', () => {
+    show(itemView({ kind: 'do' }));
+    // The label wraps its hint, as the value field's does, so the name starts with the label's words.
+    const note = screen.getByRole('textbox', { name: /^Note to the coordinator \(optional\)/ }) as HTMLInputElement;
+    expect(note.maxLength).toBe(ANSWER_MAX);
+    expect(note.value).toBe('');
+    const panel = screen.getByRole('region', { name: 'Your move' });
+    expect(within(panel).getAllByRole('textbox')).toEqual([note]);
+    expect(panel.textContent).toContain(DO_NOTE_HINT);
+    expect(panel.textContent).not.toContain('Nothing to fill in');
+    // The note is optional: Mark done is on with the field empty, and no count is drawn for a note that is not there.
+    expect((screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(panel.textContent).not.toContain(`of ${ANSWER_MAX} characters`);
+  });
+
+  it('Do posts no answer when the note is left empty, or holds only spaces', async () => {
     const { onTick } = show(itemView({ kind: 'do' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
     await waitFor(() => expect(onTick).toHaveBeenCalledTimes(1));
-    expect(onTick).toHaveBeenCalledWith();
+    expect(onTick.mock.calls[0]).toEqual([]);
+    cleanup();
+    const spaced = show(itemView({ kind: 'do' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(spaced.onTick).toHaveBeenCalledTimes(1));
+    expect(spaced.onTick.mock.calls[0]).toEqual([]);
+  });
+
+  it('Do posts the note, trimmed, when one is typed, and nothing joined to it', async () => {
+    const { onTick } = show(itemView({ kind: 'do' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: '  An administrator did step 1 at 14:05 UTC.  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(onTick).toHaveBeenCalledTimes(1));
+    expect(onTick.mock.calls[0]).toEqual(['An administrator did step 1 at 14:05 UTC.']);
+  });
+
+  it('a Do note has the limit and the count too, and a note past the limit is not sent', () => {
+    const { onTick } = show(itemView({ kind: 'do' }));
+    const note = screen.getByRole('textbox', { name: /note to the coordinator/i }) as HTMLInputElement;
+    const done = screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement;
+    fireEvent.change(note, { target: { value: ' 1234 ' } });
+    expect(screen.getByText(`4 of ${ANSWER_MAX} characters`)).toBeTruthy();
+    expect(done.disabled).toBe(false);
+    // a paste can outrun maxLength in some browsers
+    fireEvent.change(note, { target: { value: 'x'.repeat(ANSWER_MAX + 1) } });
+    expect(done.disabled).toBe(true);
+    fireEvent.click(done);
+    expect(onTick).not.toHaveBeenCalled();
+    fireEvent.change(note, { target: { value: 'x'.repeat(ANSWER_MAX) } });
+    expect(done.disabled).toBe(false);
+  });
+
+  it('a Do item that is being checked, or whose programme has ended, offers no note field', () => {
+    show(itemView({ kind: 'do', state: 'checking', tickedAt: NOW - MIN, answer: 'Done at noon.' }));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    cleanup();
+    show(itemView({ kind: 'do' }), { programmeLive: false });
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 
   it('a refused tick shows the refusal sentence and leaves the button enabled', async () => {

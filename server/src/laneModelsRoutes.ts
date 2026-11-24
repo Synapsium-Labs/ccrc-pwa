@@ -3,15 +3,27 @@ import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import type { ModelClass } from '../../shared/models.js';
 import type { FleetIO } from './io.js';
 import { readLaneModels } from './laneModels.js';
-import { modelsActAuditWord, modelsActVerdict, parseModelsActBody, type ModelsWriteAction } from './laneModelsAct.js';
+import {
+  modelsActAuditWord, modelsActVerdict, parseModelsActBody, revertGateVerdict, type ModelsDoorAction,
+} from './laneModelsAct.js';
 import { refuseRoute } from './refuse.js';
 
 /**
  * THE MODELS SHEET'S WRITE DOOR (programme model-class-advance, wave R4; plan 2026-10-15-model-class-auto-advance-codex-arm.md,
- * Task 19's POST as re-planned, D-8686, D-8687; the audit's actor is D-5229): `POST /api/models/:lane`, body exactly
- * `{action: 'hold' | 'release' | 'revert', class}`. It runs `ccrc models <lane> <action> <class>` on the fleet's box
- * through `FleetIO.models` (the agent's `models` op, or the local arm), and answers
- * `{ok, lane, action, class, changed, partial, models}`. The read beside it, `GET /api/models/:lane`, stays in `server.ts`.
+ * Task 19's POST as re-planned, D-8686, D-8687; the audit's actor is D-5229; revert-holds-until-newer, D-8757):
+ * `POST /api/models/:lane`, body exactly `{action: 'revert', class}`. It runs `ccrc models <lane> revert <class>` on the
+ * fleet's box through `FleetIO.models` (the agent's `models` op, or the local arm), and answers
+ * `{ok, lane, action, class, changed, partial, models}` (`changed` is always `null`; the key stays for an older console).
+ * The read beside it, `GET /api/models/:lane`, stays in `server.ts`.
+ *
+ *  - REVERT ONLY. Hold and Release are refused `bad-action` before any read or write: they remain the shell's and the
+ *    agent's verbs (`ccrc models <lane> hold|release`), and the sheet no longer offers them.
+ *  - A FRESH CAPABILITY READ BEFORE THE ACT. After the lane and the body, the door reads the lane (`readLaneModels` with
+ *    `{ fresh: true }`: a `show` of its own, never one already in flight) and asks `revertGateVerdict`. It writes only when
+ *    that read carries `revertHoldEnds: true`, because a hold the box would never end by itself must not be written from the
+ *    console: an older or unreadable box proves nothing. A refusal there is a word, writes nothing and audits nothing (the
+ *    audit line is one per write op ASKED). No atomicity is promised across a box being replaced between that read and the
+ *    act: the act's own answer still decides what the sheet is told.
  *
  *  - SESSION-GATED, NO BOX TOKEN. The global auth gate takes it like every PWA-surface write (it is in no EXEMPT table);
  *    a session's own hand never reaches it, the operator's device does. The box-token census lists it as `MODELS_DOORS`.
@@ -36,7 +48,6 @@ import { refuseRoute } from './refuse.js';
  */
 export interface LaneModelsRouteDeps {
   readonly io: FleetIO;
-  readonly ccrcDir: string;
   /** Whether the roster holds this lane. */
   readonly hasLane: (lane: string) => boolean;
   /** The device label the gate measured, as `device:<label>` (or the gate's own `unmeasured`); never a session id. */
@@ -50,6 +61,9 @@ export function registerLaneModelsRoutes(app: FastifyInstance, deps: LaneModelsR
     const parsed = parseModelsActBody(lane, req.body);
     if (!parsed.ok) return refuseRoute(reply, 'bad-request', { why: parsed.why });
     const { action, cls } = parsed;
+    // The capability read, fresh, before any write: a refusal here asks the op nothing and writes no audit line.
+    const gate = revertGateVerdict(await readLaneModels(deps.io, lane, { fresh: true }));
+    if (gate.kind === 'refuse') return refuseRoute(reply, gate.error, gate.extra);
     // The act. A rejected promise is a contract breach of the seam: the frame may have left, so it reads as lost.
     let asked: ModelsAsked;
     try { asked = await deps.io.models(lane, action, cls); } catch { asked = { kind: 'lost' }; }
@@ -59,12 +73,12 @@ export function registerLaneModelsRoutes(app: FastifyInstance, deps: LaneModelsR
     reply.header('cache-control', 'no-store');
     return {
       ok: true, lane, action, class: cls, changed: verdict.changed, partial: verdict.partial,
-      models: await readLaneModels(deps.io, deps.ccrcDir, lane, { fresh: true }),
+      models: await readLaneModels(deps.io, lane, { fresh: true }),
     };
   });
 }
 
 /** The one audit line of an op that was asked (D-5229). The server runs `Fastify({ logger: false })`, so `req.log` is a no-op. */
-function audit(action: ModelsWriteAction, lane: string, cls: ModelClass, actor: string, outcome: string): void {
+function audit(action: ModelsDoorAction, lane: string, cls: ModelClass, actor: string, outcome: string): void {
   console.warn(`ccrc-server: models: ${action} ${lane} ${cls} by ${actor} -> ${outcome}`);
 }

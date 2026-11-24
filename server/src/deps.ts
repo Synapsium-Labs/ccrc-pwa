@@ -35,6 +35,7 @@ import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -54,6 +55,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { IsolationReader } from './isolationFacts.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -239,9 +241,15 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
+   *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
+  overlordRestore?: OverlordRestoreState;
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;
+  /** The isolation word's one reader (Overlord W1, §7.4, H28), built once in `index.ts` over the server's boot facts and the
+   *  live fleet state. Absent (a test, a script): the ladder's `shared-user` input reads `unmeasured: not-wired`, which caps. */
+  isolation?: IsolationReader;
   ladderServerCaps?: readonly string[];
   /** The sandbox settle step's test seams (W1 sandbox B, review 3325 F4 and F6): isolated own lists in place of the release's
    *  (`CLAUDE_CODE_OWN_LISTS`, which lists no build), and a completion signal per settle. Absent: the release's lists, no signal. */

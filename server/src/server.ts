@@ -88,6 +88,7 @@ import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectRea
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
 import { registerApprovalCensusRoutes } from './coord/approvalCensusRoutes.js';
+import { registerDelegationBackfillRoutes } from './coord/delegationBackfillRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
@@ -1476,7 +1477,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { lane } = req.params as { lane: string };
     if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
     reply.header('cache-control', 'no-store');
-    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, lane) };
     return answer;
   });
 
@@ -2008,13 +2009,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
               : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
                 + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
                 + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
-                + 'start: fix the row, and restart the server')
+                + 'start: fix the row, and restart the server; if it is meant to be an Anthropic lane, its row in this '
+                + 'box\'s accounts.json needs telemetry "anthropic", and no codex exec block: fix the row, and restart '
+                + 'the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
             : '';
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
-          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
+          + `or Anthropic lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
         notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
           'ccrc-server: /api/notify: the push did not go out');
@@ -2171,15 +2174,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Hold, Release and Revert, registered
+  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Revert only, registered
   // from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`MODELS_DOORS`) read by name.
   registerLaneModelsRoutes(app, {
-    io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
+    io: deps.io, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
   // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own
   // file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`APPROVAL_CENSUS_DOORS`) read by name.
   registerApprovalCensusRoutes(app, { sources: (fromMs, toMs) => questions.censusSources(fromMs, toMs), wall: () => deps.time.clock.wall() });
+  // The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): its dry run, pass and undo, session-gated,
+  // no box token, registered from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`DELEGATION_BACKFILL_DOORS`) read.
+  registerDelegationBackfillRoutes(app, {
+    applier: async () => (watcher === undefined ? null : watcher.delegationApplier()), io: deps.io, registryDir: deps.cfg.registryDir,
+    listedIds: () => watcher?.currentRegistryIds() ?? null, now: () => deps.time.clock.wall(), signedIn: (req) => deps.cfg.authEnabled && sessionAuth(req).reason === 'session',
+  });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({
@@ -2227,7 +2236,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id) }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2388,7 +2397,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps,
+    ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: overlordBody,

@@ -339,16 +339,56 @@ describe('a valid field places its row, and only adds (path-identity spec §4.5 
 });
 
 describe('a pending or unmeasured field holds, by row id', () => {
-  it('a PENDING field holds the child, by row id, with its remedy', () => {
-    makeChild(h);
-    const elsewhere = mk('elsewhere');
+  // A PENDING FIELD HOLDS ONLY THE TREES IT COULD BE IN (D-8954). A pending line says a pane never recorded where it
+  // entered, and its logical spelling is `.workdir` itself. Spelled through no link and resolving completely, that
+  // spelling is where its `cd` went, so the row is placed by it, as a legacy row is, and the string, leaf and identity
+  // arms refuse it at, inside or through the child. Measured on a fleet box, 2026-11-22: one unrelated pending row
+  // held every child reclaim for 13 hours. A spelling through a link, or one that does not resolve completely, still
+  // holds by row id. The rows are spelled from the HOME's real path, so a linked TMPDIR leaves only the links a case makes.
+  const realHome = (): string => fs.realpathSync(h.home);
+
+  it('an UNRELATED pending row no longer holds: a link-free spelling outside the child is placed by it, and counted', () => {
+    const c = makeChild(h);
+    const elsewhere = fs.realpathSync(mk('elsewhere'));
     otherRow('demo-pending', elsewhere);
-    expect(evalOf(h).verdict, 'the CONTROL: legacy, the row lies outside').toBe('reclaimable');
     writeField(h, 'demo-pending', pendingField(elsewhere));
-    expect(fieldState('demo-pending', elsewhere)).toBe('pending');
+    expect(fieldState('demo-pending', elsewhere), 'the CONTROL: the field reads pending').toBe('pending');
+    placed(evalOf(h), 'a pending row whose spelling leads elsewhere');
+    expect(counts(c)).toBe('[rc=0] legacy=[0] pending=[1]');
+  }, 90_000);
+
+  it('a pending row INSIDE the child still refuses: containment-unproven, by its spelling', () => {
+    const c = makeChild(h);
+    const x = path.join(fs.realpathSync(c.wt), 'x');
+    fs.mkdirSync(x);
+    otherRow('demo-pending', x);
+    writeField(h, 'demo-pending', pendingField(x));
+    expect(fieldState('demo-pending', x), 'the CONTROL: the field reads pending').toBe('pending');
+    answers(evalOf(h), 'containment-unproven', NESTED_BY('demo-pending'));
+  }, 90_000);
+
+  it('a pending row spelled THROUGH A LINK holds, by row id, though the link leads outside the child', () => {
+    makeChild(h);
+    const alias = path.join(realHome(), 'alias');
+    fs.symlinkSync(fs.realpathSync(mk('elsewhere')), alias);
+    otherRow('demo-pending', alias);
+    placed(evalOf(h), 'the CONTROL: legacy, the link leads outside');
+    writeField(h, 'demo-pending', pendingField(alias));
+    expect(fieldState('demo-pending', alias)).toBe('pending');
     const r = evalOf(h);
     answers(r, 'unmeasured', `registry row(s) demo-pending ${PENDING}`);
-    expect(r.detail, 'by id, never by its spelling').not.toContain(elsewhere);
+    expect(r.detail, 'by id, never by its spelling').not.toContain(alias);
+  }, 90_000);
+
+  it('a pending row that CANNOT BE RESOLVED completely holds with the pending clause, beside the gone row’s own', () => {
+    makeChild(h);
+    const goneWd = path.join(realHome(), 'gone-entry', 'server');
+    otherRow('demo-pending', goneWd);
+    writeField(h, 'demo-pending', pendingField(goneWd));
+    expect(fieldState('demo-pending', goneWd)).toBe('pending');
+    const r = evalOf(h);
+    answers(r, 'unmeasured', `registry row(s) demo-pending ${PENDING}`);
+    expect(r.detail).toContain(`registry row(s) demo-pending ${HELD}`);
   }, 90_000);
 
   it('a DIRECTORY at the field holds the child: not a regular file, unmeasured', () => {
@@ -677,7 +717,9 @@ describe('the legacy count (path-identity spec §4.4)', () => {
     otherRow('demo-valid', valid);
     writeField(h, 'demo-valid', field(identOf(valid), fs.realpathSync(valid), valid));
     otherRow('demo-legacy', mk('legacy'));
-    const pending = mk('pending');
+    // Spelled through a link, so its pending field holds the child on every TMPDIR (D-8954).
+    const pending = path.join(fs.realpathSync(h.home), 'pending-link');
+    fs.symlinkSync(mk('pending'), pending);
     otherRow('demo-pending', pending);
     writeField(h, 'demo-pending', pendingField(pending));
   };

@@ -149,10 +149,12 @@ const reasonsAt = (plan: DelegationCompactionPlan, seq: number): readonly string
 // ── Task 3.2: the planner (pure) ───────────────────────────────────────────────────────────────────────────────────────
 
 describe('Task 3.2: the planner: the cut point S and the carried set (pure)', () => {
-  it('the planner module names no filesystem, no SQLite, no clock and no randomness, and imports only the model and the shared vocabulary', () => {
-    // read from the parse (ARCH-06: no literal source pin)
+  it('the planner module names no filesystem, no SQLite, no clock and no randomness, and imports only the model, the end basis and the shared vocabulary', () => {
+    // read from the parse (ARCH-06: no literal source pin). D-8874 (session helpers S2): `delegation-end-basis.ts` joins, the pure L1 owner of
+    // `hasMeasuredEnd`, which the holds and the retirable set read so that a record the one-time pass closed is held as an open one; it imports
+    // only the model and the shared vocabulary itself, so the planner stays free of every port.
     const parsed = parsedFile('server/src/coord/delegation-compaction.ts');
-    expect([...new Set(parsed.imports.map((i) => i.specifier))].sort()).toEqual(['../../../shared/api.js', './delegation-model.js']);
+    expect([...new Set(parsed.imports.map((i) => i.specifier))].sort()).toEqual(['../../../shared/api.js', './delegation-end-basis.js', './delegation-model.js']);
     expect(parsed.calls.map((c) => c.callee).filter((c) => /^(?:Date\.now|Math\.random|performance\.now|readFileSync|writeFileSync|setTimeout|setImmediate)$|randomUUID|^fsp\.|^fs\./.test(c))).toEqual([]);
   });
 

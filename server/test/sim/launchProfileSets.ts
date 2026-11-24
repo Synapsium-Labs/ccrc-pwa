@@ -164,9 +164,9 @@ export function launchRowCases(m: LaunchProfileModule): Record<string, SuiteCase
         tools: ['mcp__door__read'] } });
       expect(row.surfaceSettings.permissions.deny).toStrictEqual(['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch',
         'SendMessage', 'ListAgents', 'Workflow', 'CronCreate', 'CronList', 'CronDelete']);
-      expect(Object.keys(row.surfaceSettings.hooks).sort()).toStrictEqual(['PermissionRequest', 'PostCompact', 'PostToolUse',
-        'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
-        'UserPromptSubmit']);
+      expect(Object.keys(row.surfaceSettings.hooks).sort()).toStrictEqual(['PermissionRequest', 'PostCompact', 'PostModelSwitch',
+        'PostToolUse', 'PreCompact', 'PreModelSwitch', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'StopFailure',
+        'SubagentStart', 'SubagentStop', 'UserPromptSubmit']);
       expect(row.surfaceSettings.hooks.PreToolUse?.[0]?.matcher).toBe('*');
       expect(row.remoteControl).toBe('off');
     },

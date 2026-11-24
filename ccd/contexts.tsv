@@ -8,7 +8,7 @@
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
 # ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1),
-# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms) and ccd/lib/door.sh (the Overlord's door process), which ccd loads at its foot:
+# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms), ccd/lib/door.sh (the Overlord's door process) and ccd/lib/model-aliases.sh (the model-class Anthropic arm), which ccd loads at its foot:
 # <function name><TAB><context>.
 _tmx_sock	C10
 _tmx_argv	C10
@@ -932,6 +932,10 @@ _ws_shed_asleep_why	C4
 _ws_shed_run	C4
 cmd_ws_shed_deps	C4
 _ws_shed_locked	C4
+_ws_collect_sysblock	C4
+_ws_collect_devmm	C4
+_ws_collect_dev_gone	C4
+_ws_collect_absence_dev	C4
 _pr_train_py	C4
 cmd_pr_train_prove	C4
 _ws_train_tried_get	C4
@@ -991,3 +995,21 @@ _fresh_pick_to	C1
 _door_prog_ok	C10
 _door_purge	C10
 _door_spawn	C10
+_model_id_bare_to	C3
+_ma_file_to	C3
+_ma_answer_to	C3
+_alias_facts_to	C3
+_lane_class_efforts_to	C3
+_class_takes_no_effort	C3
+_class_effort_barred_to	C3
+_orphaned_effort_to	C3
+_alias_launch_mark	C3
+_alias_fill_overruled	C3
+_alias_launch_fill	C3
+_alias_launch_observe	C3
+_route_applied_put	C3
+_route_applied_unpick_to	C3
+_route_model_record	C3
+_alias_model_observe	C3
+_alias_observe	C3
+_held_model_env_to	C3

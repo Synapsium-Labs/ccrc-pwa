@@ -1403,8 +1403,10 @@ _launchd_class() {
 # A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h`,
 # `OnUnitInactiveSec=<n>s|min|h` (the period counted from the END of the last
 # run, the graph sweep's since D-7876: the gap between a run's end and the next
-# start is the one number) or `OnCalendar=*:0/<n>` (every <n> minutes, <n>
-# dividing the hour, so the gap between firings is one number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# start is the one number), `OnCalendar=*:0/<n>` (every <n> minutes, <n>
+# dividing the hour, so the gap between firings is one number) or
+# `OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC` (every <h> hours from midnight UTC, <h>
+# dividing the day: the weekly quiz's slots since run 3508). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
 # `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
 # keys), each comment and each blank is IGNORED, never refused: they sit beside
 # the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
@@ -1429,8 +1431,10 @@ _timer_period_s() {   # <timer-file>
     esac
   elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
     echo $((BASH_REMATCH[1] * 60))
+  elif [[ "$hit" =~ ^OnCalendar=\*-\*-\*\ 00/([1-9][0-9]?):[0-5][0-9]:[0-5][0-9]\ UTC$ ]] && [ $((24 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 3600))   # run 3508: every <h> hours of the day from midnight UTC; one gap only when <h> divides 24
   else
-    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h, OnCalendar=*:0/<n> or OnCalendar=*-*-* 00/<h>:<mm>:<ss> UTC" >&2; return 1
   fi
 }
 
@@ -2444,6 +2448,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_ACT_ID=""           # the act's id, set only by the test box's updater after it sources this file (D-8905); never taken from the environment
 UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
@@ -12630,6 +12635,9 @@ _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yam
 #      `how: "hand"`) is recorded in the advance file as the hand move it was, and is no event and no push (ruling
 #      RC3). The recovery is read whether or not the answer was ok (D-6067): a refusal after the writer's first
 #      successful write still carries it. When the backfill created the file or settled a move, the plan is read again.
+#      It never writes a class's run of sightings of a missing pin: the first pass's `materialise --refresh true` does,
+#      after every successful probe, so an hour this step skips (readiness, budget, a held lock) still records it, and
+#      a pin listed again ends the run before any step here reads it (programme wave 3, D-8838).
 #   3. READINESS, asked once, no lock (D22): the lane's mode first, by a bounded read; on `litellm`,
 #      `_codex_tier_ours --bounded-read` for the LiteLLM tier and then the shim, each 0 (ours and running; the shim's 0
 #      is its proof that the listener answers as THIS lane, D-5210), then the check-only `litellm` op answering
@@ -12741,7 +12749,10 @@ _models_push() {   # <message> -> rc 0
   local hook="$_SVC_REG/notify.sh"
   [ -x "$hook" ] || return 0
   if [ -n "${MODELS_AUTO_DEADLINE:-}" ]; then
-    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )) || return 0
+    if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )); then
+      [ "${2:-}" != grouped ] || printf 'ccrc: models push skipped (deadline): %s\n' "$1" >&2
+      return 0
+    fi
     _plat_timeout_strict "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
   else
     _plat_timeout "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
@@ -13197,10 +13208,10 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
 #                                                                       Codex step skips silently too; the next hour retries
 #   {id, ok: false, reason, aliases: {ok: false, error: <word>, moved: []}}   the op or the lock refused (`lock-busy`, the
 #                                                                       op's own cause word, `no-answer`): a failed row
-# Each class that moved is pushed through `_models_push`, one line each, built by `moveline` in the Codex step's own
-# shape after `tok` and `word` have checked the tokens, as `recovered` does; a refresh with no move pushes nothing.
+# It pushes nothing: the row carries what moved, and the refresh sends ONE push per (class, from, to) over every lane
+# (`_models_aliases_push`), so one alias change is one notification however many lanes it moved (F15).
 _models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE row; rc 0 unless the row failed
-  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 line row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
+  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
   if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then :
   elif ! _models_advance_capable "$id"; then body='{"ok":false,"error":"not-capable"}'
   else pre=0
@@ -13220,13 +13231,41 @@ _models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE ro
                          elif ($b.detail | type) == "string" then $b.detail else "aliases-refresh refused with \($w)" end)}
           end end')" || return 1
   printf '%s\n' "$row"
-  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; *'"aliases":{"ok":true'*) ;; *) return 0 ;; esac
+  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; esac
+  return 0
+}
+
+# The ONE push of the Anthropic arm (D-8751, F15): the moves of every refreshed row, grouped by (class, from, to) in the order
+# each group first appears, one line per group naming its lanes in the rows' order (the roster's),
+# `<lane>, <lane>: <class> <from|none> → <to>`, which `modelsPushOf` reads. `tok` and `word` check the tokens, as `recovered`
+# does. A row that failed or was deferred holds no move and so names no lane. Each line goes through `_models_push` in the
+# automatic context at the run's advance deadline, so a spent budget skips the push rather than running it late.
+_models_aliases_push() {   # <deadline-secs> <row>... -> rc 0
+  local MODELS_AUTO_DEADLINE="$1" line lines
+  shift
+  lines="$(printf '%s\n' "$@" | jq -rs "$MODELS_JQ_DEFS"'
+    reduce (.[] | select(type == "object" and .ok == true and .aliases.ok == true) | .id as $id
+            | (.aliases.moved // []) | if type == "array" then .[] else empty end
+            | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
+            | {k: [.class, .from, .to], id: $id, m: .}) as $e
+      ([]; (map(.k) | index([$e.k])) as $i
+        | if $i == null then . + [{k: $e.k, m: $e.m, ids: [$e.id]}]
+          else .[$i].ids += [$e.id] end)
+    | .[] | (.ids | join(", ")) as $lanes | .m | moveline($lanes)' 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  # The strict hook call needs the capability THIS shell proved: the lanes' own runs proved it in their subshells, so it is
+  # proved here, admitted first, and a box without it sends nothing, as a lane without it ran nothing.
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then
+    while IFS= read -r line; do
+      [ -z "$line" ] || printf 'ccrc: models push skipped (deadline): %s\n' "$line" >&2
+    done <<<"$lines"
+    return 0
+  fi
+  _plat_timeout_capability >/dev/null
+  [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || return 0
   while IFS= read -r line; do
-    [ -n "$line" ] && _models_push "$line"
-  done < <(printf '%s' "$body" | jq -r --arg id "$id" "$MODELS_JQ_DEFS"'
-    (.moved // []) | if type == "array" then .[] else empty end
-    | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
-    | moveline($id)' 2>/dev/null)
+    [ -n "$line" ] && _models_push "$line" grouped
+  done <<<"$lines"
   return 0
 }
 
@@ -13375,7 +13414,10 @@ _models_box_sub() {   # <subcommand> [args…]
           local mreason="" mat_body mat_rc=0
           # Under the lane-files lock (auto-advance spec D21): a refresh overlapping a hand verb, or another
           # refresh, re-materialises after it, never interleaved. A held lock is this row's reason, never a hang.
-          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          # `--refresh true` (programme wave 3, D-8838, D-8842) is this call alone: it writes the fallback for an
+          # effort level the new catalogue dropped, and records this probe's sightings of a missing pin. The switch
+          # and ensure callers' materialise passes nothing, so a dropped level is refused there as before.
+          mat_body="$(_models_node_locked "$id" materialise --file "$file" --id "$id" --refresh true 2>/dev/null)" || mat_rc=$?
           if [ "$mat_rc" -ne 0 ]; then
             mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
             [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
@@ -13421,6 +13463,13 @@ _models_box_sub() {   # <subcommand> [args…]
             # row is about to take is kept, so the step's events land on it.
             if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
+          # D-8842, D-8865: a dropped level's fallback is never silent: every row whose materialise kept one, the
+          # LiteLLM-failure row and a refusal whose write-back failed included, carries what materialise wrote and
+          # whether the advance file recorded it (`effortFallbackRecord`), on every lane, with or without that file.
+          local fbrow
+          fbrow="$(printf '%s' "$mat_body" | tail -n1 | jq -c --argjson r "$row" \
+            '$r + (if (.effortFallback | type) == "array" then {effortFallback, effortFallbackRecord} else {} end)' \
+            2>/dev/null)" && [ -n "$fbrow" ] && row="$fbrow"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
@@ -13470,13 +13519,15 @@ _models_box_sub() {   # <subcommand> [args…]
       # row, each in the automatic context, its row appended to `rows` so that BOTH output paths below carry it (the
       # advance overlays are keyed by the indexes the registry rows took above, which an append never moves). A budget that
       # is spent defers a lane, never fails it.
-      local anth_n anth_i anth_id anth_row
+      local anth_n anth_i anth_id anth_row anth_rows=()
       anth_n="$(printf '%s' "$anth" | jq 'length')"
       for (( anth_i = 0; anth_i < anth_n; anth_i++ )); do
         anth_id="$(printf '%s' "$anth" | jq -r ".[$anth_i].id")"
         anth_row="$(_models_aliases_lane "$anth_id" "$file" "$adv_deadline")" || failed=1
-        rows+=("$anth_row")
+        rows+=("$anth_row"); anth_rows+=("$anth_row")
       done
+      # ONE push per (class, from, to) over every lane, after the loop has run them all (F15).
+      [ "${#anth_rows[@]}" -eq 0 ] || _models_aliases_push "$adv_deadline" "${anth_rows[@]}"
       if [ "$adv_entered" -eq 1 ]; then
         # The final output, bounded: ONE strict jq assembles the rows and the advance overlays and writes the result
         # straight to stdout (no capture, no outer printf, no per-lane merge elsewhere). Its allowance is the 18 s
@@ -23352,6 +23403,9 @@ _upd_phase() {
   # `ccrc doctor`'s update-sweep check reads it that way, and so does the server's
   # one reader of it (`sweepFrom`, D-8386), which puts it on `GET /api/updates`.
   [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
+  # The act's id (D-8905): a second additive key, written only by a caller that set UPD_ACT_ID (the test box's updater,
+  # which is handed one by the fleet host's driver). Absent in every other report; a reader matches two reports by it.
+  [ -z "${UPD_ACT_ID:-}" ] || sw+=",\"act\":$(_upd_json_str "$(_upd_redact "$UPD_ACT_ID")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
@@ -24698,6 +24752,13 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
   case "$role" in
     server|both) unit=ccrc.service ;;
     fleet)       unit=ccrc-agent.service ;;
+    # The test box's two arms (D-8903, D-8917; spec 2026-11-22-test-box-managed-node §2.7): `testbox`, and `testbox-legacy`
+    # for a release from before the box was a managed node. Its unit is a SYSTEM unit and its signals are files under
+    # the box's own root, which this file never names: the box's updater (deploy/testbox/bin/box-update) declares
+    # `_tb_gate_probe` before it calls `_upd_gate`. With no such function this is the refusal every other role meets.
+    testbox|testbox-legacy)
+      if declare -F _tb_gate_probe >/dev/null; then _tb_gate_probe "$role" "$want"; return $?; fi   # its status by name: a bare `return` in a signal handler is the status from before the handler in bash 5.2
+      UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
     *) UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
   esac
   if [ "$CCD_OS" = darwin ]; then   # the launchd arm: two pid samples, never systemctl
@@ -25057,6 +25118,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/pool-set.sh" ccd-lib-pool-set.sh   # its fourth library (the Overlord's pool set): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/long-lived.sh" ccd-lib-long-lived.sh   # its fifth library (the Overlord's ccd arms): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/door.sh" ccd-lib-door.sh   # its sixth library (the Overlord's door process): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/model-aliases.sh" ccd-lib-model-aliases.sh   # its seventh library (the model-class Anthropic arm): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
@@ -29724,12 +29786,12 @@ _uninst_tree_bins() {
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
-    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/lib/long-lived.sh" "$HOME/.local/libexec/ccrc/lib/door.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" "$HOME/.local/libexec/ccrc/door-process.mjs" \
+    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/lib/long-lived.sh" "$HOME/.local/libexec/ccrc/lib/door.sh" "$HOME/.local/libexec/ccrc/lib/model-aliases.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" "$HOME/.local/libexec/ccrc/door-process.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, lib/model-aliases.sh, shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

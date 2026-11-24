@@ -81,6 +81,11 @@ const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
  *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
 const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
 
+/** The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): `GET` and `POST
+ *  /api/coord/delegation-backfill`, a routes file of its own with NO box-token lane. The operator's, session-gated:
+ *  `DELEGATION_BACKFILL_DOORS`. */
+const DELEGATION_BACKFILL_SRC = read('server/src/coord/delegationBackfillRoutes.ts');
+
 /** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
  *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
  *  `DECISION_MODEL_DOORS`. */
@@ -189,7 +194,9 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
 const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate',
   // the Settings doors (Overlord W1 designation C): the model class and the account set, the same gate, a step-up for `fable` and a widening
   '/api/overlord/model', '/api/overlord/account-set',
-  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear'];
+  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
+  // Confirm the restore (authority journal C): the guard's state, and the door behind the step-up
+  '/api/overlord/restore', '/api/overlord/restore/confirm'];
 
 /** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
  *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
@@ -202,7 +209,7 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
 const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule', '/api/continuity/quiz-runs/:id/withdraw'];
 
 /** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
- *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like
+ *  harvest above can see: `POST /api/models/:lane`, revert of one class. Hand-kept for the NAME only, like
  *  `NAME_LIST_DOORS`: the describe below derives the file's registrations and compares in both directions. The operator's, behind the
  *  session gate, no box token, in no EXEMPT table. */
 const MODELS_DOORS = ['/api/models/:lane'];
@@ -213,6 +220,12 @@ const MODELS_DOORS = ['/api/models/:lane'];
  *  EXEMPT table. */
 const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
 
+/** The one-time pass's door (session helpers S2, D-8874), registered from `server/src/coord/delegationBackfillRoutes.ts`, which no harvest
+ *  above can see: the dry run (`GET`) and the pass or its undo (`POST`), one path registered twice, so listed once per registration and
+ *  compared with the file's registrations in both directions below. The operator's, behind the session gate, no box token, in no EXEMPT
+ *  table; the pass also refuses while sign-in is dark. */
+const DELEGATION_BACKFILL_DOORS = ['/api/coord/delegation-backfill', '/api/coord/delegation-backfill'];
+
 /** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
  *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
 const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
@@ -221,7 +234,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
-  ...DECISION_MODEL_DOORS, ...MODELS_DOORS, ...APPROVAL_CENSUS_DOORS];
+  ...DECISION_MODEL_DOORS, ...DELEGATION_BACKFILL_DOORS, ...MODELS_DOORS,...APPROVAL_CENSUS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -484,7 +497,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers nine routes (five designation and four ladder)').toBe(9);
+    expect(regs.length, 'the Overlord doors file registers eleven routes (five designation, four ladder and two restore)').toBe(11);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {
@@ -538,6 +551,18 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(lanesIn(APPROVAL_CENSUS_SRC), 'the census read consults the box token — it is the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of APPROVAL_CENSUS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('DELEGATION_BACKFILL_DOORS is exactly what the one-time pass\'s file registers, in both directions; none is a lane or EXEMPT (D-8874)', () => {
+    const keys = registrationsIn(DELEGATION_BACKFILL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'delegationBackfillRoutes.ts and DELEGATION_BACKFILL_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...DELEGATION_BACKFILL_DOORS].sort());
+    expect([...keys].sort(), 'the dry run is a GET, the pass and the undo one POST').toEqual(['GET /api/coord/delegation-backfill', 'POST /api/coord/delegation-backfill']);
+    expect(lanesIn(DELEGATION_BACKFILL_SRC), 'a door of the one-time pass consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of DELEGATION_BACKFILL_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
     }
   });

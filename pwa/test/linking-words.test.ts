@@ -77,10 +77,10 @@ describe("a refused key write's words (review 2971 F4)", () => {
     expect(keyWriteText(refused('team-ambiguous'), 0)).toBe(PICKER_WORDS.ambiguousUnlisted);
     expect(PICKER_WORDS.ambiguous).toContain(PICKER_WORDS.label);
   });
-  it('unavailable says the Linear keys could not be read and nothing was changed, whatever the holders (review 2997 A3)', () => {
+  it('unavailable says the Linear keys or a workspace could not be read, nothing was changed, and to try later, whatever the holders (review 2997 A3, review 3286 F4)', () => {
     const down = new ApiError(503, { ok: false, error: 'unavailable' });
     for (const n of [0, 1, 2]) expect(keyWriteText(down, n)).toBe(KEY_WRITE_WORDS.unavailable);
-    expect(KEY_WRITE_WORDS.unavailable).toMatch(/Linear keys .*could not be read, so nothing was changed/);
+    expect(KEY_WRITE_WORDS.unavailable).toMatch(/Linear keys, or a Linear workspace, could not be read, so nothing was changed\. Try again later\./);
   });
   it('every other refusal is the write\'s own sentence', () => {
     expect(keyWriteText(refused('team-unknown'), 2)).toBe(LINKING_REFUSAL_TEXT['team-unknown']);

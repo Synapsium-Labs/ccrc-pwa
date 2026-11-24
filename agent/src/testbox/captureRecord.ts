@@ -3,7 +3,7 @@
 // `agent/dist/agent/src/testbox/captureRecord.js` and run as `node <path> <event|statusline>`. It appends what it was given on stdin, with
 // a copy of the live status file taken at that moment, as ONE line of the recording in the shape
 // `shared/claudeBuildCapture.ts#readCaptureRecords` reads; as the PermissionRequest hook it answers `allow`, so no human
-// and no dialog is needed. It always exits 0: a recorder that could not write breaks nothing in the drive, and the replay
+// and no dialog is needed, and that line records the answer it printed. It always exits 0: a recorder that could not write breaks nothing in the drive, and the replay
 // then fails for the record that is missing.
 //
 // IT IMPORTS NO LOCAL MODULE, and uses only syntax Node's type stripping erases, so its tests run its source as a process
@@ -23,8 +23,11 @@ function startedAsProgram(argv1: string | undefined, moduleUrl: string): boolean
 /** This script's own path, for the runner to put in the seeded config (compiled, it is `agent/dist/agent/src/testbox/captureRecord.js`, beside the service's `main.js`). */
 export const recorderPath = (): string => fileURLToPath(import.meta.url);
 
+/** The decision the recorder gives every PermissionRequest; its line in the recording carries it as `answer`, so the replay
+ *  can tie the tool's run to it (`shared/claudeBuildCapture.ts#replayCapture`, spec §2.6). */
+const ALLOW = 'allow';
 /** What the recorder prints to answer a PermissionRequest. */
-export const ALLOW_REPLY = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}';
+export const ALLOW_REPLY = `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"${ALLOW}"}}}`;
 /** What it prints as the statusline. */
 export const STATUSLINE_REPLY = 'ccrc capture';
 
@@ -51,7 +54,8 @@ export function record(arg: string, stdin: string, env: Readonly<Record<string, 
     let payload: unknown = stdin;
     try { payload = JSON.parse(stdin) as unknown; } catch { /* kept as the raw string */ }
     const status = liveStatus(env['CLAUDE_CONFIG_DIR'] ?? '');
-    const line = arg === 'statusline' ? { kind: 'statusline', payload, status } : { kind: 'hook', event: arg, payload, status };
+    const line = arg === 'statusline' ? { kind: 'statusline', payload, status }
+      : { kind: 'hook', event: arg, payload, status, ...(arg === 'PermissionRequest' ? { answer: ALLOW } : {}) };
     const file = env['CCRC_CAPTURE_RECORDING'];
     if (file !== undefined && file !== '') appendFileSync(file, `${JSON.stringify(line)}\n`);
   } catch { /* the replay fails for the missing record; the drive goes on */ }

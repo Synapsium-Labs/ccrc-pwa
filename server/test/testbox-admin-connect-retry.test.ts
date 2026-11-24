@@ -16,7 +16,8 @@ const ADMIN = readFileSync(path.join(REPO, 'ccd', 'ccrc-testbox-admin'), 'utf8')
 const SNIPPET = /^\s*_tba_cx_out sh -c '(umask 077; p=\$1; d=\$\(dirname "\$p"\);[^']*)' sh "\$TBA_BOX_ENV_PATH"/m.exec(ADMIN)?.[1];
 
 const TOKEN_SNIPPET = /^\s*_tba_cx_out sh -c '(umask 022; p=\$1; case \$p in[^']*)' sh "\$svc_tok"/m.exec(ADMIN)?.[1];
-const INSTALLER = readFileSync(path.join(REPO, 'deploy', 'testbox', 'install.sh'), 'utf8');
+// The installer and its steps (deploy/testbox/box-steps since D-8903, which the box updater calls too).
+const INSTALLER = ['install.sh', 'box-steps'].map((f) => readFileSync(path.join(REPO, 'deploy', 'testbox', f), 'utf8')).join('\n');
 
 let W: World;
 beforeAll(async () => { W = await makeWorld(); }, 180_000);

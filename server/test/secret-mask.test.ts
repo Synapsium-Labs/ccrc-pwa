@@ -1254,6 +1254,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/renewal-mode': 'one setting word, its default and its two choices (Overlord W1a, the renewal hand-offs)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
+    '/api/coord/delegation-backfill': "the one-time pass's dry run: counts by kind and age, a mode word, an instant and the basis's fixed words: no session text, no record id (D-8874)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/testbox/admin': "the test box's connection state, pin fingerprint and act ledger: no address, no secret, no session text (D-8166)",
     '/api/testbox/builds': "each Claude Code build's capture verdict, its times and counts and the test box's replay output: no session text (D-8289)",
@@ -1290,6 +1291,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
     // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
     '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
+    '/api/overlord/restore': "the authority guard's state: one of three closed words and a closed cause or reason word (AUTHORITY_STATE_WORDS, AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS); no session-written text (Overlord W1 authority journal C)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 

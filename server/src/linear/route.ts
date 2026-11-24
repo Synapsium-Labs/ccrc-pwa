@@ -37,8 +37,10 @@ export type LinearRouteRefusal = 'team-unknown' | 'workspace-unknown' | 'workspa
 export type LinearRoute =
   | { kind: 'slot'; slot: LinearRouteSlot }
   | { kind: 'refused'; word: LinearRouteRefusal }
-  /** `candidates`: the matching slots' URL keys, sorted, for the detail: `--workspace` is the remedy. */
-  | { kind: 'refused'; word: 'team-ambiguous'; candidates: string[] };
+  /** `candidates`: the matching slots' URL keys, sorted, for the detail: `--workspace` is the remedy.
+   *  `holders` (D-8808, D-8809): EVERY holding slot by workspace id, sorted by it, one with no URL key too (which `candidates`
+   *  drops): the id is the only name the linking doors accept as `workspace`, so a refusal there names its holders by it. */
+  | { kind: 'refused'; word: 'team-ambiguous'; candidates: string[]; holders: Array<{ workspaceId: string; urlKey: string | null }> };
 
 type Listed = Extract<LinearStoreRead, { kind: 'listed' }>;
 
@@ -180,5 +182,7 @@ export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteA
   if (holding.length === 1) return { kind: 'slot', slot: holding[0]! };
   if (holding.length === 0) return { kind: 'refused', word: 'team-unknown' };
   const candidates = holding.flatMap((s) => (s.urlKey === null ? [] : [s.urlKey])).sort();
-  return { kind: 'refused', word: 'team-ambiguous', candidates };
+  const holders = holding.map((s) => ({ workspaceId: s.workspaceId, urlKey: s.urlKey }))
+    .sort((a, b) => (a.workspaceId < b.workspaceId ? -1 : a.workspaceId > b.workspaceId ? 1 : 0));
+  return { kind: 'refused', word: 'team-ambiguous', candidates, holders };
 }

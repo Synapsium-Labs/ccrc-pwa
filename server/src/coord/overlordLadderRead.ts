@@ -13,6 +13,8 @@ import type { CoordStore } from './store.js';
 import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/overlord-ladder.js';
 import type { AuthorityAppender, BrakeActor, LadderWrite } from './overlordLadderStore.js';
 import type { Clock, Entropy } from '../time/ports.js';
+import type { IsolationRead } from '../../../shared/isolation.js';
+import { ISOLATION_NOT_WIRED, isolationCondition } from '../isolationWord.js';
 
 type LatchTable = Readonly<Record<string, LadderCauseRow & { readonly kind: 'latch'; readonly effect: { readonly kind: 'cap'; readonly cap: Rung } }>>;
 /** The only delivery-facing latch raise: cap and notice belong to the cause row, not the caller. */
@@ -48,7 +50,7 @@ export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
 const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
 
-export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf' | 'startLoadsOfNewestStart'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf' | 'startLoadsOfNewestStart'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf; isolation?: { read(): IsolationRead } }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
@@ -95,6 +97,9 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
         return read.kind === 'current' ? rungWordReading(read.current, deps.serverCaps) : 'unmeasured';
       } catch { return 'unmeasured'; }
     },
+    // The isolation word (Overlord W1, §7.4, Table 7.5a): `shared-user` stands, a separate word lifts, and `unmeasured`
+    // (an older agent, a down link, no reader wired) is unmeasured, which caps as `shared-user` does.
+    'shared-user': () => isolationCondition(deps.isolation?.read() ?? ISOLATION_NOT_WIRED),
   };
 }
 

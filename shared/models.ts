@@ -197,14 +197,39 @@ export type ModelWindows = Readonly<Record<string, number>>;
 
 /** D-8406: one class on one lane, as the lane's own files say it: the model its registry slot names (`null`: the class
  *  is unavailable on this lane by nature) and the catalogue's label for that model (`null`: no catalogue, or no row
- *  for it). `laneClassModels` derives it. */
+ *  for it). `laneClassModels` derives it on a lane with a registry.
+ *
+ *  On an Anthropic lane (model-class Anthropic arm, Task A4.1) the row comes from the lane's aliases file instead: `model`
+ *  is the id the class's alias resolves to, or, while a hold stands, the held id (`hold.model`, the model the class's
+ *  sessions launch on), and `label` and `efforts` are that id's catalogue row's. A class with no id, or whose kept id the
+ *  lane's build cannot launch, is a row of nulls. The optional fields below are that lane's alone: an older server, and
+ *  every lane with a registry, omits them, and their one reader per runtime (`classRow`, `server/src/laneModels.ts`;
+ *  `asLaneModelsRead`, `pwa/src/lib/models.ts`) reads each absence as today, and a malformed one as absent. */
 export interface LaneClassModel {
   readonly model: string | null;
   readonly label: string | null;
-  /** D-8686 (re-plan R1): the effort levels the catalogue row for `model` lists, as `parseCatalogue` kept them (`[]`:
-   *  the row lists none). `null` when there is no catalogue, no row for the model, or no model. An older server omits
+  /** D-8686 (re-plan R1): the effort levels the catalogue row for `model` lists, as its parser kept them. `null` when
+   *  there is no catalogue, no row for the model, or no model. `[]` alone is a list that names no level, which the pickers
+   *  read as no constraint; a model that TAKES NO level carries `takesNoEffort` beside its `[]`, and a reader asks that
+   *  field first, so "takes none" is never read off `[]` (D-8750). An older server omits
    *  the field, and its one reader (`asLaneModelsRead`, `pwa/src/lib/models.ts`) reads that as `null`. */
   readonly efforts: readonly string[] | null;
+  /** D-8750: the row says the model takes no effort level. Absent: it does not say so. */
+  readonly takesNoEffort?: true;
+  /** Where the alias's id came from: Claude Code's catalogue cache, or a fresh alias launch seen in use (D-8744). */
+  readonly source?: 'cache' | 'use' | null;
+  /** The cache's alias target and the newest launch reading, both kept so a reader sees when they disagree (D-8744). */
+  readonly cacheTarget?: string | null;
+  readonly seenId?: string | null;
+  /** The class's alias resolution is not observed: no id, an unlaunchable one, or a held class whose id rests on
+   *  evidence older than its hold (D-8744). */
+  readonly unobserved?: true;
+  /** The kept id's row needs a newer Claude Code build than the lane runs (`laneVersion` null: the build is unread). */
+  readonly unlaunchable?: { readonly needs: string; readonly laneVersion: string | null };
+  /** The alias's current id, set only while a hold makes `model` another id, so the sheet can show both. */
+  readonly aliasId?: string;
+  /** A home's saved effort level keyed to an older id of the class, which ccd carries at launch under Auto (D-8746). */
+  readonly orphanedEffort?: { readonly id: string; readonly level: string } | null;
 }
 export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
 
@@ -248,7 +273,10 @@ type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
  *    asks again.
  *  A reader shows class names for every arm but `read`, and never a model name this tree spells. */
 export type LaneModelsRead =
-  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead }
+  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead;
+      /** revert-ends-itself: the fleet box's models op ends a revert's hold by itself once a newer model comes (a
+       *  constant of that op, never a setting). Absent from an older op, which is read as "does not". */
+      readonly revertHoldEnds?: true }
   | { readonly kind: 'absent'; readonly laneKind?: LaneAbsentKind }
   | { readonly kind: 'unreadable'; readonly code?: LaneUnreadableCode }
   | { readonly kind: 'unsupported' }

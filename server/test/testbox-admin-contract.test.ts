@@ -13,7 +13,8 @@ import {
   TESTBOX_ACTS, TESTBOX_ACT_OUTCOMES, TESTBOX_BOX_KEYS, TESTBOX_HOST_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRING_KEYS,
   TESTBOX_PAIRED_BOX_KEYS, TESTBOX_RUN_SHAPING, TESTBOX_SHAPE_CLASS, TESTBOX_SHAPE_SENTENCE, TESTBOX_REPO_ROW_MAX_BYTES,
   buildTestboxAdminArgv, fitsTestboxShape, isBoxAddress, isPrivateNetworkAddress, isSshPort, isLoginUser, isHostKeyFingerprint, isPrNumber,
-  TESTBOX_STEP_UP_SETTINGS, TESTBOX_LINE_CODES, parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
+  TESTBOX_STEP_UP_SETTINGS, TESTBOX_LINE_CODES, TESTBOX_ADMIN_DEADLINE_S, TESTBOX_ACT_TIME_MAX_MS, readTestboxBusyHolder,
+  parityArmable, parityCurrentOf, readTestboxAdminStatus, readTestboxParityRecord, readTestboxRepoArg,
   testboxAdminIsLong, testboxAdminNeedsStepUp,
   type TestboxAdminSub, type TestboxAdminFields, type TestboxParityRecord,
 } from '../../shared/testbox-admin.js';
@@ -600,6 +601,31 @@ describe('the status reader', () => {
     expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, at: -1 })).ok).toBe(false);
     expect(readTestboxParityRecord('{').ok).toBe(false);
   });
+  // D-8945: the light check's record says how many test files it compared. An older record (a full-suite run) has no
+  // `files` and still reads; the field is set only when the record carries it.
+  it('the parity record\'s `files` is optional: an older record reads without it, and a present one is a whole number up to 100000', () => {
+    const old = readTestboxParityRecord(JSON.stringify(PARITY));
+    expect(old.ok && Object.hasOwn(old.value, 'files')).toBe(false);
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 54 }))).toEqual({ ok: true, value: { ...PARITY, files: 54 } });
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 0 }))).toEqual({ ok: true, value: { ...PARITY, files: 0 } });
+    expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: 100_000 })).ok).toBe(true);
+    for (const bad of [-1, 1.5, '3', null, 100_001, true]) {
+      expect(readTestboxParityRecord(JSON.stringify({ ...PARITY, files: bad })).ok, String(bad)).toBe(false);
+    }
+  });
+  it('a status whose parity record carries `files` reads, and the gate gives it the same verdict as one without', () => {
+    const cur = { fingerprint: FP, boxFileSha256: SHA, stale: false };
+    const withFiles = read({ ...STATUS, parity: { ...PARITY, files: 54 } });
+    const without = read({ ...STATUS, parity: PARITY });
+    expect(withFiles.ok && without.ok).toBe(true);
+    if (!withFiles.ok || !without.ok) return;
+    expect(withFiles.value.parity?.files).toBe(54);
+    expect(without.value.parity && Object.hasOwn(without.value.parity, 'files')).toBe(false);
+    expect(parityArmable(withFiles.value.parity, cur)).toBe(parityArmable(without.value.parity, cur));
+    expect(parityArmable(withFiles.value.parity, cur)).toBe(true);
+    const failing = { ...PARITY, result: 'fail' as const };
+    expect(parityArmable({ ...failing, files: 54 }, cur)).toBe(parityArmable(failing, cur));
+  });
 });
 
 describe('the parity gate', () => {
@@ -651,5 +677,68 @@ describe('the codes', () => {
       expect(s, c).not.toMatch(/[0-9/@:\\]|CCRC_|https?|~/);
       expect(s, c).not.toContain('\n');
     }
+  });
+});
+
+// D-8899 (spec 2026-11-22-test-box-managed-node-design.md §2.9): the one deadline table, the holder a `busy`
+// answer names and the running act's latest end in the status. The bash twin is held to this table by
+// `testbox-admin-verb.test.ts`; the holder's words are the PWA's (`pwa/test/testbox-admin-words.test.ts`).
+describe('the deadline table, the busy holder and the status\'s latest end (D-8899)', () => {
+  const ROWS = TESTBOX_ADMIN_DEADLINE_S as Readonly<Record<string, number>>;
+  const HOLDER = { sub: 'parity', startedAt: 1_700_000_000_000, deadlineAt: 1_700_003_690_000 };
+
+  it('a sub is long exactly when the table gives it a ceiling, and every row is a whole number of seconds', () => {
+    for (const s of SUBS) expect(Object.hasOwn(ROWS, s), s).toBe(TESTBOX_ADMIN_SUBS[s].long);
+    expect(Object.keys(ROWS).filter((k) => k.includes('/')).sort()).toEqual(['parity/kill', 'parity/leg', 'parity/queue', 'parity/sample', 'parity/tail', 'settings-box/idle', 'unit/stop']);
+    for (const [k, v] of Object.entries(ROWS)) expect(Number.isSafeInteger(v) && v > 0, k).toBe(true);
+    expect(Object.isFrozen(TESTBOX_ADMIN_DEADLINE_S)).toBe(true);
+    expect(ROWS['parity/leg']).toBeLessThan(ROWS['parity']! - ROWS['parity/tail']!);
+  });
+
+  it('the holder reader takes a long sub and two times a Date can show, and nothing else', () => {
+    expect(readTestboxBusyHolder(HOLDER)).toEqual(HOLDER);
+    // an extra member (an address, a path) is never carried on: the reader builds its own object
+    expect(readTestboxBusyHolder({ ...HOLDER, address: 'testbox.invalid', path: '/home/x' })).toEqual(HOLDER);
+    for (const bad of [
+      null, undefined, 'parity', [], [HOLDER], { ...HOLDER, sub: 'key' }, { ...HOLDER, sub: 'parity/leg' }, { ...HOLDER, sub: 'toString' },
+      { ...HOLDER, startedAt: '1700000000000' }, { ...HOLDER, startedAt: -1 }, { ...HOLDER, startedAt: 1.5 }, { ...HOLDER, deadlineAt: null },
+      { ...HOLDER, deadlineAt: HOLDER.startedAt - 1 }, { sub: 'parity', startedAt: 1 }, { ...HOLDER, deadlineAt: Number.MAX_VALUE },
+      // a safe integer past what a Date can format, and one just past the reader's own limit
+      { ...HOLDER, deadlineAt: 9_000_000_000_000_000 }, { ...HOLDER, deadlineAt: TESTBOX_ACT_TIME_MAX_MS + 1 },
+      { ...HOLDER, startedAt: TESTBOX_ACT_TIME_MAX_MS + 1, deadlineAt: TESTBOX_ACT_TIME_MAX_MS + 2 },
+    ]) expect(readTestboxBusyHolder(bad), JSON.stringify(bad)).toBeNull();
+    // every time the reader lets through can be shown: the limit itself formats, and it is fifteen digits, the verb's own limit
+    const top = readTestboxBusyHolder({ ...HOLDER, deadlineAt: TESTBOX_ACT_TIME_MAX_MS });
+    expect(top).not.toBeNull();
+    expect(() => new Date(top!.deadlineAt).toISOString()).not.toThrow();
+    expect(() => new Date(Math.ceil(top!.deadlineAt / 60_000) * 60_000).toISOString()).not.toThrow();
+    expect(String(TESTBOX_ACT_TIME_MAX_MS)).toMatch(/^9{15}$/);
+  });
+
+  it('the status reader takes a running act\'s latest end and reads an act without one as it always did; a holder is no field of the status', () => {
+    const base = { v: 1, connected: false, addressSet: false, login: null, fingerprint: null, hostKey: 'none', boxFileSha256: null, act: null, boxSettings: null, boxSettingsAt: null, parity: null };
+    const act = { id: 'a'.repeat(32), sub: 'parity', phase: 'legs', phases: [], outcome: 'running', code: null, startedAt: 1, endedAt: null };
+    const read = (a: unknown): ReturnType<typeof readTestboxAdminStatus> => readTestboxAdminStatus(JSON.stringify({ ...base, act: a, endedActs: [] }));
+    // an older verb's act: no field, and the value has none
+    const old = read(act);
+    expect(old.ok && old.value.act).toEqual(act);
+    expect(old.ok && Object.hasOwn(old.value.act!, 'deadlineAt')).toBe(false);
+    // this verb's running act
+    const now = read({ ...act, deadlineAt: HOLDER.deadlineAt });
+    expect(now.ok && now.value.act).toEqual({ ...act, deadlineAt: HOLDER.deadlineAt });
+    // an explicit null reads as none
+    const none = read({ ...act, deadlineAt: null });
+    expect(none.ok && Object.hasOwn(none.value.act!, 'deadlineAt')).toBe(false);
+    // off its shape, the whole status is refused, as for any other field
+    for (const bad of ['1700003690000', 1.5, -1, 9_000_000_000_000_000, TESTBOX_ACT_TIME_MAX_MS + 1, { at: 1 }]) {
+      expect(read({ ...act, deadlineAt: bad }).ok, JSON.stringify(bad)).toBe(false);
+    }
+    // an ended act of the list reads the same way
+    const ended = readTestboxAdminStatus(JSON.stringify({ ...base, endedActs: [{ ...act, outcome: 'failed', code: 'interrupted', endedAt: 2 }] }));
+    expect(ended.ok && ended.value.endedActs).toHaveLength(1);
+    // the status names its holder in `act`: a top-level `holder` is still a field it does not name
+    expect(readTestboxAdminStatus(JSON.stringify(base)).ok).toBe(true);
+    expect(readTestboxAdminStatus(JSON.stringify({ ...base, holder: HOLDER })).ok).toBe(false);
+    expect(read({ ...act, holder: HOLDER }).ok).toBe(false);
   });
 });

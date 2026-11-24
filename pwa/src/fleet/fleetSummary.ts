@@ -1,10 +1,16 @@
-// The fleet's one count readout (W2 Task S2c; D-5471, D-5472): "19 sessions · 4 waiting · 5 runs". The fleet
+// The fleet's one count readout (W2 Task S2c; D-5471, D-5472): "19 sessions · 4 waiting · 5 runs", counting running sessions only. The fleet
 // head's count line, Refined's phone subtitle (S5) and sidebar head (S6) and Instrument's status bar (S9) all
 // render it; none counts sessions itself, so two places can never show two numbers for one fleet.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { isRunClosed } from './runWords';
 
+/** The buckets of a session that is not running: exited, archived, or waiting only to be cleaned up. Such a session holds no
+ *  process, no memory and no account quota, so the count leaves it out (the operator's ruling of 2026-11-22: a count of
+ *  sessions that includes the exited ones says nothing about the fleet). The list still shows them, under their own chips. */
+const NOT_RUNNING: ReadonlySet<FleetSession['bucket']> = new Set(['dead', 'archived', 'cleanup']);
+
 export interface FleetSummary {
+  /** The sessions that are running: every one whose bucket is not exited, archived or cleanup. */
   readonly sessions: number;
   /** The server's `attention` bucket, never `dialogPending`: a killed session that is still `dialogPending` is
    *  bucketed `dead` (shared/api.ts's ladder checks `dead` first), and it is waiting on no one. */
@@ -20,8 +26,9 @@ const count = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : '
 export function fleetSummary(sessions: readonly FleetSession[], runs: readonly Pick<RunSummary, 'state'>[] | null): FleetSummary {
   const waiting = sessions.filter((s) => s.bucket === 'attention').length;
   const open = runs === null ? null : runs.filter((r) => !isRunClosed(r)).length;
-  const parts = [count(sessions.length, 'session')];
+  const live = sessions.filter((s) => !NOT_RUNNING.has(s.bucket)).length;
+  const parts = [count(live, 'session')];
   if (waiting > 0) parts.push(`${waiting} waiting`);
   if (open !== null && open > 0) parts.push(count(open, 'run'));
-  return { sessions: sessions.length, waiting, runs: open, readout: parts.join(' · ') };
+  return { sessions: live, waiting, runs: open, readout: parts.join(' · ') };
 }

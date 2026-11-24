@@ -397,8 +397,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(sevenDayHolders(ALL).filter((h) => h in OWN_FACTS)).toEqual(Object.keys(OWN_FACTS).sort());
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the nineteen separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These nineteen are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twenty separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twenty are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -438,6 +438,10 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The hook's reports keep (Overlord W1 door process B1: reader and model-switch rows and the witness checks, the plan's starting
     // value, question 12) is the nineteenth, ruled a separate quantity by the coordinator (coordinator ruling, 2026-11-20, run 2832):
     // unrelated to token rotation, and it does not import the token interval.
+    // The one-time pass's positive check (session helpers S2, D-8874) is the twentieth, ruled a separate quantity by the coordinator
+    // (2026-11-21, run 3098): spec 2026-11-19 §7.2's seven days of quiet, after which an agent or workflow record passes the check
+    // without its parent's measurement. The dry run's first age band edge reads it rather than naming a week of its own. It is
+    // unrelated to token rotation, and it does not import the token interval.
     expect(sevenDayHolders(ALL).filter((h) => !(h in OWN_FACTS)), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
@@ -445,6 +449,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
       'server/src/coord/coordCalls.ts:BLOCK_TIME_WAKE_MAX_MS',
       'server/src/coord/coordCalls.ts:CALL_SEEN_WINDOW_MS',
+      'server/src/coord/delegation-backfill.ts:DELEGATION_BACKFILL_PROVEN_QUIET_MS',
       'server/src/coord/delegation-lease-state.ts:DELEGATION_LEASE_EXPIRY_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
       'server/src/coord/portfolio.ts:WEEK_MS',

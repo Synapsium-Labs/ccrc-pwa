@@ -89,7 +89,7 @@ describe('the grant is gone (R3b)', () => {
         return (...args: unknown[]) => { touched.push(String(key)); void args; throw new Error(`readLaneModels asked io.${String(key)}`); };
       },
     });
-    await readLaneModels(io, '/nonexistent/.ccrc', 'lane-a');
+    await readLaneModels(io, 'lane-a');
     expect(touched).toEqual([]);
   });
 });
@@ -114,12 +114,12 @@ describe('the mixed pairs (R3b), so the wave is safe in either update order', ()
           return onModels();
         },
       };
-      return { io: createIo(client as never), frames, ccrcDir: path.join(home, '.ccrc') };
+      return { io: createIo(client as never), frames };
     };
 
     it('an answer: the op is used, and the grant is never asked', async () => {
       const a = r3Agent(() => Promise.resolve({ kind: 'exited', code: 0, stdout: SHOW, fleetIdentity: null }));
-      const got = await readLaneModels(a.io, a.ccrcDir, 'lane-a');
+      const got = await readLaneModels(a.io, 'lane-a');
       expect(got).toEqual({ kind: 'read', classes: CLASS_LABELS, advance: { state: 'absent', detail: null, pending: null, classes: null } });
       expect(a.frames).toEqual([MODELS_OP]);
     });
@@ -133,7 +133,7 @@ describe('the mixed pairs (R3b), so the wave is safe in either update order', ()
       })],
     ] as const)('%s reads as %s, and the grant is never asked', async (_n, kind, onModels) => {
       const a = r3Agent(onModels);
-      expect((await readLaneModels(a.io, a.ccrcDir, 'lane-a')).kind).toBe(kind);
+      expect((await readLaneModels(a.io, 'lane-a')).kind).toBe(kind);
       expect(a.frames).toEqual([MODELS_OP]);
     });
 
@@ -143,7 +143,7 @@ describe('the mixed pairs (R3b), so the wave is safe in either update order', ()
         state: { agentOps: ['update', 'token-sync', 'account'] },
         request: async (f: Record<string, unknown>) => { frames.push(String(f.op)); throw new Error('never asked'); },
       };
-      expect(await readLaneModels(createIo(client as never), '/nonexistent/.ccrc', 'lane-a')).toEqual({ kind: 'unsupported' });
+      expect(await readLaneModels(createIo(client as never), 'lane-a')).toEqual({ kind: 'unsupported' });
       expect(frames).toEqual([]);
     });
   });

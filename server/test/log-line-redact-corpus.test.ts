@@ -358,7 +358,8 @@ describe('the bare-host mode\'s scope (D-7289)', () => {
   // line it misreads) reds here, not only a call that passes a second word. A commit that adds or removes a call moves
   // its file's count in the same diff.
   // D-8389: ccd/ccrc's 21st is `_upd_fetch`'s, over the verifier's stderr.
-  const CALLS = { 'ccd/ccrc': 21, 'ccd/ccrc-doctor-checks': 3 } as const;
+  // D-8905: its 22nd is `_upd_phase`'s, over the act's id in the report.
+  const CALLS = { 'ccd/ccrc': 22, 'ccd/ccrc-doctor-checks': 3 } as const;
   it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument, and their counts are pinned', () => {
     for (const [f, count] of Object.entries(CALLS)) {
       const calls = updRedactCalls(read(f));

@@ -87,7 +87,7 @@ const SETTINGS_LINES = new Map([
 ]);
 const TS: ToolsSettings = toolsSettings(SETTINGS_LINES, durationMs);
 const [R1, R2] = [TS.retryMs[0]!, TS.retryMs[1]!];
-const BOX: BoxTools = { release: NEW_TAG, versions: NEW, set: 's.aaaaaaaa' };
+const BOX: BoxTools = { release: NEW_TAG, versions: NEW, set: 's.aaaaaaaa', managed: 'unmanaged' };
 const OK_REPORT = parseReport('result\tok\nrelease\tv0.0.2\nset\ts.bbbbbbbb\ntakeover\t0\nnode-changed\t1\n');
 
 describe('tools.ts: the decider (spec §2.10)', () => {
@@ -993,6 +993,7 @@ function driver(b: Box, o: {
   const served: ServedService = {
     status: okStatus, idle: () => { idleAsked = true; return idle; }, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
     submit: (f, conn) => { if (o.submit !== undefined) o.submit(f, conn); submitted.push({ f, conn }); },
+    forgetWaiting: () => new Map(),
   };
   const t = new ToolSync({
     sys: fakeSys(b, path.join(svcRoot, 'specs', 'tools'), units, o.beforeUnit), root: svcRoot, toolsDir: b.tools,
@@ -1277,7 +1278,7 @@ function slowService() {
   const gates: (() => void)[] = [];
   const c = { started: 0, inFlight: 0, most: 0 };
   const served: ServedService = {
-    status: okStatus, idle: async () => undefined, liveRuns: () => [], waiting: () => [], submit: () => undefined,
+    status: okStatus, idle: async () => undefined, liveRuns: () => [], waiting: () => [], submit: () => undefined, forgetWaiting: () => new Map(),
     tick: async () => {
       c.started++; c.inFlight++; c.most = Math.max(c.most, c.inFlight);
       await new Promise<void>((r) => gates.push(r));
@@ -1708,6 +1709,7 @@ describe('the timer (main.ts#timerWork): a sync never holds up the service\'s wo
     const t = new ToolSync({ sys: u.sys, root: path.join(fx, 'svc'), toolsDir: tools, settings: TS, now: () => now, exit: () => undefined });
     const served: ServedService = {
       status: okStatus, idle: async () => undefined, liveRuns: () => [], waiting: () => [], submit: () => undefined, tick: async () => { ticks++; },
+      forgetWaiting: () => new Map(),
     };
     t.serve(served);
     const svc = { tick: served.tick } as unknown as TestboxService;
@@ -1789,8 +1791,9 @@ const boxEnvAssignments = (t: string): string[] => shellCode(t).filter((l) => /\
 
 /** D-7568, named exception: TB7's installer checks its staging tree's MANIFEST in phase 1, as plan task TB7 requires
  *  (the first release is trusted on its transport checksum and its MANIFEST, D-7424), through ccd/ccrc's own
- *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. */
-const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/install.sh: ( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
+ *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. It is a step of
+ *  `deploy/testbox/box-steps` since D-8903, where the installer and the box updater both call it: still one line. */
+const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/box-steps: ( cd "$1" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
 
 describe('counted exits (D-7408, D-7457)', () => {
   it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0 (TB7\'s installer MANIFEST line the one named exception, D-7568)', async () => {

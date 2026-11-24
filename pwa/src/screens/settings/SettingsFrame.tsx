@@ -4,7 +4,7 @@
 // column capped at `--page-max`.
 //
 //   - `/settings`: `PageScaffold` (Back to the fleet, `❯`, "Settings"), the sign-in gate's banner if it shows, then
-//     the five index rows.
+//     the six index rows.
 //   - `/settings/<id>`: the gate's banner, then the section's page, led by its `<h2>`, with Back to the index.
 // The banner (`SignInGateBanner`, settings Task R2b2) holds the same place in the tree in both, so moving between the
 // index and a section keeps its node, and its `role="alert"` is announced once per mount of the frame.
@@ -23,6 +23,7 @@ import { backToFleet } from '../../command/door';
 import { matchRoute, SETTINGS_SECTIONS, type SettingsSectionId } from '../../lib/routes';
 import { AppearanceSection } from './AppearanceSection';
 import { AutomationSection } from './AutomationSection';
+import { IntegrationsSection } from './IntegrationsSection';
 import { NotificationsSection } from './NotificationsSection';
 import { SecuritySection } from './SecuritySection';
 import { SignInGateBanner } from './SignInGateCard';
@@ -50,8 +51,8 @@ function SectionBody({ id, view }: { id: SettingsSectionId; view: SettingsPageVi
       return <NotificationsSection view={view.updates.view} reload={view.updates.reload} supported={view.push !== 'unsupported'} />;
     case 'automation': return <AutomationSection view={view} />;
     case 'security':
-      return <SecuritySection poll={view.updates} auth={view.auth} passkeys={view.passkeys} refreshAuth={view.refreshAuth}
-        linear={view.linear} />;
+      return <SecuritySection poll={view.updates} auth={view.auth} passkeys={view.passkeys} refreshAuth={view.refreshAuth} />;
+    case 'integrations': return <IntegrationsSection linear={view.linear} />;
   }
 }
 

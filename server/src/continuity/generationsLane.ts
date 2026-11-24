@@ -102,7 +102,9 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
-import type { W1Inputs } from './renewalReadings.js';
+import { designatedClassAtMint, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import {
   actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
   standingActs, type ItemAbout, type ItemStanding, type PermitWait, type RenewalAct,
@@ -185,6 +187,10 @@ export interface GenerationsDeps {
    *  the caller across passes, never a decision's durable state (review 2063 F4). One key per kind, so a stalled compaction
    *  try and a spot try never overwrite each other (review 2068 F4). */
   readonly emptyTries: EmptyTries;
+  /** The ladder's one latch raise (`renewalReadingsWiring.ts` binds `overlordLadderRead.ts#raiseLatch`), asked for the
+   *  `probes-failed-twice` row on a live Overlord step (`probesFailedTwiceOf`). The cap is the cause row's, never the lane's.
+   *  Absent: nothing is raised. Its answer is checked; a refusal or a throw is logged, never thrown. */
+  readonly latch?: (cause: LadderLatchCause, detail: string) => { readonly ok: true } | { readonly ok: false; readonly why: string };
 }
 
 /** The empty-try memo: by generation id, then by round kind, the `emptyTryKey` of the newest try that had no question. */
@@ -274,8 +280,22 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const retract: string[] = [];
   const recorded: string[] = [];
   const waits: Partial<Record<PermitWait, number>> = {};
+  // The `probes-failed-twice` latch (Table 7.5a; renewal readings Task 6): the ladder's one raise, so a standing latch answers
+  // `changed: false`. A refusal or a throw is logged and the pass goes on.
+  function latchProbes(gen: GenRow): void {
+    if (deps.latch === undefined) return;
+    try {
+      const r = deps.latch('probes-failed-twice', `generation ${gen.n} of the Overlord degraded after two failed probe rounds`);
+      if (!r.ok) deps.log(`ccrc-server: generations: the probes-failed-twice latch was refused for generation ${gen.id} (${r.why})`);
+    } catch (e) {
+      deps.log(`ccrc-server: generations: the probes-failed-twice latch failed for generation ${gen.id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
   const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent, about?: ItemAbout): void => {
+    // The pre-step row holds both the walk's written column and the probe count that `degrade` resets (review 2183 F8).
+    const { column } = effectiveGeneration(gen, live);
+    if (probesFailedTwiceOf({ role: gen.role, from, event, view: gen, next: step.next.state, column })) latchProbes(gen);
     if (live) { for (const act of actsOfStep(step.actions, from, event, about)) planned.push({ target: targetOf(gen), act }); return; }
     const line = shadowLine(gen, from, step, event);
     recorded.push(line);
@@ -339,8 +359,10 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   // for the renewal permit then reads undecided, so a coordinator's renewal holds as a role change.
   let designation: DesignationFact | 'unmeasured';
   let designationWhy = 'the designation could not be read';
+  let designationRead: DesignationRead = { kind: 'unmeasured', why: designationWhy };
   try {
     const read = coord.designationRead();
+    designationRead = read;
     designation = designationFactFrom(read);
     if (read.kind === 'unmeasured') designationWhy = read.why;
   } catch (e) { designation = 'unmeasured'; designationWhy = e instanceof Error ? e.message : String(e); }
@@ -376,6 +398,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         identity: identityFor(s.sessionId), sessionId: s.sessionId, role: v.role,
         term: identityFor(s.sessionId) === 'overlord' && fact.kind === 'row' ? fact.term : GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
         startId: s.id, startReportedAt: s.reportedAt, resumed: v.resumed, model: s.model, lane: v.lane, host: null,
+        designatedClass: designatedClassAtMint(designationRead, identityFor(s.sessionId)),
         outcome: v.outcome, mono: clock.mono(), proc: deps.proc, now,
       });
 

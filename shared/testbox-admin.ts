@@ -316,7 +316,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'unpair-failed': 'The box\'s own unpair did not finish. Run its installer\'s --unpair by hand, and remove ccrc\'s access line from its authorized_keys if it is still there.',
   'address-not-private': 'The box is not on a private network, so ccrc will not connect to it. Use an address on a tailnet, a VPN or your provider\'s private network.',
   'box-already-set': 'A box is already set up here, so its address and port change only through Replace or Start over.',
-  'interrupted': 'The act stopped before it finished, because the fleet host restarted or its unit was stopped; run it again.',
+  'interrupted': 'The act stopped before it finished, because the fleet host restarted, its unit was stopped or it reached its time limit; run it again.',
   // D-8337: the access key's Rotate and Revoke.
   'new-key-refused': 'The box did not take the new access key, so ccrc took it out again and kept the old one, which still works.',
   'old-line-kept': 'ccrc now uses its new access key, but the box still lets the old key in; remove the old key\'s line shown by hand.',
@@ -354,6 +354,66 @@ export const TESTBOX_ADMIN_PHASES: Readonly<Record<TestboxPhasedSub, readonly Te
   'settings-box': Object.freeze(['wait', 'settings', 'install'] as const),
   'parity': Object.freeze(['legs', 'record'] as const),
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// The deadlines (D-8899; spec 2026-11-22-test-box-managed-node-design.md §2.9).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** A row of the deadline table: a long sub (its detached unit's ceiling), or a named part of one. A row that is no sub holds a
+ *  `/`, which no sub does. */
+export type TestboxAdminDeadlineRow =
+  | TestboxPhasedSub | 'settings-box/idle' | 'parity/leg' | 'parity/kill' | 'parity/tail' | 'parity/sample' | 'parity/queue'
+  | 'unit/stop';
+/** THE ONE DEADLINE TABLE, in seconds; `TBA_DEADLINE_S` in `ccd/ccrc-testbox-admin` is its bash twin, held equal by
+ *  `server/test/testbox-admin-verb.test.ts`. The system manager enforces a sub's row on its unit (`RuntimeMaxSec`), so an act
+ *  that outlives it is stopped and its lock freed, and the next status read ends it `interrupted`.
+ *   - `connect`: 58 minutes, the design's bound for a first install (release fetched, verified and copied, the box's packages
+ *     and tools installed, paired and checked); the install alone is about five minutes on a real box.
+ *   - `repair`, `apply-release`, `settings-box`: 30 minutes. Each ends in one re-run of the box's installer, about five
+ *     minutes on a real box, after at most a fetch, a verify and a copy of the release.
+ *   - `settings-box/idle`: an Apply when idle: the six-hour wait for no run in progress (`TBA_IDLE_DEADLINE_DEFAULT`), then
+ *     the `settings-box` row, then two minutes for the wait's last look. One ceiling for the wait and the act together.
+ *   - `parity`: 25 minutes in all, about twice the light check's expected ten minutes on a loaded fleet box, and room for one
+ *     queue wait: one merged pull request per repository row, over a sample of its tests, and the three fixtures (D-8945,
+ *     D-8947). It leaves two stopped steps and a queue wait inside the time before the tail. `parity/leg`: 7 minutes
+ *     for one step of the parity tool (a lockfile install, the per-file times fetch, one run of the sample on one side, or a
+ *     flake's re-run alone), sized as three times the CI pace of a `parity/sample` sample at two workers, plus a minute for
+ *     vitest to start; enforced by the platform timeout shim (`_plat_timeout`) in `ccd/testbox-parity`; a step stopped there
+ *     fails and the act goes on. `parity/kill`: 8 seconds between a stopped step's TERM and its KILL, and between the tool's
+ *     own: the most the shim's grace allows (2 to 8). `parity/tail`: the last five minutes of the act, kept back from its legs
+ *     (unchanged: cleaning a worktree and its installs does not shrink with the sample): the tool starts nothing after the
+ *     act's start plus `parity` less this, is itself stopped half of it later, and the other half is the record's. So a run
+ *     that is only slow ends with a record and a reason, and the ceiling is left for a real hang.
+ *   - `parity/sample`: 240 CI-measured seconds of test-file time (the `testtimes` artifact), not a deadline: what the samples
+ *     of one act may add up to, split evenly across the repository rows (at least 60 each) and passed to the tool as
+ *     `--sample-budget`. It is the fact that makes a sample's leg fit `parity/leg`.
+ *   - `parity/queue`: 5 minutes the local leg may wait for one of the fleet's heavy-test slots (`ccrc test`'s queue), added to
+ *     that leg's bound only and passed to the tool as `--queue-wait`, so a busy queue does not eat the run's own time; a leg
+ *     stopped while still queued is reported as a busy fleet box, not as a difference.
+ *   - `unit/stop`: 90 seconds between the unit's TERM at its ceiling and its KILL (`TimeoutStopSec`). */
+export const TESTBOX_ADMIN_DEADLINE_S: Readonly<Record<TestboxAdminDeadlineRow, number>> = Object.freeze({
+  'connect': 3480, 'repair': 1800, 'apply-release': 1800, 'settings-box': 1800, 'settings-box/idle': 23520,
+  'parity': 1500, 'parity/leg': 420, 'parity/kill': 8, 'parity/tail': 300, 'parity/sample': 240, 'parity/queue': 300,
+  'unit/stop': 90,
+});
+
+/** The largest time, in epoch milliseconds, the verb prints and a reader takes for an act: fifteen digits, which a `Date`
+ *  can still format (its own limit is 8.64e15). */
+export const TESTBOX_ACT_TIME_MAX_MS = 999_999_999_999_999;
+/** The act that holds the admin lock, as a `busy` answer names it: which sub, when it began and the latest time it can end
+ *  (its start, its row and `unit/stop`), both in epoch milliseconds. No address, path or secret. The status says the same of
+ *  its running act ({@link TestboxActState.deadlineAt}); the words are the PWA's (`busyHolderSentence`). */
+export interface TestboxBusyHolder { sub: TestboxPhasedSub; startedAt: number; deadlineAt: number }
+/** THE ONE READER of a `busy` answer's `holder`. null for none (an older verb, or a short act that holds the lock for under
+ *  a minute and is not recorded) and for one off its shape, a time past {@link TESTBOX_ACT_TIME_MAX_MS} included. */
+export function readTestboxBusyHolder(v: unknown): TestboxBusyHolder | null {
+  if (!plainObject(v)) return null;
+  const { sub, startedAt, deadlineAt } = v as { sub?: unknown; startedAt?: unknown; deadlineAt?: unknown };
+  if (typeof sub !== 'string' || !Object.hasOwn(TESTBOX_PHASED_SUB_MAP, sub)) return null;
+  if (!Number.isSafeInteger(startedAt) || !Number.isSafeInteger(deadlineAt)) return null;
+  if ((startedAt as number) < 0 || (deadlineAt as number) < (startedAt as number) || (deadlineAt as number) > TESTBOX_ACT_TIME_MAX_MS) return null;
+  return { sub: sub as TestboxPhasedSub, startedAt: startedAt as number, deadlineAt: deadlineAt as number };
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // The sub table.
@@ -681,7 +741,16 @@ export interface TestboxParityRecord {
   fingerprint: string;
   boxFileSha256: string;
   at: number;
+  /** The test files compared on both sides, summed over the record's pull request legs: the light check's sample (D-8945).
+   *  The reader ships first and nothing writes it yet: a server older than this field refuses a whole status whose record
+   *  carries it, and the default rollout and the console's update both move the fleet box first, so the parity tool starts
+   *  writing it only in a later release, once every server reads it. A record without it reads and arms as before; the
+   *  reader sets it only when the record carries it. */
+  files?: number;
 }
+
+/** The most test files a parity record says it compared. */
+const TESTBOX_PARITY_FILES_MAX = 100_000;
 
 export interface TestboxActState {
   id: string;
@@ -692,6 +761,10 @@ export interface TestboxActState {
   code: TestboxAdminCode | null;
   startedAt: number;
   endedAt: number | null;
+  /** The latest time a RUNNING long act can end, in epoch milliseconds: its start, its row of {@link TESTBOX_ADMIN_DEADLINE_S}
+   *  and `unit/stop`, as the verb recorded it (what a `busy` answer names as its holder's). Absent from an ended act, from a
+   *  short one and from an older verb's status; the reader sets it only when the verb sent one (D-8899). */
+  deadlineAt?: number;
 }
 
 export interface TestboxAdminStatus {
@@ -775,7 +848,12 @@ const FIXTURES = { 'git-state': true, socket: true, workers: true } as const;
 const RESULTS = { pass: true, fail: true } as const;
 
 function parityRecord(v: unknown, at: string): TestboxParityRecord {
-  const o = exact(v, at, ['v', 'result', 'prs', 'fixtures', 'release', 'toolsKey', 'fingerprint', 'boxFileSha256', 'at']);
+  // `files` was added after the first record shape (D-8945): a record without one (a full-suite run) reads as before, and the
+  // field is set only when the record carries it, as an act's `deadlineAt` is.
+  const o = exact(plainObject(v) && !Object.hasOwn(v, 'files') ? { ...v, files: null } : v, at,
+    ['v', 'result', 'prs', 'fixtures', 'release', 'toolsKey', 'fingerprint', 'boxFileSha256', 'at', 'files']);
+  const files = !Object.hasOwn(v as Obj, 'files') ? null
+    : int(o['files'], `${at}.files`) <= TESTBOX_PARITY_FILES_MAX ? o['files'] as number : refuse(`${at}.files`, 'more than a record counts');
   if (o['v'] !== 1) refuse(`${at}.v`, 'not 1');
   if (!Array.isArray(o['prs']) || o['prs'].length > 4096) refuse(`${at}.prs`, 'not a list');
   if (!Array.isArray(o['fixtures']) || o['fixtures'].length > 3) refuse(`${at}.fixtures`, 'not a list of at most three');
@@ -802,11 +880,16 @@ function parityRecord(v: unknown, at: string): TestboxParityRecord {
     fingerprint: isHostKeyFingerprint(fp) ? fp : refuse(`${at}.fingerprint`, 'not a host key fingerprint'),
     boxFileSha256: typeof sha === 'string' && SHA256_HEX_RE.test(sha) ? sha : refuse(`${at}.boxFileSha256`, 'not a sha256'),
     at: int(o['at'], `${at}.at`),
+    ...(files === null ? {} : { files }),
   };
 }
 
 function actState(v: unknown, at: string): TestboxActState {
-  const o = exact(v, at, ['id', 'sub', 'phase', 'phases', 'outcome', 'code', 'startedAt', 'endedAt']);
+  // `deadlineAt` was added after the first act shape (D-8899): an act without one (an older verb, an ended
+  // act) reads as it always did.
+  const o = exact(plainObject(v) && !Object.hasOwn(v, 'deadlineAt') ? { ...v, deadlineAt: null } : v, at,
+    ['id', 'sub', 'phase', 'phases', 'outcome', 'code', 'startedAt', 'endedAt', 'deadlineAt']);
+  const deadlineAt = orNull(o['deadlineAt'], (x) => (int(x, `${at}.deadlineAt`) <= TESTBOX_ACT_TIME_MAX_MS ? x as number : refuse(`${at}.deadlineAt`, 'not a time')));
   if (typeof o['id'] !== 'string' || !ACT_ID_RE.test(o['id'])) refuse(`${at}.id`, 'not 32 lowercase hex characters');
   if (!Array.isArray(o['phases']) || o['phases'].length > 16) refuse(`${at}.phases`, 'not a short list');
   return {
@@ -821,6 +904,7 @@ function actState(v: unknown, at: string): TestboxActState {
     code: orNull(o['code'], (x) => pick(TESTBOX_ADMIN_CODE_MAP, x, `${at}.code`)),
     startedAt: int(o['startedAt'], `${at}.startedAt`),
     endedAt: orNull(o['endedAt'], (x) => int(x, `${at}.endedAt`)),
+    ...(deadlineAt === null ? {} : { deadlineAt }),
   };
 }
 
@@ -872,7 +956,7 @@ export function readTestboxAdminStatus(json: string): Read<TestboxAdminStatus> {
   try { raw = JSON.parse(json); } catch { return { ok: false, reason: 'not JSON' }; }
   try {
     // `installedTag`, `endedActs` and `parityStale` were added after the first status shape: a status without one (an older verb)
-    // reads as null, as none and as not stale.
+    // reads as null, as none and as not stale. An act's `deadlineAt` is the fourth such field, read in `actState`.
     const o = exact(raw && typeof raw === 'object' && !Array.isArray(raw)
       ? { ...(!Object.hasOwn(raw, 'installedTag') ? { installedTag: null } : {}), ...(!Object.hasOwn(raw, 'endedActs') ? { endedActs: [] } : {}),
           ...(!Object.hasOwn(raw, 'parityStale') ? { parityStale: false } : {}), ...(raw as Obj) } : raw, 'status', [

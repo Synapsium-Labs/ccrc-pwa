@@ -34,6 +34,9 @@ export const SLOW_FIRST: readonly string[] = [
  *  name (runs-widths, 246 s, among them, which had cost the median) and replaces every other figure. Refresh it from a
  *  newer such log when the leg's shards drift apart. */
 export const FILE_MS: Readonly<Record<string, number>> = {
+  // Settings › Integrations (#3230) made it 22 cases over every width, skin and theme: 360,336 ms in queue run
+  // 45175290557 against the 28,901 it had here, so it started last in its shard and the shard ran past its 20 minutes.
+  'project-linking-card.browser.test.ts': 360336,
   'ask-inline.browser.test.ts': 573465,
   'wheel-chain.browser.test.ts': 355313,
   'wheel-chain-chip.browser.test.ts': 247571,
@@ -89,7 +92,6 @@ export const FILE_MS: Readonly<Record<string, number>> = {
   'transcript-work-card.browser.test.ts': 30111,
   'accounts-openrouter-card.browser.test.ts': 29930,
   'compaction-fold.browser.test.ts': 29210,
-  'project-linking-card.browser.test.ts': 28901,
   'content-focus-ring.browser.test.tsx': 27895,
   'chat-width.browser.test.ts': 25306,
   'inspector-hide.browser.test.ts': 24996,

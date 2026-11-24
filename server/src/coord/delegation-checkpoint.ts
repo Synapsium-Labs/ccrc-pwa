@@ -52,7 +52,7 @@ import {
   isDelegationHourCarveOut,
   isDelegationWorkerIndex,
   isLowerHex64,
-  parseDelegationInstant,
+  parseDelegationInstant, maxInstant,
   planDelegationCursorRetention,
   sortedProjectionRows,
   upkeepDelegationIntervals,
@@ -81,7 +81,8 @@ import {
 import {
   type DelegationRecordNaming,
 } from './delegation-compaction.js';
-import { endBasisDefect, endedBy, isEndable, taskReportEnd } from './delegation-end-basis.js';
+import { endBasisDefect, endedBy, isEndable, isFinalNotification, taskReportEnd } from './delegation-end-basis.js';
+import { backfillClosed, backfillReopened, workerUnderRun } from './delegation-backfill.js';
 import {
   foldLeaseCarrierSeen,
   foldLeaseRelease,
@@ -618,7 +619,6 @@ export type DelegationBashCallFact =
   | { kind: 'pre'; journalId: string; sequence: number; observedAt: string; lastObservedAt: string; listing: readonly string[]; acceptedAtMs: number }
   | { kind: 'equal'; preJournalId: string };
 
-const maxInstant = (a: string, b: string): string => (a >= b ? a : b);
 const minInstant = (a: string, b: string): string => (a <= b ? a : b);
 
 /** D-6267: a due heap over journal-time deadlines (a cache only: every decision re-reads the map entry the heap names). */
@@ -961,7 +961,7 @@ export class DelegationCheckpointBuilder {
     const runId = Object.hasOwn(this.mapping, L.runEncoded) ? this.mapping[L.runEncoded] : undefined;
     const run = runId === undefined ? undefined : this.activities.get(runId);
     if (run === undefined) return refuse('fold-refused', `the task notification of workflow run ${L.runId} of (${e.sessionId}, ${e.parentIncarnation}) finds no run row, although its launch was folded`);
-    const terminal = n.status !== 'unknown';
+    const terminal = isFinalNotification(n.status);   // D-8874 (review 3026 F9): the rule's one writer
     const changed: DelegationActivityRow[] = [];
     const nextRun: DelegationActivityRow = terminal && isEndable(run)
       ? endedBy(run, e.observedAt, 'observed')
@@ -1138,11 +1138,11 @@ export class DelegationCheckpointBuilder {
     const runMapped = Object.hasOwn(this.mapping, runKey) ? this.mapping[runKey] : undefined;
     const run = runMapped === undefined ? undefined : this.activities.get(runMapped);
     if (run === undefined) return { kind: 'waiting-for-evidence' };
-    return {
-      kind: 'opened',
-      activityId: this.openFromCandidate(
-        { key: worker, journalId: run.identityJournalId, observedAt: run.openedAt, lastObservedAt: run.lastEventAt, endedAt: run.endedAt }, encoded),
-    };
+    const activityId = this.openFromCandidate(
+      { key: worker, journalId: run.identityJournalId, observedAt: run.openedAt, lastObservedAt: run.lastEventAt, endedAt: run.endedAt }, encoded);
+    // D-8874 (review 3026 F3): the run's state and basis, not its `endedAt` alone: a worker of a run S2's pass closed opens closed by it.
+    this.activities.set(activityId, workerUnderRun(this.activities.get(activityId)!, run));
+    return { kind: 'opened', activityId };
   }
 
   private foldLease(record: DelegationJournalRecordV1, e: Extract<DelegationJournalEntryV1, { kind: 'lease-created' }>): void {
@@ -1297,7 +1297,8 @@ export class DelegationCheckpointBuilder {
     for (const id of ids) {
       const a = this.activities.get(id);
       if (a === undefined) continue;
-      if (a.executionState !== 'ended' || named.has(id)) refuse('change-refused', `activity ${id} is not retirable behind the cut: it has not ended, or a lease or lineage row names it`);
+      // D-8874: a record S2's pass closed has no measured end, so it is refused as an open one is (`isEndable`).
+      if (isEndable(a) || named.has(id)) refuse('change-refused', `activity ${id} is not retirable behind the cut: it has no measured end, or a lease or lineage row names it`);
     }
     const runs = new Set<string>();
     for (const [encoded, id] of Object.entries(this.mapping)) {
@@ -1310,6 +1311,12 @@ export class DelegationCheckpointBuilder {
     for (const [k, L] of this.workflowLaunches) if (runs.has(L.runEncoded)) this.workflowLaunches.delete(k);
     return n;
   }
+
+  /** D-8874, session helpers S2 (spec §7.2): the one-time pass and its undo, each run inside the applier's `commitLocked`; the rows are
+   *  decided in `delegation-backfill.ts`. The pass closes the given ids still open; the undo reopens every record the pass closed. */
+  closeByBackfill(ids: readonly string[]): number { return this.putActivities(backfillClosed(this.activities, ids)); }
+  reopenBackfill(): number { return this.putActivities(backfillReopened(this.activities)); }
+  private putActivities(rows: readonly DelegationActivityRow[]): number { for (const a of rows) this.activities.set(a.activityId, a); return rows.length; }
 
   /**
    * D-7021, the compaction's `memory-prune`: drops every journal-derived fact whose source record the cut removed (at or below `cutThrough`

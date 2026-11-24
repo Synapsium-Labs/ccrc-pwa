@@ -63,6 +63,9 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
   pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
   'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
+  // Confirm the restore (authority journal C): the guard's state for the banner, and the door behind the step-up.
+  'restore-read': operator('GET', '/api/overlord/restore', OVERLORD, 'view'),
+  'restore-confirm': operator('POST', '/api/overlord/restore/confirm', OVERLORD, 'admin'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
   'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),
