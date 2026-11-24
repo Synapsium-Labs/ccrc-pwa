@@ -1600,7 +1600,7 @@ describe('stage B fix round 1, F1: the key\'s two code lists are the whole stati
   it('every file the seeds and the gate\'s own files load is in exactly one of the two lists, and every listed file is loaded', () => {
     const gate = G.GATE_CODE_FILES as string[];
     const pilot = QP.PILOT_CODE_FILES as string[];
-    // the gate's files are walked too (what its driver loads is a pilot file); its Python script is spawned, never imported
+    // the gate's files are walked too (what its driver loads is a pilot file); its Python script runs on its own, never imported
     const loaded = new Set([...closureOf([...SEEDS, ...gate.filter((f) => f.endsWith('.mjs'))]), ...gate.filter((f) => !f.endsWith('.mjs'))]);
     const listed = new Set([...gate, ...pilot]);
     expect([...loaded].filter((f) => !listed.has(f)).sort(), 'loaded, and in neither list').toEqual([]);
