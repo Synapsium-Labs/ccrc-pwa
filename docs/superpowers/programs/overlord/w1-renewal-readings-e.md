@@ -53,6 +53,9 @@ for them; the coordinator folds them into the plan's ledger. Measured on `main` 
 - **`class-changed-k5-imports-nothing`**: PR C's mutant K5 in `renewalReadingSets.ts` appended its own import of
   `familyClassOf`. The module now imports it, so the mutant would not compile (`invalid`); K5 now adds no import. Its kill is
   unchanged.
+- **`sidecar-read-derives-read-failure`**: the consumer-declared `SidecarRead` first spelled the read-failure pair itself,
+  a second copy of `shared/agent-protocol.ts#ReadFailure`; the first CI run's `single-definition/vocabularies.test.ts` caught
+  it. It now derives the pair (`ReadFailure | 'malformed'`).
 - **`switch-target-class-unused-by-drift`**: `modelDriftOf` counts every `switched` report whatever its target, so the
   target's class (`toClass`) does not change the drift; the mapper still classes it, since `SwitchReading` carries it.
 
@@ -104,7 +107,8 @@ Each alone, through the fleet's test wrapper, from `server/`: the new suite; `co
 `continuity-renewal-readings-wiring.test.ts`, `continuity-readings.test.ts`, `continuity-hook-reports.test.ts`,
 `continuity-generations-lane.test.ts`; `sim/mutation-floors.test.ts` scoped to the renewal readings' sets, the baseline and
 the two floor checks; `rings/watcher-store-port.test.ts`, `rings/totality.test.ts`, `rings/outward-edges.test.ts`,
-`rings/held-by-leaf.test.ts`, `coord-policy-rings.test.ts`, `single-definition/writers-map.test.ts`,
-`single-definition/core-vocab.test.ts`, `run-session-census.test.ts`, `ownership.test.ts`, `growth-check.test.ts`,
+`rings/held-by-leaf.test.ts`, `rings/shared-imports.test.ts`, `rings/host-imports.test.ts`, `rings/exemption-age.test.ts`,
+`rings/wire-totality.test.ts`, `rings/fastify-l4.test.ts`, `coord-policy-rings.test.ts`, every `single-definition/*.test.ts`
+(44 files, after the first CI run's red), `run-session-census.test.ts`, `ownership.test.ts`, `growth-check.test.ts`,
 `growth-caps.test.ts`; the server's `tsc --noEmit`, and the touched test files under the tests' compiler options (the whole
 tests project was killed twice by the test slice's memory cap on a loaded box, so CI's typecheck is its arbiter).

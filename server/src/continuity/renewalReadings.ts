@@ -19,6 +19,7 @@ import { fittedCeiling, type SpotProbe } from './probes.js';
 import { modelDriftOf, readersRunning, type Read, type ReaderEventIn, type SidecarClass } from './hookReports.js';
 import { familyClassOf } from '../../../shared/models.js';
 import type { ModelSwitchHow } from '../../../shared/continuity-reports.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
 /** The `RenewalInputs` fields the lane reads `W1` until their producers are wired (`renewalInputsOf`'s defaults). The
@@ -158,7 +159,7 @@ export function designatedClassAtMint(d: DesignationRead, identity: string): str
 /** The status line sidecar's read as the gather takes it (`usage.ts#UsageRead`), declared by this consumer. */
 export type SidecarRead =
   | { readonly kind: 'reading'; readonly usage: { readonly class: string | null; readonly ts: number; readonly stale: boolean } }
-  | { readonly kind: 'absent' | 'unreadable' | 'malformed' };
+  | { readonly kind: ReadFailure | 'malformed' };
 /** One reported model switch as the hook report store reads it (`ModelSwitchRow`), narrowed to what drift reads. */
 export interface SwitchRowIn { readonly how: ModelSwitchHow; readonly to: string | null }
 
