@@ -69,7 +69,14 @@ served marks.
 - **D-9004** — `testbox-refs-first-seen-persisted`: the first sight of a ref-only run id is a stamp under
   `<CCRC_TESTBOX_ROOT>/refs-seen/`, not an in-memory map, so the spec's "refs go after the retention time" (§2.1) holds
   across service restarts. Stamped for every run id at its refs' first listing; used when the run has no results or
-  logs left, as the map was. A pass that could not list every mirror removes no stamp.
+  logs left, as the map was. A pass that could not list every mirror removes no stamp, so a repository row whose
+  mirror has no `HEAD` yet (added before its clone, or a clone that never initialises) holds back the removal of
+  orphan stamps for as long as it lasts; stamps are empty files, so this costs inodes, not space. A stamp that cannot
+  be read (any failure but a proven ENOENT) or written (a full root's ENOSPC, say) is unmeasured, never a first sight:
+  it is not re-stamped, its run is timed from now for that pass only, so its refs are kept, the pass says it once
+  (`ccrc-testbox: retention: <n> refs-seen stamps unmeasured, …`) and goes on deleting results and logs. A stamp it
+  cannot remove is said the same way. Red first: "D-9004: a refs-seen stamp that cannot be read / cannot be written is
+  unmeasured, and old results and logs still go".
 - **D-9005** — `testbox-retention-failures-said`: the service's tick says a failed retention arm on the service's note
   line (`ServiceDeps.log`, stderr by default) instead of dropping it.
 - **D-9006** — `testbox-handed-over-refs-kept`: the refs a checkout will need include a run handed over to disk, which

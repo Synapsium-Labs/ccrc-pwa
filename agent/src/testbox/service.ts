@@ -460,11 +460,21 @@ export class TestboxService {
     }
     const refsIn = new Map<string, string[]>();
     let everyMirror = true;
+    // A stamp that cannot be read, written or removed is unmeasured: its run is timed from now for this pass only (its
+    // refs kept), said once at the end, and the pass goes on, so a full root still loses its old results and logs.
+    const unmeasured: string[] = [];
+    const stampAct = (act: () => void): void => {
+      try { act(); } catch (e) { unmeasured.push(e instanceof Error ? e.message : String(e)); }
+    };
     for (const r of this.d.rows) {
       if (!existsSync(path.join(r.mirrorPath, 'HEAD'))) { everyMirror = false; continue; }
       for (const id of await this.d.mirror.runIds(r.mirrorPath)) {
         const e = entry(id);
-        if (!e.refs) e.seen = this.refsFirstSeen(id, now);
+        if (!e.refs) {
+          const seen = this.refsFirstSeen(id, now);
+          if (seen.kind === 'unmeasured') unmeasured.push(seen.reason);
+          e.seen = seen.kind === 'unmeasured' ? now : seen.at;
+        }
         e.refs = true;
         refsIn.set(id, [...(refsIn.get(id) ?? []), r.mirrorPath]);
       }
@@ -484,23 +494,40 @@ export class TestboxService {
     const seenDir = path.join(this.s.root, REFS_SEEN);
     for (const id of plan.refs) {
       for (const m of refsIn.get(id) ?? []) { await this.d.mirror.deleteRefs(m, id); touched.add(m); }
-      rmSync(path.join(seenDir, id), { force: true });
+      stampAct(() => rmSync(path.join(seenDir, id), { force: true }));
     }
-    // A stamp whose refs are gone some other way goes too, but only on the word of every mirror.
-    if (everyMirror) for (const id of existsSync(seenDir) ? readdirSync(seenDir) : []) if (!refsIn.has(id)) rmSync(path.join(seenDir, id), { force: true });
+    // A stamp whose refs are gone some other way goes too, but only on the word of every mirror. A mirror with no HEAD
+    // yet (a row added before its clone) holds this sweep back for as long as it lasts; stamps are empty files.
+    if (everyMirror && existsSync(seenDir)) {
+      stampAct(() => { for (const id of readdirSync(seenDir)) if (!refsIn.has(id)) rmSync(path.join(seenDir, id), { force: true }); });
+    }
     for (const m of touched) await this.d.mirror.gc(m);
+    if (unmeasured.length > 0) {
+      const n = unmeasured.length;
+      this.failed('retention', `${n} refs-seen stamp${n === 1 ? '' : 's'} unmeasured, timed from now this pass (first: ${unmeasured[0]})`);
+    }
   }
 
-  /** D-9004: when retention first saw this run's refs, from its stamp; the first sight writes the stamp at `now`. A run
-   *  whose results or logs are gone while its directory held its refs is timed from it then, as before. */
-  private refsFirstSeen(runId: string, now: number): number {
+  /** D-9004: when retention first saw this run's refs, from its stamp; the first sight (a stamp proven absent) writes the
+   *  stamp at `now`. A stamp that cannot be read is never re-stamped, and one that cannot be written is unmeasured, not
+   *  a first sight: the caller times it from now for this pass only. A run whose results or logs are gone while its
+   *  directory held its refs is timed from it then, as before. */
+  private refsFirstSeen(runId: string, now: number): { kind: 'stamped'; at: number } | { kind: 'unmeasured'; reason: string } {
     const f = path.join(this.s.root, REFS_SEEN, runId);
-    try { return statSync(f).mtimeMs; } catch { /* first sight */ }
-    mkdirSync(path.dirname(f), { recursive: true });
-    writeFileSync(f, '');
-    const t = new Date(now);
-    utimesSync(f, t, t);
-    return now;
+    try {
+      return { kind: 'stamped', at: statSync(f).mtimeMs };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unmeasured', reason: e instanceof Error ? e.message : String(e) };
+    }
+    try {
+      mkdirSync(path.dirname(f), { recursive: true });
+      writeFileSync(f, '');
+      const t = new Date(now);
+      utimesSync(f, t, t);
+      return { kind: 'stamped', at: now };
+    } catch (e) {
+      return { kind: 'unmeasured', reason: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   /** D-9007: every registry proxy cache file not served for `CCRC_TESTBOX_REGISTRY_KEEP` deleted. Synchronous, as the

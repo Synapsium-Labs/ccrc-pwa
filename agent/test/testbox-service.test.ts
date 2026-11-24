@@ -1121,6 +1121,32 @@ describe('retention across restarts, for waiting runs, its failures, and the reg
     expect(existsSync(seenStamp(box, stays)), 'kept while a mirror was not listed').toBe(true);
   });
 
+  // A stamp that cannot be read (a file where the directory belongs: ENOTDIR) or written (a dangling link: ENOENT on the
+  // write) is unmeasured: its run's refs are timed from now for this pass only, said once, and the pass still deletes.
+  it.each([
+    ['cannot be read', (d: string) => writeFileSync(d, '')],
+    ['cannot be written', (d: string) => symlinkSync(path.join(path.dirname(d), 'nowhere'), d)],
+  ])('D-9004: a refs-seen stamp that %s is unmeasured, and old results and logs still go', async (_what, spoil) => {
+    const lines: string[] = [];
+    const box = makeBox({}, true, { log: (l) => lines.push(l) });
+    await box.svc.start();
+    const m = ROW(box.root).mirrorPath;
+    const [old, refOnly] = [runId(), runId()];
+    const dirs = ['results', 'logs'].map((k) => path.join(box.root, k, old));
+    for (const d of dirs) {
+      mkdirSync(d, { recursive: true });
+      const t = (box.clock.now - 2 * H) / 1000;
+      utimesSync(d, t, t);
+    }
+    spoil(path.join(box.root, 'refs-seen'));
+    box.mirror.refs.set(m, [old, refOnly]);
+    await box.svc.retention();
+    for (const d of dirs) expect(existsSync(d), d).toBe(false);
+    expect(box.mirror.calls, 'the old run\'s refs go; the unstamped one is kept').toEqual([`delete ${old}`, 'gc project-a.git']);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^ccrc-testbox: retention: \d+ refs-seen stamps? unmeasured, timed from now this pass \(first: .+\)$/);
+  });
+
   it('D-9006: the refs of a run handed over to disk are kept past the time; the others go', async () => {
     const [waiting, done] = [runId(), runId()];
     const box = makeBox({}, true, { handedOver: (id) => id === waiting });
