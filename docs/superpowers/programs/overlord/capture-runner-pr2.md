@@ -10,10 +10,10 @@ records what the ledger should learn; the coordinator folds it into the ledger o
 - **The copy** (spec §2.2, Table 2, D3, D7). A new short admin lane sub, `ccrc testbox-admin build-copy --version=<build>`, in
   its own sourced file, `ccd/testbox-build-copy`. On the fleet host it reads the build in Claude Code's versions directory,
   never writing it: the file must exist, be a regular file and not a link, and be at most 1 GiB, and it is hashed. Its bytes
-  stream over the lane into a stage beside the box's capture store, the box hashes them, and the checked stage is installed
-  read only at `<box root>/captures/builds/<version>`, owned by the box root's owner. Each refusal is its own code
-  (`build-not-on-fleet`, `build-not-regular`, `build-too-large`, `build-hash-mismatch`, `build-copy-failed`), and a hash that
-  differs removes the stage. The server's adapter, `server/src/testboxBuildCopy.ts`, runs that one sub through the one admin
+  stream over the lane in one box call, whose program stages them where only root can enter, hashes them, and hands them to
+  a writer that runs as the box root's owner, which places them read only at `<box root>/captures/builds/<version>` (fix
+  round 1, below). Each refusal is its own code (`build-not-on-fleet`, `build-not-regular`, `build-too-large`,
+  `build-hash-mismatch`, `build-store-refused`, `build-copy-failed`), and the stage is removed on every way out. The server's adapter, `server/src/testboxBuildCopy.ts`, runs that one sub through the one admin
   lane arm and maps it onto the lane's copy port.
 - **The copy rule, in L1.** `shared/claudeBuildTrust.ts#captureNextAct` names each act of a capture pass: send; copy only
   after a `build-absent` refusal, once a pass; send again; stop. `#captureTryOf` names what the pass records. The lane
@@ -98,3 +98,59 @@ fixture already dropping `claude_builds`; and the slot statement above.
   `861e10287c` (its hunk applied two lines lower, with its context unchanged), and neither was the architecture packet's (the
   C2 row and its neighbours were unchanged). The DB test's input blob matched. The schema packet's comment named `7e41029d65`
   as the base holding 122; it names `861e10287c` now. No line of either packet was otherwise wrong.
+
+## Fix round 1: the copy's box step hardened
+
+The coordinator's ruling (programme call 822) took the build copy's box side out of "as built" and set five properties. The
+copy is now one box call, and its program holds them:
+
+- **P1, the writes are the service user's own.** The program hands the checked bytes to a writer that runs with the box
+  root owner's identity (util-linux's privilege drop, groups cleared), so every directory, file, mode and rename under the
+  box root is that user's own act. Root changes no owner and no mode under the box root. A box root that is root's own (uid
+  or group 0), a link, not a directory, or whose owner cannot be read as two numbers is never handed to.
+- **P2, the stage is root's alone.** The bytes are staged in a fresh directory that only root can enter (mode 0700, made
+  in root's temporary directory, refused if it would land under the box root), and removed before the hand-over and on every
+  way out.
+- **P3, one hash of the very bytes.** The program holds two reads of the staged file, removes its path, hashes from the
+  first read and hands over from the second, in the same step. A hash that differs refuses `build-hash-mismatch` before
+  anything under the box root is made.
+- **P4, no link and no wrong kind.** A link or anything not a directory at `captures` or `captures/builds`, and a link or
+  anything not a regular file where the build is placed, refuses with a word of its own, `build-store-refused` (a new code,
+  mapped to `copy-failed` by the copy port's adapter), and changes nothing on the box.
+- **P5, unchanged.** The answers, the existing codes, the verb's lock, the size bound and the host-side verify are as they
+  were; the store's result is the build at its version name, mode 0555, owned by the service user. The host no longer
+  removes a stage by a second call: the box removes its own.
+
+The box programs sit in a marked box-side region of `ccd/testbox-build-copy`, which the macOS scan now cuts and pins (exactly
+the two programs, and one GNU line, the hash), as it does the admin verb's own region.
+
+**Tests, measured by mutation.** The box programs run for real against fixture roots, with shims on the search path standing
+in for the privilege drop, recording which acts ran dropped, and tampering at the two moments that matter. Each guard was
+removed in turn (15 mutants, applied in place and restored byte for byte) and each was killed:
+
+| Guard removed | Killed by |
+|---|---|
+| the privilege drop | P1: every write under the root runs dropped; the one-call shape |
+| the refusal of a root-owned box root | P1: a box root owned by root's uid, or root's group |
+| the check that the owner reads as two numbers | P1: an owner that is not a number, or cannot be read |
+| the refusal of a stage under the box root | P2: a stage that would land under the box root |
+| the stage's removal before the hand-over | P2: already removed at the hand-over; no stage left; P3: bytes changed after the hash |
+| the stage's removal on a refusal | P2: a stage that would land under the box root (removed) |
+| the hand-over from the held read | the install itself, and P3 |
+| the hash gate | P3: a hash that differs |
+| the box root link and kind check | P4: a box root that is a link |
+| the link check at `captures` and `captures/builds` | P4: a link, or a dangling link, at either |
+| the kind check at `captures` and `captures/builds` | P4: a file at either |
+| the link check where the build goes | P4: a link, or a dangling link, there |
+| the kind check where the build goes | P4: a directory there |
+| the host's word for exit 4, and for exit 5 | the host answers `build-hash-mismatch`, and `build-store-refused` |
+
+The cases the ruling named are all there: a link planted at the stage at the hand-over; a link at `captures`; a link at
+`captures/builds`; a non-regular file at the destination; bytes changed after the hash.
+
+**What only a real box shows.** No test runs as root, so these rest on reading the program and on the box's userland:
+that root's 0700 stage directory is out of the service user's reach; that the privilege drop really changes the identity
+and clears the groups; that the box's sudo leaves root's temporary directory outside the box root; and that the box's
+`ls` prints owner and group as numbers. The box runs the fleet host's own distribution release (the preflight's `os`
+check), whose util-linux carries the privilege drop.
+

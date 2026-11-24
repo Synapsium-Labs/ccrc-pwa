@@ -10,7 +10,7 @@
 //     `build-too-large`): nothing reached the box, and trying again changes nothing ........... `copy-refused`
 //   - a refusal that says no lane is there to carry it (`not-connected`, `no-access-key`) ..... `no-admin-lane`
 //   - an agent or a server-side arm that has no such op (`unsupported`) ...................... `no-admin-lane`
-//   - every other refusal (`build-hash-mismatch`, `build-copy-failed`, `busy`, the lane's own
+//   - every other refusal (`build-hash-mismatch`, `build-store-refused`, `build-copy-failed`, `busy`, the lane's own
 //     ssh codes such as `unreachable` or `host-key-changed`), an exit off the verb's grammar,
 //     a builder refusal, a frame that never left, a deadline or a lost answer ................. `copy-failed`
 // A lost answer may have placed the build after all: the next capture finds out, since the box answers `build-absent` only

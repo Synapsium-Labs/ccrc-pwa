@@ -666,7 +666,7 @@ describe('the codes', () => {
       'install-failed', 'pair-failed', 'status-not-ok', 'pairing-keys-in-ccrc-env', 'key-in-ccrc-env', 'runs-in-progress',
       'idle-deadline', 'cancelled', 'gh-signed-out', 'parity-differs', 'not-connected', 'box-side-skipped',
       'interrupted', 'new-key-refused', 'old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed', 'tools-home-failed',
-      'build-not-on-fleet', 'build-not-regular', 'build-too-large', 'build-hash-mismatch', 'build-copy-failed',
+      'build-not-on-fleet', 'build-not-regular', 'build-too-large', 'build-hash-mismatch', 'build-copy-failed', 'build-store-refused',
     ]) expect(TESTBOX_ADMIN_CODES, c).toContain(c);
     // the codes whose refusal names a public key line for the operator to remove by hand (D-8337)
     expect([...TESTBOX_LINE_CODES]).toEqual(['old-line-kept', 'revoked-box-skipped', 'revoked-unpair-failed']);

@@ -81,7 +81,7 @@ TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refuse
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped unpair-failed address-not-private box-already-set interrupted
   new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed build-not-on-fleet build-not-regular
-  build-too-large build-hash-mismatch build-copy-failed)
+  build-too-large build-hash-mismatch build-copy-failed build-store-refused)
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)

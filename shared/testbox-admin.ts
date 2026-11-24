@@ -277,7 +277,7 @@ export type TestboxAdminCode =
   | 'cancelled' | 'gh-signed-out' | 'parity-differs' | 'not-connected' | 'box-side-skipped' | 'interrupted'
   | 'unpair-failed' | 'address-not-private' | 'box-already-set' | 'new-key-refused' | 'old-line-kept' | 'revoked-box-skipped'
   | 'revoked-unpair-failed' | 'tools-home-failed' | 'build-not-on-fleet' | 'build-not-regular' | 'build-too-large'
-  | 'build-hash-mismatch' | 'build-copy-failed';
+  | 'build-hash-mismatch' | 'build-copy-failed' | 'build-store-refused';
 /** Each code in one line that names no value (no address, path, key or setting text), for the card. */
 export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'busy': 'Another test box act is already running; wait for it to end or cancel it.',
@@ -332,6 +332,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'build-too-large': 'The fleet host\'s copy of that Claude Code build is larger than ccrc copies, so nothing was copied.',
   'build-hash-mismatch': 'The Claude Code build did not arrive on the box intact, so ccrc removed what arrived.',
   'build-copy-failed': 'The Claude Code build could not be copied to the box.',
+  'build-store-refused': 'The test box\'s build store holds a link or an entry of the wrong kind, so ccrc left it as it was.',
 };
 /** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
  *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
