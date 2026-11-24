@@ -165,6 +165,10 @@ nine end words: `more` (with the next continuation), `start` (offset 0 measured)
   `olderPage.ts` import). The fix round moved every older-page decision out of the stream into a pure module,
   `server/src/transcript/olderPageGate.ts` (decide in L1, act in L4: the stream keeps the in-flight flag, the
   generation, the read and the send), and added the import to both pins with its reason.
+- **The second fast run** (at `7d9f341fe6`) failed one guard, in two shards: `shared/api.ts`'s growth cap, measured on
+  the merge ref. This branch held the file at 5140 code lines and main at 5139, so the merge held 5142 against a cap of
+  5140. Fix round 2 cut two layout lines from this wave's hunks (the `older` field joins its field line, and
+  `OlderPageAnswer` joins the notice line), leaving no type change: branch 5138, merged 5140.
 - **Compiler checks:** server source clean.
 
 ## 9. Unmeasured

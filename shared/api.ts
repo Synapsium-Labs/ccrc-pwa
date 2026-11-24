@@ -4961,12 +4961,11 @@ export type SessionStreamMsg =
    *      and reading omission as `false` would put the host-unreadable
    *      banner on every session of every pre-field server. This field is
    *      what tells the difference the collapsed `io.stat` this frame's
-   *      `missing` used to be derived from could not (D-1398). */
+   *      `missing` used to be derived from could not (D-1398).
+   *  `older` (desktop polish wave 171): the opaque continuation that asks for the page of records before this backlog
+   *      (`OlderPageRequest`). Present only when paging can be offered on this stream; absent from an older server. */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
-      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean;
-      /** Desktop polish wave 171: the opaque continuation that asks for the page of records before this backlog
-       *  (`OlderPageRequest`). Present only when paging can be offered on this stream; absent from an older server. */
-      older?: string }
+      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean; older?: string }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   /** Console speed S2: the socket's heartbeat, every `BEAT_MS` from a timer of its own. ADDITIVE, so no `FLEET_PROTO` bump: an older app drops an unknown frame type. */
@@ -5009,8 +5008,7 @@ export type SessionStreamMsg =
    *  wholesale, like `tasks`, because it is a statement about the present. */
   | { type: 'mail'; mail: MailSummary[] }
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
-  | { type: 'notice'; message: string }
-  | OlderPageAnswer;
+  | { type: 'notice'; message: string } | OlderPageAnswer;
 
 /** PWA → server, on the per-session socket. `visible` is the operator's own
  *  report that this session is on screen and focused; the server suppresses
