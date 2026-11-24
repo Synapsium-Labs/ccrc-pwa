@@ -1,10 +1,10 @@
 // A COORDINATOR WAITING ON ITS WORKERS (desktop polish wave 173, the operator's goal of 2026-11-24: "done" is misleading
 // for a coordinator whose children are still working; keep "done" for when the coordinator and its workers are all
 // doing nothing). The rule (`waitingOnWorkers`, `sessionFacts.ts`): a session whose role is coordinator, whose own bucket
-// is done or idle, with at least one worker row working or still spawning (`workerBusy` over `workersOf`), reads
+// is done or idle, with at least one worker row working or still spawning (`workersBusyOf` over `workersOf`), reads
 // `waiting on workers`. Everything else reads as before. These cases are the rule's table, the row and the header
 // saying one word, the lamp's look and spoken label, the width budget and the one spelling of the words.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -12,10 +12,11 @@ import { StatusDot } from '@ccrc/ui';
 import { SPAWN_STALL_MS, type FleetSession, type RunSummary, type SessionBucket } from '../../shared/api';
 import {
   cardFacts, headerFacts, headerStatusWord, NAME_BUDGET, sessionFacts, STATE_WORD, WAITING_ON_WORKERS,
-  WAITING_ON_WORKERS_TITLE, waitingOnWorkers, workerBusy, workersWaitAt,
+  sessionWorkerBusy, WAITING_ON_WORKERS_TITLE, waitingOnWorkers, workersWaitAt,
 } from '../src/fleet/sessionFacts';
 import { coordinationOf, fleetTree, workersBusyOf, workersOf } from '../src/fleet/fleetTree';
-import { summaryParts, type WorkerRow } from '../src/fleet/rollup';
+import { isRunClosed } from '../src/fleet/runWords';
+import { summaryParts } from '../src/fleet/rollup';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { sessionHeaderView } from '../src/session/sessionHeaderView';
 import { useFleetStore } from '../src/stores/fleet';
@@ -225,6 +226,22 @@ describe('the rule (waitingOnWorkers): its table', () => {
     expect(card.rows.find((r) => r.kind === 'session' && r.session.id === 'w1')?.depth).toBe(1);
   });
 
+  // F3 (review 3651): the list and the rule bracket the same runs. The list is handed the active runs; `workersOf` is
+  // handed every run, so the bracket's input reader drops closed runs first: a newer CLOSED run naming the same unlisted
+  // session must not hide the older spawn in flight that the card still draws.
+  it('a newer closed run naming an unlisted session does not hide the older spawn the card draws', () => {
+    const head = coord();
+    const runs = [
+      run(100, 'coord', 'x', { state: 'planned', dispatchStartedAt: NOW - MIN }),
+      run(101, 'coord', 'x', { state: 'done', closedAt: NOW - MIN / 2 }),
+    ];
+    const sessions = withRunBinding([head], runs);
+    expect(workersOf('coord', sessions, runs).map((r) => (r.kind === 'pending' ? r.run.id : r.kind))).toEqual([100]);
+    expect(rowWord(head, { sessions, runs })).toBe(WAITING_ON_WORKERS);
+    const card = fleetTree(sessions, ['project-c'], runs.filter((r) => !isRunClosed(r))).find((g) => g.project === 'project-c')!;
+    expect(card.rows.filter((r) => r.kind === 'pending').map((r) => (r.kind === 'pending' ? r.run.id : 0))).toEqual([100]);
+  });
+
   it('a coordinator with no workers reads done', () => {
     const head = coord();
     expect(rowWord(head, fleetOf(head, []))).toBe(STATE_WORD.done);
@@ -239,14 +256,15 @@ describe('the rule (waitingOnWorkers): its table', () => {
     expect(waitingOnWorkers({ coordinator: true, bucket: 'done', asleep: false, workersBusy: false })).toBe(false);
   });
 
-  it('a worker is busy when its spawn is in flight or its row word is working and not with its coordinator', () => {
-    const pending = (at: number): WorkerRow => ({ kind: 'pending', depth: 1, run: run(1, 'coord', null, { state: 'planned', dispatchStartedAt: at }) });
-    const row = (over: Partial<FleetSession>): WorkerRow => ({ kind: 'session', depth: 1, session: fleetSession(over) });
-    expect(workerBusy(pending(NOW), NOW)).toBe(true);
-    expect(workerBusy(pending(NOW - SPAWN_STALL_MS), NOW)).toBe(false);
-    expect(workerBusy(row(working), NOW)).toBe(true);
-    expect(workerBusy(row({ status: 'idle', bucket: 'done' }), NOW)).toBe(false);
-    expect(workerBusy(row(heldByCoordinator()), NOW)).toBe(false);
+  // Review 3651 F4: one spelling of each half. A worker session is busy by `sessionWorkerBusy`; a spawn is in flight by
+  // `workersWaitAt` (the board's `dispatchWindow`), the only reader the row, the header and the coordination line use.
+  it('a worker is busy when its row word is working and not with its coordinator, or its spawn is in flight', () => {
+    expect(sessionWorkerBusy(fleetSession(working))).toBe(true);
+    expect(sessionWorkerBusy(fleetSession({ status: 'idle', bucket: 'done' }))).toBe(false);
+    expect(sessionWorkerBusy(fleetSession(heldByCoordinator()))).toBe(false);
+    expect(workersWaitAt(NOW, NOW)).toBe(true);
+    expect(workersWaitAt(NOW - SPAWN_STALL_MS + 1, NOW)).toBe(true);
+    expect(workersWaitAt(NOW - SPAWN_STALL_MS, NOW)).toBe(false);
   });
 
   it('the clock-free reading (workersBusyOf) says what no clock changes, and workersWaitAt reads it at a clock', () => {
@@ -385,6 +403,25 @@ describe('the row, in both skins', () => {
     expect(view.container.querySelector('.sess-state')?.textContent).toBe(WAITING_ON_WORKERS);
     view.rerender(<SessionLine session={self} onOpen={() => {}} onActions={() => {}} now={NOW - MIN + SPAWN_STALL_MS} />);
     expect(view.container.querySelector('.sess-state')?.textContent).toBe(STATE_WORD.done);
+  });
+
+  // F2 (review 3651): with no clock passed in, the row's own 30 s tick (`useNow`, armed while a spawn's stamp is read) is the
+  // only thing that turns the word back when the spawn crosses the stall threshold with no new event: the store's answer is
+  // the same number before and after, so nothing else re-renders the row.
+  it('the row ticks on its own: no clock passed in, a spawn crossing the stall threshold turns the word back', () => {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      const head = coord();
+      const f = fleetOf(head, [], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: NOW - MIN })]);
+      act(() => useFleetStore.setState({ sessions: f.sessions, runs: f.runs }));
+      const self = f.sessions.find((s) => s.id === 'coord')!;
+      const { container } = render(<SessionLine session={self} onOpen={() => {}} onActions={() => {}} />);
+      expect(container.querySelector('.sess-state')?.textContent).toBe(WAITING_ON_WORKERS);
+      act(() => { vi.advanceTimersByTime(SPAWN_STALL_MS); });
+      expect(container.querySelector('.sess-state')?.textContent).toBe(STATE_WORD.done);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the word follows the store: the worker goes quiet and the coordinator reads done again', () => {

@@ -58,7 +58,8 @@ import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
 import {
-  boundOpenRun, claimedRunsOf, coordinatorOf, isDispatchPending, programmeWave, runCard, runHomeProject, runSentence, workerOf,
+  boundOpenRun, claimedRunsOf, coordinatorOf, isDispatchPending, isRunClosed, programmeWave, runCard, runHomeProject,
+  runSentence, workerOf,
   type BoundSession, type ChildRunContext,
 } from './runWords';
 import { hibernatedSince } from './hibernated';
@@ -156,14 +157,19 @@ export function childRunContext(
  *  session, only the run its wire binding names (`workerOf`) — so the bracket's
  *  parent and `parentIdOf` are one rule, never two orders that disagree. `byId`
  *  is the WHOLE fleet, so the worker's binding is read wherever its row is; a
- *  run naming a session the fleet does not carry keeps the newest such run by
- *  its id alone, today's answer (nothing on this list can be bracketed under
- *  it, but a pending spawn still shows). */
+ *  run naming a session the fleet does not carry keeps the newest such OPEN run
+ *  by its id alone, today's answer (nothing on this list can be bracketed under
+ *  it, but a pending spawn still shows). Closed runs (`isRunClosed`) are dropped
+ *  FIRST, so the list (handed the active runs) and `workersOf` (handed every
+ *  run) bracket the same runs: a newer closed run naming an unlisted session
+ *  never hides an older spawn the card still draws (review 3651 F3). */
 const latestPerSession = (
   runs: readonly RunSummary[], byId: ReadonlyMap<string, FleetSession>,
-): RunSummary[] =>
-  runs.filter((r) => r.sessionId === null
-    || (byId.has(r.sessionId) ? workerOf(r, byId) !== null : !runs.some((o) => o.sessionId === r.sessionId && o.id > r.id)));
+): RunSummary[] => {
+  const open = runs.filter((r) => !isRunClosed(r));
+  return open.filter((r) => r.sessionId === null
+    || (byId.has(r.sessionId) ? workerOf(r, byId) !== null : !open.some((o) => o.sessionId === r.sessionId && o.id > r.id)));
+};
 
 /** A card of the tree: `groupFleet`'s group, plus the rows `nestFleet` draws
  *  from it, the runs that drew them, the runs this project is the HOME of

@@ -49,7 +49,6 @@ import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
 import type { SessionWorktree } from './sessionWorktrees';
-import type { FleetRow } from './nestFleet';
 import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
 import { behindFact, buildText } from './buildWords';
 
@@ -260,29 +259,26 @@ export const rowWithCoordinator = (session: FleetSession): ReturnType<typeof ses
 export const sessionWorkerBusy = (session: FleetSession): boolean =>
   rowStateWord(session) === STATE_WORD.working && rowWithCoordinator(session) === null;
 
-/** Is this worker ROW keeping its coordinator waiting at `now`? A session as `sessionWorkerBusy` says, or a spawn the board
- *  itself calls in flight (`dispatchWindow`'s `in-flight` phase, its own threshold): a stalled dispatch (the board's
- *  "dispatch never completed") needs a person, so it is not busy (review 3632 F1). */
-export const workerBusy = (row: FleetRow, now: number): boolean =>
-  row.kind === 'pending' ? dispatchWindow(row.run, now).phase === 'in-flight' : sessionWorkerBusy(row.session);
-
 /** What a coordinator's workers say, read WITHOUT a clock (`workersBusyOf`, `fleetTree.ts`), so a store selector can return
  *  it as one primitive and re-render nothing while it holds: `true`, a worker session is busy (`sessionWorkerBusy`), which no
  *  clock changes; a number, none is, and the newest dispatch in a window began at that instant (`dispatchStartedAt`), which
  *  only a clock can call in flight or stalled; `false`, neither. `workersWaitAt` is its clocked reading. */
 export type WorkerWait = boolean | number;
 
-/** The clocked reading of a `WorkerWait`: busy for a busy session; for a dispatch, only while the board's own reader calls
- *  the newest one in flight (`dispatchWindow`, so its threshold, `SPAWN_STALL_MS`, is not copied here: a dispatch in a window
- *  is a `planned` run with that stamp, so the newest one is asked as such). If the newest is stalled, every older one is. */
+/** The clocked reading of a `WorkerWait`, and THE ONE SPELLING of "is this spawn in flight" in the rule (review 3651 F4):
+ *  busy for a busy session; for a dispatch, only while the board's own reader calls the newest one in flight
+ *  (`dispatchWindow`'s `in-flight` phase, so its threshold, `SPAWN_STALL_MS`, is not copied here: a dispatch in a window is a
+ *  `planned` run with that stamp, so the newest one is asked as such). If the newest is stalled, every older one is: a
+ *  stalled dispatch (the board's "dispatch never completed") needs a person, so it is not busy (review 3632 F1). */
 export function workersWaitAt(wait: WorkerWait, now: number): boolean {
   if (typeof wait === 'boolean') return wait;
   return dispatchWindow({ state: 'planned', dispatchStartedAt: wait }, now).phase === 'in-flight';
 }
 
 /** THE RULE (wave 173): a coordinator whose own bucket is `done` or `idle`, awake, with at least one busy worker
- *  (`workerBusy`), is waiting on its workers. Idle is included on purpose: `done` decays to `idle` after thirty minutes, and
- *  a coordinator waiting for hours must not read idle either. Every other bucket keeps its own word (a working, asking,
+ *  (`sessionWorkerBusy`, or a spawn in flight: `workersWaitAt` over `workersBusyOf`), is waiting on its workers. Idle is
+ *  included on purpose: `done` decays to `idle` after thirty minutes, and a coordinator waiting for hours must not read idle
+ *  either. Every other bucket keeps its own word (a working, asking,
  *  exited or archived coordinator says so whatever its workers do), and so does an asleep one. Pure; the caller passes the
  *  bucket it paints (the row's, or the header's `headerBucket`, which is the row's bucket unless a live stream says dead). */
 export function waitingOnWorkers(input: {
