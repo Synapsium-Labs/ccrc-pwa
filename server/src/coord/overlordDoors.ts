@@ -57,6 +57,9 @@ const continuity = (method: HttpMethod, path: string, verbClass: VerbClass, writ
 export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designate: operator('POST', '/api/overlord/designate', OVERLORD, 'admin'),
   retire: operator('DELETE', '/api/overlord/designate', OVERLORD, 'admin'),
+  // Designation B: Rebind the Overlord (a step-up) and Restart the Overlord (a recovery with none, `restart-needs-no-step-up`).
+  rebind: operator('POST', '/api/overlord/rebind', OVERLORD, 'admin'),
+  restart: operator('POST', '/api/overlord/restart', OVERLORD, 'admin'),
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
   model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
   'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),

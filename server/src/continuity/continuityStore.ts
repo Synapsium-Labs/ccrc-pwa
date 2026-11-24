@@ -469,11 +469,12 @@ export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, t
 }
 
 /** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
- *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
- *  the caller's transaction and opens none. */
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. A pending rebind's
+ *  body mints under its own id until it goes live (`roleOf.ts#identityOf`), so that identity is ended too when its attempt fails
+ *  or is cancelled (designation B). It runs INSIDE the caller's transaction and opens none. */
 export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { changed: boolean } {
   return changedOf(stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
-    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended'").run(sessionId));
+    + "shadowDeadlineAt = NULL WHERE identity IN ('overlord', ?) AND sessionId = ? AND state <> 'ended'").run(sessionId, sessionId));
 }
 
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).

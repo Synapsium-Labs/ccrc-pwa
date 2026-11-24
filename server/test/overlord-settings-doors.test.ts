@@ -90,6 +90,7 @@ class FakeBody implements OverlordBody {
   async clearProfile(id: string) { this.log.push({ op: 'clearProfile', id }); return { ok: true } as const; }
   async poolAnswer(id: string) { this.log.push({ op: 'poolAnswer', id }); return { kind: 'not-run' } as const; }
   async keepAwake(id: string) { this.log.push({ op: 'keepAwake', id }); return { ok: true, foreign: [] } as const; }
+  async ensure(id: string) { this.log.push({ op: 'ensure', id }); return { ok: true } as const; }
   async stop(id: string) { this.log.push({ op: 'stop', id }); return { ok: true, absent: false } as const; }
   ops(): string[] { return this.log.map((c) => `${c.op}:${c.id}`); }
 }

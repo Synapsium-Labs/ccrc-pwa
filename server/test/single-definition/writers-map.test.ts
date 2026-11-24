@@ -411,7 +411,7 @@ describe(TABLES_PIN, () => {
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
       // row's writers.
-      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+      overlord_designation: [...['applyDesignationRestoreInTx', 'bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'goLiveRebind', 'rebindPending', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.

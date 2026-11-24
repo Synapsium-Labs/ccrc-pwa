@@ -99,6 +99,8 @@ class FakeBody implements OverlordBody {
   async writeClass(id: string, cls: string) { this.log.push({ op: 'writeClass', id, extra: cls }); return { ok: true } as const; }
   async poolAnswer(id: string) { this.log.push({ op: 'poolAnswer', id }); return this.probe; }
   async keepAwake(id: string, state: 'on' | 'off') { this.log.push({ op: `keepAwake-${state}`, id }); return this.keepAwakeAnswer(state); }
+  /** Restart's resume path (designation B); no designate or retire door calls it. */
+  async ensure(id: string) { this.log.push({ op: 'ensure', id }); return { ok: true } as const; }
   async stop(id: string) {
     this.log.push({ op: 'stop', id });
     const a = this.stopAnswer(id);

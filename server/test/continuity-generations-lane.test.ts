@@ -22,7 +22,7 @@ import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
 import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
-import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
+import type { AttemptAction, DesignationRead, DesignationView, SettleFact } from '../../shared/overlord-designation.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
@@ -1442,7 +1442,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
       '../../../shared/accountOrg.js',
       // Renewal readings PR C: the mint's stamp and the latch's decider (L1). The latch itself is a port the wiring binds.
-      './renewalReadings.js'];
+      './renewalReadings.js',
+      // Designation B: the deadline sweep's decider (L1); it sends nothing, and the pass only decides with it.
+      '../coord/overlordDesignation.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
@@ -1706,4 +1708,89 @@ describe('the renewal readings PR C: the class a mint stamps, and the probes-fai
       { cause: 'probes-failed-twice', cap: 'chat', raisedBy: 'renewal-lane', clearedAt: null },
     ]);
   }, 60_000);
+});
+
+describe('the pass decides the pending deadline (Overlord W1 designation B, Task 7: GenerationsInput.attempt)', () => {
+  const PENDING_ID = 'overlord-brisk-heron';
+  const pendingRead = (deadlineAt: number, generation: string | null = 'g-new'): DesignationRead => ({
+    kind: 'not-designated',
+    row: { bound: null, pending: { sessionId: PENDING_ID, kind: 'designate', deadlineAt, since: 1, actor: 'op', generation },
+      term: 1, designatedTerm: 0, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'op',
+      lastAttempt: null, stopsOwed: [] },
+  });
+  const NO_REPORT: SettleFact = { kind: 'no-report' };
+  const attemptPass = (f: Fixture, attempt: { read: DesignationRead; settle: SettleFact } | undefined, decide?: GenerationsDeps['decide']) =>
+    generationsPass({ coord: f.s, clock: f.t.ports.clock, entropy: f.t.ports.entropy, proc: 'p1', log: (l) => f.logs.push(l), retried: new Set(), emptyTries: new Map(),
+      gate: () => null, ...(decide === undefined ? {} : { decide }) },
+    { registry: f.registry, readings: new Map(), listedAt: f.t.ports.clock.wall() + 1, ...(attempt === undefined ? {} : { attempt }) });
+  const live = (): Fixture => { const f = fixture(); f.s.setLaneArm(CONTINUITY_LANE, 'live', 1); return f; };
+  const shadowLines = (f: Fixture): string[] => f.logs.filter((l) => l.includes('the Overlord\'s attempt would'));
+
+  it('live: a pending attempt past its deadline yields the expire action, and nothing is recorded as shadow', () => {
+    const f = live();
+    const r = attemptPass(f, { read: pendingRead(FAKE_T0 - 1), settle: NO_REPORT });
+    expect(r.live).toBe(true);
+    expect(r.attempt).toEqual({ kind: 'expire', sessionId: PENDING_ID, outcome: 'deadline-passed' });
+    expect(r.recorded.filter((l) => l.includes('attempt'))).toEqual([]);
+    expect(shadowLines(f)).toEqual([]);
+  });
+
+  it('live: the deadline is inclusive of now, a held stored report of its own generation expires as authority-unrecorded', () => {
+    const f = live();
+    const held: SettleFact = { kind: 'reported', sessionId: PENDING_ID, startId: 4, generation: 'g-new', held: true };
+    expect(attemptPass(f, { read: pendingRead(FAKE_T0), settle: held }).attempt)
+      .toEqual({ kind: 'expire', sessionId: PENDING_ID, outcome: 'authority-unrecorded' });
+  });
+
+  it('live: inside the deadline a stored report of its own body is settled again; none yields null', () => {
+    const f = live();
+    const held: SettleFact = { kind: 'reported', sessionId: PENDING_ID, startId: 4, generation: 'g-new', held: true };
+    expect(attemptPass(f, { read: pendingRead(FAKE_T0 + 600_000), settle: held }).attempt)
+      .toEqual({ kind: 'resettle', sessionId: PENDING_ID, startId: 4 });
+    expect(attemptPass(f, { read: pendingRead(FAKE_T0 + 600_000), settle: NO_REPORT }).attempt).toBeNull();
+    expect(attemptPass(f, { read: { kind: 'unmeasured', why: 'locked' }, settle: NO_REPORT }).attempt).toBeNull();
+  });
+
+  it('shadow: the same input yields attempt: null and a recorded line naming the action and the session, which is also logged', () => {
+    const f = fixture();
+    const r = attemptPass(f, { read: pendingRead(FAKE_T0 - 1), settle: NO_REPORT });
+    expect(r.live).toBe(false);
+    expect(r.attempt).toBeNull();
+    const line = `ccrc-server: generations: shadow: the Overlord's attempt would expire ${PENDING_ID}`;
+    expect(r.recorded).toContain(line);
+    expect(f.logs).toContain(line);
+  });
+
+  it('shadow: a drain names its ids; a decision of none records nothing', () => {
+    const f = fixture();
+    const owing: DesignationRead = { kind: 'not-designated', row: { bound: null, pending: null, term: 1, designatedTerm: 0, model: 'opus',
+      accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: ['overlord-old-a', 'overlord-old-b'] } };
+    const r = attemptPass(f, { read: owing, settle: NO_REPORT });
+    expect(r.attempt).toBeNull();
+    expect(r.recorded).toContain('ccrc-server: generations: shadow: the Overlord\'s attempt would drain overlord-old-a,overlord-old-b');
+    const quiet = fixture();
+    expect(attemptPass(quiet, { read: { kind: 'not-designated', row: null }, settle: NO_REPORT }).recorded.filter((l) => l.includes('attempt'))).toEqual([]);
+  });
+
+  it('an absent input decides nothing, live or in shadow, and records nothing', () => {
+    for (const f of [live(), fixture()]) {
+      const r = attemptPass(f, undefined);
+      expect(r.attempt).toBeNull();
+      expect(r.recorded.filter((l) => l.includes('attempt'))).toEqual([]);
+      expect(shadowLines(f)).toEqual([]);
+    }
+  });
+
+  it('deps.decide.pendingDeadlineOf replaces the decider (a mutant hook): it is asked with the read, the fact and the pass\'s clock', () => {
+    const asked: unknown[][] = [];
+    const mutant = ((...a: unknown[]) => { asked.push(a); return { kind: 'drain', ids: ['x', 'y'] } as AttemptAction; }) as unknown as NonNullable<GenerationsDeps['decide']>['pendingDeadlineOf'];
+    const input = { read: pendingRead(FAKE_T0 + 1), settle: NO_REPORT };
+    const f = live();
+    expect(attemptPass(f, input, { pendingDeadlineOf: mutant }).attempt).toEqual({ kind: 'drain', ids: ['x', 'y'] });
+    expect(asked).toEqual([[input.read, input.settle, FAKE_T0]]);
+    const g = fixture();
+    const r = attemptPass(g, input, { pendingDeadlineOf: mutant });
+    expect(r.attempt).toBeNull();
+    expect(r.recorded).toContain('ccrc-server: generations: shadow: the Overlord\'s attempt would drain x,y');
+  });
 });

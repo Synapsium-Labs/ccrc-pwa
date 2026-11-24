@@ -50,7 +50,9 @@ export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pendin
   // the body adapter's ccd verbs and the `ws-add` refusal words it reads (`overlordBody.ts`, `workspaceCreate.ts#classifyAddFailure`)
   'project-add', 'ws-add', 'keep-awake', 'account-refused', 'slug-taken', 'bad-slug',
   // the Settings doors (designation C): the gate's own refusal word the set decider re-asks, and the set door's op-key stem
-  'step-up-required', 'account-set'] as const;
+  'step-up-required', 'account-set',
+  // designation B: the deadline sweep's attempt outcomes and settle fact, and `rebindPending`'s refusal
+  'deadline-passed', 'authority-unrecorded', 'no-report', 'attempt-pending'] as const;
 export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
 
 export type DesignateVerdict =

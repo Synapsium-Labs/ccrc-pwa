@@ -491,7 +491,10 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   // POST: Restart the Overlord (designation B, plan Task 7; §6.4 C23): the same session id again, by the resume path. A recovery
   // that changes no authority, so no step-up (`restart-needs-no-step-up`).
   app.post('/api/overlord/restart', async (req, reply) => {
-    if (!deps.gate(req, reply, { cap: null, stepUp: false }).pass) return reply;
+    const g = deps.gate(req, reply, { cap: null, stepUp: false });
+    if (!g.pass) return reply;
+    // It writes no row, but it acts on the Overlord's body, so the act is attributed through the identity port (gates B).
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       const read = coord.designationRead();
       if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
@@ -503,6 +506,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
           : refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
       }
       const id = binding!.sessionId;
+      console.warn(`ccrc-server: Restart the Overlord: ensuring ${id}, asked by ${actor.subject}`);
       const ensured = await body.ensure(id);
       if (!ensured.ok) return refuseRoute(reply, 'fleetFailed', { detail: ensured.detail, sessionId: id });
       // The markers are guards, never the fact (C4): a failed keep-awake or first prompt is said in the answer, not refused.

@@ -211,12 +211,16 @@ export function settleCases(m: SandboxModule): Record<string, SuiteCase> {
       expect(m.sandboxSettle(pendingRead(), 7, startRow({ rowIncarnation: 'other' }), failed).kind).toBe('none');
       expect(m.sandboxSettle(pendingRead({ generation: null }), 7, startRow(), held).kind).toBe('none');
     },
-    'no pending row (a settled start resent, a live binding), a rebind and an unreadable row change nothing': () => {
+    'no pending row (a settled start resent, a live binding) and an unreadable row change nothing': () => {
       const live: DesignationRead = { kind: 'designated', sessionId: BODY, term: 1, row: view(null, { sessionId: BODY, generation: GEN }) };
       expect(m.sandboxSettle(live, 7, startRow(), failed).kind).toBe('none');
       expect(m.sandboxSettle({ kind: 'not-designated', row: null }, 7, startRow(), held).kind).toBe('none');
-      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), failed).kind).toBe('none');
       expect(m.sandboxSettle({ kind: 'unmeasured', why: 'x' }, 7, startRow(), held).kind).toBe('none');
+    },
+    // Designation B: a pending rebind settles as a designate does (sandbox B's slug `settle-acts-on-designate-only-until-rebind`).
+    'a pending rebind settles: go-live on a held report, fail-pending on a failed one': () => {
+      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), held)).toStrictEqual({ kind: 'go-live', sessionId: BODY, generation: GEN });
+      expect(m.sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow(), failed).kind).toBe('fail-pending');
     },
   };
 }
@@ -299,16 +303,16 @@ const PROFILE_ENGAGED_SET: MutantSet<SandboxModule> = {
   suite: (mod) => sandboxCases(mod),
 };
 
-/** `sandboxSettle`'s mutants: settle an older start's report, a rebind row or another session's report, go live on a failed
- *  verdict, settle another generation. */
+/** `sandboxSettle`'s mutants: settle an older start's report or another session's report, refuse a rebind row (designation B), go
+ *  live on a failed verdict, settle another generation. */
 const SANDBOX_SETTLE_SET: MutantSet<SandboxModule> = {
   modulePath: MODULE,
   mutants: [
     { id: 'T1', old: '|| newest === null || newest.id !== reportStartId) return', new: '|| newest === null) return' },
-    { id: 'T2', old: "if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "if (p === null || p.sessionId !== newest.sessionId)" },
+    { id: 'T2', old: "if (p === null || p.sessionId !== newest.sessionId)", new: "if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId)" },
     { id: 'T3', old: "if (verdict.engaged) return { kind: 'go-live'", new: "if (true) return { kind: 'go-live'" },
     { id: 'T4', old: "if (p.generation === null || p.generation !== newest.rowIncarnation) return { kind: 'none' };", new: "if (p.generation === null) return { kind: 'none' };" },
-    { id: 'T7', old: "|| p.kind !== 'designate' || p.sessionId !== newest.sessionId)", new: "|| p.kind !== 'designate')" },
+    { id: 'T7', old: "if (p === null || p.sessionId !== newest.sessionId)", new: "if (p === null)" },
   ],
   suite: (mod) => settleCases(mod),
 };
