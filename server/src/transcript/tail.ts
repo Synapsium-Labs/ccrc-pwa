@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { helperFactsOf, parseTranscriptLine, type HelperFact } from './parse.js';
 import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
@@ -9,8 +10,21 @@ import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 // events); reading them whole through the agent RPC ballooned the agent's RSS
 // to ~1.9 GB and stalled its event loop. 1 MB comfortably covers BACKLOG_N=50
 // events even at large (multi-KB) line sizes. Since wave 171 it is read as four bounded byte reads of the agent link's
-// read cap, framed in bytes.
+// read cap, so every read can carry the identity of the file it read (`MeasuredByteRangeRead`'s `ident`).
 const BACKLOG_TAIL_BYTES = 4 * READ_FROM_MAX_BYTES;
+
+/** The boundary witness's most bytes: a bounded run of the file beginning at the anchor, hashed (desktop polish wave 171). */
+export const WITNESS_MAX_BYTES = 4096;
+
+/** What an older page is bound to (desktop polish wave 171): present on a backlog only when ALL of it was measured. `ident`
+ *  is the one identity token every read of the window carried (server-internal: never sent to a browser); `anchor` is the
+ *  byte offset where the oldest record the backlog covers begins, a proven record start (offset 0, or the byte before it
+ *  is a newline the window read); `witness` hashes the `len` bytes beginning at the anchor (sha256, hex). */
+export interface OlderBinding {
+  ident: string;
+  anchor: number;
+  witness: { len: number; sha256: string };
+}
 
 /**
  * What `readBacklog` answers. THREE facts, not one:
@@ -39,6 +53,8 @@ export interface BacklogRead {
   scanEnd?: number;
   /** The partial line the window began inside, which the backlog drops and the scan joins to its head; absent at offset 0. */
   cut?: string;
+  /** Desktop polish wave 171: what an older page may bind to. Absent when any of it was not measured. */
+  older?: OlderBinding;
 }
 
 const decoder = new TextDecoder();
@@ -61,6 +77,8 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
   if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
   const bytes = new Uint8Array(st.size - start);
+  /** The one identity every read carried, `null` once any read carried none or a different one. */
+  let ident: string | null | undefined;
   for (let at = start; at < st.size;) {
     const want = Math.min(READ_FROM_MAX_BYTES, st.size - at);
     const res = await io.readFileFromBytesMeasured(file, at, want);
@@ -76,6 +94,7 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
       return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
     }
     bytes.set(res.bytes, at - start);
+    ident = ident === undefined ? res.ident ?? null : ident === res.ident ? ident : null;
     at += want;
   }
 
@@ -108,9 +127,19 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
   while (k > 0 && count < lastN) { k -= 1; count += records[k]!.events.length; }
   const covered = count >= lastN ? records.slice(k) : records;
   const events = covered.flatMap((r) => r.events);
+  // The anchor: the oldest covered record's start, or, when the window's whole records hold fewer than `lastN` events,
+  // the first whole record's start (`head`). No whole record (the window lies inside one record): no anchor.
+  const anchorAt = count >= lastN && covered.length > 0 ? covered[0]!.at : head;
+  const older = typeof ident === 'string' && anchorAt < recordsEnd
+    ? (() => {
+      const len = Math.min(WITNESS_MAX_BYTES, recordsEnd - anchorAt);
+      const sha256 = createHash('sha256').update(bytes.subarray(anchorAt, anchorAt + len)).digest('hex');
+      return { ident, anchor: start + anchorAt, witness: { len, sha256 } };
+    })()
+    : undefined;
   return {
     events, offset, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
-    scanEnd: start, ...(cut !== undefined ? { cut } : {}),
+    scanEnd: start, ...(cut !== undefined ? { cut } : {}), ...(older !== undefined ? { older } : {}),
   };
 }
 

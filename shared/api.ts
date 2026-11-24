@@ -16,6 +16,7 @@ import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
 import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';
+import type { OlderPageAnswer, OlderPageRequest } from './olderPage.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';
@@ -4962,7 +4963,10 @@ export type SessionStreamMsg =
    *      what tells the difference the collapsed `io.stat` this frame's
    *      `missing` used to be derived from could not (D-1398). */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
-      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
+      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean;
+      /** Desktop polish wave 171: the opaque continuation that asks for the page of records before this backlog
+       *  (`OlderPageRequest`). Present only when paging can be offered on this stream; absent from an older server. */
+      older?: string }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   /** Console speed S2: the socket's heartbeat, every `BEAT_MS` from a timer of its own. ADDITIVE, so no `FLEET_PROTO` bump: an older app drops an unknown frame type. */
@@ -5005,14 +5009,16 @@ export type SessionStreamMsg =
    *  wholesale, like `tasks`, because it is a statement about the present. */
   | { type: 'mail'; mail: MailSummary[] }
   | { type: 'rotated'; uuid: string }             // transcript switched (clear/compact/swap) — client refetches
-  | { type: 'notice'; message: string };
+  | { type: 'notice'; message: string }
+  | OlderPageAnswer;
 
 /** PWA → server, on the per-session socket. `visible` is the operator's own
  *  report that this session is on screen and focused; the server suppresses
  *  pushes for it while any client says so — for as long as the claim stays
  *  fresh (see the two constants below). `HelperReportRequest` (H2, D-8872) asks
- *  for one finished helper's report (`shared/workflows.ts`). */
-export type SessionClientMsg = { type: 'visible'; visible: boolean } | HelperReportRequest;
+ *  for one finished helper's report (`shared/workflows.ts`); `OlderPageRequest` (desktop polish wave 171) for the page
+ *  of chat records before the last one it was given (`shared/olderPage.ts`). */
+export type SessionClientMsg = { type: 'visible'; visible: boolean } | HelperReportRequest | OlderPageRequest;
 
 /**
  * The presence heartbeat, defined ONCE for both halves because they are one
