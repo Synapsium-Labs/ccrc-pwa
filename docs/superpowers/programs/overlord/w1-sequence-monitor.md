@@ -55,7 +55,9 @@ request. The coordinator folds it into the programme ledger.
 - `sequence-line-known-is-a-decider`. Whether a stored line is named (`known`) is decided in L1 (`sequenceLineKnown`), not in
   the store. A stored actor kind outside gates A's words also makes the line opaque, with `actorKind: 'unknown'`.
 - `step-refusal-logged-through-one-wrapper`. The generations lane logs a step that the sequence refused (review F11) through
-  one wrapper around `stepGeneration`, which every step of the pass uses. `renewalActs.ts` keeps its own "not written" line.
+  one wrapper around `stepGeneration`, reached by the card, probe and due feeds. The merge keeps the store's `StepResult`
+  delegate and all three calls. A real SQLite refusal rolls a live card step back and logs the refusal; bypassing the wrapper
+  leaves that test without its log. `renewalActs.ts` keeps its own "not written" line.
 
 ## Fix round 3: measured rollback controls
 

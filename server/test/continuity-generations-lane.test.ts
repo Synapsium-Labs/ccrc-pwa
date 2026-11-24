@@ -709,6 +709,29 @@ describe('the card read (the card piece, PR B, Task 5)', () => {
     expect(f.pass()).toMatchObject({ cardRead: 0 });
   });
 
+  it('a refused live card step leaves the card and generation untouched and is logged through the store delegate', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    const id = live(f.s)[0]!.id;
+    const before = card(f.s);
+    readCard(f, 'snap-1', HASH_A);
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_card_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'probing' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass()).toMatchObject({ cardRead: 0, unread: null });
+      expect(card(f.s)).toEqual(before);
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_card_step');
+    }
+    expect(f.pass()).toMatchObject({ cardRead: 1, unread: null });
+    expect(card(f.s)).toEqual([{ n: 1, state: 'probing', shadowState: null, cardHash: HASH_A, snapshotId: 'snap-1' }]);
+  });
+
   it('shadow: the effective state is the shadow column, so the read moves `shadowState` and `state` stays active (review 1902 F6)', () => {
     const f = fixture();
     f.start('startup', U1);
