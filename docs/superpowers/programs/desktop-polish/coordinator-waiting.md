@@ -60,9 +60,9 @@ this scan is its own guard.
 | Reader | What changed | Basis |
 |---|---|---|
 | The fleet row, `SessionLine.tsx`: its word (`SessionMeta`'s card cell reads `cardFacts`) and its lamp | Converted. The row reads `workersBusyOf` from the fleet store as a boolean selector, so a frame that changes no answer re-renders no row. Both skins draw this component: Refined through `ProjectCard`, Instrument through `FleetTable` | Measured: rendered under each skin, the word, its title and the lamp's label read, the word outside the name's button. The desk and phone forms differ only in CSS, which jsdom does not lay out (§7) |
-| The session header's status chip, `sessionHeaderView.ts` and `SessionHeader.tsx` | Converted. The rule runs over the bucket the strip paints, with the workers the facts carry. The chip gains `waiting`, its lamp takes the words and its title is the words' title | Measured on the view. Live only once the screen passes the workers in (§6) |
+| The session header's status chip, `sessionHeaderView.ts` and `SessionHeader.tsx` | Converted. The rule runs over the bucket the strip paints, with the workers the facts carry. The chip gains `waiting`, its lamp takes the words and its title is the words' title | Measured on the view and on the open screen (`coordinator-waiting-screen.test.tsx`) |
 | `headerFacts`' status fact and `headerStatusWord` | Converted. The header says the card's word verbatim, with no age added. `cardWithinHeader` holds | Measured |
-| A worker header's word for its coordinator, `coordinationOf`'s `coordinatorState` (`SessionDetails`) | Converted: `coordinationOf` takes `parentWorkersBusy` | Measured on the function. The screen's wiring is §6 |
+| A worker header's word for its coordinator, `coordinationOf`'s `coordinatorState` (`SessionDetails`) | Converted: `coordinationOf` takes `parentWorkersBusy` | Measured on the function and on the open worker's screen |
 | The lamp, `StatusDot` (`ui/src/primitives/status-dot.tsx`) | A `waitingLabel` prop. Only a done or idle dot reads it | Measured |
 | The worker summary line, `rollup.ts`'s `summaryParts` | Unchanged, rightly: it counts workers, not the coordinator | Measured (`2 workers · 1 working · 1 idle`) |
 | The command palette, `command/sessionEntries.ts` | Unchanged, rightly: its entry words the role and project, never the state | Measured by reading it |
@@ -97,12 +97,15 @@ One place could contradict the word:
   not under Done. A coordinator outside a box would sit under Done and read `waiting on workers`. The group is the
   server's bucket by design (`statusGroups.ts`'s header), so it stays as it is.
 
-## 6. The session screen: held
+## 6. The session screen
 
-`pwa/src/screens/SessionScreen.tsx` was held by claim 6821 when this wave began. On the coordinator's ruling, a diff
-packet went to its holder, and the file stays untouched until the holder answers. Without that edit, the screen passes
-no `workersBusy` into the session facts and no `parentWorkersBusy` into `coordinationOf`. The header would then read the
-bucket's word, as before. The PR states whether the edit landed.
+`pwa/src/screens/SessionScreen.tsx` was held by claim 6821 (desktop polish wave 168) when this wave began. On the
+coordinator's ruling, its holder was sent a unified diff against main `01dce5c853` before the file was touched, and
+answered yes: the four hunks apply to its branch at an offset of 5 lines and touch none of its three changes there. The
+screen now reads two booleans from the fleet store: `workersBusyOf` for the open session and for its coordinator. It
+passes the first into the session facts and the second into `coordinationOf`. Booleans, so a frame that changes neither
+answer re-renders nothing (C6, D-6438). `coordinator-waiting-screen.test.tsx` opens a coordinator and a worker on the real
+screen. Its two waiting cases went red with the wiring removed and green with it.
 
 ## 7. Unmeasured
 

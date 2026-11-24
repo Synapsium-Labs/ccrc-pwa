@@ -44,7 +44,7 @@ import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
-import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { childRunContext, coordinationOf, parentIdOf, workersBusyOf } from '../fleet/fleetTree';
 import { readDelegation } from '../fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../fleet/sessionWorktrees';
 import { sessionFacts } from '../fleet/sessionFacts';
@@ -228,6 +228,10 @@ export function SessionScreen({
   // on its own lane, which is what a restart reaches.
   const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
   const claudeLaneLatest = useFleet((s) => (live === null ? null : laneClaudeLatest(s.sessions, live.wrapper)));
+  // Desktop polish wave 173: whether a worker of this session, and of its coordinator, is still working or spawning
+  // (`workersBusyOf`, the fleet row's own reader). Booleans, so a frame that changes neither answer re-renders nothing (C6).
+  const workersBusy = useFleet((s) => (live === null ? false : workersBusyOf(live, s.sessions, s.runs)));
+  const parentWorkersBusy = useFleet((s) => (parent === null ? false : workersBusyOf(parent, s.sessions, s.runs)));
 
   const kbInset = useKeyboardInsets();
   const { busy: restarting, ensure: ensureNow } = useEnsure();
@@ -330,7 +334,7 @@ export function SessionScreen({
     repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey), runsElsewhere,
   }), [repo, project, branch, runIdsKey, itemIdsKey, runsElsewhere]);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
-  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
+  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns, parentWorkersBusy);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
   // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
   // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordinatorPresence`, the orphan
@@ -354,6 +358,7 @@ export function SessionScreen({
     worktrees: delegation === null ? null : worktreesOf(readDelegation(delegation).leases, worktreeKey),
     claudeLatest,
     claudeLaneLatest,
+    workersBusy,
   });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
