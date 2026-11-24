@@ -810,18 +810,21 @@ function ChatScroller({
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());
 
-  // A HEIGHT CHANGE NO NEW ITEM EXPLAINS (review 3450 F5, review 3478 F5 and F6). `heightMove` decides (why, and when
-  // which, is said there); this measures and acts. Measured here, for it:
+  // A HEIGHT CHANGE NO NEW ITEM EXPLAINS (review 3450 F5, review 3478 F5 and F6, review 3607 F1). `heightMove` decides
+  // (why, and when which, is said there); this measures and acts. Measured here, for it:
   //  - the reader's taps on a disclosure in the list (anything with `aria-expanded`: a tool-activity row, a run group, a
-  //    card), and their own moving of the list (a wheel, a touch, a scroll key, a finger or a pointer held down on it);
+  //    card);
+  //  - the list MOVING, as the scroller itself reports it: the time of its last scroll event, whatever caused it (a
+  //    wheel, a fling, a smooth scroll, a key, a drag, code), except the scroll event the hold's own write owes;
   //  - whether an item came or went at either end of the list since the last change (appends are the foot follow's,
   //    items added at the top the older-history work's);
-  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read on every scroll, so a `hold` puts that
-  //    row back where the reader last saw it, and a regrouped list can never make it hold another.
+  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read a frame after every scroll, so a `hold`
+  //    puts that row back where the reader last saw it, and a regrouped list can never make it hold another.
   const scroller = useRef<HTMLElement | null>(null);
   const lastTap = useRef<number | null>(null);
-  const lastInput = useRef<number | null>(null);
-  const held = useRef(false);
+  const lastMove = useRef<number | null>(null);
+  /** Where the hold's own write left the scroller, until the scroll event it owes arrives. */
+  const ownWrite = useRef<number | null>(null);
   const anchor = useRef<{ key: string; top: number } | null>(null);
   /** Where the row `key` stands, from the scroller's top, or null when it is not drawn. */
   const topOf = useCallback((el: HTMLElement, key: string): number | null => {
@@ -842,6 +845,14 @@ function ChatScroller({
   // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
   const readSoon = useRef(false);
   const onScroll = useCallback((): void => {
+    const el = scroller.current;
+    const own = ownWrite.current;
+    ownWrite.current = null;
+    // The scroll event the hold's own write owes is neither the list moving nor a new place to hold: the hold keeps the
+    // place it put back as its baseline, so what it could not put back (under a pixel, a rounded position) is put back
+    // with the next change rather than becoming the new zero (review 3607 A3).
+    if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
+    lastMove.current = performance.now();
     if (readSoon.current) return;
     readSoon.current = true;
     requestAnimationFrame(() => {
@@ -852,33 +863,15 @@ function ChatScroller({
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
-  const onInput = useCallback((e: Event): void => {
-    lastInput.current = performance.now();
-    if (e.type === 'pointerdown' || e.type === 'touchstart') held.current = true;
-  }, []);
-  // A finger or a drag let go anywhere, the list's or not (a scrollbar drag can end outside it).
-  useEffect(() => {
-    const release = (): void => {
-      if (!held.current) return;
-      held.current = false;
-      lastInput.current = performance.now();
-    };
-    const ends = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'];
-    for (const t of ends) window.addEventListener(t, release, { capture: true, passive: true });
-    return () => { for (const t of ends) window.removeEventListener(t, release, true); };
-  }, []);
   const onScroller = useCallback((el: HTMLElement | Window | null): void => {
-    const inputs = ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown'];
     const old = scroller.current;
     old?.removeEventListener('click', onTap, true);
     old?.removeEventListener('scroll', onScroll);
-    for (const t of inputs) old?.removeEventListener(t, onInput, true);
     scroller.current = el instanceof HTMLElement ? el : null;
     const now = scroller.current;
     now?.addEventListener('click', onTap, true);
     now?.addEventListener('scroll', onScroll, { passive: true });
-    for (const t of inputs) now?.addEventListener(t, onInput, { capture: true, passive: true });
-  }, [onTap, onInput, onScroll]);
+  }, [onTap, onScroll]);
   const lastHeight = useRef<number | null>(null);
   const edges = useRef<string | null>(null);
   const shown = useRef(items);
@@ -896,8 +889,8 @@ function ChatScroller({
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
       sinceTap: lastTap.current === null ? null : at - lastTap.current,
-      sinceInput: lastInput.current === null ? null : at - lastInput.current,
-      held: held.current, newItem,
+      sinceMove: lastMove.current === null ? null : at - lastMove.current,
+      newItem,
     });
     if (move === 'foot') {
       virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
@@ -905,13 +898,19 @@ function ChatScroller({
     }
     // A frame later, after any correction of the list's own or the browser's: the hold compares where the row stood
     // before the change with where it stands now, so a change something else already put back is put back by nothing
-    // more (one correction per change). A `none` re-reads it, so the change it let through is the reader's new place.
+    // more (one correction per change), and a list that moved in between is not set back (review 3607 F1). A `none`, or
+    // a hold the list's movement cancelled, re-reads it, so the change it let through is the reader's new place.
     requestAnimationFrame(() => {
       const a = anchor.current;
       const now = a === null ? null : topOf(el, a.key);
       if (move === 'hold' && a !== null && now !== null) {
-        const shift = holdShift(a.top, now);
-        if (shift !== 0) el.scrollTop += shift;
+        const moved = lastMove.current !== null && lastMove.current >= at;
+        const shift = holdShift(a.top, now, moved);
+        if (shift !== 0) {
+          el.scrollTop += shift;
+          ownWrite.current = el.scrollTop;
+        }
+        if (!moved) return;
       }
       readAnchor();
     });

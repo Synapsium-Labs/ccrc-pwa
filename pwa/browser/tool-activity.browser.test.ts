@@ -419,7 +419,7 @@ describe('a live row that changes size keeps the reader where they were (review 
         expect(atFootClosed.fromFoot, 'not at the foot before the failure surfaced').toBeLessThanOrEqual(2);
         expect(afterClosed.fromFoot, 'a failure surfaced and the reader left the foot').toBeLessThanOrEqual(2);
         expect(midBefore.fromFoot, 'the reader is not above the foot').toBeGreaterThan(100);
-        expect(midGrew, 'nothing changed size while the reader was higher up: the case measures nothing').not.toBe(0);
+        expect(midGrew, 'the live row did not grow while the reader was higher up: the case measures nothing').toBeGreaterThan(0);
         expect(midAfter.fromFoot, 'the reader higher up was taken to the foot').toBeGreaterThan(100);
         expect(midAfter.text, 'the row in view changed').toBe(midBefore.text);
         expect(Math.abs(midAfter.at - midBefore.at), 'the row in view moved').toBeLessThanOrEqual(1);
@@ -494,48 +494,52 @@ type AboveMode = 'grows' | 'grows, already corrected' | 'shrinks';
 const ABOVE_MODES: AboveMode[] = ['grows', 'grows, already corrected', 'shrinks'];
 const PICK = 'Which cache should the service use, the shared one or a local one?';
 
+/** Open a session whose current turn has a stretch above (its Bash still running, or, `asks`, its question asked now),
+ *  prose, then a tall stretch; open the tall one and read inside it, 200px down, the row above out of view above. */
+async function readingBelow(page: Page, ctx: Awaited<ReturnType<typeof openApp>>['ctx'], asks: boolean) {
+  const events: object[] = [...HISTORY];
+  events.push({ kind: 'user', uuid: 'q-above', ts: TS, text: 'Check both.' });
+  call(events, 'Read', { file_path: '/w/project-a/src/slow.ts' });
+  k += 1;
+  const slow = `t${k}`;
+  const options = [{ label: 'Shared' }, { label: 'Local' }];
+  events.push(asks
+    ? { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'AskUserQuestion', input: JSON.stringify({ questions: [{ question: PICK, header: 'Cache', options }] }) }
+    : { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'Bash', input: JSON.stringify({ command: 'npm run slow' }) });
+  events.push({ kind: 'assistant', uuid: 'a-above', ts: TS, text: 'While that waits, a few questions.' });
+  for (let i = 0; i < 10; i += 1) {
+    answered(events, `Which way for part ${i} of the change, the first or the second?`);
+    call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
+  }
+  events.push({ kind: 'assistant', uuid: 'b-above', ts: TS, text: 'Questions done.' });
+  const asked = asks ? [{ type: 'ask', ask: { questions: [{ question: PICK, header: 'Cache', options }] } }] : [];
+  const send = await openSession(page, ctx, events, asked);
+  if (asks) {
+    // The question is asked now: its card is surfaced under the row above. At a phone's width its sheet opens over the
+    // transcript; close it, as a reader reading the transcript has.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+  }
+  await scrollTo(page, 'bottom');
+  await page.locator('.tool-activity-row').last().click();
+  await page.waitForTimeout(800);
+  await page.evaluate(() => {
+    const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+    const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+    const tall = rows[rows.length - 1]!;
+    s.scrollTop += tall.getBoundingClientRect().top - s.getBoundingClientRect().top + 200;
+  });
+  await page.waitForTimeout(600);
+  return { slow, send };
+}
+
 describe('a row above the reader that changes size moves nothing they read (review 3478 F6)', () => {
   for (const mode of ABOVE_MODES) {
     for (const view of GROWTH) {
       it(`${named(view)}: the row above ${mode}`, async () => {
         const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
         try {
-          // The current turn: a stretch above (its Bash still running, or its question asked now), prose, then a tall
-          // stretch the reader opens and reads.
-          const events: object[] = [...HISTORY];
-          events.push({ kind: 'user', uuid: 'q-above', ts: TS, text: 'Check both.' });
-          call(events, 'Read', { file_path: '/w/project-a/src/slow.ts' });
-          k += 1;
-          const slow = `t${k}`;
-          const options = [{ label: 'Shared' }, { label: 'Local' }];
-          events.push(mode === 'shrinks'
-            ? { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'AskUserQuestion', input: JSON.stringify({ questions: [{ question: PICK, header: 'Cache', options }] }) }
-            : { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'Bash', input: JSON.stringify({ command: 'npm run slow' }) });
-          events.push({ kind: 'assistant', uuid: 'a-above', ts: TS, text: 'While that waits, a few questions.' });
-          for (let i = 0; i < 10; i += 1) {
-            answered(events, `Which way for part ${i} of the change, the first or the second?`);
-            call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
-          }
-          events.push({ kind: 'assistant', uuid: 'b-above', ts: TS, text: 'Questions done.' });
-          const asked = mode === 'shrinks' ? [{ type: 'ask', ask: { questions: [{ question: PICK, header: 'Cache', options }] } }] : [];
-          const send = await openSession(page, ctx, events, asked);
-          if (mode === 'shrinks') {
-            // The question is asked now: its card is surfaced under the row above. At a phone's width its sheet opens over
-            // the transcript; close it, as a reader reading the transcript has.
-            await page.keyboard.press('Escape');
-            await page.waitForTimeout(400);
-          }
-          await scrollTo(page, 'bottom');
-          await page.locator('.tool-activity-row').last().click();
-          await page.waitForTimeout(800);
-          // Read inside the opened stretch, the row above out of view above.
-          await page.evaluate(() => {
-            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
-            const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
-            const tall = rows[rows.length - 1]!;
-            s.scrollTop += tall.getBoundingClientRect().top - s.getBoundingClientRect().top + 200;
-          });
-          await page.waitForTimeout(600);
+          const { slow, send } = await readingBelow(page, ctx, mode === 'shrinks');
           if (mode === 'grows, already corrected') {
             // A correction of the list's own: when the row above changes size, the view is put back at once, before the
             // list's hold runs. The hold must then move nothing more.
@@ -589,3 +593,97 @@ describe('a row above the reader that changes size moves nothing they read (revi
     }
   }
 });
+
+// ---- review 3607 F1: a list that is moving is never set back --------------------------------------------------------
+/** How the list is moving when the row above grows: a smooth scroll started in code (as Jump to latest's is); a page key's
+ *  animated scroll with focus on the list (focus on the page body or the shell moves this list by 0px in Chrome, so a key
+ *  reaches it only through the list, measured in this round); or a scroll made frame by frame in code, with no input
+ *  event at all (it stands in for a touch fling after the finger lifts, which headless Chrome cannot make). */
+type Moving = 'a smooth scroll in code' | 'a page key, focus on the list' | 'frame by frame in code, no input event';
+const MOVINGS: Moving[] = ['a smooth scroll in code', 'a page key, focus on the list', 'frame by frame in code, no input event'];
+
+describe('a row above the reader that grows while the list is moving sets nothing back (review 3607 F1)', () => {
+  for (const moving of MOVINGS) {
+    for (const view of GROWTH) {
+      it(`${named(view)}: ${moving}`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+        try {
+          const { slow, send } = await readingBelow(page, ctx, false);
+          // Watch the row above: when it first changes size, whether the list was moving then, and every scroll after.
+          await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+            const above = rows[rows.length - 2]!;
+            const w = window as unknown as { probe: { grewAt: number | null; lastScroll: number; tops: number[] } };
+            w.probe = { grewAt: null, lastScroll: 0, tops: [] };
+            const was = above.getBoundingClientRect().height;
+            s.addEventListener('scroll', () => { w.probe.lastScroll = performance.now(); w.probe.tops.push(s.scrollTop); });
+            new ResizeObserver(() => {
+              if (w.probe.grewAt === null && above.getBoundingClientRect().height !== was) w.probe.grewAt = performance.now();
+            }).observe(above);
+          });
+          const start = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            return { top: s.scrollTop, room: s.scrollHeight - s.scrollTop - s.clientHeight };
+          });
+          expect(start.room, 'no room below the reader to scroll into').toBeGreaterThan(560);
+          const fail = { type: 'events', uuid: 'u-1', events: [{ kind: 'tool_result', ts: TS, toolId: slow, text: 'exit 1', isError: true }], offset: 2 };
+          let expected: number;
+          if (moving === 'a smooth scroll in code') {
+            expected = start.top + 500;
+            await page.evaluate((to) => {
+              document.querySelector<HTMLElement>('.chat-scroller')!.scrollTo({ top: to, behavior: 'smooth' });
+            }, expected);
+            await page.waitForFunction((from) => document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop > from + 20, start.top);
+            send(fail);
+          } else if (moving === 'a page key, focus on the list') {
+            await page.evaluate(() => document.querySelector<HTMLElement>('.chat-scroller')!.focus({ preventScroll: true }));
+            const from = await page.evaluate(() => document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop);
+            // One page down unhindered measures where a page lands; back, at rest, then the same page down with the change
+            // landing in it.
+            await page.keyboard.press('PageDown');
+            await page.waitForTimeout(800);
+            const paged = await page.evaluate(() => document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop);
+            expect(paged - from, 'a page down did not scroll the list').toBeGreaterThan(100);
+            expect(start.room, 'a page down ran into the foot: the case measures nothing').toBeGreaterThan(paged - from + 20);
+            await page.evaluate((to) => { document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop = to; }, from);
+            await page.waitForTimeout(600);
+            expected = paged;
+            await page.keyboard.press('PageDown');
+            await page.waitForFunction((at) => document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop > at + 10, from);
+            send(fail);
+          } else {
+            const steps = 40;
+            expected = start.top + steps * 12;
+            await page.evaluate((n) => {
+              const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+              let i = 0;
+              const step = (): void => {
+                s.scrollTop += 12;
+                i += 1;
+                if (i < n) requestAnimationFrame(step);
+              };
+              requestAnimationFrame(step);
+            }, steps);
+            await page.waitForTimeout(80);
+            send(fail);
+          }
+          await page.waitForTimeout(1500);
+          const end = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            const w = window as unknown as { probe: { grewAt: number | null; lastScroll: number; tops: number[] } };
+            return { top: s.scrollTop, grewAt: w.probe.grewAt, lastScroll: w.probe.lastScroll, tops: w.probe.tops.length };
+          });
+          console.log(`F1 moving ${moving} ${named(view)}: ${JSON.stringify({ start, expected, end })}`);
+          expect(end.grewAt, 'the row above never grew: the case measures nothing').not.toBeNull();
+          expect(end.lastScroll, 'the row above grew after the list stopped: the case measures nothing').toBeGreaterThan(end.grewAt!);
+          expect(Math.abs(end.top - expected), 'the moving list was set back or stopped short').toBeLessThanOrEqual(1);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
+  }
+});
+
