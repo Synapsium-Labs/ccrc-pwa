@@ -28,6 +28,8 @@ import type { PlanStorePort } from './coord/planStore.js';
 import type { PlanSync } from './linear/planSync.js';
 import type { DriftPass } from './linear/driftPass.js';
 import type { LinearMigration } from './linear/migration.js';
+import type { ClaudeCodeOwnLists } from '../../shared/overlord-sandbox.js';
+import type { SettleOutcome } from './continuity/routes.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
@@ -249,6 +251,9 @@ export interface Deps {
    *  live fleet state. Absent (a test, a script): the ladder's `shared-user` input reads `unmeasured: not-wired`, which caps. */
   isolation?: IsolationReader;
   ladderServerCaps?: readonly string[];
+  /** The sandbox settle step's test seams (W1 sandbox B, review 3325 F4 and F6): isolated own lists in place of the release's
+   *  (`CLAUDE_CODE_OWN_LISTS`, which lists no build), and a completion signal per settle. Absent: the release's lists, no signal. */
+  overlordSandbox?: { readonly ownLists?: ClaudeCodeOwnLists; readonly settled?: (o: SettleOutcome) => void };
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;

@@ -79,6 +79,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
     spec: 'probes failed twice after a renewal (Table 7.5a)',
   },
+  // W1 sandbox B: no cap; the gate order's step 6 reads it (§11.2) and refuses every door but card, probe and note.
+  'launch-profile-unengaged': {
+    kind: 'condition', effect: { kind: 'read-by', reader: 'launch-profile-unmet' }, notice: 'none',
+    spec: 'the launch profile is not engaged (Table 7.5a, §3.6 H4)',
+  },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;
 export const LADDER_CAUSES = Object.keys(LADDER_CAUSE_MAP) as LadderCause[];

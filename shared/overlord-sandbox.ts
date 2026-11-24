@@ -76,24 +76,16 @@ export interface StartLoadsBody {
   readonly reportedAt: number;
 }
 
+/** Claude Code's own agent types and skills by build: the shape of `CLAUDE_CODE_OWN_LISTS` and of a test's isolated fixture. */
+export type ClaudeCodeOwnLists = Readonly<Record<string, { readonly agents: readonly string[]; readonly skills: readonly string[] }>>;
+
 /** Claude Code's own agent types and skills, which a session lists whatever its setting sources, keyed by the build they
  *  were measured on (question 4, slug `claude-code-own-lists-are-keyed-by-build`). The check allows exactly the profile's
  *  names plus the report build's lists; a build with no entry reads `skills` and `agents` `unmeasured`, naming the build.
  *
- *  A RIG LOWER BOUND (ruled 2026-11-15, slug `own-lists-are-a-rig-lower-bound`): measured in the W0 rig (Task 1, M5:
- *  `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox/load-path.md`) under the Overlord's pinned launch against the
- *  mock API, from the `agent_listing_delta` attachment's `builtInTypes` and the `skill_listing` names less the profile's
- *  own. A live account lists more bundled skills than the mock does, so nothing in PR A judges against these lists, and a
- *  live read is a Needs-first of PR B. */
-export const CLAUDE_CODE_OWN_LISTS: Readonly<Record<string, { readonly agents: readonly string[]; readonly skills: readonly string[] }>> = {
-  '2.1.323': {
-    agents: ['Explore', 'Plan', 'general-purpose'],
-    skills: ['claude-api', 'code-review', 'dataviz', 'fewer-permission-prompts', 'init', 'keybindings-help', 'loop',
-      'plugin-authoring', 'run', 'security-review', 'simplify', 'update-config'],
-  },
-  '2.1.325': {
-    agents: ['Explore', 'Plan', 'general-purpose'],
-    skills: ['claude-api', 'code-review', 'dataviz', 'fewer-permission-prompts', 'init', 'keybindings-help', 'loop',
-      'plugin-authoring', 'run', 'security-review', 'simplify', 'update-config'],
-  },
-};
+ *  NO BUILD IS LISTED (review 3325 F4, ruled in fix round 1 of W1 sandbox PR B). An entry needs built-in provenance, and the
+ *  names an account's sessions list are account inventory, not that: an account's own configuration can supply a name. The
+ *  capture inventory, queued, supplies the provenance; until it lands every build, 2.1.330 included, reads `unmeasured`, so
+ *  no designation goes live on real skills or agents. The rig's 2.1.323 and 2.1.325 lists were lower bounds (load-path.md,
+ *  M5) and are gone too. A test passes its own isolated lists to `expectedSurfaceOf`, never through this table. */
+export const CLAUDE_CODE_OWN_LISTS: ClaudeCodeOwnLists = {};
