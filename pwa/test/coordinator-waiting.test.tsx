@@ -190,6 +190,22 @@ describe('the rule (waitingOnWorkers): its table', () => {
     });
   }
 
+  // The hibernation census's stance for `rowWithCoordinator` (coordinator ruling on review 3632's round): a sleeping worker
+  // is not busy, whether or not a question of its is with the coordinator, so its coordinator reads its own word.
+  for (const held of [false, true]) {
+    it(`an asleep worker ${held ? 'whose question is with the coordinator ' : ''}does not keep its coordinator waiting`, () => {
+      const head = coord();
+      const asleep: Partial<FleetSession> = {
+        status: 'dead', lifecycle: 'stopped', stoppedBy: { at: NOW - HOUR, surface: 'agent' }, bucket: 'dead', hibernatedAt: NOW - HOUR,
+        ...(held ? { withCoordinator: { kind: 'question' as const, parentId: 'coord', since: NOW - 2 * HOUR, notifyAt: NOW + MIN } } : {}),
+      };
+      const f = fleetOf(head, [asleep]);
+      const worker = f.sessions.find((s) => s.id === 'w1')!;
+      expect(cardFacts(sessionFacts({ session: worker, now: NOW })).status.text).toMatch(/^hibernated · /);
+      expect(rowWord(head, f)).toBe(STATE_WORD.done);
+    });
+  }
+
   // F3 (review 3632): the spawn arm follows the bracket. A run whose session is on the list makes no spawn row, whatever
   // its binding reads: `latestPerSession` drops the run (its listed session is bound elsewhere), so the tree draws no
   // pending row for it and the session where its own binding puts it, and the coordinator reads as its card shows.

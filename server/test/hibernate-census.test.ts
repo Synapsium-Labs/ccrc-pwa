@@ -154,9 +154,13 @@ const CENSUS: readonly Row[] = [
       + 'session (ccd forget refuses it, D-5423); the notes word '
       + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
       + 'wrapper notes speak of a live pane only' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 2, stances: ['consults', 'true-of-pane'],
     why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
-      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
+      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp. The second hit is '
+      + '`rowWithCoordinator` (desktop polish wave 173), the one reader of a row\'s held question: a gone pane, a sleeper\'s '
+      + 'included, answers no held question, which is true of the pane (nothing is live to answer), so a sleeping worker\'s '
+      + 'row never reads `with coordinator`. Its row word is `asleep`, not `working`, so it is not busy either way and never '
+      + 'makes its coordinator read waiting on workers: a coordinator whose workers sleep has nothing running for it' },
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },

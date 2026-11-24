@@ -27,6 +27,13 @@ coordinator waiting, and the pair never read as waiting on each other. A worker 
 `waiting`, which is not busy either. Measured: a done coordinator and an idle one holding a worker's question read done and
 idle; beside a second worker that really is working, both read `waiting on workers`.
 
+**A sleeping worker.** Its row word is `asleep`, not `working`, so it is never busy, and `rowWithCoordinator` answers no
+held question for a gone pane, so its row never reads `with coordinator` either. Measured: a coordinator whose only worker
+sleeps reads done, with or without that worker's question held by it. The hibernation census
+(`server/test/hibernate-census.test.ts`) counts `rowWithCoordinator`'s gone-pane guard as a second presence reader in
+`sessionFacts.ts`. Its row there now pins 2 hits, with the stances `consults` and `true-of-pane`, argued in the row
+(coordinator's ruling: keep the guard, write the row).
+
 **A stalled dispatch (review 3632 F1).** A dispatch past `SPAWN_STALL_MS` is the board's "dispatch never completed": it
 needs a person, so it does not keep the coordinator waiting. Measured: the same dispatch one second inside the threshold
 reads waiting, at the threshold and an hour later reads done, and a stalled dispatch beside a working worker still reads
@@ -202,6 +209,11 @@ restored from git. 38 mutants: 37 went red and one is equivalent.
   read, M33 the attention tone.
 - **The header:** M34 the view's rule off, M35 the view's title dropped, M36 the header part's lamp label dropped.
 - **The screen:** M37 the facts not given the workers, M38 the coordination not given the coordinator's workers.
+
+**Fix round 1 took two pushes.** The first, at 52c30f2989, reddened one server census, the hibernation census. I had run
+the rings, W7, single-definition, anchors and citations censuses before it, not every server test that reads `pwa/src`.
+The second push carries the census row and the asleep-worker cases. Before it, every server test file that names a pwa
+path (156 files, found by grep) ran through the supported runner.
 
 **The whole pwa suite** ran once after the build: 24 files failed to load and no test failed. Two causes, both of the
 environment: the test slice's memory cap killed workers (5 OOM kills), and some censuses import a scan helper from the
