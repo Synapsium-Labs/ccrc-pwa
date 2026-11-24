@@ -77,7 +77,7 @@ describe('the restore-detected latch', () => {
     expect(b.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
     expect(standing(f.db)).toEqual([{ cause: 'restore-detected', cap: 'chat', detail: 'the authority journal reads rolled-back: trailing', raisedBy: 'ccrc server: authority', raiseSequence: null }]);
     f.db.exec("INSERT INTO overlord_ladder (id, operatorRung, actor, updatedAt, recordSequence, recordFrom, narrowedAt) VALUES (1, 'full', 'operator-a', 1, 1, NULL, NULL)");
-    const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'no-witness-since-boot': () => 'lifted' as const };
+    const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'launch-profile-unengaged': () => 'lifted' as const, 'no-witness-since-boot': () => 'lifted' as const };
     const read = ladderRead(b.coord, lifted, NO_WITNESS_YET, []);
     expect(read).toMatchObject({ kind: 'measured', effective: { rung: 'chat' } });
     // a second boot over the still-standing latch adds no second row (idempotent in the store)
