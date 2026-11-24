@@ -21,6 +21,7 @@ import { api } from '../lib/api';
 import { refusalText } from '../lib/refusalWords';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { inAppClick } from '../fleet/settingsText';
+import { useTabLink } from '../lib/useTabLink';
 import { openExternal } from '../lib/markdown';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
@@ -240,6 +241,8 @@ function Controls({ run, coordinatorOpenable, onLift, onAbandon, onResume }: {
 }
 
 function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
+  // The Spec fact is a document link: at a desk it opens a Docs tab of its own (the Docs tab rule, desktop polish wave 174).
+  const link = useTabLink();
   return (
     <>
       {groups.map((g) => (
@@ -252,7 +255,7 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
                   {f.parts.map((p, i) => p.href === undefined ? <span key={i}>{p.text}</span> : (
                     p.external === true
                       ? <TextLink key={i} href={p.href} onClick={(e) => openExternal(e, p.href)}>{p.text}</TextLink>
-                      : <TextLink key={i} href={p.href} onClick={inAppClick(p.href)}>{p.text}</TextLink>
+                      : <TextLink key={i} {...link(p.href)}>{p.text}</TextLink>
                   ))}
                 </dd>
               </div>
