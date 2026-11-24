@@ -89,9 +89,10 @@ export const TESTBOX_CONNECT_TEXT = {
   repositoriesHint: 'One to four. The box keeps a copy of each and runs its tests there.',
   repoName: 'Name',
   repoUrl: 'Fetch URL',
-  repoPackage: 'Package folder',
+  repoPackage: 'Package folders, in install order',
   repoInputs: 'Install inputs',
-  repoCommand: 'Test runner',
+  repoCommand: 'Test commands',
+  repoFieldsHint: 'Separate package folders with spaces and test commands with commas. Every package gets every command. Parity runs the first package\'s first command.',
   addRepo: 'Add a repository',
   removeRepo: 'Remove',
   offered: 'From the fleet',
@@ -99,6 +100,7 @@ export const TESTBOX_CONNECT_TEXT = {
   badRepoName: 'A name is letters, digits, . _ and -.',
   badRepoUrl: 'An https or ssh URL such as https://git.invalid/team/project.',
   badRepoWord: 'Required.',
+  badRepoTwice: 'Each one once.',
   badRepoRow: 'That row is not one the box can take. Check the install inputs.',
   needListen: 'The address the service listens on is required: the box\'s private address, the one ccrc reaches it on.',
   listenNotPrivate: 'The service listens on the box\'s private address, an IP address on a tailnet, a VPN or your provider\'s private network, the one ccrc reaches it on.',
@@ -328,29 +330,52 @@ export function actWord(act: string): string {
  *  none of the flags: no JUnit report is written, every pull request leg reads DIFFERS and the switch never arms. */
 export const TESTBOX_DEFAULT_RUNNER = './node_modules/.bin/vitest';
 
-/** One repository row as the card's step 4 holds it, as typed; `inputs` blank means the package's own pair (D-9009). */
+/** The command heads a new repository row gives each of its packages (spec 2026-10-28 §2.5's default), the runner first:
+ *  parity runs the first package's first head (`ccd/ccrc-testbox-admin`'s `_tba_row_record`). A head a package has no use
+ *  for (a script it lacks) costs nothing: the box only runs what a session asks for, and that fails there as it would
+ *  locally (D-9009). */
+export const TESTBOX_DEFAULT_HEADS: readonly string[] = [TESTBOX_DEFAULT_RUNNER, './node_modules/.bin/tsc', 'npm test', 'npm run test:browser'];
+
+/** One repository row as the card's step 4 holds it, as typed: `pkg` is the package folders in install order, separated by
+ *  spaces; `command` is the command heads, separated by commas; `inputs` is blank for each package's own pair. */
 export interface TestboxRepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
-export const blankRepoDraft = (): TestboxRepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_RUNNER });
+export const blankRepoDraft = (): TestboxRepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_HEADS.join(', ') });
 
 const REPO_URL = /^(?:https|ssh):\/\/[^\s@/]+(?:@[^\s/]+)?\/[^\s]+$/;
 const COMMAND_HEAD = /^[^\s]+(?: [^\s]+)*$/;
+const words = (s: string): string[] => s.trim().split(/\s+/).filter((w) => w !== '');
+const heads = (s: string): string[] => s.split(',').map((h) => h.trim()).filter((h) => h !== '');
+const twice = (xs: readonly string[]): boolean => new Set(xs).size !== xs.length;
 
-/** The row's JSON object for one draft, with the mirror under the box's root. */
+/** The row's JSON object for one draft, with the mirror under the box's root (D-9009). Each package gets every head, and its
+ *  install inputs are the typed ones whose first path segment names it (a typed input under no listed package goes to the
+ *  first package, so a one-package draft reads as it always did), or else its own `package.json` and `package-lock.json`. */
 export function repoRowOf(d: TestboxRepoDraft, root: string): Record<string, unknown> {
-  const inputs = d.inputs.trim() === '' ? [`${d.pkg}/package.json`, `${d.pkg}/package-lock.json`] : d.inputs.trim().split(/\s+/);
+  const names = words(d.pkg);
+  const owned = new Map<string, string[]>();
+  for (const input of words(d.inputs)) {
+    const owner = names.includes(input.split('/')[0] ?? '') ? input.split('/')[0]! : names[0] ?? '';
+    owned.set(owner, [...(owned.get(owner) ?? []), input]);
+  }
+  const commands = heads(d.command);
   return {
     name: d.name, fetchUrl: d.fetchUrl, mirrorPath: `${root.replace(/\/+$/, '')}/mirrors/${d.name}.git`,
-    packages: [{ name: d.pkg, installInputs: inputs, commands: [d.command] }], buildOutputs: [], systemTools: [],
+    packages: names.map((n) => ({ name: n, installInputs: owned.get(n) ?? [`${n}/package.json`, `${n}/package-lock.json`], commands })),
+    buildOutputs: [], systemTools: [],
   };
 }
 
-/** What is wrong with one repository draft, by field; empty for a row that parses. */
+/** What is wrong with one repository draft, by field; empty for a row the box's own reader takes (D-9009). */
 export function repoDraftProblems(d: TestboxRepoDraft, root: string): Partial<Record<keyof TestboxRepoDraft | 'row', string>> {
   const out: Partial<Record<keyof TestboxRepoDraft | 'row', string>> = {};
+  const names = words(d.pkg);
+  const commands = heads(d.command);
   if (!isTestboxName(d.name)) out.name = TESTBOX_CONNECT_TEXT.badRepoName;
   if (!REPO_URL.test(d.fetchUrl)) out.fetchUrl = TESTBOX_CONNECT_TEXT.badRepoUrl;
-  if (!isTestboxName(d.pkg)) out.pkg = TESTBOX_CONNECT_TEXT.badRepoName;
-  if (!COMMAND_HEAD.test(d.command)) out.command = TESTBOX_CONNECT_TEXT.badRepoWord;
+  if (names.length === 0 || !names.every((n) => isTestboxName(n))) out.pkg = TESTBOX_CONNECT_TEXT.badRepoName;
+  else if (twice(names)) out.pkg = TESTBOX_CONNECT_TEXT.badRepoTwice;
+  if (commands.length === 0 || !commands.every((c) => COMMAND_HEAD.test(c))) out.command = TESTBOX_CONNECT_TEXT.badRepoWord;
+  else if (twice(commands)) out.command = TESTBOX_CONNECT_TEXT.badRepoTwice;
   if (Object.keys(out).length === 0 && !parseRepoRow(JSON.stringify(repoRowOf(d, root))).ok) out.row = TESTBOX_CONNECT_TEXT.badRepoRow;
   return out;
 }
