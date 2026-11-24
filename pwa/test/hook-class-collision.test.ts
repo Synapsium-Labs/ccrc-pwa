@@ -160,6 +160,13 @@ export function collisions(
 /** Shared names that are ONE role rendered two ways, with the reason. A rule
  *  written for one of them is written for both, so nothing lands by accident. */
 export const ONE_ROLE: Record<string, string> = {
+  'ins-door':
+    "Instrument's desk bar door: the wordmark and every place are `<Door>`, and the place a desk opens in a new tab (the Docs "
+    + 'place, desktop polish wave 174) is `PlaceDoor`\'s anchor wearing the same `DOOR` utilities. One door in two elements, and '
+    + "`.ins-door` (instrument.css) is written for that door whichever element draws it.",
+  'menu-item':
+    "The session menu's row: `<ListRow>` for a command, and the Docs item's anchor wearing the same `LIST_ROW` utilities (a link "
+    + 'since desktop polish wave 174). One row in two elements, and `.menu-item` (chat.css: the type and ink) is written for it.',
   'compaction-body':
     "MessageBubble's compaction card body, rendered as `<pre>` for a raw body and as `<Prose>` "
     + 'for a markdown one — the same slot in the same component, and `.compaction-body` '

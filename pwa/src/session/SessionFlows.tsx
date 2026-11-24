@@ -14,13 +14,14 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
-import { ListRow, Sheet, cn, toast } from '@ccrc/ui';
+import { LIST_ROW, ListRow, Sheet, cn, toast } from '@ccrc/ui';
 import { api } from '../lib/api';
 import { RENEW_NOW_RECORDED_TEXT, RENEW_NOW_SHADOW_TEXT, renewNowText } from '../lib/refusalWords';
 import { commandDoor } from '../command/door';
 import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
-import { navigate } from '../lib/router';
+import { followLink } from '../lib/router';
+import { useTabLink } from '../lib/useTabLink';
 import { PrSheet } from './PrSheet';
 import { hasPrCap } from './prCap';
 import { sessionMenu, type SessionMenuEntry } from './sessionMenu';
@@ -47,14 +48,16 @@ export interface SessionFlowDoors {
 }
 
 /** One row of the session menu: a label, and — for the ones that answer a slash command — the command itself,
- *  dimmed, read by nobody. Built with `commandDoor`, never a handler of its own.
+ *  dimmed, read by nobody. Built with `commandDoor`, never a handler of its own, except the Docs item, a link
+ *  (`DocsMenuItem`).
  *
  *  `aria-hidden` on the hint is deliberate and was already: the label is the accessible name, and "/model" read
  *  aloud after it is noise. */
 function MenuItem({ entry, hint }: { entry: SessionMenuEntry; hint?: ReactNode }): ReactNode {
+  if (entry.docs !== undefined) return <DocsMenuItem entry={entry} docs={entry.docs} hint={hint} />;
   return (
     <ListRow
-      className={cn('menu-item', entry.danger === true && 'menu-item--danger', entry.docs !== undefined && 'docs-menu-item')}
+      className={cn('menu-item', entry.danger === true && 'menu-item--danger')}
       disabled={!entry.enabled}
       title={entry.title}
       {...commandDoor(entry.id)}
@@ -62,6 +65,34 @@ function MenuItem({ entry, hint }: { entry: SessionMenuEntry; hint?: ReactNode }
       <span className="menu-label">{entry.label}</span>
       {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
     </ListRow>
+  );
+}
+
+/** The Docs item (docs design 4.8): a link, not a button, so it is an anchor wearing the row, at the session's Docs address,
+ *  with the Docs tab rule's props (`useTabLink`, desktop polish wave 174), so the browser's middle click, copy link and context
+ *  menu work on it. A plain click runs its registry command, `session-docs`, as every item of this menu does (the palette runs
+ *  the same one): the menu closes and `followLink` asks the same rule, a Docs tab of its own at a desk and an in-app move
+ *  below one. A modified or middle click is the browser's. */
+function DocsMenuItem({ entry, docs, hint }: {
+  entry: SessionMenuEntry; docs: NonNullable<SessionMenuEntry['docs']>; hint?: ReactNode;
+}): ReactNode {
+  const props = useTabLink()(docs.href);
+  const door = commandDoor(entry.id);
+  return (
+    <a
+      {...props}
+      className={cn(LIST_ROW, 'menu-item', 'docs-menu-item')}
+      title={entry.title}
+      data-command={door['data-command']}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        door.onClick();
+      }}
+    >
+      <span className="menu-label">{entry.label}</span>
+      {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
+    </a>
   );
 }
 
@@ -144,7 +175,8 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
         case 'open-history': act.openHistory(); break;
         case 'session-docs': {
           const href = now.find((e) => e.id === 'session-docs')?.docs?.href;
-          if (href !== undefined) navigate(href);
+          // The palette's "Open this session's docs" (the menu's own item is a link, `DocsMenuItem`): the Docs tab rule.
+          if (href !== undefined) followLink(href);
           break;
         }
         case 'session-swap': act.moveAccount(); break;
