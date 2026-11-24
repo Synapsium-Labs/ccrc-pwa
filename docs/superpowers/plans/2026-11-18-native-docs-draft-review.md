@@ -630,4 +630,8 @@ For the coordinator to confirm: the reader lab's one anchor joins D-8767 (the re
   - the rings suites, 133 of 133.
 
   The test-project compile was killed twice by the shared test slice's 6 GiB memory cap (exit 137), so it is unmeasured locally, not failed. CI's required typecheck decides it.
+- **Fix round after the first hosted run.** The pull request's first run, at `326e0dcdf0`, failed two server shards.
+  - **The isolation guard (a real gap from the absorption).** Main's server-isolation piece (#3208) requires every configuration path field to be held or named with a reason, and R1.3's `reviewStoreDir` was neither. It is now a `secret` holding in `serverHoldings`. A read reaches the operator's snapshots, and a write could plant a share index entry. A store not yet created measures as its nearest existing ancestor, `~/.ccrc`, which is already held.
+  - **Red first.** The holdings test names it among the secret stores, and pins its path. That failed two cases before the fix, and both isolation files then passed, 39 of 39. One Opus · high review found nothing important; its two minor points, the path pin and the comment's wording, were taken.
+  - **The generation-day simulation's timeout.** It hit its 600 s bound on a shard that ran 992 s. The same file passed in 444 s in the merge-queue run that landed `6965b6d830`, and it imports nothing this pull request changes, so this is read as load. The next hosted run decides it.
 - **Hosted CI remains the arbiter** for the files run 2949 could not finish locally (linking routes, project-pool routes and cross-side update intent), for the D-6111 timing witnesses, and for the whole selection.
