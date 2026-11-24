@@ -921,6 +921,25 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     } finally { await app.close(); }
   });
 
+  // Flows wave 3a: the programmes on a flow carry each programme's title, which its coordinator wrote, so the one answer
+  // hook masks the answer (`MASKED_GET_ROUTES`).
+  it('GET /api/flows/:id/programmes masks an assembled credential in a programme title', async () => {
+    expect(answerMasked('GET', '/api/flows/:id/programmes')).toBe(true);
+    const home = mkTmp('ccrc-mask-flows-');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    app = await buildServer({ ...testDeps(home), coord });
+    await app.ready();
+    const made = await app.inject({ method: 'POST', url: '/api/flows', payload: { template: 'ccrc' } });
+    const id = (made.json() as { id: number }).id;
+    await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
+    coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state, flowId, flowVersion) VALUES ('programme-a', ?, 1, 'active', ?, 1)")
+      .run(`rotate ${OAT} today`, id);
+    const res = await app.inject({ method: 'GET', url: `/api/flows/${id}/programmes` });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).toContain(`rotate ${SECRET_MASK} today`);
+    expect(leaksNone(res.body, OAT), res.body.slice(0, 300)).toBe(true);
+  });
+
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived
   // text, so the one answer hook masks it (`MASKED_GET_ROUTES`). The summary is shape-redacted where it is read, so the
   // key planted here is a compatible one with dots in it, which the redactor's shapes keep and only a fingerprint row
