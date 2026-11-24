@@ -90,6 +90,10 @@ run; CI and the merge queue are the arbiters for everything else.
 - Red first: the production code was written before its tests in this PR, so "red" was measured by removing each guard from
   the finished code (the list above and the mutant sets), not by running the tests on the code before it.
 - The server typecheck, the tests typecheck and the PWA typecheck: clean. The growth check, armed: green.
-- CI's first run on the pushed tip was red in one file this note's list had missed, `run-session-census`: two compares in
-  `overlordDesignation.ts` (the settle fact's session against the pending one, and the renewing session against the bound
-  one) counted as binding sites. Neither reads a run, so both are named in `NOT_BINDING_SITES` with their reasons.
+- CI's first run on the pushed tip was red in four cases this note's list had missed, all fixed in one round:
+  `run-session-census` counted two compares in `overlordDesignation.ts` (the settle fact's session against the pending one,
+  and the renewing session against the bound one) as binding sites; neither reads a run, so both are named in
+  `NOT_BINDING_SITES` with their reasons. `mail-hardening` refused the new repoint for answering nothing: it now answers
+  `{changed}`, as `repointCoordinatorMail` does. Mutant D11 of `designateVerdict` no longer matched one place once
+  `renewalSetOf` spelled the same text, so its anchor names the create's line. A designation A store case expected `goLive`'s
+  answer without the new `previous: null`.

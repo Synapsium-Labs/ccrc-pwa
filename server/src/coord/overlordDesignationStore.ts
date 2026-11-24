@@ -234,7 +234,7 @@ export type GoLiveResult =
 
 /** Moves the queued deliveries of `overlord` mail from the old body to the new one, inside `goLive`'s transaction (the store's
  *  private member, through its one delivery writer; question 7). Declared here by its consumer, so this module never reaches it. */
-export type OverlordMailRepoint = (to: string, from: string) => void;
+export type OverlordMailRepoint = (to: string, from: string) => { changed: number };
 
 /** The pending attempt becomes the binding. Only for the pending id; anything else changes nothing. Appends the go-live record
  *  with the raised term first (its opKey is the term: `go-live-op-key-is-the-term`), then binds, clears the pending slot and the

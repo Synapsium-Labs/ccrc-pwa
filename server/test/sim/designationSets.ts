@@ -480,7 +480,7 @@ const DESIGNATE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutant
     { id: 'D8 unspellable passes', old: "if (spelled.kind === 'unspellable') return { act: 'refuse-input', why: 'unspellable' };", new: '' },
     { id: 'D9 an unreadable row is not its own answer', old: "if (f.read.kind === 'unmeasured') {", new: 'if (false) {' },
     { id: 'D10 a pending attempt is not an existing one', old: ' || (row !== null && row.pending !== null)) {', new: ') {' },
-    { id: 'D11 acctorder is the counted list', old: "list.join(',')", new: "counted.join(',')" },
+    { id: 'D11 acctorder is the counted list', old: "wrapper, acctorder: list.join(',')", new: "wrapper, acctorder: counted.join(',')" },
     { id: 'D12 server words unchecked', old: 'for (const w of DESIGNATE_SERVER_WORDS) if (!f.serverWords.includes(w)) needs.push(w);', new: '' },
     { id: 'D13 an unparsed probe passes', old: "return p.kind === 'answer' || (", new: "return p.kind !== 'not-run' && p.kind !== 'refused' || (" },
   ], suite: designateVerdictCases };

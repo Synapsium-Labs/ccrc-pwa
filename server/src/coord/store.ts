@@ -2610,8 +2610,8 @@ export class CoordStore {
   /** Designation B (the designation plan, question 7): a rebind that goes live moves the outstanding deliveries of mail
    *  addressed to the role `overlord` from the old body to the new one, inside `goLive`'s transaction. A parked delivery stays
    *  on the old id, visible, and no envelope is re-rendered, as `repointCoordinatorMail` leaves a reclaim's (D-1142). */
-  private repointOverlordMail(to: string, from: string): void {
-    this.writeDeliveries('toId = ?', [to], 'outstanding', "toId = ? AND mailId IN (SELECT id FROM mail WHERE toId = 'overlord')", [from]);
+  private repointOverlordMail(to: string, from: string): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding', "toId = ? AND mailId IN (SELECT id FROM mail WHERE toId = 'overlord')", [from]) };
   }
 
   /**

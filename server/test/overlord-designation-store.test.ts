@@ -185,7 +185,7 @@ describe('goLive', () => {
   it('appends the designate record with the raised term, the id and the string generation, BEFORE the row', () => {
     const db = openDb(); const f = fake(db);
     des(db, f); f.seen.length = 0;
-    expect(goLive(db, f, A, GEN, NOW + 1)).toEqual({ ok: true, changed: true, term: 1 });
+    expect(goLive(db, f, A, GEN, NOW + 1)).toEqual({ ok: true, changed: true, term: 1, previous: null });
     expect(f.seen).toHaveLength(1);
     expect(f.seen[0]!.entry).toEqual({ kind: 'authority-designate', opKey: 'go-live-term-1', term: 1, sessionId: A, generation: GEN });
     expect(f.seen[0]!.rowAtAppend).toMatchObject({ sessionId: null, term: 0 });
