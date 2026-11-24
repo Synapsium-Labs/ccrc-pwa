@@ -103,14 +103,15 @@ const FIGURES = 5;
 const DRAW = docsDrawFor(READER_E17_MERMAID);
 
 /** The global names the installed frame bootstrap guards against clobbering: the first array literal of
- *  `assets/frame/bootstrap.js` (`var O=[...]`), read from the installed file so a library change moves the fixture. Some are
+ *  `assets/frame/bootstrap.js` (`var <name>=[...]`, whatever name the minifier gave it: `O` in 1.1.0, `M` in 1.2.0), read
+ *  from the installed file so a library change moves the fixture. Some are
  *  natives no element id can shadow (`location`, `window`); the rest, Mermaid's and cytoscape's among them
  *  (`instance`, `next`, `update`, `processed`, `cytoscape`, `mermaidCaptureSizes`, `__mermaidProfiler`), a named
  *  access could. The seed element has no id (the bootstrap finds it by its place before its own script), so there is no
  *  seed name to plant. */
 const BOOTSTRAP_GLOBALS: readonly string[] = ((): string[] => {
   const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/pinax-lib/assets/frame/bootstrap.js'), 'utf8');
-  const m = /var O=(\[[^\]]*\])/.exec(text);
+  const m = /var [A-Za-z_$][\w$]*=(\[[^\]]*\])/.exec(text);
   if (m === null) throw new Error('the installed bootstrap holds no global list in the expected place');
   const names = JSON.parse(m[1] ?? '[]') as string[];
   if (names.length < 100 || new Set(names).size !== names.length) throw new Error('the bootstrap global list is not the list this fixture reads');
