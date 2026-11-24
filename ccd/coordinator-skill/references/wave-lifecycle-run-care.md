@@ -203,6 +203,7 @@ route-parity suite binds each registration to this corpus from the commit that r
 - `POST /api/ledger/deviations` — retired on 2026-11-23 (answers 410): a D-number, where the project keeps its deviation ledger the way ccrc does (`D-N` entries under `docs/superpowers/`),
   is the highest `D-N` defined in its plans, notes and specs on its main and on the branch, plus one, from 10000
   (in ccrc, `cd server && npm run next-deviation -- <count>` prints it), else the project's own convention; take
-  the wave's block in one call and give each worker a disjoint slice in its brief; never guess a number, and never
+  the wave's block in one call, past any number this programme already handed out, and give each worker a disjoint
+  slice in its brief; never guess a number, and never
   reuse one. A duplicate is caught only where the project runs a collision guard.
 - `GET /api/ledger` — the record of the numbers the retired allocator issued, for a project.
