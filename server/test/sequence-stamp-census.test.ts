@@ -53,8 +53,8 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
     table: 'operator_messages',
     stampers: [],
     nothing: {
-      [`${OM}#OperatorModelStore.recordMessage`]: 'creation stays in the private store; its sequence line is still outstanding',
-      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db; only the Inbox acknowledgement stamps after commit',
+      [`${OM}#OperatorModelStore.recordMessage`]: 'creation stays in the private store; PR B owns the settlement-mark and queue stamps (message-stamps-ride-pr-b)',
+      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db; PR A stamps the Inbox acknowledgement after commit, PR B owns the queue, delivery and settle stamps and the mover-caller census (message-stamps-ride-pr-b)',
     },
     afterCommit: { route: INBOX, delegate: RECORD_ACK, stamp: STAMP_ACK },
   },

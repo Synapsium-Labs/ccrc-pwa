@@ -1,12 +1,12 @@
 // Confirm uses the real authority journal and guard; the sequence tables and the rows share the Confirm transaction.
 import { describe, expect, it } from 'vitest';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
-import { designationRead, retire } from '../src/coord/overlordDesignationStore.js';
-import { GEN1, NOW, OPERATOR, S1, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
+import { designatePending, designationRead, retire } from '../src/coord/overlordDesignationStore.js';
+import { GEN1, NOW, OPERATOR, S1, S2, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
 
 restoreRigHooks();
 
-function restoreBeforeRetire(): { r: Rig; generationId: number } {
+function restoreBeforeRetire(withPending = false): { r: Rig; generationId: number } {
   const r = rig();
   const start = insertStart(r.db, {
     sessionId: S1, reportId: 'report-a', uuid: GEN1, source: 'startup', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW,
@@ -18,6 +18,12 @@ function restoreBeforeRetire(): { r: Rig; generationId: number } {
   }, null, false);
   if (!minted.ok) throw new Error('could not mint the fixture generation');
   designateLive(r, S1, GEN1);
+  if (withPending) {
+    // The rebind writer is outside PR A; stage its pending columns before taking the fixture snapshot.
+    r.db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = ?, pendingDeadlineAt = ?, "
+      + 'pendingActor = actor, pendingActorKind = actorKind, pendingActorIssuer = actorIssuer, pendingActorStrength = actorStrength WHERE id = 1')
+      .run(S2, NOW, NOW + 60_000);
+  }
   const restore = r.snapshot(false);
   expect(retire(r.db, r.journal, { actor: OPERATOR, at: NOW, opKey: 'retire-a' })).toMatchObject({ ok: true, changed: true });
   restore();
@@ -40,6 +46,34 @@ describe('Confirm stamps the restored designation transaction', () => {
     ]);
   });
 
+  it('stamps a cancelled pending attempt as failed before retiring the binding', () => {
+    const { r, generationId } = restoreBeforeRetire(true);
+    expect(designationRead(r.db)).toMatchObject({ kind: 'designated', row: { pending: { sessionId: S2 } } });
+    const before = lines(r);
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'cleared' });
+    expect(designationRead(r.db)).toMatchObject({ kind: 'not-designated', row: { pending: null, lastAttempt: { sessionId: S2, outcome: 'retired' } } });
+    expect(lines(r)).toEqual([...before,
+      { kind: 'generation', id: String(generationId), state: 'ended', actor: 'server', actorKind: 'server', at: NOW + 1 },
+      { kind: 'designation', id: S2, state: 'failed', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+      { kind: 'designation', id: S1, state: 'retired', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+    ]);
+  });
+
+  it('stamps a pending-only attempt as retired when Confirm clears it', () => {
+    const r = rig();
+    expect(designatePending(r.db, r.journal, {
+      sessionId: S2, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: [], untagged: false },
+      actor: OPERATOR, at: NOW, opKey: 'pending-only',
+    })).toEqual({ ok: true, changed: true });
+    r.guard.witnessRefused('witness-epoch');
+    const before = lines(r);
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'cleared' });
+    expect(designationRead(r.db)).toMatchObject({ kind: 'not-designated', row: { pending: null, lastAttempt: { sessionId: S2, outcome: 'retired' } } });
+    expect(lines(r)).toEqual([...before,
+      { kind: 'designation', id: S2, state: 'retired', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+    ]);
+  });
+
   it('does not stamp a designation retirement when Confirm keeps the binding', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
@@ -49,8 +83,8 @@ describe('Confirm stamps the restored designation transaction', () => {
     expect(lines(r)).toEqual(before);
   });
 
-  it('a refused Confirm stamp rolls the database back but leaves the Confirm record and fences the guard', () => {
-    const { r } = restoreBeforeRetire();
+  it.each([false, true])('a refused Confirm stamp rolls back and fences with pending attempt = %s', (withPending) => {
+    const { r } = restoreBeforeRetire(withPending);
     // Match the running-server boundary: the journal is trailing, but the in-memory guard has not seen it yet.
     r.guard.confirmed();
     expect(r.guard.state()).toEqual({ kind: 'coherent' });

@@ -95,7 +95,7 @@ interface Rig {
   lines: () => Record<string, unknown>[];
   fenceRows: () => number;
 }
-interface RigOpts { state?: 'active' | 'degraded'; words?: readonly string[]; designationTerm?: number; storeUp?: boolean }
+interface RigOpts { state?: 'active' | 'degraded'; words?: readonly string[]; designationTerm?: number; storeUp?: boolean; coordUp?: boolean }
 async function rig(o: RigOpts = {}): Promise<Rig> {
   const { gen, key } = fresh(o.state ?? 'active');
   const db = openOperatorModelDb(defaultOperatorModelDbPath(mkTmp('ccrc-inbox-routes-store-')));
@@ -138,7 +138,8 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
   registerOverlordInboxRoutes(app, {
     mailToken: () => TOKEN, gate: overlordGateRun(gateDeps),
     readRunner: runOverlordRead({ ledger: store, turn: async () => 'done', now: () => NOW }),
-    inboxStore: o.storeUp === false ? undefined : spied, reads: coord, continuityLive: () => true, now: () => NOW,
+    inboxStore: o.storeUp === false ? undefined : spied, reads: o.coordUp === false ? undefined : coord,
+    continuityLive: () => true, now: () => NOW,
   });
   await app.ready();
   let counter = 0;
@@ -442,6 +443,7 @@ describe('acknowledge', () => {
     const r = await rig();
     const id = r.record();
     const before = messageLines();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // FAIL after the insert leaves the row in that transaction unless the caller rolls it back.
     s.db.exec(`CREATE TEMP TRIGGER no_ack_sequence AFTER INSERT ON overlord_sequence WHEN NEW.kind = 'message'
       BEGIN SELECT RAISE(FAIL, 'fixture refused the line'); END`);
@@ -456,6 +458,18 @@ describe('acknowledge', () => {
     }
     expect(json(await ack(r, id))).toEqual({ ok: true, changed: false, state: 'settled' });
     expect(messageLines()).toEqual(before);
+    expect(warn.mock.calls).toEqual([[`ccrc-server: inbox: acknowledgement sequence stamp refused for message ${id}: write-failed`]]);
+  });
+
+  it('without coordination, refuses before settling the private message', async () => {
+    const r = await rig({ coordUp: false });
+    const id = r.record();
+    const before = r.store.messageById(id);
+    const res = await ack(r, id);
+    expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', detail: 'no coordination store' });
+    expect(r.store.messageById(id)).toEqual(before);
+    expect(r.calls).not.toContain('moveMessage');
   });
 
   it('an absent id answers 409 said-not-operator', async () => {
@@ -466,6 +480,7 @@ describe('acknowledge', () => {
   });
 
   it('a move the store refuses is re-read: a row settled meanwhile is 200 changed: false, and a row gone is 409', async () => {
+    const before = messageLines();
     const r = await rig();
     const id = r.record();
     const spy = vi.spyOn(r.store, 'moveMessage').mockImplementationOnce((i) => {
@@ -483,6 +498,7 @@ describe('acknowledge', () => {
     });
     const res = await ack(r, gone);
     expect(res.statusCode).toBe(REFUSAL_STATUS['said-not-operator']);
+    expect(messageLines()).toEqual(before);
   });
 
   it('a message in a state this build does not know answers 501 unsupported, is never moved, and is still in the inbox (review 3389 F4, F5)', async () => {

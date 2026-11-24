@@ -50,6 +50,7 @@ interface Fixture {
   start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
   /** The pass's latch raise (renewal readings PR C), when a case sets one: absent, the pass has none. */
   latch?: GenerationsDeps['latch'];
+  canRenew?: boolean;
 }
 
 function fixture(): Fixture {
@@ -73,7 +74,7 @@ function fixture(): Fixture {
   };
   const f: Fixture = {
     s, t, logs, registry,
-    pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt }),
+    pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt, canRenew: f.canRenew === true }),
     start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
       n += 1;
       const r = s.insertStart({ sessionId, reportId: `r-${n}`, uuid, source, model: 'claude-opus-5-5', rowIncarnation,
@@ -1002,6 +1003,47 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(f.pass()).toMatchObject({ probesFed: 1 });
     expect(gen(f)).toMatchObject({ state: 'active', probeRounds: 0, proven: true });
     expect(f.pass()).toMatchObject({ probesFed: 0, roundsOpened: 0 });
+  });
+
+  it('a refused live probe step is logged and the passed round can be fed again', () => {
+    const f = probing();
+    const { id } = gen(f);
+    answer(f, 'pass');
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_probe_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'active' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass()).toMatchObject({ probesFed: 0 });
+      expect(gen(f)).toMatchObject({ state: 'probing', proven: false });
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_probe_step');
+    }
+    expect(f.pass()).toMatchObject({ probesFed: 1 });
+    expect(gen(f)).toMatchObject({ state: 'active', proven: true });
+  });
+
+  it('a refused live due step is logged without starting the renewal walk', () => {
+    const f = probing();
+    answer(f, 'pass');
+    expect(f.pass()).toMatchObject({ probesFed: 1 });
+    const { id } = gen(f);
+    f.canRenew = true;
+    const overCap = at(f, usage(260_000, 1_000_000), turn('idle'));
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_due_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'draining' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass(overCap)).toMatchObject({ due: 1 });
+      expect(gen(f)).toMatchObject({ state: 'active', dueWhy: 'hard-cap' });
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_due_step');
+    }
+    f.pass(overCap);
+    expect(gen(f)).toMatchObject({ state: 'draining' });
   });
 
   it('one failed round: a second round opens only after the card is read again; two failed rounds degrade it (recorded, no item raised)', () => {

@@ -781,7 +781,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[119] (continuity_quiz_status, the weekly unattended replay quiz's last word, run 3212),
     // and MIGRATIONS[120] (coordinator_state.capMode, the run cap derived from the machine, D-8920),
     // and MIGRATIONS[121] (continuity_generations.designatedClass, the class an Overlord generation was minted under, run 3303),
-    // and MIGRATIONS[122] (advisor_settings, advisor_calls and advisor_reads, the coordinator advisor, D-8967).
+    // and MIGRATIONS[122] (advisor_settings, advisor_calls and advisor_reads, the coordinator advisor, D-8967),
+    // and MIGRATIONS[123] (overlord_sequence and overlord_sequence_pruned, the Overlord sequence).
     expect(COORD_SCHEMA_VERSION).toBe(124);
     expect(MIGRATIONS.length).toBe(124);
   });

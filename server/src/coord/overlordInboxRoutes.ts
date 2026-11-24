@@ -13,8 +13,9 @@
 //
 // The handlers read facts and ask deciders; they decide nothing. The inbox's order and bands are `composeInbox` (L1); which probe
 // facts it reads is `inboxProbeSource`; a read's line, ceiling and refusals are `runOverlordRead`; whether `acknowledge` settles is
-// `acknowledgeVerdict`. A message's state moves only through `OperatorModelStore.moveMessage`. `acknowledge` is not a read and
-// writes no ledger line. The `messages` handler is the only text reader this file holds (`operator-message-readers.test.ts`).
+// `acknowledgeVerdict`. A message's state moves only through `OperatorModelStore.moveMessage`. `acknowledge` writes no read-ledger
+// line; it stamps a text-free sequence line after a new settlement commits. If that stamp fails, it returns a partial 503:
+// the settlement stands but the line could not be written. Only `messages` reads text (`operator-message-readers.test.ts`).
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { refuseRoute } from '../refuse.js';
 import { INBOX_SERVED_BANDS, parseMessageId, type InboxAnswer } from '../../../shared/overlordInbox.js';
@@ -155,8 +156,10 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
    * The token, the body's shape, THE GATE with the fence and the witness, the id after it; then the message's text-free facts and
    * `acknowledgeVerdict`: an id that is no message is 409 `said-not-operator`, one already settled or spent 200 `changed: false`
    * (a retried call is harmless), one in a state this build does not know 501 `unsupported` (the store never moves it, so the
-   * answer is not a success and a retry cannot settle it), else the one writer moves it. A move the store refuses is re-read: a row settled or spent
-   * meanwhile is the same 200, one gone the same 409. It writes no read-ledger line: it is not a read.
+   * answer is not a success and a retry cannot settle it), else the one writer moves it. A move the store refuses is re-read:
+   * a row settled or spent meanwhile is the same 200, one gone the same 409. It writes no read-ledger line. A new settlement
+   * commits before its text-free sequence line is written; a refused stamp returns partial 503 `write-failed`, leaving the
+   * private settlement durable and the line missing.
    */
   app.post('/api/overlord/messages/:id/acknowledge', {
     config: { rateLimit: { max: 1200, timeWindow: '1 minute' } },
@@ -186,10 +189,11 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     const at = deps.now();
     const moved = store.moveMessage(id.id, 'settle', 'acknowledge', at);
     if (moved.ok) {
-      // The private store has committed. Only a new settlement gets a line, in a coordination transaction of its own.
-      if (moved.value.changed) {
-        const stamp = coord.recordInboxAcknowledgement(id.id, at);
-        if (!stamp.ok) return refuseRoute(reply, 'write-failed', { detail: 'the message was settled but its sequence line could not be written' });
+      // An accepted settle always changes state. The private store has committed; the line gets its own transaction.
+      const stamp = coord.recordInboxAcknowledgement(id.id, at);
+      if (!stamp.ok) {
+        console.warn(`ccrc-server: inbox: acknowledgement sequence stamp refused for message ${id.id}: ${stamp.error}`);
+        return refuseRoute(reply, 'write-failed', { detail: 'the message was settled but its sequence line could not be written' });
       }
       return { ok: true, changed: moved.value.changed, state: moved.value.state };
     }

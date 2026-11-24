@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { GENERATION_STATES } from '../../../shared/continuity.js';
 import { DESIGNATION_SEQUENCE_STATES } from '../../../shared/overlord-designation.js';
+import { MESSAGE_STATES } from '../../../shared/operatorMessages.js';
 import { SEQUENCE_KEEP_MS, SEQUENCE_PAGE_MAX, type SequenceWireLine } from '../../../shared/overlord-sequence.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
@@ -33,6 +34,7 @@ export function sequenceLineVerdictCases(m: SequenceModule): Record<string, Suit
     'a well-formed line of each kind and each of its states is written': () => {
       for (const state of GENERATION_STATES) expect(refusal(with_({ kind: 'generation', state }))).toBeNull();
       for (const state of DESIGNATION_SEQUENCE_STATES) expect(refusal(with_({ kind: 'designation', state, id: 'overlord-a' }))).toBeNull();
+      for (const state of MESSAGE_STATES) expect(refusal(with_({ kind: 'message', state }))).toBeNull();
     },
     'a kind outside the table is unknown-kind, before every other check': () => {
       for (const kind of ['', 'Generation', 'ladder-rung', 'constructor', '__proto__', 'toString']) {
@@ -42,6 +44,7 @@ export function sequenceLineVerdictCases(m: SequenceModule): Record<string, Suit
     "a state of another kind, or no kind's, is unknown-state": () => {
       expect(refusal(with_({ kind: 'generation', state: 'live' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'designation', state: 'carded' }))).toBe('unknown-state');
+      expect(refusal(with_({ kind: 'message', state: 'carded' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'generation', state: '' }))).toBe('unknown-state');
       expect(refusal(with_({ kind: 'generation', state: 'CARDED', id: '' }))).toBe('unknown-state');
     },
@@ -74,11 +77,14 @@ export function sequenceLineKnownCases(m: SequenceModule): Record<string, SuiteC
     "a line of a known kind, one of its states and one of gates A's actor kinds is known": () => {
       for (const s of GENERATION_STATES) expect(m.sequenceLineKnown('generation', s, 'server')).toBe(true);
       for (const s of DESIGNATION_SEQUENCE_STATES) for (const k of ['operator', 'session', 'server']) expect(m.sequenceLineKnown('designation', s, k)).toBe(true);
+      for (const s of MESSAGE_STATES) expect(m.sequenceLineKnown('message', s, 'server')).toBe(true);
     },
     'a later kind, a state of another kind or an unknown actor kind is not known': () => {
       expect(m.sequenceLineKnown('ladder-rung', 'chat', 'operator')).toBe(false);
       expect(m.sequenceLineKnown('generation', 'live', 'server')).toBe(false);
       expect(m.sequenceLineKnown('designation', 'carded', 'operator')).toBe(false);
+      expect(m.sequenceLineKnown('message', 'carded', 'server')).toBe(false);
+      expect(m.sequenceLineKnown('message', 'settled', 'robot')).toBe(false);
       expect(m.sequenceLineKnown('generation', 'active', 'robot')).toBe(false);
       expect(m.sequenceLineKnown('constructor', 'active', 'server')).toBe(false);
     },

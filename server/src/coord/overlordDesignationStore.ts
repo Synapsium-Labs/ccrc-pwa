@@ -1,9 +1,9 @@
 // The Overlord's designation row and its writers (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Task 1, questions 1 and 8, rulings X2, X3, X3b, X5, X7).
 // Ring L3, context C5. ONE table, `overlord_designation` (migration 83), its ONE row (`id = 1`), and the only functions that
-// write it: `designatePending`, `bindPendingGeneration`, `goLive`, `failPending`, `retire` and `stopDone`, the Settings doors'
-// `setModelClass` and `setAccountSet` (designation C), plus the one reader,
-// `designationRead`. Each writer is one `tx(db, …)`, synchronous, and never throws on a state it can name (it answers).
+// write it: `designatePending`, `bindPendingGeneration`, `goLive`, `failPending`, `retire`, `applyDesignationRestoreInTx`,
+// `stopDone`, and the Settings doors' `setModelClass` and `setAccountSet` (designation C). `designationRead` is the one
+// reader. Writes are synchronous, each in one `tx(db, …)` (the caller's transaction for Confirm).
 //
 // THE AUTHORITY DUTIES (the journal's "THE CALLER'S DUTIES", `overlordAuthorityJournal.ts#OverlordAuthorityJournal`): a writer
 // that records an authority move calls `appendInTx` BEFORE it writes the row, checks the answer, and on `{ok:false}` writes no
@@ -11,12 +11,12 @@
 // appends nothing. Every `from` it states is the row's own value read in the same transaction. A refusal RETURNS from the
 // transaction (it never throws), so a record already appended in it keeps its head row.
 //
-// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending` and `retire` change the
-// designation's state, so each stamps its line(s) with `stampSequenceInTx` after the row write, in its transaction, with the actor
-// it writes to the row. A writer with an append checks its lines' verdict BEFORE the append, so a refused line never follows a
-// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction. Any throw after a
-// durable append, not just a stamp refusal, calls the append receipt after rollback is attempted and before the original error
-// reaches the caller. The journal record can outlive the rolled-back rows and stamps, so the receipt fences the authority guard.
+// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending`, `retire` and
+// `applyDesignationRestoreInTx` stamp designation state changes after the row write, in the same transaction. A refused stamp
+// throws `SequenceStampRefused`. Ordinary stamped writers check their lines before appending; after a durable append, any
+// throw calls the receipt after rollback is attempted, without replacing the original error. Confirm's append precedes this
+// store's restore writer; Confirm's own catch fences after rollback if that append succeeded. In both paths the durable record
+// can outlive the rolled-back rows and stamps.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { sequenceLineVerdict } from './overlordSequence.js';
@@ -306,6 +306,14 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
 
 // ── retire ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** Retire and a clearing Confirm close the same designation states, in the same order. */
+function retirementLines(row: DesignationView, actor: ActorWire, at: number): SequenceLineInput[] {
+  const { bound, pending } = row;
+  if (bound === null) return pending === null ? [] : [designationLine(pending.sessionId, 'retired', actor, at)];
+  // A pending attempt it cancels is `failed`, then the binding `retired` (sequence plan review F12).
+  return [...(pending === null ? [] : [designationLine(pending.sessionId, 'failed', actor, at)]), designationLine(bound.sessionId, 'retired', actor, at)];
+}
+
 export interface RetireInput { actor: RecordedActor; at: number; opKey: string }
 export type RetireResult =
   | { ok: true; changed: false } | { ok: true; changed: true; term: number; owed: string[] } | AuthorityRefused | RowUnreadable | ActorRefused;
@@ -323,19 +331,18 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     const row = h.row;
     if (row === null || (row.bound === null && row.pending === null)) return { ok: true, changed: false };
     const p = row.pending;
+    const lines = retirementLines(row, i.actor, i.at);
+    checkLines(lines);
     if (row.bound === null) {
       const id = p!.sessionId;
       db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, ${SET_ACTOR}, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
         .run(...actorCols(i.actor), id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
       endOverlordGeneration(db, id, i.at); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
-      stampLines(db, [designationLine(id, 'retired', i.actor, i.at)]); // no append, no term raised
+      stampLines(db, lines); // no append, no term raised
       return { ok: true, changed: true, term: row.term, owed: [id] };
     }
     const bound = row.bound.sessionId;
     const term = row.term + 1;
-    // A pending attempt it cancels is `failed`, then the binding `retired` (sequence plan review F12), both by the retiring actor.
-    const lines = [...(p === null ? [] : [designationLine(p.sessionId, 'failed', i.actor, i.at)]), designationLine(bound, 'retired', i.actor, i.at)];
-    checkLines(lines);
     const a = add({ kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
     endOverlordGeneration(db, bound, i.at); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
@@ -394,6 +401,8 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
     return { owed: [] };
   }
   const p = row.pending;
+  const lines = retirementLines(row, actor, at);
+  checkLines(lines);
   const owed: string[] = [];
   for (const id of [row.bound?.sessionId, p?.sessionId, ...r.pastIdsJoin]) if (id !== undefined && !owed.includes(id)) owed.push(id);
   for (const owedId of owed) endOverlordGeneration(db, owedId, at);
@@ -404,7 +413,7 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
       JSON.stringify(owed.reduce<readonly string[]>(withId, row.stopsOwed)), ...actorCols(actor),
       la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, at);
   // Confirm's own post-append failure path fences if this stamp rolls the transaction back.
-  if (row.bound !== null) stampLines(db, [designationLine(row.bound.sessionId, 'retired', actor, at)]);
+  stampLines(db, lines);
   return { owed };
 }
 

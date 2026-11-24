@@ -45,7 +45,7 @@ export const SEQUENCE_KEEP_MS = 90 * 24 * 3_600_000;
 /** The most lines one retention pass deletes, so a long-stopped server catches up over a few passes. */
 export const SEQUENCE_PRUNE_BATCH = 5_000;
 
-/** What a reader learns of a restore: the restore generation, or `unmeasured` until authority journal C's counter lands (slug
+/** What a reader learns of a restore: the restore generation, or `unmeasured` if the counter cannot be measured (slug
  *  `sequence-read-carries-the-restore-generation`). A reader that sees it move rewinds. */
 export type RestoreGeneration = number | 'unmeasured';
 
