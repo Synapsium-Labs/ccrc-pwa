@@ -80,8 +80,11 @@ import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
-import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { registerReviewOpenRoute } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+import { openReviewStore } from './review/store.js';
+import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
@@ -374,6 +377,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
 /** `Deps` and `CollectLaneDeps` are declared in the type-only `deps.ts` (ARCH-03, D-6003); re-exported here so
  *  every caller that names them from `server.ts` still compiles. */
 export type { CollectLaneDeps, Deps } from './deps.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    reviewSweep: ReturnType<typeof startReviewSweep> | null;
+  }
+}
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
  *  module — src/ in dev, dist/server/src/ compiled — to the first package.json. */
@@ -4582,5 +4591,38 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `<ccrcDir>`, and a caller that removes that directory after close (a test's teardown) raced it (`ENOTEMPTY`).
   // `serverCapsNow` never rejects, so this never fails a close.
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); await watcher.serverCapsSettled(); });
+
+  // A manually assembled server without the injected clock has no review lane. Keep the route registered, but do
+  // not open a store or start work it cannot safely age. Both production assemblies supply the process clock.
+  const reviewClock = deps.time?.clock;
+  const review = reviewClock === undefined
+    ? { ok: false as const, why: 'clock-unwired' as const }
+    : deps.review?.store === undefined
+      ? await openReviewStore(deps.cfg.reviewStoreDir, deps.review?.fs)
+      : { ok: true as const, store: deps.review.store };
+  const reviewAccess = review.ok && reviewClock !== undefined
+    ? { store: review.store, wall: () => reviewClock.wall() }
+    : null;
+  registerReviewOpenRoute(app, reviewAccess);
+  const reviewAbort = new AbortController();
+  const node = docs.readers.primary;
+  const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {
+    tree: async (project, servedRef) => {
+      try {
+        // The Docs plugin already verified both primary entries. Use its flight, lane and caches.
+        const run = await readTree(docs.readers.byNode.get(node)!, docs.lanes.byNode.get(node)!,
+          { node, project }, { kind: 'qualified', ref: servedRef }, reviewAbort.signal);
+        return run.kind === 'ran' && run.value.ok ? { ok: true, tree: run.value.answer } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    },
+  }, reviewAccess.wall);
+  app.decorate('reviewSweep', reviewSweep);
+  if (!review.ok) console.warn(`ccrc-server: draft review unavailable (${review.why})`);
+  if (reviewSweep !== null) app.addHook('onClose', async () => {
+    reviewAbort.abort();
+    await reviewSweep.stop();
+  });
   return app;
 }

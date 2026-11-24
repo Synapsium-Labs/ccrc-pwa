@@ -236,7 +236,7 @@ function believeRangeFrame(got: DocsRangeFrameRead): DocsRangeFrameRead {
  * starter books `LISTING_JOB` on the read lane; the answer is believed (and recorded) once, inside the flight, before
  * any joiner sees it. Task 7's refresh reads its tree half through this same function after bumping the generation.
  */
-function readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref: DocsRefSpec | null,
+export function readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref: DocsRefSpec | null,
   signal: AbortSignal): Promise<DocsLaneRun<DocsTreeRead>> {
   const gen = at.gens.current(docsProjectKey(src.node, src.project));
   return at.flights.join(docsTreeFlightKey(src.node, src.project, ref, gen), signal,
