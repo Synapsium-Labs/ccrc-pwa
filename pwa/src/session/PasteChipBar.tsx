@@ -1,7 +1,7 @@
 // The paste-chip row (desktop-polish wave 169): one chip per long paste the draft holds, above the field beside the
-// attachment tray. The token in the field (`[Pasted text #N +L lines]`) is where the text sits; this row is where it
-// is acted on. Expand puts the full text back into the field in place, as ordinary text; Remove takes the token and
-// its text together. Ring L4: it renders what `liveChips` (pasteChips.ts, L1) listed and calls back, deciding nothing.
+// attachment tray. The chip in the field (its label, `[Pasted text #N +L lines]`, between two invisible markers) is
+// where the text sits; this row is where it is acted on. Expand puts the full text back into the field in place, as
+// ordinary text; Remove takes the chip out of the field (its text stays in the draft's table, for an undo). Ring L4: it renders what `liveChips` (pasteChips.ts, L1) listed and calls back, deciding nothing.
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { linesWord, type LiveChip } from './pasteChips';

@@ -2,7 +2,8 @@
    grounded on --bg-raised with --ink-primary, the input bar's own pair and an audited one, because its two controls are
    the design system's ghost Button, which draws --ink-primary on a transparent fill (--bg-hover when hovered): the
    chip's ground is what that ink is read against. On --bg-well, which the light palettes keep dark, it measured 1.09:1
-   (review 3457 F1); the browser leg now measures the rendered pairs in every palette and state. A chip wraps to the
+   (review 3457 F1); the browser leg measures the rendered pairs in two palettes (phosphor and light), at rest, hovered
+   and keyboard-focused, in both skins; the other ten palettes and the pressed state are unmeasured. A chip wraps to the
    next row rather than scrolling sideways, so at phone width the controls stay in reach; the head of the pasted text
    is ellipsised, the number, line count and controls never are. */
 .paste-chips {
