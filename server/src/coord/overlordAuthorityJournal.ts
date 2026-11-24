@@ -319,7 +319,7 @@ export class OverlordAuthorityJournal {
           const rec = appended;
           if (rec === null) throw new Error('apply reached with no appended record');
           writeHeadRow(db, rec);
-          return { ok: true, kind: 'appended', record: rec };
+          return { ok: true, kind: 'appended', record: rec, postAppendFailed: () => this.guard.writerFailed('trailing') };
         },
       }, phase);
     } catch (err) {
