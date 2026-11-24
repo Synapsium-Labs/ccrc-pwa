@@ -74,10 +74,14 @@ unmutated cases verify the original database snapshot is restored after rollback
 
 ## For the pieces that follow
 
-- **Confirm the restore** (authority journal C) adds `applyDesignationRestoreInTx`, a new writer of `overlord_designation`
-  that ends generations through `endOverlordGeneration`. Whichever lands second passes `at` there, and puts the writer in
-  the stamp census, stamping a Confirm that clears the binding as `retired` the way `retire` does. Authority journal C also
-  switches the cursor read's `restoreGeneration` from `unmeasured` to its counter.
+- **Confirm the restore** (authority journal C) landed first. `applyDesignationRestoreInTx` passes Confirm's `at` to
+  `endOverlordGeneration` on both paths and stamps `retired` for a binding the designation row loses. A kept binding, or a
+  row with no binding to clear, emits no designation retirement. Confirm's own catch in `OverlordRestoreState.confirm`
+  calls `guard.writerFailed('trailing')` after rollback when the Confirm append succeeded; it does not use the ordinary
+  append receipt. The real-journal proof leaves the Confirm record durable while the head, designation, generation and
+  sequence rows roll back on a refused retirement stamp. The cursor's page decider already accepts a restore generation;
+  there is no page caller in PR A. PR C's cursor door should pass the already-landed `OverlordRestoreState.restoreGeneration()`
+  reading, keeping an unmeasured result distinct from generation zero.
 - **The inbox acknowledgement** gets its `message` line and matching census entry together in the second lander of Sequence A
   and Inbox (plan question 17). The existing message queue, delivery and settlement writers remain unstamped and outstanding.
 - **Migration 121** is provisional: a later lander renumbers by position and re-pins `coord-db` and `run-close-switch`.

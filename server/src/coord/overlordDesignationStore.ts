@@ -380,7 +380,7 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   const pools = JSON.stringify({ pools: r.accountPools.pools, untagged: r.accountPools.untagged });
   if (row === null) {
     const journalOnly = r.binding.kind === 'cleared' ? r.pastIdsJoin.reduce<string[]>(withId, []) : [];
-    for (const bodyId of journalOnly) endOverlordGeneration(db, bodyId);
+    for (const bodyId of journalOnly) endOverlordGeneration(db, bodyId, at);
     db.prepare('INSERT INTO overlord_designation (id, term, designatedTerm, model, accountPools, pastIds, stopsOwed, actor, actorKind, '
       + 'actorIssuer, actorStrength, updatedAt) VALUES (1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<string[]>(withId, [])), JSON.stringify(journalOnly),
@@ -396,13 +396,15 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   const p = row.pending;
   const owed: string[] = [];
   for (const id of [row.bound?.sessionId, p?.sessionId, ...r.pastIdsJoin]) if (id !== undefined && !owed.includes(id)) owed.push(id);
-  for (const owedId of owed) endOverlordGeneration(db, owedId);
+  for (const owedId of owed) endOverlordGeneration(db, owedId, at);
   const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at };
   db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, model = ?, accountPools = ?, `
     + `pastIds = ?, stopsOwed = ?, ${SET_ACTOR}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1`)
     .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<readonly string[]>(withId, row.pastIds)),
       JSON.stringify(owed.reduce<readonly string[]>(withId, row.stopsOwed)), ...actorCols(actor),
       la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, at);
+  // Confirm's own post-append failure path fences if this stamp rolls the transaction back.
+  if (row.bound !== null) stampLines(db, [designationLine(row.bound.sessionId, 'retired', actor, at)]);
   return { owed };
 }
 

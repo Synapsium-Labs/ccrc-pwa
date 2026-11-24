@@ -34,7 +34,7 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
   },
   designation: {
     table: 'overlord_designation',
-    stampers: [`${DS}#designatePending`, `${DS}#goLive`, `${DS}#failPending`, `${DS}#retire`],
+    stampers: [`${DS}#designatePending`, `${DS}#goLive`, `${DS}#failPending`, `${DS}#retire`, `${DS}#applyDesignationRestoreInTx`],
     nothing: {
       [`${DS}#bindPendingGeneration`]: 'it fills the pending attempt\'s generation once; the state stays pending',
       [`${DS}#stopDone`]: 'the owed-stop list only',
