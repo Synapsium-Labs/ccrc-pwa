@@ -36,7 +36,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -738,9 +738,24 @@ const WITH_CALL = (frames: object[] = FRAMES()): object[] =>
     ? { ...BACKLOG, events: [...BACKLOG.events, callFor(frames)] }
     : f));
 /** The transcript's one control for the live wait at the desk: "Go to question" on the card of the call the wait
- *  identifies, else "Go to the prompt" on the tool-activity row's wait line (review 3478 F2); both raise the inline card. */
-const GO_TO = '.tool-ask .ask-state button, .tool-activity-wait .tool-activity-answer';
-const GO_TO_WORD = /^(Go to question|Go to the prompt)$/;
+ *  identifies, else "Go to the prompt" on the tool-activity row's wait line (review 3478 F2); both raise the inline card.
+ *  Each case pins the ONE place its fixture is designed to put it (review 3607 A1), so a control that moved fails. */
+type Place = 'card' | 'wait line';
+const AT: Record<Place, { sel: string; word: string }> = {
+  card: { sel: '.tool-ask .ask-state button', word: 'Go to question' },
+  'wait line': { sel: '.tool-activity-wait .tool-activity-answer', word: 'Go to the prompt' },
+};
+/** Where `frames` puts the control: on the card when the call in the transcript asks the live question's words
+ *  (`callFor`), else on the wait line (an unreadable or unparsed menu, an approval: `CALL`, which asks nothing live). */
+const placeOf = (frames: object[]): Place => (callFor(frames) === CALL ? 'wait line' : 'card');
+/** The control at `place`, by its own word. */
+const goToAt = (page: Page, place: Place) => page.locator(AT[place].sel, { hasText: AT[place].word });
+/** The control is at `place`, once, and nowhere else. */
+async function onlyAt(page: Page, place: Place, why = ''): Promise<void> {
+  const other: Place = place === 'card' ? 'wait line' : 'card';
+  expect(await goToAt(page, place).count(), `the control is not on the ${place}${why}`).toBe(1);
+  expect(await goToAt(page, other).count(), `a control on the ${other}${why}`).toBe(0);
+}
 
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
@@ -762,9 +777,8 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
-      const button = opened.page.locator(GO_TO, { hasText: GO_TO_WORD });
-      expect(await button.count(), 'premise: the transcript card offers Go to question').toBe(1);
-      expect(await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).count(), 'on the card').toBe(1);
+      await onlyAt(opened.page, 'card');
+      const button = goToAt(opened.page, 'card');
       expect(await opened.page.locator('.tool-ask .ask-state', { hasText: 'waiting for you, below' }).count(), 'beside the word').toBe(1);
 
       // Premise: nothing of the card is focused, and every scroller the layout has is at the far end from the options.
@@ -920,7 +934,8 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
         await opened.page.waitForTimeout(100);
       }
       const before = await opened.page.evaluate(STAND, CARD);
-      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).click();
+      await onlyAt(opened.page, placeOf(frames));
+      await goToAt(opened.page, placeOf(frames)).click();
       await opened.page.waitForTimeout(300);
       // A script focus that follows a mouse click is not `:focus-visible`, so no ring is drawn yet. A modifier alone does
       // nothing to the card (no digit, arrow or Escape), and makes Chrome match `:focus-visible` on the focused option, so
@@ -1026,7 +1041,8 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
       expect(answers.length, 'premise: one answer is in flight').toBe(1);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).click();
+      await onlyAt(opened.page, 'card');
+      await goToAt(opened.page, 'card').click();
       await opened.page.waitForTimeout(300);
       const after = await opened.page.evaluate((card) => {
         const el = document.querySelector<HTMLElement>(card)!;
@@ -1129,8 +1145,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
         await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
       }
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      const button = opened.page.locator(GO_TO, { hasText: GO_TO_WORD });
-      expect(await button.count(), `premise: the transcript offers one control for the wait (fixture ${n})`).toBe(1);
+      await onlyAt(opened.page, placeOf(framesOf(n)), ` (fixture ${n})`);
+      const button = goToAt(opened.page, placeOf(framesOf(n)));
       if (o.how === 'key') {
         await button.focus();
         await opened.page.keyboard.press('Enter');
@@ -1208,7 +1224,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      await opened.page.locator(GO_TO, { hasText: GO_TO_WORD }).focus();
+      await onlyAt(opened.page, 'card');
+      await goToAt(opened.page, 'card').focus();
       await opened.page.keyboard.press('Enter');
       await opened.page.waitForTimeout(300);
       const got = await opened.page.evaluate((card) => {
@@ -1684,9 +1701,13 @@ const AGED_FRAMES = (): object[] => [
   ...askFixture(2).frames,
 ];
 const DESK_VIEW: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
-/** The transcript's one control for the wait (`GO_TO`): the card's while its question is the live one, the wait line's
- *  once the pane moves on to a question the call does not ask (review 3478 F2). */
-const GTQ = GO_TO;
+/** Where the aged fixture puts the transcript's one control (review 3607 A1): on the card while the pane's question is
+ *  `CALL`'s own one question (question 1), on the wait line once the pane moves on to a question the call does not ask
+ *  (question 2, or the other aged ask). This hand-off is the FIXTURE's: `CALL` asks one question where a real call asks
+ *  all three, and a transcript copy carries one question, so on the real transcript path the counts never match (a
+ *  multi-question ask is never singled out from a transcript copy) and the wait line carries the control throughout. */
+const AGED_FIRST: Place = 'card';
+const AGED_LATER: Place = 'wait line';
 const Q2_TEXT = HOOK_QUESTIONS[1]!.question;
 
 /** An opened desk page over aged fixture 2, with the page-side request control and logs installed. */
@@ -1975,7 +1996,8 @@ describe('a screen change this client did not send fences the card in real Chrom
       await a.page.keyboard.press('2');
       await a.page.waitForTimeout(300);
       expect((await a.snap()).posts, 'a digit after Tab sends nothing').toBe(0);
-      await a.page.focus(GTQ);
+      await onlyAt(a.page, AGED_LATER, ' (the other aged ask)');
+      await goToAt(a.page, AGED_LATER).focus();
       await a.page.keyboard.press('Enter');
       await a.page.waitForTimeout(300);
       await a.page.keyboard.press('2');
@@ -1997,7 +2019,8 @@ describe('re-entry in real Chrome (R105, R106)', () => {
   it('Go to question with nothing in flight unlocks, draws the focus ring, and a digit then answers once', async () => {
     await withAged(async (a) => {
       await a.answered();
-      await a.page.focus(GTQ);
+      await onlyAt(a.page, AGED_LATER, ' (question 2)');
+      await goToAt(a.page, AGED_LATER).focus();
       await a.page.keyboard.press('Enter'); // the keyboard activation, so the ring is a :focus-visible one
       await a.page.waitForTimeout(300);
       const s = await a.snap();
@@ -2033,15 +2056,16 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.focusFirst(true);
         await a.page.keyboard.press('1');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+        await onlyAt(a.page, AGED_FIRST, ' (question 1)');
         await a.mark();
-        await a.page.evaluate(async ({ w, sel }) => {
+        await a.page.evaluate(async ({ w, sel, word }) => {
           const probe = window as unknown as Probe;
-          const b = [...document.querySelectorAll<HTMLButtonElement>(sel)].find((x) => /^(Go to question|Go to the prompt)$/.test(x.textContent ?? ''))!;
+          const b = [...document.querySelectorAll<HTMLButtonElement>(sel)].find((x) => x.textContent === word)!;
           b.click();
           if (w === 'next microtask') await Promise.resolve();
           if (w === 'one frame') await new Promise((r) => requestAnimationFrame(() => r(null)));
           probe.__reply();
-        }, { w: when, sel: GTQ });
+        }, { w: when, ...AT[AGED_FIRST] });
         await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
         await a.page.waitForTimeout(400);
         const s = await a.snap();
@@ -2049,7 +2073,8 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.page.keyboard.press('2');
         await a.page.waitForTimeout(300);
         expect(await a.posts(), 'a digit sends nothing').toBe(1);
-        await a.page.locator(GTQ, { hasText: GO_TO_WORD }).click();
+        await onlyAt(a.page, AGED_LATER, ' (question 2)');
+        await goToAt(a.page, AGED_LATER).click();
         await a.page.waitForTimeout(300);
         await a.page.keyboard.press('2');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);

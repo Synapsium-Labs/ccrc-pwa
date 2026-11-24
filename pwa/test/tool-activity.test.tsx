@@ -20,6 +20,7 @@ import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { HEIGHT_BUCKETS } from '../src/session/itemHeight';
 import { activityWords, foldToolActivity, liveWaitOf, waitKey, type LiveWait, type ToolActivityItem } from '../src/session/toolActivity';
 import { groupToolRun } from '../src/session/toolSummary';
+import { NO_RESULT_WORD } from '@ccrc/ui';
 
 const seen = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
@@ -674,7 +675,7 @@ describe.each(SETS)('%s draws one live control, open or closed (review 3478 F1-F
     expect(card.querySelector('.tool-dur'), 'a ticking clock').toBeNull();
     fireEvent.click(card.querySelector<HTMLElement>('.tool-row')!);
     expect(card.textContent).not.toContain('running');
-    expect(card.textContent).toContain('no result recorded');
+    expect(card.textContent).toContain(NO_RESULT_WORD);
     // The current turn's call still runs.
     const live = now!.querySelector<HTMLElement>('.toolcard')!;
     expect(live.querySelector('.tool-dot--run')).not.toBeNull();
