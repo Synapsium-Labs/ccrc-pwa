@@ -22,6 +22,19 @@ export interface PasteChipBarProps {
   onDismiss?: () => void;
 }
 
+/** One worded act of the row (expand, undo, dismiss): the design system's ghost Button, at its 44px floor at every
+ *  width (the chip grows to hold it), written once. */
+function ChipAct({ label, disabled, onClick, children }: {
+  label: string; disabled: boolean; onClick?: () => void; children: ReactNode;
+}): ReactNode {
+  return (
+    <Button variant="ghost" size="fit" className="paste-chip-act flex-none" aria-label={label} disabled={disabled}
+      onClick={onClick}>
+      {children}
+    </Button>
+  );
+}
+
 export function PasteChipBar({
   chips, onExpand, onRemove, disabled = false, broken = false, onUndo, onDismiss,
 }: PasteChipBarProps): ReactNode {
@@ -33,14 +46,13 @@ export function PasteChipBar({
           <p className="paste-broken-text">
             The last edit broke a pasted block. Sending is held until you undo it or dismiss it.
           </p>
-          <Button variant="ghost" size="fit" className="paste-chip-act flex-none" disabled={disabled}
-            aria-label="Undo the edit that broke the pasted block" onClick={onUndo}>
+          <ChipAct label="Undo the edit that broke the pasted block" disabled={disabled} onClick={onUndo}>
             undo
-          </Button>
-          <Button variant="ghost" size="fit" className="paste-chip-act flex-none" disabled={disabled}
-            aria-label="Dismiss the broken pasted block and keep the text as it shows" onClick={onDismiss}>
+          </ChipAct>
+          <ChipAct label="Dismiss the broken pasted block and keep the text as it shows" disabled={disabled}
+            onClick={onDismiss}>
             dismiss
-          </Button>
+          </ChipAct>
         </div>
       )}
       {chips.length > 0 && (
@@ -52,17 +64,10 @@ export function PasteChipBar({
                 <span className="paste-chip-lines">{linesWord(c.lines)}</span>
                 {c.head !== '' && <span className="paste-chip-head">{c.head}</span>}
               </span>
-              {/* The design system's ghost Button, at its 44px floor at every width (the chip grows to hold it). */}
-              <Button
-                variant="ghost"
-                size="fit"
-                className="paste-chip-act flex-none"
-                aria-label={`Expand pasted text #${c.n}, ${linesWord(c.lines)}, into the message`}
-                disabled={disabled}
-                onClick={() => onExpand(c.at)}
-              >
+              <ChipAct label={`Expand pasted text #${c.n}, ${linesWord(c.lines)}, into the message`} disabled={disabled}
+                onClick={() => onExpand(c.at)}>
                 expand
-              </Button>
+              </ChipAct>
               <Button
                 variant="ghost"
                 size="fit"

@@ -176,7 +176,10 @@ the outgoing text and the settled request count:
 The whole reviewed-tip runs: jsdom 22 of 50 red; Chrome, the review cases, 8 of 12 red (the four green there as here
 are review 3480's F1 and F2 cases; three of the eight are review 3480's F3 and F6 cases, which read the label's exact
 spaces and are red there by that alone). Neighbouring composer and audit suites: 51 files, 2386 tests
-green. The full pwa typecheck is clean.
+green. The full pwa typecheck is clean. Those neighbours left out the markup census, and the pull request's first
+fast run on this round's tip went red there: the notice's two acts and Expand spelled the same ghost Button three
+times. The act is now one helper in `PasteChipBar.tsx`; the census, the chip suites (pure, composer, Chrome 33) and the
+typecheck are green again on the follow-up commit.
 
 **Mutation, by hand** (the coordinator's helper drives Python only), each deleting or inverting one guard. Against the
 pure and composer suites, 37: the exact label check, a marker paste as a chip, the field-text strip and the table
