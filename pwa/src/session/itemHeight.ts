@@ -221,17 +221,25 @@ export function wellLines(text: string): number {
  * drawn differently (a sentence and a count, against a card's name and input).
  * Expanded, it is not in its opening form and is never sampled.
  *
+ * `activity` is the tool-activity row (desktop polish wave 168): one stretch of
+ * a turn's tool calls folded into one collapsed line, `.tool-activity`, with the
+ * first call that wants the reader (the question asked now, else a failed call)
+ * drawn under it as its own card, and a live wait no call is identified as (an
+ * approval, a menu) drawn as a line of its own. Its lines are the row's, the
+ * wait line's and that card's, so a row with either is priced above one
+ * without. Expanded, it is never sampled either.
+ *
  * THE RECORD IS THE VOCABULARY. `HEIGHT_BUCKETS` derives from it rather than
  * restating it, so a new bucket is a compile error here, not an unsized row.
  */
 export type RowKind =
   | 'user' | 'assistant' | 'system' | 'folded'
-  | 'divider' | 'tool' | 'group' | 'mail' | 'task' | 'pending' | 'working';
+  | 'divider' | 'tool' | 'group' | 'activity' | 'mail' | 'task' | 'pending' | 'working';
 export type HeightBucket = RowKind | 'attach';
 
 const BUCKET_MAP: Record<HeightBucket, true> = {
   user: true, assistant: true, system: true, folded: true,
-  divider: true, tool: true, group: true, mail: true, task: true, pending: true, working: true,
+  divider: true, tool: true, group: true, activity: true, mail: true, task: true, pending: true, working: true,
   attach: true,
 };
 

@@ -24,7 +24,7 @@ import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.j
 import { anthropicLaneOf } from '../../shared/roster.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, inventoryBuilds, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -192,6 +192,7 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { skewRunningOf } from './continuity/sandboxCheck.js';
 import { ADVISOR_COUNT_LANE_ROW, advisorCountPass } from './continuity/advisorLane.js';
 import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
@@ -6352,6 +6353,14 @@ export class FleetWatcher {
           // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
           buildAgreement: () => inventoryBuildAgreement(coord),
           anthropicLane: (lane) => anthropicLaneOf(cfg.roster, lane),
+        },
+        // The skew notice (W1 sandbox B): the body's liveness from its fleet-state row (`skewRunningOf`), both builds from the node inventory,
+        // and one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
+        skew: {
+          running: (id) => skewRunningOf(this.currentFleet()?.find((r) => r.id === id)),
+          builds: () => { const b = inventoryBuilds(coord); const w = (i: typeof b.own) => (i === null ? null : i.version ?? i.sha.slice(0, 9)); return { fleet: w(b.fleet), server: w(b.own) }; },
+          noticed: (id, key) => coord.hasNotice('coord', id, key),
+          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord is down while the builds differ', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
         },
         now: () => this.deps.time.clock.wall(),
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route, wrapper: r.unmeasured.includes('wrapper') ? null : r.wrapper,

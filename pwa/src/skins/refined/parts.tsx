@@ -57,4 +57,6 @@ export const REFINED_SET: SkinSet = {
   // Desktop-polish PL10 (D-7952): the shared bottom bar of the console's places, below 900 and outside a session.
   PhoneNav: PhoneBar,
   transcriptGrouping: 'tool-runs',
+  // Desktop polish wave 168: each stretch of a turn's tool activity reads as one collapsed row.
+  toolActivity: 'stretches',
 };

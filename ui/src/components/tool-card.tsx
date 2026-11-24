@@ -59,7 +59,7 @@ function elapsedLabel(from: string, now: number): string | null {
  *  string, and an empty one would leave a card with no question on it. One bad
  *  question spoils the card, because the answers are matched to the questions
  *  by position and a hole in the list would slide them onto the wrong ones. */
-function askQuestions(input: string): string[] | null {
+export function askQuestions(input: string): string[] | null {
   try {
     const qs = (JSON.parse(input) as { questions?: { question?: unknown }[] }).questions;
     if (!Array.isArray(qs) || qs.length === 0) return null;
@@ -361,9 +361,13 @@ export function askCardLines(use: ToolUseEvent, result?: ToolResultEvent): strin
   return [...rows, result === undefined ? ASK_WORD.unanswered : NO_ANSWER];
 }
 
+/** What a call with no result says once its turn is over: nothing was recorded for it, and nothing runs. */
+export const NO_RESULT_WORD = 'no result recorded';
+
 export function ToolCard({
   use,
   result,
+  settled = false,
   askPending,
   askBelow,
   answerLabel,
@@ -372,6 +376,9 @@ export function ToolCard({
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
+  /** The call's turn is over (the reader has prompted since): a missing result is a result never recorded, drawn with no
+   *  breathing dot, no clock and no running word, never as a call still running. A call with its result ignores it. */
+  settled?: boolean;
   /** How the input and result wells draw their text (see `RenderWell`); absent: the text as it arrived. The ask card
    *  has no such wells and ignores it. */
   renderWell?: RenderWell;
@@ -386,7 +393,7 @@ export function ToolCard({
       <AskCard questions={questions} result={result} askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer} />
     );
   }
-  return <GenericToolCard use={use} result={result} renderWell={renderWell} />;
+  return <GenericToolCard use={use} result={result} settled={settled} renderWell={renderWell} />;
 }
 
 /** What the result well shows: the text, or a word for none. */
@@ -395,20 +402,23 @@ const resultText = (result: ToolResultEvent): string => (result.text === '' ? '(
 function GenericToolCard({
   use,
   result,
+  settled,
   renderWell,
 }: {
   use: ToolUseEvent;
   result?: ToolResultEvent;
+  settled: boolean;
   renderWell?: RenderWell;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   const reduced = usePrefersReducedMotion();
-  const running = result === undefined;
+  const running = result === undefined && !settled;
   const now = useNow(1_000, running);
 
-  const dot = running ? 'tool-dot--run' : result.isError ? 'tool-dot--err' : 'tool-dot--ok';
+  // A settled call with no result: no dot hue (the dot's slot stays, empty), no clock.
+  const dot = result === undefined ? (running ? 'tool-dot--run' : '') : result.isError ? 'tool-dot--err' : 'tool-dot--ok';
   const summary = use.input.split('\n', 1)[0] ?? '';
-  const dur = running ? elapsedLabel(use.ts, now) : durationLabel(use.ts, result.ts);
+  const dur = result === undefined ? (running ? elapsedLabel(use.ts, now) : null) : durationLabel(use.ts, result.ts);
 
   return (
     <div className="toolcard">
@@ -453,7 +463,7 @@ function GenericToolCard({
               )}
               <p className="tool-meta">
                 {result === undefined ? (
-                  <span>running…</span>
+                  <span>{running ? 'running…' : NO_RESULT_WORD}</span>
                 ) : (
                   <>
                     {result.isError && <span className="exit-badge">ERROR</span>}

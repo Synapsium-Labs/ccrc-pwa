@@ -4406,6 +4406,41 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 124: user_version 123 -> 124 ──────────────────────────────────────────
+  // The capture's not-sent words widen (capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md
+  // §2.2, §2.5 Table 6; the coordinator's ruling on PR 1's fix round 1): `claude_builds.notSent` keeps its CHECK, now over
+  // `shared/claudeBuildTrust.ts#BUILD_CAPTURE_NOT_SENT_MAP`'s nine words, so the box's `build-absent` and `path-refused`, a frame
+  // that never left (`not-started`), a fleet agent busy with another capture (`busy`) and the three a failed copy leaves are
+  // each recorded as themselves instead of folded into `no-runner` or `no-test-box`. SQLite cannot alter a CHECK, so the table
+  // is rebuilt: the same columns in the same order, every row copied as it stands, the old table dropped and the new one
+  // renamed. No index, trigger, view or foreign key names `claude_builds`. An older build opening a file at this entry's
+  // version takes rule 3 (it warns, reads as-is and migrates nothing): it reads a word it does not know as no reason
+  // (`claudeBuildsStore.ts#claudeBuildRecords`), and every word it writes is still allowed. The rebuild preserves the failed
+  // verdict counter from migration 119. The slot is the next free one by position on `main` (c7f7e84bca holds 123).
+  // RE-MEASURE the slot before merge (it must print 123, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_builds_124 (
+    build         TEXT    PRIMARY KEY,
+    source        TEXT    NOT NULL CHECK (source IN ('rig', 'fleet')),
+    capture       TEXT    NOT NULL CHECK (capture IN ('queued', 'pass', 'fail')),
+    cwd           INTEGER NOT NULL DEFAULT 0,
+    seenAt        INTEGER NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    lastAttemptAt INTEGER,
+    notSent       TEXT    CHECK (notSent IS NULL OR notSent IN ('no-test-box', 'no-runner', 'build-absent', 'path-refused',
+                    'not-started', 'busy', 'copy-refused', 'copy-failed', 'no-admin-lane')),
+    verdictAt     INTEGER,
+    output        TEXT,
+    fails         INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO claude_builds_124 (build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails)
+    SELECT build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails FROM claude_builds;
+  DROP TABLE claude_builds;
+  ALTER TABLE claude_builds_124 RENAME TO claude_builds;
+  `,
+
+  // ── 125: user_version 124 -> 125 ──────────────────────────────────────────
   // The one sequence (Overlord spec §10.4, H3, H27; Table 11.1a's row `overlord_sequence`; plan
   // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 1): one line per stamped change, in one order,
   // written by `overlordSequenceStore.ts#stampSequenceInTx` inside the transaction that writes the stamped row, and deleted only by
@@ -4413,7 +4448,7 @@ export const MIGRATIONS: readonly string[] = [
   // pruned). AUTOINCREMENT, so a prune that empties the table never reissues a number. No index on `at`: the retention lane
   // reads the oldest lines by `seq`, the primary key. TWO NEW TABLES, nothing else: an older build opening a file at this
   // entry's version takes rule 3 (it warns, reads as-is and migrates nothing) and never names them. The slot is the next free
-  // one by position on `main`. RE-MEASURE the slot before merge (it must print 123, the count before this entry):
+  // one by position on `main`. RE-MEASURE the slot before merge (it must print 124, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

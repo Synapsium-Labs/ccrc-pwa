@@ -12,6 +12,8 @@
 
 **Status:** 2026-11-20, X6 design wave (run 2847). No implementation is claimed by this document. Run ids and deviation blocks for XR1 and XR2 are issued when each opens.
 
+**Amended 2026-11-24** (wave 41, run 3605, D-8974 and D-8975): Reader Mode now comes first, as one wave, XR, on the library's 1.2.0 release, after X1's wave C and a wave PH that builds X2's Task P5.3 alone. Read § Amendment 2026-11-24 below before the waves; where it and the rest of this plan differ, above or below it, it governs.
+
 ## Global Constraints
 
 - Reader frame sandbox exactly `allow-scripts`; no `allow`, no `allowfullscreen` on it; shell CSP meta exactly `frame-src 'none'`; no parent-DOM access by any frame; no extra message channel; no window `message` listener anywhere in `pwa/src`; never `allow-modals`.
@@ -46,13 +48,238 @@
 
 The order is the coordinator's ruling on review 2933 F7, option (a): the library lands L1, its rename and L2, and cuts the contract release; X1's wave C re-pins ccrc to it; X2's P6 follows X1's host wave and P4, and X2's P5 then adopts the release (X2 plan's waves table); XR1 follows on it, in continuous scroll. XR1 needs that release, not a split of P5.3: its places tests use the frame's `place` op and `hash {push, from}`, which the 1.1 bridge drops. LX6 joins the contract release if ready by its cut, otherwise the next release; XR2 follows on whichever carries it. Every wave ends with the common acceptance cycle of the completion plan (exact-tip CI and CodeQL, privacy scan, review run).
 
+*Amended 2026-11-24 (D-8974, D-8975): the table and the order above are superseded by § Amendment 2026-11-24 §2. LX6 has landed in the library, and the 1.2.0 candidate carries it, so XR1 and XR2 run as one wave, XR.*
+
 ## Acceptance row (proposed for completion Task 17)
 
 | Row | Task 17 row | Installed action and observation | Waves |
 |---|---|---|---|
 | AR-X6 | Reader mode | On the installed release carrying XR2, in the default layout (reader mode switches to it for its duration, and the other four layouts are never reached in reader mode; one entry from `review` checks the switch and the return, or, under `default-only`, the note): open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. (After XR1 alone, the text scrolls and two small controls stay over its top corners, ccrc's menu control and the reader's own Aa, spec §4.2; the row is run in full after XR2.) Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. Device rows FS-1 to FS-10 (spec §4.4) recorded per engine | XR1, XR2 |
 
+*Amended 2026-11-24 (D-8975): the row's text stands. It is run after wave XR, which carries XR1 and XR2 together, so "the release carrying XR2" is the release carrying XR, and its parenthesis "(After XR1 alone, …)" describes no shipped state. Its layout clause ("one entry from `review` checks the switch and the return, or, under `default-only`, the note") and device row FS-9 move to X2's P5.1, which brings the layouts; FS-10 is recorded against the overlay's Aa. § Amendment 2026-11-24 §5 says when Reader Mode is done.*
+
 ---
+
+## Amendment 2026-11-24: Reader Mode first (wave 41, run 3605)
+
+The operator's priority of 2026-11-24: Reader Mode in the console comes first. This section changes the order and the shape of the waves above. It changes no wall, op, decider or test unless a row below says so. The rest of the plan, above and below this section (the task bodies and the mutation rows included), stays as the dispatched record, and where the two differ, this section governs. D-8974 and D-8975 are defined at its end. D-8976, the library's new package name, is defined in X1's plan (`2026-11-18-native-docs-appearance-continuity.md`, its amendment of the same date).
+
+### What was verified first
+
+Each of the brief's three statements about the library holds. They were read as git objects of the library's repository (now `Synapsium-Labs/pinax-lib`) at `996a39b2602d2e1e636c54c95cc9e403fe55cf88`. That commit is the versioned 1.2.0 candidate of the package `@synapsium-labs/pinax-lib`, not yet tagged or published.
+
+| Statement | Where, at that commit | Holds |
+|---|---|---|
+| The appearance contract | `appearance` in `FRAME_ACCEPTS`, `PARENT_OPS` and `OP_KEYS` (`src/frame/protocol.ts`); `parseAppearance` (`src/enhance/appearance.ts`), exported from `./frame` | Yes |
+| The frame's `place` op and `hash {push, from}` | `place` in `FRAME_OPS`, `OP_KEYS.place = ['t', 'kind']`; `OP_KEYS.hash = ['t', 'id', 'push', 'from']`; both sent only to a seed with `bridge.places`, which `onPlace` sets (`src/host/mount.ts`, `src/frame-runtime/adapters.ts`) | Yes |
+| LX6 | `reading` in `FRAME_ACCEPTS` (`READING_MODES`: `screens`, `scroll`, `off`); `reader` in `FRAME_OPS` (`READER_ACTS`: `menu`, `exit`, `toggle`, `active`); `BRIDGE_LIMITS.readerWindowMs` 250 and `readerActiveMs` 60000; `HostAdapters.onReader`; `DocFrame.setReading`; screen pages (`src/enhance/pages.ts`); `size` (`s`, `m`, `l`, `xl`) in enhance's own prefs; `meta.readingMinutes` | Yes |
+
+The library's changelog entry for 1.2.0 adds three facts this section relies on:
+- while a reading mode is on, the `settings` command still opens the frame's settings menu;
+- `setReading` is replayed at the ready of that `DocFrame`'s own later mounts, and is "not a paint guarantee: a mount that leaves chrome out cannot restore it in place" (the ledger's LX6 outcome records this as the library's D-8950);
+- the 1.2.0 assets' hashes, which `assets/assets.json` records at that commit.
+
+### 1. The smallest slice: what reader mode consumes from P5 and P6
+
+Traced against X2's plan (`2026-11-18-native-docs-parity.md`) and `main` at `2b5b5e32a6`. On `main`, X2's P1 has landed and none of P2 to P6 has: `pwa/src/lib/popstate.ts`, `pwa/src/lib/historyPlaces.ts`, `pwa/src/docs/reader/places.ts`, `pwa/src/docs/print/` and `pwa/src/lib/printAllow.ts` are all absent. X1's wave C has not landed either: `pwa/package.json` still pins the old package at 1.1.0.
+
+| What reader mode consumes | Named in | Comes from | Needs P2, P4, P6 or the rest of P5? |
+|---|---|---|---|
+| The one `popstate` dispatcher and `onPop`, with the router's, `useReaderOnly`'s and the release gate's listeners moved onto it | Global Constraints, XR1.3 | P5.3 (`lib/popstate.ts`, `lib/router.ts`, `docs/readerHistory.ts`, `lib/swupdate.ts`) | No |
+| The pop decider `decidePop` and its answers (`close-overlay`, `goto`, `consume`, `skip`, `router`) | XR1.3 | P5.3 (`lib/historyPlaces.ts`) | No |
+| The place host, `setPlaceHost`, beside which XR1.3 adds the reader host | XR1.3 | P5.3 (`lib/popstate.ts`) | No |
+| The tab record (`visit`, `doc`, `places`, `pendingSeq`, `lastIdx`, `next`), `docsIdx` on every entry, and `PLACES_MAX = 50` | XR1.3 | P5.3 | No |
+| The place push in `docs/reader/places.ts`, to which XR1.3 adds the drop of recorded places above `lastIdx` | XR1.3 | P5.3 | No |
+| The frame's `place` (`overlay`, `overlay-closed`) and a `hash` with `push` reaching ccrc: `onPlace` and the two-argument `onHash`, passed by the bridge | XR1.3; XR1.4 (wake-lock activity) | P5.3's wiring in `ReaderFrame.tsx` and `reader/bridge.ts` | No. It needs the library at 1.2.0, which is wave C's pin |
+| `close-overlay` sent on the step-back's pop | XR1.3 | P5.3, through `DocFrame.closeOverlay()`, which 1.2.0 adds (the shipped 1.1.0's `COMMAND_OPS` has only the four tools) | No. It needs wave C's pin, like the places |
+| `ReaderLayout`, the five layouts and the Layout row in Page details | XR1.1 (`readerModeOffered`), XR1.4 (`remount({chrome, layout})`), XR1.5 (the note) | P5.1 | Only for the layout rule, which has nothing to decide while the console mounts the default layout alone. The rule moves to P5.1 (D-8975) |
+| The library at a release carrying the contract, the places and LX6 | Global Constraints | Wave C's re-pin (X1's Task 1), not P5.1 | No |
+| `lib/pageClock.ts` (`onPageVisible`, `onPageHidden`, `onWindowBlur`), `modal-layers.ts#recordModalLayer`, `readerBar.ts#createReaderProgress`, `ReaderMount.command`, `readerMountPlan` and `ReaderChrome` | XR1.2, XR1.4 | Already on `main` | No |
+| Print, the page loader, `docs.css`'s print rules, `DocsHead.tsx`'s Print row | none | P6 | No. P6 shares files with reader mode (`ReaderFrame.tsx`, `DocsHead.tsx`, `docs.css`). "P6 before P5" only serialised those edits, and claims serialise them just as well |
+| Tracker links, reading-layer flags, print stage 2 | none | P5.2, P5.4, P5.5 | No |
+
+So the slice is X2's Task P5.3 alone, as its plan writes it, on wave C's pin. Its real dependencies are three:
+- the frame's `place` op and `hash {push, from}` exist only from the 1.2.0 release, so the slice waits for wave C;
+- the one dispatcher, decider, place host and tab record are what XR1.3 extends;
+- `ReaderFrame.tsx` and `reader/bridge.ts` are edited in turn by P5.3, reader mode, and later P6 and P5.1, each under its own claim.
+
+### 2. The new order
+
+```mermaid
+flowchart LR
+  REL["Library 1.2.0 published<br/>(the operator's tag)"] --> WC["Wave C: re-pin to<br/>pinax-lib 1.2.0, appearance,<br/>the rename (D-8976)"]
+  WC --> PH["Wave PH: Back places,<br/>X2 Task P5.3 alone"]
+  PH --> XR["Wave XR: reader mode,<br/>screen pages by default,<br/>Scroll in the overlay"]
+  XR --> P6["X2 P6: print stage 1,<br/>the page loader"]
+  P1["X2 P1 (landed)"] --> P2["X2 P2 outside folders"]
+  P2 --> P3["X2 P3 PDF frame"]
+  P2 --> P4["X2 P4 listings and refs"]
+  P4 --> P6
+  P6 --> P5["X2 P5 less P5.3: P5.1 layouts<br/>with reader mode's layout rule,<br/>P5.2, P5.4, P5.5"]
+```
+*Figure A1. The order from 2026-11-24. Start at the library's release. Wave C re-pins ccrc to 1.2.0, wave PH builds Back places on it, and wave XR builds reader mode on PH. The rest of X2 follows, and P5.1, which brings the layouts, takes reader mode's layout rule. P2 to P4 touch no reader host file except P2.4's truth line, so they may run beside C, PH and XR under claims.*
+
+**A scroll-only XR1 is no longer worth shipping apart from XR2.** 1.2.0 carries LX6, so one wave delivers screen pages as the default, with continuous scroll kept as the reader's own choice. The reasons:
+- XR2.1 removes every part that only XR1 needs: the `reading` chrome and the desktop remount with its 400 ms quiet wait, the corner menu control, the frame's own Aa in reader mode and the window-blur hide. The plan's own retirement list names nine mutation rows built for them (X6.21, X6.25, X6.35, X6.54, X6.55, X6.56, X6.66, X6.68, X6.69). Wave XR keeps X6.25's guard with its test reworded, and adds X6.73 to the rows never built (below).
+- The remount is a frame swap of 0.2 to 1.4 s (lab E4) and resets the changed-since notice, the open folds and the drawn figures. The in-place `reading` op keeps all of them.
+- Screen pages are the operator's answer to ask 656. Scroll-only first would ship the reading model that was not chosen, as the default.
+- XR alone is smaller than XR1 and XR2 together, because the parts XR2 removes are never built.
+
+**Where the Scroll choice lives.** The choice of Pages or Scroll stays where XR2.2 puts it: a switch in reader mode's overlay, remembered per device, with Pages as the default. Nothing is added to the Settings screen. The Settings audit (`docs/superpowers/specs/2026-11-22-settings-audit.md`) keeps three pages (Appearance, Security, Updates) and lists per-device view state as "remembered toggles, not settings". The switch is such a toggle, beside the reading it changes. Ask 656's "scroll kept as a reader setting" is that switch. The text size is the frame's own (LX6.3, in its Aa menu, which the overlay's Aa opens).
+
+#### Wave C: X1's Tasks 1 to 7, on 1.2.0
+
+| | |
+|---|---|
+| Tasks | X1's Tasks 1 to 7 as written, on 1.2.0. Task 1 also takes the rename (D-8976): every import, test and script reference in §3 below moves in Task 1's first commit, before Tasks 2 to 7, and only what needs the registry waits for the wave's last commit (§4) |
+| Files | X1's "File ownership (wave C)" table, and the rename's files (§3) |
+| Tests | As written. The rename edits the existing pins: `reader-pin.test.ts` (name, version, `resolved`), `server/test/ci-pipeline.test.ts` (the provenance step's repository, signer, lock key and pack name), `server/test/docs-parity.test.ts` (M79's specifier rule) |
+| Mutation rows | X1's rows as written. The rename adds none: each renamed line is already pinned by an existing test, which a revert reds |
+| Depends on | The 1.2.0 publication, for its pull request only (§4) |
+| Overlap | None with PR #3138 (X3's R1: server review files, `shared/docs.ts`, `pwa/src/docs/export/policy.ts`, docs). None with the live claims measured on 2026-11-24 |
+
+#### Wave PH: Back places, X2's Task P5.3 alone (D-8974)
+
+| | |
+|---|---|
+| Tasks | P5.3 Steps 0 to 6 as written: lab E16 per engine first, the characterization commit for `router-location.test.tsx` and `reload-on-move.test.ts`, then the places. It carries the programme ledger's P5.3 items (the forward-skip trap with `lastIdx` updated on a skip, case 8b of `reader-history-adapter.test.tsx`, M11.73 extended, A1's skip-loop bound and counter seeding) |
+| Files | P5.3's Files, and from P5's row the two it needs: `pwa/src/docs/reader/bridge.ts` (pass `onPlace`, take `onHash`'s second argument) with `pwa/test/reader-bridge.test.ts`; rich-docs §4.4 (D-8763). `onPlace` rides input presence in `bridge.ts`: the library's adapter is optional, and passing it is what sets the seed's `bridge.places`, so `reader/policy.ts` is not needed |
+| Tests | P5.3's Step 1 list, and `reader-places` in the browser leg |
+| Mutation rows | M11.27, M11.28, M11.29, M11.30, M11.49, M11.57, M11.63, M11.64, M11.73 |
+| Depends on | Wave C merged. It may be built ahead on a workspace cut from wave C's branch (before publication, C has no accepted tip), and absorbs `main` once C has merged; its pull request opens after C's merge |
+| Overlap | None with PR #3138. None with the live claims measured on 2026-11-24 |
+
+#### Wave XR: reader mode, XR1 and XR2 as one wave (D-8975)
+
+The task ids are kept, so every row and test above stays traceable.
+
+| Task | In wave XR |
+|---|---|
+| XR1.1 | As written, with three changes. `readerModeOffered` takes no `layout` or `rule`, and `readerModeLayoutNote`, `READER_LAYOUT_RULE` and `READER_REMOUNT_QUIET_MS` are not defined here (all to P5.1). `readerModeStep` gains XR2.1's events `frame-exit` and `frame-toggle`. Step 0 re-reads the facts on the installed 1.2.0, LX6's included: `setReading` hides and restores the chrome in place with the same nonce; `onReader`'s acts and their pacing; the `settings` command while reading; `r` and Esc. Its layout measurement moves to P5.1. M-3, M-4 and M-7's frame half stay. The row `offered: under remount, …` moves to P5.1 |
+| XR1.2 | As written, with one change: `ReaderModeContext.setFrame` takes `{ ready, focus() }` and the mount's `setReading`, with no `remount` and no `layout`. `ReaderLayout` does not exist until P5.1, which adds both back with the layout rule. And the focus wrap: while reader mode is on and no ccrc control is drawn (the overlay hidden), the leading focus guard sends focus to the frame, not to the last ccrc control. This is the coordinator's ruling on review 3626 A3, a consequence of D-8975: the menu control that held that place in XR1 is never built. Browser row `focus: with the overlay hidden, Shift+Tab out of the frame's first control returns focus to the frame`; mutation row X6.77 |
+| XR1.3 | As written, on wave PH. The row `reader place: a Back during the desktop remount still exits` reads `reader place: a Back during a same-document remount still exits` (a new commit, or `openAt`): entering no longer remounts |
+| XR1.4 | XR2.1's in-place mount replaces XR1.4's remount. Not built: the `reading` chrome, `ReaderMount.remount`, `ReaderModeMenuControl`, the window-blur subscription. The overlay is XR2's: a top strip with the title only, a bottom strip with Exit, the turn switch and Aa (`onAa` hides the overlay and its layer, then sends `command settings`), and the clear layer between them; `onReader` and `setReading`. Kept from XR1.4: `onProgress` on every production mount (D-8805), `ReaderMount.focus()`, a changed share and the frame's figure places counted as activity, the fallback reaching the context, and Step 5's amendments (D-8805, D-8831) beside XR2.1's Step 5 (D-8803, D-8804). `readerMountPlan` takes reader mode's state: a mount made while it is on is sent `setReading` with the turn before its ready, because each of ccrc's mounts is a new `DocFrame` and the library replays only within one. XR2.1's Step 0 is not run: wave C has already pinned 1.2.0 |
+| XR1.5 | As written, less its `default-only` rows (to P5.1) |
+| XR2.1 | Folded into XR1.4 above, as written, with three exceptions. Step 0 is not run, and its package files are not touched. `remount` is not kept for a layout switch, which comes with P5.1: the Files clause "`remount` kept only for the layout switch" and the parenthesis of `reader ops: entering sends setReading with the stored turn and remounts nothing` ("from another layout …") move to P5.1. The row `reader ops: with the frame accepting reader, ccrc's menu control is not drawn` is dropped, because the control is never built |
+| XR2.2 | As written |
+| XR2.3 | As written |
+
+- **XR1.4's tests in XR:** `every production mount asks for progress, the lab's does not`; `focus: the frame is focused after entering and after leaving` (reworded: entering no longer makes a new mount); `reader mode: a fallback after entering ends reader mode and consumes its place`; the three `wake lock:` rows; `overlay: hidden on entry, a menu act shows it, Esc on it hides it and returns focus to the frame`; `overlay: Exit leaves reader mode`; `overlay: a tap on the layer outside it hides it and does nothing else`; `overlay: nothing hides it on a timer`; `overlay: an Esc that closes a sheet in reader mode neither hides the overlay nor leaves reader mode`; `overlay: the percentage follows progress, at most once a second`; `overlay: every control is at least the tap floor`; and one new row, `mount plan: a mount made while reader mode is on is sent setReading with the turn before its ready`. With them, XR2.1's Step 1 list as written, less the row it drops.
+- **XR1.4's browser rows in XR:** none of them is run. Five name the menu control or the frame's Aa while the overlay shows, and are never built: `menu control: the frame's Aa is uncovered …`, `menu control: a drag that starts at the frame's top centre …`, `overlay: while shown, the frame's Aa corner is uncovered`, `overlay: Exit never sits where the menu control was`, `overlay: a click on the frame's Aa while shown …`. `overlay: Exit is the strip's rightmost control, left of the frame's Aa corner` is replaced by XR2.1's own row for the bottom strip (`reader ops: the top strip holds no control …`, X6.74). XR2.1's browser row and XR2.3's rows stand.
+- **Two rows the programme's definition of done needs** (review 3626; the gap is older than this amendment, and wave XR closes it):
+  - `reader mode: a new mount made while reader mode is on paints its first frame with the reader's chrome hidden`. Browser, a same-document remount at 412 by 915 and at 1280 by 800, sampled on every animation frame from the new frame's first paint. `setReading`'s replay at ready is not a paint guarantee, so where it fails, XR keeps the new mount under the reading ground until its `ready` has applied the turn. That stays inside the existing container, with nothing widened.
+  - `reader mode: leaving after a same-document remount sends off to the new mount, never to the destroyed one`. jsdom, through the mount's real path. Mutation row X6.78.
+- **A Docs page in its own tab** (the coordinator's addendum to fix round 1, 2026-11-24): a Docs page can open in a browser tab of its own at desk width, with no console around the reader and no history entry before it. Browser row, XR1.3's: `reader place: on a Docs page that is the first history entry in its own tab, entering reader mode, then Exit, and again Back, each leave reader mode and stay on the document, and no entry before the page is consumed`, at 1280 by 800, checking `history.length` and the URL after each. Mutation row X6.79.
+- **Mutation rows built in XR:** every row whose task is XR1.1, XR1.2, XR1.3, XR1.5, XR2.1 or XR2.2, less those moved below. Of XR1.4's rows: X6.24, X6.36, X6.43, X6.49, X6.53, X6.64 and X6.67, and X6.25 with its test reworded as above. X6.20's red test is renamed with XR1.3's row: `reader place: a Back during a same-document remount still exits`.
+- **Never built, their mechanism never ships:** X6.21, X6.35, X6.54, X6.55, X6.56, X6.66, X6.68, X6.69 and X6.73.
+- **Moved to P5.1 (D-8975):** X6.22, X6.23, X6.59, X6.60, X6.70.
+- **New:** X6.76, X6.77, X6.78 and X6.79 (below).
+- **Files:** XR1's row and XR2's row of the waves table, less `pwa/package.json` and its lock, `reader-pin.test.ts`, `reader-assets.test.ts` and `frame-cost.browser.test.ts` (wave C pinned the release and took the BASE), and with `pwa/test/reader-mode-overlay.test.tsx` and `pwa/test/w7-storage-keys.test.ts` (XR2.2).
+- **Depends on:** wave PH merged, and so wave C.
+- **Overlap:** none with PR #3138. With the live claims measured on 2026-11-24, one file: `ui/src/index.ts` (XR1.2's four exports), held by a desktop-polish fix round. XR claims it at dispatch and asks the holder by mail if it is still held.
+- **Overlap, the Docs tab view:** the tab view of the row above belongs to the Desktop polish programme. It does not edit the Docs head or the reader frame, and wave XR absorbs it from main.
+
+| Row | Task | Mutation | Red test |
+|---|---|---|---|
+| X6.76 | XR1.4 | A mount made while reader mode is on is not sent `setReading` | mount plan: a mount made while reader mode is on is sent setReading with the turn before its ready |
+| X6.77 | XR1.2 | The leading focus guard sends focus to the last ccrc control even when none is drawn | focus: with the overlay hidden, Shift+Tab out of the frame's first control returns focus to the frame (browser) |
+| X6.78 | XR1.4 | Leaving sends `off` to the mount reader mode was entered on, not to the current one | reader mode: leaving after a same-document remount sends off to the new mount, never to the destroyed one |
+| X6.79 | XR1.3 | `stepBelowReaderPlace` steps one entry further than the reader place (`n` plus 1) | reader place: on a Docs page that is the first history entry in its own tab, entering reader mode, then Exit, and again Back, each leave reader mode and stay on the document, and no entry before the page is consumed (browser) |
+
+#### The rest of X2, after XR
+
+- **P2, P3 and P4** keep their order and may run beside C, PH and XR: they touch no reader host file, except P2.4's truth line in `DocsHead.tsx`, which is serialised by claim (XR1.5 edits the same file). They share two other files with wave C: `pwa/package.json` and its lock (P3.1 adds `pdfjs-dist`) and `server/test/docs-parity.test.ts` (P2.1's `H.VERBS` case, beside the M79 rename). A claim serialises each.
+- **P6**, as written, after XR and P4.
+- **P5, less P5.3**, as written, after P6. P5.1 no longer pins the library, because wave C did: it takes the layouts, and with them reader mode's layout rule (D-8975). That means XR1.1 Step 0's layout measurement, `READER_LAYOUT_RULE`, `readerModeOffered`'s `layout` and `rule` inputs, `readerModeLayoutNote`, the remount into `default` on entry and back on exit with `READER_REMOUNT_QUIET_MS` and no opening hash, the Page details note, the rows `offered: under remount, …`, `remount: entering from review …`, `remount: under default-only …`, `remount: the same document, no body read, no initialHash`, `remount: waits 400 ms after the last progress message` and the `default-only` rows of XR1.5, mutation rows X6.22, X6.23, X6.59, X6.60 and X6.70, device row FS-9, and AR-X6's layout clause. It also takes the rule that a same-document remount made while reader mode is on (a new commit, or `openAt`) is planned in the default layout, whatever the stored layout pref: X6.68's layout half, whose chrome half never ships.
+- **The HTML-artifacts plan's wave A5** (`2026-11-19-native-docs-html-artifacts.md`) still waits for P6, so under this order it lands later, after XR.
+
+### 3. The rename
+
+The package is now `@synapsium-labs/pinax-lib` and the repository `Synapsium-Labs/pinax-lib`; the console still pins `@synapsium-labs/docserver` at 1.1.0. Every file outside `docs/` that names the old package or repository, measured on `main` at `2b5b5e32a6` with `git grep`, goes to **wave C's Task 1** (D-8976), split by what each change needs:
+- **Task 1's first commit, on the branch as it is built.** Every import, test and script reference moves here, ahead of Tasks 2 to 7 and of PH. The built-ahead tarball installs under the new name, so code left on the old name would resolve to the locked 1.1.0, which has neither the contract nor the places.
+- **The wave's last commit (§4).** Only what needs the registry waits: the package file's dependency, the lock, and the pin and asset tests' literals.
+
+| File | What names the old package or repository |
+|---|---|
+| `pwa/package.json` | The dependency `"@synapsium-labs/docserver": "1.1.0"` (last commit) |
+| `pwa/package-lock.json` | The root dependency and the `node_modules/@synapsium-labs/docserver` entry (`resolved`, `integrity`), re-taken from the registry (last commit) |
+| `pwa/src/docs/reader/assets.ts` | A type import of `./frame` and five `?raw` imports of assets |
+| `pwa/src/docs/reader/bridge.ts` | Imports of `./frame` and `./host` |
+| `pwa/src/docs/reader/labPolicy.ts` | An import of `./frame` |
+| `pwa/src/lib/readerRenderJob.ts` | An import of `./render` |
+| `pwa/test/docs-scans.test.ts` | `LIBRARY`, the allowed edges and the planted specifiers |
+| `pwa/test/markdown-purity.test.ts` | `ALLOWED_PACKAGES`' `…/render` |
+| `pwa/test/reader-pin.test.ts` | `LIB` and its title (first commit); the version and the `resolved` prefix, `…/pinax-lib/-/pinax-lib-1.2.0.tgz` (last commit) |
+| `pwa/test/reader-assets.test.ts`, `reader-bridge.test.ts`, `reader-built.test.ts`, `reader-diff.test.ts`, `reader-images.test.ts`, `reader-lab-bridge.test.ts`, `reader-lab-frames.test.ts`, `reader-policy.test.ts`, `reader-commands.test-d.ts`, `reader-history-types.test-d.ts` | Imports of the library's entry points, `reader-assets`' built specifiers (its hash rows in the last commit), and in `reader-images.test.ts` a deep import of the installed package's `dist/frame/seed.js` |
+| `pwa/test/w7-storage-keys.test.ts` | An import of `./frame`, and a path to the package's `dist/host` joined from separate segments (`'@synapsium-labs', 'docserver', …`), which a search for the whole path string misses |
+| `pwa/browser/reader-frame.browser.test.ts` | An import of `./frame` and the path `node_modules/@synapsium-labs/docserver/assets/frame/bootstrap.js` |
+| `.github/ci/library-provenance.sh` | `REPO`, `SIGNER` (`…/.github/workflows/release.yml`), the lock key, the `npm pack` spec, the tarball's name and the closing line |
+| `server/test/ci-pipeline.test.ts` | The pins of those lines, the fake lock and tarball, the expected log lines, and the scan for the signer's holders |
+| `server/test/docs-parity.test.ts` | M79's specifier rule and its planted cases, the near-miss cases (`@synapsium-labs/docserverx`, `@other/docserver`) included |
+
+Not renamed:
+- the lines that name the standalone docs server, the operator's own tool, rather than the library: `CLAUDE.md`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `server/test/ccrc-doctor-exposure.test.ts` and `server/test/ccrc-memory.test.ts`;
+- the dated plans and specs under `docs/`, which are the record. Their instructions for later waves are amended by this wave's dated notes.
+
+### 4. Building ahead of publication
+
+This is analysis only. This wave packs and installs nothing.
+
+**What can be built before publication.** Wave C, and PH on wave C's branch, can be built and tested on worker branches against a tarball packed from the verified commit. The console reads the library only through its package's entry points and frame assets. At `996a39b2…` the frame assets' hashes are committed (`assets/assets.json`), and the library's `prepack` (`scripts/verify-assets.mjs`) refuses a pack whose built assets differ from them. The worker:
+1. exports `996a39b2…` from the library's repository into its session temp root (`git archive`, never a checkout of the library's working tree);
+2. runs the library's `npm ci` and `npm run build`, then `npm pack`;
+3. records the tarball's sha512 and every asset hash in Results;
+4. installs it into its worktree's `node_modules` with `npm install --no-save`, which writes neither `package.json` nor the lock.
+
+That install is of a package that is not from the registry, so it needs the coordinator's word at dispatch. The pressure reclaim deletes scratch older than 14 days, so the recorded digest is what lets a later worker pack the same bytes again. With Task 1's rename commit in place, the typecheck, the unit suites and the browser leg run against the 1.2.0 code. `reader-pin.test.ts` and `library-provenance.sh` fail there by design until the pin commit, and nothing edits them to pass.
+
+**What waits for the registry.** These, and only these, go in the wave's last commit, which only the published release can make. Every import, test and script reference was renamed in Task 1's first commit (§3):
+- the exact pin `1.2.0` in `pwa/package.json`;
+- the lock's `resolved` (the registry's address) and `integrity` (the registry tarball's sha512, which a local pack need not match);
+- `reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals, read from the installed package;
+- the provenance check: `library-provenance.sh` against the registry's attestation;
+- `npm audit signatures`.
+
+No `file:` spec, no tarball and no weakened pin or provenance check is ever committed.
+
+**The exact condition that holds the pull request.** The branch is pushed and its pull request opened only when all of these hold, checked in this order:
+1. `@synapsium-labs/pinax-lib@1.2.0` resolves on the public registry.
+2. `v1.2.0` is a signed annotated tag on `996a39b2602d2e1e636c54c95cc9e403fe55cf88`.
+3. The provenance step, renamed in Task 1's first commit, verifies the registry tarball's attestation: repository `Synapsium-Labs/pinax-lib`, signer workflow `Synapsium-Labs/pinax-lib/.github/workflows/release.yml`, source ref `refs/tags/v1.2.0`. The worker reads both names from the published attestation and checks that they equal the step's. Any other value stops the wave.
+4. `npm audit signatures` is clean.
+5. The installed package's `assets/assets.json` equals the one at `996a39b2…`, hash for hash. If not, the branch was built against other bytes: the wave's suites run again at the registry pin before the push.
+6. The last commit (the pin, the lock, and the pin and asset tests' literals) is the branch's last, and the wave's own checks pass on it. The import list (rich-docs §4.7, M8.10) was read at Task 1 Step 1, per X1's amendment.
+
+Then the worker pushes once and the common acceptance cycle runs on the exact tip. Wave PH's pull request opens after wave C's merges, and wave XR's after PH's.
+
+### 5. When Reader Mode is done
+
+Reader Mode is done when all three hold:
+- wave XR has merged through the common acceptance cycle: exact-tip CI and CodeQL, the privacy scan, and a held-out review run before the landing;
+- a release carrying XR is installed;
+- AR-X6 passes on that release as written, with two exceptions, both defined by D-8975. Its layout clause, and device row FS-9 with it, is run at P5.1's acceptance, because until P5.1 the console mounts only the default layout, so there is no layout to enter from. FS-10 is recorded against the overlay's Aa, the only Aa on screen in reader mode from XR on; its pass words hold for it unchanged.
+
+That is Reader Mode's own definition of done; this wave's acceptance is the review of this amendment. No setting is added.
+
+### Deviations defined by this amendment
+
+The plan's `## Deviations found` stays as it was; these two are defined here, as issued to this run.
+
+- **D-8974 (2026-11-24)** — reader-mode-first. Reader mode moves ahead of X2's P2, P4, P6 and the rest of P5. The order becomes wave C, then wave PH (X2's Task P5.3 alone), then wave XR, then the rest of X2 (§2). It departs from three texts:
+  - the order this plan records from the coordinator's ruling on review 2933 F7, option (a): "X2's P6 follows X1's host wave and P4, and X2's P5 then adopts the release (X2 plan's waves table); XR1 follows on it";
+  - this plan's ownership constraint: "XR1 and XR2 claim those files only after X1's wave C and X2's P5 and P6 have merged";
+  - X2's waves table and its Figure 7, where P5 is one wave, after P6, and last.
+
+  Argued: the operator's priority of 2026-11-24. F7 did not split P5.3 because of the library release, and the 1.2.0 candidate now carries the places, the contract and LX6 (verified above). Reader mode needs P5.3 alone (§1), and "P6 before P5" only serialised shared files, which claims serialise as well. Issued to run 3605 (wave 41), block 8974 to 8976.
+- **D-8975 (2026-11-24)** — reader-mode-one-wave. XR1 and XR2 run as one wave, XR, on 1.2.0, with screen pages the default from its first release. XR1's interim parts are never built: the `reading` chrome remount, the corner menu control, the frame's own Aa in reader mode and the window-blur hide. R21's layout rule moves to X2's P5.1, which brings the layouts, and with it AR-X6's layout clause and device row FS-9 (§2, §5). FS-10 is recorded against the overlay's Aa. It departs from this plan's waves table, its acceptance row's Waves column (XR1, XR2) and its Global Constraints on `READER_LAYOUT_RULE`, and from the design's R16, R20 and §7.5.
+
+  Argued:
+  - with LX6 in the same release, XR1's interim parts would be built only for XR2.1 to remove them: nine mutation rows by the plan's own list;
+  - the remount costs a 0.2 to 1.4 s frame swap and resets the notice, folds and figures, which the in-place op keeps;
+  - screen pages are the operator's answer to ask 656;
+  - before P5.1 the console mounts only the default layout, so the layout rule has nothing to decide and AR-X6's entry from `review` cannot be run.
+
+  Issued to run 3605.
 
 ## Wave XR1: reader mode on the contract release, in continuous scroll
 

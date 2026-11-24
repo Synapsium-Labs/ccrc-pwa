@@ -23,11 +23,14 @@ export const INSTRUMENT_SET: SkinSet = {
   Head: null,
   Fab: PhoneFab,
   SessionChrome: null,
-  // No row part and no fold: each transcript item renders as today until S14's log rows (D-5475).
+  // No row part and no run fold until S14's log rows (D-5475): an item renders as today, and a tool-activity row is the
+  // shared `ToolActivityRow`, which opens into the plain entries.
   TranscriptRow: null,
   Inspector: null,
   StatusBar,
   // Desktop-polish PL10 (D-7952): the shared bottom bar of the console's places, below 900 and outside a session.
   PhoneNav: PhoneBar,
   transcriptGrouping: 'none',
+  // Desktop polish wave 168: each stretch of a turn's tool activity reads as one collapsed row.
+  toolActivity: 'stretches',
 };

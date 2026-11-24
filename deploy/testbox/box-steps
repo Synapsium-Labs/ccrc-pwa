@@ -270,7 +270,8 @@ tbs_run_root_dirs() {
   for d in runs install pristine; do dir 0755 root root "$ROOT/$d"; done
   for ((i = 1; i <= RUNS; i++)); do dir 0755 root root "$ROOT/runs/$i"; done
   dir 0755 "$SVC" "$SVC" "$ROOT/specs"
-  for d in results logs out registry handover; do dir 0750 "$SVC" "$SVC" "$ROOT/$d"; done
+  # captures: the build capture's store and scratch (capture runner spec 2026-11-22 §2.2); the copy drops to its owner.
+  for d in results logs out registry handover captures; do dir 0750 "$SVC" "$SVC" "$ROOT/$d"; done
   for ((i = 1; i <= RUNS; i++)); do dir 0750 "$SVC" "$SVC" "$ROOT/out/$i"; done
   dir 0750 "$SVC" "$SVC" "$ROOT/out/install"
 }

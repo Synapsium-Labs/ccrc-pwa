@@ -73,6 +73,37 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/browser/docs-compact-head.browser.test.ts`, `reader-frame.browser.test.ts`, `frame-cost.browser.test.ts` | — | 6 | Per-skin geometry and cost rows (AP-7, §9 budgets) |
 | `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` | — | 7 | D-8759, D-8760 and D-8761 amendments |
 
+## Amendment 2026-11-24: wave C on 1.2.0, under the library's new name (wave 41, run 3605)
+
+The operator's priority of 2026-11-24 puts Reader Mode in the console first. Its order (the reader-mode plan, `2026-11-20-native-docs-reader-mode.md`, § Amendment 2026-11-24, D-8974) starts with this plan's wave C. Where this section and the rest of the plan differ, the task bodies below included, this section governs.
+
+- **R is 1.2.0.** The release this wave pins is the library's 1.2.0, at `996a39b2602d2e1e636c54c95cc9e403fe55cf88`. It is verified as a candidate and not yet tagged or published. It carries this contract, X2's places and layouts, and reader mode's LX6. Its signed tag and publication stay the operator's. Task 1 Steps 1 and 2a read that tag and its test 8 tables once they exist. The tables hold rows for X1, X2 and X6, and Step 2a's release read already checks each design against its own share.
+- **The package's name changes with its version (D-8976, below).** Task 1 moves every file that names `@synapsium-labs/docserver` or `Synapsium-Labs/docserver` to `@synapsium-labs/pinax-lib` and `Synapsium-Labs/pinax-lib`, in two parts. The reader-mode plan's amendment §3 lists every file, and they join this wave's file ownership for Task 1.
+  - **Task 1's first commit, on the branch as it is built,** ahead of Tasks 2 to 7 and of PH: every import, test and script reference. That is the four source files, the pwa and server tests' imports, specifiers and pins, and the provenance step's repository, signer, lock key and pack name.
+  - **The wave's last commit:** only what needs the registry. That is the package file's dependency, the lock's `resolved` and `integrity`, and `reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals.
+- **How Task 1's steps fall under that split** (amendment note; the steps' text stands):
+  - Step 1 runs at publication, before the last commit, and also reads the import list (rich-docs §4.7, M8.10): every library subpath and asset specifier the console imports, against 1.2.0's `exports` and files, with each change named in Results. Until this amendment no wave owned that per-release read for 1.2.0.
+  - Step 2a's two reads are git objects, so they may run ahead.
+  - Steps 2 to 4 (install from the registry, `npm ls` of the new name, the M8.12 rows PASS, and the commit of the package file and lock) make the wave's last commit, after Tasks 2 to 7. Their "commit the pin first" order gives way to the split.
+- **Task 6 Step 1's BASE "at Task 1's commit"** is taken at Task 1's rename commit, on the built-ahead tree with the packed tarball installed, before any edit of Tasks 2 to 5. It stands only if the reader-mode plan's hold condition 5 holds: the registry's `assets/assets.json` equals the commit's, hash for hash. Otherwise BASE is taken again at the registry pin, and Tasks 2 to 6 are judged against the new one.
+- **Built ahead, landed after publication.** The wave may be built and tested against a tarball packed from that commit and installed without saving, with the coordinator's word for that install. Its pull request is opened only after publication, under the six conditions of the reader-mode plan's amendment §4: the registry resolves the release; the signed tag is on the commit; the provenance step verifies the attestation; `npm audit signatures` is clean; the installed asset hashes equal the commit's; and the last commit, the only registry-dependent one, is the branch's last. No pin or provenance check is weakened.
+- **Tasks 2 to 7 are unchanged in content.** They are built after Task 1's rename commit, and the wave's last commit follows them.
+
+**Deviation defined by this amendment** (the plan's `## Deviations found` stays as it was):
+
+- **D-8976 (2026-11-24)** — library-package-rename. Wave C's re-pin (Task 1) changes the library's package name as well as its version: `@synapsium-labs/docserver` 1.1.0 becomes `@synapsium-labs/pinax-lib` 1.2.0. The change covers the package file, the lock, every source import, the pwa and server tests, and the provenance step's repository, signer and pack name. Every reference moves in Task 1's first commit, and only the registry-dependent pin, lock and test literals wait for the wave's last commit. It departs from:
+  - Task 1 Step 2: "`npm ls` of the library's package (the name `pwa/package.json` already carries)";
+  - this plan's wave C file ownership, which gives Task 1 the package file and the lock only;
+  - X2's plan's Global Constraint and Tech Stack: "`@synapsium-labs/docserver` exactly 1.1.0 until P5 adopts".
+
+  Argued:
+  - the library renamed its package with 1.2.0, and its repository on 2026-11-24, with the old address redirecting;
+  - 1.2.0 is published under the new name only, and the old name gets no further version, so the re-pin is a rename;
+  - every reference moves first, because the built-ahead tarball installs under the new name, and code left on the old one would resolve to the locked 1.1.0;
+  - the provenance step checks the attestation's repository and signer by name, and those are now the new repository's.
+
+  Issued to run 3605 (wave 41), block 8974 to 8976.
+
 ---
 
 ### Task 1: Re-pin the shared library to the contract release

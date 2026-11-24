@@ -27,6 +27,7 @@ import type { SpotProbe } from './probes.js';
 import { isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
 import type { ClaimRead, StartFact } from './actKey.js';
 import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
+import type { CarryFact } from './sandboxCheck.js';
 export type { StartLoadsReport } from './startLoads.js';
 
 /** What the door hands the writer: `source` is the payload's word as it came. */
@@ -99,24 +100,32 @@ export function insertStartLoads(db: DatabaseSync, sessionId: string, r: StartLo
 }
 
 export type NewestStartLoadsRead =
-  | { ok: true; newest: { start: StartRow; report: StartLoadsRow | null } | null }
+  | { ok: true; newest: { start: StartRow; report: StartLoadsRow | null; carry: CarryFact } | null }
   | { ok: false; detail: string };
 
 /** The session's newest `startup` or `resume` start (by `reportedAt`, then id) with its report joined by `startId`, the
- *  start with a null report when none landed, or null when the session has no such start. A failed read answers ok: false. */
+ *  start with a null report when none landed, or null when the session has no such start. A failed read answers ok: false.
+ *  `carry` is the start a resume's report names in `carriedFrom`, read in the same statement (W1 sandbox PR B, review 2135
+ *  F9): its source and its own report's digest, build and conflict flag, so the check can vouch for the carried kinds. */
 export function startLoadsOfNewestStart(db: DatabaseSync, sessionId: string): NewestStartLoadsRead {
   try {
     const row = stmt(db,
       'SELECT s.id, s.sessionId, s.reportId, s.uuid, s.source, s.model, s.rowIncarnation, s.reportedAt, s.receivedAt, '
       + 'l.startId AS lStartId, l.profileRole, l.profileDigest, l.launchRc, l.claudeVersion, l.permissionMode, l.cwdInWorkspace, '
-      + 'l.loaded, l.carriedFrom, l.conflicted FROM continuity_starts s LEFT JOIN continuity_start_loads l ON l.startId = s.id '
-      + "WHERE s.sessionId = ? AND s.source IN ('startup', 'resume') ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1",
-    ).get(sessionId) as (Record<string, unknown> & { source: string; lStartId: number | null }) | undefined;
+      + 'l.loaded, l.carriedFrom, l.conflicted, c.id AS cId, c.source AS cSource, cl.startId AS clStartId, cl.profileDigest AS clDigest, '
+      + 'cl.claudeVersion AS clVersion, cl.conflicted AS clConflicted FROM continuity_starts s LEFT JOIN continuity_start_loads l ON l.startId = s.id '
+      + 'LEFT JOIN continuity_starts c ON c.sessionId = s.sessionId AND c.reportId = l.carriedFrom LEFT JOIN continuity_start_loads cl ON cl.startId = c.id '
+      + "WHERE s.sessionId = ? AND s.source IN ('startup', 'resume') ORDER BY s.reportedAt DESC, s.id DESC, c.id DESC LIMIT 1",
+    ).get(sessionId) as (Record<string, unknown> & { source: string; lStartId: number | null; cId: number | null; clStartId: number | null }) | undefined;
     if (row === undefined) return { ok: true, newest: null };
     const start = { id: row['id'], sessionId: row['sessionId'], reportId: row['reportId'], uuid: row['uuid'], source: startSourceOf(row.source),
       model: row['model'], rowIncarnation: row['rowIncarnation'], reportedAt: row['reportedAt'], receivedAt: row['receivedAt'] } as StartRow;
     const report = row.lStartId === null ? null : startLoadsRowOf({ ...(row as unknown as StartLoadsRaw), startId: row.lStartId });
-    return { ok: true, newest: { start, report } };
+    const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+    const carry: CarryFact = report === null || report.carriedFrom === null ? { kind: 'none' } : row.cId === null ? { kind: 'absent' }
+      : { kind: 'read', source: startSourceOf(String(row['cSource'])), report: row.clStartId === null ? null
+        : { profileDigest: str(row['clDigest']), claudeVersion: str(row['clVersion']), conflicted: row['clConflicted'] !== 0 } };
+    return { ok: true, newest: { start, report, carry } };
   } catch (e) {
     return { ok: false, detail: `continuity_start_loads read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
