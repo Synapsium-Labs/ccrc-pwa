@@ -626,6 +626,39 @@ describe.each(SETS)('%s draws one live control, open or closed (review 3478 F1-F
     expect(answers(container)[0]!.closest('.tool-activity-wait')).not.toBeNull();
   });
 
+  it('a question its words tie to no single open ask of this turn: the wait line alone, no control on any card', () => {
+    // The rule: the live question's whole words equal exactly one open ask of the current turn. Its three other outcomes.
+    const noMatch = transcript();
+    noMatch.user('Go.');
+    noMatch.ask('Pick one?');
+    noMatch.call('Read', { file_path: '/repo/a.ts' });
+    const twoEqual = transcript();
+    twoEqual.user('Go.');
+    twoEqual.ask('Pick one?');
+    twoEqual.ask('Pick one?');
+    const earlier = transcript();
+    earlier.user('First.');
+    earlier.ask('Pick one?');
+    earlier.user('Then this.');
+    earlier.call('Read', { file_path: '/repo/a.ts' });
+    const cases: [string, ReturnType<typeof transcript>, LiveWait][] = [
+      ['words no open ask asks', noMatch, asking('Pick one')],
+      ['two open asks with the same words', twoEqual, asking('Pick one?')],
+      ['the words asked only in an earlier turn', earlier, asking('Pick one?')],
+    ];
+    for (const [what, t, askWait] of cases) {
+      const { container, unmount } = render(list(set, t.events, { askPending: true, askWait, onAnswer: () => {}, busy: true }));
+      for (const phase of ['closed', 'opened']) {
+        if (phase === 'opened') openAll(container);
+        const controls = answers(container);
+        expect(controls, `${what}, ${phase}`).toHaveLength(1);
+        expect(controls[0]!.closest('.tool-activity-wait'), `${what}, ${phase}: the control is not the wait line's`).not.toBeNull();
+        expect(container.querySelector('.tool-activity-first[data-attention="question"]'), `${what}: a card is surfaced`).toBeNull();
+      }
+      unmount();
+    }
+  });
+
   it('an opened earlier turn\'s call with no result shows nothing that reads as running (F4)', () => {
     const t = transcript();
     t.user('Run it.');

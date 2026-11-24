@@ -50,6 +50,12 @@ receives carries a call id, so a question's words are the only way a source iden
   result asks exactly those questions, in that order (its input read by the card's own parser, `askQuestions`, now
   exported by the design system). Its card carries Answer into the actual sheet, closed (drawn under the row) and open
   (in the body); it leads the failures.
+- **The identification rule, in plain words** (accepted by the coordinator in this round): nothing the session receives
+  carries a call id, so the transcript ties a live question to a call by its words alone. The live question's whole text
+  (each question, trimmed of surrounding spaces, in order) must equal the questions of exactly one open ask of the
+  current turn; a prefix or a partial match is no match. Every other outcome gives the wait line alone and no control on
+  any card: words no open ask asks (`Pick one` against `Pick one?`), two open asks with the same words, and words asked
+  only by an ask of an earlier turn (each pinned, in both skins, closed and opened).
 - **No other card offers a control for the wait** (review 3478 F1). Inside a tool-activity row only the entry the fold
   singled out gets the pending state (`rowScope`, `ChatList.tsx#TranscriptRowView`), so an opened row draws no second
   Answer: a stale ask of an earlier turn, a second open ask, or an open ask while an approval is the live wait, reads
@@ -83,11 +89,23 @@ opened row): they sit inside it in order.
     from the scroller, and the list's own flag agreeing), so the list goes back to it. An append adds no item, so
     `followOutput` never fired: a failure card surfacing under a closed live row had left a reader at the foot 50px above
     it, inside the pill's band, where no pill showed (measured in Chrome before review 3450's fix).
-  - `hold`: the reader was anywhere else, so the item at the top of their view is put back where they last saw it, a
-    frame later, after virtuoso's own correction (which scrolls, and so re-reads it), so nothing is corrected twice.
+  - `hold`: the reader was anywhere else, so the row crossing the top of their view is put back where they last saw it.
     Virtuoso did not move the view for a row above it that grew: a failure card surfacing under a closed row 258px above
     the reader moved everything they were reading down by its 50px (**measured** in Chrome on b9094fd707, both skins, 390
-    and 1280).
+    and 1280). Its bounds, the coordinator's:
+    - it acts only on rows wholly above the top of the view (a row below, or the row crossing the top changing at its
+      foot, moves nothing it holds);
+    - never while the reader moves the list themselves: a wheel, a touch or a scroll key within `INPUT_SETTLE_MS`
+      (300ms), or a finger or a pointer held on the list (a scrollbar drag; its release is heard anywhere);
+    - never for a change that came with an item added or removed at either end of the list (the item count and the
+      first and last keys, compared at each change): appends are the foot follow's, items added at the top the
+      older-history work's, which will own that anchor;
+    - it anchors by the row's KEY (`data-row-key` on each list row), never its index, so a regrouped list cannot make it
+      hold another row;
+    - one correction per change: the row's place is read a frame after each scroll (the list lays out the rows a
+      scroll brings into reach after the scroll event, and moved them 1.5-2.5px then, measured), and the hold compares
+      that place with where the row stands a frame after the change, after any correction of the list's own or the
+      browser's, so a change already put back is put back by nothing more.
   - `none`: the reader caused the change by opening or closing a disclosure in the list (anything with `aria-expanded`: a
     tool-activity row, a run group, a card), timed by a click listener on the scroller, within `TAP_SETTLE_MS` (600ms).
     Nothing moves: the header they tapped stays where it was, and what opened grows downward under it, as every
@@ -97,7 +115,9 @@ opened row): they sit inside it in order.
   a 1879-2266px stretch at the foot leaves its header at the same pixel; an opened live row that grows at the foot (Refined
   +52px, Instrument +216px) and a surfaced failure card (+50px) leave the reader 0-1px from the foot; a reader 499-535px
   above the foot keeps the row in view at the same place (within 1px) while the list grows 106-162px below them, and is
-  not taken to the foot; a row above the reader that grows by 50px moves the card in view by at most 1px.
+  not taken to the foot; a row wholly above the reader that grows by 50px, or shrinks by 105-127px (its surfaced
+  question no longer asked), moves the card in view by at most 1px; and with a correction of the list's own applied first
+  (a resize observer on the row above that puts the view back at once), the view moves by 1px, not by twice the 50px.
 - **Correcting what this note claimed after review 3450** (review 3478 F5-F7): the mid-list case then proved nothing grew
   while the reader was mid-list (the growing row was likely not mounted), and Refined's "opened row changes size" case
   measured a 54px shrink, which a browser clamps at the foot with no follow at all, so it stayed green with the follow
@@ -132,7 +152,7 @@ change.
 |---|---|---|
 | One row per stretch over a 14-turn fixture (prose and tools mixed, a failed call, an answered question, a stale unanswered ask, the question asked now); the unfolded list is `buildChatItems`' list exactly; prose never inside | `pwa/test/tool-activity.test.tsx` | Measured |
 | The question asked now surfaced and leading failures, never a stale one; no card named for an approval, parallel calls (out-of-order results, running while an earlier call lacks its result), an all-answered turn or two open asks, the wait on the newest current row only; a new prompt before its first call leaves the last turn quiet; running only while busy; key stable; inner grouping per skin | same | Measured |
-| Both skins: closed rows, the surfaced cards, the question's Answer closed and open (drawn once), the wait line and its control closed and open, `Go to the prompt` below, gone with no wait and after a new prompt; expansion kept across unmount and remount and forgotten on another session; an append into an open row keeps it open and shows the calls; an append into a closed one moves no key and scrolls nothing; the foot follow and its measured guard; the spoken name, `aria-controls`, the wait line priced | same | Measured, 47 cases green after review 3478's round |
+| Both skins: closed rows, the surfaced cards, the question's Answer closed and open (drawn once), the wait line and its control closed and open, `Go to the prompt` below, gone with no wait and after a new prompt; expansion kept across unmount and remount and forgotten on another session; an append into an open row keeps it open and shows the calls; an append into a closed one moves no key and scrolls nothing; the foot follow and its measured guard; the spoken name, `aria-controls`, the wait line priced | same | Measured, 49 cases green after review 3478's round |
 | The row barrier: a freshly built row over the same events is the same row; a changed live state, wait, surfaced entry, call, open question or inner grouping is a new row | `pwa/test/same-row.test.ts` | Measured, 12 green (with review 3478's `past` case) |
 | The run fold itself, with the activity fold off | `pwa/test/transcript-rows.test.tsx` | Measured, 8 green |
 | Chrome, both skins, both palettes, 390 and 1280: one line, failed surfaced, no loose cards, append while scrolled up moves nothing, opened row holds the column, open state survives scrolling away and back | `pwa/browser/tool-activity.browser.test.ts` | Measured locally, 8 green |
@@ -183,7 +203,9 @@ by mutant:
 | The barrier: a row whose turn ended (`past`) is a new row | `same-row.test.ts` | Green; mutant below |
 | `heightMove` and `holdShift` | `foot-follow.test.ts` | New module; mutants below |
 | F5: opening a stretch taller than the view at the foot leaves the tapped header where it was (within 1px) | `tool-activity.browser.test.ts`, both skins, 390 and 1280 | Red on the tip (1875-2218px); green |
-| F6: the mid-list case asserts the list grew while the reader was 499-535px up; a row above the reader that grows moves nothing they read | same | The second red on the tip (50px); green |
+| F6: the mid-list case asserts the list grew while the reader was 499-535px up; a row wholly above the reader that grows, grows with the list's own correction applied first, or shrinks moves nothing they read (12 cases) | same | The growth red on the tip (50px); green |
+| The question rule's three other outcomes: no match (a prefix), two equal asks, a match only in an earlier turn: the wait line alone, one control, closed and opened | `tool-activity.test.tsx`, both skins | Green |
+| The hold's bounds: held finger or drag, the reader's own input, a new item at an end; the foot follow not bounded by them | `foot-follow.test.ts` | Green; mutants below |
 | F7: Refined's opened row grows at the foot, `> 0` | same | Green; red with the foot move removed (mutant below) |
 | A3: the wait control at 360 and 390, both skins, both palettes: inside the column, uncut, 44px against the 44px tap minimum, reached by Tab from the row with a visible ring and the name `Answer` (measured with the approval's sheet closed: at a phone's width the sheet opens over the transcript, which the app hides from assistive technology behind it) | same | Green; mutant below |
 
@@ -192,13 +214,18 @@ matched without their count, or in any order; every card in a row given the pend
 settled; no stretch past; the card ignoring `settled`, or keeping its clock; the barrier skipping `past`; a tap not the
 reader's; nothing held; the foot without the measure; the foot for a reader who left; rounding taken as a move; the wait
 keyed by its kind only; a structured question naming no call; the list folding by `askPending` alone; the wait line drawn
-beside a named question (19, `tool-activity.test.tsx`, `same-row.test.ts`, `foot-follow.test.ts`). One first survived
+beside a named question; a held finger or drag ignored; a new item at an end ignored; the reader's own input ignored; the
+bounds stopping the foot follow too (23, `tool-activity.test.tsx`, `same-row.test.ts`, `foot-follow.test.ts`). One first survived
 (words matched without their count); the case of a call asking fewer questions than the wait kills it. In Chrome
 (`tool-activity.browser.test.ts`, each mutant built into its own production bundle): no move to the foot (the four
 "opened, calls arrive" cases red, Refined at 1280 among them, which the shrink had let through before); a tap not the
-reader's, and no tap seen (the four F5 cases red); the hold putting nothing back (the four F6 cases red). One is
-equivalent: the wait control without its `FOCUS_RING` class still draws the same 2px solid ring, from base.css's
-`:focus-visible` rule, so A3's ring check (solid, at least 2px, never the browser's default) stays green.
+reader's, and no tap seen (the four F5 cases red); the hold putting nothing back (the eight grow and shrink cases red);
+the anchor read in the scroll event rather than a frame after (the four shrink cases red, 2-3px); the change put back
+again over a correction already made (the four "already corrected" cases red). Two survived, both equivalent.
+Measuring the row's content rather than its wrapper changed nothing once the anchor is read a frame after a scroll, so
+that code is gone and the list measures the wrapper. The wait control without its `FOCUS_RING` class still draws the same
+2px solid ring, from base.css's `:focus-visible` rule, so A3's ring check (solid, at least 2px, never the browser's
+default) stays green; the class stays, as on every control of the transcript.
 
 **What else this round changed in the tests.** `ask-inline.browser.test.ts` drew its live ask call with fixed words
 (`Which cache should the service use?`) beside a live question in other words, an unreadable or unparsed menu, or an
@@ -211,10 +238,11 @@ written as a conditional, read as a new hook class to the two design-system boun
 template again.
 
 **Browser evidence, this round, local Chrome over the production build** (the pull request's browser shards skip their
-tests; the merge queue runs them): `tool-activity` 28; `ask-inline` 500 (12 skipped); `tool-group-fit`, `tool-well-colour`,
-`wheel-chain`, `wheel-chain-chip`, `compaction-fold`, `frame-cost` and `inspector-hide` 121 (1 expected fail, 40
-skipped); `wheel-chain-well` 8; `ask-surface`, `chat-colour`, `chat-width`, `chat-links`, `instrument-desk`, `row-fit`,
-`sheet-stack-hide`, `helpers-rail` and `session-header` 374. All green.
+tests; the merge queue runs them): `tool-activity` 36; `ask-inline` 500 (12 skipped); `wheel-chain`, `wheel-chain-well`,
+`wheel-chain-chip`, `frame-cost`, `inspector-hide`, `refined-phone`, `tool-group-fit`, `tool-well-colour` and
+`compaction-fold` 182 (1 expected fail, 40 skipped); `ask-surface`, `instrument-desk`, `chat-width`, `chat-links`,
+`chat-colour`, `row-fit`, `sheet-stack-hide`, `helpers-rail`, `session-header` and `session-panel-words` 396. All green on
+the pushed code. No jump or oscillation in any of them.
 
 **Review 3450** (three Opus lenses, Sonnet refuters) confirmed seven findings; the fix round took them all as the
 coordinator ruled: F1, F2, F3 and F6 by the current-turn rules and the wait line above; F4 by the row's details giving way
@@ -252,8 +280,9 @@ Taken in Chrome over the production build, over the browser test's fixture (24 t
 - A question is tied to its call by its words: two open asks of one turn asking exactly the same questions single out
   neither (the wait line carries the control). While the pane is on the ask's review screen the wait is `other`, so the
   question's card shows no control and the wait line carries it.
-- The hold keeps the item at the top of the view in place; a change inside that item above the reader's line (a card
-  opening within an opened stretch, by something other than a tap) is not compensated.
+- The hold keeps the row crossing the top of the view in place; a change inside that row above the reader's line (a card
+  opening within an opened stretch, by something other than a tap) is not compensated, and neither is a change while the
+  reader is moving the list or one that came with an item at either end (the bounds above).
 - Per-call failed and live are re-derived in `toolActivity.ts` beside `toolSummary.ts`'s own (review 3478 A5): the two
   agree today; one owner is the follow-up.
 - Two arms of the row barrier (`sameList(entries)`, the attention kind) are redundant with `inner` and the attention

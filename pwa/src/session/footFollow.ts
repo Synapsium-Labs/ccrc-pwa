@@ -10,9 +10,13 @@
 // SO, ON EACH CHANGE, ONE OF THREE:
 //  - `foot`: the reader was at the foot (within the pill's band of it, measured against the list as it stood BEFORE
 //    this change, and the list's own flag agreeing), so the list goes back to it;
-//  - `hold`: the reader was anywhere else, so the item at the top of their view is kept where it was, and a row that
-//    grew above it moves nothing they read (a row below it, or the item itself growing at its foot, moves nothing
-//    anyway);
+//  - `hold`: the reader was anywhere else, so the row crossing the top of their view (by its key, never its index) is put
+//    back where it was, and a row wholly above it that grew or shrank moves nothing they read (a row below it, or the
+//    row itself changing at its foot, moves nothing anyway). Never while the reader is moving the list themselves (a
+//    wheel, a touch, a scroll key within `INPUT_SETTLE_MS`, or a finger or pointer held on it), and never for a change
+//    that came with an item added or removed at either end of the list: appends are the foot follow's, and items added
+//    at the top belong to the older-history work, which owns that anchor. One change is corrected once: the list
+//    measures a frame later, after any correction of virtuoso's or the browser's own;
 //  - `none`: the reader caused the change by opening or closing a row, a run group or a card, so nothing moves: the
 //    header they tapped stays where it was, and what opened grows downward under it, as every disclosure did before the
 //    fold. A change within `TAP_SETTLE_MS` of the reader's last tap on a disclosure in the list is theirs.
@@ -27,6 +31,10 @@
  *  the list measures the rows it re-renders a frame or two later. */
 export const TAP_SETTLE_MS = 600;
 
+/** How long after the reader's own wheel, touch or scroll key the list is still theirs: a wheel's or a fling's momentum
+ *  scrolls on after its last event. */
+export const INPUT_SETTLE_MS = 300;
+
 export interface HeightChange {
   /** The list's last word on whether the reader is at the foot (`atBottomStateChange`). */
   readonly pinned: boolean;
@@ -39,6 +47,12 @@ export interface HeightChange {
   readonly band: number;
   /** Milliseconds since the reader last opened or closed a disclosure in the list; null if they never have. */
   readonly sinceTap: number | null;
+  /** Milliseconds since the reader last moved the list themselves (a wheel, a touch, a scroll key); null if never. */
+  readonly sinceInput: number | null;
+  /** A finger or a pointer is held down on the list (a touch, a scrollbar drag). */
+  readonly held: boolean;
+  /** An item was added or removed at either end of the list since the last change. */
+  readonly newItem: boolean;
 }
 
 export type HeightMove = 'foot' | 'hold' | 'none';
@@ -46,7 +60,9 @@ export type HeightMove = 'foot' | 'hold' | 'none';
 export function heightMove(c: HeightChange): HeightMove {
   if (c.before === null) return 'none';
   if (c.sinceTap !== null && c.sinceTap < TAP_SETTLE_MS) return 'none';
-  return c.pinned && c.before - c.scrollTop - c.clientHeight <= c.band + 1 ? 'foot' : 'hold';
+  if (c.pinned && c.before - c.scrollTop - c.clientHeight <= c.band + 1) return 'foot';
+  if (c.held || c.newItem || (c.sinceInput !== null && c.sinceInput < INPUT_SETTLE_MS)) return 'none';
+  return 'hold';
 }
 
 /** How far to scroll to put the item at the top of the view back where it was: where it is now less where it was, px;

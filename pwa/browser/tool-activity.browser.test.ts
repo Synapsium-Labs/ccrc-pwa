@@ -487,68 +487,105 @@ describe('opening a row at the foot leaves the header the reader tapped where it
   }
 });
 
+/** How a row above the reader changes size: its running call fails and a card surfaces (+); the same, while a correction
+ *  of the list's own puts the view back first, so the hold must add nothing (one correction per change); or the
+ *  question it surfaced stops being asked, and its card goes (-). */
+type AboveMode = 'grows' | 'grows, already corrected' | 'shrinks';
+const ABOVE_MODES: AboveMode[] = ['grows', 'grows, already corrected', 'shrinks'];
+const PICK = 'Which cache should the service use, the shared one or a local one?';
+
 describe('a row above the reader that changes size moves nothing they read (review 3478 F6)', () => {
-  for (const view of GROWTH) {
-    it(named(view), async () => {
-      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
-      try {
-        // The current turn: a stretch whose Bash is still running, prose, then a tall stretch the reader opens and reads.
-        const events: object[] = [...HISTORY];
-        events.push({ kind: 'user', uuid: 'q-above', ts: TS, text: 'Check both.' });
-        call(events, 'Read', { file_path: '/w/project-a/src/slow.ts' });
-        k += 1;
-        const slow = `t${k}`;
-        events.push({ kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'Bash', input: JSON.stringify({ command: 'npm run slow' }) });
-        events.push({ kind: 'assistant', uuid: 'a-above', ts: TS, text: 'While that runs, a few questions.' });
-        for (let i = 0; i < 10; i += 1) {
-          answered(events, `Which way for part ${i} of the change, the first or the second?`);
-          call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
+  for (const mode of ABOVE_MODES) {
+    for (const view of GROWTH) {
+      it(`${named(view)}: the row above ${mode}`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+        try {
+          // The current turn: a stretch above (its Bash still running, or its question asked now), prose, then a tall
+          // stretch the reader opens and reads.
+          const events: object[] = [...HISTORY];
+          events.push({ kind: 'user', uuid: 'q-above', ts: TS, text: 'Check both.' });
+          call(events, 'Read', { file_path: '/w/project-a/src/slow.ts' });
+          k += 1;
+          const slow = `t${k}`;
+          const options = [{ label: 'Shared' }, { label: 'Local' }];
+          events.push(mode === 'shrinks'
+            ? { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'AskUserQuestion', input: JSON.stringify({ questions: [{ question: PICK, header: 'Cache', options }] }) }
+            : { kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'Bash', input: JSON.stringify({ command: 'npm run slow' }) });
+          events.push({ kind: 'assistant', uuid: 'a-above', ts: TS, text: 'While that waits, a few questions.' });
+          for (let i = 0; i < 10; i += 1) {
+            answered(events, `Which way for part ${i} of the change, the first or the second?`);
+            call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
+          }
+          events.push({ kind: 'assistant', uuid: 'b-above', ts: TS, text: 'Questions done.' });
+          const asked = mode === 'shrinks' ? [{ type: 'ask', ask: { questions: [{ question: PICK, header: 'Cache', options }] } }] : [];
+          const send = await openSession(page, ctx, events, asked);
+          if (mode === 'shrinks') {
+            // The question is asked now: its card is surfaced under the row above. At a phone's width its sheet opens over
+            // the transcript; close it, as a reader reading the transcript has.
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(400);
+          }
+          await scrollTo(page, 'bottom');
+          await page.locator('.tool-activity-row').last().click();
+          await page.waitForTimeout(800);
+          // Read inside the opened stretch, the row above out of view above.
+          await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+            const tall = rows[rows.length - 1]!;
+            s.scrollTop += tall.getBoundingClientRect().top - s.getBoundingClientRect().top + 200;
+          });
+          await page.waitForTimeout(600);
+          if (mode === 'grows, already corrected') {
+            // A correction of the list's own: when the row above changes size, the view is put back at once, before the
+            // list's hold runs. The hold must then move nothing more.
+            await page.evaluate(() => {
+              const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+              const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+              const above = rows[rows.length - 2]!;
+              let last = above.getBoundingClientRect().height;
+              new ResizeObserver(() => {
+                const h = above.getBoundingClientRect().height;
+                s.scrollTop += h - last;
+                last = h;
+              }).observe(above);
+            });
+          }
+          const reading = async () => page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            const top = s.getBoundingClientRect().top;
+            const card = [...s.querySelectorAll<HTMLElement>('.tool-activity-body .tool-ask, .tool-activity-body .toolcard, .tool-activity-body .ref-tool-group')]
+              .find((el) => el.getBoundingClientRect().top >= top);
+            const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+            const above = rows[rows.length - 2];
+            return {
+              text: card?.textContent ?? '',
+              at: Math.round((card?.getBoundingClientRect().top ?? 0) - top),
+              fromFoot: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight),
+              aboveBottom: above === undefined ? null : Math.round(above.getBoundingClientRect().bottom - top),
+              aboveHeight: above === undefined ? null : Math.round(above.getBoundingClientRect().height),
+            };
+          });
+          const before = await reading();
+          send(mode === 'shrinks'
+            ? { type: 'ask_cleared' }
+            : { type: 'events', uuid: 'u-1', events: [{ kind: 'tool_result', ts: TS, toolId: slow, text: 'exit 1', isError: true }], offset: 2 });
+          await page.waitForTimeout(1000);
+          const after = await reading();
+          console.log(`F6 above ${mode} ${named(view)}: ${JSON.stringify({ before, after })}`);
+          expect(before.text, 'no card in view inside the opened stretch').not.toBe('');
+          expect(before.aboveBottom, 'the changing row is not above the reader').not.toBeNull();
+          expect(before.aboveBottom!, 'the changing row is not wholly above the reader').toBeLessThanOrEqual(0);
+          const change = after.aboveHeight! - before.aboveHeight!;
+          if (mode === 'shrinks') expect(change, 'the row above did not shrink: the case measures nothing').toBeLessThan(0);
+          else expect(change, 'the row above did not grow: the case measures nothing').toBeGreaterThan(0);
+          expect(after.text, 'the card in view changed').toBe(before.text);
+          expect(Math.abs(after.at - before.at), 'the card in view moved').toBeLessThanOrEqual(1);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
         }
-        events.push({ kind: 'assistant', uuid: 'b-above', ts: TS, text: 'Questions done.' });
-        const send = await openSession(page, ctx, events);
-        await scrollTo(page, 'bottom');
-        await page.locator('.tool-activity-row').last().click();
-        await page.waitForTimeout(800);
-        // Read inside the opened stretch, the running stretch out of view above.
-        await page.evaluate(() => {
-          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
-          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
-          const tall = rows[rows.length - 1]!;
-          s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -100 }));
-          s.scrollTop += tall.getBoundingClientRect().top - s.getBoundingClientRect().top + 200;
-        });
-        await page.waitForTimeout(600);
-        const reading = async () => page.evaluate(() => {
-          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
-          const top = s.getBoundingClientRect().top;
-          const card = [...s.querySelectorAll<HTMLElement>('.tool-activity-body .tool-ask, .tool-activity-body .toolcard, .tool-activity-body .ref-tool-group')]
-            .find((el) => el.getBoundingClientRect().top >= top);
-          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
-          const above = rows[rows.length - 2];
-          return {
-            text: card?.textContent ?? '',
-            at: Math.round((card?.getBoundingClientRect().top ?? 0) - top),
-            fromFoot: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight),
-            aboveBottom: above === undefined ? null : Math.round(above.getBoundingClientRect().bottom - top),
-            aboveHeight: above === undefined ? null : Math.round(above.getBoundingClientRect().height),
-          };
-        });
-        const before = await reading();
-        // The running call fails: its card surfaces under its closed row, above the reader.
-        send({ type: 'events', uuid: 'u-1', events: [{ kind: 'tool_result', ts: TS, toolId: slow, text: 'exit 1', isError: true }], offset: 2 });
-        await page.waitForTimeout(1000);
-        const after = await reading();
-        console.log(`F6 above ${named(view)}: ${JSON.stringify({ before, after })}`);
-        expect(before.text, 'no card in view inside the opened stretch').not.toBe('');
-        expect(before.aboveBottom, 'the growing row is not above the reader').not.toBeNull();
-        expect(before.aboveBottom!, 'the growing row is not above the reader').toBeLessThanOrEqual(0);
-        expect(after.aboveHeight! - before.aboveHeight!, 'the row above did not grow: the case measures nothing').toBeGreaterThan(0);
-        expect(after.text, 'the card in view changed').toBe(before.text);
-        expect(Math.abs(after.at - before.at), 'the card in view moved').toBeLessThanOrEqual(1);
-        expect(errors).toEqual([]);
-      } finally {
-        await ctx.close();
-      }
-    });
+      });
+    }
   }
 });

@@ -536,7 +536,8 @@ const MeasuredItem = memo(function MeasuredItem({ meter, ...row }: RowViewProps 
     const node = el.current;
     return node === null ? undefined : meter.observe(node, () => current.current);
   }, [meter]);
-  return <div ref={el} className="chat-item"><TranscriptRowView {...row} /></div>;
+  // `data-row-key`: the row's identity, by which the list holds the reader's place (`onHeight`), never by its index.
+  return <div ref={el} className="chat-item" data-row-key={row.item.key}><TranscriptRowView {...row} /></div>;
 }, sameRowProps);
 
 /** Ordinary prose for the probe, so its average glyph is an ordinary one. */
@@ -810,55 +811,111 @@ function ChatScroller({
   const [band] = useState(() => column.pillBand());
 
   // A HEIGHT CHANGE NO NEW ITEM EXPLAINS (review 3450 F5, review 3478 F5 and F6). `heightMove` decides (why, and when
-  // which, is said there); this measures and acts. A tap on a disclosure in the list (anything with `aria-expanded`: a
-  // tool-activity row, a run group, a card) is timed here, so the change it makes is the reader's. The item at the top
-  // of the view is read on every scroll, so a `hold` puts it back where the reader last saw it.
+  // which, is said there); this measures and acts. Measured here, for it:
+  //  - the reader's taps on a disclosure in the list (anything with `aria-expanded`: a tool-activity row, a run group, a
+  //    card), and their own moving of the list (a wheel, a touch, a scroll key, a finger or a pointer held down on it);
+  //  - whether an item came or went at either end of the list since the last change (appends are the foot follow's,
+  //    items added at the top the older-history work's);
+  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read on every scroll, so a `hold` puts that
+  //    row back where the reader last saw it, and a regrouped list can never make it hold another.
   const scroller = useRef<HTMLElement | null>(null);
   const lastTap = useRef<number | null>(null);
-  const anchor = useRef<{ el: Element; top: number } | null>(null);
+  const lastInput = useRef<number | null>(null);
+  const held = useRef(false);
+  const anchor = useRef<{ key: string; top: number } | null>(null);
+  /** Where the row `key` stands, from the scroller's top, or null when it is not drawn. */
+  const topOf = useCallback((el: HTMLElement, key: string): number | null => {
+    const row = el.querySelector(`[data-row-key="${CSS.escape(key)}"]`);
+    return row === null ? null : row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+  }, []);
   const readAnchor = useCallback((): void => {
     const el = scroller.current;
     if (el === null) return;
+    // Measured from the scroller's own top, so a move of the scroller itself (a strip or the inline card above or below
+    // it changing) is never taken for a move of the rows inside it.
     const top = el.getBoundingClientRect().top;
-    const item = [...el.querySelectorAll('[data-index]')].find((it) => it.getBoundingClientRect().bottom > top);
-    anchor.current = item === undefined ? null : { el: item, top: item.getBoundingClientRect().top };
-  }, []);
+    const row = [...el.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top);
+    const at = row === undefined ? null : topOf(el, row.dataset.rowKey!);
+    anchor.current = row === undefined || at === null ? null : { key: row.dataset.rowKey!, top: at };
+  }, [topOf]);
+  // Read a frame after a scroll, never in it: the list lays out the rows a scroll brings into reach after the scroll
+  // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
+  const readSoon = useRef(false);
+  const onScroll = useCallback((): void => {
+    if (readSoon.current) return;
+    readSoon.current = true;
+    requestAnimationFrame(() => {
+      readSoon.current = false;
+      readAnchor();
+    });
+  }, [readAnchor]);
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
+  const onInput = useCallback((e: Event): void => {
+    lastInput.current = performance.now();
+    if (e.type === 'pointerdown' || e.type === 'touchstart') held.current = true;
+  }, []);
+  // A finger or a drag let go anywhere, the list's or not (a scrollbar drag can end outside it).
+  useEffect(() => {
+    const release = (): void => {
+      if (!held.current) return;
+      held.current = false;
+      lastInput.current = performance.now();
+    };
+    const ends = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'];
+    for (const t of ends) window.addEventListener(t, release, { capture: true, passive: true });
+    return () => { for (const t of ends) window.removeEventListener(t, release, true); };
+  }, []);
   const onScroller = useCallback((el: HTMLElement | Window | null): void => {
-    scroller.current?.removeEventListener('click', onTap, true);
-    scroller.current?.removeEventListener('scroll', readAnchor);
+    const inputs = ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown'];
+    const old = scroller.current;
+    old?.removeEventListener('click', onTap, true);
+    old?.removeEventListener('scroll', onScroll);
+    for (const t of inputs) old?.removeEventListener(t, onInput, true);
     scroller.current = el instanceof HTMLElement ? el : null;
-    scroller.current?.addEventListener('click', onTap, true);
-    scroller.current?.addEventListener('scroll', readAnchor, { passive: true });
-  }, [onTap, readAnchor]);
+    const now = scroller.current;
+    now?.addEventListener('click', onTap, true);
+    now?.addEventListener('scroll', onScroll, { passive: true });
+    for (const t of inputs) now?.addEventListener(t, onInput, { capture: true, passive: true });
+  }, [onTap, onInput, onScroll]);
   const lastHeight = useRef<number | null>(null);
+  const edges = useRef<string | null>(null);
+  const shown = useRef(items);
+  shown.current = items;
   const onHeight = useCallback((height: number): void => {
     const before = lastHeight.current;
     lastHeight.current = height;
+    const list = shown.current;
+    const now = `${list.length}:${list[0]?.key ?? ''}:${list[list.length - 1]?.key ?? ''}`;
+    const newItem = edges.current !== null && edges.current !== now;
+    edges.current = now;
     const el = scroller.current;
     if (el === null) return;
-    const tap = lastTap.current;
+    const at = performance.now();
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
-      sinceTap: tap === null ? null : performance.now() - tap,
+      sinceTap: lastTap.current === null ? null : at - lastTap.current,
+      sinceInput: lastInput.current === null ? null : at - lastInput.current,
+      held: held.current, newItem,
     });
     if (move === 'foot') {
       virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
       return;
     }
-    // A frame later, after virtuoso's own correction (which scrolls, and so re-reads the anchor): a `hold` puts back
-    // only what it left, so nothing is corrected twice. A `none` re-reads it, so the tap's change is the new place.
+    // A frame later, after any correction of the list's own or the browser's: the hold compares where the row stood
+    // before the change with where it stands now, so a change something else already put back is put back by nothing
+    // more (one correction per change). A `none` re-reads it, so the change it let through is the reader's new place.
     requestAnimationFrame(() => {
       const a = anchor.current;
-      if (move === 'hold' && a !== null && a.el.isConnected) {
-        const shift = holdShift(a.top, a.el.getBoundingClientRect().top);
+      const now = a === null ? null : topOf(el, a.key);
+      if (move === 'hold' && a !== null && now !== null) {
+        const shift = holdShift(a.top, now);
         if (shift !== 0) el.scrollTop += shift;
       }
       readAnchor();
     });
-  }, [band, readAnchor]);
+  }, [band, readAnchor, topOf]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
