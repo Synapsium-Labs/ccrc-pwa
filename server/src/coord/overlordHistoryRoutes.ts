@@ -39,7 +39,7 @@ export interface OverlordHistoryRoutesDeps {
 
 /** The route's byte bound: the request's own bound (`OVERLORD_HISTORY_REQUEST_MAX_BYTES`, which the reader measures on the
  *  request less the caller's pair, as the agent measures it on the frame less its envelope) plus room for the pair, so one
- *  request reads alike at the door and at the agent (slug `history-door-bound-allows-the-pair`). A larger body is `bad-request`
+ *  request reads alike at the door and at the agent (slug `history-door-bound-allows-the-pair`). A larger body is `oversize`
  *  413 before anything is parsed. */
 export const OVERLORD_HISTORY_BODY_LIMIT_BYTES = OVERLORD_HISTORY_REQUEST_MAX_BYTES + 512;
 
@@ -60,9 +60,10 @@ export function registerOverlordHistoryRoutes(app: FastifyInstance, deps: Overlo
   app.post('/api/overlord/history', {
     bodyLimit: OVERLORD_HISTORY_BODY_LIMIT_BYTES,
     config: { rateLimit: { max: 1200, timeWindow: '1 minute' } },
-    // A body past the bound is the claim route's 413, in this door's refusal shape; any other error keeps its own path.
+    // A body past the bound is 413 `oversize`, the word that status belongs to (the credential routes' shape); any other error
+    // keeps its own path.
     errorHandler: (err, _req, reply) => {
-      if ((err as { statusCode?: number }).statusCode === 413) return reply.code(413).send({ ok: false, error: 'bad-request', refusal: 'oversize' });
+      if ((err as { statusCode?: number }).statusCode === 413) return refuseRoute(reply, 'oversize');
       return reply.send(err);
     },
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {

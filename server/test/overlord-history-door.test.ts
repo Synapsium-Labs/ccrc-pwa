@@ -293,7 +293,7 @@ describe('the door: the request', () => {
     expect(r.lines()).toEqual([]);
   });
 
-  it('a request past its own bound is bad-request 400 oversize; a body past the route bound is bad-request 413', async () => {
+  it('a request past its own bound is bad-request 400 oversize; a body past the route bound is oversize 413', async () => {
     const r = await rig();
     const big = { ...SEARCH, args: [...Array.from({ length: 8 }, () => 'x'.repeat(1000)), 'x'.repeat(300)] };
     expect(Buffer.byteLength(JSON.stringify({ byId: BODY, byUuid: 'u-1', ...big }))).toBeLessThan(OVERLORD_HISTORY_BODY_LIMIT_BYTES);
@@ -302,7 +302,7 @@ describe('the door: the request', () => {
     expect(json(over)).toMatchObject({ error: 'bad-request', refusal: 'oversize' });
     const huge = await history(r, { ...SEARCH, pad: 'x'.repeat(OVERLORD_HISTORY_BODY_LIMIT_BYTES) });
     expect(huge.statusCode, huge.body).toBe(413);
-    expect(json(huge)).toEqual({ ok: false, error: 'bad-request', refusal: 'oversize' });
+    expect(json(huge)).toEqual({ ok: false, error: 'oversize' });
     expect(r.asked).toEqual([]);
     expect(r.lines()).toEqual([]);
   });

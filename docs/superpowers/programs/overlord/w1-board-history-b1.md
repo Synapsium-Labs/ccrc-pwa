@@ -38,7 +38,8 @@ defined here: each departure has a slug, and the coordinator mints numbers.
 - **`history-door-bound-allows-the-pair`**: the plan sets the route's `bodyLimit` to
   `OVERLORD_HISTORY_REQUEST_MAX_BYTES`. The reader measures the request less the caller pair, as the agent measures the
   frame less its envelope, so one request reads alike at the door and at the agent; the route bound is that bound plus
-  512 bytes for the pair. A body past the route bound is `bad-request` 413 (`refusal: oversize`); a body within it whose
+  512 bytes for the pair. A body past the route bound is `oversize` 413, the word that status belongs to (the plan says
+  `bad-request` 413; the inline-send ratchet refuses a word answered at another word's status); a body within it whose
   request is past the request bound is `bad-request` 400 with the reader's `oversize`.
 - **`history-request-read-after-the-gate`**: the request is read after the gate and before the read runner, as the
   inbox's message id is: a caller that is not the Overlord learns nothing of the grammar, and a refused request writes no
@@ -81,15 +82,27 @@ Each guard was removed in place, its test file run, then restored:
 | the client's separator, `--regex` and bound checks | `ccrc-api.test.ts` (mutant controls) | each sends |
 | `historyAgentFor`, `historyDoorAnswer` | `sim/mutation-floors.test.ts` | 9 of 9 mutants killed |
 | the history file in the gate census | `overlord-gate-census.test.ts` (control) | the skipped gate is named |
+| `isOverlordHistoryKebab` (the coordination word scan) | `mail-routes.test.ts` | 1 failed |
+| the 413 through `refuseRoute` | `overlord-history-door.test.ts` | 1 failed |
 
 Two bugs the corpus caught while it was written: jq's `inside` is a substring test on strings, so an empty or partial
 verb passed the client, and the bound case's pad argument was past 1024 characters.
+
+## The first full run
+
+The pull request's first run (tip `04f4de8148`) was red beyond the known README line, on four censuses this branch had not
+run locally: `refusal-status` (the 413 was an inline send at another word's status), `mail-routes` (the coordination word
+scan did not know `no-agent` and the other causes), `overlord-gate` (the door table's fenced reads) and
+`overlord-other-lanes-census` (a write door with no class); and on `fleetio-contract` (the member list), a held file. The
+four are fixed here; the member list went to its holder as a packet.
 
 ## Files held by others
 
 - `server/src/auth/gate.ts`, `server/test/auth-gate.test.ts` and `server/test/rings/fastify-l4.data.ts` (another
   programme's worker) and `README.md` (another programme's landing work): a packet each, a unified diff against main
-  `125a388691b05ba80bc074f827b56aa66b123158`, every line forced by a census; applied only on a yes. The drafts were made
+  `125a388691b05ba80bc074f827b56aa66b123158`, every line forced by a census; applied only on a yes. The gate packet's yes
+  is applied; the README yes is held for the final merge (the coordinator's ruling); `server/test/fleetio-contract.test.ts`
+  (the landing work's) went as a third packet after the first run. The drafts were made
   in the work tree to measure them, then restored to main's text before the packets went.
 - Overlord peers' files carry my hunks with a one-line notice: `overlordDoors.ts`, `server.ts`, `CLAUDE.md`, the
   box-token census and the doors census (Authority B); `overlordInboxRoutes.ts` (three exports) and

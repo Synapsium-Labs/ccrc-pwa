@@ -59,6 +59,12 @@ const CAUSE_MAP: Record<HistoryUnreachableCause, string> = {
 /** Every `HistoryUnreachableCause`, derived from the map. */
 export const HISTORY_UNREACHABLE_CAUSES = Object.keys(CAUSE_MAP) as HistoryUnreachableCause[];
 
+/** Whether a kebab word is one this file names: a cause of `history-unreachable`, or the agent's refused request as a line's
+ *  outcome. A word rides a door answer's `cause` or a read-ledger line, never a `refused` or `reject.code` (the coordination
+ *  scan's guard, `mail-routes.test.ts`). */
+export const isOverlordHistoryKebab = (word: string): boolean =>
+  Object.prototype.hasOwnProperty.call(CAUSE_MAP, word) || word === 'request-refused';
+
 /** Everything the door can be handed: the choice's no-link answers, or what the port answered. */
 export type HistoryReadOutcome = { readonly kind: 'no-agent' } | { readonly kind: 'many-agents' } | OverlordHistoryAsked;
 
