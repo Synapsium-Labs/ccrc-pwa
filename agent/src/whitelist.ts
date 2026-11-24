@@ -422,6 +422,7 @@ export const REQUIRED_VERB_FLAG = {
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project', 'docs-log': '--project',
   'docs-show-range': '--project',
+  'docs-folder-read': '--label',
   'ws-collect': '--expect',
   'ws-orphan': '--expect',
   'ws-title': '--session',
@@ -747,6 +748,17 @@ export const EXEC_WHITELIST = {
     // One file's bytes above the show caps, as a snapshot prepare and then frames (X2 P1, behind `docs-range-v1`):
     // read-only on the project, ENROLLED above on `--project`; its argv shapes are ccd's (a usage die on any other).
     ['docs-show-range', '--project'],
+    // The outside-folder registry (X2 spec 2026-11-18 section 7, P2.1, behind `docs-folders-v1`): `docs-folder` is a
+    // multi-flag verb, NOT enrolled in `REQUIRED_VERB_FLAG` (as `ws-audit`, `pr-state` and `ws-archive`): three grants each
+    // name their flag as the second token, so a bare `docs-folder` matches none. `--list` reads the registry; `--add` and
+    // `--remove` are its one writer's, server-composed only (the verb is forbidden to every session, in every form).
+    ['docs-folder', '--list'],
+    ['docs-folder', '--add'],
+    ['docs-folder', '--remove'],
+    // One read of a registered folder (X2 spec section 7, P2.2, behind `docs-folders-v1`): a tree, a show, a snapshot prepare
+    // or a frame, read-only, ENROLLED above on `--label`; ccd resolves the label from its registry and dies with usage on any
+    // other shape.
+    ['docs-folder-read', '--label'],
     // THE CHILD TEMP-ROOT COLLECTOR (child reclamation spec 2026-09-22 §5.10): the fourth destructive verb, and the third
     // the SERVER sends with no human in the path — on a witnessed child temp root whose workspace is gone. Granted on its
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides

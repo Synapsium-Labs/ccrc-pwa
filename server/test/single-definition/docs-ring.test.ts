@@ -441,3 +441,115 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
     expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
   });
 });
+
+
+// Native Docs parity X2 P2.1 (spec 2026-11-18 section 4.1): the registry of outside folders, `$REG/docs-folders/<label>`,
+// has ONE writer, `folder_registry_write` in ccd's Docs helper, which takes the registry's lock for every create, write,
+// rename and unlink. The scan is textual and narrow. In the helper (comment lines dropped, split into top-level `def`
+// blocks): (a) a MUTATION line is one that names the registry directory (its descriptor `reg_fd`, or the constant
+// FOLDER_REGISTRY_NAME) and a mutating call (mkdir, rename, unlink, remove, rmdir, replace, link, symlink, fchmod, a
+// write, truncate or create open flag), and exactly one def holds any; (b) exactly two defs name the constant at all, the
+// reader's opener and that writer, so a third function that opens the directory is seen. Outside the helper: (c) the
+// literal `'docs-folders'` is spelled once, as the constant's definition, in ccd/ccd; (d) no other file, a bash file or
+// a TypeScript source of the four roots, spells the registry as a filesystem path under the registry root. Only the
+// writer (a) can mutate, and only ccd (c, d) names where the registry lives. APPENDED, for the citation audit's reason.
+describe('docs-folder registry has one writer (X2 P2.1)', () => {
+  const MUTATORS = /\bos\.(?:mkdir|makedirs|rename|renames|unlink|remove|rmdir|replace|link|symlink|fchmod|chmod|write|ftruncate|truncate)\(|\bO_(?:CREAT|WRONLY|RDWR|TRUNC|APPEND)\b|\bshutil\./;
+  const NAMES_REGISTRY = /\breg_fd\b|\bFOLDER_REGISTRY_NAME\b/;
+  const isPyComment = (l: string): boolean => l.trim().startsWith('#');
+  /** The helper's top-level `def` blocks: a block runs from its `def` line to the next line at column 0 that is not a
+   *  comment or blank; comment lines are dropped. */
+  const pyDefs = (py: string): { name: string; lines: string[] }[] => {
+    const out: { name: string; lines: string[] }[] = [];
+    let cur: { name: string; lines: string[] } | null = null;
+    for (const l of py.split('\n')) {
+      const m = /^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(l);
+      if (m !== null) { cur = { name: m[1]!, lines: [] }; out.push(cur); continue; }
+      if (/^\S/.test(l) && !isPyComment(l)) { cur = null; continue; }
+      if (cur !== null && !isPyComment(l)) cur.lines.push(l);
+    }
+    return out;
+  };
+  const writersIn = (py: string): string[] =>
+    pyDefs(py).filter((d) => d.lines.some((l) => NAMES_REGISTRY.test(l) && MUTATORS.test(l))).map((d) => d.name);
+  /** Defs that CALL `folder_registry_open` (its own def line is not a call), and, of them, those holding ANY mutating line
+   *  whatever the descriptor is named: a reader that unlinks through `fd` is as much a writer as one that uses `reg_fd`. */
+  const openerCallers = (py: string): string[] =>
+    pyDefs(py).filter((d) => d.name !== 'folder_registry_open' && d.lines.some((l) => /\bfolder_registry_open\(/.test(l))).map((d) => d.name);
+  const mutatingCallers = (py: string): string[] =>
+    pyDefs(py).filter((d) => d.name !== 'folder_registry_write'
+      && d.lines.some((l) => /\bfolder_registry_open\(/.test(l)) && d.lines.some((l) => MUTATORS.test(l))).map((d) => d.name);
+  const openersIn = (py: string): string[] =>
+    pyDefs(py).filter((d) => d.lines.some((l) => /\bFOLDER_REGISTRY_NAME\b/.test(l))).map((d) => d.name);
+  /** Lines (not comments) of `text` that quote the registry's name bare. */
+  const quotedName = (text: string): string[] =>
+    text.split('\n').filter((l) => !isPyComment(l) && /(['"])docs-folders\1/.test(l));
+  /** A filesystem-path spelling of the registry: the state root (`.cc-sessions`, `$REG`, `${REG}`, `reg`) and the name on
+   *  one line, the name quoted or after a slash and not the `-v1` token. `/api/docs-folders` is a URL, not a path. */
+  const PATH_SPELLING = /(?:\.cc-sessions|\$\{?REG\}?|\breg\b|\bREG\b)[^\n]*(?:['"]|(?<!api)\/)docs-folders(?!-)/;
+  const pathSpellings = (files: readonly (readonly [string, string])[]): string[] =>
+    files.flatMap(([name, text]) => text.split('\n')
+      .filter((l) => !isPyComment(l) && !/^\s*(\*|\/\/|\/\*)/.test(l) && PATH_SPELLING.test(l)).map((l) => `${name}: ${l.trim()}`));
+
+  const SHIPPED_PY = async (): Promise<string> => (await import('../docsHelperPy.js')).docsHelperSource();
+
+  it('docs-folder registry has one writer', async () => {
+    const py = await SHIPPED_PY();
+    expect(writersIn(py), 'the one def that mutates the registry').toEqual(['folder_registry_write']);
+    expect(openersIn(py), 'the defs that open the registry directory: its reader and its writer').toEqual(
+      ['folder_registry_open', 'folder_registry_write']);
+    // (e) the reader's opener is called only by the reader and the writer, and a caller other than the writer holds no
+    // mutating line at all (its descriptor may be named anything).
+    const callers = openerCallers(py);
+    expect(callers, 'the reader calls the opener').toContain('folder_registry_read');
+    expect(callers.filter((c) => !['folder_registry_read', 'folder_registry_write'].includes(c)), 'no other def calls the opener').toEqual([]);
+    expect(mutatingCallers(py), 'a caller of the opener that mutates anything').toEqual([]);
+    // (c) the name is quoted once in ccd/ccd, as the constant.
+    const { readFileSync: read } = await import('node:fs');
+    const ccd = read(path.join(ccrcRoot, 'ccd', 'ccd'), 'utf8');
+    const hits = quotedName(ccd);
+    expect(hits, 'the registry name is spelled once in ccd/ccd').toHaveLength(1);
+    expect(hits[0]!.trim()).toMatch(/^FOLDER_REGISTRY_NAME\s*=\s*'docs-folders'$/);
+    // (d) nobody else spells where the registry lives: not the bash outside the helper, not any other bash file, not a
+    // TypeScript source of the four roots.
+    const { BASH } = await import('./helpers.js');
+    const outsideHelper = ccd.replace(py, '');
+    const others = BASH.filter((f) => rel(f) !== 'ccd/ccd').map((f) => [rel(f), read(f, 'utf8')] as const);
+    const ts = ALL.map((f) => [rel(f), read(f, 'utf8')] as const);
+    expect(pathSpellings([['ccd/ccd (outside the helper)', outsideHelper], ...others, ...ts])).toEqual([]);
+    // Not vacuous: the corpus holds the files, and the pattern sees the helper's own spelling of a registry path.
+    expect(outsideHelper.length).toBeGreaterThan(1000);
+    expect(ALL.length).toBeGreaterThan(100);
+    expect(pathSpellings([['x', 'p = os.path.join(reg, "docs-folders")']])).toHaveLength(1);
+  });
+
+  it('CONTROL: a second writer, a third opener, a second spelling of the name and a path spelling are each seen', async () => {
+    const py = await SHIPPED_PY();
+    const second = `${py}\ndef sneaky(ctx):\n    os.unlink('x', dir_fd=reg_fd)\n`;
+    expect(writersIn(second)).toEqual(['folder_registry_write', 'sneaky']);
+    const creates = `${py}\ndef sneaky(ctx):\n    fd = os.open('x', os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=reg_fd)\n`;
+    expect(writersIn(creates)).toEqual(['folder_registry_write', 'sneaky']);
+    const mkdirs = `${py}\ndef sneaky(base_fd):\n    os.mkdir(FOLDER_REGISTRY_NAME, 0o700, dir_fd=base_fd)\n`;
+    expect(writersIn(mkdirs)).toEqual(['folder_registry_write', 'sneaky']);
+    const opens = `${py}\ndef sneaky(base_fd):\n    return os.open(FOLDER_REGISTRY_NAME, 0, dir_fd=base_fd)\n`;
+    expect(openersIn(opens)).toEqual(['folder_registry_open', 'folder_registry_write', 'sneaky']);
+    // A caller of the opener that mutates through a descriptor of any name, and a third caller, are each seen.
+    const readerUnlinks = py.replace('def folder_registry_read(ctx):\n', "def folder_registry_read(ctx):\n    os.unlink(name, dir_fd=fd)\n");
+    expect(readerUnlinks, 'the plant landed').not.toBe(py);
+    expect(mutatingCallers(readerUnlinks)).toEqual(['folder_registry_read']);
+    expect(mutatingCallers(py)).toEqual([]);
+    const third = `${py}\ndef sneaky(ctx):\n    return folder_registry_open(ctx)\n`;
+    expect(openerCallers(third)).toEqual([...openerCallers(py), 'sneaky']);
+    // A comment line and a def of its own that only reads are not writers.
+    const quiet = `${py}\n# os.unlink('x', dir_fd=reg_fd)\ndef reader(reg_fd):\n    return os.listdir(reg_fd)\n`;
+    expect(writersIn(quiet)).toEqual(['folder_registry_write']);
+    expect(quotedName("FOLDER_REGISTRY_NAME='docs-folders'\nOTHER = \"docs-folders\"\n# 'docs-folders' in a comment\n")).toHaveLength(2);
+    for (const spelled of ["const p = path.join(reg, 'docs-folders');", 'dir="$REG/docs-folders"', 'ls "$HOME/.cc-sessions/docs-folders"']) {
+      expect(pathSpellings([['x', spelled]]), spelled).toHaveLength(1);
+    }
+    for (const fine of ["const u = '/api/docs-folders';", 'echo docs-folders-v1', "// join(reg, 'docs-folders') in prose",
+      '# "$REG/docs-folders" in a comment', "const w = ['docs-folders'];"]) {
+      expect(pathSpellings([['x', fine]]), fine).toEqual([]);
+    }
+  });
+});

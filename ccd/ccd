@@ -9552,6 +9552,7 @@ EOF
   echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
   echo docs-log; echo docs-log-v1   # native Docs reader W5b (rich-docs spec G4): the verb, and the token that says it takes exactly this argv; the server sends it only behind the token
   echo docs-show-range; echo docs-range-v1   # native Docs parity X2 P1.2 (spec 2026-11-18 section 4.3): one file read by range, a snapshot prepare then frames; the verb, and the token that says it takes exactly these four argv shapes; the server sends it only behind the token
+  echo docs-folder; echo docs-folders-v1   # native Docs parity X2 P2.1 (spec 2026-11-18 section 4.1): the outside-folder registry verb, and the token that says this ccd takes its three shapes (--list, --add --path, --remove) and `docs-folder-read`, which the next task adds; the server sends either only behind the token
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -45258,6 +45259,25 @@ cmd_docs_show_range() {   # --project P (--commit C | --draft-branch B --head H)
   _docs_py docs-show-range "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
+cmd_docs_folder() {   # --list | --add <label> --path <abs> | --remove <label>
+  # The registry of outside folders and the admission of one (X2 spec 2026-11-18 section 4.1, plan P2.1). Three shapes, each
+  # exact in token count, and no other: a second mode, a repeated flag or a missing value is `die` (rc 1, empty stdout, the
+  # server-bug class). THE LABEL IS NOT CHECKED HERE: the helper owns its grammar (FOLDER_LABEL_RE) and refuses bad-label
+  # before any path join; this front joins no path and touches no file. The roster's config directories (protected: no
+  # folder may sit in or contain one) are computed here, where the roster is sourced, and handed to the helper in argv: a
+  # count and then that many absolute paths, after the three roots and in front of this verb's own tokens.
+  local shape=bad
+  if [[ $# -eq 1 && "${1-}" == --list ]]; then shape=list
+  elif [[ $# -eq 4 && "${1-}" == --add && "${3-}" == --path ]]; then shape=add
+  elif [[ $# -eq 2 && "${1-}" == --remove ]]; then shape=remove
+  fi
+  [[ "$shape" != bad ]] || die "usage: ccd docs-folder (--list | --add <label> --path <abs> | --remove <label>)"
+  _docs_front docs-folder || return 0
+  local cfg=() acct dir
+  for acct in "${CCRC_ACCOUNTS[@]}"; do dir=$(_ccrc_cfg_dir "$acct") && [[ -n "$dir" ]] && cfg+=("$dir"); done
+  _docs_py docs-folder "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "${#cfg[@]}" ${cfg[@]+"${cfg[@]}"} "$@" </dev/null
+}
+
 _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
   # Embedded for `_pr_py`'s reason: ~/.local/bin/ccd is a COPY, so a sibling
   # file would be a second deployment step, and a way for `ccd caps` to
@@ -45341,7 +45361,7 @@ DOCS_RANGE_MAX_BYTES=67108864
 DOCS_RANGE_PREPARE_BUDGET_MS=10000
 MTIME_NS_RE=r'0|[1-9][0-9]{0,18}'
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
-FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
+FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed','bad-label','absent','not-a-directory','foreign-owner','protected','unreadable','label-exists','unknown-folder'})
 # docs-parity: end
 
 # ===== docs: core =====
@@ -45553,6 +45573,8 @@ def read_args(verb, rest):
     if verb == 'docs-index':
         _contract(rest == ['--all'], 'docs-index takes exactly --all')
         return IndexArgs()
+    if verb == 'docs-folder':
+        return folder_args(rest)   # the folder section's: the label first, then the path's shape
     if verb == 'docs-tree':
         project, ref = _one_or_two(rest, '--ref')
         _refuse(valid_project(project), 'bad-project')
@@ -48736,11 +48758,20 @@ FETCH_AUTH_MARKS = ('Authentication failed', 'could not read Username', 'Permiss
 # ref-locked means ANOTHER process holds a ref lock (spec 2 (g) step 7, retried),
 # so 'cannot lock ref' alone is not enough: git says the same two words for a
 # directory/file conflict ("'refs/remotes/origin/foo' exists; cannot create
-# ..."), which only a prune cures and which --no-prune never will. The lock arm
-# needs git's own lock-file evidence beside it, `Unable to create '<ref>.lock':
-# File exists` (measured on git 2.43.0 under LC_ALL=C).
+# ..."), which only a prune cures and which --no-prune never will. git words a held
+# ref lock in TWO ways, and the lock arm takes either (rc 1 in both):
+#   git 2.43.0: `error: cannot lock ref '<ref>': Unable to create '<ref>.lock': File
+#     exists.` The mark needs git's own lock-file evidence beside it, `Unable to create
+#     '<ref>.lock': File exists`.
+#   git 2.53.0: `error: fetching ref refs/remotes/origin/<b> failed: reference already
+#     exists`, one whole line with neither the mark nor the evidence (a directory/file
+#     conflict says only the `some local refs could not be updated` summary, and a
+#     permission-denied lock says `cannot lock ref ... Permission denied` with rc 255).
+# Both measured under LC_ALL=C. The 2.53 line is pinned to `refs/remotes/origin/`, the tracked prefix this verb fetches
+# into: the same sentence about another ref is not a lock of ours.
 FETCH_LOCK_MARK = 'cannot lock ref'
 FETCH_LOCK_EVIDENCE_RE = r"Unable to create '[^'\n]*\.lock': File exists"
+FETCH_LOCK_LINE_RE = r'^error: fetching ref refs/remotes/origin/\S+ failed: reference already exists$'
 
 # A failure's `detail` (the envelope's bound, section 2 (b)): redacted BEFORE it
 # is cut, so a cut never slides a secret out from under a pattern's length floor.
@@ -48772,7 +48803,8 @@ def classify_fetch(rc, stderr, timed_out):
         return 'fetch-rejected-objects'
     if any(m in stderr for m in FETCH_AUTH_MARKS):
         return 'fetch-auth-failed'
-    if rc == 1 and FETCH_LOCK_MARK in stderr and re.search(FETCH_LOCK_EVIDENCE_RE, stderr):
+    if rc == 1 and ((FETCH_LOCK_MARK in stderr and re.search(FETCH_LOCK_EVIDENCE_RE, stderr))
+                    or re.search(FETCH_LOCK_LINE_RE, stderr, re.M)):
         return 'ref-locked'
     if rc == 128:
         return 'fetch-transport'
@@ -49551,10 +49583,474 @@ def verb_show_range(ctx, a):
     finally:
         os.close(cache.fd)
 
+# ===== docs: folder =====
+# docs-folder (X2 spec 2026-11-18 section 4.1, plan Task P2.1): the registry of outside folders and the admission of one.
+# Three shapes and no other, each exact in token count: `--list`, `--add <label> --path <abs>`, `--remove <label>`. The bash
+# front checked the shape; this section validates every VALUE by fixed index. THE LABEL FIRST, before any path join or any
+# filesystem call: FOLDER_LABEL_RE is ccd's parity copy of shared/docs.ts's DOCS_FOLDER_LABEL_RE, and the bash front checks
+# only the shape, so this check is ccd's own and the one a bad label meets (M11.58). Then the path's shape, then admission.
+# ADMISSION is by descriptors (spec 4.1): `/` is opened, then each component with O_DIRECTORY|O_NOFOLLOW from its parent's
+# descriptor, so a symlink anywhere refuses; the folder must be a directory of this user; and it must neither sit inside nor
+# contain a protected directory, compared by (st_dev, st_ino), never by a path string. A refusal names its failure word and,
+# for `protected`, its reason word, and NEVER the path or a part of it; `--list` is the only answer that carries a path.
+# THE ROSTER'S CONFIG DIRECTORIES reach the helper in argv, not the environment and not the wire: the bash front computes
+# them (`_ccrc_cfg_dir` over the roster) and hands them after the three roots as a count and then that many absolute paths,
+# in front of the verb's own tokens, so the verb's tokens stay at fixed offsets behind them.
+# THE REGISTRY is `$REG/docs-folders/<label>`, one regular file per label holding the admitted path and a newline, in a
+# directory of mode 0700 that only `folder_registry_write` (the one writer) creates, under a flock on `.lock` there.
+
+# docs-folder's own limits. FOLDER_LABEL_RE is a parity copy (DOCS_FOLDER_LABEL_RE); the others are ccd's.
+FOLDER_LABEL_RE=r'[a-z0-9][a-z0-9-]{0,31}'
+FOLDER_PATH_MAX_BYTES=4096
+FOLDER_FILE_MAX_BYTES=4097
+FOLDER_REGISTRY_NAME='docs-folders'
+FOLDER_LOCK_NAME='.lock'
+FOLDER_LOCK_WAIT_S=5
+FOLDER_CHAIN_MAX_STEPS=256
+# The opens of admission. A component opens with O_NOFOLLOW, so a symlink refuses; `/` and a protected directory (which
+# the stat of the protected set already followed) open without it.
+FOLDER_COMPONENT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+FOLDER_ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+# The protected directories under ccd's HOME, in the order a refusal names them, each with its reason word. The roots ccd is
+# handed (projects, worktrees, registry) come before them; the roster's config directories and every `.claude*` directory
+# directly under HOME come after the first four; HOME itself is last.
+FOLDER_PROTECTED_FIRST = (('.cc-secrets', 'secrets'), ('.cc-limits', 'limits'), ('.ccrc', 'ccrc-state'), ('ccrc-backups', 'backups'))
+FOLDER_PROTECTED_LAST = (('.config', 'dot-config'), ('.ssh', 'ssh'), ('.gnupg', 'gnupg'), (os.path.join('.local', 'share'), 'local-share'),
+                         (RANGE_CACHE_NAME, 'range-cache'))
+FolderArgs = namedtuple('FolderArgs', ['mode', 'label', 'path', 'cfg_dirs'])
+
+
+def valid_folder_label(s):
+    """The label's grammar, whole: ccd's own check of it (never the server's)."""
+    return re.fullmatch(FOLDER_LABEL_RE, s) is not None
+
+
+def valid_folder_path(s):
+    """True for an absolute path of at most FOLDER_PATH_MAX_BYTES bytes of strict UTF-8, with no empty component (no `//`),
+    no `.` or `..` component, no trailing slash and no control character. `/` alone is a trailing slash."""
+    try:
+        raw = os.fsencode(s)
+        text = raw.decode('utf-8')
+    except UnicodeError:
+        return False
+    if len(raw) > FOLDER_PATH_MAX_BYTES or not text.startswith('/') or text.endswith('/'):
+        return False
+    if any(unicodedata.category(ch) == 'Cc' for ch in text):
+        return False
+    return all(c not in ('', '.', '..') for c in text[1:].split('/'))
+
+
+def folder_args(rest):
+    """docs-folder's arguments: the roster's config directories (a count, then that many paths), then one of the three
+    shapes. The front checked the shape, re-asserted here; the label is refused bad-label first, then the path bad-path."""
+    rest = list(rest)
+    _contract(len(rest) >= 1 and re.fullmatch(r'[0-9]{1,3}', rest[0]) is not None, 'docs-folder: the roster count')
+    n = int(rest[0])
+    _contract(len(rest) >= 1 + n, 'docs-folder: the roster list')
+    cfg_dirs = rest[1:1 + n]
+    # The front hands only absolute paths (`_ccrc_cfg_dir` joins them to HOME): a relative one is a break of that
+    # contract, answered helper-failed, never skipped, which would leave a wrapper's directory unprotected.
+    _contract(all(os.path.isabs(d) for d in cfg_dirs), 'docs-folder: a roster config directory is not absolute')
+    toks = rest[1 + n:]
+    if toks == ['--list']:
+        return FolderArgs('list', None, None, cfg_dirs)
+    if len(toks) == 4 and toks[0] == '--add' and toks[2] == '--path':
+        _refuse(valid_folder_label(toks[1]), 'bad-label')
+        _refuse(valid_folder_path(toks[3]), 'bad-path')
+        return FolderArgs('add', toks[1], toks[3], cfg_dirs)
+    _contract(len(toks) == 2 and toks[0] == '--remove', 'docs-folder takes exactly three shapes')
+    _refuse(valid_folder_label(toks[1]), 'bad-label')
+    return FolderArgs('remove', toks[1], None, cfg_dirs)
+
+
+def folder_ids(st):
+    return (st.st_dev, st.st_ino)
+
+
+def folder_refused(e):
+    """An OSError at a seam of docs-folder -> the one Fail it is: unreadable, naming the errno and never a path."""
+    return Fail('unreadable', {'reason': _walk_errno(e.errno)})
+
+
+def folder_open_chain(path):
+    """Open `path` (already shaped) from `/` one component at a time -> (fd, chain), the held descriptor of the last
+    component and the (st_dev, st_ino) of every directory opened, `/` and the folder included. A component that will not
+    open as a directory is symlink-in-path, not-a-directory (a file on the way), absent or unreadable (with its errno)."""
+    fd = SYS.open('/', FOLDER_ROOT_FLAGS)
+    chain = []
+    try:
+        chain.append(folder_ids(SYS.fstat(fd)))
+        for comp in path[1:].split('/'):
+            try:
+                nfd = SYS.open(comp, FOLDER_COMPONENT_FLAGS, dir_fd=fd)
+            except OSError as e:
+                kind, err = _walk_middle_refused(fd, comp, e)
+                if kind == 'unreadable':
+                    raise Fail('unreadable', {'reason': err})
+                raise Fail({'file-in-path': 'not-a-directory'}.get(kind, kind))
+            SYS.close(fd)
+            fd = nfd
+            chain.append(folder_ids(SYS.fstat(fd)))
+    except BaseException:
+        SYS.close(fd)
+        raise
+    return fd, chain
+
+
+def folder_protected_set(ctx, cfg_dirs):
+    """Every protected directory that exists -> [(path, (st_dev, st_ino), reason)], each stat FOLLOWING symlinks, so a
+    HOME reached through a link still yields the real directory's identity. HOME is ccd's registry's parent, never read
+    from the environment. One that is absent (or whose parent is a file) is skipped, and so is one that is not a
+    directory; one that cannot be stat'ed for any other reason refuses unreadable: admission fails closed."""
+    home = os.path.dirname(ctx.reg)
+    paths = [(ctx.root, 'projects-root'), (ctx.worktrees, 'worktrees-root'), (ctx.reg, 'registry')]
+    paths += [(os.path.join(home, name), reason) for name, reason in FOLDER_PROTECTED_FIRST]
+    try:
+        under_home = sorted(SYS.listdir(home))
+    except OSError as e:
+        raise folder_refused(e)
+    paths += [(os.path.join(home, n), 'config-dir') for n in under_home if n.startswith('.claude')]
+    paths += [(d, 'config-dir') for d in cfg_dirs]
+    paths += [(os.path.join(home, name), reason) for name, reason in FOLDER_PROTECTED_LAST]
+    paths.append((home, 'home'))
+    out = []
+    for p, reason in paths:
+        try:
+            st = SYS.stat(p)
+        except OSError as e:
+            if e.errno in (errno.ENOENT, errno.ENOTDIR):
+                continue
+            raise folder_refused(e)
+        if stat.S_ISDIR(st.st_mode):
+            out.append((p, folder_ids(st), reason))
+    return out
+
+
+def folder_protected_hit(chain_ids, folder_id, protected):
+    """The INSIDE check, pure: the reason of the first protected entry whose (st_dev, st_ino) is that of any directory
+    in `chain_ids` (every ancestor and the folder itself), else None. `protected` is [((dev, ino), reason)] in the order
+    a refusal names them. HOME is the one exception: a folder inside it is the ordinary case, so it hits only when it
+    is the folder itself. Identity only: no path is read here, so a directory reached by any spelling answers alike."""
+    chain = set(tuple(i) for i in chain_ids)
+    for ident, reason in protected:
+        ident = tuple(ident)
+        if reason == 'home':
+            if ident == tuple(folder_id):
+                return reason
+        elif ident in chain:
+            return reason
+    return None
+
+
+def folder_contains_hit(folder_id, protected):
+    """The CONTAINS check, by descriptors: for each protected directory, open it and walk up by opening `..` from the
+    current descriptor until the identity is that of `/`, comparing every step with the folder's -> the reason of the first
+    protected directory the folder is an ancestor of (or is), else None. At most FOLDER_CHAIN_MAX_STEPS steps; past it, and
+    on any OSError, refuses unreadable."""
+    try:
+        root_id = folder_ids(SYS.stat('/'))
+    except OSError as e:
+        raise folder_refused(e)
+    for p, _ident, reason in protected:
+        try:
+            fd = SYS.open(p, FOLDER_ROOT_FLAGS)
+        except OSError as e:
+            raise folder_refused(e)
+        try:
+            steps = 0
+            while True:
+                cur = folder_ids(SYS.fstat(fd))
+                if cur == tuple(folder_id):
+                    return reason
+                if cur == root_id:
+                    break
+                steps += 1
+                if steps > FOLDER_CHAIN_MAX_STEPS:
+                    raise Fail('unreadable', {'reason': 'too-deep'})
+                nfd = SYS.open('..', FOLDER_ROOT_FLAGS, dir_fd=fd)
+                SYS.close(fd)
+                fd = nfd
+        except OSError as e:
+            raise folder_refused(e)
+        finally:
+            SYS.close(fd)
+    return None
+
+
+def folder_admit(ctx, path, cfg_dirs):
+    """Admit the folder `path` (shaped by valid_folder_path) -> (fd, st): the held descriptor of its directory and its
+    fstat, which the caller closes. In order: the chain from `/` (symlink-in-path, not-a-directory, absent, unreadable),
+    the owner (foreign-owner), then the protected set (protected, with its reason). Every refusal is a word and never the
+    path. `cfg_dirs` are the roster's config directories, handed by the front; ctx's field order is pinned, so they
+    travel beside it."""
+    fd, chain = folder_open_chain(path)
+    try:
+        st = SYS.fstat(fd)
+        if st.st_uid != SYS.geteuid():
+            raise Fail('foreign-owner')
+        protected = folder_protected_set(ctx, cfg_dirs)
+        hit = folder_protected_hit(chain, folder_ids(st), [(ident, reason) for _p, ident, reason in protected])
+        if hit is None:
+            hit = folder_contains_hit(folder_ids(st), protected)
+        if hit is not None:
+            raise Fail('protected', {'reason': hit})
+    except BaseException:
+        SYS.close(fd)
+        raise
+    return fd, st
+
+
+def folder_registry_open(ctx):
+    """The registry directory, read-only, as a descriptor -> fd, or None when `$REG` or the directory is ABSENT (ENOENT; nothing
+    is created). Any other failure, a `$REG` that is a file (ENOTDIR) included, is unreadable: absence and a failure to look
+    are two answers. The directory is opened O_NOFOLLOW, so a symlink in its place is unreadable, as is one that is not this
+    user's."""
+    try:
+        base_fd = SYS.open(ctx.reg, FOLDER_ROOT_FLAGS)
+    except OSError as e:
+        if e.errno == errno.ENOENT:
+            return None
+        raise folder_refused(e)
+    try:
+        try:
+            fd = SYS.open(FOLDER_REGISTRY_NAME, FOLDER_COMPONENT_FLAGS, dir_fd=base_fd)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                return None
+            raise folder_refused(e)
+    finally:
+        SYS.close(base_fd)
+    if SYS.fstat(fd).st_uid != SYS.geteuid():
+        SYS.close(fd)
+        raise Fail('unreadable', {'reason': 'foreign-owner'})
+    return fd
+
+
+def folder_file_path(dir_fd, name):
+    """The path one label file holds -> the path, or None when the entry cannot be read as one: not a regular file of this
+    user's, longer than FOLDER_FILE_MAX_BYTES, or not exactly one admissible absolute path and its newline. Opened O_NOFOLLOW
+    and O_NONBLOCK (a symlink is refused and a FIFO cannot hang the call). Its bytes are never returned in any other form."""
+    try:
+        ffd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(ffd)
+        raw = os.read(ffd, FOLDER_FILE_MAX_BYTES + 1) if stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() else b''
+    except OSError:
+        raw = b''
+    finally:
+        os.close(ffd)
+    if not raw or len(raw) > FOLDER_FILE_MAX_BYTES or raw.count(b'\n') != 1 or not raw.endswith(b'\n'):
+        return None
+    try:
+        text = raw[:-1].decode('utf-8')
+    except UnicodeError:
+        return None
+    return text if valid_folder_path(text) else None
+
+
+def folder_registry_read(ctx):
+    """Every entry of the registry named as a label -> [(label, path | None)] sorted by label: the path when its file holds one
+    admissible absolute path, None when it cannot be read as one (the entry is still listed, so it can be removed, and its
+    bytes are never echoed). A name that is no label (the lock, a temporary file, junk) is not an entry."""
+    fd = folder_registry_open(ctx)
+    if fd is None:
+        return []
+    try:
+        return [(name, folder_file_path(fd, name)) for name in sorted(os.listdir(fd)) if valid_folder_label(name)]
+    finally:
+        os.close(fd)
+
+
+def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None):
+    """THE registry's ONE writer (`docs-folder registry has one writer`, docs-ring.test.ts): every create, write, rename and
+    unlink inside `$REG/docs-folders` is here, under a flock on its `.lock` (polled, FOLDER_LOCK_WAIT_S at most).
+    op 'add': makes the directory (0700) if absent, so the lock can live in it; `guard()` runs once the lock is held (the
+    re-run of admission) and returns a closer or None; the label's file is written whole through a temporary name and a
+    rename (the directory fsynced after), refused label-exists when the label stands. An add that refuses after this call
+    made the directory takes the directory away again (its lock file, then the directory, if nothing else is in it): a
+    refused add creates nothing. op 'remove': an absent `$REG` (ENOENT), directory or label is unknown-folder and creates
+    nothing; any other failure is unreadable; `guard()` runs, then `purge()` (the label's range snapshots), and only then the
+    label's file is unlinked, so a purge that fails leaves the label registered and a retry finds it. The closer of `guard`
+    runs last."""
+    try:
+        base_fd = SYS.open(ctx.reg, FOLDER_ROOT_FLAGS)
+    except OSError as e:
+        if op == 'remove' and e.errno == errno.ENOENT:
+            raise Fail('unknown-folder')
+        raise folder_refused(e)
+    reg_fd = None
+    closer = None
+    created = done = False
+    try:
+        if op == 'add':
+            try:
+                os.mkdir(FOLDER_REGISTRY_NAME, 0o700, dir_fd=base_fd)
+                created = True
+            except OSError as e:
+                if e.errno != errno.EEXIST:
+                    raise folder_refused(e)
+        try:
+            reg_fd = os.open(FOLDER_REGISTRY_NAME, FOLDER_COMPONENT_FLAGS, dir_fd=base_fd)
+        except OSError as e:
+            if op == 'remove' and e.errno == errno.ENOENT:
+                raise Fail('unknown-folder')
+            raise folder_refused(e)
+        st = os.fstat(reg_fd)
+        if st.st_uid != os.geteuid():
+            raise Fail('unreadable', {'reason': 'foreign-owner'})
+        if stat.S_IMODE(st.st_mode) != 0o700:
+            os.fchmod(reg_fd, 0o700)
+        lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        try:
+            if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                raise Fail('unreadable', {'reason': 'lock-not-regular'})
+            end = SYS.monotonic() + FOLDER_LOCK_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                        raise folder_refused(e)
+                if SYS.monotonic() >= end:
+                    raise Fail('unreadable', {'reason': 'registry-busy'})
+                time.sleep(0.02)
+            closer = guard() if guard is not None else None
+            try:
+                os.lstat(label, dir_fd=reg_fd)
+                present = True
+            except FileNotFoundError:
+                present = False
+            if op == 'add':
+                if present:
+                    raise Fail('label-exists')
+                tmp = '.add-' + label + '.tmp'
+                tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(tfd).st_mode):
+                        raise Fail('unreadable', {'reason': 'not-regular'})
+                    view = memoryview(body)
+                    while view:
+                        view = view[os.write(tfd, view):]
+                    os.fsync(tfd)
+                finally:
+                    os.close(tfd)
+                try:
+                    os.rename(tmp, label, src_dir_fd=reg_fd, dst_dir_fd=reg_fd)
+                except BaseException:
+                    os.unlink(tmp, dir_fd=reg_fd)
+                    raise
+                os.fsync(reg_fd)
+            else:
+                if not present:
+                    raise Fail('unknown-folder')
+                if purge is not None:
+                    purge()
+                os.unlink(label, dir_fd=reg_fd)
+                os.fsync(reg_fd)
+            done = True
+        finally:
+            os.close(lock_fd)
+    except OSError as e:
+        raise folder_refused(e)
+    finally:
+        if closer is not None:
+            closer()
+        if created and not done and reg_fd is not None:
+            # This call made the directory and refused: take back what it made, the lock file and then the directory.
+            # Best effort: a directory with anything else in it stays.
+            try:
+                os.unlink(FOLDER_LOCK_NAME, dir_fd=reg_fd)
+                os.rmdir(FOLDER_REGISTRY_NAME, dir_fd=base_fd)
+            except OSError:
+                pass
+        if reg_fd is not None:
+            os.close(reg_fd)
+        os.close(base_fd)
+
+
+def folder_cache_guard(ctx, label):
+    """The range cache's lock for a remove: -> (guard, purge). `guard()` opens the cache directory if it is there (never
+    creating it) and takes its lock, answering the closer that releases both, or None when there is no cache; `purge()` then
+    removes every completed snapshot whose binding names `label`, under that lock, BEFORE the registry's unlink. The lock is
+    taken first, so a busy cache refuses the remove untouched (prepare-busy, range_lock's word), and a cache that is not
+    a sound directory of this user's (a symlink, a file, another owner's, a lock that is no regular file) is unreadable with
+    the reason `range-cache`, never helper-failed."""
+    held = []
+
+    def guard():
+        cdir = range_cache_dir(ctx)
+        try:
+            os.lstat(cdir)
+        except FileNotFoundError:
+            return None
+        try:
+            cache = range_open_dir(cdir)
+        except RuntimeError:
+            raise Fail('unreadable', {'reason': 'range-cache'})
+        try:
+            lock_fd = range_lock(cache)
+        except RuntimeError:
+            os.close(cache.fd)
+            raise Fail('unreadable', {'reason': 'range-cache'})
+        except BaseException:
+            os.close(cache.fd)
+            raise
+        held.append(cache)
+
+        def close():
+            os.close(lock_fd)
+            os.close(cache.fd)
+        return close
+
+    def purge():
+        if held:
+            folder_purge_snapshots(held[0], label)
+    return guard, purge
+
+
+def folder_purge_snapshots(cache, label):
+    """Under the cache's lock: remove every completed snapshot whose `.meta` binding has `label` equal to `label` (a folder
+    snapshot's binding is {'label': L, 'section', 'path', 'pin'}, with `project` absent). A project snapshot has no label."""
+    entries, _resvs = range_scan(cache, SYS.now_ms())
+    for rid in sorted(entries):
+        if entries[rid]['bind'].get('label') == label:
+            range_remove(cache, range_path(rid, 'meta'))
+            range_remove(cache, range_path(rid, 'bin'))
+
+
+def verb_folder(ctx, a):
+    """docs-folder: --list {folders:[{label, path, state}]}, --add {label}, --remove {label, removed}. A listed entry is
+    state ok with its path, or state unreadable with a null path (its file holds no one admissible path: Settings can still
+    remove it). A refusal is a Fail of its word (and reason); none of them carries a path. A refused add creates nothing:
+    admission runs once before the registry is touched, and again under its lock."""
+    try:
+        if a.mode == 'list':
+            return {'folders': [{'label': label, 'path': path, 'state': 'ok' if path is not None else 'unreadable'}
+                                for label, path in folder_registry_read(ctx)]}
+        if a.mode == 'add':
+            fd, _st = folder_admit(ctx, a.path, a.cfg_dirs)
+            SYS.close(fd)
+
+            def recheck():
+                rfd, _rst = folder_admit(ctx, a.path, a.cfg_dirs)
+                SYS.close(rfd)
+            folder_registry_write(ctx, 'add', a.label, (a.path + '\n').encode('utf-8'), guard=recheck)
+            return {'label': a.label}
+        guard, purge = folder_cache_guard(ctx, a.label)
+        folder_registry_write(ctx, 'remove', a.label, guard=guard, purge=purge)
+        return {'label': a.label, 'removed': True}
+    except OSError as e:
+        # An errno names itself; helper-failed's detail is a traceback line, which can carry a path.
+        raise folder_refused(e)
+
+
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
 # make run() reach a stand-in body.
-VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log, 'docs-show-range': verb_show_range}
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log, 'docs-show-range': verb_show_range, 'docs-folder': verb_folder}
 
 # The verbs whose ok answer is a listing, bounded by guard_listing.
 LISTING_VERBS = ('docs-index', 'docs-tree')
@@ -49978,7 +50474,8 @@ case "${1:-}" in
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   docs-log)   shift; cmd_docs_log "$@" ;;
   docs-show-range) shift; cmd_docs_show_range "$@" ;;
+  docs-folder) shift; cmd_docs_folder "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|docs-folder|version} <args>" >&2; exit 1 ;;
 esac
 fi
