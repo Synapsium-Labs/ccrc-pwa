@@ -6,7 +6,11 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { clipName, clipPath, clipStem, stageUpload, CLIP_MIME, CLIP_NAME_RE } from '../src/clip.js';
-import { CLIP_DOC_EXTS, CLIP_EXTS, CLIP_IMAGE_EXTS } from '../../shared/api.js';
+import { CLIP_EXT_MAX, CLIP_IMAGE_EXTS } from '../../shared/api.js';
+
+/** A spread of extensions of the stored shape: pictures, documents, and the
+ *  formats any-file admits (2026-11-24). */
+const SHAPED = ['png', 'jpg', 'md', 'pdf', 'docx', 'zip', 'gz', 'mp3', 'ts', 'exe', 'sh', '7z', 'noext', 'a'.repeat(CLIP_EXT_MAX)];
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 
@@ -89,37 +93,46 @@ describe('clipStem', () => {
   });
 });
 
-describe('the admitted extension list', () => {
-  // The list is enumerated once in shared/api.ts and DERIVED everywhere. These
-  // hold the derivations to it: a new extension that reaches one gate and not
-  // another strands a staged file behind a 400 or serves it as a download.
-  it('admits every extension the store claims to, and nothing else', () => {
-    for (const ext of CLIP_EXTS) {
+describe('the admitted extension shape', () => {
+  // Since any file attaches (2026-11-24) the gate is the extension's SHAPE,
+  // stated once in shared/api.ts (`CLIP_EXT_ALT`) and DERIVED here. These hold
+  // the name rule to it: a name the writer composes must be one the rule, and
+  // so the clip route, accepts.
+  it('admits every extension of the shape, and nothing else', () => {
+    for (const ext of SHAPED) {
       const name = clipName(ext, Date.parse('2026-07-26T15:03:40Z'), 'a1b2');
       expect(CLIP_NAME_RE.test(name), ext).toBe(true);
     }
-    for (const ext of ['exe', 'sh', 'svg', 'html', 'docx', 'xlsx', 'zip', 'gif']) {
+    for (const ext of ['PNG', 'Zip', 'a'.repeat(CLIP_EXT_MAX + 1), 't~t', 'tar-gz', 'a b', '', '\u212A']) {
       expect(CLIP_NAME_RE.test(`clip-20260726-150340-a1b2.${ext}`), ext).toBe(false);
     }
   });
 
-  it('gives every admitted extension a Content-Type', () => {
-    expect(CLIP_EXTS.filter((e) => CLIP_MIME[e] === undefined)).toEqual([]);
+  // The pictures are served inline so the bubble can draw them; any other
+  // extension with no entry is served as an opaque download (the clip route's
+  // fallback), which is the point now that any file is stored.
+  it('gives every picture a Content-Type', () => {
+    expect(CLIP_IMAGE_EXTS.filter((e) => CLIP_MIME[e] === undefined)).toEqual([]);
+  });
+
+  // Review 3647 F2d: the whole inline table, entry by entry, so deleting a
+  // document type (a PDF served as a download) or adding one is a red here.
+  it('is exactly the fourteen inline types, pictures and documents', () => {
+    expect({ ...CLIP_MIME }).toEqual({
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+      md: 'text/markdown', txt: 'text/plain', log: 'text/plain',
+      csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json',
+      yaml: 'text/yaml', yml: 'text/yaml', rtf: 'application/rtf', pdf: 'application/pdf',
+    });
   });
 
   // These are bytes a client uploaded, served back from the app's own origin.
   // A script type in this table would make the clip route a same-origin script
-  // host; `.docx` is absent for a different reason (Read cannot open a ZIP),
-  // and this is the one that is a security property rather than a judgement.
+  // host, and this is a security property rather than a judgement.
   it('names no type a browser would execute in our own origin', () => {
     for (const [ext, mime] of Object.entries(CLIP_MIME)) {
-      expect(mime, ext).not.toMatch(/html|xhtml|svg|javascript|ecmascript/i);
+      expect(mime, ext).not.toMatch(/html|xhtml|svg|xml|javascript|ecmascript/i);
     }
-  });
-
-  it('splits into images and documents with nothing in both and nothing left over', () => {
-    expect(CLIP_EXTS).toEqual([...CLIP_IMAGE_EXTS, ...CLIP_DOC_EXTS]);
-    expect(CLIP_IMAGE_EXTS.filter((e) => (CLIP_DOC_EXTS as readonly string[]).includes(e))).toEqual([]);
   });
 });
 
@@ -149,13 +162,13 @@ describe('clipPath', () => {
 
   it('refuses a name that could climb out of the session directory', () => {
     for (const bad of ['../../.ssh/authorized_keys', '../x.png', 'a/b.png', '..', '.', '',
-                       'notaclip.png', 'clip-x.exe', 'clip-x.png/../../y.png']) {
+                       'notaclip.png', 'clip-x.ex~e', 'clip-x.PNG', 'clip-x.png/../../y.png']) {
       expect(() => clipPath('/home/u/.cc-clips', 'claude9-Proj', bad)).toThrow(/bad-clip-name|bad-session-id/);
     }
   });
 
   it('accepts the names clipName actually produces', () => {
-    for (const ext of CLIP_EXTS) {
+    for (const ext of SHAPED) {
       const name = clipName(ext, Date.parse('2026-07-26T15:03:40Z'), 'a1b2');
       expect(CLIP_NAME_RE.test(name)).toBe(true);
       expect(clipPath('/home/u/.cc-clips', 'claude9-Proj', name))

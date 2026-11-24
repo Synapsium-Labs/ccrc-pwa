@@ -3,7 +3,7 @@
 // to cope with `ccd clip` typing a path on either side of the user's prose.
 import { describe, expect, it } from 'vitest';
 import {
-  composePrompt, splitClipPaths, CLIP_EXTS, CLIP_PATH_RE, hasClipExt, isImageClip,
+  composePrompt, splitClipPaths, CLIP_EXT_MAX, CLIP_PATH_RE, hasClipExt, isImageClip,
 } from '../../shared/api';
 
 const P1 = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150340-a1b2.png';
@@ -40,12 +40,24 @@ describe('CLIP_PATH_RE', () => {
       .toEqual({ paths: [DOC], rest: 'read this' });
   });
 
-  it('recognises every admitted extension, and nothing outside the list', () => {
+  // Any file attaches (2026-11-24), so the path pattern follows the stored
+  // extension's SHAPE, not a list: what the store can write, this can find.
+  it('recognises any extension of the stored shape, and nothing else', () => {
     const base = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150340-a1b2';
-    for (const ext of CLIP_EXTS) expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(true);
-    for (const ext of ['docx', 'zip', 'exe', 'svg', 'html']) {
-      expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(false);
+    for (const ext of ['png', 'md', 'pdf', 'docx', 'zip', 'exe', 'svg', 'html', 'gz', '7z', 'a'.repeat(CLIP_EXT_MAX)]) {
+      expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(true);
     }
+    // Upper case is never stored; an over-long run is no extension, and the
+    // closing look-ahead stops it being read as a path with half of one.
+    for (const ext of ['PNG', 'a'.repeat(CLIP_EXT_MAX + 1), 't~t', '']) {
+      expect(new RegExp(`^(?:${CLIP_PATH_RE.source})$`).test(`${base}.${ext}`), ext).toBe(false);
+    }
+    expect(splitClipPaths(`${base}.${'a'.repeat(CLIP_EXT_MAX + 1)}`).paths).toEqual([]);
+  });
+
+  it('finds a non-picture path mid-line and leaves the prose whole', () => {
+    const zip = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150340-a1b2-backup.tar.gz';
+    expect(splitClipPaths(`unpack ${zip} please`)).toEqual({ paths: [zip], rest: 'unpack please' });
   });
 });
 
