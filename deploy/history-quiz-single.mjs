@@ -45,7 +45,16 @@
 // pins the week to the release measured now and pilots again as the next round, on the week's own ledger and --budget. A
 // round that stopped before its result was written is resumed only on the release it was pinned to, else it refuses
 // `repilot-release-moved`. When to ask for it is the unattended runner's decision, never this file's: passed by hand, the
-// flag is a permission and decides nothing (no cap, no same-release rule).
+// flag is a permission and decides nothing (no cap, no same-key rule). Both write sites of the pin record the pilot key the
+// act measured (stage B, B0 and its fix round 1: the build's --version line, the gate's code shas, the quiz's pilot files'
+// shas and the skill's sha), which the runner reads as the key of the week's first pilot.
+//
+// The pilot, stage B (the note quiz-pilot-stage-b.md; the rules are history-quiz-pilot.mjs's). `arms` pins the shipped
+// history skill's source before --out, and every treatment-arm run, step 0b's probes and the week's questions, finds it
+// staged in its own working folder as a project skill (B1); the box run, step 0b's first run, is observed, and every later
+// run of the round, the week's questions and the judge run under one settings value switching off each entry it reported
+// that is not the build's own (B3); a run that left something passes persistence only on its proof (B4); and when the skill
+// alone fails under restricted, one probe under the fallback mode is recorded, the verdict staying restricted's (B2).
 //
 // Where it writes and what it spends (F7). Its files go under --out, the driver's --out rule (prepareOut: outside any git
 // tree, 0700, the driver's marker) plus this file's own marker beside it, written only into a directory it has just made:
@@ -94,14 +103,16 @@ import { DriverRefusal, LIMITS_DEFAULTS, OUT_JSON_CAP, QUIZ_META_FILE, SETTINGS_
   refuseSpawnAdmission, refuseSyntheticPresent, refuseUnusableInputs, refuseWriterModel, requireListed, rosterConfigDirs, runBatch,
   settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spendLinesOf, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
   step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
-  warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
+  TREE_ROOT, warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
+import { SKILL_WORDS, fallbackProbeDueOf, fallbackSkillOf, fallbackUnmeasuredOf, knownIdsOf, persistenceProofOf, pilotKeyOf, pilotKeyValid, pilotShasOf, pluginsCheckWithMapOf, pluginsOffOf,
+  pluginsOffSettingsOf, skillSourceOf, stageSkillInto } from './history-quiz-pilot.mjs';
 
 const PREFIX = 'ccrc history-quiz-single';
 
 // ── the words, the kinds and the paths ──────────────────────────────────────────────────────────────────────────────
 /** This file's own refusal words, beside the driver's DRIVER_REASONS: `in-session` (CLAUDECODE is set: the quiz is the
  *  operator's, never a session's) and `release-moved` (one week's arms ran on one release, and its judge on the same). */
-export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved']);
+export const QUIZ_SINGLE_REASONS = Object.freeze(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved', ...SKILL_WORDS]);
 /** A refusal in one of QUIZ_SINGLE_REASONS' words. */
 export class QuizSingleRefusal extends Error {
   /** @param {string} word  @param {string} detail */
@@ -579,11 +590,11 @@ export async function markerCommand(flags) {
 
 // ── arms: step 0b's probes first, then the treatment arm ────────────────────────────────────────────────────────────
 /** One week's release pin: written by the first `arms` on this --out, and a later `arms` on another release refuses. */
-function pinArmsRelease(out, setupSha256, release) {
+function pinArmsRelease(out, setupSha256, release, key) {
   const pin = armsPinOf(out, setupSha256);
   if (pin.state === 'absent') {
     ensurePlainDir(out, SECTION);
-    writePlain(out, RELEASE_PIN_FILE, releasePinText(setupSha256, release, 0));
+    writePlain(out, RELEASE_PIN_FILE, releasePinText(setupSha256, release, 0, key));
     return;
   }
   const p = pin.value;
@@ -593,11 +604,14 @@ function pinArmsRelease(out, setupSha256, release) {
 /** The release pin's bytes, the one composer of them (fix round 1, F3). The pin has two write sites, for two acts:
  *  pinArmsRelease writes it at the week's first `arms` and verifies it at every later one, and repilotPrepare replaces it on
  *  purpose after a failed pilot, for the round it starts. `round` is the step 0b round the pin was written for (0 at the
- *  first start); a pin written before it existed reads as round 0. Pure.
- *  @param {string} setupSha256  @param {string} release  @param {number} round  @returns {string} */
-export function releasePinText(setupSha256, release, round) {
+ *  first start); a pin written before it existed reads as round 0. `key` is the pilot key the pin was written on (stage B,
+ *  B0 and fix round 1: the build, the gate's code shas, the pilot files' shas and the skill's sha this act measured,
+ *  pilotKeyOf), which the runner reads as the key of the week's first pilot; a pin written before it existed has none. Pure.
+ *  @param {string} setupSha256  @param {string} release  @param {number} round  @param {object} key  @returns {string} */
+export function releasePinText(setupSha256, release, round, key) {
   if (!Number.isSafeInteger(round) || round < 0) throw new TypeError(`releasePinText: round ${String(round)}`);
-  return `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release, round })}\n`;
+  if (!pilotKeyValid(key)) throw new TypeError('releasePinText: the key is no pilot key');
+  return `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release, round, key })}\n`;
 }
 /** This --out's release pin: `absent`, or its parsed `value` when it is this setup's pin (its kind and setup sha); any other
  *  file refuses out-refused. Both write sites read the pin through it first, so neither replaces a pin that is not this run's. */
@@ -678,10 +692,10 @@ async function step0bOf(c) {
     }
     if (r.passed !== true) refuse('pilot-failed', `${rel} records a failed step 0b: run the week again on a fresh --out`);
     const versions = r.batches.map((b) => b?.claude_code_version);
-    if (versions.length > 0 && versions.every((v) => v === c.expected.claude_code_version)) return { rel, sha256: shaOfPlain(c.out, rel), versions };
+    if (versions.length > 0 && versions.every((v) => v === c.expected.claude_code_version)) return { rel, sha256: shaOfPlain(c.out, rel), versions, settings: weekSettingsOf(r, rel) };
     if (!c.reprobe) {
       process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: every question is settled, so nothing runs and step 0b is not probed again\n`);
-      return { rel, sha256: shaOfPlain(c.out, rel), versions };
+      return { rel, sha256: shaOfPlain(c.out, rel), versions, settings: weekSettingsOf(r, rel) };
     }
     process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: probing again\n`);
     round = roundOf(r) + 1;
@@ -733,44 +747,75 @@ function repilotPrepare(c) {
   }
   ensurePlainDir(c.out, `${SECTION}/step0b`);
   writePlain(c.out, step0bFailedRel(c.settingsMode, roundOf(have.value)), have.bytes);
-  writePlain(c.out, RELEASE_PIN_FILE, releasePinText(c.setupSha256, c.release, next));
+  writePlain(c.out, RELEASE_PIN_FILE, releasePinText(c.setupSha256, c.release, next, c.key));
 }
 
-/** One step 0b round on this --out: the box batch and the arm batches, the checks, the result written whatever it shows. */
+/** One step 0b round on this --out: the box batch and the arm batches, the checks, the result written whatever it shows.
+ *  Stage B (the note quiz-pilot-stage-b.md): the box run is the pilot's first run, and the plugins-off map is composed from
+ *  what it reported (B3) and passed to every later run of the round; every treatment-arm run finds the history skill staged in
+ *  its working folder (B1); a run that left something passes persistence only on its proof (B4); and when the skill alone
+ *  fails under restricted, one probe under the fallback mode records whether the skill is listed there (B2), the verdict
+ *  staying restricted's. */
 async function step0bRound(c, rel, round) {
   const { launch, out, model, settingsMode, lang, gate, claim, q, home } = c;
   // The driver's runBatch reuses a finished run of the same name rather than spawning it again, and a run's record names
   // no build: so every round, round 0 included, runs under its build and its round.
-  const nameOf = (run) => step0bRoundName(settingsMode, c.expected.claude_code_version, round, run);
+  const nameOf = (run, mode = settingsMode) => step0bRoundName(mode, c.expected.claude_code_version, round, run);
   const spawnPre = () => preflightSpawn({ launch, home, out, lang, gate, expected: c.expected });
   const batches = [];
   const pre0 = await spawnPre();
   const mech = await step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim, name: nameOf('turn-bound') });
   batches.push({ claude_code_version: pre0.version, runs: [nameOf('turn-bound')] });
   const box = finishedOutcome({ launch, mode: 'box', model, settingsMode, out, name: nameOf('turn-bound') });
+  const pluginsOff = pluginsOffOf(box.facts.init);   // B3: from the pilot's first run alone
+  const settings = pluginsOffSettingsOf(pluginsOff);
   const probes = step0bProbesOf(home, c.transcript);
+  const armRun = (p, card, mode, name) => {
+    const job = { launch, mode: 'arm', model, settingsMode: mode, recall: { session: q.ccrc_id, arm: TREATMENT_ARM, asof: q.boundary_uuid },
+      stdin: step0bStdinOf(card, p), out, name, lang, stage: c.skill, ...(settings === undefined ? {} : { settings }) };
+    return c.timeoutMs === undefined ? job : { ...job, timeoutMs: c.timeoutMs };
+  };
   const outcomes = [];
   for (let i = 0; i < probes.length; i += c.limits.batch_max) {
     const card = await step0bCardOf(c.cardCtx);
     const pre = await spawnPre();
-    const jobs = probes.slice(i, i + c.limits.batch_max).map((p) => {
-      const job = { launch, mode: 'arm', model, settingsMode, recall: { session: q.ccrc_id, arm: TREATMENT_ARM, asof: q.boundary_uuid },
-        stdin: step0bStdinOf(card, p), out, name: nameOf(p.probe), lang };
-      return c.timeoutMs === undefined ? job : { ...job, timeoutMs: c.timeoutMs };
-    });
+    const jobs = probes.slice(i, i + c.limits.batch_max).map((p) => armRun(p, card, settingsMode, nameOf(p.probe)));
     outcomes.push(...await runBatch(jobs, { gate, claim, concurrency: c.limits.concurrency }));
     batches.push({ claude_code_version: pre.version, runs: jobs.map((j) => j.name) });
   }
-  const persistence = [{ name: box.name, ...mech.persistence }, ...outcomes.map((o) => ({ name: o.name,
-    ...persistenceMeasured({ configDir: launch.configDir, sessionId: o.facts.init === null ? null : o.facts.init.sessionId, cwd: o.cwd }) }))];
+  const known = knownIdsOf(c.cardCtx.rs.db, home);   // B4: the sweep's own known ids, read once for the round
+  const rowOf = (o) => ({ name: o.name, ...persistenceProofOf(persistenceMeasured({ configDir: launch.configDir, sessionId: o.facts.init === null ? null : o.facts.init.sessionId, cwd: o.cwd }),
+    { cwd: o.cwd, sessionId: o.facts.init === null ? null : o.facts.init.sessionId, known }) });
+  const persistence = [{ name: box.name, ...persistenceProofOf(mech.persistence, { cwd: box.cwd, sessionId: box.facts.init === null ? null : box.facts.init.sessionId, known }) },
+    ...outcomes.map(rowOf)];
+  const want = armToolsOf(spawnArgv({ mode: 'arm', model, settingsMode, home }));
+  const init = initChecksOf(outcomes.map((o) => o.facts.init), want);
   const checks = {
     'turn-bound': turnBoundCheckOf(mech.turn_bound),
     persistence: persistenceCheckOf(persistence),
-    ...initChecksOf(outcomes.map((o) => o.facts.init), armToolsOf(spawnArgv({ mode: 'arm', model, settingsMode, home }))),
+    ...init, plugins: pluginsCheckWithMapOf(init.plugins, pluginsOff),
     ...Object.fromEntries(probes.flatMap((p, k) => (p.expect === 'subagent' ? [] : [[p.probe,
       (p.expect === 'admitted' ? admissionCheckOf : denialCheckOf)(probeFindingOf(outcomes[k].facts, p.command))]]))),
   };
   const verdict = step0bVerdictOf(checks);
+  let skillFallback = null;
+  if (fallbackProbeDueOf(settingsMode, verdict)) {
+    // B2: one more probe under the fallback mode, recorded only; the verdict above is restricted's and stays so. Fix round 1,
+    // F2: the probe decides nothing, so its failure decides nothing either. Any refusal or throw inside it, a stop included, is
+    // recorded as the fallback reading unmeasured with its word, and the act goes on to write the result and end on the pilot
+    // word below, as it would have without the probe; nothing spawns after the catch.
+    const name = nameOf('skill-probe', 'fallback');
+    try {
+      const card = await step0bCardOf(c.cardCtx);
+      const pre = await spawnPre();
+      const job = armRun(probes[0], card, 'fallback', name);
+      const [o] = await runBatch([job], { gate, claim, concurrency: 1 });
+      batches.push({ claude_code_version: pre.version, runs: [job.name] });
+      skillFallback = { run: job.name, skill: fallbackSkillOf(initChecksOf([o.facts.init], want).skill.state), persistence: rowOf(o), record: step0bRunOf('arm', o) };
+    } catch (e) {
+      skillFallback = fallbackUnmeasuredOf(name, e);
+    }
+  }
   const agent = outcomes[probes.findIndex((p) => p.expect === 'subagent')];
   const output = {
     kind: STEP0B_KIND, v: 1, setup_sha256: c.setupSha256, store_id: c.storeId, round, measured_ms: Date.now(), account: launch.accountId, model,
@@ -778,11 +823,34 @@ async function step0bRound(c, rel, round) {
     synthetic_transcript: c.transcript, probes: [...STEP0B_PROBES], batches, checks, subagent: subagentToolsOf(agent.facts.toolPairs), persistence,
     runs: [step0bRunOf('box', box), ...outcomes.map((o) => step0bRunOf('arm', o))],
     passed: verdict.passed, failed: verdict.failed, unmeasured: verdict.unmeasured,
+    skill_sha256: c.skill.sha256, plugins_off: pluginsOff, skill_fallback: skillFallback,
   };
   ensurePlainDir(out, `${SECTION}/step0b`);
   writePlain(out, rel, `${canonicalJson(output)}\n`);
   if (!verdict.passed) refuse('pilot-failed', step0bFailureDetail(settingsMode, checks, verdict));
-  return { rel, sha256: shaOfPlain(out, rel), versions: batches.map((b) => b.claude_code_version) };
+  return { rel, sha256: shaOfPlain(out, rel), versions: batches.map((b) => b.claude_code_version), settings };
+}
+
+/** B3: the settings value a recorded step 0b result says the week runs under (its plugins-off map), read back through the
+ *  map's own checker, so a damaged record never reaches an argument: undefined for a result written before stage B, which
+ *  records none, and for a map that switches nothing off; a map that is no map refuses out-refused. */
+function weekSettingsOf(r, rel) {
+  if (!Object.hasOwn(r, 'plugins_off')) return undefined;
+  try { return pluginsOffSettingsOf(r.plugins_off); } catch { refuse('out-refused', `${rel}'s plugins_off is not a plugins-off map`); }
+}
+/** B1: the history skill's source pinned at this act's start (its files' sha), and the staging every treatment-arm run asks for
+ *  in its working folder, which re-reads the source and refuses skill-source-moved when it changed. `root` is the installed
+ *  tree (TREE_ROOT; a test's fixture tree through deps.skillRoot). */
+function pinSkill(root) {
+  const src = skillSourceOf(root);
+  if (src.state !== 'value') throw new QuizSingleRefusal('skill-source-unmeasured', src.detail);
+  return {
+    sha256: src.sha256,
+    write(cwd) {
+      const w = stageSkillInto(root, src.sha256, cwd);
+      if (w !== null) throw new QuizSingleRefusal(w.word, w.detail);
+    },
+  };
 }
 
 /** A build's token in step 0b's run names: its `--version` line folded to the run-name alphabet (lower case, any other
@@ -849,6 +917,9 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
     const cardCtx = { home, rs, storeId, q: questions[0], deps, configDirs };
     await step0bCardOf(cardCtx);   // W2-D78 (iii) and the card, before --out
     refuseSyntheticPresent(transcript);
+    const skill = pinSkill(deps.skillRoot ?? TREE_ROOT);   // stage B, B1: the source pinned before --out, refused before any write
+    const pilotCode = pilotShasOf(deps.pilotRoot ?? TREE_ROOT);   // stage B fix round 1, F1: the pilot files, a part of the pin's key; refused before --out
+    if (pilotCode.state !== 'measured') refuse('code-unmeasured', `pilot file ${pilotCode.path} is ${pilotCode.cause}`);
     const out = openOut(flags.out);
     if (lstatOrNull(out, SETUP_FILE) !== null && shaOfPlain(out, SETUP_FILE) === setup.sha256) {
       refuse('out-refused', `--out holds this setup's ${SETUP_FILE}: a week runs in a fresh --out of its own, never the setup's`);
@@ -859,8 +930,10 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       const startedMs = Date.now();
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: s.budget, limits: s.limits });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
-      if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp });
-      pinArmsRelease(out, setup.sha256, expected.release_stamp);
+      // stage B, B0 and fix round 1: the pin records the key, the build, the gate's code, the pilot files and the skill
+      const key = pilotKeyOf(expected.claude_code_version, { state: 'measured', files: expected.code_shas }, pilotCode, skill.sha256);
+      if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp, key });
+      pinArmsRelease(out, setup.sha256, expected.release_stamp, key);
       const armed = armedWordsOf(home, ids);
       const ctx = {
         section: SECTION, home, out, rs, storeId, launch, gate, expected, allowCodeChange: false, deps, configDirs, model: s.arm_model,
@@ -872,8 +945,10 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       settleAnswers(ctx, open);
       const step0b = await step0bOf({ setupSha256: setup.sha256, storeId, out, home, launch, gate, claim, expected, model: s.arm_model,
         settingsMode: s.settings_mode, lang: env.LANG, limits: s.limits, q: questions[0], cardCtx, transcript, timeoutMs: deps.timeoutMs,
-        reprobe: open.some((st) => st.next.length > 0), repilot: flags.repilot === true });
-      const run = { setupSha256: setup.sha256, frozenSha256: fz.sha256, budget: s.budget, startedMs, armed, step0b };
+        reprobe: open.some((st) => st.next.length > 0), repilot: flags.repilot === true, skill });
+      ctx.stage = skill;   // stage B, B1: every treatment-arm run finds the skill staged in its working folder
+      if (step0b.settings !== undefined) ctx.settings = step0b.settings;   // B3: the week runs under its pilot's plugins-off map
+      const run = { setupSha256: setup.sha256, frozenSha256: fz.sha256, budget: s.budget, startedMs, armed, step0b: { rel: step0b.rel, sha256: step0b.sha256, versions: step0b.versions } };
       let states;
       try {
         for (;;) {
@@ -924,6 +999,17 @@ function reportStop(ctx, run, questions, e) {
 }
 
 // ── judge ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** B3: the week's plugins-off map for the judge, read from the step 0b result the arms summary names: its path is this mode's
+ *  result, its bytes hash to the sha the summary names, and it is a step 0b result (fix round 1: each check held by a case). */
+function judgeSettingsOf(out, ref, mode) {
+  if (!plainObject(ref) || ref.rel !== step0bRel(mode) || typeof ref.sha256 !== 'string') refuse('input-invalid', 'arms-summary names no step 0b result of this mode');
+  const read = readPlain(path.join(out, ref.rel), OUT_JSON_CAP);
+  if (read.state !== 'bytes' || sha256Hex(read.bytes) !== ref.sha256) refuse('input-invalid', `${ref.rel} is not the step 0b result the arms summary names`);
+  let r = null;
+  try { r = JSON.parse(read.bytes.toString('utf8')); } catch { r = null; }
+  if (!plainObject(r) || r.kind !== STEP0B_KIND) refuse('input-invalid', `${ref.rel} is not a step 0b result`);
+  return weekSettingsOf(r, ref.rel);
+}
 /** The arms summary as `judge` and `report` take it: this setup's and this frozen list's, finished with no stop and every
  *  question settled, and the one this --out holds (so the answer records read beside it are its own). */
 function loadSummary(flags, out, setupSha256, frozenSha256) {
@@ -989,8 +1075,9 @@ export async function judgeCommand(flags, env) {
       const picked = judgeItemsOf({ entries: fz.list.entries, answers: readArmAnswers(out, SECTION), arms: [TREATMENT_ARM], shaMinPrefix: s.labeller.sha_min_prefix });
       const jobs = judgeJobsAgreed({ items: picked.items, map, idx: rs.idx, freshIdx: pairIndexOf(rs.db, home) });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
+      const settings = judgeSettingsOf(out, summary.value.step0b, s.settings_mode);   // stage B, B3: the week's plugins-off map, from its step 0b result
       const judge = await openJudge({ home, accountId: account, model: s.judge_model, settingsMode: s.settings_mode, rubricId: s.rubric_id,
-        claim, budget: cap, limits: s.limits, expected, lang: env.LANG });
+        claim, budget: cap, limits: s.limits, expected, lang: env.LANG, ...(settings === undefined ? {} : { settings }) });
       const items = await judge.judge(SECTION, jobs);
       const count = (pred) => items.filter(pred).length;
       const output = {

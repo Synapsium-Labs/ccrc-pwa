@@ -9,12 +9,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname as pathDirname, join, relative as pathRelative, resolve as pathResolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
 import * as gateMod from '../../deploy/history-gate.mjs';
 import * as libMod from '../../ccd/history/lib.mjs';
+import * as qpMod from '../../deploy/history-quiz-pilot.mjs';
 import { createStore } from '../../ccd/history/store.mjs';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { REPO, scrubbedEnv } from './historyHelpers.js';
@@ -24,6 +26,7 @@ const QS = qsMod as unknown as R;
 const D = drvMod as unknown as R;
 const G = gateMod as unknown as R;
 const L = libMod as unknown as R;
+const QP = qpMod as unknown as R;
 
 removeTmpFixturesEachTest();
 
@@ -44,7 +47,10 @@ const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart
 
 /** The recording stub: logs every run (argv, the recall arm, stdin); `--version` prints STUB_VERSION's first line. A
  *  print-mode run is keyed by sha256(settings mode, a newline, its stdin) and prints `<STUB_DIR>/<key>.jsonl` (else
- *  `<STUB_DIR>/default.jsonl`, else nothing), exits `<key>.exit` (else 0), and with `<key>.sleep` writes its pid to `<key>.pid` and sleeps. */
+ *  `<STUB_DIR>/default.jsonl`, else nothing), exits `<key>.exit` (else 0), and with `<key>.sleep` writes its pid to `<key>.pid` and sleeps.
+ *  Stage B: it also logs its cwd and the sha256 of each staged skill file it finds there (`staged`, null when none); with
+ *  `<key>.leave` (JSON `{session, file}`) it leaves `projects/<slug of its cwd>/<session>/subagents/<file>` in its config dir, as
+ *  the Agent probe's subagent does; and with `stub-touch` naming a file, it appends one byte to that file once, then removes the control. */
 const STUB = `#!/usr/bin/env node
 (async () => {
   const fs = await import('node:fs');
@@ -59,7 +65,19 @@ const STUB = `#!/usr/bin/env node
   const mode = argv.includes('--restricted') ? 'restricted' : 'fallback';
   const key = crypto.createHash('sha256').update(mode + '\\n' + stdin).digest('hex');
   const dir = ${JSON.stringify(STUB_DIR)};
-  fs.appendFileSync(at(${JSON.stringify(STUB_LOG)}), JSON.stringify({ argv, arm: process.env.CCRC_RECALL_ARM ?? null, stdin, key }) + '\\n');
+  const cwd = process.cwd();
+  const sk = path.join(cwd, '.claude', 'skills', 'ccrc-history');
+  const staged = fs.existsSync(sk) ? Object.fromEntries(fs.readdirSync(sk).sort().map((n) => [n, crypto.createHash('sha256').update(fs.readFileSync(path.join(sk, n))).digest('hex')])) : null;
+  fs.appendFileSync(at(${JSON.stringify(STUB_LOG)}), JSON.stringify({ argv, arm: process.env.CCRC_RECALL_ARM ?? null, stdin, key, cwd, staged }) + '\\n');
+  const touch = opt('stub-touch');
+  if (touch !== null) { fs.appendFileSync(touch, 'x'); fs.rmSync(at('stub-touch')); }
+  const leave = opt(dir + '/' + key + '.leave');
+  if (leave !== null) {
+    const l = JSON.parse(leave);
+    const d = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), l.session, 'subagents');
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, l.file), '{"leftover":true}\\n');
+  }
   const sleep = opt(dir + '/' + key + '.sleep');
   if (sleep !== null) {
     fs.writeFileSync(at(dir + '/' + key + '.pid'), String(process.pid));
@@ -74,9 +92,9 @@ const STUB = `#!/usr/bin/env node
  *  pair per call, `main` more main-thread messages and `sub` subagent ones, and a result with `text` and `subtype` whose
  *  usage sums to 65 (none when `result` is false). */
 function stream(o: { text?: string; skills?: string[]; calls?: Array<{ command?: string; name?: string; denied?: boolean; parent?: string | null }>;
-  main?: number; sub?: number; subtype?: string; result?: boolean; session?: string } = {}): string {
+  main?: number; sub?: number; subtype?: string; result?: boolean; session?: string; plugins?: unknown[] } = {}): string {
   const ev: R[] = [{ type: 'system', subtype: 'init', session_id: o.session ?? 'fixture-qs-session', model: ARM_MODEL, tools: ['Bash', 'Agent'],
-    mcp_servers: [], plugins: [], skills: o.skills ?? ['ccrc-history'], slash_commands: [] }];
+    mcp_servers: [], plugins: o.plugins ?? [], skills: o.skills ?? ['ccrc-history'], slash_commands: [] }];
   const usage = { input_tokens: 1, output_tokens: 1 };
   const denials: R[] = [];
   (o.calls ?? []).forEach((c, i) => {
@@ -98,6 +116,10 @@ function stream(o: { text?: string; skills?: string[]; calls?: Array<{ command?:
   return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
 }
 const keyOf = (mode: string, stdin: string): string => L.sha256Hex(`${mode}\n${stdin}`) as string;
+/** Stage B, B0: the pilot key an act on this checkout measures with the stub's build: its --version line and the gate's code shas. */
+// stage B fix round 1, F1: the key's four parts, the pilot files and the skill (FAKE stages the repository's own) beside the build and the gate's code
+const QK = (build = '2.9.1 (Claude Code)'): R => ({ claude_code: build, code_shas: (D.codeShas() as R).files, pilot_shas: (QP.pilotShasOf() as R).files,
+  skill_sha256: (QP.skillSourceOf(REPO) as R).sha256 });
 function put(home: string, mode: string, stdin: string, ext: string, text: string): void {
   mkdirSync(join(home, STUB_DIR), { recursive: true });
   writeFileSync(join(home, STUB_DIR, `${keyOf(mode, stdin)}${ext}`), text);
@@ -271,7 +293,8 @@ describe('Task 3: the module refuses inside a pane and inside a session before i
   });
 
   it('its words: the driver\'s, plus its own, and only those (run 3538 adds account-moved)', () => {
-    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved']);
+    // stage B, B1 adds the two skill-source words
+    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved', 'repilot-release-moved', 'account-moved', 'skill-source-unmeasured', 'skill-source-moved']);
     for (const w of QS.QUIZ_SINGLE_REASONS as string[]) expect(D.DRIVER_REASONS, w).not.toContain(w);
     expect(() => new QS.QuizSingleRefusal('in-pane', 'x')).toThrow(TypeError);
   });
@@ -959,19 +982,20 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
   it('the pin each write site leaves is exactly the release pin\'s fields: the first start at round 0, a re-pilot at its round', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    expect(json(pinPath), 'the first start').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0 });
-    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, STAMP, 0));
+    // stage B, B0: each pin now records the pilot key it was written on
+    expect(json(pinPath), 'the first start').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0, key: QK() });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, STAMP, 0, QK()));
     plantStep0b(w.home, w.mode);
     setRelease(w.home, 'v9.9.9');
     expect((await run(w.home, w.argv(['--repilot']), FAKE)).refusal).toBeNull();
-    expect(json(pinPath), 'the re-pilot\'s replacement').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: 'v9.9.9', round: 1 });
-    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, 'v9.9.9', 1));
+    expect(json(pinPath), 'the re-pilot\'s replacement').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: 'v9.9.9', round: 1, key: QK() });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, 'v9.9.9', 1, QK()));
   });
 
   it('a pin that is not this setup\'s is never replaced: --repilot refuses out-refused (fix round 1, F3)', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    writeFileSync(pinPath, QS.releasePinText('0'.repeat(64), STAMP, 0) as string);
+    writeFileSync(pinPath, QS.releasePinText('0'.repeat(64), STAMP, 0, QK()) as string);
     const before = readFileSync(pinPath);
     setRelease(w.home, 'v9.9.9');
     const r = await run(w.home, w.argv(['--repilot']), FAKE);
@@ -1014,7 +1038,7 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
   it('a pin whose round is past the next one is refused out-refused, and nothing is replaced', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    writeFileSync(pinPath, QS.releasePinText(w.s.sha, STAMP, 2) as string);
+    writeFileSync(pinPath, QS.releasePinText(w.s.sha, STAMP, 2, QK()) as string);
     const pin = readFileSync(pinPath);
     setRelease(w.home, 'v9.9.9');
     const r = await run(w.home, w.argv(['--repilot']), FAKE);
@@ -1045,9 +1069,18 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
 
   it('the composer refuses a round that is not a non-negative integer', () => {
     for (const bad of [-1, 1.5, Number.NaN, '1', null, undefined]) {
-      expect(() => QS.releasePinText('a'.repeat(64), 'v1', bad), String(bad)).toThrow(TypeError);
+      expect(() => QS.releasePinText('a'.repeat(64), 'v1', bad, QK()), String(bad)).toThrow(TypeError);
     }
-    expect(QS.releasePinText('a'.repeat(64), 'v1', 0), 'CONTROL').toMatch(/"round":0/);
+    expect(QS.releasePinText('a'.repeat(64), 'v1', 0, QK()), 'CONTROL').toMatch(/"round":0/);
+  });
+
+  it('the composer refuses a key that is no pilot key (stage B, B0)', () => {
+    const bad: unknown[] = [undefined, null, {}, { ...QK(), claude_code: '' }, { ...QK(), code_shas: {} },
+      { ...QK(), code_shas: { f: 'not-hex' } }, { ...QK(), pilot_shas: {} }, { ...QK(), skill_sha256: 'not-hex' }, { ...QK(), extra: 1 },
+      // fix round 1: a key lacking a part is no key to pin
+      { claude_code: 'b', code_shas: QK().code_shas }];
+    for (const k of bad) expect(() => QS.releasePinText('a'.repeat(64), 'v1', 0, k), JSON.stringify(k)).toThrow(TypeError);
+    expect(JSON.parse(QS.releasePinText('a'.repeat(64), 'v1', 0, QK()) as string).key, 'CONTROL').toEqual(QK());
   });
 
   // fix round 1, F2: a re-pilot round that stopped before its result was written resumes only on its own release.
@@ -1398,5 +1431,620 @@ process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME,
   it('the composer refuses an account that is not a non-empty string', () => {
     for (const bad of ['', null, 7, undefined]) expect(() => QS.weekAccountText('a'.repeat(64), bad), String(bad)).toThrow(TypeError);
     expect(JSON.parse(QS.weekAccountText('a'.repeat(64), 'lane-a') as string)).toEqual({ kind: QS.WEEK_ACCOUNT_KIND, v: 1, setup_sha256: 'a'.repeat(64), account: 'lane-a' });
+  });
+});
+
+// ── quiz pilot stage B (Overlord W1a, run 3561): characterization of main (e29f704d47) before any stage-B change ──
+// The task note is docs/superpowers/programs/overlord/quiz-pilot-stage-b.md. Committed green against main's code first; each
+// later stage-B commit edits only the rows its ruling moves, and says which.
+describe('stage B characterization of main (e29f704d47): what a passing week spawns and records', () => {
+  const judgeArgv = (w: R): string[] => {
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    return ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)];
+  };
+
+  it('every arms run, the box run, the probes and the questions, spawns with the arm argv and nothing else', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const want = D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: w.mode, home: w.home }) as string[];
+    const got = runs(w.home);
+    expect(got.length).toBe(1 + (D.STEP0B_PROBES as string[]).length + 3 + D.ARM_ATTEMPTS_MAX);
+    for (const r of got) expect(r.argv).toEqual(want);
+  });
+
+  it('every judge run spawns with the judge argv and nothing else', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = runs(w.home).length;
+    expect((await run(w.home, judgeArgv(w), FAKE)).refusal).toBeNull();
+    const want = D.spawnArgv({ mode: 'judge', model: OPUS, settingsMode: w.mode, home: w.home }) as string[];
+    const got = runs(w.home).slice(n);
+    expect(got.length).toBeGreaterThan(0);
+    for (const r of got) expect(r.argv).toEqual(want);
+  });
+
+  it('the step 0b result\'s fields, and a probe run\'s record fields', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const res = json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    // Changed by B1, B2 and B3 (was: without plugins_off, skill_fallback and skill_sha256): the result records the map the week
+    // runs under, the fallback probe (null when not due) and the staged skill's sha.
+    expect(Object.keys(res).sort()).toEqual(['account', 'batches', 'checks', 'failed', 'kind', 'measured_ms', 'model', 'passed', 'persistence', 'plugins_off',
+      'probes', 'question', 'round', 'runs', 'settings_mode', 'setup_sha256', 'skill_fallback', 'skill_sha256', 'store_id', 'subagent', 'synthetic_transcript',
+      'unmeasured', 'v']);
+    // Changed by B3 (was: loaded and state): the check records whether the map was passed and what it refused.
+    expect(Object.keys(res.checks.plugins).sort()).toEqual(['loaded', 'map_passed', 'map_refused', 'state']);
+    const name = res.batches[1].runs[0] as string;
+    const rec = json(join(w.out, `${name}.run.json`));
+    // Changed by B1 (was: no staged_sha256): a treatment-arm run records the sha of the skill staged in its working folder.
+    expect(Object.keys(rec).sort()).toEqual(['account', 'code', 'cwd', 'kind', 'mode', 'model', 'ms', 'name', 'settings_mode', 'signal', 'staged_sha256',
+      'stream_sha256', 'tokens', 'unknown_options', 'usage_assistant_tokens', 'usage_result_tokens', 'v']);
+  });
+
+  it('the release pin\'s fields', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    // Changed by B0 (was: no key): the pin records the pilot key it was written on.
+    expect(Object.keys(json(join(w.out, 'quiz', 'arms-release.json'))).sort()).toEqual(['ccrc_release', 'key', 'kind', 'round', 'setup_sha256', 'v']);
+  });
+});
+
+// ── quiz pilot stage B (Overlord W1a, run 3561): B1 to B4 on the single-arm module ─────────────────────────────────────
+// The task note is docs/superpowers/programs/overlord/quiz-pilot-stage-b.md. The plugin entries copy the field NAMES the build
+// reports with neutral values; the marketplace plugin is named only by its class.
+const SB_BUILD = ['alpha', 'beta'].map((n) => ({ name: n, path: 'builtin', source: `${n}@builtin` }));
+const SB_MARKET = { name: 'market-one', path: '/fixture/config/plugins/cache/market-a/market-one/1.0.0', source: 'market-one@market-a', version: '1.0.0' };
+const sbInit = (plugins: unknown[] | null, skills: unknown[] | null = ['ccrc-history']): R => ({ sessionId: 's', model: 'm', tools: ['Bash', 'Agent'], mcpServers: [], plugins, skills, slashCommands: [] });
+/** The probe runs' stdin (in STEP0B_PROBES order) and the box run's, for planting streams by run. */
+const probeIns = (home: string): R[] => (D.step0bProbesOf(home, D.STEP0B_SYNTHETIC_TRANSCRIPT) as R[]).map((p) => ({ ...p, stdin: D.step0bStdinOf(CARD, p) as string }));
+const step0bResult = (w: R): R => json(join(w.out, 'quiz', 'step0b', `${w.mode as string}.json`));
+const sha = (b: Buffer | string): string => L.sha256Hex(b) as string;
+/** The skill's files as the installed tree holds them, each file's sha256. */
+const skillFileShas = (root: string): R => Object.fromEntries((QP.HISTORY_SKILL_FILES as string[]).map((n) => [n, sha(readFileSync(join(root, QP.HISTORY_SKILL_SOURCE as string, n)))]));
+/** A fixture tree holding a copy of the shipped skill, for the cases that move or remove it. */
+function skillTree(): string {
+  const root = mkTmp('ccrc-qs-skill-');
+  mkdirSync(join(root, QP.HISTORY_SKILL_SOURCE as string), { recursive: true });
+  for (const n of QP.HISTORY_SKILL_FILES as string[]) writeFileSync(join(root, QP.HISTORY_SKILL_SOURCE as string, n), readFileSync(join(REPO, QP.HISTORY_SKILL_SOURCE as string, n)));
+  return root;
+}
+const judgeOf = (w: R): string[] => {
+  const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+  return ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)];
+};
+
+describe('stage B, B1: the shipped history skill is staged into every treatment-arm run\'s own working folder', () => {
+  it('each arm probe and each question run finds the skill\'s files, byte for byte; the box run and the judge runs find none; each folder is removed', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = runs(w.home).length;
+    expect((await run(w.home, judgeOf(w), FAKE)).refusal).toBeNull();
+    const all = runs(w.home);
+    const want = skillFileShas(REPO);
+    const box = all.find((r) => r.stdin === D.TURN_PROBE_PROMPT)!;
+    expect(box.staged, 'the box run is no treatment-arm run').toBeNull();
+    const arms = all.slice(0, n).filter((r) => r !== box);
+    expect(arms.length).toBe((D.STEP0B_PROBES as string[]).length + 3 + (D.ARM_ATTEMPTS_MAX as number));
+    for (const r of arms) expect(r.staged, r.stdin.slice(0, 40)).toEqual(want);
+    for (const r of all.slice(n)) expect(r.staged, 'a judge run').toBeNull();
+    for (const r of all) expect(existsSync(r.cwd), 'the run\'s folder went with it').toBe(false);
+    const res = step0bResult(w);
+    expect(res.skill_sha256).toBe(sha(L.canonicalJson(want) as string));
+    const rec = json(join(w.out, `${res.batches[1].runs[0] as string}.run.json`));
+    expect(rec.staged_sha256, 'the run record names the staged skill').toBe(res.skill_sha256);
+  });
+
+  it('a source that cannot be read refuses skill-source-unmeasured before --out: nothing is written, nothing spawns', async () => {
+    const w = await week();
+    const root = skillTree();
+    rmSync(join(root, QP.HISTORY_SKILL_SOURCE as string, 'LICENSE.lossless-claw'));
+    const r = await run(w.home, w.argv(), { ...FAKE, skillRoot: root });
+    expect(r.refusal).toEqual({ word: 'skill-source-unmeasured', detail: 'ccd/history-skill/LICENSE.lossless-claw is absent' });
+    expect(existsSync(w.out)).toBe(false);
+    expect(runs(w.home)).toEqual([]);
+  });
+
+  it('a source that is a link, or not a regular file, is unmeasured too', () => {
+    const root = skillTree();
+    const at = join(root, QP.HISTORY_SKILL_SOURCE as string, 'SKILL.md');
+    rmSync(at);
+    symlinkSync(join(REPO, QP.HISTORY_SKILL_SOURCE as string, 'SKILL.md'), at);
+    expect(QP.skillSourceOf(root)).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^ccd\/history-skill\/SKILL\.md is unreadable/) });
+    rmSync(at);
+    mkdirSync(at);
+    expect(QP.skillSourceOf(root)).toEqual({ state: 'unmeasured', detail: 'ccd/history-skill/SKILL.md is not a regular file' });
+    expect(QP.skillSourceOf(REPO), 'CONTROL').toMatchObject({ state: 'value' });
+  });
+
+  it('a source changed after the act pinned it refuses skill-source-moved at the next staging, before that run spawns', async () => {
+    const w = await week();
+    const root = skillTree();
+    writeFileSync(join(w.home, 'stub-touch'), join(root, QP.HISTORY_SKILL_SOURCE as string, 'SKILL.md'));   // the box run moves it
+    const r = await run(w.home, w.argv(), { ...FAKE, skillRoot: root });
+    expect(r.refusal).toMatchObject({ word: 'skill-source-moved', detail: expect.stringMatching(/^the skill's files hash to [0-9a-f]{64}, pinned [0-9a-f]{64} at this act's start$/) });
+    expect(runs(w.home).length, 'only the box run spawned').toBe(1);
+  });
+
+  it('stageSkillInto writes nothing when the source moved, and never over an existing file', () => {
+    const root = skillTree();
+    const pinned = QP.skillSourceOf(root).sha256 as string;
+    const cwd = mkTmp('ccrc-qs-cwd-');
+    expect(QP.stageSkillInto(root, pinned, cwd)).toBeNull();
+    expect(() => QP.stageSkillInto(root, pinned, cwd), 'a second staging into the same folder').toThrow();
+    const cwd2 = mkTmp('ccrc-qs-cwd-');
+    expect(QP.stageSkillInto(root, '0'.repeat(64), cwd2)).toMatchObject({ word: 'skill-source-moved' });
+    expect(readdirSync(cwd2)).toEqual([]);
+  });
+});
+
+describe('stage B fix round 1, F1: the key\'s two code lists are the whole static closure of the quiz, the sweep and the library', () => {
+  /** The five seeds the ruling names: the three quiz modules, the sweep module and the history library. */
+  const SEEDS = ['deploy/history-quiz-pilot.mjs', 'deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs', 'ccd/history/sweep.mjs', 'ccd/history/lib.mjs'];
+  /** A static import or re-export with a relative specifier (`import ... from`, `export ... from`, a bare `import '...'`). */
+  const STATIC_RE = /^\s*(?:import|export)\s[^'"]*?from\s*['"](\.[^'"]+)['"]|^\s*import\s*['"](\.[^'"]+)['"]/gm;
+  /** The tree files `seeds` load by static import, followed transitively, by repository-relative path. */
+  function closureOf(seeds: string[]): Set<string> {
+    const seen = new Set<string>();
+    const queue = [...seeds];
+    while (queue.length > 0) {
+      const f = queue.shift()!;
+      if (seen.has(f)) continue;
+      seen.add(f);
+      for (const m of readFileSync(join(REPO, f), 'utf8').matchAll(STATIC_RE)) {
+        queue.push(pathRelative(REPO, pathResolve(pathDirname(join(REPO, f)), (m[1] ?? m[2])!)));
+      }
+    }
+    return seen;
+  }
+
+  it('every file the seeds and the gate\'s own files load is in exactly one of the two lists, and every listed file is loaded', () => {
+    const gate = G.GATE_CODE_FILES as string[];
+    const pilot = QP.PILOT_CODE_FILES as string[];
+    // the gate's files are walked too (what its driver loads is a pilot file); its Python script runs on its own, never imported
+    const loaded = new Set([...closureOf([...SEEDS, ...gate.filter((f) => f.endsWith('.mjs'))]), ...gate.filter((f) => !f.endsWith('.mjs'))]);
+    const listed = new Set([...gate, ...pilot]);
+    expect([...loaded].filter((f) => !listed.has(f)).sort(), 'loaded, and in neither list').toEqual([]);
+    expect([...listed].filter((f) => !loaded.has(f)).sort(), 'listed, and no longer loaded').toEqual([]);
+    expect(pilot.filter((f) => gate.includes(f)), 'the gate\'s files are not repeated').toEqual([]);
+    expect(pilot, 'one list, in sorted order').toEqual([...pilot].sort());
+    expect(Object.isFrozen(pilot)).toBe(true);
+  });
+
+  it('CONTROL: the walk sees through re-exports and multi-line imports, and finds the files the ruling named', () => {
+    const c = closureOf(SEEDS);
+    for (const f of ['ccd/history/store.mjs', 'shared/redact.mjs', 'ccd/compact-card.mjs', 'deploy/history-replay.mjs']) expect(c.has(f), f).toBe(true);
+    expect(c.size, 'the seeds alone reach the driver and what it loads').toBeGreaterThan(SEEDS.length + 10);
+  });
+
+  it('pilotShasOf hashes every pilot file the way the gate hashes its own (one hasher)', () => {
+    const got = QP.pilotShasOf() as R;
+    expect(got.state).toBe('measured');
+    expect(got).toEqual(D.codeShas(REPO, QP.PILOT_CODE_FILES));
+    for (const f of QP.PILOT_CODE_FILES as string[]) expect(got.files[f], f).toBe(L.sha256Hex(readFileSync(join(REPO, f))));
+    const root = mkTmp('ccrc-qs-pilot-');
+    expect(QP.pilotShasOf(root), 'a missing file is unmeasured, naming it').toEqual({ state: 'unmeasured', path: (QP.PILOT_CODE_FILES as string[])[0], cause: 'absent' });
+  });
+});
+
+describe('stage B fix round 1, F3: the skill source\'s size cap', () => {
+  /** A fixture tree whose skill files are `skillBytes` and a short licence. */
+  function skillTree(skillBytes: number): string {
+    const root = mkTmp('ccrc-qs-skill-');
+    const dir = join(root, QP.HISTORY_SKILL_SOURCE as string);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), Buffer.alloc(skillBytes, 0x61));
+    for (const n of (QP.HISTORY_SKILL_FILES as string[]).filter((x) => x !== 'SKILL.md')) writeFileSync(join(dir, n), 'licence\n');
+    return root;
+  }
+  const CAP = 1_048_576;
+
+  it('a file over the cap is unmeasured, with its own detail; one at the cap is read', () => {
+    expect(QP.skillSourceOf(skillTree(CAP + 1))).toEqual({ state: 'unmeasured', detail: `${QP.HISTORY_SKILL_SOURCE as string}/SKILL.md is over ${CAP} bytes` });
+    expect((QP.skillSourceOf(skillTree(CAP)) as R).state, 'CONTROL: at the cap').toBe('value');
+  });
+
+  it('the week refuses skill-source-unmeasured on it before anything spawns', async () => {
+    const w = await week();
+    const r = await run(w.home, w.argv(), { ...FAKE, skillRoot: skillTree(CAP + 1) });
+    expect(r.refusal).toMatchObject({ word: 'skill-source-unmeasured', detail: expect.stringMatching(/is over 1048576 bytes$/) });
+    expect(runs(w.home)).toEqual([]);
+  });
+});
+
+describe('stage B fix round 2, F2: the arms act refuses pilot files it cannot read, before --out', () => {
+  it('a pilot file it cannot read: code-unmeasured naming it, the out folder never opened, nothing written and nothing spawned', async () => {
+    const w = await week();
+    const r = await run(w.home, w.argv(), { ...FAKE, pilotRoot: mkTmp('ccrc-qs-pilot-root-') });
+    expect(r.refusal).toEqual({ word: 'code-unmeasured', detail: `pilot file ${(QP.PILOT_CODE_FILES as string[])[0]} is absent` });
+    expect(existsSync(w.out), 'the out folder was never opened').toBe(false);
+    expect(runs(w.home)).toEqual([]);
+  });
+});
+
+describe('stage B, B3: a plugins-off map from the pilot\'s first run, passed to every later run and to the week\'s arms and judge', () => {
+  it('pluginsOffOf: each observed entry that is not the build\'s own and has a plain source is switched off; nothing else', () => {
+    expect(QP.pluginsOffOf(sbInit([...SB_BUILD, SB_MARKET]))).toEqual({ observed: true, off: { 'market-one@market-a': false }, refused: [] });
+    expect(QP.pluginsOffOf(sbInit(SB_BUILD))).toEqual({ observed: true, off: {}, refused: [] });
+    expect(QP.pluginsOffOf(null)).toEqual({ observed: false, off: {}, refused: [] });
+    expect(QP.pluginsOffOf(sbInit(null))).toEqual({ observed: false, off: {}, refused: [] });
+  });
+
+  it('a source that is not a plain name, one @ and a plain marketplace name is refused into no argument', () => {
+    const bad: Array<[string, unknown]> = [
+      ['two separators', { name: 'x', source: 'x@market-a@other', path: '/p' }],
+      ['no name', { name: 'x', source: '@market-a', path: '/p' }],
+      ['no marketplace', { name: 'x', source: 'x@', path: '/p' }],
+      ['no separator', { name: 'x', source: 'x', path: '/p' }],
+      ['a space', { name: 'x', source: 'x y@market-a', path: '/p' }],
+      ['a slash', { name: 'x', source: '../x@market-a', path: '/p' }],
+      ['a quote', { name: 'x', source: 'x"@market-a', path: '/p' }],
+      ['a leading dash', { name: 'x', source: '-x@market-a', path: '/p' }],
+      ['no source', { name: 'x', path: '/p' }],
+      ['a source that is no string', { name: 'x', source: ['x@market-a'], path: '/p' }],
+      ['a bare string', 'x@market-a'],
+    ];
+    for (const [why, entry] of bad) {
+      const m = QP.pluginsOffOf(sbInit([...SB_BUILD, entry])) as R;
+      expect(m.off, why).toEqual({});
+      expect(m.refused.length, why).toBe(1);
+      expect(QP.pluginsCheckWithMapOf({ state: 'pass', loaded: [] }, m).state, `${why}: the check fails`).toBe('fail');
+    }
+  });
+
+  it('pluginsOffSettingsOf: undefined for an empty map, one enabledPlugins value otherwise; a damaged map never becomes one', () => {
+    expect(QP.pluginsOffSettingsOf({ observed: true, off: {}, refused: [] })).toBeUndefined();
+    expect(QP.pluginsOffSettingsOf({ observed: true, off: { 'a@b': false }, refused: [] })).toEqual({ enabledPlugins: { 'a@b': false } });
+    for (const m of [null, {}, { off: { 'a@b': true } }, { off: { 'a b@c': false } }, { off: { '--x@b': false } }, { off: 'a@b' }]) {
+      expect(() => QP.pluginsOffSettingsOf(m), JSON.stringify(m)).toThrow(TypeError);
+    }
+  });
+
+  it('pluginsCheckWithMapOf: the driver\'s state stands, failed too when the map refused an entry; it records whether the map was passed', () => {
+    const map = QP.pluginsOffOf(sbInit([...SB_BUILD, SB_MARKET]));
+    expect(QP.pluginsCheckWithMapOf({ state: 'fail', loaded: [] }, map)).toEqual({ state: 'fail', loaded: [], map_passed: true, map_refused: [] });
+    expect(QP.pluginsCheckWithMapOf({ state: 'pass', loaded: [] }, map)).toEqual({ state: 'pass', loaded: [], map_passed: true, map_refused: [] });
+    expect(QP.pluginsCheckWithMapOf({ state: 'unmeasured', loaded: [] }, QP.pluginsOffOf(null))).toEqual({ state: 'unmeasured', loaded: [], map_passed: false, map_refused: [] });
+  });
+
+  /** A week whose box run reports `boxPlugins` and whose arm probes report `armPlugins`. */
+  async function mapWeek(boxPlugins: unknown[], armPlugins: unknown[]) {
+    const w = await week();
+    const over: Record<string, string> = { 'turn-bound': stream({ main: 12, sub: 2, subtype: D.MAX_TURNS_STOP_SUBTYPE as string, session: 'fixture-qs-turn', plugins: boxPlugins }) };
+    for (const p of probeIns(w.home)) {
+      const session = `fixture-qs-${p.probe as string}`;
+      over[p.probe as string] = p.expect === 'admitted' ? stream({ session, calls: [{ command: p.command }], plugins: armPlugins })
+        : p.expect === 'denied' ? stream({ session, calls: [{ command: p.command, denied: true }], plugins: armPlugins })
+          : stream({ session, calls: [{ name: 'Agent' }, { command: p.command, parent: 'toolu_qs_0' }], plugins: armPlugins });
+    }
+    plantStep0b(w.home, w.mode, over);
+    return w;
+  }
+  const SETTINGS = '{"enabledPlugins":{"market-one@market-a":false}}';
+
+  it('the map built from the box run is passed to every later run, the week\'s question runs and the judge; the build honoured it, so the pilot passes', async () => {
+    const w = await mapWeek([...SB_BUILD, SB_MARKET], SB_BUILD);
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = runs(w.home).length;
+    expect((await run(w.home, judgeOf(w), FAKE)).refusal).toBeNull();
+    const all = runs(w.home);
+    const base = D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: w.mode, home: w.home }) as string[];
+    const box = all.find((r) => r.stdin === D.TURN_PROBE_PROMPT)!;
+    expect(box.argv, 'the first run observes: it gets no map').toEqual(base);
+    const withMap = D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: w.mode, home: w.home, settings: JSON.parse(SETTINGS) }) as string[];
+    expect(withMap.slice(0, 3)).toEqual(['--restricted', '--settings', SETTINGS]);
+    for (const r of all.slice(0, n).filter((x) => x !== box)) expect(r.argv).toEqual(withMap);
+    const judgeArgv = D.spawnArgv({ mode: 'judge', model: OPUS, settingsMode: w.mode, home: w.home, settings: JSON.parse(SETTINGS) }) as string[];
+    for (const r of all.slice(n)) expect(r.argv, 'a judge run').toEqual(judgeArgv);
+    const res = step0bResult(w);
+    expect(res.plugins_off).toEqual({ observed: true, off: { 'market-one@market-a': false }, refused: [] });
+    expect(res.checks.plugins).toMatchObject({ state: 'pass', map_passed: true, map_refused: [] });
+  });
+
+  it('a build that ignores the map: the marketplace entry still loads in the runs made with it, so the check fails, recording that the map was passed', async () => {
+    const w = await mapWeek([...SB_BUILD, SB_MARKET], [...SB_BUILD, SB_MARKET]);
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/failed plugins/) });
+    expect(step0bResult(w).checks.plugins).toMatchObject({ state: 'fail', map_passed: true });
+  });
+
+  it('the map comes from the pilot\'s first run alone: an entry only the later runs report is never switched off', async () => {
+    const other = { ...SB_MARKET, name: 'market-two', source: 'market-two@market-b' };
+    const w = await mapWeek([...SB_BUILD, SB_MARKET], [...SB_BUILD, other]);
+    await run(w.home, w.argv(), FAKE);
+    const res = step0bResult(w);
+    expect(res.plugins_off.off).toEqual({ 'market-one@market-a': false });
+    expect(res.checks.plugins.state, 'the unswitched entry still fails the check').toBe('fail');
+    for (const r of runs(w.home)) expect(r.argv.join(' '), 'no argument names it').not.toContain('market-two');
+  });
+
+  it('a malformed source in the first run reaches no argument and fails the check', async () => {
+    const odd = { ...SB_MARKET, source: 'market-one@market-a@other' };
+    const w = await mapWeek([...SB_BUILD, odd], SB_BUILD);
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/failed plugins/) });
+    for (const x of runs(w.home)) expect(x.argv.join(' ')).not.toContain('market-one');
+    expect(step0bResult(w).checks.plugins).toMatchObject({ state: 'fail', map_passed: false, map_refused: [{ name: 'market-one', source: 'market-one@market-a@other' }] });
+  });
+
+  it('a recorded map that is damaged refuses out-refused, and reaches no argument', async () => {
+    const w = await mapWeek([...SB_BUILD, SB_MARKET], SB_BUILD);
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const p = join(w.out, 'quiz', 'step0b', `${w.mode}.json`);
+    const res = json(p);
+    res.plugins_off.off = { '--dangerous x@y': false };
+    writeFileSync(p, `${L.canonicalJson(res) as string}\n`);
+    const n = runs(w.home).length;
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/plugins_off is not a plugins-off map$/) });
+    expect(runs(w.home).length).toBe(n);
+  });
+
+  // fix round 1, F3: the judge refuses a map that differs from the result the arms ran under, by each of its three checks
+  describe('the judge takes only the step 0b result the arms ran under', () => {
+    const OTHER = { 'market-two@market-b': false };
+    const resRel = (w: R): string => `quiz/step0b/${w.mode as string}.json`;
+    const sumPath = (w: R): string => join(w.out, 'quiz', 'arms-summary.json');
+    /** The week's step 0b result with another valid map in it, as text. */
+    const otherMapText = (w: R): string => { const r = json(join(w.out, resRel(w))); r.plugins_off = { ...r.plugins_off, off: OTHER }; return `${L.canonicalJson(r) as string}\n`; };
+    /** The arms summary rewritten to name `rel` at its bytes' sha. */
+    const pointSummaryAt = (w: R, rel: string): void => {
+      const v = json(sumPath(w));
+      v.step0b = { rel, sha256: shaOfFile(join(w.out, rel)) };
+      writeFileSync(sumPath(w), `${L.canonicalJson(v) as string}\n`);
+    };
+    async function armsDone() {
+      const w = await mapWeek([...SB_BUILD, SB_MARKET], SB_BUILD);
+      expect((await run(w.home, w.argv(), FAKE)).refusal, 'fixture: the arms finished').toBeNull();
+      return w;
+    }
+    const cases: Array<[string, (w: R) => void, RegExp]> = [
+      ['its bytes changed (another map), the summary unchanged: the sha check', (w) => writeFileSync(join(w.out, resRel(w)), otherMapText(w)),
+        /is not the step 0b result the arms summary names$/],
+      ['the summary names another file (a kept failed result holding another map): the path check', (w) => {
+        const rel = QS.step0bFailedRel(w.mode, 0) as string;
+        writeFileSync(join(w.out, rel), otherMapText(w));
+        pointSummaryAt(w, rel);
+      }, /^arms-summary names no step 0b result of this mode$/],
+      ['the file the summary names is no step 0b result (no kind), though it holds a map: the kind check', (w) => {
+        writeFileSync(join(w.out, resRel(w)), `${L.canonicalJson({ plugins_off: { observed: true, off: OTHER, refused: [] } }) as string}\n`);
+        pointSummaryAt(w, resRel(w));
+      }, /is not a step 0b result$/],
+    ];
+    for (const [why, edit, detail] of cases) {
+      it(`${why}: refused input-invalid, and no judge run spawns`, async () => {
+        const w = await armsDone();
+        edit(w);
+        const n = runs(w.home).length;
+        const r = await run(w.home, judgeOf(w), FAKE);
+        expect(r.refusal).toMatchObject({ word: 'input-invalid', detail: expect.stringMatching(detail) });
+        expect(runs(w.home).length).toBe(n);
+      });
+    }
+  });
+
+  it('spawnArgv: the map is merged under the fallback mode\'s own value, which wins, and passed after --restricted; absent, the argv is the mode\'s', () => {
+    const a = (sm: string, settings?: R): string[] => D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: sm, home: '/home/u', ...(settings === undefined ? {} : { settings }) }) as string[];
+    expect(a('restricted', { enabledPlugins: { 'a@b': false } }).slice(0, 3)).toEqual(['--restricted', '--settings', '{"enabledPlugins":{"a@b":false}}']);
+    expect(a('fallback', { enabledPlugins: { 'a@b': false } }).slice(0, 4)).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true,"enabledPlugins":{"a@b":false}}']);
+    expect(a('fallback', { disableAllHooks: false }).slice(0, 4), 'the mode\'s own value wins').toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']);
+    expect(a('restricted', undefined)).toEqual(a('restricted'));
+    expect(() => a('restricted', 'x' as unknown as R)).toThrow(TypeError);
+  });
+});
+
+describe('stage B, B4: what a run left passes persistence only on its proof, every condition recorded', () => {
+  const SLUG = (cwd: string): string => D.projectSlugOf(cwd) as string;
+  const CWD = '/tmp/ccrc-history-replay-fixture';
+  const SID = '00000000-0000-4000-8000-0000000000c1';
+  /** persistenceMeasured's row for the Agent probe's measured leftover, with `files` under it and `over` on its shape. */
+  const left = (files: string[], over: R = {}, transcripts: string[] = [`${SLUG(CWD)}/${SID}`]): R => ({ left: true, transcripts, project_dir: true,
+    shape: { entries: [], subagents_dir: true, transcript_file: files.some((f) => f.endsWith('.jsonl')), truncated: false, files, links: [], ...over } });
+  const sub = `${SLUG(CWD)}/${SID}/subagents/agent-a1.jsonl`;
+  const proof = (row: R, known: Set<string> | null = new Set()): R => QP.persistenceProofOf(row, { cwd: CWD, sessionId: SID, known }) as R;
+
+  it('the measured shape, a subagent file of a session the sweep does not know: every condition holds, and the check passes', () => {
+    const p = proof(left([sub]));
+    expect(p.proof).toEqual({ own_folder: true, no_main_transcript: true, walk_complete: true, store_cannot_read: true, files: 1, readable: [], passed: true });
+    expect(D.persistenceCheckOf([p])).toEqual({ state: 'pass' });
+  });
+
+  it('a leftover holding no regular file passes on the first three alone', () => {
+    const p = proof(left([]));
+    expect(p.proof).toMatchObject({ store_cannot_read: null, files: 0, passed: true });
+    expect(D.persistenceCheckOf([p])).toEqual({ state: 'pass' });
+  });
+
+  it('each condition dropped in turn fails the check, and is the one recorded false', () => {
+    const cases: Array<[string, R, Set<string> | null, string]> = [
+      ['something left outside the run\'s own project folder', left([sub], {}, [`${SLUG(CWD)}/${SID}`, `-elsewhere/${SID}`]), new Set(), 'own_folder'],
+      ['no project folder of its own at all', { ...left([sub]), project_dir: false }, new Set(), 'own_folder'],
+      // fix round 1: any link among what the run left fails this condition, whatever it points at
+      ['a link among what the run left', left([sub], { links: [`${SLUG(CWD)}/${SID}/subagents/far.jsonl`] }), new Set(), 'own_folder'],
+      ['a link that is the project folder itself', left([sub], { links: [SLUG(CWD)] }), new Set(), 'own_folder'],
+      ['a shape that lists no links (written before fix round 1)', left([sub], { links: undefined }), new Set(), 'own_folder'],
+      ['a main transcript in the project folder', left([sub, `${SLUG(CWD)}/${SID}.jsonl`], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
+      // the one row where this condition alone decides: the walk names a main transcript that is neither a regular file nor a link
+      // (a folder or a FIFO named <session>.jsonl: in transcripts, in neither files nor links), and no regular file is left
+      ['a main transcript that is neither a regular file nor a link, beside no regular file', left([], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
+      ['the walk cut at its bound', left([sub], { truncated: true }), new Set(), 'walk_complete'],
+      ['the walk unmeasured', left([sub], { unmeasured: 'EACCES' }), new Set(), 'walk_complete'],
+      ['the session is one the sweep knows', left([sub]), new Set([SID]), 'store_cannot_read'],
+      ['a regular file outside any session folder', left([`${SLUG(CWD)}/stray.txt`]), new Set(), 'store_cannot_read'],
+    ];
+    for (const [why, row, known, cond] of cases) {
+      const p = proof(row, known);
+      expect(p.proof.passed, why).toBe(false);
+      expect(p.proof[cond], why).toBe(false);
+      expect(D.persistenceCheckOf([p]), why).toEqual({ state: 'fail' });
+    }
+    const u = proof(left([sub]), null);
+    expect(u.proof.store_cannot_read, 'known ids that could not be read prove nothing').toBe('unmeasured');
+    expect(D.persistenceCheckOf([u])).toEqual({ state: 'fail' });
+  });
+
+  it('fix round 2, A6: a regular file named like a transcript, one folder deeper under a folder the sweep does not know, passes; under a known one it fails', () => {
+    const deeper = `${SLUG(CWD)}/other-folder/${SID}.jsonl`;
+    const p = proof(left([deeper]));
+    // the sweep's decision reads <slug>/<folder>/… as a file of session <folder>, read only when that session is known
+    expect(p.proof).toEqual({ own_folder: true, no_main_transcript: true, walk_complete: true, store_cannot_read: true, files: 1, readable: [], passed: true });
+    const k = proof(left([deeper]), new Set(['other-folder']));
+    expect(k.proof, 'CONTROL: the folder is a session the sweep knows').toMatchObject({ store_cannot_read: false, readable: [deeper], passed: false });
+  });
+
+  it('knownIdsOf: the store\'s read throwing (a fixture store with no epochs table) reads null, so the proof is unmeasured and never a pass', () => {
+    const home = mkTmp('ccrc-qs-known-');
+    const db = new DatabaseSync(':memory:');
+    try {
+      expect(QP.knownIdsOf(db, home), 'the owner\'s read throws: unmeasured').toBeNull();
+      const p = proof(left([sub]), QP.knownIdsOf(db, home) as Set<string> | null);
+      expect(p.proof).toMatchObject({ store_cannot_read: 'unmeasured', passed: false });
+      expect(D.persistenceCheckOf([p])).toEqual({ state: 'fail' });
+      db.exec('CREATE TABLE epochs (cc_session_uuid TEXT, confirmed_ms INTEGER)');
+      expect(QP.knownIdsOf(db, home), 'CONTROL: a store it can read, and no registry, is an empty set').toEqual(new Set());
+    } finally {
+      db.close();
+    }
+  });
+
+  it('a clean row and an unmeasured one come back unchanged, with no proof', () => {
+    const clean = { left: false, transcripts: [], project_dir: false };
+    const unm = { left: true, transcripts: [], project_dir: null, unmeasured: 'no-session-id' };
+    expect(proof(clean)).toEqual(clean);
+    expect(proof(unm)).toEqual(unm);
+  });
+
+  it('end to end: the Agent probe\'s subagent leaves its folder; a session the sweep does not know passes, one it knows fails the pilot', async () => {
+    for (const known of [false, true]) {
+      const w = await week();
+      const agent = probeIns(w.home).find((p) => p.expect === 'subagent')!;
+      put(w.home, w.mode, agent.stdin as string, '.jsonl', stream({ session: SID, calls: [{ name: 'Agent' }, { command: agent.command, parent: 'toolu_qs_0' }] }));
+      put(w.home, w.mode, agent.stdin as string, '.leave', JSON.stringify({ session: SID, file: 'agent-a1.jsonl' }));
+      if (known) {
+        mkdirSync(join(w.home, '.cc-sessions'), { recursive: true });
+        writeFileSync(join(w.home, '.cc-sessions', 'lane-a.uuid'), `${SID}\n`);
+      }
+      const r = await run(w.home, w.argv(), FAKE);
+      const res = step0bResult(w);
+      const row = (res.persistence as R[]).find((x) => x.name.endsWith('/agent'))!;
+      expect(row.left, 'fixture: the subagent left its folder').toBe(true);
+      expect(row.shape.files.map((f: string) => f.split('/').slice(1).join('/'))).toEqual([`${SID}/subagents/agent-a1.jsonl`]);
+      expect(row.proof, known ? 'known' : 'unknown').toMatchObject({ own_folder: true, no_main_transcript: true, walk_complete: true, store_cannot_read: !known, passed: !known });
+      if (known) expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/failed persistence/) });
+      else expect(r.refusal).toBeNull();
+    }
+  });
+});
+
+describe('stage B, B2: when the skill alone fails under restricted, one probe under fallback records whether it is listed there', () => {
+  it('fallbackProbeDueOf: restricted, the skill the only failure and nothing unmeasured', () => {
+    expect(QP.fallbackProbeDueOf('restricted', { failed: ['skill'], unmeasured: [] })).toBe(true);
+    expect(QP.fallbackProbeDueOf('fallback', { failed: ['skill'], unmeasured: [] })).toBe(false);
+    expect(QP.fallbackProbeDueOf('restricted', { failed: ['skill', 'plugins'], unmeasured: [] })).toBe(false);
+    expect(QP.fallbackProbeDueOf('restricted', { failed: ['skill'], unmeasured: ['tools'] })).toBe(false);
+    expect(QP.fallbackProbeDueOf('restricted', { failed: ['plugins'], unmeasured: [] })).toBe(false);
+    expect(QP.fallbackProbeDueOf('restricted', { failed: [], unmeasured: [] })).toBe(false);
+  });
+
+  /** A week whose arm probes report no skill under restricted; `fallback` plants the fallback probe's stream when given. */
+  async function noSkillWeek(o: { fallback?: string; also?: Record<string, string> } = {}) {
+    const w = await week();
+    const over: Record<string, string> = {};
+    for (const p of probeIns(w.home)) {
+      const session = `fixture-qs-${p.probe as string}`;
+      over[p.probe as string] = p.expect === 'admitted' ? stream({ session, skills: [], calls: [{ command: p.command }] })
+        : p.expect === 'denied' ? stream({ session, skills: [], calls: [{ command: p.command, denied: true }] })
+          : stream({ session, skills: [], calls: [{ name: 'Agent' }, { command: p.command, parent: 'toolu_qs_0' }] });
+    }
+    plantStep0b(w.home, w.mode, { ...over, ...o.also });
+    if (o.fallback !== undefined) put(w.home, 'fallback', probeIns(w.home)[0]!.stdin as string, '.jsonl', o.fallback);
+    return w;
+  }
+
+  for (const [why, fb, want] of [
+    ['the skill listed there', stream({ session: 'fixture-qs-fb', calls: [{ command: 'x' }] }), 'listed'],
+    ['the skill not listed there either', stream({ session: 'fixture-qs-fb', skills: [], calls: [{ command: 'x' }] }), 'not-listed'],
+  ] as Array<[string, string, string]>) {
+    it(`${why}: recorded as ${want}; the verdict is restricted's, pilot-failed on the skill`, async () => {
+      const w = await noSkillWeek({ fallback: fb });
+      const r = await run(w.home, w.argv(), FAKE);
+      expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/^step0b restricted: failed skill; unmeasured -/) });
+      const res = step0bResult(w);
+      expect(res).toMatchObject({ passed: false, failed: ['skill'], unmeasured: [], settings_mode: 'restricted' });
+      expect(res.skill_fallback).toMatchObject({ skill: want, run: expect.stringMatching(/^quiz\/step0b\/fallback\.v[^/]+\.r0\/skill-probe$/) });
+      const fbRuns = runs(w.home).filter((x) => !x.argv.includes('--restricted'));
+      expect(fbRuns.length, 'exactly one run under the fallback mode').toBe(1);
+      expect(fbRuns[0]!.argv.slice(0, 4)).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']);
+      expect(fbRuns[0]!.staged, 'the fallback probe finds the skill staged too').toEqual(skillFileShas(REPO));
+    });
+  }
+
+  // fix round 1, F2: the probe decides nothing, so its failure decides nothing either
+  /** FAKE, with a payloads stand-in that runs `then` once every restricted run of the round has been made (the box run and each
+   *  arm probe): the next card asked is the fallback probe's, so its failure lands inside the probe. `then` answers a reading to
+   *  hand back, or null to answer as FAKE does. */
+  const afterRestricted = (home: string, then: () => R | null): R => {
+    const restricted = 1 + probeIns(home).length;
+    const base = FAKE.payloads as (...a: unknown[]) => R;
+    return { ...FAKE, payloads: (...a: unknown[]): R => (runs(home).length >= restricted ? then() : null) ?? base(...a) };
+  };
+  /** A later pilot on a new key (a new build) runs the week again as round 1, and passes. */
+  async function pilotsAgainOnNewKey(w: R): Promise<void> {
+    plantStep0b(w.home, w.mode);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal, 'piloted again on the new key').toBeNull();
+    expect(step0bResult(w)).toMatchObject({ round: 1, passed: true });
+    expect(json(join(w.out, QS.RELEASE_PIN_FILE as string))).toMatchObject({ round: 1, key: QK('2.9.2 (Claude Code)') });
+  }
+  const FB_RUN = /^quiz\/step0b\/fallback\.v[^/]+\.r0\/skill-probe$/;
+
+  it('the probe refusing on a word that is not resumable: recorded unmeasured with that word, the result on disk, pilot-failed; a new key pilots it again', async () => {
+    const w = await noSkillWeek();
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => ({ state: 'gone', why: 'fixture-gone' })));
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/^step0b restricted: failed skill; unmeasured -/) });
+    const res = step0bResult(w);
+    expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'], unmeasured: [], settings_mode: 'restricted' });
+    expect(res.skill_fallback).toEqual({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'quiz-unanswerable', detail: expect.stringMatching(/ payload fixture-gone$/) });
+    expect(runs(w.home).length, 'nothing spawned in any mode after the restricted runs').toBe(1 + probeIns(w.home).length);
+    await pilotsAgainOnNewKey(w);
+  });
+
+  it('a stop landing inside the probe (the limits row past its threshold): recorded unmeasured, nothing spawned after it, pilot-failed; a new key pilots it again', async () => {
+    const w = await noSkillWeek();
+    const lim = join(w.home, '.cc-limits', 'up-a.json');
+    const row = readFileSync(lim);
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => { writeFileSync(lim, JSON.stringify({ ...JSON.parse(row.toString('utf8')), five: 99 })); return null; }));
+    expect(r.refusal, 'the act ends on the pilot word, not on the stop').toMatchObject({ word: 'pilot-failed' });
+    const res = step0bResult(w);
+    expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'] });
+    expect(res.skill_fallback).toMatchObject({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'limits-threshold' });
+    expect(runs(w.home).length, 'nothing spawned in any mode after the stop').toBe(1 + probeIns(w.home).length);
+    writeFileSync(lim, row);
+    await pilotsAgainOnNewKey(w);
+  });
+
+  it('fix round 2: a probe that throws with no word is recorded as probe-threw with its message, and the act still ends on pilot-failed', async () => {
+    const w = await noSkillWeek();
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => { throw new Error('fixture wordless throw'); }));
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed' });
+    expect(step0bResult(w).skill_fallback).toEqual({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'probe-threw', detail: 'fixture wordless throw' });
+    expect(runs(w.home).length, 'nothing spawned in any mode after it').toBe(1 + probeIns(w.home).length);
+  });
+
+  it('not due when another check fails too: no run under the fallback mode, and the result records none', async () => {
+    const w0 = await week();
+    const p = probeIns(w0.home).find((x) => x.probe === 'deny-rg')!;
+    const w = await noSkillWeek({ also: { 'deny-rg': stream({ session: 'fixture-qs-deny-rg', skills: [], calls: [{ command: p.command }] }) } });
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/failed skill deny-rg/) });
+    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted'))).toEqual([]);
+    expect(step0bResult(w).skill_fallback).toBeNull();
+  });
+
+  it('a passing pilot makes no fallback probe', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted'))).toEqual([]);
+    expect(step0bResult(w).skill_fallback).toBeNull();
   });
 });
