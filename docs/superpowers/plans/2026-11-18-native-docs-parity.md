@@ -498,6 +498,12 @@ Each row ships with the task that owns it; the row is red when the guard is remo
   - **What changes here:** §6's State line is amended in place.
   - The coordinator ruled it on 2026-11-22 (early). Issued to run 3249 in its block 8881 to 8883; 8882 and 8883 are unspent so far.
 
+- **D-9001 (2026-11-24)** — ccd-grows-by-the-folder-verbs. Wave P2 (Tasks P2.1 and P2.2): `ccd/ccd` grows by 914 net code lines at the wave's built head `0ed80e0917` (`growth-check.test.ts`'s own `netGrowth` and `programRow`, against the merge-base `e0e8989c05`; the ccd program row by the same 914), past the growth check's per-PR limit of 40, under the waiver `server/test/growth-waivers/D-9001-ccd-ccd.json` (`maxDelta` 940).
+  - **What grows.** `docs-folder` (P2.1): the bash front, the label and path grammars, admission by descriptors from `/` with the protected directories compared by device and inode both ways, the registry's one writer under its lock, Remove's snapshot purge, and refusals that never echo a path. `docs-folder-read` (P2.2): the walker over the six section directories below the held folder descriptor, its leaf checks, and the folder's show, prepare and frame reads with the label and the folder's identity in the snapshot binding. Plus both review rounds' hardening.
+  - **Why it lives in ccd.** Spec §4.1's decision table puts admission, the registry and the folder reads beside the files, in ccd, the one component that names the disk layout, and the server never sends a path to read; a reader beside ccd would be a second owner of those reads.
+  - **Conditions (the coordinator's).** Re-measured at the wave's tip before the push; a fix round past 940 is an ask with the new figure. The wave-done states the final net growth beside the waiver. The held-out review is asked whether any of these lines repeat logic the range verb already has.
+  - The coordinator ruled it (mail 34526). Issued to run 3656 in its block 9001 to 9003; 9002 and 9003 are unspent so far.
+
 ## Results
 
 ### What was read and measured (2026-11-18)
@@ -881,3 +887,60 @@ The review found 6 important findings (F1 to F6) and 5 advisory ones (a0 to a4).
 | M11.116 | `docs-md-parts` 1/3/42: the residual 7 pin's fence is closed and reopened |
 
 **Process this round:** the leave was kept to the letter by me and by every implementer: file text only through Edit and Write, each test, compile or script run its own `ccrc test --` call, one at a time, no chained calls, and every file claimed before its first edit. No breach.
+
+### Wave P2 (run 3656, 2026-11-24)
+
+Wave 44, ticket `x2-p2`, base `main` at `e0e8989c05` (P1 landed in #3102). Issued block 9001 to 9003.
+
+#### What was built, by task
+
+| Task | What | Commit |
+|---|---|---|
+| P2.1 | `ccd docs-folder --list \| --add L --path P \| --remove L`: three exact shapes, a second mode refused with no side effect; the label grammar checked in the helper before any path join; the path's shape; admission by descriptors from `/` (`O_DIRECTORY\|O_NOFOLLOW` per component), the owner check, and the protected set compared by device and inode both ways (folder inside one, HOME only as an exact match; folder containing one, HOME included, by a bounded walk up `..`); the registry `$REG/docs-folders/<label>`, its one writer under its own lock (`.lock` there), atomic writes, a refused add creating nothing; Remove purges the label's completed snapshots first, then unlinks, under the registry lock then the cache lock. `--list` rows carry `state` (`ok` with the path, or `unreadable` with `path: null`, never the bytes), so Settings can remove a broken label. The `docs-folders-v1` token, the four grants (`docs-folder` not enrolled in `REQUIRED_VERB_FLAG`; `docs-folder-read` enrolled on `--label`) and the four `CCD_ARGV` builders with their `CCD_CAN` rows | `d9e8bbc664` |
+| P2.1 | The docs-fetch lock wording (the ledger's P2 carry): git 2.53 words a held ref lock `error: fetching ref refs/remotes/origin/<b> failed: reference already exists` (rc 1), measured on this box's git 2.53.0; `FETCH_LOCK_LINE_RE`, pinned to `refs/remotes/origin/`, answers `ref-locked` beside 2.43's pair. One pure row per wording, seven near-misses, and the four real-git cases now pass on 2.53 | `d9e8bbc664` |
+| P2.1 Step 0 | `CCRC_DOCTOR_DOCS_CAPS` names `docs-range-v1` and `docs-folders-v1`; the warning names what Docs then lacks; `docs-parity` holds the literal equal to the four constants | `da7113e638` |
+| P2.2 | `ccd docs-folder-read --label L --op tree \| show \| prepare \| range`: every op resolves the label from the registry and re-runs admission first; only the six section directories, opened from the held descriptor; dot names skipped and counted nowhere; symlinks, FIFOs, sockets and devices listed and never opened (show and prepare decide by `lstat` before any open); loops end by a visited set; each directory compared with the protected set; another device never descended; an unreadable directory listed and the walk continues; the listing caps and the shared hash budget; a folder snapshot bound to label, section, path, pin and the folder's device and inode | `63956d3a5e` |
+| P2.3 (layers) | `docs-folder` forbidden to every session, one whole-verb row at each layer, in `delegation-adopt`'s server-only group: `FORBIDDEN_CCD_VERBS`, `CHILD_DENY_CCD_VERBS` (one line, granted by its holder), both jq lists of the session hook, the installer's loop, `is_protected`'s first tuple, and the body's direct-entry guard (in `63956d3a5e`). `docs-folder-read` stays ordinary at each | `0ed80e0917` |
+
+#### Wire shapes the server and console must type (P2.3, P2.4)
+
+- A tree entry is `{section, path, kind, size, mtimeNs, fp}`, plus `errno` (a name such as `EACCES`) on `unreadable` only. `kind` is `file`, `symlink`, `special`, `hardlink`, `foreign-owner`, `other-device` or `unreadable`. Only `file` carries `size` and `mtimeNs` (a decimal string); `fp` is a sha256, or null past the 4 MiB hash ceiling or the 32 MiB shared budget (then pinned by stat at open). Every other kind has `size`, `mtimeNs` and `fp` null. So the plan's `mtimeNs: string` is `string | null`, set exactly when `kind` is `file`.
+- `unlisted` is `{count, byReason}`, `byReason` among `invalid-utf8`, `unsafe-char`, `too-long` and `too-deep` (a loop revisit and a skipped section count as `too-deep`).
+- New failure words in the helper: `absent`, `bad-label`, `foreign-owner`, `label-exists`, `not-a-directory`, `protected` (with `reason`), `unknown-folder`, `unreadable` (with `reason`: an errno name, `registry-entry`, `registry-busy`, `range-cache`, `lock-not-regular` or `timeout`). `DOCS_CCD_FAILURES` gains them when `shared/docs.ts` is free.
+- Deadlines: `HELPER_DEADLINE_S` `docs-folder` 12 s (runner 25 000 ms), `docs-folder-read` 20 s (runner 30 000 ms), each held by `docs-budget.test.ts`'s rule.
+
+#### Mutation rows measured
+
+Each row: the file's sha256 recorded, the one mutation made with the Edit tool, its case run alone and seen red, restored, the sha256 equal again, green.
+
+| Row | Red |
+|---|---|
+| M11.1 | `ccd-docs-folder` 1/21 skipped: the symlinked component admitted (`ok: true`) |
+| M11.3 | `ccd-docs-folder` 1/31 skipped: the protected directory named through a symlinked HOME admitted (the inside check) |
+| M11.3, second half (review I1) | the contains check alone made a path prefix: the symlinked-HOME parent and the symlinked projects root's parent each admitted, 1/31 skipped each |
+| M11.58 | `ccd-docs-folder` 1/21 skipped: `add ".."` answers `absent`, not `bad-label` |
+| lock wording (the carry's row) | `ccd-docs-fetch` 1/30 skipped: the pure classifier's 2.53 row answers `fetch-failed` |
+| registry one writer | `docs-ring` 2/75 skipped: a planted unlink in the reader is a second writer |
+| M11.2 | `ccd-docs-folder-read`: `docs/superpowers` swapped for a symlink after add answers `ok: true` |
+| M11.4 | `ccd-docs-folder-read`: the listing gains `.env`, `.git/config`, `.hidden/x.md` and four more |
+| M11.5 | `ccd-docs-folder-read`: 11 leaks, the fixture HOME and the folder path among them |
+| M11.72 | `ccd-docs-folder-read`, all three cases (review I2): after remove `snapshot-gone` where `unknown-folder` is pinned; registry entry gone `ok: true`; a swapped component `ok: true` |
+| folder identity in the binding (review finding (a)) | a re-added label for another directory serves the old snapshot (`ok: true`, `snapshot-gone` expected) |
+| M11.56 | `session-hook-approval-deny` 2 failed: 27 forms of `ccd docs-folder` undenied |
+| M11.65 | `ccd-ws-lease-mark-reach` 1/29 skipped: `expected 1 to be 125` (usage, not `entry-unprivileged`) |
+
+#### Reviews in this wave
+
+- **P2.1, Opus review:** no Critical. I1 (M11.3 pinned only the inside check) fixed with a second row. I3 (the token advertises `docs-folder-read` before P2.2): both ship in this one pull request. Eleven minors fixed in one round (Remove's order, a broken cache, the registry root's own failures, unreadable labels listed, a refused add creating nothing, a relative roster path a contract breach, the lock line pinned to `refs/remotes/origin/`, the writer scan through the descriptor, two leak and FIFO cases).
+- **P2.2, Opus review:** no Critical. I2 (M11.72's named case accepted either word) fixed. Minors fixed: unreadable directories listed, the protected check and `lstat` before open on show and prepare, other devices not descended, the section-level checks pinned, the wire-bound case real, the protected set measured once.
+- **Layers, Opus review:** no Critical. Minors fixed: the launcher's header names the verb, the agent's exec op starts it privileged (a row), a flag-before-verb hook case.
+
+#### Process notes
+
+- **One breach, ruled (the coordinator, mail 34429):** the walker's implementer changed `server/test/ccd-docs-index.test.ts` with one in-place stream edit, against the file-text rule. Its diff was read whole: exactly the three intended lines. The lines stand; later briefs repeat the rule naming the incident.
+- **One hook refusal, ruled (mail 34519):** a commit message named the doctor's remedy as the launcher plus its update verb, which the session hook's forbidden-verb arm matched as prose. Nothing ran; it was reported with the exact text from a file and re-run with the phrase reworded.
+
+#### Not done here, and why (so far)
+
+- The roster's auth directories and secrets files outside the protected trees are not in the protected set: the spec's list does not name them, only the six sections are ever read, and a review called it defence in depth. Recorded, not built.
+- `CLAUDE.md`'s SAFETY sentence for `docs-folder`, `shared/docs.ts`'s folder block and failure words, the doors in `routes.ts`, the census and auth-gate counts, and `DocsHead.tsx`: files other runs hold; each waits for its holder.
