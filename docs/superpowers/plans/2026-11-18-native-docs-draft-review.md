@@ -618,4 +618,16 @@ For the coordinator to confirm: the reader lab's one anchor joins D-8767 (the re
   - the deviation-refs guard, 34 of 34.
 
   The first source compile was piped, against the brief's rule, and was reported (mail 33857) and re-run unpiped.
+- **Second main absorption.** While those checks ran, main moved to `6965b6d8301ec38172a3d893aa40b76d2753b016`, where the Overlord's inbox and home pieces landed. The merge probe then exited 1, so main was absorbed once more, by merge.
+  - Only the gate and its auth test conflicted, and only on counts. Their claim was released when the inbox piece landed, and this run took it.
+  - The gate's header now counts 302 routes. The auth gate test counts 305 scanned, 302 HTTP, 190 gated and 112 exempt, and twenty-nine files that register routes.
+  - The dependency seam, the server composition and the box-token census were re-sent to their holder as a packet against the new main, and committed after its yes for those exact blobs.
+  - The architecture spec changes only the C9 row, and the README keeps the same sentence after a clean merge. Each holder's stated terms need no new yes for those.
+- **Checks after the second absorption, one at a time in the foreground and unpiped.** The server source compiles with exit 0. Test results:
+  - auth gate, 392 of 392;
+  - box-token census and token sharing, 120 of 120;
+  - the seven review files, 173 of 173;
+  - the rings suites, 133 of 133.
+
+  The test-project compile was killed twice by the shared test slice's 6 GiB memory cap (exit 137), so it is unmeasured locally, not failed. CI's required typecheck decides it.
 - **Hosted CI remains the arbiter** for the files run 2949 could not finish locally (linking routes, project-pool routes and cross-side update intent), for the D-6111 timing witnesses, and for the whole selection.
