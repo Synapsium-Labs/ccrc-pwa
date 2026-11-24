@@ -5596,11 +5596,11 @@ export class CoordStore {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
     return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
   }
-  /** Overlord §10.4 (`overlordSequenceStore.ts`): the one sequence's reads and its prune (the retention lane's); its one writer,
-   *  `stampSequenceInTx`, is called inside each stamped writer's own transaction, never through here. */
+  /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
   sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }
   sequenceOldest(limit: number): ReturnType<typeof sequence.sequenceOldest> { return sequence.sequenceOldest(this.db, limit); }
   pruneSequenceThrough(through: number, keep: readonly number[]): ReturnType<typeof sequence.pruneSequenceThrough> { return sequence.pruneSequenceThrough(this.db, through, keep); }
+  recordInboxAcknowledgement(id: number, at: number): sequence.StampAnswer { return sequence.stampInboxAcknowledgement(this.db, id, at); }
   /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
   applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */

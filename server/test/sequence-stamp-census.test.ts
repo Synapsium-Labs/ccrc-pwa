@@ -10,14 +10,20 @@ import { SEQUENCE_KINDS, type SequenceKind } from '../../shared/overlord-sequenc
 
 const CS = 'server/src/continuity/continuityStore.ts';
 const DS = 'server/src/coord/overlordDesignationStore.ts';
+const OM = 'server/src/operatorModel/store.ts';
+const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
+const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
+const RECORD_ACK = 'server/src/coord/store.ts#CoordStore.recordInboxAcknowledgement';
 const WRITER = 'stampSequenceInTx';
 
 interface StampedTable {
   readonly table: string;
   /** `file#symbol` of each writer that stamps. */
   readonly stampers: readonly string[];
-  /** `file#symbol` of each other writer of the table, and why it stamps nothing. */
+  /** `file#symbol` of each other writer of the table, and why it stamps nothing in its transaction. */
   readonly nothing: Readonly<Record<string, string>>;
+  /** The named cross-file exception: a route stamps only after its private-store writer commits. */
+  readonly afterCommit?: { readonly route: string; readonly delegate: string; readonly stamp: string };
 }
 
 export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
@@ -43,10 +49,21 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
       'server/src/coord/schema.ts#(module)': 'a migration\'s one-time backfill of the pending actor columns',
     },
   },
+  message: {
+    table: 'operator_messages',
+    stampers: [],
+    nothing: {
+      [`${OM}#OperatorModelStore.recordMessage`]: 'creation stays in the private store; its sequence line is still outstanding',
+      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db; only the Inbox acknowledgement stamps after commit',
+    },
+    afterCommit: { route: INBOX, delegate: RECORD_ACK, stamp: STAMP_ACK },
+  },
 };
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
-const STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`] as const;
+const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`] as const;
+const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
+const STAMP_HELPERS = [...TX_STAMP_HELPERS, ...AFTER_COMMIT.map((row) => row.stamp)];
 
 const split = (ref: string): [string, string] => { const i = ref.indexOf('#'); return [ref.slice(0, i), ref.slice(i + 1)]; };
 const callsOf = (ref: string): string[] => { const [f, n] = split(ref); return callsIn(symbolOf(f, n)).map((c) => c.name ?? c.callee); };
@@ -83,7 +100,7 @@ describe('the sequence stamp census (Overlord §10.4)', () => {
       const [f, n] = split(ref);
       const src = symbolOf(f, n).text;
       expect(callsOf(ref), ref).toContain(WRITER);
-      expect(src, `${ref} reads the answer`).toMatch(/if \(!s\.ok\) throw /);
+      expect(src, `${ref} reads the answer and rolls back on failure`).toMatch(/if \(!s\.ok\) (?:\{ refused\.answer = s; )?throw /);
     }
     const helperNames = STAMP_HELPERS.map((r) => split(r)[1]);
     for (const row of Object.values(STAMPED_TABLES)) {
@@ -103,11 +120,18 @@ describe('the sequence stamp census (Overlord §10.4)', () => {
   it('every call of the writer in server/src sits in a listed helper, and every call of a helper in a listed stamper', () => {
     expect(callersOf(WRITER)).toEqual([...STAMP_HELPERS].sort());
     const stampers = Object.values(STAMPED_TABLES).flatMap((r) => r.stampers);
-    for (const ref of STAMP_HELPERS) {
+    for (const ref of TX_STAMP_HELPERS) {
       const [f, n] = split(ref);
       const callers = callersOf(n).filter((c) => c.startsWith(`${f}#`));
       expect(callers.length, ref).toBeGreaterThan(0);
       for (const c of callers) expect(stampers, `${c} calls ${n}`).toContain(c);
+    }
+  });
+
+  it('each post-commit stamp is reachable only through its listed delegate and route', () => {
+    for (const { route, delegate, stamp } of AFTER_COMMIT) {
+      expect(callersOf(split(stamp)[1])).toEqual([delegate]);
+      expect(callersOf(split(delegate)[1].split('.').at(-1)!)).toEqual([route]);
     }
   });
 });

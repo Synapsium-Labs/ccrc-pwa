@@ -37,8 +37,8 @@ export interface OverlordInboxRoutesDeps {
   readonly readRunner: ReturnType<typeof runOverlordRead>;
   /** The private store's readers and its one state writer, or undefined on a server that never opened it. */
   readonly inboxStore: Pick<OperatorModelStore, 'unsettledFacts' | 'messageFactsById' | 'messageById' | 'moveMessage'> | undefined;
-  /** The coordination store's three reads the inbox composes from: the designation, the live generations and the open probe round. */
-  readonly reads: Pick<CoordStore, 'designationRead' | 'liveGenerations' | 'openProbeRound'> | undefined;
+  /** The inbox's three coordination reads, and the acknowledgement's separate, post-commit sequence write. */
+  readonly reads: Pick<CoordStore, 'designationRead' | 'liveGenerations' | 'openProbeRound' | 'recordInboxAcknowledgement'> | undefined;
   /** Whether the `continuity` row is live, for `effectiveGeneration` (as the gate's port is). */
   readonly continuityLive: () => boolean;
   readonly now: () => number;
@@ -181,11 +181,16 @@ export function registerOverlordInboxRoutes(app: FastifyInstance, deps: Overlord
     if (verdict.kind === 'absent') return refuseRoute(reply, 'said-not-operator', { detail: 'no operator message has this id' });
     if (verdict.kind === 'already') return { ok: true, changed: false, state: verdict.state };
     if (verdict.kind === 'unknown') return refuseRoute(reply, 'unsupported', { detail: UNKNOWN_STATE });
-    const moved = store.moveMessage(id.id, 'settle', 'acknowledge', deps.now());
+    const coord = deps.reads;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable', { detail: NO_COORD });
+    const at = deps.now();
+    const moved = store.moveMessage(id.id, 'settle', 'acknowledge', at);
     if (moved.ok) {
-      // The sequence line (the plan's question 19) is written here, in a `coord.db` transaction of its own after this commit,
-      // through the sequence's one writer, once the sequence piece lands: this build has no such writer yet, and the
-      // sequence piece adds the stamp call at this spot.
+      // The private store has committed. Only a new settlement gets a line, in a coordination transaction of its own.
+      if (moved.value.changed) {
+        const stamp = coord.recordInboxAcknowledgement(id.id, at);
+        if (!stamp.ok) return refuseRoute(reply, 'write-failed', { detail: 'the message was settled but its sequence line could not be written' });
+      }
       return { ok: true, changed: moved.value.changed, state: moved.value.state };
     }
     if (moved.error !== 'refused') return refuseRoute(reply, 'write-failed', { detail: 'the message could not be settled' });

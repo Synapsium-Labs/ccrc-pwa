@@ -5,8 +5,9 @@
 // any prune deleted (absent: nothing was ever pruned).
 //
 // ONE WRITER PER FACT: `stampSequenceInTx` is the only inserter of a line, called INSIDE the transaction that writes the stamped
-// row, so a line and its row commit or roll back together; `pruneSequenceThrough` is the only deleter, and the only writer of
-// the floor, in one transaction with the delete. The stamped writers are named in `server/test/sequence-stamp-census.test.ts`.
+// row, so a line and its row commit or roll back together. Inbox acknowledgement is the one exception (plan question 17):
+// the private store commits before its sequence line is written in a coordination transaction. `pruneSequenceThrough` is the
+// only deleter and floor writer. The stamped writers are named in `server/test/sequence-stamp-census.test.ts`.
 //
 // LEGITIMATELY DIFFERENT from `feed_events` (§10.4 "Why not `feed_events`"): that table is pruned to 2,000 rows, carries titles
 // and bodies, and older builds read its `kind`. This one carries ids, kinds, states and actors only, is kept 90 days, and is
@@ -57,6 +58,20 @@ export function stampSequenceInTx(db: DatabaseSync, line: SequenceLineInput): St
     return { ok: true, seq: Number(r.lastInsertRowid) };
   } catch (e) {
     return { ok: false, error: 'write-failed', detail: errText(e) };
+  }
+}
+
+/** The Inbox's text-free line, stamped only after its private settlement commits. A refusal rolls back this transaction only. */
+export function stampInboxAcknowledgement(db: DatabaseSync, id: number, at: number): StampAnswer {
+  const refused: { answer?: Extract<StampAnswer, { ok: false }> } = {};
+  try {
+    return tx(db, () => {
+      const s = stampSequenceInTx(db, { kind: 'message', id: String(id), state: 'settled', actor: 'acknowledge', actorKind: 'server', at });
+      if (!s.ok) { refused.answer = s; throw new Error(s.detail); }
+      return s;
+    });
+  } catch (e) {
+    return refused.answer ?? { ok: false, error: 'write-failed', detail: errText(e) };
   }
 }
 

@@ -6,7 +6,7 @@ request. The coordinator folds it into the programme ledger.
 
 ## What was built
 
-- `shared/overlord-sequence.ts` (L0): the line's wire shape, `SEQUENCE_KIND_MAP` (the generation and the designation), the
+- `shared/overlord-sequence.ts` (L0): the line's wire shape, `SEQUENCE_KIND_MAP` (generation, designation and message), the
   bounds, the 90-day keep, the prune batch, the page size and the cursor read's four-arm answer. It also holds
   `DESIGNATION_SEQUENCE_STATES` in `shared/overlord-designation.ts`, the designation's one list.
 - `server/src/coord/overlordSequence.ts` (L1): `sequenceLineVerdict`, `sequenceLineKnown`, `sequencePage`, `retentionCut` and
@@ -45,7 +45,7 @@ request. The coordinator folds it into the programme ledger.
   distinction; it differs in diagnostic text only. The guard, remeasurement and Confirm paths are unchanged.
 - `ladder-stamps-ride-pr-b`. The ladder merged before sequence A. The index's "sequence writer" bullet gives its stamps to
   PR B ("if it merges after sequence A; otherwise PR B wires it"), and the plan's question 11 notes that the ladder's rows
-  carry no actor kind yet. PR A therefore stamps the generation and the designation only. Its kind table has no ladder rows.
+  carry no actor kind yet. PR A therefore has no ladder stamps or kind rows.
 - `retire-lines-carry-the-retiring-actor`. A live retire that cancels a pending attempt writes `failed` for the pending id,
   then `retired` for the bound id (review F12). Both lines carry the retiring operator, the actor the retire writes to the
   row. `failPending` carries the attempt's own actor (`pendingActor`), because it writes no actor of its own.
@@ -72,7 +72,7 @@ request. The coordinator folds it into the programme ledger.
 The designation controls are in the mutation floor at 1; the journal receipt control runs in the journal's own suite. The
 unmutated cases verify the original database snapshot is restored after rollback while the durable records stand.
 
-## For the pieces that follow
+## Second-lander work and remaining duties
 
 - **Confirm the restore** (authority journal C) landed first. `applyDesignationRestoreInTx` passes Confirm's `at` to
   `endOverlordGeneration` on both paths and stamps `retired` for a binding the designation row loses. A kept binding, or a
@@ -82,6 +82,22 @@ unmutated cases verify the original database snapshot is restored after rollback
   sequence rows roll back on a refused retirement stamp. The cursor's page decider already accepts a restore generation;
   there is no page caller in PR A. PR C's cursor door should pass the already-landed `OverlordRestoreState.restoreGeneration()`
   reading, keeping an unmeasured result distinct from generation zero.
-- **The inbox acknowledgement** gets its `message` line and matching census entry together in the second lander of Sequence A
-  and Inbox (plan question 17). The existing message queue, delivery and settlement writers remain unstamped and outstanding.
-- **Migration 121** is provisional: a later lander renumbers by position and re-pins `coord-db` and `run-close-switch`.
+- **The inbox acknowledgement** now stamps a `message` line only when it settles a message, in a `coord.db` transaction
+  after the private commit (sequence plan question 17, Inbox plan question 19). It stamps the id, `settled`, actor
+  `acknowledge` of kind `server`, and the move's `at`, never message text. A failed stamp rolls back the sequence transaction
+  and reports the partial outcome; it cannot undo the private move. Repeats, spent messages and already-settled races stamp
+  nothing. A missing line remains unmeasured for that message, not a violation. The census pins the SQL writers separately
+  from the route's post-commit call through the coordination delegate.
+- **Migration position.** The original slot 121 moves after the base's last migration, with `coord-db` and `run-close-switch`
+  re-pinned together.
+
+### Message moves after Inbox landed
+
+| Mover | What it moves | Sequence ownership |
+|---|---|---|
+| `promptRecord.ts` through `OperatorModelStore.recordMessage` and `moveMessage` | creates, may settle by an operator mark, and queues a nudge | unstamped; private-store follow-up |
+| `nudgeLane.ts#settleOperatorNudge` | delivers after the mail lane reports delivery | unstamped; private-store follow-up |
+| `bootPass.ts` | clears an unsupported settlement, queues a missing nudge, or records one already delivered | unstamped; private-store boot follow-up |
+| Hook pick-up report (`continuity/routes.ts`, store port in `server.ts`) | marks the message as picked up | unstamped; door-process follow-up |
+| Inbox acknowledge route | settles a message not settled or spent | stamped here |
+| Citing doors | settle or spend after their own commit; vocabulary only on this base | not yet wired; W2 citing-door work |

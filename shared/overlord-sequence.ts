@@ -8,6 +8,7 @@
 import { GENERATION_STATES } from './continuity.js';
 import { DESIGNATION_SEQUENCE_STATES } from './overlord-designation.js';
 import { ACTOR_SUBJECT_MAX, type ActorKind } from './overlord-identity.js';
+import { MESSAGE_STATES } from './operatorMessages.js';
 
 /** One line of the one sequence. `known` is false for a line whose kind or state this build lacks: its text is served as
  *  stored, opaque, never a failed page (slug `unknown-lines-are-served-opaque`). `actorKind` is `unknown` only on such a
@@ -27,6 +28,7 @@ export const SEQUENCE_KIND_MAP = {
     id: 'the session the move concerns: the pending id for pending and failed, the bound id for live and retired',
     spec: '§10.4 "the designation"',
   },
+  message: { states: MESSAGE_STATES, id: 'the operator message id', spec: '§10.4 "a message"' },
 } as const satisfies Readonly<Record<string, { readonly states: readonly string[]; readonly id: string; readonly spec: string }>>;
 export type SequenceKind = keyof typeof SEQUENCE_KIND_MAP;
 export const SEQUENCE_KINDS = Object.keys(SEQUENCE_KIND_MAP) as SequenceKind[];

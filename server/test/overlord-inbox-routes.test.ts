@@ -3,8 +3,7 @@
 // /api/overlord/messages/:id/acknowledge`, through the REAL gate runner over a real fixture `coord.db` (as `linking-overlord-
 // confirm.test.ts` stands it up), the REAL read runner and a real `OperatorModelStore` on a fixture file. Fixture names only.
 //
-// The sequence line `acknowledge` writes after its move (the plan's question 19) is not built in this tree: the sequence piece adds
-// the stamp call, and its cases come with it.
+// The sequence line `acknowledge` writes after its private commit (question 19) uses the real coordination store too.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { createHash } from 'node:crypto';
@@ -129,14 +128,17 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
     serverWords: () => o.words ?? ['overlord-v1'],
     now: () => NOW,
   };
-  // The coordination store's three reads, the designation being the gate's own fixture (this store seeds none).
-  const probeReads = { designationRead: () => DESIGNATED(o.designationTerm ?? 1), liveGenerations: () => s.liveGenerations(), openProbeRound: (id: string) => s.openProbeRound(id) };
+  // Real coordination reads and stamp, except designation (the gate's fixture supplies it).
+  const coord = {
+    designationRead: () => DESIGNATED(o.designationTerm ?? 1), liveGenerations: () => s.liveGenerations(),
+    openProbeRound: (id: string) => s.openProbeRound(id), recordInboxAcknowledgement: s.recordInboxAcknowledgement.bind(s),
+  };
   const app = Fastify({ logger: false });
   apps.push(app);
   registerOverlordInboxRoutes(app, {
     mailToken: () => TOKEN, gate: overlordGateRun(gateDeps),
     readRunner: runOverlordRead({ ledger: store, turn: async () => 'done', now: () => NOW }),
-    inboxStore: o.storeUp === false ? undefined : spied, reads: probeReads, continuityLive: () => true, now: () => NOW,
+    inboxStore: o.storeUp === false ? undefined : spied, reads: coord, continuityLive: () => true, now: () => NOW,
   });
   await app.ready();
   let counter = 0;
@@ -401,7 +403,10 @@ describe('messages', () => {
 });
 
 describe('acknowledge', () => {
-  it('a queued message moves to settled with settledBy acknowledge; no ledger line is written; the boot pass keeps the row settled', async () => {
+  const messageLines = () => s.db.prepare("SELECT id, state, actor, actorKind, at FROM overlord_sequence WHERE kind = 'message' ORDER BY seq").all();
+
+  it('a queued message settles and stamps a text-free sequence line, not a read-ledger line', async () => {
+    const before = messageLines();
     const r = await rig();
     const id = r.record();
     r.store.moveMessage(id, 'queue', 'route', NOW - 10);
@@ -411,6 +416,7 @@ describe('acknowledge', () => {
     const row = r.store.messageById(id);
     expect(row).toMatchObject({ kind: 'measured', value: { state: 'settled', settledBy: 'acknowledge', settledAt: NOW } });
     expect(r.lines()).toEqual([]);
+    expect(messageLines()).toEqual([...before, { id: String(id), state: 'settled', actor: 'acknowledge', actorKind: 'server', at: NOW }]);
     const settled = r.store.settledRows();
     expect(settled.kind === 'measured' && settled.value.map((x) => bootSettlement(x, { kind: 'not-applicable' }))).toEqual(['keep']);
   });
@@ -420,6 +426,7 @@ describe('acknowledge', () => {
     const id = r.record();
     await ack(r, id);
     const stamp = r.store.messageById(id);
+    const stamped = messageLines();
     const again = await ack(r, id);
     expect(again.statusCode).toBe(200);
     expect(json(again)).toEqual({ ok: true, changed: false, state: 'settled' });
@@ -428,6 +435,27 @@ describe('acknowledge', () => {
     r.store.moveMessage(spent, 'spend', 'citing-door', NOW);
     const res = await ack(r, spent);
     expect(json(res)).toEqual({ ok: true, changed: false, state: 'spent' });
+    expect(messageLines()).toEqual(stamped);
+  });
+
+  it('a failed sequence write reports the gap without undoing or repeating the private commit', async () => {
+    const r = await rig();
+    const id = r.record();
+    const before = messageLines();
+    // FAIL after the insert leaves the row in that transaction unless the caller rolls it back.
+    s.db.exec(`CREATE TEMP TRIGGER no_ack_sequence AFTER INSERT ON overlord_sequence WHEN NEW.kind = 'message'
+      BEGIN SELECT RAISE(FAIL, 'fixture refused the line'); END`);
+    try {
+      const res = await ack(r, id);
+      expect(res.statusCode, res.body).toBe(REFUSAL_STATUS['write-failed']);
+      expect(json(res)).toMatchObject({ ok: false, error: 'write-failed', detail: expect.stringContaining('message was settled') });
+      expect(r.store.messageById(id)).toMatchObject({ kind: 'measured', value: { state: 'settled', settledBy: 'acknowledge' } });
+      expect(messageLines()).toEqual(before);
+    } finally {
+      s.db.exec('DROP TRIGGER no_ack_sequence');
+    }
+    expect(json(await ack(r, id))).toEqual({ ok: true, changed: false, state: 'settled' });
+    expect(messageLines()).toEqual(before);
   });
 
   it('an absent id answers 409 said-not-operator', async () => {
