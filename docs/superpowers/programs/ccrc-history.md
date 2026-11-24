@@ -86,7 +86,49 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-11, 18:35Z
+## Current checkpoint — 2026-11-24
+
+This supersedes the checkpoint of 2026-11-11 below where they differ; the current route and the definition of done above
+stand. The evidence is under "Latest rulings and evidence — 2026-11-12 to 2026-11-24, act 5 and W3's direction".
+
+Against the definition of done:
+
+1. **W1 is accepted.** W1-b, the last row open, was re-measured by CP-37's protocol over the week ending 2026-11-16 00:00Z.
+   It read 416,772 ms against 240,000 ms: missed as measured. The cause is the measure, not capture, and the operator
+   accepted it by cause on 2026-11-16, with both figures recorded.
+2. **W3 is built and stays unarmed.** Act 5 ran for both backends. Spec §7.5's headroom passes on both. The W3 row's fixed
+   limit, added p50 compaction time of at most +10%, fails on both: +27.7% on the gateway backend and +32.7% on Anthropic.
+   So CP-63 cannot arm either backend under the plan, whatever bar O4 sets.
+   - No pick of another direction came by 2026-11-24. This ledger therefore records W3 on direction (a): built, released
+     and left unarmed, with W3-2 and W3-3 not built.
+   - Done-item 2 asks for the operator's explicit choice to leave steering off. The final close records that choice.
+   - Act 6, the end of the spike, is the operator's and is not yet performed: both `steer-on/<id>` markers and the four
+     roll-hold markers still stand.
+3. **W4 is built and released.** W4-4's release, v0.0.1139, reached the session node on 2026-11-11 at about 23:35Z. The
+   rest is the operator's: subagent history turned on per node, then capture, parent-link coverage and the
+   resource-bound checks measured and recorded, and the staging and rollout policy recorded.
+4. **The held runs are disposed of.** Unchanged since 2026-11-09.
+5. **Recall use was reported on 2026-11-07**, under "Recall use, the definition of done's report (item 5)", over the
+   window 2026-10-31 23:18Z to 2026-11-07 23:18Z.
+   - Correction: the checkpoint of 2026-11-11 lists "the recall-use report" among run 1834's close work. That was wrong:
+     the report was already done.
+6. **This ledger is not the final one.** The final close waits on act 6, on W4's per-node acceptance and on the operator
+   lifting the filing postponement. The follow-up list in the evidence below adds to the enhancement candidates.
+
+- **No run is open.** The run-close lane's never-started sweep closed run 1834 (wave 33, planned, no worker) at
+  2026-11-14 20:17Z, as failed. It was the programme's last open run, so the programme reads abandoned until a final
+  close sets it done. Nothing on the fleet was lost: the run had no worker, workspace, claim or item.
+  - Wave 34 opens only once the closing acts can run inside the sweep's 72-hour quiet bound. The final close runs on it.
+- **Open with the operator:**
+  - act 6;
+  - confirming direction (a), or choosing (b) or (c);
+  - subagent history per node (W4);
+  - the anchor-slot lane's Live, whose hold this coordinator released on 2026-11-16 (act 6 first is recommended);
+  - the stall watch at "Everything" (CP-04);
+  - a write-up of `touched`'s two carried speed-ups;
+  - lifting the filing postponement.
+
+### Checkpoint of 2026-11-11, 18:35Z
 
 This supersedes the 2026-11-10 checkpoints below where they differ; the current route and the definition of done above
 stand. The evidence is under "Latest rulings and evidence — 2026-11-11, W4-4 landed".
@@ -342,11 +384,188 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 30 | W4-2: subagent leaves on their own chain, with no receipt and no card (W4 plan Task 2) | fleet | #2563 | **merged** 2026-11-10 19:16Z as `6b2330eeb` at head `d1528cd6e` (run 1754, done; reviews 1757 and 1759; one fix round); defines D-8168 and D-8169; numbers 8170 and 8171 unwritten |
 | 31 | W4-3: subagent rows show only under `--agents` (W4 plan Task 3) | fleet | #2594 | **merged** 2026-11-10 22:06Z as `e3d91a7b6` at head `6e904736f` (run 1761, done; reviews 1763 and 1765; one fix round); defines D-8175 and D-8176; numbers 8177 and 8178 unwritten |
 | 32 | W4-4: `touched`, read-only (W4 plan Tasks 4A to 4C) | fleet | #2663 | **merged** 2026-11-11 18:30Z as `88bdf0f4e` at head `bfd3d7daa` (run 1767, done; reviews 1822, 1830 and 1833; two fix rounds; one queue ejection on an unrelated browser row, re-enqueued); defines D-8188 to D-8191 |
-| 33 | Programme close: act 5's report, W1-b, the recall-use report, W4's per-node acceptance, the final ledger | coordinator | — | **open, planned** (run 1834, no worker); keeps the programme's item and ledger routes open |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface releases v0.0.1078 and v0.0.1088 not on the node; focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 to W4-4 **merged** (#2554, #2563, #2594, #2663; waves 29 to 32); act M3 measured; no node armed; B4 live still required |
+| 33 | Programme close: act 5's report, W1-b, the recall-use report, W4's per-node acceptance, the final ledger | coordinator | — | **closed failed** on 2026-11-14 20:17Z by the run-close lane's never-started sweep (run 1834, no worker); act 5 and W1-b ran without an open run, the recall-use report was already done (2026-11-07), and the rest moves to wave 34 |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface releases v0.0.1078 and v0.0.1088 not on the node; the samples closed at 2026-11-11 04:12Z (gateway) and 2026-11-15 16:52Z (Anthropic, pooled over both sessions), and act 5 ran for both; §7.5's headroom passes, the +10% limit on added p50 compaction time fails on both (+27.7%, +32.7%); **built and unarmed** on direction (a) (2026-11-24), W3-2 and W3-3 not built; act 6 is the operator's and not yet performed |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 to W4-4 **merged** (#2554, #2563, #2594, #2663; waves 29 to 32); act M3 measured; W4-4 released to the session node in v0.0.1139 (2026-11-11 about 23:35Z); no node armed (subagent history per node is the operator's); B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-12 to 2026-11-24, act 5 and W3's direction
+
+**The cohort's samples.** Both samples were read with `deploy/history-counters.mjs spike` from the node's installed
+tree, read-only, against the store opened read-only. The baseline is O21's: the node's other sessions on the same
+backend over the same range.
+- **Gateway backend.** O2's bound was met when the 20th receipted main compaction fell at 2026-11-11 04:12:11Z. Only B1
+  falls inside this sample. Act 5 ran on 2026-11-12. The sample:
+  - 20/20 receipted;
+  - compliance 17/20, the 3 misses all absent with no block and all before B1;
+  - cut 0/20;
+  - unclosed 3/20 against the baseline's 8/12 (O19 (b): at most, true);
+  - duration p50 420 s, p95 559 s;
+  - added p50 +27.7%;
+  - add-ons 2/3;
+  - contamination 0, sweep caught up, a 12-span baseline.
+  After B1, 59 of 59 spans were ok up to 09:43Z on 2026-11-12. Added p50 reads +0.4% after B1 (10 spans against a 3-span
+  baseline) and -2.0% from B1 to B2 (25 against 5). The later slices have no baseline.
+- **Anthropic backend.** The gateway-lane session moved to an Anthropic account at 2026-11-14 06:38:49Z, on the same
+  Claude Code 2.1.319, so there is no version split. From then on it compacts on the Anthropic backend. All 123 of its
+  gateway spans fall before B4.
+  - O2 read literally pools by backend. The coordinator gave the operator that default on 2026-11-15, and no other
+    answer came.
+  - The 20th pooled receipted main compaction fell at 2026-11-15 16:52:30Z, 10 from each session, between B5 and B6.
+    B1 to B5 fall inside the sample.
+  - Act 5 ran on 2026-11-16 at about 01:00Z. Run twice, it gives the same digest.
+  - The sample: 20/20 receipted, compliance 20/20, cut 0/20, contamination 0, add-ons 3/3.
+  - Duration p50 83.4 s against the baseline's 62.8 s over 198 spans: added p50 +32.7%. By session it is +24.6% for the
+    Anthropic-lane session and +34.1% for the gateway-lane session. By boundary it runs from +14.5% to +66.1%, and no
+    slice is of O2's size.
+- **O19 (b)'s one unclosed summary on Anthropic is a false positive of the measure.** As printed it reads 1/20 against
+  0/198 (at most: false). The span is the Anthropic-lane session's compaction at 2026-11-14 03:39:48Z, between B3 and
+  B4. Its stored summary holds no real `<summary>` tag, because Claude Code strips them. `summaryParts` (`lib.mjs`)
+  matched a `<summary>` quoted in the summary's prose, the steer template's own words, as an opening tag with no close.
+  Its leaf block is closed and its compliance is ok. Read correctly, the figure is 0/20 against 0/198 (at most: true).
+- **Method note.** `producer-unknown` leaves every headroom figure unmeasured, and it appears when the newest span's
+  post-summary assistant row is not stored yet. So act 5 ran only after a recount read it as 0.
+
+**W3's direction.** §7.5's headroom passes on both backends: cut 0, and unclosed is not raised once the false positive
+is read correctly. The W3 row's fixed limit (spec §10.7) is at most +10% added p50 compaction time, and both samples
+fail it. So CP-63 cannot arm either backend under the plan, whatever bar O4 sets. The coordinator put three
+directions to the operator on 2026-11-16:
+- (a) close W3 built and unarmed, with W3-2 and W3-3 not built;
+- (b) build W3-2 and W3-3 and re-measure;
+- (c) raise the +10% limit.
+(c) changes a bar the operator set, and (b) adds scope nobody has ruled on, so both are the operator's. (a) is what the
+plan's own gates leave standing. Under D-8126 (the coordinator works its own questions out from the programme's goals,
+and only operator-only decisions go to the operator), the coordinator stated on 2026-11-22 that it would write the
+ledger on (a) unless (b) or (c) was chosen. Neither was chosen by 2026-11-24.
+- A re-measure under (b) would also have to split at every Claude Code change since the samples. The gateway-lane
+  session changed account and build three times: 2.1.329 from 2026-11-20 17:14:05Z, 2.1.327 from 2026-11-21 22:53:15Z
+  and 2.1.330 from 2026-11-23 01:04:33Z. The Anthropic-lane session changed once, to 2.1.330 from 2026-11-22 21:22:04Z.
+  All four changes came after both samples, so no reported figure moves. The roll hold stops a roll, not an account
+  swap, which restarts the session on the new account's build.
+
+**The operator's rulings of 2026-11-16**, verbatim: "1 accept / 2. yes / 3. can we move out of shadow today?"
+- 1: W1-b (CP-37) is accepted by cause.
+- 2: yes to act 6 and O4. Act 6 is the operator's act; no session removes a steer or roll-hold marker. It removes the
+  two `steer-on/<id>` markers and each cohort session's no-roll and no-hibernate markers, all six stamped
+  2026-11-10 16:57:50Z. O4 has no number, and nothing turns on one while the +10% limit fails.
+- 3: the anchor-slot lane (#2803) may leave Shadow. The hold this coordinator asked for during the cohort is released,
+  because the samples are complete and arming it changes no reported figure. The recommended order is act 6 first,
+  then Live.
+- Mail 21416 told the Overlord coordinator that its two holds are released: no route field `precompact` on the steer-on
+  sessions (mails 19594 and 19598), and the anchor-slot hold.
+
+**W1-b by CP-37's protocol.** D-7098's query was run with the installed `deploy/measure-history.py` (v0.0.1221), over
+(2026-11-09 00:00Z, 2026-11-16 00:00Z], against the store opened read-only.
+- `w1b_lag_p95_ms` was 416,772 against 240,000: missed as measured. There were 5,165 qualifying ticks, 420 of them over
+  4 minutes, with a median of 112 s. Every day and every hour of the day read over the target, so the redaction
+  re-derivations of 11-11 and 11-14 are not the cause.
+- The cause is the measure. A tick's lag is the tick's start minus the oldest timestamp among its new main rows. In 244
+  of the 420 slow ticks, the oldest new row was a manual `/compact`'s own command rows. Claude Code writes those after
+  the compaction, behind the boundary and the summary, but stamps them with the time `/compact` was entered. One
+  session set 196 of the 244. Bounded by the file's write order, their capture lag is at most 131 s.
+- With only those ticks bounded, p95 reads 189,346 ms, under 240 s. The other slow ticks were queued task
+  notifications, assistant rows, SessionStart attachments and mail-nudge prompts, probably of the same class but not
+  proven.
+- Ruled: accepted by cause, with both figures recorded.
+
+**The cohort's releases (O11 as amended).** Every release that reached the session node is recorded from its install
+record. A steering boundary is a release whose diff touches `ccd/history/**` or `deploy/history-counters.mjs`, or the
+steer, history or PreCompact parts of `ccd/session-hook.sh`. The coordinator also watches `shared/redact.mjs`.
+
+| Boundary | Release | Installed (UTC) | Change | Relative to the samples |
+|---|---|---|---|---|
+| B1 | v0.0.1088 | 2026-11-10 22:46:34 | W4-2 and W4-3 | inside both |
+| B2 | v0.0.1121 | 2026-11-11 13:33:15 | #2651 (`lib.mjs`, `shared/redact.mjs`) | inside Anthropic's |
+| B3 | v0.0.1139 | 2026-11-11 about 23:35:07 | W4-4 (#2663); not seen live, its time derived from the node's backups (window 23:35:05 to 23:35:18) | inside Anthropic's |
+| B4 | v0.0.1192 | 2026-11-14 06:33:08 | #2739, #2740 and #2787: a dark refusal arm before PreCompact's history print, and a role section before the steer text only for a route with a launch profile; neither cohort session had one, so their print was unchanged | inside Anthropic's |
+| B5 | v0.0.1214 | 2026-11-15 06:35:14 | #2803, the anchor piece: an owed-anchor marker after a main auto compaction, dark while the anchor-slot lane is in Shadow | inside Anthropic's |
+| B6 | v0.0.1221 | 2026-11-15 20:13:49 | #2841, the Overlord's read-only history operation: a verbatim move of the store helpers and a read scope no argument can select | after both |
+| B7 | v0.0.1287 | 2026-11-18 07:49:09 | #2999 (D-8726): FTS5 merge steps fold only when no merge is in progress | after both |
+| B8 | v0.0.1309 | 2026-11-19 10:35:23 | #3052: the history PEM rule built from `shared/redact.mjs`'s source, byte-identical, with the profile and belt version unchanged | after both |
+
+B6 to B8 count by path alone; none of them was expected to change steering. From v0.0.1144 to v0.0.1428 (installed
+2026-11-23 20:35:34Z), every other release did one of three things: it changed no watched path, it changed the hook
+only outside its steer, history and PreCompact parts, or it changed `shared/redact.mjs` only outside the history
+profiles. The hook changes outside those parts were:
+- the turn marker (#2687), the launch record (#2723), a lock comment (#2735), the loads report (#2847, #2878);
+- deny rows (#2887, #2896, #2898, #3169);
+- the mail hold and approvals (#3067, #3061, #3083, #3106, #3141);
+- door reports and model events (#3099, #3201);
+- the owed-anchor print's door delta, which is post-compaction context only (#3057);
+- the coordinator role card's D-8126 clause (#3146).
+The coordinator's full per-release record is kept outside the repository.
+
+**Gate code.** `GATE_CODE_FILES` holds four files. If the W2 study is ever resumed, step 0a records the new digests.
+
+| File | At the final W2 release, v0.0.767 | Now |
+|---|---|---|
+| `deploy/history-gate.mjs` | `dc187648` | unchanged |
+| `deploy/measure-history.py` | `86521a22` | unchanged |
+| `ccd/history/lib.mjs` | `826c9e8c` | `0bce3b50` before B7 (after W3, W4 and #2651), then `e5b60c71` at B7 and `e2f5a182` at B8 |
+| `deploy/history-replay.mjs` | `1002fc6a` | `aeda5514` from #2988, `724d79fd` from #3253, `e69cb005` on `main` from #3262 and #3267 |
+
+**The replay quiz's single-arm mode (another programme's).**
+- The Overlord programme asked whether ccrc-history would add a single-arm, recall-on mode to the replay driver
+  (mail 20157). The answer was no: this programme is closing and filing is postponed. Their PR could add the mode itself
+  on five terms (mail 20165):
+  1. it is additive, and the two-arm path stays byte-identical, with a characterization test first;
+  2. it edits none of the gate-code files or the frozen-tree set;
+  3. it writes no comparison figure;
+  4. it mails this coordinator its PR number before the final close;
+  5. they name its fields.
+- On 2026-11-17 the coordinator agreed (mail 23063) that the single-arm quiz may skip the W2 pilot acts, under the plan
+  in #2984, on three conditions:
+  - W2's readers refuse every single-arm kind;
+  - the agreement covers that measure only, and nothing it writes is W2 evidence, budget or quiz list;
+  - the open item on a weekly run during a W2 window is settled before any W2 window opens.
+- Term 2 was then waived for one export-only edit of `deploy/history-replay.mjs`, so that the single-arm module could
+  install the driver's stop handling. The waiver's conditions:
+  - export prefixes only, with the line count unchanged;
+  - functions exported, never state;
+  - a red SIGINT test;
+  - terms 1 and 2 otherwise stand;
+  - one edit only, with later requests going to this coordinator, or to the operator after the close.
+- #2988 merged on 2026-11-18 as `0c4145d1a` within all five conditions.
+- **Residuals for whoever resumes W2:**
+  - The driver's own `checkOut` still accepts a single-arm output directory. The single-arm module refuses a W2 output
+    directory, but not the other way round.
+  - #3253, #3262 and #3267 edited `deploy/history-replay.mjs` again between 2026-11-23 and 2026-11-24, and this
+    coordinator was not asked about any of them.
+    - #3253: step 0b's checks read a reported `Task` as `Agent`, admit the build's own plugins, and record a leftover's
+      shape.
+    - #3262: two limits functions and their constants moved to a module of their own, which the driver re-exports.
+    - #3267: the pilot's stage B.
+    - W2 is not run or scheduled, so nothing signed depends on the old digest. Before a resumed W2 relies on step 0b,
+      it reviews these edits.
+  - If W2 resumes, `shared/redact.mjs` and `shared/workflow-ids.mjs` join `GATE_CODE_FILES` and the frozen-tree diff
+    set first.
+- The single-arm mode comes off this programme's follow-ups; it is carried by the Overlord programme.
+
+**Run 1834.** On 2026-11-13 the run-close lane warned that run 1834 (wave 33, planned, no worker) would close at
+2026-11-14 20:16:30Z unless the programme acted (mail 18599). The coordinator did not send mail only to keep it open:
+the programme's next real acts fell after that time. The sweep closed it at 20:17Z as failed (mail 19593), and the
+programme reads abandoned until a final close. Nothing on the fleet was lost. A planned run that holds the programme
+open would meet the same 72-hour rule while the programme waits on the operator's acts. So wave 34 opens only when
+the closing acts can run.
+
+**Follow-up candidates**, to file when the operator lifts the filing postponement:
+1. `ccrc history newest [--session <id>] [--json]`: one family's newest node, which the Overlord's W1a plans asked for
+   (mail 18209). Today a session reads it from the compaction card line, in-session only, or from `history tree --json`.
+2. A way for a live coordinator to mark a programme as waiting until a date, so that the never-started sweep does not
+   close a run that waits on a known date (run 1834).
+3. W1-b's lag reads a row's write time from file order, not from the row's stamp.
+4. `summaryParts` tests the `<summary>` tag at the summary's structure, not anywhere in the prose (O19 (b)'s false
+   positive).
+5. Steering's compaction-time cost, if steering is ever reconsidered: what makes up the +28% to +33%, and whether a
+   smaller steer meets the +10% limit.
+
+**Linear.** The CP tickets were kept in step: act 5's figures went to CP-61's ticket, and CP-37's ticket closed with
+W1-b's ruling. CP-61, CP-62 and CP-63 move once the operator confirms the direction.
+
+**Coordinator tooling.** On 2026-11-21 and 2026-11-22 the fleet's pressure reclaim removed this coordinator's scratch
+entries by modify time, its private-name scan among them. The scan was restored byte for byte from this session's
+history, and the working set now lives outside scratch.
 
 ### Latest rulings and evidence — 2026-11-11, W4-4 landed
 
@@ -3003,6 +3222,22 @@ holds over an earlier one for the same item.
 - **README's driver paragraph** is held by another run's claim, so W2-7 left it as it is. Its sentence "`open --amend` after a version move, a freeze exception or a forced act" gains the raise once the claim allows; nobody edits README until then.
 
 ## Next-wave brief
+
+**From 2026-11-24** (this supersedes items 2 and 3 below where they differ; items 1 and 4 stand):
+- The closing acts wait on the operator:
+  - act 6;
+  - confirming the direction;
+  - subagent history per node (W4);
+  - lifting the filing postponement.
+- After act 6, the coordinator measures that the six markers are gone, records the time, and keeps the CP tickets in step.
+  On the operator's confirmation of (a), CP-61's ticket is done with W3-2 and W3-3 not built, and CP-62's and CP-63's
+  are cancelled.
+- Wave 34 opens with `ccrc-api runs open` only when the remaining acts can run inside the sweep's 72-hour bound. On it
+  the coordinator:
+  - measures W4's acceptance on each node the operator arms;
+  - writes the final ledger;
+  - files the follow-ups;
+  - closes the programme done.
 
 1. Apply the conditional skip ruling and current route at the top of this ledger. Do not start full W2 replay,
    pilot/assignment or a seven-day observation to unlock W3/W4. Record **evaluation not run**, never W2 PASS or
