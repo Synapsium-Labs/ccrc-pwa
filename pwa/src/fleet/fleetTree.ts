@@ -57,7 +57,7 @@ import {
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { boundOpenRun, coordinatorOf, programmeWave, runCard, runHomeProject, runSentence, workerOf, type BoundSession, type ChildRunContext } from './runWords';
+import { boundOpenRun, coordinatorOf, keptRunOf, programmeWave, runCard, runHomeProject, runSentence, workerOf, type BoundSession, type ChildRunContext, type KeptRun } from './runWords';
 import { hibernatedSince } from './hibernated';
 import { cardHues, fleetHues, type ProgHue } from './programmeBoxes';
 import { STATE_WORD } from './sessionFacts';
@@ -92,13 +92,25 @@ export function workingOn(s: FleetSession, cards: ReadonlyMap<string, string>): 
 /** What a child's programme-and-wave label is told (`childOfRunLabel`): the
  *  active run bound to it and its coordinator's display name, looked up
  *  FLEET-WIDE (`lookup`), because the coordinator may sit on another card or in
- *  a fold. */
+ *  a fold. `kept` is the tree's answer for a finished worker its programme still
+ *  keeps (`FleetRow.kept`, D-8981), whose coordinator is then the one named. */
 export function childRunContext(
-  s: BoundSession, runs: readonly RunSummary[], lookup: (id: string) => FleetSession | null,
+  s: BoundSession, runs: readonly RunSummary[], lookup: (id: string) => FleetSession | null, kept: KeptRun | null = null,
 ): ChildRunContext {
-  const pid = parentIdOf(s, runs);
+  const pid = parentIdOf(s, runs) ?? kept?.coordinatorId ?? null;
   const parent = pid === null ? null : lookup(pid);
-  return { run: boundOpenRun(runs, s), coordinator: parent === null ? null : sessionLabel(parent) };
+  return { run: boundOpenRun(runs, s), coordinator: parent === null ? null : sessionLabel(parent), ...(kept === null ? {} : { kept }) };
+}
+
+/** Every kept worker of the fleet (D-8981), by session id: `keptRunOf` over the fleet's open runs, asked once per frame so
+ *  every card nests by the same answer. */
+export function keptOfFleet(sessions: readonly FleetSession[], runs: readonly RunSummary[]): ReadonlyMap<string, KeptRun> {
+  const out = new Map<string, KeptRun>();
+  for (const s of sessions) {
+    const k = keptRunOf(s, runs);
+    if (k !== null) out.set(s.id, k);
+  }
+  return out;
 }
 
 /** The runs `nestFleet` brackets by: a pending spawn (no session yet) and, per
@@ -137,6 +149,9 @@ export function fleetTree(
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
   // ONE hue map per runs frame, over every open programme, so a programme keeps its hue on every card (Task G2).
   const hues = fleetHues(runs);
+  // D-8981: the finished workers whose programme still keeps them, decided fleet-wide (a coordinator's open work may all
+  // render on other cards).
+  const kept = keptOfFleet(sessions, runs);
   // The card the run's claimant renders on: its coordinator (`coordinatorOf`, D-7207) placed by the server.
   const claimantCard = (r: RunSummary): string | null => {
     const c = coordinatorOf(r, byId);
@@ -151,14 +166,15 @@ export function fleetTree(
       // Rule 1, ONE parent: the bracket reads only the run each session's wire
       // binding names (`workerOf`, the run the label and header name), so a
       // worker two claimants' runs both name nests under the one its label says.
-      rows: nestFleet(g.sessions, latestPerSession(mine, byId)),
+      rows: nestFleet(g.sessions, latestPerSession(mine, byId), kept),
       runs: mine,
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).
       abroad: runs.filter((r) => runHomeProject(r) === g.project && r.project !== g.project
         && runCard(r, cards) !== g.project),
       claimed,
-      hues: cardHues(hues, [...mine, ...claimed]),
+      // A kept worker's programme is on this card too, in the fleet's hue for it.
+      hues: cardHues(hues, [...mine, ...claimed, ...g.sessions.flatMap((s) => kept.get(s.id) ?? [])]),
     };
   });
 }
