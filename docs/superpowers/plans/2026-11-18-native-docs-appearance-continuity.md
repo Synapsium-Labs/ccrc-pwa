@@ -471,6 +471,11 @@ All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are def
 
 Run 3639's block (8994 to 8996) is defined.
 
+- **D-9017 (2026-11-24)**: same-session-reader-timing-base. Issued to run 3639 (wave C, wave 43). It departs from Task 6 Step 1 and the 2026-11-24 amendment only in how the timing BASE is taken. The geometry and srcdoc-size BASE remain at Task 1's commit.
+  - For timing, build the Task 1 tree with the same candidate library as the hosted tree. Use the same ordinary Docs fixture and mount-start and ready marks for both. In one stock Chromium session, interleave the builds, alternating which goes first. Measure nine fresh opens per build per skin in each of two rounds, reversing the order in the second round. Each hosted median must be at most 1.10 times its own same-round BASE median; all four comparisons must pass.
+  - The ordinary browser suite asserts the srcdoc size budget independently. `frame-cost.browser.test.ts` runs the timing comparison on demand: set `CCRC_MEASURE=1` and `CCRC_PAIRED_READER_BASE_DIST` to that built BASE, and select `reader paired timing`. Each comparison prints the samples and their spread. The earlier standalone timing figures remain Results evidence, not a fixed ceiling in the ordinary suite.
+  - Why: the paired BASE medians were near 200 ms on the same machine that previously measured near 88 ms. A historical wall-clock comparator mixes the build's cost with changes in load. The fixture, library pin, measurement endpoints and 1.10 ceiling are unchanged.
+
 ## Results
 
 **X1, run 2631, 2026-11-18.** This is a design wave and writes no source. The base is `main` at `6f5421139`.
@@ -1088,3 +1093,20 @@ All 142 `PHH-FIGURE`, `L11-FIGURE`, `T10-FIGURES worst` and `FRAME-COST-READER` 
 - Green after the fix and re-review: the PWA type check exited 0. The bridge, policy, scan, alias, lab-run, frame, version, history-adapter and host-appearance files passed 512 of 512 through `ccrc test` (rc 0). The wrapper ran locally with the unsaved candidate.
 - Assertion-red and restored with hash checks: AP-M1, AP-M4, both AP-M22 holds, AP-M8, AP-M12 (including the lab row), AP-M14 and AP-M16. A compile-valid microtask yield immediately after the appearance read also reddened the timing assertion. AP-M21 has a matching planted-import control; the actual source mutation remains for Task 6.
 - Re-review found no production blocker. Follow-up for the whole-branch review: stripping fonts copies the base asset object, so a non-production `deps.assets` implementation that supplies asset fields through inherited or non-enumerable properties could lose them. The shipped loader supplies ordinary own fields.
+
+#### Task 6: Hosted measurements at the build-ahead pin
+
+The timing row remains **red** (D-9017). The first, standalone hosted run gave medians of 107.3 ms (92.5–113.3) for Refined and 96.5 ms (92.1–106.8) for Instrument, both over 1.10 times the historical BASE. The same-library, same-session comparison below used the same fixture and the same mount-start and `ready` endpoints. Each cell reports medians with min–max in ms, from nine fresh opens per build; the first build alternated and the lead was reversed in round 2.
+
+| Test | Round | Skin | BASE | Hosted | Ratio |
+|---|---:|---|---:|---:|---:|
+| Before overlap | 1 | Refined | 206.2 (141.4–393.9) | 227.9 (177.1–278.6) | 1.1052 |
+| Before overlap | 1 | Instrument | 193.8 (138.8–378.8) | 214.7 (163.2–278.5) | 1.1078 |
+| Before overlap | 2 | Refined | 185.1 (128.6–240.2) | 203.1 (146.1–259.3) | 1.0972 |
+| Before overlap | 2 | Instrument | 177.6 (98.7–219.0) | 196.8 (120.7–268.0) | 1.1081 |
+| After overlap | 1 | Refined | 79.9 (76.2–94.6) | 100.3 (95.7–122.0) | 1.2553 |
+| After overlap | 1 | Instrument | 82.9 (78.7–98.5) | 97.5 (91.0–107.9) | 1.1761 |
+| After overlap | 2 | Refined | 81.4 (76.3–90.9) | 97.5 (93.8–110.0) | 1.1978 |
+| After overlap | 2 | Instrument | 86.6 (75.2–103.9) | 102.9 (91.4–110.6) | 1.1882 |
+
+- Both paired runs exited 1. Three comparisons missed before the experiment and four after it. The across-run change in the ratios does not isolate the effect of the overlap: the BASE and hosted builds both ran much faster in the later session, despite the fixtures and procedure matching. No second timing experiment was attempted. The bridge unit run failed on serial loading (3 failed, 79 passed) and on faces-first ordering (1 failed, 81 passed), then passed 82 of 82 after base-first overlap. Read-only review found no production blocker; late face rejection after the base fallback returned was not tested independently. The full PWA suite attempt stopped after the runner's budget warning; the focused run is not a full-suite result.

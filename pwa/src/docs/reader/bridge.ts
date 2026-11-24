@@ -159,18 +159,28 @@ function withSeed(d: RenderInput, v: ReaderVersionSeed): RenderInput {
  *  `ready` and any fallback come later, through the callbacks). A rejected asset load calls `onFallback('assets')`
  *  and mounts nothing. */
 export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps: ReaderMountDeps = {}): Promise<ReaderMount> {
+  const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
+  const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
+  const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
+  // Start the base I/O first, then faces without yielding; contain either loader's immediate failure.
+  let baseLoad: Promise<FrameAssets>;
+  try { baseLoad = (deps.assets ?? loadReaderAssets)(); }
+  catch (error) { baseLoad = Promise.reject(error); }
+  void baseLoad.catch(() => undefined);
+  let faces: Promise<{ sans: string; mono: string } | undefined> | undefined;
+  if (hosted) {
+    try { faces = (deps.fonts ?? loadReaderFonts)().catch(() => undefined); }
+    catch { faces = Promise.resolve(undefined); }
+  }
   let assets: FrameAssets;
   try {
-    const { fonts: _fonts, ...base } = await (deps.assets ?? loadReaderAssets)();
+    const { fonts: _fonts, ...base } = await baseLoad;
     assets = base;
   } catch {
     input.onFallback('assets');
     return INERT;
   }
 
-  const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
-  const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
-  const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
   const watchdogMs = plan.watchdogMs;
   const loadMermaid = deps.mermaid ?? loadMermaidAsset;
   let document: RenderInput = plan.history && input.version !== undefined
@@ -197,10 +207,9 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     }
   }
 
-  if (hosted) {
-    try {
-      assets = { ...assets, fonts: await (deps.fonts ?? loadReaderFonts)() };
-    } catch { /* The frame can mount without the host faces. */ }
+  if (faces !== undefined) {
+    const fonts = await faces;
+    if (fonts !== undefined) assets = { ...assets, fonts };
   }
 
   const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;

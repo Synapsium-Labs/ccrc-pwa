@@ -174,6 +174,7 @@ describe('host appearance', () => {
     });
     const pending = r.run();
     await waiting;
+    if (held === 'fonts') await vi.waitFor(() => expect(r.mermaid).toHaveBeenCalledTimes(1));
     expect(read).not.toHaveBeenCalled();
     el.dataset.theme = 'second'; el.style.setProperty('--bg-page', '#abcdef');
     release();
@@ -187,6 +188,50 @@ describe('host appearance', () => {
     mount.openAt!('x');
     expect(read).toHaveBeenCalledTimes(2);
     expect(mount.seed).toEqual({ hosted: true, stamp: 'refined|third' });
+  });
+
+  it('starts hosted faces and base assets before either settles', async () => {
+    let releaseAssets!: (value: typeof STUB_ASSETS) => void;
+    let releaseFonts!: (value: typeof fonts) => void;
+    const order: string[] = [];
+    const assets = vi.fn(() => { order.push('base'); return new Promise<typeof STUB_ASSETS>((resolve) => { releaseAssets = resolve; }); });
+    const faces = vi.fn(() => { order.push('faces'); return new Promise<typeof fonts>((resolve) => { releaseFonts = resolve; }); });
+    const r = rig({ appearanceRoot: root(), assets, fonts: faces });
+    const pending = r.run();
+    expect(assets).toHaveBeenCalledTimes(1);
+    expect(faces).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['base', 'faces']);
+    expect(r.mount).not.toHaveBeenCalled();
+    releaseFonts(fonts); releaseAssets(STUB_ASSETS);
+    await pending;
+    expect(r.options().adapters.assets.fonts).toEqual(fonts);
+  });
+
+  it.each(['reject', 'throw'] as const)('base %s falls back without waiting for pending faces', async (failure) => {
+    const faces = vi.fn(() => new Promise<typeof fonts>(() => {}));
+    const r = rig({ appearanceRoot: root(), fonts: faces, assets: () => {
+      if (failure === 'throw') throw new Error('base failed');
+      return Promise.reject(new Error('base failed'));
+    } });
+    await r.run();
+    expect(faces).toHaveBeenCalledTimes(1);
+    expect(r.input.onFallback).toHaveBeenCalledWith('assets');
+    expect(r.mount).not.toHaveBeenCalled();
+  });
+
+  it.each(['reject', 'throw'] as const)('face %s is contained while base assets are held', async (failure) => {
+    let release!: (value: typeof STUB_ASSETS) => void;
+    const r = rig({ appearanceRoot: root(),
+      assets: () => new Promise<typeof STUB_ASSETS>((resolve) => { release = resolve; }),
+      fonts: () => { if (failure === 'throw') throw new Error('faces failed'); return Promise.reject(new Error('faces failed')); },
+    });
+    const pending = r.run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(r.mount).not.toHaveBeenCalled();
+    release(STUB_ASSETS);
+    await pending;
+    expect(r.options().adapters.assets.fonts).toBeUndefined();
+    expect(r.input.onFallback).not.toHaveBeenCalled();
   });
 
   it('only passes the validated appearance, and follows drops without setPrefs', async () => {
@@ -243,8 +288,10 @@ describe('host appearance', () => {
 
   it.each(['none', 2] as const)('unsupported contract %s is mode-only and never reads the root', async (contract) => {
     const read = vi.spyOn(window, 'getComputedStyle');
-    const r = rig({ appearanceRoot: root(), libraryContract: () => contract, fonts: () => Promise.resolve(fonts), strictOld: true });
+    const faces = vi.fn(() => Promise.resolve(fonts));
+    const r = rig({ appearanceRoot: root(), libraryContract: () => contract, fonts: faces, strictOld: true });
     const m = await r.run();
+    expect(faces).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
     expect(m.seed).toEqual({ hosted: false });
     expect(r.options().adapters.appearance).toBeUndefined();

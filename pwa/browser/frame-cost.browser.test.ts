@@ -38,7 +38,9 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED, SKINS } from '@ccrc/ui';
+import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { resolveChrome } from './harness';
 import {
   backlogFrame, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
@@ -489,6 +491,117 @@ describe('measurement — C6 Step 0/4', () => {
         }, MEASURE_CASE_MS);
       }
     }
+  }
+
+  // ---- the reader's open cost (AP-7, the plan's Task 6): one ordinary Docs page, open to `ready`, per skin ---------------
+  // One ordinary page (a title, an introduction, forty paragraphs and six sections: no image and no Mermaid fence, so the
+  // frame's own assets and the host's wiring are what is measured, not a lazy load). Each open is a fresh context, so
+  // nothing is warm. `openToReadyMs` runs from the page's `ccrc-reader-mount-start` mark to the moment the reader's iframe
+  // is in and the plain view's "Formatting" line is gone (the frame's `ready`, as reader-frame.browser.test.ts's
+  // `__readyAts` reads it); `srcdocChars` is the length of the hosted frame's `srcdoc`. The size check runs independently
+  // of the on-demand timing comparison. For timing, set CCRC_MEASURE=1 and CCRC_PAIRED_READER_BASE_DIST to the built
+  // Task 1 BASE (same library bytes, no hosted appearance), then select 'reader paired timing'. Both builds use this
+  // exact fixture in one browser; a historical wall-clock median is not a comparator.
+  const READER_PROJECT = 'demo';
+  const READER_SECTION = DOC_SECTION_SLUGS[0]!;
+  const READER_LEAF = '2026-10-20-path-identity-design.md';
+  const READER_BLOB = 'c'.repeat(40);
+  const READER_DOC = '# Path identity design\n\nA path names one document at one ref, so a link means the same thing on every checkout.\n\n'
+    + ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].map((n, i) => `## The ${n} section\n\n`
+      + Array.from({ length: 7 }, (_, j) => `Paragraph ${i * 7 + j + 1} of the body, long enough to wrap on a phone's width.`).join('\n\n')).join('\n\n')
+    + '\n';
+  const READER_OPENS = 9;
+  const BASE_SRCDOC_CHARS = 839_815;
+  const MAX_SRCDOC_GROWTH = 191_736;
+
+  async function openReaderOnce(skin: string, origin = server!.origin): Promise<{ openToReadyMs: number; srcdocChars: number }> {
+    const app = await openApp(browser!, { skin, theme: PHOSPHOR, width: 1280 }, fixture());
+    try {
+      await app.page.addInitScript(() => {
+        const w = window as unknown as { __readerReadyAt: number; __readerSrcdocChars: number };
+        w.__readerReadyAt = Number.NaN;
+        w.__readerSrcdocChars = 0;
+        const note = (): void => {
+          const frame = document.querySelector('.docs-reader iframe');
+          if (frame === null) return;
+          if (w.__readerSrcdocChars === 0) w.__readerSrcdocChars = frame.getAttribute('srcdoc')?.length ?? 0;
+          if (Number.isNaN(w.__readerReadyAt) && document.querySelector('.doc-formatting') === null) w.__readerReadyAt = performance.now();
+        };
+        new MutationObserver(note).observe(document, { childList: true, subtree: true });
+      });
+      const size = Buffer.byteLength(READER_DOC, 'utf8');
+      const tree = treeOk({ entries: [entry(READER_SECTION, READER_LEAF, { committed: { kind: 'file', blob: READER_BLOB, size } })] });
+      const json = { ...DOCS_RESPONSE_HEADERS, 'content-type': 'application/json; charset=utf-8' };
+      await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
+        if (route.request().method() !== 'GET') { await route.fulfill({ status: 204 }); return; }
+        if (new URL(route.request().url()).pathname.endsWith('/tree')) {
+          await route.fulfill({ status: 200, headers: json, body: Buffer.from(JSON.stringify(treeResponse(tree))) });
+          return;
+        }
+        const show = {
+          v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: READER_SECTION, path: READER_LEAF, size,
+          sha256: READER_BLOB.padEnd(64, '0'), encoding: 'utf8', text: READER_DOC, commit: COMMIT_A, blob: READER_BLOB, onRef: 'contains',
+        };
+        await route.fulfill({ status: 200, headers: json, body: Buffer.from(JSON.stringify({ ok: true, contentClass: 'markdown', from: 'ccd', show })) });
+      });
+      await app.page.goto(`${origin}/docs/${READER_PROJECT}/${READER_SECTION}/${READER_LEAF}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => !Number.isNaN((window as unknown as { __readerReadyAt: number }).__readerReadyAt), undefined, { timeout: 90_000, polling: 50 });
+      const got = await app.page.evaluate(() => {
+        const w = window as unknown as { __readerReadyAt: number; __readerSrcdocChars: number };
+        const start = performance.getEntriesByName('ccrc-reader-mount-start').at(-1)?.startTime ?? Number.NaN;
+        return { openToReadyMs: w.__readerReadyAt - start, srcdocChars: w.__readerSrcdocChars };
+      });
+      expect(Number.isFinite(got.openToReadyMs) && got.openToReadyMs > 0, 'the mount-start mark and the ready moment were both read').toBe(true);
+      expect(got.srcdocChars, 'the hosted frame was inserted with a srcdoc').toBeGreaterThan(0);
+      expect(app.errors, 'no page error').toEqual([]);
+      return got;
+    } finally {
+      await app.ctx.close();
+    }
+  }
+
+  const PAIR_BASE_DIST = process.env['CCRC_PAIRED_READER_BASE_DIST'];
+  it.runIf(MEASURE && PAIR_BASE_DIST !== undefined)('reader paired timing: interleaved BASE and hosted opens', async () => {
+    const base = await serveDist(PAIR_BASE_DIST!);
+    try {
+      const comparisons: { skin: string; round: number; ratio: number }[] = [];
+      for (const round of [1, 2]) {
+        for (const { id: skin } of SKINS) {
+          const samples = { base: [] as number[], hosted: [] as number[] };
+          const sizes = { base: new Set<number>(), hosted: new Set<number>() };
+          for (let i = 0; i < READER_OPENS; i += 1) {
+            // Alternate the leading build, and reverse the lead in the second round.
+            const order = (i + round) % 2 === 1 ? (['base', 'hosted'] as const) : (['hosted', 'base'] as const);
+            for (const build of order) {
+              const open = await openReaderOnce(skin, build === 'base' ? base.origin : server!.origin);
+              samples[build].push(Math.round(open.openToReadyMs * 10) / 10);
+              sizes[build].add(open.srcdocChars);
+            }
+          }
+          const describeSamples = (values: number[]) => ({ samples: values, median: medianOf(values), min: Math.min(...values), max: Math.max(...values) });
+          const baseline = describeSamples(samples.base);
+          const hosted = describeSamples(samples.hosted);
+          const ratio = hosted.median / baseline.median;
+          console.log(`FRAME-COST-PAIRED ${JSON.stringify({ skin, round, baseline, hosted, ratio, ceiling: 1.10 * baseline.median, sizes: { base: [...sizes.base], hosted: [...sizes.hosted] } })}`);
+          expect([...sizes.base], 'the paired BASE is the original no-appearance document').toEqual([BASE_SRCDOC_CHARS]);
+          expect([...sizes.hosted], 'the candidate carries appearance in the same document').toHaveLength(1);
+          expect([...sizes.hosted][0]).toBeGreaterThan(BASE_SRCDOC_CHARS);
+          comparisons.push({ skin, round, ratio });
+        }
+      }
+      // Print every row before failing, so the first red cannot hide the second round.
+      expect(comparisons.filter(({ ratio }) => ratio > 1.10), 'every paired timing median is at most 1.10 x its same-round BASE').toEqual([]);
+    } finally {
+      await base.close();
+    }
+  }, 480_000);
+
+  for (const skin of SKINS.map((k) => k.id)) {
+    it(`reader srcdoc budget, ${skin}: one ordinary Docs page`, async () => {
+      const { srcdocChars } = await openReaderOnce(skin);
+      console.log(`FRAME-COST-READER-SIZE ${skin} srcdoc=${srcdocChars} base=${BASE_SRCDOC_CHARS} limit=${BASE_SRCDOC_CHARS + MAX_SRCDOC_GROWTH}`);
+      expect(srcdocChars, `${skin} srcdoc growth against BASE`).toBeLessThanOrEqual(BASE_SRCDOC_CHARS + MAX_SRCDOC_GROWTH);
+    }, 120_000);
   }
 
   // The renders have a browser of their own, launched with RENDER_ARGS and closed here (only when CCRC_RENDERS is set),
