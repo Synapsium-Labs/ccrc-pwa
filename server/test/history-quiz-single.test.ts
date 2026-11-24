@@ -1400,3 +1400,52 @@ process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME,
     expect(JSON.parse(QS.weekAccountText('a'.repeat(64), 'lane-a') as string)).toEqual({ kind: QS.WEEK_ACCOUNT_KIND, v: 1, setup_sha256: 'a'.repeat(64), account: 'lane-a' });
   });
 });
+
+// ── quiz pilot stage B (Overlord W1a, run 3561): characterization of main (e29f704d47) before any stage-B change ──
+// The task note is docs/superpowers/programs/overlord/quiz-pilot-stage-b.md. Committed green against main's code first; each
+// later stage-B commit edits only the rows its ruling moves, and says which.
+describe('stage B characterization of main (e29f704d47): what a passing week spawns and records', () => {
+  const judgeArgv = (w: R): string[] => {
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    return ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)];
+  };
+
+  it('every arms run, the box run, the probes and the questions, spawns with the arm argv and nothing else', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const want = D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: w.mode, home: w.home }) as string[];
+    const got = runs(w.home);
+    expect(got.length).toBe(1 + (D.STEP0B_PROBES as string[]).length + 3 + D.ARM_ATTEMPTS_MAX);
+    for (const r of got) expect(r.argv).toEqual(want);
+  });
+
+  it('every judge run spawns with the judge argv and nothing else', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = runs(w.home).length;
+    expect((await run(w.home, judgeArgv(w), FAKE)).refusal).toBeNull();
+    const want = D.spawnArgv({ mode: 'judge', model: OPUS, settingsMode: w.mode, home: w.home }) as string[];
+    const got = runs(w.home).slice(n);
+    expect(got.length).toBeGreaterThan(0);
+    for (const r of got) expect(r.argv).toEqual(want);
+  });
+
+  it('the step 0b result\'s fields, and a probe run\'s record fields', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const res = json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    expect(Object.keys(res).sort()).toEqual(['account', 'batches', 'checks', 'failed', 'kind', 'measured_ms', 'model', 'passed', 'persistence', 'probes',
+      'question', 'round', 'runs', 'settings_mode', 'setup_sha256', 'store_id', 'subagent', 'synthetic_transcript', 'unmeasured', 'v']);
+    expect(Object.keys(res.checks.plugins).sort()).toEqual(['loaded', 'state']);
+    const name = res.batches[1].runs[0] as string;
+    const rec = json(join(w.out, `${name}.run.json`));
+    expect(Object.keys(rec).sort()).toEqual(['account', 'code', 'cwd', 'kind', 'mode', 'model', 'ms', 'name', 'settings_mode', 'signal', 'stream_sha256',
+      'tokens', 'unknown_options', 'usage_assistant_tokens', 'usage_result_tokens', 'v']);
+  });
+
+  it('the release pin\'s fields', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    expect(Object.keys(json(join(w.out, 'quiz', 'arms-release.json'))).sort()).toEqual(['ccrc_release', 'kind', 'round', 'setup_sha256', 'v']);
+  });
+});

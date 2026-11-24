@@ -24922,3 +24922,52 @@ describe('ruling 3: the leftover\'s shape is recorded, the verdict is unchanged'
     expect(shape.entries.length).toBe(QPC_D.LEFTOVER_SHAPE_MAX_ENTRIES);
   });
 });
+
+// ── quiz pilot stage B (Overlord W1a, run 3561): characterization of main (e29f704d47) before any stage-B change ──
+// The task note is docs/superpowers/programs/overlord/quiz-pilot-stage-b.md. These pins were committed green against main's
+// code first; each later stage-B commit edits only the rows its ruling moves, and says which.
+// ISOLATION: nothing is spawned and no driver subcommand runs; the one directory read is a mkTmp fixture config dir.
+describe('stage B characterization of main (e29f704d47): the shared step 0b pieces before the change', () => {
+  const M = 'claude-opus-5-5';
+  const HOME = '/home/u';
+  const tail = ['-p', '--no-session-persistence', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose', '--max-turns', '12', '--model', M];
+  const head: Record<string, string[]> = {
+    restricted: ['--restricted'],
+    fallback: ['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}'],
+  };
+  const tools: Record<string, string[]> = {
+    arm: ['--tools', 'Bash,Agent', '--allowedTools', ...(QPC_D.allowedToolSpellings(HOME) as string[])],
+    box: ['--tools', 'Bash,Agent', '--allowedTools', ...(QPC_D.allowedToolSpellings(HOME) as string[])],
+    writer: ['--tools', ''],
+    judge: ['--tools', ''],
+  };
+
+  it('spawnArgv, every mode under every settings mode, exactly', () => {
+    for (const mode of QPC_D.SPAWN_MODES as string[]) {
+      for (const sm of QPC_D.SETTINGS_MODES as string[]) {
+        expect(QPC_D.spawnArgv({ mode, model: M, settingsMode: sm, home: HOME }), `${mode} ${sm}`).toEqual([...head[sm]!, ...tail, ...tools[mode]!]);
+      }
+    }
+  });
+
+  it('persistenceCheckOf: clean passes, anything left fails, an unmeasured run leaves it unmeasured, a fail beats an unmeasured', () => {
+    const clean = { left: false, transcripts: [], project_dir: false };
+    const left = { left: true, transcripts: ['-p/s'], project_dir: true, shape: { entries: [], subagents_dir: false, transcript_file: false, truncated: false } };
+    const unm = { left: true, transcripts: [], project_dir: null, unmeasured: 'no-session-id' };
+    expect(QPC_D.persistenceCheckOf([clean, clean])).toEqual({ state: 'pass' });
+    expect(QPC_D.persistenceCheckOf([clean, left])).toEqual({ state: 'fail' });
+    expect(QPC_D.persistenceCheckOf([clean, unm])).toEqual({ state: 'unmeasured' });
+    expect(QPC_D.persistenceCheckOf([unm, left])).toEqual({ state: 'fail' });
+    expect(QPC_D.persistenceCheckOf([])).toEqual({ state: 'unmeasured' });
+  });
+
+  it('the Agent probe\'s leftover with a subagent transcript: today\'s shape names two levels below the project folder, and the file is not named', () => {
+    const l = qpcLeftover({ subagents: true, transcript: true });
+    const got = QPC_D.persistenceMeasured(l);
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    expect(QPC_D.LEFTOVER_SHAPE_NAMED_DEPTH).toBe(2);
+    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'subagents_dir', 'transcript_file', 'truncated']);
+    expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir'], [`${slug}/${l.sessionId}/subagents`, 'dir']]);
+    expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+  });
+});
