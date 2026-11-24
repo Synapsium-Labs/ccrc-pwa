@@ -3,6 +3,7 @@
 // are fakes. The expected words are written out here, never read from the code the cases judge.
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { tx } from '../src/coord/tx.js';
@@ -11,7 +12,8 @@ import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot } from '../src/coord/overlordAuthorityGuard.js';
 import { OverlordAuthorityExchange, type ExchangeAnswer } from '../src/coord/overlordAuthorityExchange.js';
 import type { WitnessLink, WitnessLinkAnswer } from '../src/coord/overlordAuthorityWitnessLink.js';
-import { makeIsolationReader } from '../src/isolationFacts.js';
+import { makeIsolationReader, type IsolationReader } from '../src/isolationFacts.js';
+import { ts } from './scan/parse.js';
 import type { AgentHostRelation } from '../../shared/isolation.js';
 import { PRIVACY_HEAD_UNWIRED, type PrivacyHeadRead } from '../src/coord/privacyJournalHead.js';
 import { readReadyWitness, type ReadyWitness } from '../../shared/agent-protocol.js';
@@ -124,6 +126,44 @@ describe('an agent', () => {
     expect(r.ex.noWitnessSinceBoot()).toBe('standing');
     expect(r.ex.heldFor(1)).toBe('not-yet');
     expect(r.ex.told()).toEqual({ kind: 'measured', told: null });
+  });
+  it('reads the current Isolation link for agent holdings instead of returning a constant', async () => {
+    // Pin the boot-only composition without starting index.ts against the host. Then exercise the exchange at that port.
+    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const root = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
+    const exchange = root.statements.filter(ts.isVariableStatement).flatMap((s) => s.declarationList.declarations)
+      .find((d) => d.name.getText() === 'overlordAuthorityExchange')?.initializer;
+    const deps = exchange && ts.isNewExpression(exchange) ? exchange.arguments?.[0] : undefined;
+    const relation = deps && ts.isObjectLiteralExpression(deps) ? deps.properties.find((p) => p.name?.getText() === 'relationOf') : undefined;
+    expect(relation?.getText(), 'exchange must read Isolation from the current fleet state')
+      .toMatch(/\bisolation\.relationOf\(\s*isolation\.linkOf\(\s*fleetClient\.state\s*\)\s*\)/);
+
+    const state: Parameters<IsolationReader['linkOf']>[0] = {
+      connected: true, hostReport: 'absent', peer: { locality: 'not-local', uid: 'unmeasured' }, readySerial: 1,
+    };
+    const isolation = makeIsolationReader('remote', {
+      facts: { uid: 1000, initialNamespace: true, overflowUid: 65534, holdings: [] },
+      ids: { machine: 'unmeasured', boot: 'unmeasured' },
+    }, null, state);
+    // W1 cannot prove an off-volume link. Supply that word only at the fixture's reader port, for this ready observation.
+    const reader: IsolationReader = {
+      ...isolation,
+      relationOf: (link) => link.link === 'ready' && link.readySerial === 1 ? 'other-host' : isolation.relationOf(link),
+    };
+    const r = rig({ relationOf: () => reader.relationOf(reader.linkOf(state)) });
+    try {
+      r.append(WIDEN);
+      const tuple = r.held({});
+      r.agent.held = { kind: 'tuple', tuple };
+      await r.ex.exchangeAgent();
+      expect(r.ex.heldFor(1)).toBe('held');
+
+      // Same link and tuple, but a fresh ready has no off-volume proof.
+      state.readySerial = 2;
+      r.agent.held = { kind: 'tuple', tuple };
+      await r.ex.exchangeAgent();
+      expect(r.ex.heldFor(1)).toBe('not-yet');
+    } finally { r.db.close(); }
   });
   it('on another host, from an earlier boot, lifts it', async () => {
     const r = rig();

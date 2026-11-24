@@ -124,11 +124,15 @@ Confirm and the measured agent relation are not wired or verified by this local 
   80 → 81), with no new migration or change to `FLEET_PROTO = 1`.
 - Private store A's `PrivacyJournalHead` remains wired in `index.ts` over its head and digest reads (plan question 11).
 
-| Real-route fixture | Before wiring | After wiring |
+| Wiring check | Stand-in or constant | Shipped wiring |
 | --- | --- | --- |
 | Restore retains the witnessed narrowing | `full` | `chat` |
 | Restore raises the independently verified epoch bound | 5 | 6 |
 | Confirm withdraws boot confidence, even after a prior-boot witness at the new base | `lifted` | `standing` until restart |
+| Exchange reads the current Isolation link | Replacing the reader callback in the inspected source with constant `unmeasured` failed the composition assertion: 1 failed / 36 passed | 37 passed; the exchange returned `held` with synthetic `other-host` proof at the reader port and `not-yet` on the same link and tuple at a fresh ready without proof |
+
+The Isolation check inspects the boot-only wiring without starting the server, and tests holdings through the exchange separately.
+Its affirmative word is synthetic: W1's real Isolation reader still cannot prove another kernel. No production wiring changed.
 
 The route file went from 2 failed / 9 passed to 11 passed in the fleet test lane. The malformed and unreadable cases were already
 passing before wiring and still pass. The first integrated source check found two wrong type imports; the corrected source check
