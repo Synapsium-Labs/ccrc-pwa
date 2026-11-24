@@ -11309,8 +11309,7 @@ export interface SessionRun {
   readonly id: number;
   readonly state: RunState;
   readonly claimedBy: string | null;
-  readonly program?: string;
-  readonly wave?: number;
+  readonly program?: string; readonly wave?: number;
 }
 
 /** THE ONE READER of `FleetSession.run` and `FleetSession.openRun`. `undefined` (a live frame from a server predating the
@@ -11335,11 +11334,8 @@ function reviveSessionRun(o: RawObj, k: string): SessionRun | null {
   const { id, state, claimedBy, program, wave } = v as RawObj;
   if (!isPositiveDecimalSafeInteger(id) || typeof state !== 'string' || !isRunState(state)) return null;
   if (claimedBy !== null && typeof claimedBy !== 'string') return null;
-  return {
-    id, state, claimedBy,
-    ...(typeof program === 'string' && program !== '' ? { program } : {}),
-    ...(isPositiveDecimalSafeInteger(wave) ? { wave } : {}),
-  };
+  return { id, state, claimedBy, ...(typeof program === 'string' && program !== '' ? { program } : {}),
+    ...(isPositiveDecimalSafeInteger(wave) ? { wave } : {}) };
 }
 
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
