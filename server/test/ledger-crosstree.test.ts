@@ -370,6 +370,13 @@ describe('crossTreeCollisions — one merge earlier', () => {
     expect(hits[0]!.files).toEqual(['a.md', 'b.md', 'c.md']);
   });
 
+  it('stops below the self-assigned era: a renamed plan or a mirror at 10000 or above is selfAssignedCollisions\' alone', () => {
+    const line = `- **${D(10005)}** \u2014 same subject`;
+    expect(crossTreeCollisions([f('new-name.md', line)], [f('old-name.md', line)])).toEqual([]);
+    expect(crossTreeCollisions([f('a.md', `- **${D(10005)}** \u2014 x`)], [f('b.md', `- **${D(10005)}** \u2014 y`)])).toEqual([]);
+    expect(crossTreeCollisions([f('a.md', `- **${D(9999)}** \u2014 x`)], [f('b.md', `- **${D(9999)}** \u2014 y`)])).toHaveLength(1);
+  });
+
   it('is silent on two empty trees, and on trees that share nothing', () => {
     expect(crossTreeCollisions([], [])).toEqual([]);
     expect(crossTreeCollisions([f('a.md', '- **D-900** — x')], [f('b.md', '- **D-901** — y')])).toEqual([]);
@@ -495,6 +502,21 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
   it('a wrapped subject mirrored word for word is one deviation', () => {
     const wrapped = `- **${D(10012)}** \u2014\n  foo the bar.\n`;
     expect(selfAssignedCollisions([f(P, wrapped), f(Q, wrapped)], [], NONE)).toEqual([]);
+  });
+  it('a path the branch deleted is absent: its base copy no longer counts', () => {
+    expect(selfAssignedCollisions([f(Q, def(10014, 'kept here'))], [f(P, def(10014, 'the deleted copy')), f(Q, def(10014, 'kept here'))],
+      new Set([P]))).toEqual([]);
+  });
+  it('a file renamed and reworded on the branch is judged by its new path only (both paths changed, renames off)', () => {
+    expect(selfAssignedCollisions([f(Q, def(10015, 'reworded on the move'))], [f(P, def(10015, 'first wording'))],
+      new Set([P, Q]))).toEqual([]);
+  });
+  it('an empty wrapped subject is never read from a definition, a heading or a fence on the next line', () => {
+    const before = (next: string): string => `- **${D(10016)}** \u2014\n${next}\n`;
+    for (const next of [`- **${D(10017)}** \u2014 x`, '## Next', '```\ncode\n```', '~~~\ncode\n~~~']) {
+      expect(selfAssignedCollisions([f(P, before(next)), f(Q, before(next))], [], NONE), next)
+        .toEqual([{ n: 10016, files: [P, Q] }]);
+    }
   });
   it('an empty subject matches no other definition, not even another empty one', () => {
     expect(selfAssignedCollisions([f(P, `- **${D(10013)}** \u2014`), f(Q, `- **${D(10013)}** \u2014\n\n`)], [], NONE))

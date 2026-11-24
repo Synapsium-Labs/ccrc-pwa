@@ -54,6 +54,35 @@ export function resolveLedgerBase(
   return null;
 }
 
+/**
+ * The definition paths the branch changed since its merge base with `base`, renames off: a path deleted or
+ * renamed away is listed, so the collision guard reads it as absent rather than from the base. The three-dot
+ * diff never lists main's own later additions.
+ */
+export function changedDefinitionPaths(root: string, base: string, dirs: readonly string[] = DEFINITION_DIRS): Set<string> {
+  return new Set(execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', `${base}...HEAD`, '--', ...dirs],
+    { cwd: root, encoding: 'utf8', maxBuffer: 1 << 24 }).split('\0').filter(Boolean));
+}
+
+/**
+ * Whether `base` (an explicit `$CCRC_LEDGER_BASE`) is behind what the resolver picks without it: null when
+ * nothing else resolves, the two are the same ref, or that ref is an ancestor of `base`. Measured against the
+ * resolver's own answer, never a hard-coded `origin/main`, so a fork whose `main` diverged from upstream is not
+ * stale. Residual: a transient failure to resolve `upstream/main` (D-2732's `packed-refs` case) drops a fork to its
+ * `origin/main` here too; both tools print the base they measured.
+ */
+export function staleLedgerBase(root: string, base: string): { anchor: string; behind: number } | null {
+  const anchor = resolveLedgerBase(root, '');
+  if (anchor === null || anchor === base) return null;
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', anchor, base], { cwd: root, stdio: 'pipe' });
+    return null;
+  } catch {
+    const behind = Number(execFileSync('git', ['rev-list', '--count', `${base}..${anchor}`], { cwd: root, encoding: 'utf8' }).trim());
+    return { anchor, behind };
+  }
+}
+
 function main(argv: string[]): number {
   let count = 1;
   let ref: string | null = null;

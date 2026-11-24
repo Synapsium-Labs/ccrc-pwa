@@ -288,8 +288,8 @@ export function definitionsIn(
 
 /**
  * `definitionsIn` with each definition's comparable subject, for the subject-aware rule. A subject
- * wrapped onto the next line (`- **D-N** —` then the text) is read from the next non-blank line; one
- * still empty gets a key of its own (file and line), so an empty subject never makes two definitions equal.
+ * wrapped onto the next line (`- **D-N** —` then the text) is read from the next non-blank line, unless
+ * that line is a definition, a heading or a fence; one still empty gets a key of its own (file and line), so an empty subject never makes two definitions equal.
  */
 function definitionLines(
   files: readonly { readonly path: string; readonly text: string }[],
@@ -303,7 +303,11 @@ function definitionLines(
       const m = DEFINITION.exec(lines[i]!);
       if (!m) continue;
       let subject = definitionSubject(lines[i]!);
-      if (subject === '') subject = tidySubject(lines.slice(i + 1).find((l) => l.trim() !== '') ?? '');
+      if (subject === '') {
+        // A definition, heading or fence on the next line is not this one's subject.
+        const nx = lines.slice(i + 1).find((l) => l.trim() !== '') ?? '';
+        subject = DEFINITION.test(nx) || /^\s*(?:#|```|~~~)/.test(nx) ? '' : tidySubject(nx);
+      }
       out.push({ file: f.path, n: Number(m[1]), subject: subject === '' ? `\0${f.path}:${i}` : subject });
     }
   }
@@ -347,7 +351,8 @@ export function crossTreeCollisions(
 ): CrossTreeCollision[] {
   const byN = new Map<number, Set<string>>();
   for (const d of [...definitionsIn(branch), ...definitionsIn(base)]) {
-    if (d.n < era) continue;
+    // From SELF_ASSIGNED_ERA up, selfAssignedCollisions alone judges: a renamed or mirrored entry is one deviation there.
+    if (d.n < era || d.n >= SELF_ASSIGNED_ERA) continue;
     const files = byN.get(d.n) ?? new Set<string>();
     files.add(d.file);
     byN.set(d.n, files);
@@ -370,16 +375,17 @@ type Files = readonly { readonly path: string; readonly text: string }[];
  * judged by the branch's copy only when the branch changed it since the merge base (`changed`), and
  * by the base's copy otherwise: so rewording a merged entry, or fixing a collision the base carries,
  * is not a collision, and main's later addition to a file the branch never touched still counts. A
- * base path the branch lacks (main moved on, or the branch renamed it) counts. Two branches adding
+ * base path the branch lacks counts when main added it after the merge base; one the branch deleted or
+ * renamed away is in `changed` (the caller lists renames off) and is absent. Two branches adding
  * one number to the SAME file are seen only on the merged tree (the queue). `files` lists each
  * defining path once, sorted. Pure, like `crossTreeCollisions`; the caller measures `changed`.
  */
 export function selfAssignedCollisions(branch: Files, base: Files, changed: ReadonlySet<string>): CrossTreeCollision[] {
   const onBase = new Set(base.map((f) => f.path));
-  const onBranch = new Set(branch.map((f) => f.path));
   const defs = definitionLines([
     ...branch.filter((f) => !onBase.has(f.path) || changed.has(f.path)),
-    ...base.filter((f) => !onBranch.has(f.path) || !changed.has(f.path)),
+    // A path the branch changed (deleted or renamed away included; the caller lists renames off) is the branch's view.
+    ...base.filter((f) => !changed.has(f.path)),
   ]);
   const byN = new Map<number, { subjects: Set<string>; files: Set<string> }>();
   for (const d of defs) {

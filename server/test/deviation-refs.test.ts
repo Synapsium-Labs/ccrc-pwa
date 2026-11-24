@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { crossTreeCollisions, definitionsIn, definitionSubject, selfAssignedCollisions,
          LEDGER_ALLOCATOR_ERA, SELF_ASSIGNED_ERA, type Definition } from '../src/coord/ledger.js';
-import { DEFINITION_DIRS, readDefinitionFilesAt, resolveLedgerBase } from '../scripts/next-deviation.js';
+import { DEFINITION_DIRS, changedDefinitionPaths, readDefinitionFilesAt, resolveLedgerBase, staleLedgerBase } from '../scripts/next-deviation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -301,29 +301,16 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const baseSha = execFileSync('git', ['rev-parse', '--short', LEDGER_BASE!],
       { cwd: ROOT, encoding: 'utf8' }).trim();
     // The property is NOT "the base is reachable from HEAD" — the fossil is
-    // reachable, it is old main. It is "the base is not BEHIND `origin/main`":
-    // `origin/main` must be an ancestor of whatever we are comparing against.
-    // That admits `origin/main` itself and anything built on it, and refuses a
-    // ref that predates it — which is the only way an explicit
-    // `CCRC_LEDGER_BASE` can now hand this gate a stale tree, the silent
-    // fallback having been removed above.
-    const stale = ((): string | null => {
-      try {
-        execFileSync('git', ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'],
-          { cwd: ROOT, stdio: 'pipe' });
-      } catch { return null; }   // no origin/main to compare against: not this test's call
-      try {
-        execFileSync('git', ['merge-base', '--is-ancestor', 'origin/main', LEDGER_BASE!],
-          { cwd: ROOT, stdio: 'pipe' });
-        return null;
-      } catch {
-        const behind = execFileSync('git', ['rev-list', '--count', `${LEDGER_BASE!}..origin/main`],
-          { cwd: ROOT, encoding: 'utf8' }).trim();
-        return behind;
-      }
-    })();
+    // reachable, it is old main. It is "the base is not BEHIND what the resolver
+    // picks without $CCRC_LEDGER_BASE" (`staleLedgerBase`): that ref must be an
+    // ancestor of whatever we are comparing against, which is the only way an
+    // explicit `CCRC_LEDGER_BASE` can now hand this gate a stale tree, the silent
+    // fallback having been removed above. Measured against the resolver's answer,
+    // never a hard-coded `origin/main`, so a fork whose own `main` diverged from
+    // upstream is not read as stale.
+    const stale = staleLedgerBase(ROOT, LEDGER_BASE!);
     expect(stale,
-      `the ledger base ${LEDGER_BASE} (${baseSha}) is ${stale ?? '?'} commits BEHIND origin/main — `
+      `the ledger base ${LEDGER_BASE} (${baseSha}) is ${stale?.behind ?? '?'} commits BEHIND ${stale?.anchor ?? '?'} — `
       + 'a collision report against it is about a tree nobody is merging into').toBeNull();
     expect(here.length, `only ${here.length} plans read from HEAD`).toBeGreaterThanOrEqual(50);
     expect(there.length,
@@ -344,9 +331,9 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
         expect(read, `${name}: read ${read} files under ${dir}`).toBeGreaterThanOrEqual(1);
       }
     }
-    // A shared path is judged by the branch's copy only when the branch changed it since the merge base.
-    const changed = new Set(execFileSync('git', ['diff', '--name-only', '-z', `${LEDGER_BASE!}...HEAD`, '--', ...DEFINITION_DIRS],
-      { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 24 }).split('\0').filter(Boolean));
+    // A shared path is judged by the branch's copy only when the branch changed it since the merge base; one it
+    // deleted or renamed away is absent (renames off).
+    const changed = changedDefinitionPaths(ROOT, LEDGER_BASE!);
     const hits = selfAssignedCollisions(head, base, changed);
     expect(hits.map((c) => `D-${c.n} is defined with two different subjects in ${c.files.join(', ')}`),
       `measured against ${LEDGER_BASE}. If they are the same deviation, make the lines identical (or cite it ` +

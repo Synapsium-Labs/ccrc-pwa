@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LEDGER_ALLOC_MAX, nextDeviationNumbers } from '../src/coord/ledger.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
-import { DEFINITION_DIRS, readDefinitionFilesAt, resolveLedgerBase } from '../scripts/next-deviation.js';
+import { DEFINITION_DIRS, changedDefinitionPaths, readDefinitionFilesAt, resolveLedgerBase, staleLedgerBase } from '../scripts/next-deviation.js';
 
 afterEach(() => removeTmpFixtures());
 
@@ -75,6 +75,48 @@ describe('resolveLedgerBase (the one base resolver: the helper and the guard)', 
     const root = fixtureRepo();
     execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/main'], { cwd: root });
     expect(resolveLedgerBase(root, undefined)).toBeNull();
+  });
+});
+
+describe('the guard\'s two git reads', () => {
+  const git = (root: string, ...a: string[]): string => execFileSync('git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...a],
+    { cwd: root, encoding: 'utf8' }).trim();
+  const A = 'docs/superpowers/plans/old-name.md';
+  const B = 'docs/superpowers/plans/new-name.md';
+  it('changedDefinitionPaths lists a rename as both paths, so the old path counts as changed', () => {
+    const body = '# A plan\n\n' + 'A line of the plan that the move keeps.\n'.repeat(20) + entry(10020);
+    const root = fixtureRepo({ [A]: body });
+    git(root, 'mv', A, B);
+    writeFileSync(path.join(root, B), body.replace('a deviation', 'reworded on the move'));
+    expect(git(root, 'diff', '--name-status', '--find-renames', 'HEAD'), 'git must see a rename here').toMatch(/^R\d+/);
+    git(root, 'commit', '-qam', 'rename');
+    expect([...changedDefinitionPaths(root, 'origin/main')].sort()).toEqual([B, A].sort());
+  });
+  it('changedDefinitionPaths lists a deleted path, measured from the merge base after main moved on', () => {
+    const root = fixtureRepo({ [A]: entry(10020) });
+    git(root, 'rm', '-q', A);
+    git(root, 'commit', '-qm', 'delete');
+    const later = git(root, 'commit-tree', 'origin/main^{tree}', '-p', 'origin/main', '-m', 'main moves on');
+    git(root, 'update-ref', 'refs/remotes/origin/main', later);
+    expect([...changedDefinitionPaths(root, 'origin/main')]).toEqual([A]);
+  });
+  it('staleLedgerBase: a fork whose own origin/main diverged is measured against upstream/main, and is not stale', () => {
+    const root = fixtureRepo();
+    const up = git(root, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'upstream moves on');
+    git(root, 'update-ref', 'refs/remotes/upstream/main', up);
+    const fork = git(root, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'the fork commits to its own main');
+    git(root, 'update-ref', 'refs/remotes/origin/main', fork);
+    expect(resolveLedgerBase(root, undefined)).toBe('upstream/main');
+    expect(staleLedgerBase(root, 'upstream/main')).toBeNull();
+  });
+  it('staleLedgerBase: an explicit base behind the resolver\'s own answer is stale, and says by how much', () => {
+    const root = fixtureRepo();
+    const old = git(root, 'rev-parse', 'HEAD');
+    const up = git(root, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'upstream moves on');
+    git(root, 'update-ref', 'refs/remotes/upstream/main', up);
+    expect(staleLedgerBase(root, old)).toEqual({ anchor: 'upstream/main', behind: 1 });
+    expect(staleLedgerBase(root, 'upstream/main')).toBeNull();
   });
 });
 
