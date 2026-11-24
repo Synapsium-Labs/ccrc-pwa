@@ -19,5 +19,9 @@
   "if true; then gh pr ready 42; fi",
   "git push && gh pr ready 42",
   "gh pr ready 42\necho done",
-  "git commit -m 'wave done' && gh pr ready 42"
+  "git commit -m 'wave done' && gh pr ready 42",
+  "gh pr ready 42 --undo=false",
+  "gh pr ready 42 --undo=0",
+  "echo --undo; gh pr ready 42",
+  "gh pr ready 42 --title-undo"
 ]

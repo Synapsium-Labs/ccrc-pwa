@@ -133,12 +133,15 @@ JSON
    never the literal `main`): the producer LANDS BEFORE IT CLOSES. Once its review is
    clean and wave N+1 is open — or, on the programme's LAST wave, which has
    no wave N+1, once its review is clean (its close is SKILL.md step 7's and
-   §6's) — mark its PR ready for review with `gh pr ready <pr>`, then
-   advance the producer's run to `merging` (§4 — from `awaiting-review`,
-   re-measured). Every worker opens its PR as a draft and it stays one until
-   this moment (SKILL.md clause 15, D-8997): marked ready first, the advance
-   measures it `open`, so the landing's checks lane reads it, where a draft at
-   the advance leaves that lane off (D-8999). Enqueue only a PR whose required checks
+   §6's) — read `gh pr view <pr> --json headRefOid` as `handoffCommit`, mark
+   its PR ready for review with `gh pr ready <pr>`, then advance the
+   producer's run to `merging` (§4 — from `awaiting-review`, re-measured). Every
+   worker opens its PR as a draft and it stays one until this moment (SKILL.md
+   clause 15, D-8997): marked ready first, the advance measures it `open`, so
+   the landing's checks lane reads it, where a draft at the advance leaves that
+   lane off (D-8999). A refused advance turns the PR back into a draft at once
+   (`gh pr ready <pr> --undo`, §4), and a head other than `handoffCommit` is
+   never marked ready. Enqueue only a PR whose required checks
    have all passed — every required name the verdict discovered passes on the
    head, and `gh pr checks <pr> --required` exits 0: for any other
    PR gh arms auto-merge instead of queueing it,
@@ -221,10 +224,12 @@ JSON
    no worker would be left to fix it. A coordinator whose own workspace
    carries a programme-wave hold or the child marker — a self-claimed run's,
    or a reclaim heir that was the programme's own worker — is refused its
-   ready and its enqueue by the session hook, like any worker. Do not close to shed the
-   hold (a final close of a child reclaims your own pane): ask the operator
-   to mark it ready and enqueue it, or disarm, with the same spellings from their own shell, and
-   wait at `merging` as above.
+   ready and its enqueue by the session hook, like any worker. Do not close to
+   shed the hold (a final close of a child reclaims your own pane): before the
+   advance to `merging`, ask the operator to mark the PR ready from their own
+   shell, and advance only once it reads `open` at `handoffCommit`; then ask
+   them to enqueue it, or disarm, with the same spellings from their own shell,
+   and wait at `merging` as above.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open

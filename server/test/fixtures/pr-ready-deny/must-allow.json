@@ -15,5 +15,7 @@
   "cat <<'EOF' > /tmp/body.md\ngh pr ready 42\nEOF",
   "git commit -F - <<'EOF'\ndocs: say when the coordinator runs gh pr ready\n\nThe worker keeps its PR a draft.\nEOF",
   "# gh pr ready 42\necho ok",
-  "ready=1; echo $ready"
+  "ready=1; echo $ready",
+  "gh pr ready 42 --undo=true",
+  "gh pr ready -R owner-a/repo-a --undo 42"
 ]

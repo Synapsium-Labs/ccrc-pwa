@@ -4,11 +4,14 @@
  * The session hook's PreToolUse arm DENIES `gh pr ready` to a session it calls a worker: one whose hold names a programme
  * wave, or whose workspace carries the child marker (`$REG/<id>.child`, which only a dispatch writes). The arm rides the
  * worker merge deny's strip and head grammar (`GH_READY_RE`, derived from `GH_MERGE_RE`), so a mention in quoted text, a
- * comment or a heredoc passes, as a merge mention does, and `gh pr ready <n> --undo` (back to a draft) passes. A session
- * with neither, a coordinator's or the operator's, is never asked: the coordinator's `gh pr ready <n>` runs.
+ * comment or a heredoc passes, as a merge mention does, and `gh pr ready <n> --undo` (back to a draft) passes, the flag
+ * read as a whole word of that command (`--undo=false` is a ready, and refused). The same worker is refused a
+ * `gh pr create` that holds no `--draft` or `-d`, the likelier accident. A session with neither, a coordinator's or the
+ * operator's, is never asked: the coordinator's `gh pr ready <n>` runs.
  *
- * `fixtures/pr-ready-deny/must-deny.json` is every spelling a worker is refused; `must-allow.json` is what a worker
- * writes that names the verb and must pass. Both are iterated, never respelled here.
+ * `fixtures/pr-ready-deny/must-deny.json` is every spelling of a ready a worker is refused; `must-allow.json` is what a
+ * worker writes that names the verb and must pass; `create-must-deny.json` and `create-must-allow.json` are the same for
+ * `gh pr create`. All four are iterated, never respelled here.
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME, as `session-hook-ws-add-deny.test.ts` does.
  */
@@ -22,6 +25,8 @@ const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIX = path.resolve(__dirname, 'fixtures/pr-ready-deny');
 const MUST_DENY: string[] = JSON.parse(fs.readFileSync(path.join(FIX, 'must-deny.json'), 'utf8'));
 const MUST_ALLOW: string[] = JSON.parse(fs.readFileSync(path.join(FIX, 'must-allow.json'), 'utf8'));
+const CREATE_DENY: string[] = JSON.parse(fs.readFileSync(path.join(FIX, 'create-must-deny.json'), 'utf8'));
+const CREATE_ALLOW: string[] = JSON.parse(fs.readFileSync(path.join(FIX, 'create-must-allow.json'), 'utf8'));
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const ID = 'demo-quiet-basin';
 const WAVE_HOLD = 'program:project-a wave:2/5 run:17';
@@ -58,6 +63,7 @@ const bash = (command: string): string | null => {
   return j.hookSpecificOutput.permissionDecision === 'deny' ? String(j.hookSpecificOutput.permissionDecisionReason) : null;
 };
 const READY_REASON = 'a worker never marks its own PR ready for review (`gh pr ready`)';
+const CREATE_REASON = 'a worker opens its PR as a draft: a `gh pr create` without `--draft`';
 
 describe('the worker ready deny (D-8998)', () => {
   it('the corpora are non-trivial and hold the plain spelling and its undo', () => {
@@ -90,13 +96,44 @@ describe('the worker ready deny (D-8998)', () => {
     expect(bash(c), c).toBeNull();
   });
 
+  it('the create corpora are non-trivial and hold the bare create, its draft and the false value', () => {
+    expect(CREATE_DENY).toContain('gh pr create --fill');
+    expect(CREATE_DENY).toContain('gh pr create --draft=false --fill');
+    expect(CREATE_ALLOW).toContain('gh pr create --draft --fill');
+    expect(CREATE_DENY.length).toBeGreaterThan(10);
+    expect(CREATE_ALLOW.length).toBeGreaterThan(10);
+  });
+
+  it.each(CREATE_DENY)('a child is refused the ready-PR create %j, with the create reason', (c) => {
+    marker();
+    const d = bash(c);
+    expect(d, c).not.toBeNull();
+    expect(d, c).toContain(CREATE_REASON);
+    expect(d, c).toContain('child marker');
+    expect(d, 'the reason names the draft spelling').toContain('gh pr create --draft');
+  });
+
+  it.each(CREATE_DENY)('a session whose hold names a programme wave is refused the ready-PR create %j', (c) => {
+    hold();
+    const d = bash(c);
+    expect(d, c).not.toBeNull();
+    expect(d, c).toContain(CREATE_REASON);
+    expect(d, c).toContain('hold names a programme wave');
+  });
+
+  it.each(CREATE_ALLOW)('a worker passes the create %j', (c) => {
+    marker();
+    hold();
+    expect(bash(c), c).toBeNull();
+  });
+
   it('a dangling marker link is still a marker: existence decides, never contents', () => {
     fs.symlinkSync(path.join(home, 'nowhere'), reg(`${ID}.child`));
     expect(bash('gh pr ready 42')).toContain(READY_REASON);
   });
 
   it('a session with neither is never asked: the coordinator and a top-level session run every spelling', () => {
-    for (const c of MUST_DENY) expect(bash(c), `top-level: ${c}`).toBeNull();
+    for (const c of [...MUST_DENY, ...CREATE_DENY]) expect(bash(c), `top-level: ${c}`).toBeNull();
     hold('program:project-a');
     expect(bash('gh pr ready 42'), 'a hold that names no wave is not a worker').toBeNull();
   });
@@ -149,6 +186,37 @@ describe('the worker ready deny (D-8998)', () => {
     expect(verdicts(no), `matched: ${no.join(' | ')}`).toEqual(no.map(() => false));
   });
 
+  it('GH_READY_UNDO_RE, GH_CREATE_RE and GH_CREATE_DRAFT_RE share GH_READY_RE\'s head and read a whole flag of that command', () => {
+    const hookText = fs.readFileSync(HOOK, 'utf8');
+    const names = ['GH_MERGE_RE', 'GH_READY_CUT', 'GH_READY_RE', 'GH_READY_UNDO_RE', 'GH_CREATE_RE', 'GH_CREATE_DRAFT_RE'];
+    const defs = names.map((n) => {
+      const m = new RegExp(`^${n}=.*$`, 'm').exec(hookText);
+      if (m === null) throw new Error(`the hook no longer defines ${n} on one line`);
+      return m[0];
+    }).join('\n');
+    for (const n of ['GH_READY_UNDO_RE', 'GH_CREATE_RE', 'GH_CREATE_DRAFT_RE']) {
+      expect(defs, `${n} is derived from GH_MERGE_RE by the same cut`).toContain(`${n}=\${GH_MERGE_RE%"$GH_READY_CUT"*}`);
+    }
+    const verdicts = (re: string, cmds: string[]): boolean[] => {
+      const script = `${defs}\nfor c in "$@"; do if [[ "$c" =~ $${re} ]]; then echo 1; else echo 0; fi; done`;
+      const r = spawnSync('bash', ['-c', script, 'x', ...cmds], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout.trim().split('\n').map((x) => x === '1');
+    };
+    const undoYes = ['gh pr ready 42 --undo', 'gh pr ready --undo 42', 'gh pr ready 42 --undo=true', 'gh pr ready 42 --undo;echo'];
+    const undoNo = ['gh pr ready 42 --undo=false', 'gh pr ready 42 --undone', 'echo --undo; gh pr ready 42', 'gh pr ready 42'];
+    expect(verdicts('GH_READY_UNDO_RE', undoYes), undoYes.join(' | ')).toEqual(undoYes.map(() => true));
+    expect(verdicts('GH_READY_UNDO_RE', undoNo), undoNo.join(' | ')).toEqual(undoNo.map(() => false));
+    const draftYes = ['gh pr create --draft', 'gh pr create --fill -d', 'gh pr new --draft=1', 'gh -R o/r pr create --draft --fill'];
+    const draftNo = ['gh pr create --fill', 'gh pr create --draft=false', 'gh pr create --fill; echo --draft', 'gh pr create --drafts'];
+    expect(verdicts('GH_CREATE_DRAFT_RE', draftYes), draftYes.join(' | ')).toEqual(draftYes.map(() => true));
+    expect(verdicts('GH_CREATE_DRAFT_RE', draftNo), draftNo.join(' | ')).toEqual(draftNo.map(() => false));
+    const createYes = ['gh pr create', 'gh pr new --fill', 'echo ok; gh pr create --fill'];
+    const createNo = ['gh pr created', 'gh issue create', 'echo gh pr create'];
+    expect(verdicts('GH_CREATE_RE', createYes), createYes.join(' | ')).toEqual(createYes.map(() => true));
+    expect(verdicts('GH_CREATE_RE', createNo), createNo.join(' | ')).toEqual(createNo.map(() => false));
+  });
+
   describe('the arm\'s budget', () => {
     /** A `jq` first on PATH that logs each call's option words, then runs the real one. */
     const countJq = (): void => {
@@ -172,6 +240,7 @@ describe('the worker ready deny (D-8998)', () => {
       hold();
       expect(strips('gh pr ready 42'), 'a held worker\'s ready did not wake the strip once').toBe(1);
       expect(strips('gh pr view 42'), 'a worker\'s other verb woke the strip').toBe(0);
+      expect(strips('gh pr create --fill'), 'a held worker\'s create did not wake the strip once').toBe(1);
     });
   });
 });
