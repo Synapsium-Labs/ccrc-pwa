@@ -8328,20 +8328,19 @@ export const CLIP_EXT_MAX = 12;
  *  stated once. */
 export const CLIP_EXT_ALT = `[a-z0-9]{1,${String(CLIP_EXT_MAX)}}`;
 
-/** The same shape for a name as an uploader wrote it: ASCII letters of either
- *  case. Tested BEFORE lower-casing, because `toLowerCase` folds some non-ASCII
- *  letters to ASCII (the Kelvin sign becomes `k`) and the server's
- *  case-insensitive gate does not, so testing after would admit a name the
- *  server refuses. */
-const CLIP_EXT_RAW_RE = new RegExp(`^[A-Za-z0-9]{1,${String(CLIP_EXT_MAX)}}$`);
+/** The same shape for a name as an uploader wrote it, built exactly as the
+ *  server's upload gate builds it: `CLIP_EXT_ALT` with the case-insensitive
+ *  flag and no Unicode flag, which matches ASCII letters of either case and
+ *  nothing else. Tested BEFORE lower-casing, because `toLowerCase` folds some
+ *  non-ASCII letters to ASCII (the Kelvin sign becomes `k`) and the gate does
+ *  not, so testing after would admit a name the server refuses. */
+const CLIP_EXT_RAW_RE = new RegExp(`^(?:${CLIP_EXT_ALT})$`, 'i');
 
-/** The extension a file would be stored under: its own, after its last dot,
- *  lower-cased, when it has the admitted shape; '' when it has none. */
+/** The extension a file would be stored under: its own, after the last dot
+ *  of its last path segment, lower-cased, when it has the admitted shape; ''
+ *  when it has none (a dot in a directory name above it is not one). */
 export function clipExtOf(nameOrPath: string): string {
-  const base = nameOrPath.slice(nameOrPath.lastIndexOf('/') + 1);
-  const dot = base.lastIndexOf('.');
-  if (dot < 0) return '';
-  const ext = base.slice(dot + 1);
+  const ext = /\.([^./]*)$/.exec(nameOrPath)?.[1] ?? '';
   return CLIP_EXT_RAW_RE.test(ext) ? ext.toLowerCase() : '';
 }
 
