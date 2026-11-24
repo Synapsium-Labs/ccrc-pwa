@@ -74,7 +74,7 @@ density of the file you are editing.
 **Do not edit the shared ledgers in a feature pull request.** Existing files under
 `docs/superpowers/programs/` and `docs/superpowers/plans/` belong to the coordinator's `ledger/<programme>`
 pull request. Add a new note, `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds it
-in. `.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
+in. `.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <reason>` trailer on the head commit is the escape
 (a trailer on an earlier commit does not count). A new file under `docs/superpowers/specs/` or `docs/superpowers/plans/`
 takes the repo's review judge's layout, a dated spec (`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`)
 or plan (`YYYY-MM-DD-<slug>.md`) directly in that directory; the guard's layout arm refuses anything else, with no
@@ -92,32 +92,44 @@ cd server && npm run next-deviation -- <count>
 ```
 
 If `origin` is your fork, measure the project itself, not your fork's `main` (a stale base hands
-you a number already taken):
+you a number already taken): add the project as `upstream` once and fetch it, and the helper and
+the collision check below then measure `upstream/main` by themselves:
 
 ```bash
+git remote add upstream https://github.com/Synapsium-Labs/ccrc-pwa   # once
 git fetch upstream main
-cd server && npm run next-deviation -- <count> --ref upstream/main
+cd server && npm run next-deviation -- <count>
 ```
 
+Both pick their base the same way (`resolveLedgerBase` in `server/scripts/next-deviation.ts`):
+`$CCRC_LEDGER_BASE` when it is set and resolves, else `upstream/main`, else `origin/main`, and
+both name the base they measured. The helper's `--ref <ref>` overrides it for one run.
+
 The helper prints `max(highest + 1, 10000)` onward, where the highest is the highest `D-N`
-defined on `origin/main` (or the `--ref` you pass) and on your branch, in any `.md` file under
-`docs/superpowers/plans/`, `programs/` or `specs/`.
-**Take and define in the same commit**; until then the entry is `D-TBD-<slug>`, which CI
+defined on that base and on your branch, in any `.md` file under
+`docs/superpowers/plans/`, `programs/` or `specs/`. **Take all the numbers your change needs in
+one call:** the helper counts only committed definitions, so a second call before you commit
+returns the same numbers.
+**Take and define in the same commit**, in a file your pull request adds: your change's own
+new dated plan, or a new task note `docs/superpowers/programs/<programme>/<task-or-pr>.md`.
+`.github/ci/ledger-guard.mjs` allows both (a pull request may add files under `plans/` and
+`programs/`); it refuses a modified, deleted or renamed-away existing file there unless the head
+commit carries a `Ledger-Edit: <reason>` trailer. Until then the entry is `D-TBD-<slug>`, which CI
 refuses to land. The server allocator (`POST /api/ledger/deviations`) retired on 2026-11-23.
 
 Two pull requests in flight can take the same number, so a collision is checked rather than
 prevented:
 
 ```bash
-git fetch origin main
+git fetch origin main   # or upstream main, on a fork
 cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
 ```
 
-That suite compares this branch's ledger entries against `origin/main`'s **without merging
+That suite compares this branch's ledger entries against the base's (the helper's base, above) **without merging
 either into the other**, and reds if a number of 10000 or more is defined with two different
 subjects anywhere across those three directories (one entry mirrored in a spec and its plan, or a
 file renamed on your branch, is one deviation; an older, allocator-era number is checked across
-plans only). It measures whatever `origin/main` your checkout has fetched — hence the
+plans only). It measures whatever base your checkout has fetched, and names it — hence the
 `git fetch` first — and it goes red on a base it cannot resolve rather than quietly passing, so
 a shallow clone reports a problem instead of a clean bill. CI runs it on every PR, and the merge
 queue runs it on the merged result, so the pair never lands: whoever lands second renumbers the

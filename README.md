@@ -49,7 +49,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 | **Review runs and a stall watch** | A finished wave is read by a separate reviewer session at one measured tip, and the coordinator rules on its report. A silent worker is asked, then its coordinator told, then you — each rung recorded before it is sent, and nothing sent until you arm it. |
 | **Claims are re-measured, never believed** | A worker reporting "wave done" is checked against the workspace branch tip and `.prhistory`, from the git refs on disk. |
 | **Mail between sessions** | Delivered only into an idle turn boundary, so a nudge never lands mid-thought. The body lives in a durable store; what arrives is one line. |
-| **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and deviation numbers are taken with a helper from `origin/main`, never guessed. |
+| **Sessions that stay out of each other's way** | A session claims the paths it is about to edit, all or nothing, and a conflict names the holder to mail. A dispatched worker is denied `gh pr merge` — the coordinator lands work — and a deviation number is the next past the highest on `origin/main` and the branch (a helper prints it), never guessed. |
 | **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
 | **A code graph for every tree** | graphify keeps an AST-derived knowledge graph fresh per git tree on the fleet host, and a ccrc session that searches a freshly graphed tree before querying it is turned back, at most three times (`touch ~/.ccrc/graph-gate-off` lifts the gate). |
 | **Answer from the lock screen** | A session asks a question; your phone gets a push and you answer it from the notification, without opening a terminal. A worker's question goes to its coordinator first, and reaches you when the coordinator passes on it or three minutes go by. |
@@ -5851,7 +5851,7 @@ file there unless its head branch is `ledger/<programme>` (the name is this guar
 ledger-branch name existed). A pull request ADDS a per-task note instead,
 `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
 ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
-escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
+escape is a `Ledger-Edit: <reason>` trailer on the pull request's HEAD commit (only the head commit's
 trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
 commit does not), which passes and is written to the step summary. Its layout arm (D-8719) holds every branch,
 ledger branches included, with no trailer escape, to the repo's review judge's layout: a file added, copied or
@@ -6084,15 +6084,20 @@ invited reply, never a mail to oneself), one per mail, recorded in `mail.answers
 **Deviation numbers are self-assigned.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and since 2026-11-23 the author takes the number, with no server and no token:
 `git fetch origin main`, then `cd server && npm run next-deviation -- <count>`, which prints
-`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` and on your branch
+`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on the base and on your branch
 in any `.md` file under `docs/superpowers/plans/`, `programs/` or `specs/` (`server/scripts/next-deviation.ts`, reading with the
-guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). When `origin` is a fork,
-`git fetch upstream main` and pass `--ref upstream/main`. A coordinator names the
-numbers it takes in the brief (coordinator clause 10), and a worker takes its own the same way (worker clause
-11). Until a number is taken the entry is `D-TBD-<slug>`, and `server/test/dtbd.test.ts` reds any tracked
+guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). The base is one resolver's
+answer, shared by the helper and the collision guard (`resolveLedgerBase`): `$CCRC_LEDGER_BASE`, else
+`upstream/main`, else `origin/main`, and both name it; so a fork adds the project as `upstream` and runs `git fetch
+upstream main`, and the helper's `--ref` overrides. A change takes all its numbers in one call (the helper counts
+only committed definitions) and defines them in a file it adds: its own new dated plan, or a new task note
+`docs/superpowers/programs/<programme>/<task-or-pr>.md`, which `.github/ci/ledger-guard.mjs` allows (an edit of an
+existing file there needs a `Ledger-Edit: <reason>` trailer on the head commit). A coordinator takes one block for
+the wave and names each worker's slice in its brief (coordinator clause 10); a worker uses that slice, and takes its
+own only when the brief names none (worker clause 11). Until a number is taken the entry is `D-TBD-<slug>`, and `server/test/dtbd.test.ts` reds any tracked
 file that carries a concrete `D-TBD-` placeholder (the `<slug>` meta-form is exempt). A collision is caught at
 merge, not prevented: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` (after the
-fetch) compares this branch's definitions against `origin/main`'s without merging and, for a number of 10000 or
+fetch) compares this branch's definitions against the base's without merging and, for a number of 10000 or
 more, reds on one defined with two different subjects across all three directories (a mirrored entry or a
 renamed file is one deviation; below 10000 the older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
 The allocator retired the same day: `POST /api/ledger/deviations` still checks the box token, then answers
