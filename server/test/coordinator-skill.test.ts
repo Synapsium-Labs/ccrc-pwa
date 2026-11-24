@@ -856,6 +856,10 @@ describe('the coordinator skill: linkage', () => {
       // sessions that are not coordinators, which no coordinator has a reason to read or set.
       'GET /api/coord/plain-auto-memory',
       'POST /api/coord/plain-auto-memory',
+      // THE COORDINATOR ADVISOR (D-8967) — the operator-dial shape: the operator's Settings row over coordinators' own
+      // launches and their daily cap, which a coordinator must not read as an invitation to set for itself.
+      'GET /api/coord/coordinator-advisor',
+      'POST /api/coord/coordinator-advisor',
       // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
       // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
       'GET /api/coord/review-cap/:id',

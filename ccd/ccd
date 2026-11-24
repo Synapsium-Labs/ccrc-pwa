@@ -1735,7 +1735,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold advisor)
 # `mailhold` (mid-turn mail spec 2026-11-19 §3.3): the furthest `until` may sit past this box's clock at a write,
 # `shared/mailHold.ts#MAILHOLD_REACH_S` (`mailhold-parity.test.ts` holds the two equal).
 MAILHOLD_REACH_S=360
@@ -9503,6 +9503,10 @@ EOF
   # `route-mailhold-v1` (mid-turn mail spec §3.3): `mailhold` is a lane-only route field, bounded at the write site. A server
   # that does not see this token composes no marker, and the hold is off on this box.
   echo route-mailhold-v1
+  # `route-advisor-v1` (coordinator advisor, D-8967): `advisor` is a lane-only route field and every spawn renders it as
+  # `--advisor <model>` (`_advisor_spawn_compose`). An older ccd refuses the field by name, the whole call, so a server that
+  # does not see this token sends none.
+  echo route-advisor-v1
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -10186,12 +10190,13 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     # composed by the server, is not a session's shell. Before the empty-value clear, so a clear is refused too.
     [[ ( "$f" == poolset || "$f" == acctorder ) && -n "${CLAUDECODE:-}" ]] && die "pool-set-operator-only: a Claude Code session may not write $f"
     # `mailhold` is the projection lane's alone (mid-turn mail spec §3.3), and a session's shell never writes or clears it.
-    [[ "$f" == mailhold && -n "${CLAUDECODE:-}" ]] && die "mailhold-lane-only: a Claude Code session may not write mailhold"
+    # So is `advisor` (coordinator advisor plan, D-8967): the launch-profile lane's alone.
+    [[ ( "$f" == mailhold || "$f" == advisor ) && -n "${CLAUDECODE:-}" ]] && die "$f-lane-only: a Claude Code session may not write $f"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
     # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
     # designation's retire and rebind, plan slug poolset-empty-value-clears), and so does `profiledigest` (Overlord W1 sandbox:
     # retire, rebind and a failed pending designation), and so does `mailhold` (the projection's clear). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest || "$f" == mailhold ) ]] && continue
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest || "$f" == mailhold || "$f" == advisor ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -22333,9 +22338,9 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. THE POOL SET'S TWO (`poolset`,
   # `acctorder`; the Overlord's W1, plan slug pool-fields-outside-route-any) decide placement, never the spawn's model or flags.
   # Nor `profiledigest` (Overlord W1 sandbox): `_profile_spawn_compose` reads it, and an Overlord row is not a routed row.
-  # Nor `mailhold` (mid-turn mail spec §3.3): the session hook reads it, and a held row is not a routed row.
+  # Nor `mailhold` (mid-turn mail spec §3.3): the session hook reads it, and a held row is not a routed row. Nor `advisor` (D-8967).
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest|mailhold) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest|mailhold|advisor) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 # @ccd-lib:poolset — a session's pool set (the Overlord's W1, C46): its bounds, its spelling's parser and the ordered list's shape check, which `_route_valid` reads, live in ccd/lib/pool-set.sh
@@ -22387,6 +22392,7 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     profiledigest) [[ "$v" =~ ^[0-9a-f]{64}$ ]] ;;
     # `mailhold` (mid-turn mail spec §3.3): the grammar and the two role words only, copied character for character from
     # `shared/mailHold.ts#MAILHOLD_RE_BODY`. The bound on `until` is `cmd_route`'s, at the write site.
+    advisor)  _route_word_in "$v" "fable opus" ;;   # the coordinator advisor's model (D-8967); the server decides who
     mailhold) [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ ]] ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
@@ -22508,7 +22514,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     # place their account BEFORE they write the record, so a set on their `--route` would mint a session outside the set it
     # was handed. Only `ccd route --session` writes one, and it is `cmd_route`'s to accept, so this refusal is argv-only.
     # `mailhold` is refused here too (mid-turn mail spec §3.3): the projection lane is its one writer, never a mint.
-    [[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"
+    [[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold || "$f" == advisor ]] && die "'$f' is written only by ccd route --session; nothing was touched"
     # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
     # (controller ruling S4-R4) — it is the one place the two validators are
     # allowed to differ in ARMS rather than wording, because only this side
@@ -26525,6 +26531,28 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
   _door_spawn "$id" || { _profile_refused "$id" "door process: $DOOR_SPAWN_WHY"; return 1; }
 }
+# THE COORDINATOR ADVISOR (plan 2026-11-23-coordinator-advisor, D-8967, D-8968): the route's lane-only `advisor` adds
+# `--advisor <model>`. `$REG/<id>.advisorspawn` (`.advisor` is the field's own file) records what this spawn applied:
+# `<model> <epoch>`, `off <epoch>` (no field, a record standing), or `off fastdeath <epoch>`. A row that never had the
+# field gains no file. FAIL OPEN AT LAUNCH: the
+# build exits an interactive launch whose advisor it refuses (D-8968), so a spawn within ADVISOR_FAST_DEATH_S of one that
+# applied it omits the flag and says so once in swap.log; the server reads that as `dropped` and clears the field for the day.
+# A false positive (a deliberate respawn inside the window, such as a swap) costs the advisor for the rest of that UTC day.
+ADVISOR_FAST_DEATH_S=90
+_advisor_spawn_compose() {   # id launchflags -> sets ADVISOR_SPAWN_FLAGS; writes $REG/<id>.advisorspawn; never fails
+  local id="$1" want prev="" now
+  ADVISOR_SPAWN_FLAGS="$2"; printf -v now '%(%s)T' -1; want=$(_route_get "$id" advisor)
+  [[ -n "$want" || -e "$REG/$id.advisorspawn" ]] || return 0
+  _reg_get_to prev "$id" advisorspawn 2>/dev/null || prev=""
+  # A fast-death record stands until a spawn applies the flag again, so the server keeps the drop for its UTC day.
+  [[ -n "$want" ]] || { [[ "$prev" == "off fastdeath "* ]] || _reg_set "$id" advisorspawn "off $now" || true; return 0; }
+  if [[ "$prev" =~ ^(fable|opus)\ ([0-9]{1,12})$ ]] && (( now - 10#${BASH_REMATCH[2]} < ADVISOR_FAST_DEATH_S )); then
+    _reg_set "$id" advisorspawn "off fastdeath $now" || true
+    echo "$(date '+%F %T') advisor-dropped $id: the spawn that applied --advisor $want ended within ${ADVISOR_FAST_DEATH_S}s; this spawn omits it" >> "$REG/swap.log"
+    return 0
+  fi
+  ADVISOR_SPAWN_FLAGS="${ADVISOR_SPAWN_FLAGS:+$ADVISOR_SPAWN_FLAGS }--advisor $want"; _reg_set "$id" advisorspawn "$want $now" || true
+}
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
 # only while `continuity` is live (decision compaction-text-follows-continuity, ruling R8): arming `launch-profile`
@@ -27179,6 +27207,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
   _profile_spawn_compose "$id" "$launchflags" || die "$id: launch profile refused, no pane started (swap.log names the step)"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
+  _advisor_spawn_compose "$id" "$launchflags"; launchflags="$ADVISOR_SPAWN_FLAGS"   # the coordinator advisor (D-8967), never fails
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

@@ -27,7 +27,7 @@ import {
 const ALL_FIELDS: Record<RouteField, true> = {
   class: true, effort: true, subagent: true, workflow: true, compact: true, browser: true,
   profile: true, automem: true, compactwindow: true, precompact: true, poolset: true, acctorder: true, profiledigest: true,
-  mailhold: true,
+  mailhold: true, advisor: true,
 };
 void ALL_FIELDS;   // its whole job is the type error above, not a runtime read
 
@@ -38,9 +38,9 @@ describe('ROUTE_WRITABLE_FIELDS', () => {
   // moved it from 5 to 6 (`browser`); the launch profile (Overlord W1a) from 6 to 9
   // (`profile`, `automem`, `compactwindow`); the compaction piece from 9 to 10 (`precompact`); the pool set (Overlord W1)
   // from 10 to 12 (`poolset`, `acctorder`); the W1 sandbox from 12 to 13 (`profiledigest`); the mid-turn mail hold from
-  // 13 to 14 (`mailhold`).
-  it('is exactly fourteen fields', () => {
-    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(14);
+  // 13 to 14 (`mailhold`); the coordinator advisor from 14 to 15 (`advisor`, D-8967).
+  it('is exactly fifteen fields', () => {
+    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(15);
   });
 
   it('every field the list names is one parseRouteFields accepts, except the lane-only ones, which it refuses by name', () => {
@@ -53,9 +53,9 @@ describe('ROUTE_WRITABLE_FIELDS', () => {
     }
   });
 
-  it('the lane-only fields are the launch profile\'s three, the generations lane\'s precompact, the pool set\'s two, the sandbox\'s profiledigest and the mid-turn mail hold\'s mailhold, the tail of the list (Overlord W1a, F1; W1)', () => {
+  it('the lane-only fields are the launch profile\'s three, the generations lane\'s precompact, the pool set\'s two, the sandbox\'s profiledigest, the mid-turn mail hold\'s mailhold and the coordinator advisor\'s advisor, the tail of the list (Overlord W1a, F1; W1; D-8967)', () => {
     expect(ROUTE_LANE_ONLY_FIELDS).toStrictEqual(ROUTE_WRITABLE_FIELDS.slice(6));
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(8);
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(9);
     expect(ROUTE_LANE_ONLY_FIELDS[0]).toBe('profile');
     expect(routeParseDetail({ ok: false, why: 'lane-only', field: 'automem' })).toBe('route: lane-only automem');
   });
