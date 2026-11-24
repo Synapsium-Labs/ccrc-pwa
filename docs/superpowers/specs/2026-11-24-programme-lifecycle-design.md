@@ -1,18 +1,19 @@
 # Programme lifecycle: one end fact, derived activity, joined at spawn, ended by decision (design)
 
-Date: 2026-11-24. Plan: `docs/superpowers/plans/2026-11-24-programme-lifecycle.md` (D-8983..D-8992, issued).
-Read against `origin/main` at `6965b6d83`. Context: Coordination (programmes, runs, coordinators, the ledger doors).
+Date: 2026-11-24. Plan: `docs/superpowers/plans/2026-11-24-programme-lifecycle.md` (D-8983..D-8993, issued).
+Read against `origin/main` at `6965b6d83`; the seams R11 touches re-read at `fffa89aba`. Context: Coordination
+(programmes, runs, coordinators, the ledger doors).
 
-This spec says what a programme is, which states it can be in, who moves it between them, what each move records, and
-what the console shows at each state. It is written so that a reader can answer, for any programme on any day: why
-does it read what it reads, who put it there, and when.
+This spec says what a programme is, which states it can be in, who owns it, who moves it between states, what each
+move records, and what the console shows at each state. It is written so that a reader can answer, for any programme
+on any day: why does it read what it reads, who leads it, who put it there, and when.
 
 ## 1. The operator's rulings of 2026-11-24
 
 | # | Ruling | Overturns |
 |---|---|---|
 | R1 | Every coordinator joins a programme at spawn. Every session the operator starts, by any route, is a coordinator (spec 2026-10-17 §8, D-5301; D-8142). It joins the programme picked at creation, or a provisional one that it files into the right business objective on its first turn. A new objective gets a new programme. | D-8142's conditional "when your work belongs to a programme" in the start card; spec 2026-10-17 §8's "coordinator-ness is derived from claims" (the lighter run kind stays out of scope: a binding replaces the need for it) |
-| R2 | A programme is a business objective that can hold diverse work. It is not one feature, one code change or one session. No rule ties one session to one programme. | — |
+| R2 | A programme is a business objective that can hold diverse work. It is not one feature, one code change or one session. No rule ties one session to one programme. (Its last sentence is overturned by R11.) | — |
 | R3 | The Overlord can start and end programmes, as the operator can. Amended the same day: the Overlord has every programme act the operator has, at maximum autonomy, with no acknowledgement queue or other admin burden for the operator; the history records its acts like anyone else's. | — |
 | R4 | The coordinator proposes an end, with evidence against the definition of done; the operator or the Overlord confirms it. An end is a decision with a recorded reason, never a side effect. The auto-retire at zero open runs goes. A finished run moves the programme to Idle, not Done. | D-51 (the auto-retire); the coordinator's `plan close` as an end (skill clause 22) |
 | R5 | States: Open (a coordinator exists, nothing dispatched yet); Active (has an open run); Idle (not ended, nothing running); Paused (the operator's hold); Done and Abandoned (only by decision; the operator can reopen). | D-26's "exactly one `active` row" reading of `soleActiveCoordinator`; D-8558's "NOT `programs.state`" in `programmeLive` |
@@ -21,6 +22,7 @@ does it read what it reads, who put it there, and when.
 | R8 | Each programme's page tells its whole story: its start (when, by whom), every state change (who, why), its waves, its end. | — |
 | R9 | The backfill is decided programme by programme by the operator: 13 programmes with open runs become Active, 4 stay Paused, 6 become Idle, 32 Done, 1 Abandoned. The per-programme list is operator data, applied from a private file or a console act, never committed. Live coordinators with no programme get one through the spawn rule or a one-time pass over live sessions; exited sessions are left alone. | — |
 | R10 | The role code's `plain` role conflicts with R1 and is aligned with it. | Overlord spec 2026-11-09 §3.3.9's `plain` row, and W1a's "auto memory for plain sessions" Settings row |
+| R11 | (2026-11-24) Coordinators manage long-term context well enough for one coordinator to own a programme and for a programme to be owned by one coordinator: a 1:1 relationship. At any one time a live programme has exactly one coordinator, and a coordinator owns exactly one live programme. A coordinator whose programme has ended may be given a new one, still one at a time. There are no members. | This spec's earlier design choice "one lead and any number of members" (`programme_members`, D-8986 as first written); R2's "no rule ties one session to one programme" |
 
 ## 2. What `main` does today (measured)
 
@@ -40,7 +42,13 @@ among them, 1 with `planEnd` set, 8 reading `done` or `abandoned` while they hol
 - **No coordinator fact.** A programme's coordinator is derived from its runs' `claimedBy`, whose one writer is
   `CoordStore#reclaimProgram` (reached from the reclaim door and from D-8199's `reclaim.ts#moveClaims`, the archive and
   stop doors' hand-over and release). With no open run, nothing names one, `claimsProgramme` answers no, and the end act
-  and ticks are refused.
+  and ticks are refused. `runs` stores `claimedBy` only: the `claimedByUuid` a `POST /api/runs` sends is checked
+  against the registry at open (D-5298) and not kept.
+- **One direction of 1:1 only.** `openRun` refuses a second claimant for a programme (`claimed-by-another`, read from
+  the programme's lowest claimed run), so one programme has one claimant. Nothing stops one session claiming runs in
+  several programmes. Measured read-only on the live server's `coord.db` on 2026-11-24: 43 open runs in 13 programmes,
+  claimed by 12 sessions; no programme's open runs have two claimants, and **1 session claims open runs in two
+  programmes**. So 11 programmes pair with one session unambiguously, and 1 conflict (2 programmes) breaks R11.
 - **Idle reads as ended.** A tick is refused when no run is open; the PWA's `programmeIsLive` marks such items ended;
   the portfolio drops the programme; the Programmes card folds it under "Finished" seven days after its last close.
 - **No history.** `run_events` covers runs. Who started a programme, and who changed its state, is not recorded.
@@ -59,21 +67,52 @@ named exemption is the migration's own SQL in `schema.ts`):
 |---|---|---|---|
 | The decision state | `programs.state` (existing) | `active` (live: not held, not ended), `paused`, `done`, `abandoned`, and `unknown` (an existing member of `ProgramState`); any other stored value is out of vocabulary | `decideInTx` |
 | The end's record | `programs.planEnd`, `planEndWhy`, `planEndAt` (existing) | set by an end, cleared by a reopen, in the same transaction as the state; `planEnd` always equals an ended `state` | `decideInTx` |
-| The lead coordinator | `programs.coordinator`, `coordinatorUuid`, `coordinatorSince` (new) | a session id with the uuid of its incarnation, or null | `bindCoordinatorInTx` |
-| Membership | `programme_members` (new): `program`, `session`, `uuid`, `joinedAt`, `via` | one row per session incarnation that joined the programme | `joinInTx` |
-| A pick at creation | `programme_picks` (new): `session`, `program`, `at` | the programme a create route was asked to join, until the join completes or it expires | `pickInTx` |
+| The coordinator (the owner) | `programs.coordinator`, `coordinatorUuid`, `coordinatorSince` (new) | a session id with the uuid of its incarnation, or null; null on every ended programme and every filed or withdrawn placeholder; a uuid null only on a binding the migration seeded, until the first registry pass measures it (§13). A partial unique index on `(coordinator, coordinatorUuid)` where `coordinator` is not null makes a second binding of one incarnation a constraint failure (R11) | `bindCoordinatorInTx` |
+| A pick at creation | `programme_picks` (new): `session`, `program`, `at` | the programme a create route was asked to start a coordinator for, until the join completes or it expires | `pickInTx` |
 | Placeholder | `programs.placeholder` (new, TEXT, null for a real programme), `programs.filedInto` (new) | `unfiled`, `filed` (with `filedInto`), `withdrawn` | `mintInTx`, `fileInTx` |
-| The story | `programme_events` (new, append-only, never deleted) | one row per decision, mint, join, coordinator change, filing, withdrawal, end proposal, coordinator exit | every writer above, in the same transaction |
+| The story | `programme_events` (new, append-only, never deleted) | one row per decision, mint, coordinator change, filing, withdrawal, end proposal, coordinator exit; a coordinator change carries the incoming session and uuid in its `session` and `sessionUuid` columns, which is what "this incarnation has been a coordinator" is read from (§7) | every writer above, in the same transaction |
 
 `CoordStore#setProgramState` and `planStore.ts#closePlan` stop being writers: they become private steps of
 `decideInTx`, or are deleted. `openRun`, `applyPlanChangesInTx` and `reconstruct` create rows only through `mintInTx`.
 
-**One coordinator fact, one path.** The lead binding is the programme's coordinator; a run's `claimedBy` is that run's
+**One coordinator fact, one path.** The binding is the programme's coordinator; a run's `claimedBy` is that run's
 claimant. `CoordStore#reclaimProgram` stays their one mover: it becomes keyed on the programme (its run id argument
 resolves to the run's programme, as today), moves every open run's `claimedBy` and calls `bindCoordinatorInTx` in the
-same transaction, and for a programme with no open run moves the binding alone. The hand-over door, the reclaim door
-and `moveClaims` (hand-over and release) all go through it, so an open run's `claimedBy` always equals the binding; a
-release clears both. The heir rule is reclaim's own (D-3012, D-3028), never a second one.
+same transaction, and for a programme with no open run moves the binding alone. The hand-over door, the reclaim door,
+`moveClaims` (hand-over and release) and a takeover of a programme whose coordinator is measured absent (a pick or a
+filing, §7) all go through it, so an open run's `claimedBy` always equals the binding; a release clears both. The heir
+rule is reclaim's own (D-3012, D-3028), never a second one; R11 adds one rung to it (rule 4 below).
+
+**Ownership: one coordinator, one programme (R11, D-8993).** In plain sentences, these are the whole rules:
+
+1. A live programme (not Done, not Abandoned) has at most one coordinator. A coordinator owns at most one live
+   programme. An ended programme is owned by nobody. There are no members: a session either owns the programme or has
+   nothing to do with it.
+2. Owning is the binding (`programs.coordinator` with `coordinatorUuid`), and nothing else. A run's `claimedBy` follows
+   the binding; a session id reused by a new incarnation (another uuid) owns nothing.
+3. A session becomes a programme's coordinator in exactly these ways: it is started with that programme picked, and the
+   programme has no live coordinator (§7); it is given a placeholder at spawn (§7); it files its placeholder into a
+   programme with no live coordinator, or as a new programme (§7); it opens the first run of a programme that does not
+   exist yet (§5, start by first run); the operator or the Overlord starts a programme naming it, or hands a programme to
+   it (§5); the reclaim door, or an archive or stop door's hand-over, names it the heir (§9).
+4. A session that already owns a live real programme cannot be given a second one: every way in rule 3 refuses
+   `owns-another-programme`, naming the programme it owns, and the partial unique index stops any path this list
+   forgot. An unfiled placeholder does not count here: when its coordinator takes a real programme, the placeholder is
+   filed into it (a new programme the session started) or withdrawn (a programme it was given), in the same
+   transaction.
+5. A programme that has a live coordinator cannot be given another one except by a hand-over, which takes it off the
+   first (§5). Picking it when starting a session, or filing into it, is refused `programme-has-coordinator`, naming
+   the coordinator, and nothing else changes owner. "Live" is the coordinator line's `led`; a programme whose line is
+   `no-coordinator` can be taken, and one whose line is `unmeasured` is refused `coordinator-unmeasured` with nothing
+   written, never guessed either way.
+6. A coordinator stops owning its programme when the programme is handed to another session, when the programme ends,
+   or when the operator releases it (the archive or stop door's release). It is never given a new programme
+   automatically. It is shown as a **coordinator with no programme**, and the operator or the Overlord archives it,
+   starts a programme naming it, or hands it one.
+7. A coordinator that exits keeps its binding (R7): the programme shows "No coordinator" until it is handed over, picked
+   by a new session, or ended.
+8. Opening a run never changes who owns a programme, with one exception, the first run of a programme that does not
+   exist yet (rule 3). Only the programme's coordinator opens runs in it.
 
 **What "open run" means**, one vocabulary for every guard in this spec: a run whose state is not terminal
 (`TERMINAL_RUN_STATES`, the store's existing `TERMINAL_RUN_STATES_SQL` predicate, which `programOpenRunCount` reads).
@@ -115,7 +154,8 @@ or `abandoned`) is the one end predicate; every gate that read `planEnd` reads i
 stuck rows read correctly the moment their stored state is a decision again (§13).
 
 **The coordinator line** is derived by `coordinatorLineOf(binding, registry)`: `led` (the bound session is present in
-the registry with the bound uuid and is not archived), `no-coordinator` (no binding; the session id is absent from the
+the registry with the bound uuid, or with any uuid while a migration-seeded binding's uuid is still null, and is not
+archived), `no-coordinator` (no binding; the session id is absent from the
 registry; its row carries another uuid, which is a new incarnation; or it is archived, so it cannot take mail until
 restored), or `unmeasured` (the registry or the row's uuid could not be read, or the row is mid-swap or mid-roll in the
 registry lane's existing carry reading). `unmeasured` is never folded into `no-coordinator`. Hibernated and held rows
@@ -154,43 +194,48 @@ stateDiagram-v2
 ```
 
 Resume, reopen and a repair to `active` write stored `active`; which of Open, Active and Idle the programme then shows is
-the runs' answer. A reopened programme with no dispatched run shows Open, not Idle. Done needs no open run, so a
+the runs' answer. A reopened programme with no dispatched run shows Open, not Idle. An end (Done or Abandoned, by any
+door, a repair included) releases the binding in the same transaction (R11 rule 6), so a reopened programme comes back
+with "No coordinator" and is handed to one, or picked by a new session, before its next run opens. Done needs no open run, so a
 programme holding only `planned` runs reaches Done after its coordinator closes or abandons them, and Abandoned through
 `abandonRuns`.
 
 ## 5. Transitions: who, through which door, under which guard, and what is recorded
 
 Every stored transition goes through `decideInTx`. A target equal to the current stored state writes nothing (which is
-what makes a re-run of the backfill safe). Every row below that is not "derived" writes exactly one
-`programme_events` row in the same transaction. Every edge but `file`, `withdraw` and the coordinator exit refuses a
+what makes a re-run of the backfill safe). Every row below that is not "derived" and not "pick" writes the
+`programme_events` rows its last column names, in the same transaction. Every edge but `file`, `withdraw` and the coordinator exit refuses a
 placeholder (`programme-provisional`). The credential each door takes is in §14.
 
 | Edge | From → to | Who | Door | Guard (refusal code) | Recorded |
 |---|---|---|---|---|---|
-| start | none → Open | operator, Overlord | `POST /api/programmes {slug, title, why, coordinator?}` | slug free and well-formed (`slug-taken`); why required; `coordinator` names a live top-level session, or is absent only for the operator's start sheet, which records the pick for the session it starts next (§7); the Overlord must name one (`coordinator-required`) | row (`active`); events `started` (actor, why) and `coordinator` |
-| start (spawn) | none → Open | the join sweep (§7) | the sweep | §7's decision answers `mint-provisional` | row (`active`, `placeholder` `unfiled`); events `started`, `joined`, `coordinator` |
-| start (first run) | none → Open → Active | the coordinator | `POST /api/runs` (`openRun`) | today's guards | row (`active`); event `started`, actor the claimant, why "first run opened"; the claimant joins and is bound |
-| dispatch | Open/Idle → Active | derived | `openRun`, `advance` | `openRun` refuses an ended (`plan-closed`, the existing code, its words now "the programme has ended"), paused (`programme-paused`), unknown (`programme-unknown`) or placeholder (`programme-provisional`) programme, and a claimant other than the bound coordinator (`claimed-by-another`, today's code); a binding whose `no-coordinator` line the route measured is empty for this guard when the programme has no open run, so the claimant takes it over | nothing new: `run_events` records the run; a takeover writes `coordinator` with why "previous coordinator measured absent"; an open end proposal is withdrawn in the same transaction (system, why "run <id> opened") |
+| start | none → Open | operator, Overlord | `POST /api/programmes {slug, title, why, coordinator?}` | slug free and well-formed (`slug-taken`); why required; `coordinator` names a live top-level session that owns no live real programme (`owns-another-programme`, naming it; an unfiled placeholder it owns is withdrawn), or is absent only for the operator's start sheet, which records the pick for the session it starts next (§7); the Overlord must name one (`coordinator-required`) | row (`active`); events `started` (actor, why) and `coordinator` |
+| start (spawn) | none → Open | the join sweep (§7) | the sweep | §7's decision answers `mint-provisional` | row (`active`, `placeholder` `unfiled`); events `started` and `coordinator` |
+| start (first run) | none → Open → Active | the coordinator | `POST /api/runs` (`openRun`) on a slug that does not exist yet | today's guards; the claimant owns no live real programme (`owns-another-programme`, naming it) | row (`active`); event `started`, actor the claimant, why "first run opened"; the claimant is bound (event `coordinator`); its unfiled placeholder, if any, is filed into the new programme (event `filed` on both rows) |
+| pick | (no change until the join) | operator | `POST /api/sessions {programme}`, `POST /api/projects/:project/workspaces {programme}` (not a child), the start sheet | real, not ended (`programme-ended`), not a placeholder (`programme-provisional`); coordinator line not `led` and no unexpired pick for another session (`programme-has-coordinator`, naming that session, which the console then opens instead of starting one); line not `unmeasured` (`coordinator-unmeasured`) | a `programme_picks` row; nothing on the programme until the join sweep binds the session (§7) |
+| dispatch | Open/Idle → Active | derived | `openRun`, `advance` | `openRun` refuses an ended (`plan-closed`, the existing code, its words now "the programme has ended"), paused (`programme-paused`), unknown (`programme-unknown`) or placeholder (`programme-provisional`) programme; a claimant that is not the bound coordinator: `claimed-by-another` (today's code, naming the coordinator) when a binding names someone else, measured absent included, and `not-your-programme` (the ledger doors' existing code) when the programme has no binding, so a free programme is taken first by a pick, a filing or a hand-over, never by a run (R11 rule 8) | nothing new: `run_events` records the run; an open end proposal is withdrawn in the same transaction (system, why "run <id> opened") |
 | run closes | Active → Idle | derived | `closeRun` | — | nothing new: `run_events` records the close; no programme write (D-51 deleted) |
 | pause | Open/Active/Idle → Paused | operator, Overlord | `POST /api/programmes/:slug/state {edge:'pause', why}` | not ended (`programme-ended`); not unknown | `state` `paused`; event with why; open runs keep running |
 | resume | Paused → live | operator, Overlord | same door, `edge:'resume'` | was paused (`not-paused`) | `state` `active`; event with why |
 | propose end | (no change) | the bound coordinator | `POST /api/programmes/:slug/end-proposal`, and `plan close` (§8) | caller is the bound coordinator (`not-coordinator`); not ended; no open run (`programme-runs-open`); no open proposal (`already-asked`); evidence given (`evidence-required`) | an `operator_items` decide row, `action:'end-programme'`; event `end-proposed` with outcome, evidence, item id |
-| confirm end | Open/Idle/Paused → Done or Abandoned | operator, Overlord | `POST /api/items/:id/act {programme}` on the proposal | proposal open; no open run (`programme-runs-open`, and the proposal stays open) | `state`, `planEnd`/`planEndWhy`/`planEndAt`; item closed; event `ended` with outcome, why, evidence, item id |
+| confirm end | Open/Idle/Paused → Done or Abandoned | operator, Overlord | `POST /api/items/:id/act {programme}` on the proposal | proposal open; no open run (`programme-runs-open`, and the proposal stays open) | `state`, `planEnd`/`planEndWhy`/`planEndAt`; the binding released (R11 rule 6); item closed; event `ended` with outcome, why, evidence, item id and the coordinator it released |
 | decline end | (no change) | operator, Overlord | `POST /api/items/:id/decline` | proposal open | item closed; system mail to the coordinator bound at that moment (none when there is none: the decline stays in the history); event `end-declined` with why |
 | withdraw proposal | (no change) | the bound coordinator | `POST /api/items/:id/withdraw` (the existing coordinator door) | proposal open | item closed; event `end-withdrawn` |
-| end (direct) | Open/Idle/Paused → Done or Abandoned; Active → Abandoned | operator, Overlord | `POST /api/programmes/:slug/state {edge:'end', outcome, why, abandonRuns?}` | why required; open runs refuse (`programme-runs-open`) unless `abandonRuns:true`, which ends them first through the abandon door's own decision on the coordination serialiser, and then the outcome is always Abandoned | as confirm, plus each abandoned run's own `run_events`; an open proposal is closed with the end |
+| end (direct) | Open/Idle/Paused → Done or Abandoned; Active → Abandoned | operator, Overlord | `POST /api/programmes/:slug/state {edge:'end', outcome, why, abandonRuns?}` | why required; open runs refuse (`programme-runs-open`) unless `abandonRuns:true`, which ends them first through the abandon door's own decision on the coordination serialiser, and then the outcome is always Abandoned | as confirm (the binding released), plus each abandoned run's own `run_events`; an open proposal is closed with the end |
 | archive end | as direct end with `abandonRuns`, outcome Abandoned | operator, Overlord (through its archive door, where it has one) | `POST /api/sessions/:id/archive {programme:'end'}` | today's archive guards | as direct end, why "archived with programme end" |
-| reopen | Done/Abandoned → live | operator, Overlord | `POST /api/programmes/:slug/state {edge:'reopen', why}` | was ended (`not-ended`) | `state` `active`; `planEnd` fields cleared; event `reopened` with why and the end it reverses |
+| reopen | Done/Abandoned → live | operator, Overlord | `POST /api/programmes/:slug/state {edge:'reopen', why}` | was ended (`not-ended`) | `state` `active`; `planEnd` fields cleared; no coordinator (it was released at the end); event `reopened` with why and the end it reverses |
 | repair | Unknown → `active`/`paused`/`done`/`abandoned` | operator, Overlord | `POST /api/programmes/:slug/state {edge:'repair', to, why}` | stored value is `unknown` or out of vocabulary (`not-unknown`); `done` and `abandoned` follow the end's guards | `state` (and `planEnd` fields for an end); event `repaired` with the unreadable value in `detail` |
-| hand over | (no change) | operator, Overlord; the reclaim door; `moveClaims` | `POST /api/programmes/:slug/coordinator {session, why}`; `POST /api/runs/:id/reclaim`; the archive and stop doors | not ended; the heir passes reclaim's heir rule; all through `CoordStore#reclaimProgram` (§3) | binding and open runs' `claimedBy` together; the heir joins; event `coordinator` with from, to, why; an open end proposal stays open and now names the heir |
-| file | placeholder → target | the placeholder's coordinator; operator or Overlord (re-file) | `POST /api/programmes/:slug/file`; `POST /api/programmes/:slug/refile` | placeholder `unfiled` (`not-provisional`); `{into}` names a live real programme; `{name, title}` takes a free slug | `placeholder` `filed`, `filedInto` the target, in one transaction; the session joins the target (and is bound there when its binding is empty or measured absent, otherwise it joins as a member, §7); event `filed` on both rows |
+| hand over | (no change) | operator, Overlord; the reclaim door; `moveClaims` | `POST /api/programmes/:slug/coordinator {session, why}`; `POST /api/runs/:id/reclaim`; the archive and stop doors | not ended; the heir passes reclaim's heir rule, whose new rung refuses an heir that owns another live real programme (`owns-another-programme`, naming it; an unfiled placeholder it owns is withdrawn instead); all through `CoordStore#reclaimProgram` (§3) | binding and open runs' `claimedBy` together; event `coordinator` with from, to, why; the previous coordinator, if live, now owns nothing and is shown as a coordinator with no programme (R11 rule 6); an open end proposal stays open and now names the heir |
+| file | placeholder → target | the placeholder's coordinator; operator or Overlord (re-file) | `POST /api/programmes/:slug/file`; `POST /api/programmes/:slug/refile` | placeholder `unfiled` (`not-provisional`); `{into}` names a live real programme; `{name, title}` takes a free slug; `{into}` a programme whose coordinator line is `unmeasured` is refused `coordinator-unmeasured` with nothing written | `{name, title}`: a new programme it owns, `started` and `coordinator` on it. `{into}` a programme with no coordinator, or one measured `no-coordinator`: the session becomes its coordinator (bound through `reclaimProgram`, which moves any open runs to it), event `coordinator` with why "filed from <placeholder>". Either way `placeholder` `filed` with `filedInto`, in one transaction, and event `filed` on both rows. `{into}` a programme with a live coordinator: answered 409 `programme-has-coordinator`, naming the coordinator, and in the same transaction the placeholder is `withdrawn` (why "its objective is led by <session>"); the answer's words tell the session to mail its work to that coordinator; it then owns nothing, and archiving it is the operator's or the Overlord's (R11 rule 6, never automatic) |
 | withdraw placeholder | `unfiled` → `withdrawn` | operator or Overlord (re-file door, `{withdraw:true, why}`); the sweep | as file | placeholder `unfiled` | `placeholder` `withdrawn`; event `withdrawn` with why; it is never ended, so it never counts as Abandoned |
 | coordinator exit | (no change) | system | the registry measure (§9) | bound incarnation measured `no-coordinator` on two consecutive passes | event `coordinator-gone`, once per incarnation; `coordinator-back` if the same incarnation reads `led` again |
 
 **What every event row holds** (`programme_events`): `id`, `program`, `at`, `edge`, `fromState`, `toState`,
 `actorKind` (`operator`, `overlord`, `coordinator`, `system`, `backfill`, `migration`), `actor` (a session id, the
-signed-in device, or `unmeasured`), `why`, and `detail` (JSON: evidence lines, item id, coordinator from and to, the
-placeholder or target slug, the migration rule, `flag-off` when sign-in was dark). The actor and why are never null;
+signed-in device, or `unmeasured`), `why`, `session` and `sessionUuid` (on a `coordinator` event, the incoming
+coordinator, null for a release; null on every other edge; indexed, because the join sweep asks them, §7), and `detail`
+(JSON: evidence lines, item id, coordinator from and to, the placeholder or target slug, the migration rule or
+conflict, `flag-off` when sign-in was dark). The actor and why are never null;
 an act done while sign-in is dark records actor `unmeasured` and `flag-off` in `detail`.
 
 ## 6. What the console shows at each state
@@ -212,7 +257,23 @@ The **coordinator line** on every row and page: "Led by <session>" (`led`), "No 
 coordinator** and **End** (`no-coordinator`), or "Coordinator unmeasured" (`unmeasured`, no actions offered on it).
 While sign-in is dark those two buttons cannot act; the line then says "sign-in needed to hand over or end", and the
 dark ways forward are the reclaim door (ungated, D-282) for a programme with open runs and, for one without, a session
-the operator starts with this pick or that opens a run there (the takeover in §5's dispatch row).
+the operator starts with this programme picked (R11 rule 3). A programme whose open runs are claimed by a session that
+does not own it (a migration conflict, §13) says so on its line: "Open runs held by <session>, which also holds runs in
+another programme: hand it over or split", with **Hand to coordinator**.
+
+Below the list, **Coordinators with no programme** (R11 rule 6): every live, settled coordinator whose incarnation owns
+no live programme and has been a coordinator before (handed over, its programme ended, its placeholder withdrawn, or
+released), each with why it has none and since when, and three acts: **Start a programme** (the start door naming it),
+**Hand it a programme** (the hand-over door from a programme's side) and **Archive** (the existing archive door). A
+coordinator that is a migration conflict's party is listed in that conflict, not here. Nothing on this list is
+archived or given a programme automatically.
+
+**Starting a session on a programme** (the create sheet and the start sheet): the picker shows each programme's
+coordinator line. Picking a programme that is `led` does not start a session: the route answers
+`programme-has-coordinator` naming the coordinator, and the console opens that coordinator's session instead, with
+"<programme> is led by <session>; opened it". Picking one with "No coordinator", or none, starts the session, and it
+becomes the coordinator when it is joined (§7). Picking an `unmeasured` one is refused with "could not tell whether
+<programme> has a coordinator; try again".
 
 ## 7. Joining at spawn (R1)
 
@@ -220,57 +281,68 @@ the operator starts with this pick or that opens a run there (the takeover in §
 child, not the Overlord, not an auditor, not a replay). A held or hibernated coordinator joins too; joining writes only
 server rows and acts on no session.
 
-**The decision** is L1, `server/src/coord/programmeJoin.ts#joinDecision(row, memberships, pick)`. Its inputs are
+**The decision** is L1, `server/src/coord/programmeJoin.ts#joinDecision(row, history, pick)`. Its inputs are
 measured by the sweep:
 
 - **A settled spawn**: the row's uuid is present, and the sweep has seen the same session id and uuid with no `.child`
   marker on two consecutive passes. `ccd ws-add` writes the registry row before `.child`, and that write is warn-only
   on failure, so a single pass cannot tell a dispatched worker from a coordinator. An unreadable uuid or marker
   answers `skip unmeasured`.
-- **Memberships**: the incarnation's (session id and uuid) rows in `programme_members`. A membership counts when its
-  programme has not ended and is not a `filed` or `withdrawn` placeholder.
+- **History**: whether this incarnation (session id and uuid) has ever been joined, which is: a programme's binding
+  names it now (by id alone while a migration-seeded uuid is null), or a `coordinator` event ever named it as the
+  incoming coordinator (`programme_events.session`, `sessionUuid`). And whether it is the `claimedBy` of an open run.
+- **The pick's programme**, re-measured at the join: its coordinator line, and whether it is still real and live.
 
-The answer: `skip <reason>` (not a coordinator, not settled, unmeasured); `already-joined` (a counting membership
-exists); `join-picked <slug>` (a pick exists and names a live real programme); `mint-provisional` (otherwise).
-Keying on the incarnation's counting memberships, not on the lead binding, means a hand-over never mints a
-placeholder for the session that handed over (it is still a member), a reused session id with a new uuid is a new
-session, and a live coordinator whose every programme has ended is offered a new one on the next pass.
+The answer: `skip <reason>` (not a coordinator, not settled, unmeasured, or it claims an open run while owning no
+programme: a migration conflict's party, §13, which the operator resolves); `already-joined` (it has ever been
+joined); `join-picked <slug>` (a pick exists and its programme is real, live and not `led` by anyone else);
+`pick-taken <slug>` (the pick's programme gained a live coordinator, or ended, since the pick); `mint-provisional`
+(otherwise). `skip` on an `unmeasured` pick line waits for the next pass.
+
+Keying on "this incarnation has never been joined", not on what it owns now, is what keeps the join once per
+incarnation (R9's one-time semantics): a coordinator that handed its programme over, whose programme ended, or whose
+placeholder was withdrawn is never minted a new one; it owns nothing and is listed as a coordinator with no programme
+(§6) for the operator or the Overlord. A reused session id with a new uuid is a new incarnation and is joined.
 
 **The act** is L4 and has one site, the join sweep. The create routes only record a pick:
 
 | Route | What changes |
 |---|---|
-| `POST /api/sessions` (`server.ts`) | optional `programme` in the body (additive); before the `CcdArgv` start, `pickInTx` records it under the session id the route is about to start |
-| `POST /api/projects/:project/workspaces` when not a child | the same field and record |
+| `POST /api/sessions` (`server.ts`) | optional `programme` in the body (additive); before the `CcdArgv` start, the route asks §5's pick guard and either refuses (`programme-has-coordinator` naming the coordinator, which the console opens; `coordinator-unmeasured`; `programme-ended`; `programme-provisional`) and starts nothing, or `pickInTx` records the pick under the session id the route is about to start |
+| `POST /api/projects/:project/workspaces` when not a child | the same field, guard and record |
 | The start-programme sheet | passes its picked slug in the body; the kickoff stays mail-only |
 | The join sweep | completes a pick, or mints, for every settled live row the decision answers; it is how `ccd start` by hand, `cc <wrapper> <project>` and a hand-run `ccd ws-add` are joined. It acts on live registry rows only, so exited sessions are left alone |
-| `ccd supervise` resume, a swap, a roll | nothing: the session id and uuid are kept, so the membership and the binding are kept |
+| `ccd supervise` resume, a swap, a roll | nothing: the session id and uuid are kept, so the binding is kept |
 | Dispatched children | nothing: a child is a worker or reviewer, never a coordinator |
 
 No ccd verb is added; the server writes the rows. The sweep extends the existing lane that re-measures the registry
 for the coordination store (the plan names it after measuring; a second poller needs a recorded reason). A pick
 expires after one hour unjoined; an expired pick is dropped with no event.
 
-**Joining a programme someone else leads.** A programme has one lead (clause 8 stands), and any number of members (R2:
-nothing ties one session to one programme, and nothing ties a programme to one session). A session that joins a
-programme whose binding is empty or measured `no-coordinator` becomes its lead; one that joins a programme led by a
-live coordinator becomes a member, and its join mail says who leads, that runs there go through the lead or a
-hand-over, and that it may file a new programme only for a new objective.
+**Joining means becoming the coordinator (R11).** There is no other kind of join. `join-picked` binds the session to
+the picked programme through `reclaimProgram`, so any open runs move to it with the binding (event `coordinator`, why
+"picked at start", plus "previous coordinator measured absent" when the binding named one). Clause 8's one coordinator per programme stands, and now holds
+in both directions.
 
-**Minting.** With no pick, the sweep mints a placeholder `p-<base36 ms>` (never the session id), stored `active`,
-`placeholder` `unfiled`, and binds the session to it, so it shows Open and Unfiled. Every join queues one system mail
-naming the programme, its lead, and whether it is a placeholder. When a session with an unfiled placeholder joins a
-real programme by any path (a pick completed late, filing, a first `openRun` elsewhere), the placeholder is withdrawn
-in the same transaction (why "joined <slug>").
+**Minting.** On `mint-provisional`, the sweep mints a placeholder `p-<base36 ms>` (never the session id), stored
+`active`, `placeholder` `unfiled`, and binds the session to it, so it shows Open and Unfiled. On `pick-taken`, it mints
+the same way, and the join mail adds "<programme> is now led by <session>: mail your work to it, or file this
+placeholder into another objective"; the operator, who picked, sees the same on the session. Every join queues one
+system mail naming the programme and whether it is a placeholder. When a session with an unfiled placeholder takes a
+real programme by any way in R11 rule 3, the placeholder is filed into it (a programme it started) or withdrawn (one it
+was given), in the same transaction.
 
-**A child found late.** When a `.child` marker appears for a session the sweep joined, the sweep removes its
-memberships and binding (event `coordinator` to none, why "the session is a dispatched child") and withdraws its
+**A child found late.** When a `.child` marker appears for a session the sweep joined, the sweep releases its binding
+through `reclaimProgram` (event `coordinator` to none, why "the session is a dispatched child") and withdraws its
 unfiled placeholder.
 
-**The start card** (`ccd/session-hook.sh#_hook_role_card`) becomes unconditional for a coordinator: "You belong to a
-programme. Read it with `ccrc-api GET /api/sessions/<id>/programme`, then its goals and definition of done. If it is
-provisional, file it on your first turn: into the business objective your work serves, or as a new programme for a new
-objective." The card's existing suppressions are unchanged: card-off, a child, a held session (the hold card prints
+**The start card** (`ccd/session-hook.sh#_hook_role_card`) becomes unconditional for a coordinator: "You are the
+coordinator of one programme, and the only one. Read it with `ccrc-api GET /api/sessions/<id>/programme`, then its
+goals and definition of done. If it is provisional, file it on your first turn: into the business objective your work
+serves, or as a new programme for a new objective. If that objective already has a coordinator, the filing is refused:
+mail your work to that coordinator." For a coordinator with no programme, the read answers `none` with why (handed
+over, ended, withdrawn, released), and the card and the mail that tells it say: "You own no programme now. The operator
+or the Overlord will give you one or archive this session; open no runs until then." The card's existing suppressions are unchanged: card-off, a child, a held session (the hold card prints
 instead) and a start whose anchor slot printed (the anchor replaces the role card). For those starts the join mail
 carries the same sentence, so no coordinator depends on the card alone.
 
@@ -280,8 +352,9 @@ ledger item doors, `/remaining`, `/spec`, `/calls`, `/modifications`, the portfo
 and hand-over doors. A census test lists every slug-keyed write door and fails on one that does not ask it. So a
 placeholder holds no run, plan, item, statement, pin or rank, and is never deleted: filing marks it `filed` with
 `filedInto`, its events stay (the store is append-only), and the target's history reads its own events and those of
-every placeholder filed into it. `{into: slug}` joins an existing objective; `{name, title}` mints a new one
-(`started`, actor the coordinator, why "new objective filed from <placeholder>").
+every placeholder filed into it. `{into: slug}` takes an existing objective that has no live coordinator; into one that
+has, it is refused and the placeholder withdrawn, as §5's file row says. `{name, title}` mints a new one (`started`,
+actor the coordinator, why "new objective filed from <placeholder>"), which the session owns.
 
 ## 8. Ending (R4)
 
@@ -305,8 +378,9 @@ every placeholder filed into it. `{into: slug}` joins an existing objective; `{n
   Confirm re-checks "no open run" and refuses while one is open, leaving the item open.
 - **Who decides.** The operator always; the Overlord when it is at the `full` rung (§10). Below `full`, or with the
   Overlord off, a proposal waits on the operator alone, and the item says so.
-- **Confirm and decline** are the existing item doors. Confirm runs `decideInTx` (`ended`); decline mails through the
-  existing system mail.
+- **Confirm and decline** are the existing item doors. Confirm runs `decideInTx` (`ended`), which releases the binding
+  (R11 rule 6): the coordinator that proposed the end owns nothing afterwards and is told so by system mail; decline
+  mails through the existing system mail.
 - **Direct ends** by the operator or the Overlord take the state door (§5); an end over open runs names
   `abandonRuns:true` and is always Abandoned. Nothing ends a programme as a side effect of anything else.
 - **The archive door's `{programme:'end'}`** calls `decideInTx` explicitly (Abandoned, "archived with programme end")
@@ -320,13 +394,21 @@ every placeholder filed into it. `{into: slug}` joins an existing objective; `{n
 
 ## 9. The coordinator binding (R7)
 
-- **One fact.** `programs.coordinator` with `coordinatorUuid` names the programme's lead; `claimsProgramme(session,
-  slug)` reads it and compares the caller's uuid as `claimedByUuid` is compared today (D-5298), so a reused session id
-  owns nothing. `openRun` binds the claimant when the binding is empty, and refuses another claimant with today's
-  `claimed-by-another` (the code, and every skill text and `nestFleet.ts` word that names it, stay).
-- **Moves.** Only `CoordStore#reclaimProgram` moves it (§3), from the hand-over door, the reclaim door and
-  `moveClaims`. A release (`moveClaims`'s release choice) clears the binding with the claims, so the next coordinator's
-  `openRun` binds itself.
+- **One fact, both directions (R11).** `programs.coordinator` with `coordinatorUuid` names the programme's coordinator,
+  and the same binding is the coordinator's one programme: `programmeOf(session, uuid)` reads it from the other side
+  (at most one live row, by the partial unique index). `claimsProgramme(session, slug)` reads the binding and compares
+  the caller's attributed uuid as the attribution gate compares `claimedByUuid` today (D-5298), so a reused session id
+  owns nothing; a migration-seeded binding with a null uuid compares the id alone until the registry lane stamps the
+  uuid it measures (§13). `openRun` never binds, except the first run of a programme that does not exist yet (R11
+  rule 3), and refuses a claimant that is not the coordinator: `claimed-by-another` (the code, and every skill text and
+  `nestFleet.ts` word that names it, stay) when the binding names another, `not-your-programme` when there is none.
+- **Moves.** Only `CoordStore#reclaimProgram` moves it (§3), from the hand-over door, the reclaim door, `moveClaims`,
+  and a pick or filing that takes over a programme measured `no-coordinator` (§7). Reclaim's heir rule gains one rung:
+  an heir that owns another live real programme is refused `owns-another-programme` (its unfiled placeholder is
+  withdrawn instead). A release (`moveClaims`'s release choice) clears the binding with the claims, and an end clears
+  the binding (§4); the next coordinator then takes the programme by a pick, a filing or a hand-over, never by opening a
+  run. Every move and release that leaves a live session owning nothing tells it by one system mail ("You own no
+  programme now", §7), and it is listed as a coordinator with no programme (§6).
 - **Exit.** A coordinator that exits writes nothing to the programme's state. The coordinator line derives
   `no-coordinator` (§3). The registry lane writes one `coordinator-gone` event per bound incarnation, after two
   consecutive passes read it `no-coordinator` (a swap or roll reads `unmeasured`, never absent), and `coordinator-back`
@@ -345,7 +427,9 @@ every placeholder filed into it. `{into: slug}` joins an existing objective; `{n
   sign-in is the operator's: no decision-model row is added.
 - Rows in `server/src/coord/overlordDoors.ts` for every programme edge the operator has: start, pause, resume, end
   (direct), confirm, decline, reopen, repair, hand over, and re-file or withdraw a placeholder. Each records
-  `actorKind:'overlord'`, the designated session and its why.
+  `actorKind:'overlord'`, the designated session and its why. So the Overlord can resolve a coordinator with no
+  programme as the operator can (start a programme naming it, or hand it one); archiving it goes through the Overlord's
+  archive door where it has one. R11's rules bind the Overlord's doors exactly as the operator's.
 - **No acknowledgement queue** (R3 as amended 2026-11-24: maximum autonomy, no unnecessary admin burden). An Overlord
   programme act is not written to the D-8126 call record and waits for no Seen. It is recorded in the programme's
   history (§11) with its actor and why, exactly as the operator's own acts are, and the history is where the operator
@@ -358,8 +442,8 @@ every placeholder filed into it. `{into: slug}` joins an existing objective; `{n
 
 `GET /api/programmes/:slug/history` (session-gated; the box token for the programme's own coordinator) merges
 `programme_events` (the programme's own, and every placeholder's filed into it) with the programme's runs and their
-`run_events` into one timeline, oldest first: start (when, by whom, from which route or placeholder), every join,
-pause, resume, hand-over, filing, coordinator exit and return, end proposal, withdrawal, decline, end, reopen and repair
+`run_events` into one timeline, oldest first: start (when, by whom, from which route or placeholder), every coordinator change
+(who led it from when, and why it changed), pause, resume, hand-over, filing, coordinator exit and return, end proposal, withdrawal, decline, end, reopen and repair
 (who and why), and each wave (opened, dispatched, closed, by whom). The Programme page
 (`pwa/src/ledgers/ProgrammeScreen.tsx`) renders it as a History section. Rows written by the migration or by the boot
 re-measure (§15) say so.
@@ -381,15 +465,29 @@ re-measure (§15) say so.
 **The migration** (the next `coord.db` slot when the build PR lands; 123 is the newest on `main` today) refuses to
 start rather than open empty, as every migration does, names no programme, and skips the reserved `linear-sync` row:
 
-1. Adds `coordinator`, `coordinatorUuid`, `coordinatorSince`, `placeholder`, `filedInto`, and the tables
-   `programme_events` (index on `(program, at)`), `programme_members` and `programme_picks`.
+1. Adds `coordinator`, `coordinatorUuid`, `coordinatorSince`, `placeholder`, `filedInto`, the partial unique index on
+   `(coordinator, coordinatorUuid)`, and the tables `programme_events` (indexes on `(program, at)` and
+   `(session, sessionUuid)`) and `programme_picks`.
 2. Writes one `started` event per row: `actorKind` `migration`, actor `unmeasured`, at `createdAt`, why "who started it
    was not recorded before this build".
-3. Seeds the binding and one membership only from an open run's `claimedBy` and `claimedByUuid`, with one
-   `coordinator` event. A programme with no open run gets no binding (a terminal run's claimant is usually long gone,
-   and binding it would only produce a burst of exits stamped with the wrong time). When the first registry pass then
-   reads a seeded binding absent, its `coordinator-gone` says "absent when first measured after the migration; when it
-   left was not recorded".
+3. Seeds a binding only for an **unambiguous pair** (R11): a programme that step 4's rule leaves live (the step runs
+   after it, so an ended programme binds nothing) whose open runs are all claimed by one
+   session, where that session claims no open run in any other programme. The binding takes that `claimedBy`, a null
+   `coordinatorUuid` (`runs` does not store the uuid, §2), and one `coordinator` event. The migration never invents an
+   owner: a session claiming open runs in two or more programmes binds to none of them, and a programme whose open runs
+   two or more sessions claim binds to none; each such programme gets a `migrated` event naming the conflict
+   (`session-in-several` or `programme-several-claimants`, with the claimants in `detail`). Conflicts are listed by the
+   backfill door for the operator to resolve (below). A programme with no open run gets no binding (a terminal run's
+   claimant is usually long gone, and binding it would only produce a burst of exits stamped with the wrong time). The
+   registry lane's first pass stamps each seeded binding's uuid from the registry row it reads, through
+   `bindCoordinatorInTx` (event `coordinator`, why "incarnation first measured after the migration"); when it reads a
+   seeded binding absent, its `coordinator-gone` says "absent when first measured after the migration; when it left was
+   not recorded", and the uuid stays null.
+
+   **Measured on 2026-11-24** (the live server's `coord.db`, read-only; §2): 13 programmes hold open runs; 11 are
+   unambiguous pairs and bind; **1 conflict** remains, one session claiming open runs in 2 programmes
+   (`session-in-several`); no programme has two claimants. So 2 programmes start with no binding and their open runs
+   still claimed, and the operator decides which of them that session keeps.
 4. Rewrites the stored state by one rule, recorded per changed row as a `migrated` event naming the rule:
    - a set `planEnd` is a decision: `state` becomes `planEnd`'s own value (`done` or `abandoned`);
    - otherwise, `done` or `abandoned` over one or more open runs becomes `active`: D-51's side effect, contradicted by
@@ -414,10 +512,22 @@ once the console ships). The file is a list of `{slug, to, why}` and is never co
 - The answer lists each entry's outcome (`unchanged`, `applied`, `mismatch`, `refused:<code>`), the counts per shown
   state over the listed rows (what the operator checks against R9's 56), and separately: `unlisted` (every real
   programme the file does not name, with its shown state, which the operator then decides or leaves), `placeholders`
-  (unfiled ones minted by the join sweep, by count), and the reserved row's presence. Nothing outside the file changes.
+  (unfiled ones minted by the join sweep, by count), `conflicts`, and the reserved row's presence. Nothing outside the
+  file changes.
+- `conflicts` is derived at each read, never stored: every live real programme whose open runs are claimed by a
+  session other than its binding (or with no binding), grouped as `session-in-several` (one session, its programmes
+  and each one's open-run count) or `programme-several-claimants` (one programme, its claimants). The operator resolves
+  each with the hand-over door: hand one programme to the session that holds its runs (it owns nothing yet, so the heir
+  rule admits it), and the others to another coordinator (one it starts with that programme picked, which takes the
+  runs over through `reclaimProgram`, or an existing one with no programme). A conflict leaves the list the moment its
+  runs' claimants equal the binding. Until then the session keeps running its open runs (dispatch and advance check
+  the run's own `claimedBy`, as today), and `openRun` refuses it a new run in either programme (`not-your-programme`).
+  The decisions file does not resolve conflicts: who owns a programme is a hand-over, recorded as one.
 
-The join sweep's first pass after deploy is R9's one-time pass over live sessions: it is one-time because a joined
-incarnation is never joined again, and its events carry why "first pass after the lifecycle build". Exited sessions
+The join sweep's first pass after deploy is R9's one-time pass over live sessions: it is one-time because an
+incarnation that has ever been joined is never joined again (§7), and its events carry why "first pass after the
+lifecycle build". The sessions of the 11 seeded bindings have been joined (their binding names them), so they are not
+minted a placeholder; a conflict's session is skipped until the operator resolves it. Exited sessions
 are left alone.
 
 ## 14. Doors
@@ -448,19 +558,30 @@ PR that adds a door edits that sentence in the same commit.
 
 ## 15. Wire and rollback
 
-- `ProgrammeRow` gains `lifecycle`, `coordinatorLine`, `placeholder` and `pausedOpenRuns`, each additive and each read
-  by one PWA reader (`pwa/src/screens/programmeLifecycleWords.ts`, L1). An older PWA ignores them.
+- `ProgrammeRow` gains `lifecycle`, `coordinatorLine`, `placeholder`, `pausedOpenRuns` and `claimConflict` (the
+  derived conflict, §13), each additive and each read by one PWA reader (`pwa/src/screens/programmeLifecycleWords.ts`,
+  L1). The programmes read gains `coordinatorsWithoutProgramme` (§6), additive too. An older PWA ignores them.
+- The refusal vocabulary (`shared/refusal.ts`) gains `owns-another-programme`, `programme-has-coordinator` and
+  `coordinator-unmeasured`, additive; `not-your-programme` and `claimed-by-another` are existing codes, now also
+  answered by `openRun` and the create routes. An older client shows an unknown code as a generic refusal.
 - `ProgramState` keeps its five values (`active`, `paused`, `done`, `abandoned`, `unknown`), so an older build reads the
   column.
 - **Rolled back**, an older build reads the newer `coord.db` as-is and migrates nothing (`sqliteFile.ts`'s rule: a
   rollback may refuse to migrate, never to read). It sees the 8 rows `active`, so its `soleActiveCoordinator` answers
   "ambiguous" more often (mail with no run id waits), and its D-51 retires programmes again at their next close,
-  writing `done` with no event. It ignores the new tables and columns.
+  writing `done` with no event. It ignores the new tables and columns, so it neither reads nor moves the binding: its
+  `openRun` lets one session claim runs in a second programme again, and its reclaim moves `claimedBy` without the
+  binding.
 - **Rolled forward**, the migration does not run again, so the new build re-measures at boot: every row with no
   `started` event gets one (as migration step 2), and every row whose stored state differs from the `toState` of its
   newest programme event is put through migration step 4's rule, with a `migrated` event "written by an older build
   (rollback); re-measured at start". So an end written by a rolled-back D-51 is never read as a decision without a
-  record, and one over open runs is undone by the same rule as the migration's.
+  record, and one over open runs is undone by the same rule as the migration's. The binding is re-measured the same
+  way: an ended programme's binding is released, a live programme whose open runs one session claims and whose binding
+  differs is put through migration step 3's rule (an unambiguous pair, whose session also owns no other live
+programme, binds, with a `coordinator` event "written by
+  an older build (rollback); re-measured at start"; anything else is left as a conflict the backfill door lists), and
+  nothing is ever bound by guess.
 - `FLEET_PROTO` is not bumped.
 
 ## 16. Rejected
@@ -475,6 +596,15 @@ PR that adds a door edits that sentence in the same commit.
 - **Storing Idle or Active**: a second writer inside `openRun` and `closeRun`, the D-51 drift again.
 - **A membership run kind for the coordinator**: open forever, so no programme would read Idle, and every run reader
   (the cap, open-run counts, the stall watch, reclaim, the close lanes) would need an exclusion.
+- **Members** (`programme_members`: one lead and any number of member sessions per programme): rejected by the
+  operator's 1:1 ruling, R11.
+- **`openRun` binding a free programme, or taking over one whose coordinator is absent**: a run would change who owns a
+  programme, and a coordinator could end up claiming runs in two programmes; R11 rule 8 keeps ownership on the binding
+  doors (pick, filing, hand-over, reclaim).
+- **Minting a placeholder for a coordinator that lost its programme**: it would hand a session the operator may want
+  archived a new objective nobody asked for; R11 rule 6 lists it for the operator or the Overlord instead.
+- **The migration picking an owner for a conflict** (the lowest run id, or the newest claim): a guess about who leads,
+  written as a fact; conflicts are listed and resolved by a recorded hand-over.
 - **Writing the binding beside `runs.claimedBy`**: two writers of who leads; the binding moves only through
   `reclaimProgram`.
 - **Renaming a placeholder slug in place** (design A): a primary-key change across every table that names a slug.
