@@ -25,8 +25,8 @@ beyond `git fetch`.
 
 ## The rule (decided)
 
-**A new deviation takes the next number: the highest `D-N` defined on `origin/main`, plus one, and never below
-`D-10000`.** Several deviations in one change take consecutive numbers from there. The author assigns them; nobody
+**A new deviation takes the next number: the highest `D-N` defined on `origin/main` and on the author's branch,
+plus one, and never below `D-10000`.** Several deviations in one change take consecutive numbers from there. The author assigns them; nobody
 issues them.
 
 - **Where a deviation is defined:** a `D-N` entry in any file under `docs/superpowers/plans/`,
@@ -54,10 +54,12 @@ the check makes that loud and cheap.
 ## What changes
 
 1. **The helper.** One command prints the next free numbers, so nobody counts by hand:
-   `cd server && npm run next-deviation -- [count]` (a tsx script, `server/scripts/next-deviation.ts`, because the guards' reader is TypeScript) reads `origin/main`'s definitions with the same `definitionsIn` the
-   guards use and prints `max(highest + 1, 10000)` onward. No network, no token. (`ccrc-api ledger next` may wrap it later.)
+   `cd server && npm run next-deviation -- [count]` (a tsx script, `server/scripts/next-deviation.ts`, because the guards' reader is TypeScript) reads the definitions on `origin/main` (or `--ref <ref>`, for a fork's `upstream/main`) and on `HEAD`, so a
+   stacked or unmerged branch never gets a number it already took, with the same `definitionsIn` the guards use and prints `max(highest + 1, 10000)` onward. No network, no token. (`ccrc-api ledger next` may wrap it later.)
 2. **The guard.** For numbers of 10000 and above, the cross-tree check reads `plans/`, `programs/` and `specs/`, and
-   reds one number defined twice in one file as well as in two files. Below 10000 the check stays exactly as it is:
+   reds one number defined with two different subjects, in one file or in two (council cycle 1: identical subjects
+   are one deviation, so a spec mirroring its plan or a file renamed on the branch is not a collision, and a path on
+   both trees is judged by the branch's copy). Below 10000 the check stays exactly as it is:
    measured on 2026-11-23, `main` holds 44 allocator-era numbers defined twice in one file and 43 restated across a
    plan and a spec or note, all landed and harmless, so widening the old range would red `main` on day one. Each
    widening ships with a fixture that goes red without it. The grandfathered sets are untouched (they may still only
