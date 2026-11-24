@@ -285,6 +285,17 @@ describe('the live row fits a phone column with its flags (review 3450 F4)', () 
               past: Math.round(f.getBoundingClientRect().right - right),
             })),
             wait: box.querySelector('.tool-activity-wait')?.textContent ?? null,
+            control: (() => {
+              const c = box.querySelector<HTMLElement>('.tool-activity-wait .tool-activity-answer');
+              if (c === null) return null;
+              const r = c.getBoundingClientRect();
+              return {
+                height: Math.round(r.height),
+                past: Math.round(r.right - scroller.getBoundingClientRect().right),
+                cut: c.scrollWidth - c.clientWidth,
+                tapMin: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')),
+              };
+            })(),
             scrollerSide: scroller.scrollWidth - scroller.clientWidth,
             pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
@@ -299,6 +310,34 @@ describe('the live row fits a phone column with its flags (review 3450 F4)', () 
           expect(f.past, `flag "${f.text}" is past the row's edge`).toBeLessThanOrEqual(0);
         }
         expect(m.wait, 'the live wait line is not drawn').toContain('waiting for you');
+        // The wait's one control (review 3478 A3): there, inside the column, uncut, at least the tap minimum tall.
+        expect(m.control, 'the wait line has no control').not.toBeNull();
+        expect(m.control!.past, 'the control passes the column').toBeLessThanOrEqual(0);
+        expect(m.control!.cut, 'the control\'s word is cut').toBeLessThanOrEqual(0);
+        expect(m.control!.height, 'the control is under the tap minimum').toBeGreaterThanOrEqual(Math.floor(m.control!.tapMin));
+        // Reached by the keyboard from the row before it, with a visible focus and its name. At a phone's width the
+        // approval's sheet is up over the transcript, which the app hides from assistive technology behind it; the
+        // transcript's control is what the reader uses once they close the sheet, so it is measured then.
+        await page.keyboard.press('Escape');
+        await expect.poll(() => page.locator('[role="dialog"]').count(), 'the sheet did not close').toBe(0);
+        await page.locator('.tool-activity-row').last().focus();
+        await page.keyboard.press('Tab');
+        const focus = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          const style = el === null ? null : getComputedStyle(el);
+          return el === null ? null : {
+            isControl: el.matches('.tool-activity-wait .tool-activity-answer'),
+            visible: el.matches(':focus-visible'),
+            outline: style!.outlineStyle === 'none' ? 0 : Number.parseFloat(style!.outlineWidth),
+            hidden: el.closest('[aria-hidden="true"], [inert]') !== null,
+          };
+        });
+        expect(focus?.isControl, 'Tab from the row does not reach the wait control').toBe(true);
+        expect(focus?.visible, 'the control\'s focus is not visible').toBe(true);
+        expect(focus?.outline, 'the control draws no focus ring').toBeGreaterThan(0);
+        expect(focus?.hidden, 'the control is hidden from assistive technology').toBe(false);
+        expect(await page.locator('.tool-activity-wait').last().getByRole('button', { name: 'Answer', exact: true }).count(),
+          'the control has no accessible name "Answer"').toBe(1);
         expect(m.scrollerSide, 'the transcript has no sideways scroll').toBe(0);
         expect(m.pageSide, 'the page has no sideways scroll').toBe(0);
         expect(errors).toEqual([]);
@@ -322,11 +361,13 @@ describe('a live row that changes size keeps the reader where they were (review 
           const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
           return Math.round(rows[rows.length - 1]!.getBoundingClientRect().height);
         });
-        const more = (n: number, failLast: boolean): object[] => {
-          const out: object[] = [{ kind: 'tool_result', ts: TS, toolId: running, text: 'ok', isError: false }];
+        /** `n` calls arriving after the running one; with `settle`, the running one's result first. */
+        const more = (n: number, failLast: boolean, settle = true): object[] => {
+          const out: object[] = settle ? [{ kind: 'tool_result', ts: TS, toolId: running, text: 'ok', isError: false }] : [];
           for (let i = 0; i < n; i += 1) call(out, 'Grep', { pattern: `p${k}` }, failLast && i === n - 1);
           return out;
         };
+        const height = async (): Promise<number> => page.evaluate(() => document.querySelector('.chat-scroller')!.scrollHeight);
         let offset = 2;
         // 1. At the foot, the live row opened by the reader: calls arrive in it, and it changes size.
         await scrollTo(page, 'bottom');
@@ -335,7 +376,9 @@ describe('a live row that changes size keeps the reader where they were (review 
         await scrollTo(page, 'bottom');
         const atFootOpen = await position(page);
         const openBefore = await lastRowHeight();
-        send({ type: 'events', uuid: 'u-1', events: more(4, false), offset: offset++ });
+        // The running call keeps running, so the arriving calls add rows in both skins (review 3478 F7: a Refined row
+        // whose running call settled joined its neighbours' run group and SHRANK, which a clamp at the foot hides).
+        send({ type: 'events', uuid: 'u-1', events: more(4, false, false), offset: offset++ });
         await page.waitForTimeout(1000);
         const afterOpen = await position(page);
         const openGrew = (await lastRowHeight()) - openBefore;
@@ -351,24 +394,153 @@ describe('a live row that changes size keeps the reader where they were (review 
         await page.waitForTimeout(1000);
         const afterClosed = await position(page);
         const closedGrew = (await lastRowHeight()) - closedBefore;
-        // 3. Higher up, the same two growths: the row the reader is reading does not move.
+        // 3. Higher up, with the live row still mounted below (review 3478 F6): it grows, and the row the reader is reading
+        // does not move.
         await page.locator('.tool-activity-row').last().click(); // open again
-        await page.waitForTimeout(300);
-        await scrollTo(page, 'middle');
+        await page.waitForTimeout(700);
+        await scrollTo(page, 'bottom');
+        await page.evaluate(() => { document.querySelector<HTMLElement>('.chat-scroller')!.scrollTop -= 500; });
+        await page.waitForTimeout(600);
         const midBefore = await position(page);
-        send({ type: 'events', uuid: 'u-1', events: more(3, true), offset: offset++ });
+        const midHeight = await height();
+        send({ type: 'events', uuid: 'u-1', events: more(3, true, false), offset: offset++ });
         await page.waitForTimeout(1000);
         const midAfter = await position(page);
-        console.log(`F5 ${named(view)}: ${JSON.stringify({ atFootOpen, afterOpen, openGrew, atFootClosed, afterClosed, closedGrew, midBefore, midAfter })}`);
-        // Refined's opened row SHRINKS here (the answered call joins its neighbours' run group); Instrument's grows.
-        expect(openGrew, 'the opened live row did not change size: the case measures nothing').not.toBe(0);
+        const midGrew = (await height()) - midHeight;
+        console.log(`F5 ${named(view)}: ${JSON.stringify({ atFootOpen, afterOpen, openGrew, atFootClosed, afterClosed, closedGrew, midBefore, midAfter, midGrew })}`);
+        expect(openGrew, 'the opened live row did not grow: the case measures nothing').toBeGreaterThan(0);
         expect(closedGrew, 'no failure card surfaced under the closed row: the case measures nothing').toBeGreaterThan(0);
         expect(atFootOpen.fromFoot, 'not at the foot before the opened row grew').toBeLessThanOrEqual(2);
         expect(afterOpen.fromFoot, 'the opened live row grew and the reader left the foot').toBeLessThanOrEqual(2);
         expect(atFootClosed.fromFoot, 'not at the foot before the failure surfaced').toBeLessThanOrEqual(2);
         expect(afterClosed.fromFoot, 'a failure surfaced and the reader left the foot').toBeLessThanOrEqual(2);
+        expect(midBefore.fromFoot, 'the reader is not above the foot').toBeGreaterThan(100);
+        expect(midGrew, 'nothing changed size while the reader was higher up: the case measures nothing').not.toBe(0);
+        expect(midAfter.fromFoot, 'the reader higher up was taken to the foot').toBeGreaterThan(100);
         expect(midAfter.text, 'the row in view changed').toBe(midBefore.text);
         expect(Math.abs(midAfter.at - midBefore.at), 'the row in view moved').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+// ---- review 3478: a tap is the reader's, and a row above the reader that grows -------------------------------------
+/** An answered question: its card stands alone in both skins, a few lines tall. */
+const answered = (into: object[], question: string): void => {
+  k += 1;
+  into.push({
+    kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: `t${k}`, name: 'AskUserQuestion',
+    input: JSON.stringify({ questions: [{ question, header: 'Pick', options: [{ label: 'Ink' }, { label: 'Paper' }] }] }),
+  });
+  into.push({ kind: 'tool_result', ts: TS, toolId: `t${k}`, text: `User has answered your questions: "${question}"="Ink".`, isError: false });
+};
+/** A last turn whose one stretch, opened, is taller than any viewport: answered questions between reads. */
+const TALL_TURN = (): object[] => {
+  const events: object[] = [...HISTORY];
+  events.push({ kind: 'user', uuid: 'q-tall', ts: TS, text: 'Ask me everything.' });
+  events.push({ kind: 'assistant', uuid: 'a-tall', ts: TS, text: 'A few questions first.' });
+  for (let i = 0; i < 14; i += 1) {
+    answered(events, `Which way for part ${i} of the change, the first or the second?`);
+    call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
+  }
+  return events;
+};
+
+describe('opening a row at the foot leaves the header the reader tapped where it was (review 3478 F5)', () => {
+  for (const view of GROWTH) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await openSession(page, ctx, TALL_TURN());
+        await scrollTo(page, 'bottom');
+        const header = async () => page.evaluate(() => {
+          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity-row')];
+          const row = rows[rows.length - 1]!;
+          return {
+            at: Math.round(row.getBoundingClientRect().top - s.getBoundingClientRect().top),
+            box: Math.round(row.closest('.tool-activity')!.getBoundingClientRect().height),
+            view: s.clientHeight,
+            fromFoot: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight),
+          };
+        });
+        const before = await header();
+        await page.locator('.tool-activity-row').last().click();
+        await page.waitForTimeout(1200);
+        const after = await header();
+        console.log(`F5 tap ${named(view)}: ${JSON.stringify({ before, after })}`);
+        expect(before.fromFoot, 'not at the foot before the tap').toBeLessThanOrEqual(2);
+        expect(after.box, 'the opened stretch is not taller than the view: the case measures nothing').toBeGreaterThan(after.view);
+        expect(Math.abs(after.at - before.at), 'the header the reader tapped moved').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+describe('a row above the reader that changes size moves nothing they read (review 3478 F6)', () => {
+  for (const view of GROWTH) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        // The current turn: a stretch whose Bash is still running, prose, then a tall stretch the reader opens and reads.
+        const events: object[] = [...HISTORY];
+        events.push({ kind: 'user', uuid: 'q-above', ts: TS, text: 'Check both.' });
+        call(events, 'Read', { file_path: '/w/project-a/src/slow.ts' });
+        k += 1;
+        const slow = `t${k}`;
+        events.push({ kind: 'tool_use', uuid: `u${k}`, ts: TS, toolId: slow, name: 'Bash', input: JSON.stringify({ command: 'npm run slow' }) });
+        events.push({ kind: 'assistant', uuid: 'a-above', ts: TS, text: 'While that runs, a few questions.' });
+        for (let i = 0; i < 10; i += 1) {
+          answered(events, `Which way for part ${i} of the change, the first or the second?`);
+          call(events, 'Read', { file_path: `/w/project-a/src/part${i}.ts` });
+        }
+        events.push({ kind: 'assistant', uuid: 'b-above', ts: TS, text: 'Questions done.' });
+        const send = await openSession(page, ctx, events);
+        await scrollTo(page, 'bottom');
+        await page.locator('.tool-activity-row').last().click();
+        await page.waitForTimeout(800);
+        // Read inside the opened stretch, the running stretch out of view above.
+        await page.evaluate(() => {
+          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+          const tall = rows[rows.length - 1]!;
+          s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -100 }));
+          s.scrollTop += tall.getBoundingClientRect().top - s.getBoundingClientRect().top + 200;
+        });
+        await page.waitForTimeout(600);
+        const reading = async () => page.evaluate(() => {
+          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const top = s.getBoundingClientRect().top;
+          const card = [...s.querySelectorAll<HTMLElement>('.tool-activity-body .tool-ask, .tool-activity-body .toolcard, .tool-activity-body .ref-tool-group')]
+            .find((el) => el.getBoundingClientRect().top >= top);
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity')];
+          const above = rows[rows.length - 2];
+          return {
+            text: card?.textContent ?? '',
+            at: Math.round((card?.getBoundingClientRect().top ?? 0) - top),
+            fromFoot: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight),
+            aboveBottom: above === undefined ? null : Math.round(above.getBoundingClientRect().bottom - top),
+            aboveHeight: above === undefined ? null : Math.round(above.getBoundingClientRect().height),
+          };
+        });
+        const before = await reading();
+        // The running call fails: its card surfaces under its closed row, above the reader.
+        send({ type: 'events', uuid: 'u-1', events: [{ kind: 'tool_result', ts: TS, toolId: slow, text: 'exit 1', isError: true }], offset: 2 });
+        await page.waitForTimeout(1000);
+        const after = await reading();
+        console.log(`F6 above ${named(view)}: ${JSON.stringify({ before, after })}`);
+        expect(before.text, 'no card in view inside the opened stretch').not.toBe('');
+        expect(before.aboveBottom, 'the growing row is not above the reader').not.toBeNull();
+        expect(before.aboveBottom!, 'the growing row is not above the reader').toBeLessThanOrEqual(0);
+        expect(after.aboveHeight! - before.aboveHeight!, 'the row above did not grow: the case measures nothing').toBeGreaterThan(0);
+        expect(after.text, 'the card in view changed').toBe(before.text);
+        expect(Math.abs(after.at - before.at), 'the card in view moved').toBeLessThanOrEqual(1);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

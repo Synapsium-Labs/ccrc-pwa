@@ -18,7 +18,7 @@ import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import type { SkinSet } from '../src/skins/types';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { HEIGHT_BUCKETS } from '../src/session/itemHeight';
-import { activityWords, foldToolActivity, type LiveWait, type ToolActivityItem } from '../src/session/toolActivity';
+import { activityWords, foldToolActivity, liveWaitOf, waitKey, type LiveWait, type ToolActivityItem } from '../src/session/toolActivity';
 import { groupToolRun } from '../src/session/toolSummary';
 
 const seen = vi.hoisted(() => ({
@@ -645,6 +645,46 @@ describe.each(SETS)('%s draws one live control, open or closed (review 3478 F1-F
     // The current turn's call still runs.
     const live = now!.querySelector<HTMLElement>('.toolcard')!;
     expect(live.querySelector('.tool-dot--run')).not.toBeNull();
+  });
+});
+
+describe('the live wait the fold reads (review 3478 F2)', () => {
+  it('only Claude\'s own question carries words a call is matched by; every other kind names no call', () => {
+    const q = { question: '  Ship it now? ', header: 'Ship', options: [{ label: 'Yes' }] };
+    expect(liveWaitOf({ kind: 'none' })).toEqual({ kind: 'none' });
+    expect(liveWaitOf({ kind: 'structured', questions: [q], from: 'hook' })).toEqual({ kind: 'question', questions: ['Ship it now?'] });
+    expect(liveWaitOf({ kind: 'approval', approval: { tool: 'Bash', summary: 'npm publish' } })).toEqual({ kind: 'other' });
+    expect(liveWaitOf({ kind: 'menu', title: 'Pick', options: [] })).toEqual({ kind: 'other' });
+    expect(liveWaitOf({ kind: 'ask-unreadable' })).toEqual({ kind: 'other' });
+    expect(liveWaitOf({ kind: 'terminal-only' })).toEqual({ kind: 'other' });
+    expect(liveWaitOf({ kind: 'review', rows: null as never, summary: [] })).toEqual({ kind: 'other' });
+  });
+
+  it('keys a wait by what it says, so an equal wait folds nothing again and other words fold anew', () => {
+    expect(waitKey(asking('A?'))).toBe(waitKey(asking('A?')));
+    expect(waitKey(asking('A?'))).not.toBe(waitKey(asking('B?')));
+    expect(waitKey(asking('A?', 'B?'))).not.toBe(waitKey(asking('A?')));
+    expect(new Set([waitKey(NONE), waitKey(OTHER), waitKey(asking())]).size).toBe(3);
+  });
+
+  it('matches every question of a call, in order', () => {
+    const t = transcript();
+    t.user('Go.');
+    t.events.push({
+      kind: 'tool_use', uuid: 'm', ts: TS, toolId: 'tm', name: 'AskUserQuestion',
+      input: JSON.stringify({ questions: [{ question: 'A?', options: [] }, { question: 'B?', options: [] }] }),
+    });
+    const fold = (wait: LiveWait) => activities(foldToolActivity(buildChatItems(t.events, [], true), { runs: 'none', wait, busy: true }))[0]!;
+    expect(fold(asking('A?', 'B?')).attention.map((a) => a.kind)).toEqual(['question']);
+    expect(fold(asking('A?')).waiting, 'one of its two questions').toBe(true);
+    expect(fold(asking('B?', 'A?')).waiting, 'its questions out of order').toBe(true);
+    // A call asking fewer questions than the wait does is not the one asked.
+    const one = transcript();
+    one.user('Go.');
+    one.ask('A?');
+    const [single] = activities(foldToolActivity(buildChatItems(one.events, [], true), { runs: 'none', wait: asking('A?', 'B?'), busy: true }));
+    expect(single!.waiting, 'a call that asks only the first of the questions').toBe(true);
+    expect(single!.attention).toEqual([]);
   });
 });
 

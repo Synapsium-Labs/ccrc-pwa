@@ -27,7 +27,7 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { followsFoot } from './footFollow';
+import { heightMove, holdShift } from './footFollow';
 import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
 import { groupToolRun } from './toolSummary';
@@ -809,20 +809,30 @@ function ChatScroller({
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());
 
-  // A READER AT THE NEWEST TURN FOLLOWS A ROW THAT GROWS THERE, AND NOT ONE THEY OPENED (review 3450 F5, review 3478
-  // F5). `followsFoot` decides (why, and when not, is said there); this measures and acts. A tap on a disclosure in the
-  // list (anything with `aria-expanded`: a tool-activity row, a run group, a card) is timed here, so the change it makes
-  // is the reader's and the header they tapped stays put.
+  // A HEIGHT CHANGE NO NEW ITEM EXPLAINS (review 3450 F5, review 3478 F5 and F6). `heightMove` decides (why, and when
+  // which, is said there); this measures and acts. A tap on a disclosure in the list (anything with `aria-expanded`: a
+  // tool-activity row, a run group, a card) is timed here, so the change it makes is the reader's. The item at the top
+  // of the view is read on every scroll, so a `hold` puts it back where the reader last saw it.
   const scroller = useRef<HTMLElement | null>(null);
   const lastTap = useRef<number | null>(null);
+  const anchor = useRef<{ el: Element; top: number } | null>(null);
+  const readAnchor = useCallback((): void => {
+    const el = scroller.current;
+    if (el === null) return;
+    const top = el.getBoundingClientRect().top;
+    const item = [...el.querySelectorAll('[data-index]')].find((it) => it.getBoundingClientRect().bottom > top);
+    anchor.current = item === undefined ? null : { el: item, top: item.getBoundingClientRect().top };
+  }, []);
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
   const onScroller = useCallback((el: HTMLElement | Window | null): void => {
     scroller.current?.removeEventListener('click', onTap, true);
+    scroller.current?.removeEventListener('scroll', readAnchor);
     scroller.current = el instanceof HTMLElement ? el : null;
     scroller.current?.addEventListener('click', onTap, true);
-  }, [onTap]);
+    scroller.current?.addEventListener('scroll', readAnchor, { passive: true });
+  }, [onTap, readAnchor]);
   const lastHeight = useRef<number | null>(null);
   const onHeight = useCallback((height: number): void => {
     const before = lastHeight.current;
@@ -830,12 +840,25 @@ function ChatScroller({
     const el = scroller.current;
     if (el === null) return;
     const tap = lastTap.current;
-    if (!followsFoot({
+    const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
       sinceTap: tap === null ? null : performance.now() - tap,
-    })) return;
-    virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-  }, [band]);
+    });
+    if (move === 'foot') {
+      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      return;
+    }
+    // A frame later, after virtuoso's own correction (which scrolls, and so re-reads the anchor): a `hold` puts back
+    // only what it left, so nothing is corrected twice. A `none` re-reads it, so the tap's change is the new place.
+    requestAnimationFrame(() => {
+      const a = anchor.current;
+      if (move === 'hold' && a !== null && a.el.isConnected) {
+        const shift = holdShift(a.top, a.el.getBoundingClientRect().top);
+        if (shift !== 0) el.scrollTop += shift;
+      }
+      readAnchor();
+    });
+  }, [band, readAnchor]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
