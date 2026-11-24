@@ -401,7 +401,9 @@ describe('the desk doors, characterized', () => {
   const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('header.shell-accounts .ins-door:not(.ins-home)')];
   // `/settings` is the bare path: Settings is the current door there as on `/settings/updates` (desk-nav Task A review 1646 A3;
   // desktop-polish Task C14, D-8110).
-  const PATHS = ['/', '/runs', '/settings', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
+  // A Docs page at a desk is a Docs tab, which draws no bar (desktop polish wave 174, `docs-own-tab.test.tsx`), so the walk has
+  // no Docs page; the Docs door is never current at a desk now, since the console never draws a Docs page there.
+  const PATHS = ['/', '/runs', '/settings', '/settings/updates', `/s/${S.id}`, '/waiting/1'] as const;
 
   /** `S` and two more sessions waiting on the operator, the two bound to open runs, and one open item, so Waiting on you,
    *  Inbox and Runs all count. */
@@ -426,7 +428,8 @@ describe('the desk doors, characterized', () => {
     for (const at of PATHS) {
       mount(at, countedFleet());
       expect(deskDoors().map((d) => d.getAttribute('aria-label')), at).toEqual([
-        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs', 'Settings',
+        // The Docs door is a link that opens a Docs tab at a desk, and its name says so (desktop polish wave 174).
+        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs, opens in a new tab', 'Settings',
       ]);
       cleanup();
     }
@@ -435,7 +438,7 @@ describe('the desk doors, characterized', () => {
   it('which door is current', () => {
     stubAt(1280);
     const want: Record<(typeof PATHS)[number], string | null> = {
-      '/': null, '/runs': 'go-runs', '/settings': 'go-settings', '/settings/updates': 'go-settings', '/docs/project-a/specs/a.md': 'go-docs',
+      '/': null, '/runs': 'go-runs', '/settings': 'go-settings', '/settings/updates': 'go-settings',
       [`/s/${S.id}`]: null, '/waiting/1': 'go-waiting',
     };
     for (const at of PATHS) {
@@ -573,7 +576,8 @@ describe('the desk top bar (desk-nav Task A)', () => {
 
   it('it is current nowhere else', () => {
     stubAt(1280);
-    for (const at of ['/runs', '/mail', '/settings', '/settings/updates', '/docs', '/waiting', '/waiting/1', '/archive', '/digest', '/nope']) {
+    // `/docs` left the list: at a desk it is a Docs tab, with no bar and no wordmark door (desktop polish wave 174).
+    for (const at of ['/runs', '/mail', '/settings', '/settings/updates', '/waiting', '/waiting/1', '/archive', '/digest', '/nope']) {
       mount(at);
       expect(homeDoor().getAttribute('aria-current'), at).toBeNull();
       cleanup();
@@ -764,10 +768,13 @@ describe('the desk top bar (desk-nav Task A)', () => {
         digestChunk.open();
       }
       await settled();
-      const current = topBar().querySelectorAll('[aria-current="page"]');
+      // A Docs page at a desk is a Docs tab (desktop polish wave 174): no bar, and its title says where you are.
+      const docsTab = document.querySelector('.app-shell[data-tab="docs"]') !== null;
+      const current = docsTab ? [] : [...topBar().querySelectorAll('[aria-current="page"]')];
       const detail = document.querySelector('main.shell-detail')!;
       const heading = detail.querySelector('h1, .chat-title');
-      const says = current.length === 1 || (heading !== null && (heading.textContent ?? '').trim() !== '');
+      const says = current.length === 1 || (heading !== null && (heading.textContent ?? '').trim() !== '')
+        || (docsTab && document.title.endsWith('Docs · ccrc'));
       expect(current.length, `${at}: at most one current door`).toBeLessThanOrEqual(1);
       expect(says, `${at}: a current door or the page's own heading`).toBe(true);
       cleanup();

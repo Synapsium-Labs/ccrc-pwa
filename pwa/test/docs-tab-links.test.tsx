@@ -3,6 +3,7 @@
 // the tab; below the desk width it is the same anchor with no target, and a plain click moves within the app. A link that is
 // not to a document is unchanged at every width. Controls that are not anchors go through `followLink`. Neutral names only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../shared/api';
@@ -47,7 +48,7 @@ const here = (): string => location.pathname + location.search;
 const DOC = '/docs/project-a/specs/x.md';
 const SPEC_PATH = 'docs/superpowers/specs/x.md';
 
-let open: ReturnType<typeof vi.spyOn<Window, 'open'>>;
+let open: MockInstance<typeof window.open>;
 
 beforeEach(() => {
   history.replaceState(null, '', '/');

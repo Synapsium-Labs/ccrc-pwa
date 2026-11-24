@@ -76,7 +76,8 @@ let sockets: string[] = [];
 class RecordingSocket extends EventTarget {
   static readonly CONNECTING = 0; static readonly OPEN = 1; static readonly CLOSING = 2; static readonly CLOSED = 3;
   readyState = 0;
-  constructor(readonly url: string) { super(); sockets.push(url); }
+  readonly url: string;
+  constructor(url: string) { super(); this.url = url; sockets.push(url); }
   send(): void {}
   close(): void { this.readyState = 3; }
 }
