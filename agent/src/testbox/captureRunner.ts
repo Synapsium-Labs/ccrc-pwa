@@ -2,29 +2,34 @@
 // it acts on what `capture.ts` decides and `shared/claudeBuildCapture.ts#replayCapture` judges. One capture: a scratch
 // directory, the seeded config, the stand-in model, the build started through the launcher, the drive (each step's text
 // typed, the recording polled until the step's events are in or its deadline passes), then the replay of the recording.
+// Every bound it keeps is one of the timing contract's (`capture.ts#CAPTURE_TIMINGS`), handed in by the entry point
+// (`main.ts#captureRunnerFor`), and `capture.ts#captureWorstCaseMs` is its worst case.
 //
 // A build that started but stalled FAILS, its output naming what was never recorded (spec §2.4): the lane must not keep
 // a broken contract queued for ever. A capture that could not START (the stand-in or the launcher threw), and the box faults
-// below, answer no verdict, so the lane tries the build again. The scratch directory is the runner's own and is removed at
-// the end.
+// below, answer no verdict, so the lane tries the build again. The scratch directory and the tmux directory are the
+// runner's own and are removed at the end.
 //
 // THE VERDICT CUT (review 3226, F1 and F2): a fault of the box is not a fault of the build. A `type` that throws while the
 // build is gone is a build that exited mid-drive, a FAIL naming the events never recorded; while the build lives it is the
 // launcher failing, and answers no verdict. A drive that stops unfinished with nothing recorded at all and no build alive
 // is a box fault too (the build died before it could report), no verdict. A live build that records nothing still fails.
+// The build's life is one of three words (review 3623): `alive`, `gone`, or `unknown` when the launcher cannot tell, and
+// `unknown` is never read as `gone`: wherever the cut would turn on it, the capture answers no verdict.
 //
-// THE CLEANUP (F10): after `stop`, the runner waits, bounded, until the build is gone before it removes the directory, so
-// nothing is still writing in it; the removal's own failure is logged and never replaces the answer.
+// THE CLEANUP (F10): after `stop`, the runner waits, bounded, until the build is gone before it removes the directories,
+// so nothing is still writing in them; the build's life is read from its own processes, never from its terminal server
+// (review 3623). A removal's own failure is logged and never replaces the answer.
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readCaptureRecords, replayCapture, type CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../../shared/claudeBuildTrust.js';
 import {
-  CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, stepDone,
+  CAPTURE_SOCKET, CAPTURE_STEPS, CAPTURE_TMUX_SESSION, captureClaudeJson, captureEnv, capturePaths, captureSettings, sq, stepDone,
 } from './capture.js';
 import type { StandIn } from './captureStub.js';
 import { tmuxName, tmuxTarget } from '../../../shared/tmux-target.js';
-import { boundedExec } from './exec.js';
+import { boundedExec, type Exec } from './exec.js';
 
 /** What a launcher is handed: the build, where it starts, its WHOLE environment, and its own tmux server's names. */
 export interface CaptureLaunchSpec {
@@ -35,11 +40,15 @@ export interface CaptureLaunchSpec {
   readonly session: string;
 }
 
+/** Whether a started build lives: `unknown` when the launcher cannot tell, which is never read as `gone`. */
+export type BuildLife = 'alive' | 'gone' | 'unknown';
+
 /** A started build, as the drive sees it. */
 export interface LaunchedBuild {
   /** Types `text`, then Enter. */
   type(text: string): Promise<void>;
-  alive(): Promise<boolean>;
+  /** The build's life, read from the build's own processes, never from its terminal server (review 3623). */
+  life(): Promise<BuildLife>;
   stop(): Promise<void>;
 }
 
@@ -51,10 +60,13 @@ export interface CaptureRun { readonly result: BuildCaptureResult | null; readon
 
 export interface CaptureRunnerDeps {
   readonly root: string;
+  /** The service's temporary directory, under which the capture's tmux directory goes (`capture.ts#captureTmuxDir`). */
+  readonly tmuxBase: string;
   /** The command that runs the recorder, as argv (`capture.ts#captureSettings`): the node binary and the recorder's
    *  absolute path (`captureRecord.ts#recorderPath`). */
   readonly recorder: readonly string[];
-  readonly toolsPath: string | null;
+  /** The box's tools directories, read when each capture starts (the tool sync may move them between captures). */
+  readonly toolsPath: () => string | null;
   readonly launcher: CaptureLauncher;
   readonly standIn: () => Promise<StandIn>;
   /** How long one step may take to raise its events. */
@@ -62,22 +74,28 @@ export interface CaptureRunnerDeps {
   /** How long the build may take to exit after the last step. */
   readonly exitTimeoutMs: number;
   readonly pollMs: number;
-  /** How long to wait, after `stop`, for the build to be gone before the directory is removed (default 5000). */
-  readonly stopWaitMs?: number;
+  /** How long to wait, after `stop`, for the build to be gone before the directory is removed. */
+  readonly stopWaitMs: number;
+  /** How long to wait for the stand-in model to close; a hung close is left behind, never waited on. */
+  readonly standInCloseMs: number;
   /** Removes the scratch directory (default: `rmSync`, recursive and forced); a test makes it throw. */
   readonly remove?: (dir: string) => void;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** The clock every deadline is measured on (default `Date.now`); the deadline test runs the runner on a virtual one. */
+  readonly now?: () => number;
 }
 
 const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-const STOP_WAIT_MS = 5000;
 const removeDir = (dir: string): void => { rmSync(dir, { recursive: true, force: true }); };
 
-/** Whether the build lives; a launcher that cannot say reads as gone. */
-async function aliveOf(l: LaunchedBuild): Promise<boolean> {
-  try { return await l.alive(); } catch { return false; }
+/** The build's life; a launcher that throws cannot tell, so `unknown`, never `gone` (review 3623). */
+async function lifeOf(l: LaunchedBuild): Promise<BuildLife> {
+  try { return await l.life(); } catch { return 'unknown'; }
 }
+
+/** The no-verdict answer when the launcher cannot tell whether the build lives at a point the verdict turns on. */
+const UNKNOWN_LIFE = 'the launcher cannot tell whether the build lives: a fault of the box, not a verdict';
 
 export class CaptureRunner {
   constructor(private readonly d: CaptureRunnerDeps) {}
@@ -88,8 +106,9 @@ export class CaptureRunner {
   }
 
   async run(captureId: string, build: string): Promise<CaptureRun> {
-    const p = capturePaths(this.d.root, captureId, build);
+    const p = capturePaths(this.d.root, captureId, build, this.d.tmuxBase);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }));
+    const now = this.d.now ?? Date.now;
     let standIn: StandIn | null = null;
     let launched: LaunchedBuild | null = null;
     try {
@@ -102,7 +121,7 @@ export class CaptureRunner {
       try {
         standIn = await this.d.standIn();
         launched = await this.d.launcher.start({
-          binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
+          binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath()), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
         });
       } catch (e) {
         return { result: null, detail: `the capture could not start: ${why(e)}` };
@@ -114,32 +133,40 @@ export class CaptureRunner {
           try {
             await launched.type(step.type);
           } catch (e) {
-            // A build that is gone exited mid-drive (a fail, below); a live one means the launcher could not type.
-            if (await aliveOf(launched)) return { result: null, detail: `the launcher could not type into the build: ${why(e)}` };
+            // A build that is gone exited mid-drive (a fail, below); a live one means the launcher could not type; one the
+            // launcher cannot read is never taken for gone.
+            const life = await lifeOf(launched);
+            if (life === 'alive') return { result: null, detail: `the launcher could not type into the build: ${why(e)}` };
+            if (life === 'unknown') return { result: null, detail: `${UNKNOWN_LIFE} (the launcher could not type: ${why(e)})` };
             finished = false;
             break drive;
           }
         }
-        const deadline = Date.now() + this.d.stepTimeoutMs;
+        const deadline = now() + this.d.stepTimeoutMs;
         for (;;) {
           const hooks = this.recorded(p.recording).records.slice(before).flatMap((r) => (r.kind === 'hook' ? [r.event] : []));
           if (stepDone(step, hooks)) break;
-          if (Date.now() >= deadline) { finished = false; break drive; }
+          if (now() >= deadline) { finished = false; break drive; }
           await sleep(this.d.pollMs);
         }
         // The next step counts the events recorded after this one's.
         before = this.recorded(p.recording).records.length;
       }
       if (finished) {
-        const deadline = Date.now() + this.d.exitTimeoutMs;
-        while (await launched.alive()) {
-          if (Date.now() >= deadline) { finished = false; break; }
+        const deadline = now() + this.d.exitTimeoutMs;
+        for (;;) {
+          const life = await lifeOf(launched);
+          if (life === 'gone') break;
+          if (life === 'unknown') return { result: null, detail: UNKNOWN_LIFE };
+          if (now() >= deadline) { finished = false; break; }
           await sleep(this.d.pollMs);
         }
       }
       const { records, unreadable } = this.recorded(p.recording);
-      if (!finished && records.length === 0 && unreadable === 0 && !(await aliveOf(launched))) {
-        return { result: null, detail: 'the build exited before it recorded anything: a fault of the box, not a verdict' };
+      if (!finished && records.length === 0 && unreadable === 0) {
+        const life = await lifeOf(launched);
+        if (life === 'gone') return { result: null, detail: 'the build exited before it recorded anything: a fault of the box, not a verdict' };
+        if (life === 'unknown') return { result: null, detail: UNKNOWN_LIFE };
       }
       return { result: replayCapture({ records, unreadable, cdDir, finished }, build), detail: null };
     } catch (e) {
@@ -147,34 +174,63 @@ export class CaptureRunner {
     } finally {
       if (launched !== null) {
         await launched.stop().catch(() => undefined);
-        // Nothing may still write in the directory when it goes: wait, bounded, for the build to be gone.
-        const until = Date.now() + (this.d.stopWaitMs ?? STOP_WAIT_MS);
-        while (await aliveOf(launched) && Date.now() < until) await sleep(this.d.pollMs);
+        // Nothing may still write in the directory when it goes: wait, bounded, for the build's processes to be gone.
+        const until = now() + this.d.stopWaitMs;
+        while (await lifeOf(launched) !== 'gone' && now() < until) await sleep(this.d.pollMs);
       }
-      if (standIn !== null) await standIn.close().catch(() => undefined);
-      try { (this.d.remove ?? removeDir)(p.dir); } catch (e) { console.warn(`ccrc-testbox: capture directory not removed: ${why(e)}`); }
+      if (standIn !== null) {
+        const s = standIn;
+        await Promise.race([s.close().catch(() => undefined), sleep(this.d.standInCloseMs)]);
+      }
+      for (const dir of [p.dir, p.tmux]) {
+        try { (this.d.remove ?? removeDir)(dir); } catch (e) { console.warn(`ccrc-testbox: capture directory not removed: ${why(e)}`); }
+      }
     }
   }
 }
 
+/** What the production launcher acts through, for the tests: the bounded spawner and the signal call. */
+export interface TmuxLauncherSeams {
+  readonly spawner?: (env: Readonly<Record<string, string>>, boundMs: number) => Exec;
+  /** `process.kill`; a negative pid names a process group. */
+  readonly signal?: (pid: number, sig: NodeJS.Signals | 0) => void;
+}
+
+/** The life of a process group, from a probe with signal 0: `ESRCH` is gone, `EPERM` is a group that exists, and any
+ *  other failure cannot tell. */
+export function groupLife(signal: (pid: number, sig: 0) => void, pgid: number): BuildLife {
+  try { signal(-pgid, 0); return 'alive'; } catch (e) {
+    const code = (e as NodeJS.ErrnoException | null)?.code;
+    return code === 'ESRCH' ? 'gone' : code === 'EPERM' ? 'alive' : 'unknown';
+  }
+}
+
 /** The production launcher: the build in its own tmux server (`-L <socket>`, `TMUX_TMPDIR` from the spec's environment, never
- *  the fleet's), every call through the bounded spawner with the spec's environment as the WHOLE child environment. */
-export function tmuxLauncher(tmux: string, boundMs = 15_000): CaptureLauncher {
+ *  the fleet's), every call through the bounded spawner with the spec's environment as the WHOLE child environment, each
+ *  within `boundMs` (the timing contract's `tmuxCallMs`). The build is started by `exec` of its path as one quoted shell
+ *  word, so the pane's process IS the build, and tmux makes it the leader of a process group of its own; the creation
+ *  prints that process, and the build's life is read from its group (review 3623), never from the terminal server. */
+export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncherSeams = {}): CaptureLauncher {
+  const signal = seams.signal ?? ((pid: number, sig: NodeJS.Signals | 0) => { process.kill(pid, sig); });
   return {
     async start(spec) {
-      const exec = boundedExec(Object.fromEntries(spec.env), boundMs);
+      const exec = (seams.spawner ?? boundedExec)(Object.fromEntries(spec.env), boundMs);
       const base = ['-L', spec.socket];
-      const call = async (args: readonly string[]): Promise<{ readonly status: number; readonly stderr: string }> => {
+      const call = async (args: readonly string[]): Promise<{ readonly status: number; readonly stdout: string; readonly stderr: string }> => {
         const r = await exec(tmux, [...base, ...args]);
-        return { status: r.killed ? 124 : r.status, stderr: r.stderr };
+        return { status: r.killed ? 124 : r.status, stdout: r.stdout, stderr: r.stderr };
       };
       // The session is created and addressed in ccrc's one spelling (`shared/tmux-target.ts`): its name, then the anchored
       // target, so no `-t` can prefix-match another session even on this private server.
-      const made = await call(['-f', '/dev/null', 'new-session', '-d', '-s', tmuxName(spec.session), '-x', '200', '-y', '50', '-c', spec.cwd, spec.binary]);
-      if (made.status !== 0) {
+      const made = await call([
+        '-f', '/dev/null', 'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', '200', '-y', '50',
+        '-c', spec.cwd, `exec ${sq(spec.binary)}`,
+      ]);
+      const pid = made.status === 0 && /^[1-9][0-9]*$/.test(made.stdout.trim()) ? Number(made.stdout.trim()) : null;
+      if (pid === null || pid <= 1) {
         // No half-started private server is left behind.
         await call(['kill-server']).catch(() => undefined);
-        throw new Error(`tmux new-session exited ${made.status}: ${made.stderr.trim()}`);
+        throw new Error(made.status !== 0 ? `tmux new-session exited ${made.status}: ${made.stderr.trim()}` : 'tmux new-session named no process for the build');
       }
       let stopped = false;
       return {
@@ -184,8 +240,14 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000): CaptureLauncher {
           const e = await call(['send-keys', '-t', tmuxTarget(spec.session), 'Enter']);
           if (e.status !== 0) throw new Error(`tmux send-keys exited ${e.status}`);
         },
-        alive: async () => (await call(['has-session', '-t', tmuxTarget(spec.session)])).status === 0,
-        stop: async () => { if (stopped) return; stopped = true; await call(['kill-server']).catch(() => undefined); },
+        life: async () => groupLife(signal, pid),
+        stop: async () => {
+          if (stopped) return;
+          stopped = true;
+          await call(['kill-server']).catch(() => undefined);
+          // The server's end hangs the pane up; the build's group is also told to end, in case it does not take a hangup.
+          try { signal(-pid, 'SIGTERM'); } catch { /* already gone, or not ours to tell: the stop wait reads its life */ }
+        },
       };
     },
   };

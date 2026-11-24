@@ -12,7 +12,7 @@
 // once the service has bound its address: the release it runs from and its process id, which the box's updater reads
 // as its form of "the new release answers", with no token and no network. Neither is a frame (D-8912). A stop removes
 // both files here; the unit's `RuntimeDirectory=` removes the directory at every stop, a takeover's exit included.
-import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
@@ -24,8 +24,12 @@ import { readTestboxFrame } from '../../../shared/testbox.js';
 import { startedAsProgram } from './entry.js';
 import { BOX_PATHS, encodeReady, READY_FILE, type BoxPaths } from './boxFiles.js';
 import { boxFs, type BoxFs } from './boxFs.js';
-import { captureDirsRoot, staleCaptureDirs } from './capture.js';
-import { CaptureDesk } from './captureDesk.js';
+import {
+  CAPTURE_TIMINGS, captureBuildsDir, captureDirsRoot, buildsToPrune, captureSocketFits, staleCaptureDirs, type BuildFileFacts, type CaptureTimings,
+} from './capture.js';
+import { CaptureDesk, type CaptureRunnerLike } from './captureDesk.js';
+import { CaptureRunner, tmuxLauncher, type CaptureLauncher, type TmuxLauncherSeams } from './captureRunner.js';
+import { startStandIn, type StandIn } from './captureStub.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
 import { attachDrainer, Drainer, drainerOf } from './drainer.js';
@@ -178,6 +182,8 @@ export interface ServiceSeams {
   readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs']; readonly probeRunner?: ProbeRunner;
   /** D-8907: where the drain request and the service's runtime directory are, and the drain's clock. */
   readonly box?: BoxPaths & { readonly now?: () => number };
+  /** The capture desk's home, temporary directory and runner seams (spec 2026-11-22 PR 3b). */
+  readonly capture?: Pick<CaptureDeskOpts, 'home' | 'tmuxBase' | 'uid' | 'seams'>;
 }
 
 /** How often the service looks for a drain request (D-8907: the request is a file, so the service polls for it). */
@@ -208,12 +214,92 @@ export function probeDeskFor(cfg: TestboxConfig, runner: ProbeRunner | null, hom
   });
 }
 
-/** The build capture desk (spec 2026-11-22): the role and the fleet directories as the probe desk has them. The runner is
- *  wired in PR 3 of the spec, so until then every capture is refused `no-runner`. */
-export function captureDeskFor(cfg: TestboxConfig, home: string = os.homedir()): CaptureDesk {
+/** What a test may put in place of the capture's own (the service never passes any): the clock, the sleep and the
+ *  launcher's spawner and signal call, so the deadline test runs the composed runner and the real launcher on a virtual
+ *  clock; or the whole launcher. */
+export interface CaptureSeams {
+  readonly now?: () => number;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly tmux?: TmuxLauncherSeams;
+  readonly launcher?: CaptureLauncher;
+  readonly standIn?: () => Promise<StandIn>;
+}
+
+/** The compiled recorder, beside this file in the release (`agent/dist/agent/src/testbox/captureRecord.js`, where
+ *  `testbox-capture-compiled.test.ts` finds it). Named, never imported: the recorder is an entry point of its own, run as a
+ *  hook's process (`testbox-imports.test.ts`). */
+export const compiledRecorder = (): string => fileURLToPath(new URL('./captureRecord.js', import.meta.url));
+
+/** The capture runner (spec 2026-11-22 §2.3; gate G1): every bound it keeps from the one timing contract `t`, the launcher's
+ *  per-call bound included; the build's tmux server is the box's `tmux`, found on the capture's own `PATH`; the recorder
+ *  is the compiled one beside this file, run by this process's node. */
+export function captureRunnerFor(root: string, tmuxBase: string, toolsPath: () => string | null, t: CaptureTimings = CAPTURE_TIMINGS, seams: CaptureSeams = {}): CaptureRunner {
+  return new CaptureRunner({
+    root, tmuxBase, recorder: [process.execPath, compiledRecorder()], toolsPath,
+    launcher: seams.launcher ?? tmuxLauncher('tmux', t.tmuxCallMs, seams.tmux),
+    standIn: seams.standIn ?? (() => startStandIn()),
+    stepTimeoutMs: t.stepMs, exitTimeoutMs: t.exitMs, pollMs: t.pollMs, stopWaitMs: t.stopWaitMs, standInCloseMs: t.standInCloseMs,
+    ...(seams.now === undefined ? {} : { now: seams.now }), ...(seams.sleep === undefined ? {} : { sleep: seams.sleep }),
+  });
+}
+
+/** What the desk reads of a build's file (L3): its own kind through `lstat`, never a link's target, its hard-link count and
+ *  its real path; `null` when any of it cannot be read (a dangling link among them). */
+export function buildFileFacts(file: string): BuildFileFacts | null {
+  try {
+    const st = lstatSync(file);
+    return { regular: st.isFile(), link: st.isSymbolicLink(), links: st.nlink, real: realpathSync(file) };
+  } catch {
+    return null;
+  }
+}
+
+/** The builds store's prune (L5's act, `capture.ts#buildsToPrune` decides): each build past the newest kept, never one in
+ *  `inUse`, removed in its own try. An absent store is nothing to do. Answers the names it removed. */
+export function pruneBuilds(root: string, inUse: readonly string[], remove: (file: string) => void = (f) => rmSync(f, { force: true })): string[] {
+  const dir = captureBuildsDir(root);
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  const removed: string[] = [];
+  for (const name of buildsToPrune(names, inUse)) {
+    try { remove(path.join(dir, name)); removed.push(name); } catch (e) { console.warn(`ccrc-testbox: build ${name} not pruned: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+  return removed;
+}
+
+export interface CaptureDeskOpts {
+  /** The box's tools directories, read when each capture starts. */
+  readonly toolsPath?: () => string | null;
+  /** Whether the box admits work (the tool sync's `admitting`, gate G2). */
+  readonly admitting?: () => boolean;
+  readonly home?: string;
+  /** The service's temporary directory (default `os.tmpdir()`, `/tmp` private to the unit). */
+  readonly tmuxBase?: string;
+  readonly uid?: number;
+  readonly seams?: CaptureSeams;
+}
+
+/** The build capture desk (spec 2026-11-22), with its runner wired (PR 3b): the role and the fleet directories as the probe
+ *  desk has them, one timing contract for the runner, the launcher and the desk's late check, the box's admissions, and the
+ *  builds store's prune. A service whose temporary directory is too long for the capture's tmux socket wires no runner, so
+ *  every capture is refused `no-runner` (nothing sent is counted). */
+export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): CaptureDesk {
+  const tmuxBase = o.tmuxBase ?? os.tmpdir();
+  const uid = o.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
+  const fits = captureSocketFits(tmuxBase, uid);
+  if (!fits) console.warn(`ccrc-testbox: a capture's tmux socket would not fit under ${tmuxBase}; captures are refused no-runner`);
+  return captureDeskWith(cfg, fits ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), CAPTURE_TIMINGS, o.seams) : null, tmuxBase, o);
+}
+
+/** The desk around `runner`, as `captureDeskFor` composes it: the late check on the same `CAPTURE_TIMINGS` the runner was
+ *  built from (gate G1), the box's admissions (G2), the builds store's prune. */
+export function captureDeskWith(cfg: TestboxConfig, runner: CaptureRunnerLike | null, tmuxBase: string, o: CaptureDeskOpts = {}): CaptureDesk {
+  const home = o.home ?? os.homedir();
   return new CaptureDesk({
-    role: probeRole(cfg.lines), runner: null, root: cfg.root, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf,
-    buildPresent: (file) => { try { return statSync(file).isFile(); } catch { return false; } },
+    role: probeRole(cfg.lines), runner,
+    root: cfg.root, tmuxBase, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, buildFacts: buildFileFacts, timings: CAPTURE_TIMINGS,
+    ...(o.admitting === undefined ? {} : { admitting: o.admitting }), ...(o.seams?.now === undefined ? {} : { now: o.seams.now }),
+    prune: (inUse) => { pruneBuilds(cfg.root, inUse); },
   });
 }
 
@@ -262,7 +348,10 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
       settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths, optional) => runTreeFiles(git, m, id, paths, optional)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
-    probes: probeDeskFor(cfg, seams.probeRunner ?? null), captures: captureDeskFor(cfg),
+    probes: probeDeskFor(cfg, seams.probeRunner ?? null),
+    // Spec 2026-11-22 PR 3b: the capture's tools are the current set's when each capture starts, and it starts only while
+    // the box admits work (gate G2).
+    captures: captureDeskFor(cfg, { ...seams.capture, toolsPath: () => tools.bin(), admitting: () => tools.admitting() }),
     // D-8907: a submission queued while a drain has the queue on disk goes there at once; a cancel for a run on disk
     // removes it there; and a run on disk keeps its id.
     queued: () => drain.queued(), cancelHandedOver: (id) => tools.cancelHandedOver(id), handedOver: (id) => tools.handedOver(id),
@@ -308,6 +397,7 @@ async function main(): Promise<void> {
   if (refused !== null) throw new Error(`CCRC_TESTBOX_LISTEN: ${refused}`);
   const token = readToken(cfg.tokenFile);
   sweepStaleCaptures(cfg.root);
+  pruneBuilds(cfg.root, []);
   const service = serviceFor(cfg, release);
   // D-8907: a drain request that stands now closes admission before the service queues or starts anything.
   const drain = drainerOf(service);

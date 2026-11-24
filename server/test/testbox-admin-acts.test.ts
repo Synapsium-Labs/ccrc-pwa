@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -1532,6 +1532,23 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(statSync(f).mode & 0o777).toBe(0o555);
       expect(readdirSync(builds(b))).toEqual([V]);
       expect(readdirSync(b.tmp)).toEqual([]);
+    });
+
+    // What a pass comes to after the capture desk reads a build as absent (capture runner PR 3b): a build that holds a second
+    // name (a hard link of another version) is replaced by a file of its own, one stream, and the other version keeps its
+    // bytes; a link at the build's name is the writer's refusal before any stream (the WRITER_FAULTS cases below).
+    it('a build that holds a second name is replaced by a file of its own, and the other name keeps its bytes', () => {
+      const b = box();
+      mkdirSync(builds(b));
+      const other = join(builds(b), '2.1.99');
+      writeFileSync(other, 'OTHER VERSION\n', { mode: 0o555 });
+      linkSync(other, join(builds(b), V));
+      expect(statSync(other).nlink).toBe(2);
+      expect(runCopy(b).rc).toBe(0);
+      expect(readFileSync(join(builds(b), V), 'utf8')).toBe(BYTES);
+      expect(statSync(join(builds(b), V)).nlink).toBe(1);
+      expect([readFileSync(other, 'utf8'), statSync(other).nlink]).toEqual(['OTHER VERSION\n', 1]);
+      expect(shimLog(b).filter((l) => l === 'cat 0')).toHaveLength(1);
     });
 
     it('a build already there is replaced by the new bytes', () => {
