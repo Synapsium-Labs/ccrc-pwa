@@ -1,9 +1,9 @@
 // A Docs tab (desktop polish wave 174): at a desk a Docs route draws the reader alone, in both skins, and is quiet. It
 // mounts no fleet column, accounts strip or top bar, no toast host, badge, fleet sheets, palette or splash, opens no fleet
 // stream and asks nothing but the Docs API; the sign-in and block screens still draw there. Its title names the document,
-// and its one link back opens the console in a new tab. Below the desk width a tab that has shown only Docs pages since it
-// loaded stays a Docs tab (fix round 1, L1), while a phone that moves to Docs inside the console keeps the console's Docs
-// screen, characterised below as it is on main.
+// and its one link back opens the console in a new tab. What a tab is comes from its history alone, never its width, and
+// survives a reload (fix rounds 1 and 2): a tab that has shown only Docs pages is a Docs tab at any width, and a console
+// that moves to a document shows it inside the console at any width, characterised below as it is on main.
 //
 // The reader is the real `DocsScreen`. Every request the page makes is recorded by a stub `fetch` that answers 503 (so no
 // 401 raises the sign-in screen by accident) and a stub `WebSocket` that records the address it was opened on.
@@ -18,10 +18,11 @@
 //   the title effect ................................. "titles the tab with the document" / "gives the console its title back"
 //   `ConsoleLink` through `useTabLink` ............... "its one link back opens the console in a new tab"
 //   LoginScreen / BlockScreen kept in the branch ..... "still draws the sign-in screen and the block screen"
-//   `docsOnly` in `App` (the fold, L1) ............... "narrowed below the desk width and widened again, it stays a Docs tab"
-//                                                      and "a Docs address loaded first at a phone width draws the reader alone"
+//   `docsSoFar` in `App` (history, not width) ........ "narrowed below the desk width and widened again, it stays a Docs tab",
+//                                                      "a console widened while it shows a document … is the console throughout"
 //   the fold's fall in `App` ......................... "… and its link back moves in place" (the tab is the console after)
-//   `disconnect()` when a tab becomes a Docs tab ..... "a console widened while it shows a Docs page … closes its fleet stream"
+//   `wasConsoleTab()` at the start (R4) .............. "a console reloaded on a Docs address is the console", and the release case
+//   `markConsoleTab()` for a console (R4) ............ the same cases
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -62,6 +63,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { clearAuthLost, raiseAuthLost } = await import('../src/lib/auth');
+const { noteActivated, resetReloadGateForTests, startReloadGate } = await import('../src/lib/swupdate');
 
 const DOC = '/docs/project-a/specs/2026-11-18-native-docs-parity-design.md';
 
@@ -122,6 +124,20 @@ async function mount(at: string): Promise<void> {
   await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
 }
 
+/** This tab loads `at` again as a full page (a reload, or a release's reload on a move): the page goes, so its tree
+ *  unmounts and its stream closes, and the same tab, whose per-tab storage stays, loads `at` and mounts the app afresh.
+ *  The recorders start over for the new page. */
+async function reloadAt(at: string): Promise<void> {
+  cleanup();
+  act(() => { useFleetStore.getState().disconnect(); });
+  mounted.clear();
+  sockets = [];
+  RecordingSocket.opened = [];
+  history.pushState(null, '', at);
+  render(<App />);
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+}
+
 /** The path of a recorded request, without its origin or query. */
 const pathOf = (u: string): string => new URL(u, 'http://x').pathname;
 
@@ -133,6 +149,7 @@ beforeEach(() => {
   RecordingSocket.opened = [];
   deskListeners.clear();
   localStorage.clear();
+  sessionStorage.clear();
   document.documentElement.removeAttribute('data-skin');
   document.title = 'ccrc';
   initSkin();
@@ -339,21 +356,125 @@ describe('a Docs tab at any width', () => {
     });
   }
 
-  it('a console widened while it shows a Docs page becomes a Docs tab and closes its fleet stream; narrowed, it is the console again', async () => {
+  // Fix round 2 (R2): what a tab is comes from its history, never its width. A console that shows a document in the app
+  // stays the console when the window crosses the desk width, as on main.
+  it('a console widened while it shows a document, and narrowed again, is the console throughout: one reader, the stream open', async () => {
     stubWidth(false);
     await mount('/fleet');
     await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+    const reader = document.querySelector('.docs-screen');
+    expect(reader).not.toBeNull();
     expect(sockets.length).toBeGreaterThan(0);
-    await resize(true);
-    expect(shell()).toHaveAttribute('data-tab', 'docs');
-    expect(RecordingSocket.opened.length).toBeGreaterThan(0);
-    expect(RecordingSocket.opened.every((w) => w.readyState === RecordingSocket.CLOSED), 'no fleet socket stays open in a Docs tab').toBe(true);
-    const before = sockets.length;
-    await act(async () => { await new Promise((r) => setTimeout(r, 1000)); });
-    expect(sockets.length, 'and none reopens').toBe(before);
-    await resize(false);
+    for (const desk of [true, false]) {
+      await resize(desk);
+      expect(shell()).not.toHaveAttribute('data-tab');
+      expect(shell().querySelector('.shell-nav')).not.toBeNull();
+      expect(document.querySelector('.docs-screen'), 'the reader is mounted once').toBe(reader);
+      expect(RecordingSocket.opened.some((w) => w.readyState !== RecordingSocket.CLOSED), 'the fleet stream stays open').toBe(true);
+      expect(document.title).toBe('ccrc');
+    }
+  });
+
+  it('at a desk, a console that moves to a document in the app shows it inside the console, as on main', async () => {
+    stubWidth(true);
+    await mount('/fleet');
+    await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
     expect(shell()).not.toHaveAttribute('data-tab');
-    expect(sockets.length, 'the console connects again').toBeGreaterThan(before);
+    expect(shell().querySelector('.shell-nav')).not.toBeNull();
+    expect(screen.getByRole('main').querySelector('.docs-screen')).not.toBeNull();
+    expect(mounted.has('CommandLayer')).toBe(true);
+  });
+});
+
+// A TAB'S KIND ACROSS A RELOAD (fix round 2, R4): a tab that has been the console stays the console when it loads a page
+// again (a reload, a release's reload on a move, a back or forward reload), and a tab that has shown only Docs pages stays
+// a Docs tab. The mark is per tab; with no storage, or storage that refuses, the first page decides, as before.
+describe('a tab’s kind across a reload', () => {
+  it('a phone console with a release pending: a tap on Docs loads the page afresh, and it is still the console, bar and stream intact', async () => {
+    stubWidth(false);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    let now = 1_000_000;
+    const go = vi.fn();
+    const stop = startReloadGate({ reload: vi.fn(), go, now: () => now });
+    try {
+      await mount('/fleet');
+      noteActivated();
+      now += 60_000;
+      const bar = document.querySelector<HTMLElement>('nav.shell-phone-nav')!;
+      await act(async () => { fireEvent.click(within(bar).getByRole('button', { name: 'Docs' })); await new Promise((r) => setTimeout(r, 30)); });
+      expect(go, 'the release turns the tap into a full load of the Docs address').toHaveBeenCalledWith('/docs', false);
+      await reloadAt('/docs');
+      expect(shell()).not.toHaveAttribute('data-tab');
+      expect(shell().querySelector('.shell-phone-nav')).not.toBeNull();
+      expect(screen.getByRole('main').querySelector('.docs-screen')).not.toBeNull();
+      expect(sockets.length).toBeGreaterThan(0);
+      expect(mounted.has('CommandLayer')).toBe(true);
+    } finally {
+      stop();
+      resetReloadGateForTests();
+    }
+  });
+
+  for (const desk of [true, false]) {
+    it(`${desk ? 'at a desk' : 'on a phone'}, a console reloaded on a Docs address is the console`, async () => {
+      stubWidth(desk);
+      await mount('/fleet');
+      await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+      await reloadAt(DOC);
+      expect(shell()).not.toHaveAttribute('data-tab');
+      expect(shell().querySelector('.shell-nav')).not.toBeNull();
+      expect(sockets.length).toBeGreaterThan(0);
+      expect(document.title).toBe('ccrc');
+    });
+
+    it(`${desk ? 'at a desk' : 'on a phone'}, a Docs tab reloaded is a Docs tab`, async () => {
+      stubWidth(desk);
+      await mount(DOC);
+      await act(async () => { navigate('/docs/project-a'); await new Promise((r) => setTimeout(r, 30)); });
+      await reloadAt('/docs/project-a');
+      expect(shell()).toHaveAttribute('data-tab', 'docs');
+      expect(shell().querySelector('.shell-nav')).toBeNull();
+      expect(sockets).toEqual([]);
+      expect([...mounted]).toEqual([]);
+    });
+  }
+
+  it('a Docs tab that moved to the console in place, then reloaded on a document, is the console', async () => {
+    stubWidth(false);
+    await mount(DOC);
+    const bar = document.querySelector<HTMLElement>('header.shell-tab-bar')!;
+    await act(async () => { fireEvent.click(within(bar).getByRole('link', { name: 'Console' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(shell()).not.toHaveAttribute('data-tab');
+    await reloadAt(DOC);
+    expect(shell()).not.toHaveAttribute('data-tab');
+  });
+
+  for (const how of ['missing', 'refusing'] as const) {
+    it(`with per-tab storage ${how}, the first page decides and nothing throws`, async () => {
+      if (how === 'missing') {
+        vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => { throw new DOMException('denied', 'SecurityError'); });
+      } else {
+        vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('denied', 'SecurityError'); });
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('full', 'QuotaExceededError'); });
+      }
+      stubWidth(false);
+      await mount('/fleet');
+      expect(shell()).not.toHaveAttribute('data-tab');
+      await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+      // The mark could not be kept, so the reload falls back to the first page's rule: a Docs address loaded first is a
+      // Docs tab.
+      await reloadAt(DOC);
+      expect(shell()).toHaveAttribute('data-tab', 'docs');
+      await reloadAt('/fleet');
+      expect(shell()).not.toHaveAttribute('data-tab');
+    });
+  }
+
+  it('a fresh tab with nothing kept, loaded at a Docs address, is a Docs tab', async () => {
+    stubWidth(true);
+    await mount(DOC);
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
   });
 });
 

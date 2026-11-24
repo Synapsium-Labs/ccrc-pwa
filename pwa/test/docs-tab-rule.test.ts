@@ -1,17 +1,16 @@
 // The Docs tab rule (desktop polish wave 174, `lib/docTab.ts`): at a desk a link that crosses between the console and the
 // Docs reader opens a new browser tab, and nothing crosses below the desk width. The one definition every caller derives
 // from (`useTabLink` for an anchor, `useFollowLink` for a command or a button), pinned here on its own, with what a Docs tab
-// is (`isDocsTab`, `keepsDocsOnly`), the title a Docs tab carries and the move `useFollowLink` makes.
+// is (`isDocsTab`, from the tab's history alone), the title a Docs tab carries and the move `useFollowLink` makes.
 //
 // Mutation table (each guard, and the case that goes red without it):
 //   `!desk` in `opensNewTab` ......................... "below the desk width nothing opens a new tab"
 //   `!== docsTab` (crossing, not "is a document") .... "in a Docs tab a document link stays in the tab, a console link opens a new one"
 //   the `'/'`/`'//'` refusal in `opensNewTab` ........ "an address that is not an in-app path is never a document link"
 //   `pathOf` (search and fragment cut) ............... "a Docs address with a search or a fragment is still a Docs address"
-//   `desk ||` in `isDocsTab` ......................... "a Docs page at a desk is a Docs tab whatever the tab showed before"
-//   `docsOnly` in `isDocsTab` ........................ "below the desk width a Docs page is a Docs tab only while the tab has shown only Docs"
-//   `isDocsHref(path) &&` in `isDocsTab` ............. "a console page is never a Docs tab"
-//   `keepsDocsOnly`'s fold (once false, false) ....... "the fold falls at the first page that is not Docs and never rises"
+//   `docsSoFar &&` in `isDocsTab` .................... "a Docs page is a Docs tab only while the tab has shown only Docs pages"
+//   `isDocsHref(path)` in `isDocsTab` ................ "a console page is never a Docs tab"
+//   the fold (once false, false) ..................... "the fold falls at the first page that is not Docs and never rises"
 //   `useFollowLink`'s `window.open` arm .............. "at a desk opens one new tab for a document and leaves this tab where it is"
 //   `useFollowLink`'s tab kind from the context ...... "in a Docs tab opens the console in a new tab, and moves within the tab to another document"
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +18,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { renderHook } from '@testing-library/react';
 import { docsTabTitle } from '../src/docs/docsTabTitle';
-import { CONSOLE_ROOT, isDocsHref, isDocsTab, keepsDocsOnly, opensNewTab } from '../src/lib/docTab';
+import { CONSOLE_ROOT, isDocsHref, isDocsTab, opensNewTab } from '../src/lib/docTab';
 import { navigate } from '../src/lib/router';
 import { DocsTabContext, useFollowLink } from '../src/lib/useTabLink';
 
@@ -82,25 +81,20 @@ describe('the Docs tab rule (opensNewTab)', () => {
     expect(isDocsHref('/docsearch')).toBe(false);
   });
 
-  it('a Docs page at a desk is a Docs tab whatever the tab showed before', () => {
-    expect(isDocsTab('/docs', true, false)).toBe(true);
-    expect(isDocsTab(DOC, true, false)).toBe(true);
-    expect(isDocsTab(DOC, true, true)).toBe(true);
-  });
-
-  it('below the desk width a Docs page is a Docs tab only while the tab has shown only Docs', () => {
-    expect(isDocsTab(DOC, false, true)).toBe(true);
-    expect(isDocsTab(DOC, false, false)).toBe(false);
+  // What a tab is takes no width (fix round 2, R2): the definition has no width to be given.
+  it('a Docs page is a Docs tab only while the tab has shown only Docs pages', () => {
+    expect(isDocsTab('/docs', true)).toBe(true);
+    expect(isDocsTab(DOC, true)).toBe(true);
+    expect(isDocsTab(DOC, false)).toBe(false);
+    expect(isDocsTab.length).toBe(2);
   });
 
   it('a console page is never a Docs tab', () => {
-    for (const desk of [true, false]) {
-      for (const docsOnly of [true, false]) expect(isDocsTab('/fleet', desk, docsOnly)).toBe(false);
-    }
+    for (const docsSoFar of [true, false]) expect(isDocsTab('/fleet', docsSoFar)).toBe(false);
   });
 
   it('the fold falls at the first page that is not Docs and never rises', () => {
-    const fold = (pages: string[]): boolean => pages.reduce(keepsDocsOnly, true);
+    const fold = (pages: string[]): boolean => pages.reduce((so, page) => isDocsTab(page, so), true);
     expect(fold([DOC])).toBe(true);
     expect(fold([DOC, '/docs', '/docs/project-a?ref=b'])).toBe(true);
     expect(fold(['/fleet'])).toBe(false);

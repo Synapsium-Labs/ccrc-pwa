@@ -3,10 +3,10 @@
 // no store, no DOM, no clock.
 //
 // WHAT A DOCS TAB IS (`isDocsTab`, the one definition). A tab is one of two kinds: the console, or a Docs tab, which draws
-// the reader alone. A Docs page is a Docs tab at a desk always; below the desk width it is one only when the tab's first
-// page was a Docs address and it has shown nothing but Docs pages since (`keepsDocsOnly`, fix round 1's ruling L1), so a
-// document read in a half-width window beside a session never turns into the console when the window narrows, while a
-// phone that moves to Docs inside the console keeps the console's Docs screen, as before.
+// the reader alone. What a tab is comes from its history alone, never from its width (fix round 2, R2): it is a Docs tab
+// while it shows a Docs page and has shown only Docs pages, so a document opened in a tab of its own, at any width, stays
+// a Docs tab however its window is resized, and a console that shows a document in the app stays the console, as on main.
+// Its history survives a reload of the tab (`tabMark.ts` keeps "this tab has been the console" in the tab's own store).
 //
 // ONE RULE FOR A CLICK, `opensNewTab`. An in-app link that crosses from one kind of tab to the other opens a NEW browser
 // tab, every time (an anchor's `target="_blank"`, never a named tab that a second click would reuse); a link that stays
@@ -15,8 +15,8 @@
 // run, the reader's own Back at the index) open the console in a new tab rather than drawing it in the Docs tab. Below the
 // desk width nothing opens a tab: a phone keeps documents inside the app, and a narrow Docs tab's link back moves in place.
 //
-// THE WIDTH IS THE SHELL'S OWN DESK TEST (`DESK_QUERY`, `@ccrc/ui`, 900px), asked live: the callers pass its answer in, so
-// this file names no breakpoint. Two readers ask the click rule, both in `useTabLink.ts`: `useTabLink` (an anchor's props)
+// THE WIDTH IS THE SHELL'S OWN DESK TEST (`DESK_QUERY`, `@ccrc/ui`, 900px), asked live, and it decides only whether a
+// click opens a tab: the callers pass its answer in, so this file names no breakpoint. Two readers ask the click rule, both in `useTabLink.ts`: `useTabLink` (an anchor's props)
 // and `useFollowLink` (a move made by a command or a button). The tab's kind reaches them from `App`, which asks
 // `isDocsTab`.
 import { ROUTES, matchRoute } from './routes';
@@ -40,16 +40,11 @@ export function isDocsHref(href: string): boolean {
   return matchRoute(pathOf(href))?.route.id === 'docs';
 }
 
-/** Whether a tab that has shown only Docs pages since it loaded (`docsOnly`) still has after it shows `path`: the fold
- *  `App` keeps over every page its tab shows, starting from `true` at the first. Once false it stays false. */
-export function keepsDocsOnly(docsOnly: boolean, path: string): boolean {
-  return docsOnly && isDocsHref(path);
-}
-
-/** Whether the tab showing `path` is a Docs tab: a Docs page at a desk (`desk` is the shell's desk test), and below the desk
- *  width a Docs page in a tab that has shown only Docs pages since it loaded (`docsOnly`, `keepsDocsOnly`). */
-export function isDocsTab(path: string, desk: boolean, docsOnly: boolean): boolean {
-  return isDocsHref(path) && (desk || docsOnly);
+/** Whether the tab showing `path` is a Docs tab, given whether it has shown only Docs pages before this one
+ *  (`docsSoFar`): it is exactly when this page is a Docs page too. It is also the fold `App` keeps over every page its tab
+ *  shows, starting at the first page from what the tab was before its load (`wasConsoleTab`): once false, it stays false. */
+export function isDocsTab(path: string, docsSoFar: boolean): boolean {
+  return docsSoFar && isDocsHref(path);
 }
 
 /** THE RULE: whether an in-app link to `href`, followed from a tab that is (`docsTab`) or is not a Docs tab, opens a new

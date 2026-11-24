@@ -23,14 +23,15 @@ import { Splash } from './face/SplashScreen';
 import { AppBadge } from './face/AppBadge';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
-import { ToastHost, useDesk } from '@ccrc/ui';
+import { ToastHost } from '@ccrc/ui';
 import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { ConsoleLink } from './components/ConsoleLink';
 import { docsTabTitle } from './docs/docsTabTitle';
-import { isDocsTab, keepsDocsOnly } from './lib/docTab';
+import { isDocsTab } from './lib/docTab';
+import { markConsoleTab, wasConsoleTab } from './lib/tabMark';
 import { DocsTabContext } from './lib/useTabLink';
 import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
@@ -88,17 +89,17 @@ export function App(): ReactNode {
   const { path, search } = useLocation();
   // A DOCS TAB (desktop polish wave 174, `lib/docTab.ts`): it draws the reader alone and is quiet. It opens no fleet
   // stream, starts no Overlord poll, loads no session chunk and mounts none of the console's chrome (its polls and sheets,
-  // the palette and the global keys, the badge, the toasts, the splash); the sign-in and block screens stay. A Docs page is
-  // one at a desk, asked live with the shell's desk test; below the desk width it is one while this tab has shown only
-  // Docs pages since it loaded (`docsOnly`, the fold `keepsDocsOnly` over every page, fix round 1 L1), so resizing a Docs
-  // tab never turns it into the console or remounts its reader, and a phone that moves to Docs inside the console keeps the
-  // console's Docs screen. A console widened while it shows a Docs page becomes a Docs tab (its reader mounts again there,
-  // and its fleet stream closes); narrowed again, it is the console.
-  const desk = useDesk();
-  const [docsOnly, setDocsOnly] = useState(() => keepsDocsOnly(true, path));
-  // Adjusted while rendering, React's own pattern for state that follows a prop: it only ever falls, once.
-  if (docsOnly && !keepsDocsOnly(docsOnly, path)) setDocsOnly(false);
-  const docsTab = isDocsTab(path, desk, keepsDocsOnly(docsOnly, path));
+  // the palette and the global keys, the badge, the toasts, the splash); the sign-in and block screens stay. What a tab is
+  // comes from its history alone, never its width (fix round 2, R2): a tab is a Docs tab while it shows a Docs page and has
+  // shown only Docs pages, starting from what it was before this load (`wasConsoleTab`, read once, R4). So resizing never
+  // changes a tab's kind or remounts its reader, and a console that moves to a document shows it inside the console.
+  // Kept by React's own pattern for state that follows a prop: adjusted while rendering, and it only ever falls, once.
+  const [docsSoFar, setDocsSoFar] = useState(() => isDocsTab(path, !wasConsoleTab()));
+  const docsTab = isDocsTab(path, docsSoFar);
+  if (docsSoFar && !docsTab) setDocsSoFar(false);
+  // A tab that is the console is marked so for every later load of it: a reload, or a release's reload on a move to a
+  // Docs address, keeps it the console (R4).
+  useEffect(() => { if (!docsTab) markConsoleTab(); }, [docsTab]);
   // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
   // paint, and once loaded the first open draws it in the first commit, with no loading line (reviews 1464 F4 and 1473
   // F3). The entry's imports are unchanged.
@@ -107,12 +108,8 @@ export function App(): ReactNode {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
     // dialog badges. connect() is idempotent; the socket survives navigation.
-    // A Docs tab holds none: a console that becomes one (widened on a Docs
-    // page) closes the stream it opened, and connects again when it is the
-    // console once more (fix round 1 L1). `disconnect()` with no stream open
-    // closes nothing, so a Docs tab from its first page asks it harmlessly.
-    if (docsTab) useFleetStore.getState().disconnect();
-    else useFleetStore.getState().connect();
+    // A Docs tab holds none, and no tab ever turns from the console into one.
+    if (!docsTab) useFleetStore.getState().connect();
   }, [docsTab]);
   // The Overlord's reads (Overlord W1 home, Task 2): one store, started once at the shell, so the bars, the home route and the
   // place read one answer. Its stop ends the poll when the shell unmounts.
