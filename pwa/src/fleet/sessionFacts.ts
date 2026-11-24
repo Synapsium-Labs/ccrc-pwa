@@ -49,6 +49,7 @@ import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
 import type { SessionWorktree } from './sessionWorktrees';
+import type { FleetRow } from './nestFleet';
 import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
 import { behindFact, buildText } from './buildWords';
 
@@ -141,6 +142,9 @@ export interface FactInput {
   /** D-8276: the newest build an awake session on THIS session's lane runs (`laneClaudeLatest`): what a restart reaches.
    *  Absent or `null` = unknown, and the words promise no roll. */
   readonly claudeLaneLatest?: string | null;
+  /** Wave 173: whether any worker row of this session is busy (`workersBusyOf`, `fleetTree.ts`, over the whole fleet and its
+   *  open runs). Absent = none, and the row reads its bucket's word. */
+  readonly workersBusy?: boolean;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
@@ -158,6 +162,10 @@ export interface SessionFactSet {
   /** The state word's ink: the bucket's, or `coordinator` while a parent holds the question (D-5296). */
   readonly stateTone: string;
   readonly coordinatorRole: boolean;
+  /** Wave 173: whether any worker row of this session is busy, as the caller measured it (`FactInput.workersBusy`). */
+  readonly workersBusy: boolean;
+  /** Wave 173: the rule (`waitingOnWorkers`) over this row's own bucket: the status word is `WAITING_ON_WORKERS`. */
+  readonly waitingOnWorkers: boolean;
   readonly workingOn: string | null;
   readonly childOf: ChildOfRunLabel | null;
   readonly activeRun: NonNullable<ChildRunContext['run']> | null;
@@ -228,6 +236,40 @@ const markerNote = (
 export const rowStateWord = (session: FleetSession): string =>
   hibernatedSince(session) !== null ? 'asleep' : STATE_WORD[session.bucket];
 
+/** THE WORDS OF A COORDINATOR WAITING ON ITS WORKERS (desktop polish wave 173, the operator's goal of 2026-11-24: "done" is
+ *  misleading for a coordinator whose children are still working; keep "done" for when the coordinator and its workers are
+ *  all doing nothing). Spelt here once: the row's word, the header's word, the lamp's spoken label (`StatusDot`'s
+ *  `waitingLabel`) and a worker header's word for its coordinator all read it. Never the bare `waiting`, which is
+ *  `STATE_WORD.attention`, a session blocked on the operator's question: one word must not mean two things the operator
+ *  handles differently. */
+export const WAITING_ON_WORKERS = 'waiting on workers';
+
+/** The words' hover title, on the row's word and the header's. */
+export const WAITING_ON_WORKERS_TITLE = 'this coordinator\'s own turn has ended, and at least one of its workers is still working or spawning';
+
+/** Is this worker row keeping its coordinator waiting? A spawn still coming up, or a session whose row word is `working`
+ *  (`rowStateWord`: so an asleep worker is not, and neither is one asking the operator, whose word is `waiting`). These are
+ *  the worker summary line's own `spawning` and `working` (`rollup.ts`'s `childWord`), read from the same row. A worker
+ *  whose question its coordinator holds is filed `working` by the server, so it counts: wave 173 item 6 leaves a worker's
+ *  question out of the coordinator's word. */
+export const workerBusy = (row: FleetRow): boolean =>
+  row.kind === 'pending' || rowStateWord(row.session) === STATE_WORD.working;
+
+/** THE RULE (wave 173): a coordinator whose own bucket is `done` or `idle`, awake, with at least one busy worker
+ *  (`workerBusy`), is waiting on its workers. Idle is included on purpose: `done` decays to `idle` after thirty minutes, and
+ *  a coordinator waiting for hours must not read idle either. Every other bucket keeps its own word (a working, asking,
+ *  exited or archived coordinator says so whatever its workers do), and so does an asleep one. Pure; the caller passes the
+ *  bucket it paints (the row's, or the header's live one), so the two cannot apply the rule to different states. */
+export function waitingOnWorkers(input: {
+  readonly coordinator: boolean;
+  readonly bucket: SessionBucket;
+  readonly asleep: boolean;
+  /** Whether any of its worker rows is busy (`workerBusy` over `workersOf`, `fleetTree.ts`). */
+  readonly workersBusy: boolean;
+}): boolean {
+  return input.coordinator && !input.asleep && (input.bucket === 'done' || input.bucket === 'idle') && input.workersBusy;
+}
+
 /** Is this session its project's coordinator? `role === 'coordinator'` and nothing else: a null or absent role (an older
  *  server) is a worker, and claiming a run never makes a session one. THE ONE READER of `FleetSession.role` in
  *  `pwa/src` (D-5301): the row's facts below and the palette's session entries (`sessionEntries.ts`, D-6714) ask it. */
@@ -271,11 +313,14 @@ function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: str
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, worktrees = null, claudeLatest = null, claudeLaneLatest = null,
+    coordinatorTitle = null, worktrees = null, claudeLatest = null, claudeLaneLatest = null, workersBusy = false,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
   const state = rowStateWord(session);
+  const lead = coordinatorRole(session);
+  // Wave 173: the bucket, its timestamp, the sort and the rollup stay the measurement; only the word (and the lamp) change.
+  const waiting = waitingOnWorkers({ coordinator: lead, bucket: session.bucket, asleep: asleepAt !== null, workersBusy });
 
   const childOf = childOfRunLabel(session, childRun);
   const activeRun = childRun?.run ?? null;
@@ -334,10 +379,13 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     // background work (D-5231). They are WHAT the lamp means, not extra facts.
     statusText: asleepAt !== null ? hibernatedWords(asleepAt, now)
       : wcWords !== null ? wcWords.text
+      : waiting ? WAITING_ON_WORKERS
       : cardBgWords !== null ? `${state} · ${cardBgWords.text}` : state,
-    statusTitle: wcWords?.title ?? cardBgWords?.title,
+    statusTitle: wcWords?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : cardBgWords?.title),
     stateTone: wcWords !== null ? 'coordinator' : state,
-    coordinatorRole: coordinatorRole(session),
+    coordinatorRole: lead,
+    workersBusy,
+    waitingOnWorkers: waiting,
     workingOn,
     childOf, activeRun, coordinatorName: childRun?.coordinator ?? null, heldRun, heldTitle,
     spawn: spawnChip(session),
@@ -593,9 +641,13 @@ export function headerStatusWord(input: {
   /** When the status last changed, or `null`. */
   readonly at: number | null;
   readonly now: number;
+  /** Wave 173: the rule's answer (`waitingOnWorkers`) for this bucket; only a `done` or `idle` bucket reads it. */
+  readonly waiting?: boolean;
 }): string {
-  const { bucket, asleepAt, background, at, now } = input;
+  const { bucket, asleepAt, background, at, now, waiting = false } = input;
   if (asleepAt !== null) return hibernatedWords(asleepAt, now);
+  // The card's word, verbatim: the header adds no age to it (the wait is the coordinator's present, not when it went quiet).
+  if (waiting && (bucket === 'done' || bucket === 'idle')) return WAITING_ON_WORKERS;
   const rel = at === null ? null : elapsedShort(now - at);
   switch (bucket) {
     case 'attention': return `${STATE_WORD.attention} on you`;
@@ -613,7 +665,7 @@ export function headerStatusWord(input: {
 /** The header's status fact's title (L1-2, D-8771): the header's OWN background words (`backgroundWords`, the kinds, no count), or the
  *  with-coordinator title; never the card's (`statusTitle`, which carries the count and is the card's). */
 function headerStatusTitle(f: SessionFactSet): string | undefined {
-  return f.stateTone === 'coordinator' ? f.statusTitle : f.background?.title;
+  return f.stateTone === 'coordinator' || f.waitingOnWorkers ? f.statusTitle : f.background?.title;
 }
 
 /** The header's status fact for the model's own row: the clock-free form of `headerStatusWord`. The
@@ -622,5 +674,6 @@ function headerStatusText(f: SessionFactSet): string {
   if (f.asleepAt !== null || f.stateTone === 'coordinator') return f.statusText;
   return headerStatusWord({
     bucket: f.session.bucket, asleepAt: null, background: f.background, at: f.session.statusUpdatedAt, now: f.now,
+    waiting: f.waitingOnWorkers,
   });
 }

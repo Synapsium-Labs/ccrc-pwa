@@ -57,10 +57,13 @@ import {
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { boundOpenRun, coordinatorOf, programmeWave, runCard, runHomeProject, runSentence, workerOf, type BoundSession, type ChildRunContext } from './runWords';
+import {
+  boundOpenRun, coordinatorOf, isDispatchPending, isRunClosed, programmeWave, runCard, runHomeProject, runSentence, workerOf,
+  type BoundSession, type ChildRunContext,
+} from './runWords';
 import { hibernatedSince } from './hibernated';
 import { cardHues, fleetHues, type ProgHue } from './programmeBoxes';
-import { STATE_WORD } from './sessionFacts';
+import { coordinatorRole, STATE_WORD, WAITING_ON_WORKERS, waitingOnWorkers, workerBusy } from './sessionFacts';
 import { sessionLabel } from './sessionLabel';
 
 /** Rule 1: the session id that coordinates this one, from the active run bound
@@ -68,6 +71,36 @@ import { sessionLabel } from './sessionLabel';
 export function parentIdOf(s: BoundSession, runs: readonly RunSummary[]): string | null {
   const by = boundOpenRun(runs, s)?.claimedBy ?? null;
   return by === s.id ? null : by;
+}
+
+/** Wave 173: a coordinator's worker rows, over the WHOLE fleet, by the bracket's own edges (`nestFleet`'s rules 1 and 5,
+ *  `latestPerSession`'s binding): each open run it claims whose bound worker (`workerOf`) the fleet carries, once per
+ *  worker, and each dispatch in flight whose session the fleet does not carry yet, as a spawn. Fleet-wide, not one card's,
+ *  so the row and the session header read the same workers wherever a worker renders (a worker drawn on another card
+ *  still keeps its coordinator waiting). Pure. */
+export function workersOf(id: string, sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] {
+  const byId = new Map(sessions.map((s) => [s.id, s] as const));
+  const out: FleetRow[] = [];
+  const seen = new Set<string>();
+  for (const r of runs) {
+    if (r.claimedBy !== id || isRunClosed(r)) continue;
+    const listed = r.sessionId !== null && byId.has(r.sessionId);
+    if (!listed) {
+      if (isDispatchPending(r)) out.push({ kind: 'pending', depth: 1, run: r });
+      continue;
+    }
+    const w = workerOf(r, byId);
+    if (w === null || w.id === id || seen.has(w.id)) continue;
+    seen.add(w.id);
+    out.push({ kind: 'session', depth: 1, session: w });
+  }
+  return out;
+}
+
+/** Wave 173: is any worker row of this session busy (`workerBusy` over `workersOf`)? `false` at once for a session that is
+ *  not a coordinator, so a row's store selector costs nothing for every other row. */
+export function workersBusyOf(s: FleetSession, sessions: readonly FleetSession[], runs: readonly RunSummary[]): boolean {
+  return coordinatorRole(s) && workersOf(s.id, sessions, runs).some(workerBusy);
 }
 
 /** Rule 2: every session's card, by id — the server's placement. Built once
@@ -171,8 +204,8 @@ export interface Coordination {
   readonly coordinator: string | null;
   /** The coordinator's session id — the header links to it (D-5545) — when the fleet carries it. */
   readonly coordinatorId: string | null;
-  /** The coordinator's state in the row's own words (`working`, `idle`, `exited`, `archived`, `hibernated`),
-   *  or `null` when the fleet does not carry it. */
+  /** The coordinator's state in the row's own words (`working`, `idle`, `exited`, `archived`, `hibernated`, and
+   *  `WAITING_ON_WORKERS` by the wave 173 rule), or `null` when the fleet does not carry it. */
   readonly coordinatorState: string | null;
   /** The card the session renders on — the coordinator's project for a
    *  coordinated child, which names "where from" when the coordinator itself is
@@ -186,6 +219,9 @@ export interface Coordination {
  *  nothing displaces it. Same rules as the tree, so the header and the row agree. */
 export function coordinationOf(
   s: FleetSession, sessions: readonly FleetSession[], runs: readonly RunSummary[],
+  /** Wave 173: whether any worker of this session's coordinator is busy (`workersBusyOf` over the whole fleet). Absent =
+   *  none, and the coordinator's word is its bucket's. */
+  parentWorkersBusy = false,
 ): Coordination | null {
   const ctx = childRunContext(s, runs, (id) => sessions.find((x) => x.id === id) ?? null);
   const cards = cardsOf([s]);
@@ -196,7 +232,9 @@ export function coordinationOf(
   return {
     workingOn: on, coordinator: ctx.coordinator,
     coordinatorId: parent === null ? null : parent.id,
-    coordinatorState: parent === null ? null : hibernatedSince(parent) !== null ? 'hibernated' : STATE_WORD[parent.bucket],
+    coordinatorState: parent === null ? null : hibernatedSince(parent) !== null ? 'hibernated'
+      : waitingOnWorkers({ coordinator: coordinatorRole(parent), bucket: parent.bucket, asleep: false, workersBusy: parentWorkersBusy })
+        ? WAITING_ON_WORKERS : STATE_WORD[parent.bucket],
     card: cards.get(s.id) ?? boardHome(s), run: boundOpenRun(runs, s),
   };
 }

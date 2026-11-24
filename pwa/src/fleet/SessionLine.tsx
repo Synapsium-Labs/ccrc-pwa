@@ -24,7 +24,8 @@ import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
 import type { CoordinatorPresence } from './presence';
 import { SessionMeta } from './SessionMeta';
-import { cardFacts, sessionFacts } from './sessionFacts';
+import { cardFacts, sessionFacts, WAITING_ON_WORKERS } from './sessionFacts';
+import { workersBusyOf } from './fleetTree';
 import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
@@ -141,11 +142,15 @@ function SessionLineView({
   const tick = useNow(30_000, busy && now === undefined);
   const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
   const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
+  // Wave 173: whether a worker of this coordinator is still working or spawning, over the whole fleet and its open runs
+  // (`workersBusyOf`, the header's own reader). A boolean, so a frame that changes no answer re-renders no row.
+  const workersBusy = useFleetStore((st) => workersBusyOf(session, st.sessions, st.runs));
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
     workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
     claudeLatest: claudeLatest === undefined ? storeLatest : claudeLatest,
     claudeLaneLatest: claudeLaneLatest === undefined ? storeLaneLatest : claudeLaneLatest,
+    workersBusy,
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;
@@ -169,7 +174,7 @@ function SessionLineView({
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={facts.state}>
       <span className="sess-lamp" data-status={session.bucket}>
-        <StatusDot status={session.bucket} asleep={asleep} />
+        <StatusDot status={session.bucket} asleep={asleep} {...(facts.waitingOnWorkers ? { waitingLabel: WAITING_ON_WORKERS } : {})} />
       </span>
 
       {/* The two-line block. A plain <div>, NOT the row's button: it holds real controls of its own (the label button
