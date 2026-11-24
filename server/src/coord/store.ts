@@ -2251,9 +2251,13 @@ export class CoordStore {
     for (const [i, r] of this.seriesRows('either', id).entries()) {
       const n = ids === 'ordinal' ? { ok: true as const, value: i + 1 } : persistedInt(r.idText, 'run id');
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
+      // D-8980: the programme and wave ride along for the wire (`toSessionRun`); no binding reads them, so a wave this
+      // process cannot represent is left out rather than failing the series.
+      const wave = persistedInt(r.waveText, 'wave');
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt, closedAt: r.closedAt });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt, closedAt: r.closedAt,
+        program: r.program, ...(wave.ok ? { wave: wave.value } : {}) });
     }
     return { ok: true, runs };
   }

@@ -90,7 +90,13 @@ export function newestClaimedWorkRuns(port: Pick<BindingReadPort, 'bindingRunsOf
   }
 }
 
-const toSessionRun = (r: BindingRun | null): SessionRun | null => r === null ? null : { id: r.id, state: r.state, claimedBy: r.claimedBy };
+/** The wire's projection of a bound run: its id, state and claimant, and its programme and wave when the series read them
+ *  (D-8980), left out when it did not, so absence stays "not known" and is never a false empty programme. */
+const toSessionRun = (r: BindingRun | null): SessionRun | null => r === null ? null : {
+  id: r.id, state: r.state, claimedBy: r.claimedBy,
+  ...(r.program === undefined ? {} : { program: r.program }),
+  ...(r.wave === undefined ? {} : { wave: r.wave }),
+};
 
 /** One session's two named queries over its binding series, or the reason the series could not be read. */
 export type SessionRunRead =

@@ -127,6 +127,11 @@ export interface BindingRun {
   readonly sessionBornFor: string | null;
   /** Read only by THE OPEN MINTING RUN WINS: a birth equal to it is the run's own mint (`childBirthOf`'s placeable). */
   readonly dispatchStartedAt: number | null;
+  /** The run's programme and wave (D-8980): no binding decision reads them; the wire's projection (`bindingReads.ts`'s
+   *  `toSessionRun`) carries them so a worker whose run has closed still names its programme. Optional: a series built
+   *  without them (a test's, or a wave column this process cannot read) carries none, and the wire then omits them. */
+  readonly program?: string;
+  readonly wave?: number;
 }
 
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */

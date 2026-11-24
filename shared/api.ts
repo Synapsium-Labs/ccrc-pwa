@@ -11293,6 +11293,10 @@ function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
  * reader that wants the open one reads `openRun` and never walks the runs frame to find it.
  *
  *   - `id`, `state`, `claimedBy` — the run's own columns; `claimedBy` is `null` for an ownerless run.
+ *   - `program`, `wave` — the run's programme slug and wave (D-8980), its own columns too, so a worker whose run has
+ *     CLOSED still says which programme it worked for: the runs frame carries open runs only, so nothing else on the wire
+ *     names a closed run's programme. OPTIONAL and absence-permits: an older server, or a series built without them,
+ *     omits them, and a reader then knows no programme for the run (the console keeps such a row where it was).
  *
  * `null` collapses THREE conditions, deliberately, as `releasedFrom` does: no run binds this incarnation; this server did not
  * decide (an older peer, or a snapshot from a build predating the field); and it could not decide (its `coord.db` read
@@ -11305,6 +11309,7 @@ export interface SessionRun {
   readonly id: number;
   readonly state: RunState;
   readonly claimedBy: string | null;
+  readonly program?: string; readonly wave?: number;
 }
 
 /** THE ONE READER of `FleetSession.run` and `FleetSession.openRun`. `undefined` (a live frame from a server predating the
@@ -11320,14 +11325,17 @@ export function childIdsOf(run: { readonly childIds?: readonly number[] }): read
 }
 
 /** `FleetSession.run`'s persistence contract: null → `null` (an absent key is not revived at all, above). A present value this build cannot read ALSO revives as
- *  `null`, as `releasedFrom` does: the degrade leaves the row where it rendered before this field existed. */
+ *  `null`, as `releasedFrom` does: the degrade leaves the row where it rendered before this field existed. `program` and
+ *  `wave` (D-8980) are optional inside it: one this build cannot read is left out and the run kept, since without them the
+ *  row only loses the programme of a closed run, which is how an older server's row reads. */
 function reviveSessionRun(o: RawObj, k: string): SessionRun | null {
   const v = o[k];
   if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
-  const { id, state, claimedBy } = v as RawObj;
+  const { id, state, claimedBy, program, wave } = v as RawObj;
   if (!isPositiveDecimalSafeInteger(id) || typeof state !== 'string' || !isRunState(state)) return null;
   if (claimedBy !== null && typeof claimedBy !== 'string') return null;
-  return { id, state, claimedBy };
+  return { id, state, claimedBy, ...(typeof program === 'string' && program !== '' ? { program } : {}),
+    ...(isPositiveDecimalSafeInteger(wave) ? { wave } : {}) };
 }
 
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design

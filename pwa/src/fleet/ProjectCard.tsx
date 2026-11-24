@@ -35,9 +35,9 @@ import { fleetRowKey, nestFleet, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import { partWords, type CardRollup, type RolledRow } from './rollup';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel, type KeptRun } from './runWords';
 import {
-  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowProgramme, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
@@ -358,7 +358,7 @@ function ProjectCardView({
    *  fold — which is three places that have to agree about what a row on THIS
    *  card knows: its pool, its run door and whether its repo needs saying. */
   const line = (
-    s: FleetSession, note: OrphanNote | null = null,
+    s: FleetSession, note: OrphanNote | null = null, kept: KeptRun | null = null,
   ): ReactNode => (
     <SessionLine
       key={s.id}
@@ -370,7 +370,7 @@ function ProjectCardView({
       projectPool={poolOf(s)}
       onOpenRun={openRunFor(s)}
       workingOn={workingOnCard(s, group.project)}
-      childRun={childRunContext(s, runs, coordOf)}
+      childRun={childRunContext(s, runs, coordOf, kept)}
       coordinator={note?.presence ?? null}
       {...(note === null ? {} : { coordinatorTitle: note.title })}
     />
@@ -380,7 +380,7 @@ function ProjectCardView({
   // session or a spawn (a delegation row is none: D-8782); the rollup's summary row is read only as that footer's state
   // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
   const rowBody = (row: FleetRow): ReactNode => (
-    row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />
+    row.kind === 'session' ? line(row.session, noteFor(row), row.kept ?? null) : <PendingSpawn run={row.run} nowMs={nowMs} />
   );
 
   /** D-6088 rule 6 outside a box (delegation broker wave 4): a head's folded children as one line, the Released
@@ -431,7 +431,7 @@ function ProjectCardView({
       {`${r.program} ${waveLabel(r)} in ${r.project}`}
     </span>
   );
-  const hueOf = (row: FleetRow): ProgHue | undefined => prog.hues.get(rowRun(row, boxRuns)?.program ?? '');
+  const hueOf = (row: FleetRow): ProgHue | undefined => prog.hues.get(rowProgramme(row, boxRuns) ?? '');
   const box = ({ view, state }: { view: ProgrammeBoxView; state: BoxState }): ReactNode => (
     <ProgrammeBox
       key={`box:${view.coordinatorId}`}

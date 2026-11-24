@@ -9,7 +9,10 @@
 // worker reaches this card without being a row of it (in its Released or Archived fold, or gone) is no far worker. ONE box per coordinator session: a coordinator holding open
 // runs of two programmes is led by the one with the most open work runs, a tie going to the newest run, and says
 // `more`. A coordinator with no open run is an ordinary row (`lone`). A worker whose claimant is not a box here, and
-// a spawn whose claimant is not on this card, is `elsewhere`: its programme's box is not on this card.
+// a spawn whose claimant is not on this card, is `elsewhere`: its programme's box is not on this card. A KEPT worker
+// (D-8981: its run closed, its coordinator still holds open work of that programme, `FleetRow.kept`) is one of its box's
+// children, since the tree nests it under that coordinator, or `elsewhere` when that coordinator is not on this card
+// (`rowClaimant`); a programme left with no open run keeps no one, and its workers are `lone`.
 //
 // STATE. `boxState` is one decider, in this order: needs (a drawn member is the operator's ask, `operatorAsk`), the
 // operator's pause, stalled (no move within the stall watch's quiet threshold), moving. Movement is an INPUT
@@ -25,7 +28,7 @@ import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
 import { operatorAsk, summaryParts, type RolledRow } from './rollup';
-import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle, runLastMove } from './runWords';
+import { RUN_WORD, boundOpenRun, boxRunsOf, programWave, programmeTitle, runLastMove, type KeptRun } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
 export type ProgHue = (typeof PROG_HUES)[number];
@@ -60,8 +63,9 @@ export function assignHues(slugs: readonly string[]): ReadonlyMap<string, ProgHu
  *  when the fleet's set of open programmes does, never with what another card holds. */
 export const fleetHues = (runs: readonly RunSummary[]): ReadonlyMap<string, ProgHue> => assignHues(runs.map((r) => r.program));
 
-/** A card's entries of the fleet's map: the programmes of `runs`, the runs the card can know of, in slug order. */
-export function cardHues(fleet: ReadonlyMap<string, ProgHue>, runs: readonly RunSummary[]): ReadonlyMap<string, ProgHue> {
+/** A card's entries of the fleet's map: the programmes of `runs`, the runs the card can know of (and a kept worker's
+ *  closed run, D-8981), in slug order. */
+export function cardHues(fleet: ReadonlyMap<string, ProgHue>, runs: readonly { readonly program: string }[]): ReadonlyMap<string, ProgHue> {
   const out = new Map<string, ProgHue>();
   for (const slug of [...new Set(runs.map((r) => r.program))].sort()) {
     const hue = fleet.get(slug);
@@ -107,6 +111,19 @@ export function rowRun(row: FleetRow, runs: readonly RunSummary[]): RunSummary |
   return boundOpenRun(runs, row.session);
 }
 
+/** The kept answer the tree gave a row (`FleetRow.kept`, D-8981), read only when it does no open run. */
+const rowKept = (row: FleetRow, runs: readonly RunSummary[]): KeptRun | null =>
+  row.kind === 'session' && rowRun(row, runs) === null ? row.kept ?? null : null;
+
+/** Whom a row works for: its run's claimant, or, for a finished worker its programme still keeps, that programme's
+ *  coordinator (D-8981). The card's sorting into boxes, elsewhere and lone, and the Status view's members, read it. */
+export const rowClaimant = (row: FleetRow, runs: readonly RunSummary[]): string | null =>
+  rowRun(row, runs)?.claimedBy ?? rowKept(row, runs)?.coordinatorId ?? null;
+
+/** The programme a row works for, by the same two answers: the hue it is drawn in. */
+export const rowProgramme = (row: FleetRow, runs: readonly RunSummary[]): string | null =>
+  rowRun(row, runs)?.program ?? rowKept(row, runs)?.program ?? null;
+
 /** One card's boxes, the workers of programmes elsewhere, and the rows in no programme. `rows` is the card's tree
  *  (`nestFleet`'s order); `here` is the open runs whose worker renders on this card, and `far` those a session here
  *  claims whose worker renders on another (`fleetTree`'s `runs` and `claimed`). `hues` is the fleet's map: a slug it
@@ -143,7 +160,7 @@ export function programmeBoxes(
         lastMoveAt: boxLastMove(claimed, lastMoveOf) });
       continue;
     }
-    const by = rowRun(head, runs)?.claimedBy ?? null;
+    const by = rowClaimant(head, runs);
     const far = by !== null && !(head.kind === 'session' && by === head.session.id) && !claims.has(by);
     (far ? elsewhere : lone).push(head, ...kids);
   }
@@ -152,12 +169,6 @@ export function programmeBoxes(
   const boxes = drafts.map(({ slug, title, ...d }) => ({ ...d, lead: { slug, title, hue: hueOf(slug) } }));
   return { boxes, elsewhere, lone, hues };
 }
-
-/** The runs that make a session a box: its claimed runs through the one coordinator-side reader (`claimedRunsOf`,
- *  D-7182), less a run it claims for itself, which is no box. The runs here are the open runs frame's, so its open
- *  filter keeps every one of them. Written once for `programmeBoxes` and `nextStallBoundary`. */
-const boxRunsOf = (runs: readonly RunSummary[], id: string): RunSummary[] =>
-  claimedRunsOf(runs, id).filter((r) => r.claimedBy !== r.sessionId);
 
 /** A box's last move: the newest over its runs. Written once for `programmeBoxes` and `nextStallBoundary`. */
 const boxLastMove = (runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null): number | null =>

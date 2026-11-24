@@ -20,7 +20,7 @@ import { SKIN_SETS } from '../src/skins';
 import { createFleetStore, useFleetStore } from '../src/stores/fleet';
 import { renderFleet } from './fleetHost';
 import { itemView, waitingView } from './ledgersFixture';
-import { withRunBinding } from './runBindingFixture';
+import { withProgrammeBinding, withRunBinding } from './runBindingFixture';
 import { HOUR, MIN, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
 
 const noop = (): void => {};
@@ -149,6 +149,24 @@ describe('a programme box in its project card', () => {
     expect(after(row('w9'), loneHead!)).toBe(true);
     expect(after(loneHead!, row('l1'))).toBe(true);
     expect(row('w9').closest('[data-hue]')?.getAttribute('data-hue')).toBe(assignHues(['port-api', 'billing']).get('billing'));
+  });
+
+  // D-8981, D-8982: a worker whose run closed while its programme still has open work stays in the box, and says so.
+  // Red first: on main it fell to "Not in a programme" with "run not on the board".
+  it('keeps a worker whose run closed in its programme\'s box, labelled "run closed", while the programme is active', () => {
+    const { sessions, runs } = fleet();
+    const kept = sess('w0', 'project-c', { role: 'child', child: { kind: 'child', runId: 9 } });
+    const closed = run(9, 'coord', 'w0', { state: 'done', wave: 1, closedAt: NOW - HOUR });
+    const all = [...sessions, ...withProgrammeBinding([kept], [closed, ...runs])];
+    const c = drawCard(all, runs, 'project-c', { prefs: { projects: {}, openChildren: ['coord'] } });
+    const box = c.querySelector<HTMLElement>('section.pg-box')!;
+    expect(labels(box.querySelector('.pg-tray')!)).toEqual(['w1', 'w2', 'w3', 'w0']);
+    const line = [...box.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'w0')!;
+    expect(line.querySelector('.sess-child')?.textContent).toBe('port-api · wave 1 · run closed');
+    expect(line.closest('[data-hue]')?.getAttribute('data-hue')).toBe(assignHues(['port-api']).get('port-api'));
+    const lone = c.querySelector('.pg-sub');
+    expect(lone?.textContent).toBe('Not in a programme');
+    expect([...c.querySelectorAll('.sess-child')].map((e) => e.textContent)).not.toContain('run not on the board');
   });
 
   // A control, green on main too: a card with no programme draws exactly the rows it drew before.

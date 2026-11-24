@@ -36,6 +36,7 @@ export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   return { kind: 'unrecognised' };
 };
 
-/** Does a READABLE marker name this run? True only for a `child` mark of exactly `runId`: a workspace resumed for a later
- *  wave carries a later run's id, and a recycled name carries another's, and neither belongs to this run. */
+/** Does a READABLE marker name this run? True only for a `child` mark of exactly `runId`. The marker names the run that
+ *  MINTED the workspace (`ws-add --child` is its one writer), and a later wave resumes the workspace without rewriting it,
+ *  so a resumed wave's run is NOT the one it names; a recycled name's marker names a later run (D-8981). */
 export const runBelongsTo = (mark: ChildMarkRead, runId: number): boolean => mark.kind === 'child' && mark.runId === runId;

@@ -57,7 +57,7 @@ import { isUnseen, type Acks } from '../lib/seen';
 import type { FleetTreeGroup } from './fleetTree';
 import type { FleetRow } from './nestFleet';
 import {
-  boxNeeds, boxOrder, boxState, programmeBoxes, rowRun, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
+  boxNeeds, boxOrder, boxState, programmeBoxes, rowClaimant, rowProgramme, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
 } from './programmeBoxes';
 import { coordinatorPresence } from './presence';
 import { operatorAsk } from './rollup';
@@ -212,11 +212,11 @@ export function statusView(
   // A box's own children first, then its far workers, each in its card's order.
   const placed = [
     ...cards.flatMap((c) => c.prog.boxes.flatMap((b) => b.children.map((row) => [c, b.coordinatorId, row] as const))),
-    ...cards.flatMap((c) => c.prog.elsewhere.map((row) => [c, rowRun(row, c.runs)?.claimedBy ?? null, row] as const)),
+    ...cards.flatMap((c) => c.prog.elsewhere.map((row) => [c, rowClaimant(row, c.runs), row] as const)),
   ];
   for (const [{ runs, prog }, by, row] of placed) {
     if (by === null || !heads.has(by) || gone.has(by) || row.kind !== 'session') continue;
-    const member = { session: row.session, hue: prog.hues.get(rowRun(row, runs)?.program ?? '') };
+    const member = { session: row.session, hue: prog.hues.get(rowProgramme(row, runs) ?? '') };
     members.set(by, [...(members.get(by) ?? []), member]);
   }
   // Drawn by a box: its coordinator, as its head, and every member, in its tray or nowhere.
