@@ -5355,8 +5355,9 @@ fi
 # rename turns that suite red rather than silently disarming this deny.
 # ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
 # `paid` are already in memory, so a non-Skill event, and the main thread's
-# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
-# jq for the skill's name.
+# Skill call, pay no fork in this arm, and only a subagent's Skill call pays its
+# one jq for the skill's name. A session under a launch profile pays one more jq
+# on every PreToolUse, in the surface arm below, which reads the name too.
 # A deny already set is never replaced (the merge deny's own guard, copied
 # whole). Today it cannot be set on a Skill call, because every other deny here
 # fires on another tool, and the guard is written for the day one does.
@@ -5366,17 +5367,18 @@ fi
 # `pre_json` as it was. This arm prints nothing itself: the one print site at
 # the end of the file emits the envelope, after the hookstate rename.
 ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
-if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  rsk=$(jq -r '
-    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+# The skill's name, read the way Claude Code reads it (above); the surface arm below reads it with this one definition too.
+SKILL_NAME_JQ='def skillname: def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
       or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
       or . == 8287 or . == 12288 or . == 65279;
     .tool_input.skill? // "" | tostring | explode
     | until(length == 0 or (.[0] | ws | not); .[1:])
     | until(length == 0 or (.[-1] | ws | not); .[:-1])
     | if .[0] == 47 then .[1:] else . end
-    | implode' <<<"$payload" 2>/dev/null) || rsk=""
+    | implode;'
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r "$SKILL_NAME_JQ skillname" <<<"$payload" 2>/dev/null) || rsk=""
   rbare=${rsk#*:}
   for rname in $ROLE_SKILLS; do
     if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
@@ -5386,6 +5388,39 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
       break
     fi
   done
+fi
+
+# ── THE SURFACE ARM (Overlord W1 sandbox PR B, Task 8; spec §3.6 H1, H4; slug surface-arm-refuses-what-the-profile-lacks) ──
+# A session launched under a surfaced profile carries `CCRC_LAUNCH_PROFILE=<role>:<digest>` (ccd's spawn composes it). Here
+# the hook reads that role's row from the INSTALLED `lib/launch-profiles.json` (beside this file, else `~/.cc-sessions/lib`,
+# as `_hook_role_compact_text` finds it) and denies, on the main thread and in a subagent alike: a tool the row does not list
+# (its `--tools`, or a tool `mcp__<server>__…` of a server its reader types name: the door's); an `Agent` or `Task` call (one
+# tool, as the row lists `Agent`) whose `subagent_type` is not a declared reader type (`--agents`'s keys), one naming none
+# included; and a `Skill` call whose name, read by SKILL_NAME_JQ and compared WHOLE, the row does not stage (`stagedSkills`),
+# so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
+# session's argv is the row it was spawned with, so this can only be stricter.
+# FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
+# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
+# enforcement is Claude Code's own (`--tools` and the deny rules).
+SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
+  | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
+  | if $ti == null or $ai == null then error("row") else . end
+  | ($row.flags[$ti + 1] | split(",")) as $tools | ($row.flags[$ai + 1] | fromjson) as $ag
+  | if ($row.stagedSkills | type) != "object" or ($ag | type) != "object" then error("row") else . end
+  | ([$ag[].tools[]? | strings | select(startswith("mcp__")) | "mcp__" + split("__")[1] + "__"] | unique) as $srv
+  | if (($tools | index(if $t == "Task" then "Agent" else $t end)) == null and ([$srv[] as $p | $t | startswith($p)] | any | not)) then "the tool `" + $t + "`"
+    elif ($t == "Agent" or $t == "Task") and ($ag | has($at) | not) then "the agent type `" + (if $at == "" then "(none)" else $at end) + "`"
+    elif $t == "Skill" and ($row.stagedSkills | has($sk) | not) then "the skill `" + $sk + "`"
+    else "" end'
+if [[ "$event" == PreToolUse && -n "${CCRC_LAUNCH_PROFILE:-}" && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  srole=${CCRC_LAUNCH_PROFILE%%:*} sf="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"; [[ -f "$sf" ]] || sf="$HOME/.cc-sessions/lib/launch-profiles.json"
+  sout="" sok=""; [[ "$srole" =~ ^[a-z]{1,16}$ ]] && sout=$(jq -r --arg r "$srole" --slurpfile rows "$sf" "$SKILL_NAME_JQ $SURFACE_ARM_JQ" <<<"$payload" 2>/dev/null) && sok=1
+  if [[ -z "$sok" ]]; then sreason="ccrc: this session runs under a launch profile (\`${CCRC_LAUNCH_PROFILE%%:*}\`) whose row could not be read, so every tool call is refused until it can be (W1 sandbox, the surface arm)."
+  elif [[ -n "$sout" ]]; then sreason="ccrc: this session runs under the \`$srole\` launch profile, which does not list $sout, so the call is refused (W1 sandbox, the surface arm). Use the tools, reader type and skill the profile gives you."
+  else sreason=""; fi
+  if [[ -n "$sreason" ]] && sjson=$(_hook_deny_json "$sreason"); then pre_json=$sjson; fi
 fi
 
 # ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
