@@ -1,13 +1,16 @@
 // A transcript row's equality (desktop polish Task C7). `buildChatItems` builds every item again on each events frame,
 // while the events themselves keep their identity (`dedupeAppend`), so the list's row barrier compares a row by its
 // fields: the same event is the same row, a mail item's envelope and a task item's notification are read off that event,
-// and a folded tool group is the same row when its entries are, element by element.
+// and a folded tool group is the same row when its entries are, element by element. A tool-activity row (desktop polish
+// wave 168) is the same row when its entries, its opened rows and what it surfaces are, element by element, and its
+// words and flags are the same; any change to what it shows is a new row.
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { readsClock, sameRowProps, sameTranscriptItem } from '../src/session/sameRow';
-import { groupToolRun, type TranscriptItem } from '../src/session/toolSummary';
+import { foldToolActivity, type ActivityFold, type TranscriptItem } from '../src/session/toolActivity';
+import { groupToolRun } from '../src/session/toolSummary';
 
 const TS = '2026-10-28T10:00:00.000Z';
 const assistant = (uuid: string, text: string): ChatEvent => ({ kind: 'assistant', uuid, ts: TS, text });
@@ -136,5 +139,59 @@ describe('readsClock, and the day a row compares (review 1128)', () => {
     expect(sameRowProps(message, { ...message, day: 'day-2' })).toBe(true);
     // The day is the only prop a row may skip: any other change is still a new row.
     expect(sameRowProps(message, { ...message, id: 't' })).toBe(false);
+  });
+});
+
+describe('a tool-activity row (desktop polish wave 168)', () => {
+  const failedResult = (toolId: string): ChatEvent => ({ kind: 'tool_result', ts: TS, toolId, text: 'exit 1', isError: true });
+  const events = (): ChatEvent[] => [
+    { kind: 'user', uuid: 'q1', ts: TS, text: 'Go.' },
+    assistant('a1', 'Reading.'),
+    toolUse('t1'), toolResult('t1'),
+    toolUse('t2', 'Bash', '{"command":"npm test"}'),
+  ];
+  const row = (evs: ChatEvent[], fold: Partial<ActivityFold> = {}) =>
+    only(foldToolActivity(buildChatItems(evs, [], true), { runs: 'tool-runs', wait: { kind: 'none' }, busy: true, ...fold }), 'tool-activity');
+
+  it('a freshly built row over the same events is the same row, its arrays new', () => {
+    const evs = events();
+    const a = row(evs);
+    const b = row(evs);
+    expect(a.entries).not.toBe(b.entries);
+    expect(a.inner).not.toBe(b.inner);
+    expect(a.attention).not.toBe(b.attention);
+    expect(sameTranscriptItem(a, b)).toBe(true);
+    // The same with a surfaced failure and a live wait in it.
+    const failing = [...evs.slice(0, 3), failedResult('t1'), evs[4]!];
+    expect(sameTranscriptItem(row(failing, { wait: { kind: 'other' } }), row(failing, { wait: { kind: 'other' } }))).toBe(true);
+  });
+
+  it('a row whose live state, wait or surfaced entries changed is a different row', () => {
+    const evs = events();
+    // The turn ended: no longer running, nothing else changed.
+    const running = row(evs, { busy: true });
+    const ended = row(evs, { busy: false });
+    expect([running.live, ended.live]).toEqual([true, false]);
+    expect(sameTranscriptItem(running, ended)).toBe(false);
+    // The session began to wait on the reader.
+    expect(sameTranscriptItem(row(evs), row(evs, { wait: { kind: 'other' } }))).toBe(false);
+    // A failure arrived: the same entries by key, a different result, and a new surfaced entry.
+    const failing = [...evs.slice(0, 3), failedResult('t1'), evs[4]!];
+    expect(sameTranscriptItem(row(evs), row(failing))).toBe(false);
+    // A call arrived.
+    expect(sameTranscriptItem(row(evs), row([...evs, toolUse('t3')]))).toBe(false);
+    // The session began asking the turn's one open question: the same calls, a surfaced card now.
+    const asking: ChatEvent[] = [...evs.slice(0, 4), toolUse('t4', 'AskUserQuestion', '{"questions":[{"question":"Ship?"}]}')];
+    const quiet = row(asking);
+    const asked = row(asking, { wait: { kind: 'question', questions: ['Ship?'] } });
+    expect([quiet.attention.length, asked.attention.length, quiet.waiting, asked.waiting]).toEqual([0, 1, false, false]);
+    expect(sameTranscriptItem(quiet, asked)).toBe(false);
+    // The reader prompted again: the turn is over, so the row's calls are settled (review 3478 F4), and nothing else changed.
+    const done = row(evs, { busy: false });
+    const prompted = row([...evs, { kind: 'user', uuid: 'q2', ts: TS, text: 'Next.' }], { busy: false });
+    expect([done.past, prompted.past, done.live, prompted.live]).toEqual([false, true, false, false]);
+    expect(sameTranscriptItem(done, prompted)).toBe(false);
+    // The skin's inner grouping changed (a switch): the same calls, other opened rows.
+    expect(sameTranscriptItem(row(evs, { runs: 'tool-runs' }), row(evs, { runs: 'none' }))).toBe(false);
   });
 });
