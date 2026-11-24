@@ -2,7 +2,7 @@
 
 The task note for wave 173, written by its worker for the coordinator to fold into the ledger. The operator's goal of
 2026-11-24: "done" is misleading for a coordinator whose children are still working; keep "done" for when the coordinator
-and its workers are all doing nothing. This note describes the branch after fix round 1 (review 3632). Each claim says
+and its workers are all doing nothing. This note describes the branch after fix round 2 (review 3651). Each claim says
 whether it was **measured** (read on the tree or by a test this wave ran) or **inferred**.
 
 ## 1. The rule
@@ -13,10 +13,12 @@ whether it was **measured** (read on the tree or by a test this wave ran) or **i
 - its role is coordinator (`coordinatorRole`, the one reader of the role);
 - its own bucket is `done` or `idle` (idle on purpose: done decays to idle after thirty minutes);
 - it is not asleep;
-- at least one of its worker rows is busy (`workerBusy`), which means one of:
+- at least one of its worker rows is busy, which means one of:
   - a worker session whose row word (`rowStateWord`) is `working` and whose row does not read `with coordinator`
-    (`rowWithCoordinator`, the same fact the worker's own row words take);
-  - a spawn the board itself calls in flight (`dispatchWindow`'s `in-flight` phase, with the board's own threshold).
+    (`sessionWorkerBusy`, over `rowWithCoordinator`, the same fact the worker's own row words take);
+  - a spawn the board itself calls in flight (`workersWaitAt`, which asks `dispatchWindow`'s `in-flight` phase, with the
+    board's own threshold). This is the one spelling of "is this spawn in flight" in the rule: fix round 2 removed
+    `workerBusy`, a second spelling on a row that no production code called (review 3651 F4).
 
 Every other row reads as before. The caller passes the bucket it paints, so the row and the header apply the rule to the
 same state.
@@ -41,7 +43,11 @@ waiting because of the worker.
 
 **Which rows are its workers.** `workersOf` in `pwa/src/fleet/fleetTree.ts` reads the bracket's own edges over the whole
 fleet and its open runs. It is handed what `nestFleet` is handed, `latestPerSession` (the bracket's input filter and the
-one reader of "is this run's session on the list" outside `nestFleet`), and then applies the bracket's rules 1 and 5:
+one reader of "is this run's session on the list" outside `nestFleet`), and then applies the bracket's rules 1 and 5.
+`latestPerSession` drops closed runs first (review 3651 F3): the list is handed the active runs and `workersOf` every
+run, so without that a newer closed run naming the same unlisted session would hide an older spawn in flight that the card
+still draws. Measured: run 100 planned a minute ago and run 101 closed, both naming an unlisted session; `workersOf`
+returns the spawn of run 100, the coordinator reads `waiting on workers`, and the card draws run 100 as its pending row.
 
 - an open run it claims whose bound worker (`workerOf`) the fleet carries is that worker, counted once;
 - a run whose session is listed but bound to another run was dropped by the filter, so it is no worker and no spawn;
@@ -68,8 +74,10 @@ primitive (`WorkerWait`, from `workersBusyOf`):
 - `false`: neither.
 
 The facts read it at their own `now` (`workersWaitAt`, which asks `dispatchWindow`). The row ticks every 30 s while it
-holds a number, as it does while busy, and the session screen's facts tick on the screen's own clock. If the newest
-dispatch is stalled, every older one is too.
+holds a number, as it does while busy: with no new event, that tick is the only thing that turns the word back when a
+spawn crosses the stall threshold, and a fake-timer case pins it (review 3651 F2). The session screen's facts and its
+coordination line (`coordinationOf`, a worker's word for its coordinator) both read the screen's own clock (review 3651
+F1). If the newest dispatch is stalled, every older one is too.
 
 | Case | Word | Basis |
 |---|---|---|
@@ -89,6 +97,9 @@ dispatch is stalled, every older one is too.
 | one worker bound by two of its open runs | one row | Measured |
 | a session the run names, bound to another claimant's run | no worker, no spawn | Measured |
 | a stamped dispatch whose session row exists | that session, never also a spawn | Measured |
+| an unlisted session, an older dispatch in flight and a newer closed run naming it | waiting on workers, as the card draws the spawn | Measured |
+| a worker's header, its coordinator's only wait a spawn in flight (the worker done, holding a held question, or asleep) | waiting on workers; the same spawn stalled reads done | Measured on the open screen |
+| a worker's header, the worker holding a held question or asleep, nothing else running | done | Measured on the open screen |
 
 ## 2. The words
 
@@ -105,7 +116,7 @@ this scan is its own guard. The lamp's story uses a stand-in label, so the words
 | The fleet row, `SessionLine.tsx`: its word (`SessionMeta`'s card cell reads `cardFacts`) and its lamp | Converted. The row reads `workersBusyOf` from the fleet store as one primitive, so a frame that changes no answer re-renders no row | Measured on the rendered row |
 | The session header's status chip, `sessionHeaderView.ts` and `SessionHeader.tsx` | Converted. The rule runs over the bucket the strip paints (`headerBucket`: the fleet row's bucket whenever the row exists), with the workers the facts carry. The chip gains `waiting`, its lamp takes the words and its title is the words' title | Measured on the view and on the open screen (`coordinator-waiting-screen.test.tsx`) |
 | `headerFacts`' status fact and `headerStatusWord` | Converted. The header says the card's word verbatim, with no age added. `cardWithinHeader` holds | Measured |
-| A worker header's word for its coordinator, `coordinationOf`'s `coordinatorState` (`SessionDetails`) | Converted: `coordinationOf` takes the coordinator's `WorkerWait` and an optional clock | Measured on the function and on the open worker's screen |
+| A worker header's word for its coordinator, `coordinationOf`'s `coordinatorState` (`SessionDetails`) | Converted: `coordinationOf` takes the coordinator's `WorkerWait` and the screen's clock (optional for other callers; without it a spawn alone reads the bucket's word) | Measured on the function and on the open worker's screen |
 | The lamp, `StatusDot` (`ui/src/primitives/status-dot.tsx`) | A `waitingLabel` prop. Only a done or idle dot reads it | Measured for both buckets |
 | The worker summary line, `rollup.ts`'s `summaryParts` | Unchanged, rightly: it counts workers, not the coordinator | Measured (`2 workers · 1 working · 1 idle`) |
 | The command palette, `command/sessionEntries.ts` | Unchanged, rightly: its entry words the role and project, never the state | Measured by reading it |
@@ -155,21 +166,29 @@ coordinator's ruling, its holder was sent a unified diff against main `01dce5c85
 answered yes: the four hunks apply to its branch at an offset of 5 lines and touch none of its three changes there. The
 screen reads two clock-free answers from the fleet store with `workersBusyOf`, one for the open session and one for its
 coordinator. It passes the first into the session facts, which read it at the screen's own clock, and the second into
-`coordinationOf`. Fix round 1 changed the type those answers carry and not one line of the screen.
-`coordinator-waiting-screen.test.tsx` opens a coordinator and a worker on the real screen.
+`coordinationOf`. Fix round 1 changed the type those answers carry and not one line of the screen. Fix round 2 (review
+3651 F1) moved the screen's clock (`factsNow`) above the `coordinationOf` call and passed it, under this wave's own claim
+on the file, taken after its former holder's pull request merged. `coordinator-waiting-screen.test.tsx` opens a
+coordinator and a worker on the real screen, with the worker done, holding a held question or asleep, beside a spawn in
+flight, stalled or absent.
 
 ## 7. Known limits and what is unmeasured
 
-- **A1, a nested coordinator.** A coordinator whose only busy worker is itself a coordinator with busy workers, and is
-  done or idle itself, still reads done: `workerBusy` reads the worker's own row word, not the rule.
-- **A worker's header and a spawn.** The screen gives `coordinationOf` no clock, so on a worker's header a coordinator
-  waiting on a spawn alone reads its bucket's word; a working worker session still reads waiting there. The coordinator's
-  own header and row read the spawn at their clock.
-- **A4.** A screen reader hears `waiting on workers` twice on a row and in the header (the lamp's label and the word beside
+- **A1 (review 3632), a nested coordinator.** A coordinator whose only busy worker is itself a coordinator with busy
+  workers, and is done or idle itself, still reads done: `sessionWorkerBusy` reads the worker's own row word, not the rule.
+- **A1 (review 3651), an older server.** A server that sends no run binding gives `workerOf` nothing, so the bracket drops
+  every run of a listed session: a coordinator whose listed workers are really working reads done there. The tree brackets
+  nothing either, so the surfaces agree with each other and not with the truth. It needs a version-skew window.
+- **A2 (review 3651), the word's lag.** The row and the header tick every 30 s and the card's spawn row every second, so the
+  word can turn back up to 30 s after the card shows the spawn stalled.
+- **A4 (review 3651), a long stall's tick.** A stalled spawn keeps the row on its 30 s tick for as long as the run reads
+  "dispatch never completed", possibly hours, because `workersBusyOf` returns the newest stamp whatever its age. The words
+  stay right; the cost is the tick.
+- **A4 (review 3632).** A screen reader hears `waiting on workers` twice on a row and in the header (the lamp's label and the word beside
   it), the same pattern as every other state, now a three-word phrase.
-- **A5.** The words' explanation is a `title` on a span that takes no focus, so it does not show on touch or to a keyboard.
+- **A5 (review 3632).** The words' explanation is a `title` on a span that takes no focus, so it does not show on touch or to a keyboard.
   That is the pattern of every state word.
-- **A8.** The done-or-idle condition is written in `waitingOnWorkers` and again in `headerStatusWord`, a re-check of the same
+- **A8 (review 3632).** The done-or-idle condition is written in `waitingOnWorkers` and again in `headerStatusWord`, a re-check of the same
   rule inside L1. The `StatusDot` copy is the design system's own, since `ui/` cannot import the app's policy.
 - **The glyph.** U+25D4's coverage in the mono font stack on real devices is not measured. `◔` already ships in
   `accountWords.ts` and `◐` in the working lamp. On a device whose fallback fonts lack it, the lamp would draw a
@@ -185,35 +204,44 @@ coordinator. It passes the first into the session facts, which read it at the sc
 Red first. Before the build, the suite failed to load (`workersBusyOf is not a function`). Before fix round 1, the four
 round cases went red on 6e41898311: the dispatch in flight then stalled, the done and the idle coordinator holding a
 worker's question, and the listed session bound to another run. The lamp's idle case and the extra glyphs are guards, and
-their mutants (M29 to M31 below) go red when cut.
+their mutants (M29 to M31 below) go red when cut. Before fix round 2, four of the round's cases went red on db70a2d0eb:
+the closed-run case (F3) and the three worker-header cases with a spawn in flight (F1). The fake-timer tick (F2) and the
+held-question and asleep worker-header cases with nothing else running are guards of behaviour that was already right:
+the tick case goes red when its gate is cut (M26), and the other two pin the answer F1's fix must not change.
 
-**Mutants, on the code as it stands at this round's tip.** Each was bent in place, the two test files run, and the source
-restored from git. 38 mutants: 37 went red and one is equivalent.
+**Mutants, on the code as it stands at fix round 2's tip.** Each was bent in place by a script, the two test files run
+through the supported runner, and the source restored from git. The table is renumbered from fix round 1's: its M7 guarded
+`workerBusy`, which is gone. 39 mutants: 38 went red and one is equivalent.
 
 - **The rule:** M1 idle dropped, M2 role ignored, M3 asleep ignored, M4 workers ignored.
 - **The worker's busy state:**
   - sessions: M5 a held question counted, M6 any row word counted;
-  - spawns: M7 a stalled spawn counted in `workerBusy`, M8 a stalled spawn counted in `workersWaitAt`, M9 a spawn never
-    counted, M10 the facts ignoring the clock.
-- **The words:** M11 the row word dropped, M12 the row title dropped, M13 the header word's idle arm dropped, M14 the header
+  - spawns: M7 a stalled spawn counted in `workersWaitAt`, M8 a spawn never counted there, M9 the facts ignoring the clock.
+- **The words:** M10 the row word dropped, M11 the row title dropped, M12 the header word's idle arm dropped, M13 the header
   facts not passed the wait.
-- **`workersOf`:**
-  - M15 the bracket filter dropped, M16 the spawn dropped, M17 the self-claim kept, M18 no dedupe, M19 closed runs kept;
-  - M20, the binding ignored inside the loop, is **equivalent**: after `latestPerSession`, every listed run has already
-    passed `workerOf`, so the call in the loop is the census-safe lookup and nothing else.
-- **`workersBusyOf`:** M21 the role check dropped (pinned by its own case after the first pass let it through), M22 a busy
-  session ignored, M23 the oldest spawn read instead of the newest.
-- **`coordinationOf`:** M24 the clock ignored, M25 the word dropped.
-- **The row:** M26 the store read dropped, M27 the lamp label dropped.
+- **`workersOf` and its input:**
+  - M14 the bracket filter dropped, M15 the spawn dropped, M16 the self-claim kept, M17 no dedupe, M18 closed runs kept in
+    the bracket's input (F3);
+  - M19, the binding ignored inside the loop, is **equivalent**: after `latestPerSession`, every listed run has already
+    passed `workerOf`, and the filter drops closed runs, so the call in the loop and a plain lookup agree on every run that
+    reaches it.
+- **`workersBusyOf`:** M20 the role check dropped, M21 a busy session ignored, M22 the oldest spawn read instead of the
+  newest.
+- **`coordinationOf`:** M23 the clock ignored, M24 the word dropped.
+- **The row:** M25 the store read dropped, M26 its tick's gate cut back to busy alone (F2), M27 the lamp label dropped.
 - **The lamp:** M28 the glyph made the check, M29 the working half, M30 the asking dot, M31 the idle arm cut, M32 any bucket
   read, M33 the attention tone.
 - **The header:** M34 the view's rule off, M35 the view's title dropped, M36 the header part's lamp label dropped.
-- **The screen:** M37 the facts not given the workers, M38 the coordination not given the coordinator's workers.
+- **The screen:** M37 the facts not given the workers, M38 the coordination not given the coordinator's workers, M39 the
+  coordination not given the clock (F1).
 
 **Fix round 1 took two pushes.** The first, at 52c30f2989, reddened one server census, the hibernation census. I had run
 the rings, W7, single-definition, anchors and citations censuses before it, not every server test that reads `pwa/src`.
 The second push carries the census row and the asleep-worker cases. Before it, every server test file that names a pwa
 path (156 files, found by grep) ran through the supported runner.
+
+**Fix round 2 is one push**, with code, tests and this note together. Before it, the server census family that reads pwa
+files, the hibernation census included, and the markup and colour censuses ran through the supported runner.
 
 **The whole pwa suite** ran once after the build: 24 files failed to load and no test failed. Two causes, both of the
 environment: the test slice's memory cap killed workers (5 OOM kills), and some censuses import a scan helper from the
