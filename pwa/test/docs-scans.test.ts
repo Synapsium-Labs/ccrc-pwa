@@ -204,7 +204,7 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 // Review lens 4 reads for those; the library's own frame tests and `reader-bridge.test.ts` hold the runtime side.
 // ---------------------------------------------------------------------------------------------------------------
 const SRC_DIR = path.join(PWA, 'src');
-const LIBRARY = '@synapsium-labs/docserver';
+const LIBRARY = '@synapsium-labs/pinax-lib';
 /** The two value uses of the adapters that keep them out of the main bundle: ReaderFrame's literal dynamic `import()`s,
  * and the bridge's own static import of the assets (the bridge is itself loaded only through that dynamic import, so
  * what it imports is lazy with it). */
@@ -406,10 +406,10 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     // The homes are real: each entry point is imported where the rule says it lives, so the rule is not green for
     // want of anything to see.
     expect(uses).toEqual(expect.arrayContaining([
-      'src/docs/reader/bridge.ts @synapsium-labs/docserver/host',
-      'src/docs/reader/bridge.ts @synapsium-labs/docserver/frame',
-      'src/lib/readerRenderJob.ts @synapsium-labs/docserver/render',
-      'src/docs/reader/assets.ts @synapsium-labs/docserver/assets/frame/guard.js?raw',
+      'src/docs/reader/bridge.ts @synapsium-labs/pinax-lib/host',
+      'src/docs/reader/bridge.ts @synapsium-labs/pinax-lib/frame',
+      'src/lib/readerRenderJob.ts @synapsium-labs/pinax-lib/render',
+      'src/docs/reader/assets.ts @synapsium-labs/pinax-lib/assets/frame/guard.js?raw',
     ]));
     expect(names(hits, 'library:')).toEqual([]);
   });
@@ -428,13 +428,13 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
 
   it('M8.10 planted: a /host import in DocsLeaf is red', () => {
     const dir = treeCopy();
-    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { createHost } from '@synapsium-labs/docserver/host';\nvoid createHost;\n");
+    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { createHost } from '@synapsium-labs/pinax-lib/host';\nvoid createHost;\n");
     expect(names(readerScan(dir).hits, 'library:')).toEqual(['src/docs/DocsLeaf.tsx library:/host']);
   });
 
   it('M8.10 planted: a /render import in DocsLeaf is red', () => {
     const dir = treeCopy();
-    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { render } from '@synapsium-labs/docserver/render';\nvoid render;\n");
+    plant(dir, 'src/docs/DocsLeaf.tsx', "\nimport { render } from '@synapsium-labs/pinax-lib/render';\nvoid render;\n");
     expect(names(readerScan(dir).hits, 'library:')).toEqual(['src/docs/DocsLeaf.tsx library:/render']);
   });
 
@@ -595,20 +595,20 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
   });
 
   it('M8.10 planted: the bare package import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver';\nvoid planted;\n")).toEqual([`${LEAF} library:(bare)`]);
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/pinax-lib';\nvoid planted;\n")).toEqual([`${LEAF} library:(bare)`]);
   });
 
   it('M8.10 planted: an /enhance import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver/enhance';\nvoid planted;\n")).toEqual([`${LEAF} library:/enhance`]);
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/pinax-lib/enhance';\nvoid planted;\n")).toEqual([`${LEAF} library:/enhance`]);
   });
 
   it('M8.10 planted: a /frame import in DocsLeaf is red', () => {
-    expect(planted(LEAF, "\nimport { frameDocument } from '@synapsium-labs/docserver/frame';\nvoid frameDocument;\n"))
+    expect(planted(LEAF, "\nimport { frameDocument } from '@synapsium-labs/pinax-lib/frame';\nvoid frameDocument;\n"))
       .toEqual([`${LEAF} library:/frame`]);
   });
 
   it('M8.10 planted: an /assets raw import outside assets.ts is red', () => {
-    expect(planted(LEAF, "\nimport planted from '@synapsium-labs/docserver/assets/frame/guard.js?raw';\nvoid planted;\n"))
+    expect(planted(LEAF, "\nimport planted from '@synapsium-labs/pinax-lib/assets/frame/guard.js?raw';\nvoid planted;\n"))
       .toEqual([`${LEAF} library:/assets`]);
   });
 

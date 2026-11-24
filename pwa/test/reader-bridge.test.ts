@@ -5,8 +5,8 @@
 // are built with `String.fromCharCode`.
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FRAME_MANIFEST, frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/docserver/frame';
-import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/docserver/host';
+import { FRAME_MANIFEST, frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/pinax-lib/frame';
+import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/pinax-lib/host';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import type { EnumerableStoragePort } from '../src/lib/storage';
 import {

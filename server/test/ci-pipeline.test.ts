@@ -2209,8 +2209,8 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     const text = read(SCRIPT);
     const lines = text.split('\n');
     const times = (l: string): number => lines.filter((x) => x === l).length;
-    expect(times('REPO=Synapsium-Labs/docserver')).toBe(1);
-    expect(times('SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml')).toBe(1);
+    expect(times('REPO=Synapsium-Labs/pinax-lib')).toBe(1);
+    expect(times('SIGNER=Synapsium-Labs/pinax-lib/.github/workflows/release.yml')).toBe(1);
     const verify = '"$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners';
     expect(lines.filter((l) => l.trim() === verify), 'exactly one verify line').toHaveLength(1);
     expect(text.match(/gh attestation verify/g) ?? [], 'no other mention of the verify call').toHaveLength(1);
@@ -2221,7 +2221,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
 
   it('the provenance script compares the packed tarball sha512 with the lock integrity before it verifies the attestation', () => {
     const text = read(SCRIPT);
-    expect(text).toContain('packages["node_modules/@synapsium-labs/docserver"]');
+    expect(text).toContain('packages["node_modules/@synapsium-labs/pinax-lib"]');
     expect(text).toContain('package-lock.json');
     const cmp = text.indexOf('if [ "$actual" = "$integrity" ]; then');
     const verify = text.indexOf('gh attestation verify');
@@ -2236,8 +2236,8 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
   it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
     const lines = read(SCRIPT).split('\n');
     const times = (l: string): number => lines.filter((x) => x === l).length;
-    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }'), 'the pack line').toBe(1);
-    expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
+    expect(times('"$bounded" 90 npm pack "@synapsium-labs/pinax-lib@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }'), 'the pack line').toBe(1);
+    expect(times('tgz="$dest/synapsium-labs-pinax-lib-$version.tgz"'), 'the tgz line').toBe(1);
     expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
     // `actual` has one writer, and it never reads the lock's value.
     expect(lines.filter((l) => /^\s*actual=/.test(l)), 'one assignment of actual').toHaveLength(1);
@@ -2256,13 +2256,13 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       const root = mkTmp('ccrc-prov-root-');
       mkdirSync(join(root, 'pwa'));
       writeFileSync(join(root, 'pwa', 'package-lock.json'), JSON.stringify({
-        packages: { 'node_modules/@synapsium-labs/docserver': { version: VERSION, integrity: lockIntegrity } },
+        packages: { 'node_modules/@synapsium-labs/pinax-lib': { version: VERSION, integrity: lockIntegrity } },
       }));
       const log = join(mkTmp('ccrc-prov-log-'), 'log');
       writeFileSync(log, '');
       const dir = fakeBin({
         // npm pack writes the tarball where --pack-destination says, as the real one does.
-        npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-docserver-${VERSION}.tgz"`,
+        npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-pinax-lib-${VERSION}.tgz"`,
         gh: `echo "gh $*" >> '${log}'`,
         // bounded.sh's deadline tool: it logs its argv; `expire` is a deadline that fires (124) without running the command, `expire-gh` one that fires on gh alone.
         timeout: `echo "timeout $1 $2 $3" >> '${log}'\n${deadline === 'expire' ? 'exit 124' : deadline === 'expire-gh' ? '[ "$4" = gh ] && exit 124\nshift 3\nexec "$@"' : 'shift 3\nexec "$@"'}`,
@@ -2280,13 +2280,13 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       const r = run(integrityOf(TARBALL));
       expect(r.status, r.stderr).toBe(0);
       expect(r.log.match(/^gh attestation verify /gm), 'one verify call').toHaveLength(1);
-      expect(r.log).toContain(`--repo Synapsium-Labs/docserver --signer-workflow Synapsium-Labs/docserver/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
+      expect(r.log).toContain(`--repo Synapsium-Labs/pinax-lib --signer-workflow Synapsium-Labs/pinax-lib/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
     });
 
     it('npm pack and the attestation lookup each run under a 90 second deadline', () => {
       const r = run(integrityOf(TARBALL));
       expect(r.status, r.stderr).toBe(0);
-      expect(r.log).toMatch(/^timeout -k 10 90\nnpm pack @synapsium-labs\/docserver@1\.2\.3 /m);
+      expect(r.log).toMatch(/^timeout -k 10 90\nnpm pack @synapsium-labs\/pinax-lib@1\.2\.3 /m);
       expect(r.log).toMatch(/^timeout -k 10 90\ngh attestation verify /m);
       expect(r.log.match(/^timeout -k 10 90$/gm), 'one deadline per call').toHaveLength(2);
     });
@@ -2323,7 +2323,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     const names = [...new Set(listed.split('\0').filter((n) => n !== ''))].filter((n) => existsSync(join(REPO, n)) && statSync(join(REPO, n)).isFile());
     expect(names.length, 'the .github scan went vacuous').toBeGreaterThan(10);
-    const holders = names.filter((n) => read(n).includes('docserver/.github/workflows/release.yml')).sort();
+    const holders = names.filter((n) => read(n).includes('pinax-lib/.github/workflows/release.yml')).sort();
     expect(holders).toEqual([SCRIPT]);
   });
 });

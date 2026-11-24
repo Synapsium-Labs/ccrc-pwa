@@ -9,7 +9,7 @@ import { ts } from '../../server/test/scan/parse';
 import { describe, expect, it } from 'vitest';
 import {
   BRIDGE_LIMITS, BRIDGE_PROTOCOL, ERROR_WHY, FRAME_MANIFEST, MERMAID_GATE_DEFAULTS, PREF_KEYS, frameCsp,
-} from '@synapsium-labs/docserver/frame';
+} from '@synapsium-labs/pinax-lib/frame';
 import { READER_IMAGE_BUDGET_BYTES } from '../src/lib/readerLimits';
 import { loadMermaidAsset, loadReaderAssets } from '../src/docs/reader/assets';
 
@@ -52,7 +52,7 @@ describe('the asset texts', () => {
     };
     walk(sf);
     const want = (['guard', 'bootstrap', 'enhance', 'css', 'mermaid'] as const)
-      .map((k) => `@synapsium-labs/docserver/assets/${FRAME_MANIFEST[k].path}?raw`);
+      .map((k) => `@synapsium-labs/pinax-lib/assets/${FRAME_MANIFEST[k].path}?raw`);
     expect(specifiers).toHaveLength(5);
     expect([...specifiers].sort()).toEqual([...want].sort());
   });

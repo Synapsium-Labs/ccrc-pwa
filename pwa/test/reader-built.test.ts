@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
-import { FRAME_MANIFEST } from '@synapsium-labs/docserver/frame';
+import { FRAME_MANIFEST } from '@synapsium-labs/pinax-lib/frame';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');

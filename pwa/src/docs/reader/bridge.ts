@@ -29,10 +29,10 @@
 // timed mounts: the reader lab plan, refinement (k)), its `chrome`, and the recorded E17 reading.
 import {
   mermaidGate, type FrameAssets, type RenderInput,
-} from '@synapsium-labs/docserver/frame';
+} from '@synapsium-labs/pinax-lib/frame';
 import {
   mountDocFrame, type FallbackReason, type HiddenChar, type HostAdapters, type HostLink,
-} from '@synapsium-labs/docserver/host';
+} from '@synapsium-labs/pinax-lib/host';
 import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';

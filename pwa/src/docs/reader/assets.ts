@@ -10,21 +10,21 @@
 // and the Mermaid text, by far the largest, only when a document's gate asks for it. The stylesheet is the frame's
 // built copy (`frame/reader.css`, the fonts inlined as `data:`), never the source `reader.css`, whose hash differs and
 // which the frame's asset check refuses.
-import type { FrameAssets } from '@synapsium-labs/docserver/frame';
+import type { FrameAssets } from '@synapsium-labs/pinax-lib/frame';
 
 /** The four texts every mount needs: the guard, the bootstrap, the enhancer and the frame stylesheet. A rejected
  *  import (a chunk that did not load) rejects this promise whole; the caller falls back. */
 export async function loadReaderAssets(): Promise<FrameAssets> {
   const [guard, bootstrap, enhance, css] = await Promise.all([
-    import('@synapsium-labs/docserver/assets/frame/guard.js?raw'),
-    import('@synapsium-labs/docserver/assets/frame/bootstrap.js?raw'),
-    import('@synapsium-labs/docserver/assets/frame/enhance.js?raw'),
-    import('@synapsium-labs/docserver/assets/frame/reader.css?raw'),
+    import('@synapsium-labs/pinax-lib/assets/frame/guard.js?raw'),
+    import('@synapsium-labs/pinax-lib/assets/frame/bootstrap.js?raw'),
+    import('@synapsium-labs/pinax-lib/assets/frame/enhance.js?raw'),
+    import('@synapsium-labs/pinax-lib/assets/frame/reader.css?raw'),
   ]);
   return { guard: guard.default, bootstrap: bootstrap.default, enhance: enhance.default, css: css.default };
 }
 
 /** The Mermaid script's text, for a document whose gate lets it in. Rejects when the chunk does not load. */
 export async function loadMermaidAsset(): Promise<string> {
-  return (await import('@synapsium-labs/docserver/assets/mermaid/mermaid.frame.js?raw')).default;
+  return (await import('@synapsium-labs/pinax-lib/assets/mermaid/mermaid.frame.js?raw')).default;
 }

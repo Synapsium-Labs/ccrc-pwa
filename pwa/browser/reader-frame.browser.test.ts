@@ -32,7 +32,7 @@ import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Route } from 'playwright-core';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
+import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/pinax-lib/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
@@ -109,7 +109,7 @@ const DRAW = docsDrawFor(READER_E17_MERMAID);
  *  access could. The seed element has no id (the bootstrap finds it by its place before its own script), so there is no
  *  seed name to plant. */
 const BOOTSTRAP_GLOBALS: readonly string[] = ((): string[] => {
-  const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/docserver/assets/frame/bootstrap.js'), 'utf8');
+  const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/pinax-lib/assets/frame/bootstrap.js'), 'utf8');
   const m = /var O=(\[[^\]]*\])/.exec(text);
   if (m === null) throw new Error('the installed bootstrap holds no global list in the expected place');
   const names = JSON.parse(m[1] ?? '[]') as string[];

@@ -455,6 +455,18 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 
 All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are defined: 8816 and 8824 to 8827.
 
+- **D-8994 (2026-11-24)**: reader-assets-holds-no-hash-literals. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `pwa/test/reader-assets.test.ts` ("its hash rows in the last commit") and its §4 list of what waits for the registry ("`reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals"), and from this plan's amendment bullet "the wave's last commit: … `reader-pin.test.ts`'s and `reader-assets.test.ts`'s literals".
+  - `reader-assets.test.ts` holds no registry-dependent literal: its hash rows compare each asset's sha256 against the installed package's own `FRAME_MANIFEST` entry, read at run time, and its specifiers are built from `FRAME_MANIFEST[k].path`. Measured at Task 1 on `main` at `fff0917bf7`: no 64-hex literal and no version literal in the file. So it takes only its renames, in Task 1's first commit, and the last commit holds `reader-pin.test.ts`'s literals alone among the tests.
+  - Why: review 3635's advisory A1 found the file holds no hash rows; the brief asked Task 1 to confirm it and define the correction.
+- **D-8995 (2026-11-24)**: m79-library-exception-retired. Issued to run 3639 (wave C, wave 43). It departs from the reader-mode plan's amendment §3 row for `server/test/docs-parity.test.ts` ("M79's specifier rule and its planted cases, the near-miss cases (`@synapsium-labs/docserverx`, `@other/docserver`) included"), and from the rich-docs spec's A21 and M8.18, the exception that let the library's import specifiers carry the standalone server's name in `pwa/src`.
+  - M7.9's needle is that name. The library's new name, `@synapsium-labs/pinax-lib`, does not hold it, so renamed planted cases are no hits and the nine "is a hit" cases go red. The plan's text cannot be built as written.
+  - The exception is retired instead: `M79_LIBRARY_SPECIFIER` and its code-position reader `m79InCode` are removed, so no import specifier is excepted. The planted cases keep the old name, and stay hits. The three cases that held an old-name import specifier green now hold it a hit, and a new case holds the new name's four specifiers clean. Measured: restoring the exception over the old name reds the three (Results, wave C).
+  - Why: the exception existed only because the package was named after the needle (spec R-f). Kept over the new name it would except nothing; kept over the old one it would let the retired package back into the PWA unseen.
+  - It is a second edit in place of `docs-parity.test.ts`'s append-only M7.9 block, after W8a's, and its header says so.
+  - Task 7 amends A21 and M8.18 in place, marked "(amended 2026-11-24; D-8995)".
+
+Run 3639's block: 8994 and 8995 are defined; 8996 is held.
+
 ## Results
 
 **X1, run 2631, 2026-11-18.** This is a design wave and writes no source. The base is `main` at `6f5421139`.
@@ -972,3 +984,68 @@ grep over the built frame/bootstrap.js (read only)                  -> port ops 
 ```
 
 No test, build or install ran: nothing in this wave changes code. Every commit was scanned for private names before it was made, and again before the push.
+
+### Wave C, run 3639: built ahead of publication (2026-11-24)
+
+**Base.** `main` at `fff0917bf7`. The workspace branch only; nothing pushed and no pull request opened before publication (the reader-mode plan's amendment §4).
+
+#### The built-ahead library
+
+The coordinator's word for the install is the brief of run 3639. The library's repository was cloned bare from `https://github.com/Synapsium-Labs/pinax-lib.git` into the session temp root, and `996a39b2602d2e1e636c54c95cc9e403fe55cf88` ("Prepare library version 1.2.0 (#94)", 2026-11-24) exported from it with `git archive`, never from a working tree. No tag pointed at it when read.
+
+| Step, in the export | Result |
+|---|---|
+| `npm ci` | rc 0. npm's install-scripts gate skipped esbuild's postinstall; the build did not need it |
+| `npm run build` | rc 0 |
+| Built `assets/` against the commit's blobs (`git hash-object` of each built file against the tree's blob) | 0 differ |
+| `npm pack` (its `prepack`, `scripts/verify-assets.mjs`) | rc 0; "every file under assets/ is named by assets/assets.json"; 514 files, 3.7 MB packed, 12.2 MB unpacked |
+| Tarball `synapsium-labs-pinax-lib-1.2.0.tgz` | sha512 `sha512-vZTiHrZvQBz/AfY8tD5/URE0yrDOjA/ANtmgsy4PE7J5H7DAUu/LxSZpsuna6RsAXwcCkikD+dsV7vN3VZOhlQ==`; sha256 `f2d71d20ea59f44f63a75677e029d33be8ba494efb74d1fb7f7ac1ede5c83757`; 3 678 313 bytes; npm's shasum `5efbe62d23aaceb845a74a4cc726fbc9d23eb950` |
+| `npm install --no-save <tarball>` in `pwa/` | rc 0; `pwa/package.json` and the lock unchanged (`git status` clean); `node_modules/@synapsium-labs/pinax-lib` 1.2.0 beside the locked `docserver` 1.1.0; its `assets/assets.json` byte-identical to the commit's |
+
+The registry tarball's integrity need not equal this local pack's; the lock takes the registry's at the last commit.
+
+The installed `assets/assets.json` (manifest 1, package `@synapsium-labs/pinax-lib`, version 1.2.0, bridge protocol 1), every entry:
+
+| Asset | sha256 | CSP source |
+|---|---|---|
+| `fonts/OFL.txt` | `18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3` |  |
+| `fonts/README.md` | `cfd817cfc6a573679d6961ed40a410b9c0c87ccd1af8bdce2d28c00846e314e9` |  |
+| `fonts/source-sans-3-latin-wght-italic.woff2` | `9a15dafc2c2b2414aaa9d6c30830d9aab4361329d8495b1574633603b994b411` |  |
+| `fonts/source-sans-3-latin-wght-normal.woff2` | `7a19a7027e125257d310c6dbd78ae3a30b5ea1e3794d60b12bb28227a003bfda` |  |
+| `fonts/source-serif-4-latin-opsz-italic.woff2` | `96e6393209728ab93c334ae739af8a040cd2006c82e8614d6465a8084db88f89` |  |
+| `fonts/source-serif-4-latin-opsz-normal.woff2` | `f2ea9c12d2fe9bd3a9589b02ad2c0909da88f30938c91adc838c4f4098f9f9e0` |  |
+| `frame/bootstrap.js` | `d0ab0f7e312251e25005b7c090dbb8129a971c0755d456cf35f82fe450d26c63` | `'sha256-0KsPfjEiUeJQBbfAkNu4EpqXHAdV1FbPNfgv5FDSbGM='` |
+| `frame/enhance-classic.js` | `608037f6acd409299b19fa32b65c2488dd8bbf276da3d182d38a298d9c5af86a` | `'sha256-YIA39qzUCSmbGfoytlwkiN2Lvydto9GC04opjZxa+Go='` |
+| `frame/enhance-editorial.js` | `91948b8a6af0c8f0c30b36a5a935f71c727fdb386e1f6ce58ee4a4be38f66edd` | `'sha256-kZSLimrwyPDDCzalqTX3HHJ/2zhuH2zljuSkvjj2bt0='` |
+| `frame/enhance-guided.js` | `152934356f24ee2286a67176d0497213c97825fe36b1344622df46fc26273a14` | `'sha256-FSk0NW8k7iKGpnF20ElyE8l4Jf42sTRGIt9G/CYnOhQ='` |
+| `frame/enhance-review.js` | `920c60b298691f8293b79df9208e96f4a54cf4260a7f4501bf4ee30aa51a51a3` | `'sha256-kgxgsphpH4KTt535II6W9KVM9CYKf0UBv07jCqUaUaM='` |
+| `frame/enhance.js` | `0a1b49f4a8c20dd3fe7df8d4589cc7ff5030fde2cc548015d2d7ff47d5c787ef` | `'sha256-ChtJ9KjCDdP+ffjUWJzH/1Aw/eLMVIAV0tf/R9XHh+8='` |
+| `frame/guard.js` | `ff3c25da5703bc06d40ca0412b2e760c619a73a4153306f4d0f3b662bda65c4d` | `'sha256-/zwl2lcDvAbUDKBBKy52DGGac6QVMwb00PO2Yr2mXE0='` |
+| `frame/layout-classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `frame/layout-editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `frame/layout-guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `frame/layout-review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `frame/reader.css` | `32aa81ef916560fe4a304599dfcebcd96cd4825e1d8c33d0e6ae81916d563529` |  |
+| `layouts/classic.css` | `90de780c9e0f98fea4bb916357b1ce74a962e577027e1cb88f28e0470b7ea23c` |  |
+| `layouts/editorial.css` | `c15993de4b7d34298fe9287c25516e8254cc1ff70f5b4c9eca92f731b8835dda` |  |
+| `layouts/guided.css` | `9ceef0b3f36b5d9ec611767f20622d0edc7cf0a91f76be65e34f61dbb897304c` |  |
+| `layouts/review.css` | `920780aaeccf034223d33179d0f1a77fab74663d317825f75960b7920a7def68` |  |
+| `mermaid/mermaid.frame.js` | `7585b2055ba386b9acff71b9c8a0c40b36dec79c2106a4aa56048c8fe59832c3` | `'sha256-dYWyBVujhrms/3G5yKDECzbex5whBqSqVgSMj+WYMsM='` |
+| `mermaid/mermaid.mjs` | `dfba66fc5c75e030c35bf16d5e7a62bbee7be5496cabec94ec93f85d626b38df` |  |
+| `print.css` | `2ba6cfdc58eaf2e5bced8b767eb85fb3255bcd1c9a23ee1e62ee5add4bfb6113` |  |
+| `reader.css` | `816db9774bbda71b99b85d1404523c8c837866bee2072eae0806339405cc2996` |  |
+
+**The import list, read ahead on the tarball** (Task 1 Step 1 reads it again at publication): 1.2.0's `exports` are 1.1.0's, key for key (`./render`, `./conformance`, `./enhance`, `./frame`, `./host`, `./highlight`, `./assets/*`, `./package.json`), and every asset the console imports by specifier (`frame/guard.js`, `frame/bootstrap.js`, `frame/enhance.js`, `frame/reader.css`, `mermaid/mermaid.frame.js`) and the two deep paths the tests read (`dist/frame/seed.js`, `dist/host`) exist in it. No change to the list.
+
+#### Task 1's first commit: the rename (D-8976)
+
+Every file of the reader-mode plan's amendment §3 outside the package file, the lock and the pin's literals moved to `@synapsium-labs/pinax-lib` and `Synapsium-Labs/pinax-lib`: the four source files, the pwa and server tests, the browser test, and the provenance step's repository, signer, lock key, pack spec, tarball name and closing line. `git grep` of the old name outside `docs/` then answers only the package file, the lock, `reader-pin.test.ts`'s `resolved` prefix, `docs-parity.test.ts`'s planted old-name cases (D-8995), and the standalone docs server's own lines that §3 leaves alone. `reader-pin.test.ts` changed only its `LIB` constant and its title's package name. `reader-assets.test.ts` took its renames only (D-8994). `docs-parity.test.ts`'s M7.9 exception is retired, not renamed (D-8995).
+
+| Check, on the built-ahead tree (`ccrc test`, foreground) | Result |
+|---|---|
+| `pwa`: `tsc --noEmit` | rc 0 |
+| `pwa`: the 14 renamed files (`docs-scans`, `markdown-purity`, `reader-assets`, `reader-bridge`, `reader-built`, `reader-commands.test-d`, `reader-diff`, `reader-history-types.test-d`, `reader-images`, `reader-lab-bridge`, `reader-lab-frames`, `reader-pin`, `reader-policy`, `w7-storage-keys`) | 503 of 508 pass; the 5 reds are `reader-pin.test.ts`'s 1.1.0 literals, red by design until the last commit |
+| `server`: `ci-pipeline`, `docs-parity` | 214 of 214 pass |
+| D-8995's mutation: the exception restored over the old name, from a saved copy, restored and hash-checked | the three retired-exception cases red |
+| The browser leg, renamed `reader-frame.browser.test.ts` included | run as Task 6 Step 1's BASE, on this commit (below) |
+

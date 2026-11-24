@@ -6,7 +6,7 @@
 // URL, the run's canary, in `img-src`, which the battery requests first as its sign that it ran. Everything else is
 // `frameCsp()` as the reader frame carries it, so the walls the lab measures are the reader's.
 // This file lives under `docs/reader/` because that is the one home of the library's `./frame` (M8.10).
-import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
+import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/pinax-lib/frame';
 
 /** The library build the lab ran against: the first twelve hex digits of its enhance asset's sha256. */
 export const READER_LIBRARY_BUILD: string = FRAME_MANIFEST.enhance.sha256.slice(0, 12);

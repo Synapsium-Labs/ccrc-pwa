@@ -1,8 +1,8 @@
 // The reader's history shapes are the shared Markdown library's (completion plan Task 12): `history.ts` imports nothing
 // from it, so these type tests hold the mirrored shapes equal to the library's in both directions.
-import type { CommitEntry } from '@synapsium-labs/docserver/enhance';
-import type { RenderInput } from '@synapsium-labs/docserver/frame';
-import type { HostAdapters } from '@synapsium-labs/docserver/host';
+import type { CommitEntry } from '@synapsium-labs/pinax-lib/enhance';
+import type { RenderInput } from '@synapsium-labs/pinax-lib/frame';
+import type { HostAdapters } from '@synapsium-labs/pinax-lib/host';
 import { expectTypeOf, test } from 'vitest';
 import type { ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderCommit, ReaderVersionSeed } from '../src/docs/reader/history';

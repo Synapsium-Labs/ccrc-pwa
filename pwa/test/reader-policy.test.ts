@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
+import { BRIDGE_LIMITS } from '@synapsium-labs/pinax-lib/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
 import { DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
 import { READER_COPY_WRITE_MAX_BYTES, READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
