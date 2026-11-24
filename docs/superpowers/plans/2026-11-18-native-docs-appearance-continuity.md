@@ -1049,3 +1049,19 @@ Every file of the reader-mode plan's amendment §3 outside the package file, the
 | D-8995's mutation: the exception restored over the old name, from a saved copy, restored and hash-checked | the three retired-exception cases red |
 | The browser leg, renamed `reader-frame.browser.test.ts` included | run as Task 6 Step 1's BASE, on this commit (below) |
 
+#### Task 6 Step 1: BASE, at Task 1's commit
+
+Taken at `63ba659ed5` (Task 1's rename and its follow-up, below), on the built-ahead tree, before any edit of Tasks 2 to 5, with no appearance: Chromium (Playwright's build), this box, each file once through `ccrc test`, foreground. The per-skin extensions Task 6 Step 2 keeps (every one-skin case of `docs-compact-head` and `reader-frame`'s worst case once per skin, and `frame-cost`'s reader-open measurement, on demand under `CCRC_MEASURE=1`) were written for this measurement and held out of the tree until Task 6. Runs: `docs-compact-head` 132 of 132, `reader-frame` 55 of 55, `frame-cost` reader-open 2 of 2.
+
+| Figure | Refined | Instrument |
+|---|---|---|
+| Open to `ready`, an ordinary page (6 sections, 42 paragraphs, no image, no figure), 9 opens | median 88.4 ms (80.0 to 109.1) | median 84.4 ms (77.2 to 100.3) |
+| srcdoc of that page | 839 815 characters | 839 815 characters |
+| `T10-FIGURES worst` (30 images, 5 MiB) | srcdoc 13 600 319; mount 109.7 ms; ready 2 085.5 ms; wall 2 540 ms; 57 316 elements | srcdoc 13 600 319; mount 105.0 ms; ready 2 061.2 ms; wall 2 557 ms; 57 316 elements |
+| One bar at 412 x 915 (`L11-FIGURE`) | title 56 px down, frame at 48 | title 56 px down, frame at 48 |
+| Full head, `above` at 600, 768 and 1280 | 233, 213, 306 | 233, 213, 310 |
+| Touch laptop `above`, 1280 and 915 x 412 | 322, 342 | 326, 346 |
+
+All 142 `PHH-FIGURE`, `L11-FIGURE`, `T10-FIGURES worst` and `FRAME-COST-READER` lines are kept with the wave's scratch and summarised here; Task 6 compares each against its own line. Hold condition 5 decides whether this BASE stands at the registry pin.
+
+**Task 1 follow-up (`63ba659ed5`).** The browser leg's first run at the rename commit failed to collect `reader-frame.browser.test.ts`: its fixture read the installed bootstrap's global list by the name 1.1.0's minifier gave it (`var O=[…]`), and 1.2.0's names it `M` (118 names; 117 in 1.1.0). The case's comment already says it reads the first array literal, so the code now matches any name. No assertion changed.
