@@ -13,9 +13,9 @@ import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/cont
 import { openCoordDb } from '../src/coord/db.js';
 import { overlordGateRun, type OverlordGateDeps } from '../src/coord/overlordGateRun.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from '../src/coord/overlordGateStore.js';
-import {
-  HISTORY_UNREACHABLE_CAUSES, historyAgentFor, historyDoorAnswer, type HistoryLink, type HistoryReadOutcome, type OverlordHistoryAsked,
-} from '../src/coord/overlordHistory.js';
+import * as deciders from '../src/coord/overlordHistory.js';
+import type { HistoryLink, OverlordHistoryAsked } from '../src/coord/overlordHistory.js';
+import { HISTORY_ROWS as ROWS, historyAgentForCases, historyDoorAnswerCases } from './sim/overlordHistoryDoorSets.js';
 import { OVERLORD_HISTORY_BODY_LIMIT_BYTES, registerOverlordHistoryRoutes } from '../src/coord/overlordHistoryRoutes.js';
 import { runOverlordRead } from '../src/coord/overlordRead.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -54,67 +54,19 @@ const issuer = (): PrivacyIssuer => {
   return { kind: 'ready', issue: (high) => { last = Math.max(high ?? 0, last) + 1; return { ok: true, id: last }; } };
 };
 
-const SCOPE = { kind: 'overlord', id: 'all', project: null, families: [], families_total: 0, transcripts: 0 } as const;
-const ROWS: OverlordHistoryAnswer = { outcome: 'rows', exit: 0, items: [{ trust: 'untrusted', text: 'TEXT-MARKER in project-a' }], shown: 1, total: 1, scope: SCOPE };
+const SCOPE = ROWS.outcome === 'rows' ? ROWS.scope : null;
 const answer = (a: OverlordHistoryAnswer): OverlordHistoryAsked => ({ kind: 'answer', answer: a });
 
-// ── the choice ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── the deciders: their cases are written once, in `sim/overlordHistoryDoorSets.ts`, and the mutation floors run them too ──
 describe('historyAgentFor: the one connected link that advertises overlord-history', () => {
-  const up = (ops?: string[]): HistoryLink => ({ connected: true, ...(ops === undefined ? {} : { agentOps: ops }) });
-  it('zero links give no-agent', () => { expect(historyAgentFor([])).toEqual({ kind: 'no-agent' }); });
-  it('one connected link without the word gives no-agent (no ops at all, too)', () => {
-    expect(historyAgentFor([up(['disk'])])).toEqual({ kind: 'no-agent' });
-    expect(historyAgentFor([up()])).toEqual({ kind: 'no-agent' });
-  });
-  it('one connected link with it gives that link', () => {
-    const l = up(['disk', OVERLORD_HISTORY_OP]);
-    expect(historyAgentFor([l])).toEqual({ kind: 'agent', link: l });
-  });
-  it('a disconnected link with the word gives no-agent (the link keeps its ops across a drop)', () => {
-    expect(historyAgentFor([{ connected: false, agentOps: [OVERLORD_HISTORY_OP] }])).toEqual({ kind: 'no-agent' });
-  });
-  it('two connected links with it give many-agents', () => {
-    expect(historyAgentFor([up([OVERLORD_HISTORY_OP]), up([OVERLORD_HISTORY_OP])])).toEqual({ kind: 'many-agents' });
-  });
-  it('two connected links where one has it give that one, wherever it stands', () => {
-    const l = up([OVERLORD_HISTORY_OP]);
-    expect(historyAgentFor([up(['disk']), l])).toEqual({ kind: 'agent', link: l });
-    expect(historyAgentFor([l, up(['disk'])])).toEqual({ kind: 'agent', link: l });
-    expect(historyAgentFor([{ connected: false, agentOps: [OVERLORD_HISTORY_OP] }, l])).toEqual({ kind: 'agent', link: l });
-  });
+  for (const [name, run] of Object.entries(historyAgentForCases(deciders))) it(name, run);
 });
 
-// ── the mapping (Table 2) ───────────────────────────────────────────────────────────────────────────────────────────
 describe('historyDoorAnswer: every outcome of a history read has one home (Table 2)', () => {
-  const unreachable = (cause: string) => ({ kind: 'refuse', status: 503, word: 'history-unreachable', outcome: cause, extra: { cause } });
-  const rows: [string, HistoryReadOutcome, unknown][] = [
-    ['no connected link advertises', { kind: 'no-agent' }, unreachable('no-agent')],
-    ['two or more', { kind: 'many-agents' }, unreachable('many-agents')],
-    ['unsupported', { kind: 'unsupported' }, unreachable('unsupported')],
-    ['not-started', { kind: 'not-started' }, unreachable('not-started')],
-    ['lost', { kind: 'lost' }, unreachable('lost')],
-    ['timeout (the client\'s own)', { kind: 'timeout' }, unreachable('timeout')],
-    ['agent rows', answer(ROWS), { kind: 'rows', status: 200, body: { ok: true, ...ROWS }, count: 1 }],
-    ['agent verb-refused', answer({ outcome: 'verb-refused', word: 'not-indexed' }),
-      { kind: 'answer', status: 200, body: { ok: true, outcome: 'verb-refused', word: 'not-indexed' }, outcome: 'verb-refused' }],
-    ['agent store-refused', answer({ outcome: 'store-refused', word: 'store-absent' }),
-      { kind: 'answer', status: 200, body: { ok: true, outcome: 'store-refused', word: 'store-absent' }, outcome: 'store-refused' }],
-    ['agent request-refused', answer({ outcome: 'request-refused', word: 'regex' }),
-      { kind: 'refuse', status: 400, word: 'bad-request', outcome: 'request-refused', extra: { refusal: 'regex' } }],
-    ['agent busy', answer({ outcome: 'busy' }), { kind: 'answer', status: 200, body: { ok: true, outcome: 'busy' }, outcome: 'busy' }],
-    ['agent deadline', answer({ outcome: 'deadline' }), { kind: 'answer', status: 200, body: { ok: true, outcome: 'deadline' }, outcome: 'deadline' }],
-    ['agent too-large', answer({ outcome: 'too-large', bytes: 70_000 }),
-      { kind: 'answer', status: 200, body: { ok: true, outcome: 'too-large', bytes: 70_000 }, outcome: 'too-large' }],
-    ['agent failed', answer({ outcome: 'failed', word: 'internal' }),
-      { kind: 'answer', status: 200, body: { ok: true, outcome: 'failed', word: 'internal' }, outcome: 'failed' }],
-  ];
-  it.each(rows)('%s', (_n, o, want) => { expect(historyDoorAnswer(o)).toEqual(want); });
-
-  it('the 503 is the word history-unreachable\'s own status, and every cause is a row above', () => {
+  for (const [name, run] of Object.entries(historyDoorAnswerCases(deciders))) it(name, run);
+  it('the 503 is the word history-unreachable\'s own status, and the 400 bad-request\'s', () => {
     expect(REFUSAL_STATUS['history-unreachable']).toBe(503);
     expect(REFUSAL_STATUS['bad-request']).toBe(400);
-    const causes = rows.map(([, , w]) => (w as { extra?: { cause?: string } }).extra?.cause).filter((c) => c !== undefined);
-    expect([...causes].sort()).toEqual([...HISTORY_UNREACHABLE_CAUSES].sort());
   });
 });
 
