@@ -61,7 +61,7 @@ async function skipLink(page: Page): Promise<void> {
 describe('#content draws no ring when script focuses it after a key', () => {
   // The skip link starts on /runs: on a phone the fleet route hides the detail pane (the swap), so there is no
   // landmark on screen to skip to.
-  for (const [what, start, act] of [['Ctrl+K → Go to Runs', '/', paletteToRuns], ['the skip link', '/runs', skipLink]] as const) {
+  for (const [what, start, act] of [['Ctrl+K → Go to Runs', '/fleet', paletteToRuns], ['the skip link', '/runs', skipLink]] as const) {
     for (const view of VIEWS) {
       it(`${what}: ${named(view)}`, async () => {
         const { ctx, page } = await openApp(browser!, view, FIXTURE);

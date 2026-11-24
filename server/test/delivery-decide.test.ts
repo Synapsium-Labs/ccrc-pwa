@@ -150,6 +150,14 @@ describe('the acceptance pins (ARCH-19)', () => {
   it('mailPass is at most 150 code lines (#539 first acceptance criterion)', () => {
     expect(codeLines('watch.ts', sourceOfSymbol(WATCH, 'FleetWatcher.mailPass'))).toBeLessThanOrEqual(150);
   });
+  it('a fixed line delivered once is finished before the pass types, and settled after it (review 3389 F1)', () => {
+    const calls = callsIn(symbolOf(WATCH, 'FleetWatcher.mailPass'));
+    const at = (name: string): number[] => calls.filter((c) => c.name === name).map((c) => c.start);
+    expect(at('finishFixedLineAck')).toHaveLength(1);
+    expect(at('sendPrompt')).toHaveLength(1);
+    expect(at('finishFixedLineAck')[0]!).toBeLessThan(at('sendPrompt')[0]!);
+    expect(at('settleNudge')[0]!).toBeGreaterThan(at('sendPrompt')[0]!);
+  });
   it('the mail lane reaches every policy choice through a decider', () => {
     const names = ['mailPass', 'passParked', 'actOnSendFailure'].flatMap((m) => callsIn(symbolOf(WATCH, `FleetWatcher.${m}`)).map((c) => c.name));
     for (const d of ['decideRecipientAbsent', 'decideSessionDead', 'decideTmuxUnknown', 'decideSendFailure', 'decideParked',

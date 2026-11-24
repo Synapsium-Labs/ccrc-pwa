@@ -147,7 +147,7 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         const m: Measured = await page.evaluate((sel) => {
@@ -345,13 +345,13 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
       try {
         // The page's clock starts at the fixture's instant and runs, so the hours the link stays down can be passed.
         await app.page.clock.install({ time: now });
-        await app.page.goto(server!.origin + '/');
+        await app.page.goto(server!.origin + '/fleet');
         await go(app.page, '/accounts');
         await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         const before = await readOffline(app.page);
         app.cut();
         // Leave and come back: the remount asks for a fresh answer (D-7180), which now fails.
-        await go(app.page, '/');
+        await go(app.page, '/fleet');
         await go(app.page, '/accounts');
         await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         await app.page.waitForTimeout(1_500);
@@ -411,7 +411,7 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         app.cut();
         // The page's clock runs as the real one does; it is installed so `holdOffline` can pause it for the read.
         await app.page.clock.install({ time: now });
-        await app.page.goto(server!.origin + '/');
+        await app.page.goto(server!.origin + '/fleet');
         // The snapshot was read: the fleet counts its one session, and the shell says it is reconnecting.
         await app.page.getByText('1 session', { exact: true }).first().waitFor({ timeout: 30_000 });
         await app.page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.offline-banner')]

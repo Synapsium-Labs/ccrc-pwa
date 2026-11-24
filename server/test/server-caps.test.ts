@@ -30,9 +30,11 @@ describe('continuity-v1 (Overlord W1 door process B1; review 2870 F4)', () => {
     expect(SERVER_CAPS).toContain('continuity-v1');
     // Keyed on `buildServer` through scan/symbols.ts (ARCH-06: never a literal source pin over server.ts).
     const src = sourceOfSymbol('server/src/server.ts', 'buildServer');
-    const from = src.indexOf('const gate = overlordGateRun({');
+    // The runner's deps are one object (`gateDeps`), which the runner and the inbox wake's read gate both take (W1 inbox).
+    expect(src).toContain('const gate = overlordGateRun(gateDeps);');
+    const from = src.indexOf('const gateDeps: OverlordGateDeps = {');
     expect(from).toBeGreaterThan(-1);
-    const call = src.slice(from, src.indexOf('\n  });', from));
+    const call = src.slice(from, src.indexOf('\n  };', from));
     expect(call.match(/\.\.\.witnessPorts\(\{/g) ?? []).toHaveLength(1);
     expect(call).not.toMatch(/\b(witness|recordWitness)\s*:/);
   });

@@ -49,7 +49,7 @@ import { LEDGER_REFUSAL_TEXT, apiErrorText, refusalText } from '../lib/refusalWo
 import { WAITING_BADGE_UNIT } from '../fleet/navBadges';
 import { inAppClick } from '../fleet/settingsText';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
-import { ROUTES, epicPath, runPath, waitingPath } from '../lib/routes';
+import { FLEET_PATH, epicPath, runPath, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
@@ -64,9 +64,6 @@ import { planKey } from './workRead';
 import { useWorkRead } from './useWorkRead';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
-
-/** The fleet's own path, read off the `fleet` row of the route table: this file spells no path of its own. */
-const FLEET_PATH: string = ROUTES.find((r) => r.id === 'fleet')?.path ?? '/';
 
 /** What the read of Goals has come to: not answered yet, refused or unreachable, or the programme's view. Three conditions the
  *  screen words differently, so three values and no `null`. */

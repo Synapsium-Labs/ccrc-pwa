@@ -4,6 +4,7 @@
 // here is in every skin, the palette and the shortcut sheet at once.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { Character as CharacterName } from '../../../shared/face';
+import type { HomeAnswer } from '../overlord/homePlace';
 
 /** Instrument's command field's words and accessible name (`TopBar.tsx`). The palette's words live here, beside what
  *  a command is, so the field and the palette say them from one home. */
@@ -34,6 +35,11 @@ export interface CommandContext {
   openPalette: () => void;
   /** The palette is showing: a command that opens it is not offered inside it. */
   paletteOpen: boolean;
+  /** The console's home (`homePlace`, read through the Overlord store): where "Go home" and the wordmark lead (Overlord W1
+   *  home, Task 3). */
+  home: HomeAnswer;
+  /** Whether the server advertises `overlord-v1`: "Go to Overlord" is offered only then (plan question 9). */
+  overlordShown: boolean;
   /** The session screen's flows (`SessionFlows`, W2 Task S2d), while one is mounted: null elsewhere, so a session
    *  command is offered only on a session route. */
   session: SessionCommandTarget | null;

@@ -64,8 +64,10 @@ const need = (ok, why) => { if (!ok) throw new InputRefused(why); };
 
 /** THE TOOL TABLE (plan Task 5): one row a door, `verb` a key of `ccrc-api`'s ROUTES, `input` the JSON schema the model sees,
  *  `argv(input, self)` the row's one argv builder (ruled, F3) and `body(input)` what goes on the client's stdin, if anything.
- *  `fenced` calls carry the act key, the generation and the counter; `card` is the one `view` row fenced, because the page that
- *  completes a full read is a write (gates B's `card-record`, F9) and this process cannot tell which page that is. */
+ *  `fenced` calls carry the act key, the generation and the counter; the fenced `view` rows are those whose Overlord door row is
+ *  a write (`card`, `inbox`, `messages`): the page that completes a full read of the card is a write (gates B's `card-record`,
+ *  F9), and a read of the inbox or of one message is a write too (the inbox plan's question 15), and this process cannot tell
+ *  which call is the one that writes. */
 const BASE_TOOLS = [
   {
     name: 'card', verb: 'sessions.card', class: 'view', fenced: true, reader: false,
@@ -140,6 +142,23 @@ const BASE_TOOLS = [
     description: 'Cancel one of your timers.',
     input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
     argv: (i) => { need(isId(i.id), 'id is a timer id'); return ['timer', 'cancel', String(i.id)]; },
+  },
+  {
+    name: 'inbox', verb: 'overlord.inbox', class: 'view', fenced: true, reader: false,
+    description: 'List what waits for you in your inbox.',
+    input: object({}), argv: () => ['overlord', 'inbox'],
+  },
+  {
+    name: 'messages', verb: 'overlord.messages', class: 'view', fenced: true, reader: false,
+    description: 'Read one inbox message by its id.',
+    input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
+    argv: (i) => { need(isId(i.id), 'id is a message id'); return ['overlord', 'messages', String(i.id)]; },
+  },
+  {
+    name: 'acknowledge', verb: 'overlord.acknowledge', class: 'operate', fenced: true, reader: false,
+    description: 'Acknowledge one inbox message by its id.',
+    input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
+    argv: (i) => { need(isId(i.id), 'id is a message id'); return ['overlord', 'acknowledge', String(i.id)]; },
   },
   {
     // D-8809: the Overlord's confirm of one current team candidate for a project with no Linear key, a call made in the

@@ -22,7 +22,7 @@ import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
 import {
   callerStandingOf, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
-  type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
+  type CallerStanding, type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
   type WitnessVerdict,
 } from './overlordGate.js';
 import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateStore.js';
@@ -89,6 +89,81 @@ function attempt<T>(read: () => T, unmeasured: (why: string) => T): T {
   try { return read(); } catch (e) { return unmeasured(whyOf(e)); }
 }
 
+/** The caller's live generation, read once for the runner, the read gate, the inbox handler and the wake lane (the one reading
+ *  of "which generation is this session's"): the designation row's identity for the session, then that identity's row among the
+ *  live generations, then its effective state. `gens` and `fact` are the inputs the runner's other facts reuse; `generation` keeps
+ *  every distinction it received (a state, no live generation, unmeasured with why). A port that throws is the unmeasured arm. */
+export interface CallerGeneration {
+  readonly gens: GenerationsRead;
+  readonly fact: ReturnType<typeof designationFactFrom>;
+  readonly live: GenRow | null;
+  readonly generation: GateFacts['generation'];
+}
+export function callerGenerationOf(
+  src: Pick<OverlordGateDeps, 'generations' | 'continuityLive'>, sessionId: string, designation: DesignationRead,
+): CallerGeneration {
+  const fact = designationFactFrom(designation);
+  const gens = attempt<GenerationsRead>(() => src.generations(), (detail) => ({ ok: false, detail }));
+  let live: GenRow | null = null;
+  let generation: GateFacts['generation'] = { kind: 'unmeasured', why: 'the generations could not be read' };
+  if (gens.ok && fact !== 'unmeasured') {
+    const identity = identityOf(sessionId, fact);
+    live = gens.rows.find((g) => g.identity === identity) ?? null;
+    generation = live === null ? { kind: 'none' }
+      : attempt<GateFacts['generation']>(() => ({ kind: 'state', state: effectiveGeneration(live!, src.continuityLive()).state }), (why) => ({ kind: 'unmeasured', why }));
+  } else if (!gens.ok) {
+    generation = { kind: 'unmeasured', why: gens.detail };
+  }
+  return { gens, fact, live, generation };
+}
+
+/** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id. */
+async function standingRead(deps: OverlordGateDeps, sessionId: string): Promise<{ designation: DesignationRead; standing: CallerStanding }> {
+  const designation = attempt<DesignationRead>(() => deps.designation(), (why) => ({ kind: 'unmeasured', why }));
+  let incarnation: Parameters<typeof callerStandingOf>[0]['incarnation'] = 'not-asked';
+  if (incarnationNeeded(sessionId, designation)) {
+    try { incarnation = await deps.identity.incarnation(sessionId); } catch (e) { incarnation = { kind: 'unmeasured', reason: whyOf(e) }; }
+  }
+  return { designation, standing: callerStandingOf({ sessionId, incarnation }, designation) };
+}
+
+/** The facts past step 1 that no fence or witness touches, read once, each port's throw its unmeasured arm. */
+function plainFacts(deps: OverlordGateDeps, door: OverlordDoorRow, live: GenRow | null):
+  Pick<GateFacts, 'ladder' | 'card' | 'authority' | 'serverWords'> {
+  const reads = gateReads(door);
+  const ladder: GateFacts['ladder'] = reads.ladder ? attempt(() => deps.ladder(), (why) => ({ kind: 'unmeasured', why })) : 'start-door';
+  let card: GateFacts['card'] = 'none';
+  if (reads.card) {
+    const c = live === null ? { ok: true as const, read: null } : attempt<CardReadRead>(() => deps.cardRead(live.startId), (detail) => ({ ok: false, detail }));
+    card = !c.ok ? { kind: 'unmeasured', why: c.detail } : c.read === null ? 'none' : c.read.current ? 'read-current' : 'read-stale';
+  }
+  const authority: GateFacts['authority'] = reads.authority
+    ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';
+  const serverWords = attempt<GateFacts['serverWords']>(() => deps.serverWords(), (why) => ({ kind: 'unmeasured', why }));
+  return { ladder, card, authority, serverWords };
+}
+
+/** The gate's verdict for a caller that presents no call: the wake lane's own asking. It reads the facts the runner reads (the
+ *  same helpers), as a read door's (`write` read as false: no fence, no witness), records nothing and never throws; a throw
+ *  of a port is that fact's unmeasured arm, and any other fault reads as `unmeasured`. */
+export function overlordReadGate(deps: OverlordGateDeps): (sessionId: string, key: string) => Promise<GateVerdict> {
+  return async (sessionId, key) => {
+    try {
+      const row = doorRow(key);
+      if (row.group !== 'overlord') throw new Error(`overlordReadGate: ${key} is not an Overlord door`);
+      const door: OverlordDoorRow = { ...row, write: false };
+      const { designation, standing } = await standingRead(deps, sessionId);
+      const early = standingVerdict(door, standing);
+      if (early !== null) return early;
+      const g = callerGenerationOf(deps, sessionId, designation);
+      const term = g.fact === 'unmeasured' || g.fact.kind === 'none' ? null : g.fact.term;
+      return overlordGate({ door, standing, ...plainFacts(deps, door, g.live), term, fence: 'read-door', witness: 'read-door', generation: g.generation });
+    } catch (e) {
+      return { kind: 'refuse', word: 'unmeasured', detail: whyOf(e), step: '1', record: null, why: null };
+    }
+  };
+}
+
 /** Build the runner once (L5); every Overlord door calls the function it answers with its own row's key. */
 export function overlordGateRun(deps: OverlordGateDeps):
   (req: FastifyRequest, reply: FastifyReply, key: string, claim: GateClaim) => Promise<GateRun> {
@@ -130,36 +205,15 @@ export function overlordGateRun(deps: OverlordGateDeps):
     }
     const caller = who;
     // Step 1, standing: the designation, then the incarnation only for the bound or a pending designate id.
-    const designation = attempt<DesignationRead>(() => deps.designation(), (why) => ({ kind: 'unmeasured', why }));
-    let incarnation: Parameters<typeof callerStandingOf>[0]['incarnation'] = 'not-asked';
-    if (incarnationNeeded(claim.sessionId, designation)) {
-      try { incarnation = await deps.identity.incarnation(claim.sessionId); } catch (e) { incarnation = { kind: 'unmeasured', reason: whyOf(e) }; }
-    }
-    const standing = callerStandingOf({ sessionId: claim.sessionId, incarnation }, designation);
+    const { designation, standing } = await standingRead(deps, claim.sessionId);
     const early = standingVerdict(door, standing);
     if (early !== null) return early.kind === 'refuse' ? refused(reply, early) : { kind: 'hook', caller };
 
     // The remaining facts, each read once: the identity's live generation, then what this door's order reads.
     const reads = gateReads(door);
-    const fact = designationFactFrom(designation);
+    const { gens, fact, live, generation } = callerGenerationOf(deps, claim.sessionId, designation);
     const term = fact === 'unmeasured' || fact.kind === 'none' ? null : fact.term;
-    const gens = attempt<GenerationsRead>(() => deps.generations(), (detail) => ({ ok: false, detail }));
-    let live: GenRow | null = null;
-    let generation: GateFacts['generation'] = { kind: 'unmeasured', why: 'the generations could not be read' };
-    if (gens.ok && fact !== 'unmeasured') {
-      const identity = identityOf(claim.sessionId, fact);
-      live = gens.rows.find((g) => g.identity === identity) ?? null;
-      generation = live === null ? { kind: 'none' }
-        : attempt<GateFacts['generation']>(() => ({ kind: 'state', state: effectiveGeneration(live!, deps.continuityLive()).state }), (why) => ({ kind: 'unmeasured', why }));
-    } else if (!gens.ok) {
-      generation = { kind: 'unmeasured', why: gens.detail };
-    }
-    const ladder: GateFacts['ladder'] = reads.ladder ? attempt(() => deps.ladder(), (why) => ({ kind: 'unmeasured', why })) : 'start-door';
-    let card: GateFacts['card'] = 'none';
-    if (reads.card) {
-      const c = live === null ? { ok: true as const, read: null } : attempt<CardReadRead>(() => deps.cardRead(live!.startId), (detail) => ({ ok: false, detail }));
-      card = !c.ok ? { kind: 'unmeasured', why: c.detail } : c.read === null ? 'none' : c.read.current ? 'read-current' : 'read-stale';
-    }
+    const { ladder, card, authority, serverWords } = plainFacts(deps, door, live);
     let fence: GateFacts['fence'] = 'read-door';
     let witness: GateFacts['witness'] = 'read-door';
     let presented: FencePresented = { generation: null, counter: null, key: false };
@@ -181,9 +235,6 @@ export function overlordGateRun(deps: OverlordGateDeps):
         // A thrown lookup's message never reaches the detail: the witness key may be in it (review 2803 N3).
         : attempt<WitnessVerdict>(() => deps.witness(claim.sessionId, live!.id, headerOf(req, WITNESS_KEY_HEADER)), () => ({ kind: 'unmeasured', why: 'the witness lookup failed' }));
     }
-    const authority: GateFacts['authority'] = reads.authority
-      ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';
-    const serverWords = attempt<GateFacts['serverWords']>(() => deps.serverWords(), (why) => ({ kind: 'unmeasured', why }));
 
     const verdict = overlordGate({ door, standing, serverWords, authority, ladder, term, fence, witness, card, generation });
     if (verdict.kind === 'refuse') {

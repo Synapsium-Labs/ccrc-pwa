@@ -60,7 +60,7 @@ describe('opening Accounts shows the store\'s answer at once and asks once (D-71
       try {
         const accountsHits = (): number => events.filter((e) => e.kind === 'intercept' && e.path === '/api/accounts').length;
         const accountsDone = (): number => events.filter((e) => e.kind === 'fulfil-done' && e.path === '/api/accounts').length;
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         // The store's first answer (its read at connect) has landed.
         await expect.poll(accountsDone, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
         await page.waitForTimeout(300);
