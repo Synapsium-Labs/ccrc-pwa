@@ -1727,6 +1727,8 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
       ['something left outside the run\'s own project folder', left([sub], {}, [`${SLUG(CWD)}/${SID}`, `-elsewhere/${SID}`]), new Set(), 'own_folder'],
       ['no project folder of its own at all', { ...left([sub]), project_dir: false }, new Set(), 'own_folder'],
       ['a main transcript in the project folder', left([sub, `${SLUG(CWD)}/${SID}.jsonl`], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
+      // the one row where this condition alone decides: the main transcript is no regular file (a link), and no regular file is left
+      ['a main transcript that is a link, beside no regular file', left([], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
       ['the walk cut at its bound', left([sub], { truncated: true }), new Set(), 'walk_complete'],
       ['the walk unmeasured', left([sub], { unmeasured: 'EACCES' }), new Set(), 'walk_complete'],
       ['the session is one the sweep knows', left([sub]), new Set([SID]), 'store_cannot_read'],
