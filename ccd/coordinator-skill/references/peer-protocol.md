@@ -168,18 +168,24 @@ time, never stored.
 
 ## Deviation numbers
 
-A deviation number is self-assigned: the highest `D-N` defined in the project's
-plans, notes and specs (any file under `docs/superpowers/plans/`, `programs/` or
-`specs/`) on its main and on the branch, plus one, and never below 10000. In
-ccrc a helper prints that many consecutive numbers, with no server and no token:
+A deviation number is self-assigned. Where the project keeps its deviation
+ledger the way ccrc does (`D-N` entries under `docs/superpowers/`), it is the
+highest `D-N` defined in the project's plans, notes and specs (any file under
+`docs/superpowers/plans/`, `programs/` or `specs/`) on its main and on the
+branch, plus one, and never below 10000; otherwise follow the project's own
+convention, and a duplicate is caught only where the project runs a collision
+guard. In ccrc a helper prints that many consecutive numbers, with no server
+and no token:
 
     git fetch origin main
     (cd server && npm run next-deviation -- 3)
 
-When `origin` is a fork, `git fetch upstream main` and add `--ref upstream/main`.
-Take them when the wave records a deviation, and define them
-in the same commit. Two branches in flight will sometimes take the same number:
-`deviation-refs.test.ts` compares a branch's definitions against `origin/main`'s
+On a fork, add the project as `upstream` and `git fetch upstream main`: the
+helper and the guard then measure `upstream/main` by themselves (`--ref`
+overrides). The helper counts only committed definitions, so take the wave's
+whole block in one call, give each worker a disjoint slice in its brief, and
+define them in the same commit. In ccrc, two branches in flight will sometimes take the same number:
+`deviation-refs.test.ts` compares a branch's definitions against its base's
 without merging, and the merge queue runs it on the merged result, so the pair
 never lands; the one that lands second renumbers, the entry and every reference
 to it. Until a number is taken, a deviation is `D-TBD-<slug>`, which the tree's

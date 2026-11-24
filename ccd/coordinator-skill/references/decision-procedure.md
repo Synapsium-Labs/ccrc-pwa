@@ -124,8 +124,9 @@ A **big call** is a design-level choice:
 - it departs from the plan in a way that changes what a later wave builds.
 
 A big call that departs from the spec or the plan is also entered as a deviation in the plan's ledger, with a
-D-number: the highest `D-N` defined in the project's plans, notes and specs on its main and on the branch, plus one,
-from 10000 (in ccrc, `cd server && npm run next-deviation -- <count>` prints it).
+D-number: where the project keeps its deviation ledger the way ccrc does (`D-N` entries under `docs/superpowers/`), the highest `D-N` defined in its plans, notes and specs on its
+main and on the branch, plus one, from 10000 (in ccrc, `cd server && npm run next-deviation -- <count>` prints it);
+otherwise the project's own convention. A duplicate is caught only where the project runs a collision guard.
 
 A **routine call** is everything about how to get there: sequencing and scheduling; dispatch, routing and which
 worker; landing, re-queueing, and a second landing attempt within 5b's two doors; one more review round within step 7; fix strategy within
