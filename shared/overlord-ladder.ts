@@ -79,6 +79,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
     spec: 'probes failed twice after a renewal (Table 7.5a)',
   },
+  // W1 sandbox B: no cap; the gate order's step 6 reads it (§11.2) and refuses every door but card, probe and note.
+  'launch-profile-unengaged': {
+    kind: 'condition', effect: { kind: 'read-by', reader: 'launch-profile-unmet' }, notice: 'none',
+    spec: 'the launch profile is not engaged (Table 7.5a, §3.6 H4)',
+  },
   'restore-detected': {
     kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
     spec: 'a restore detected; the operator clears it once the restore is confirmed (Table 7.5a, §7.6)',

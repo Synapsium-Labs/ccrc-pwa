@@ -10,16 +10,59 @@
 // send, each behind its own render boundary). A row draws a group itself and
 // hands everything else, the group's own entries included, to `renderItem`,
 // so no skin re-implements a card (W2 Global constraints, "One data model").
-import { createContext, useContext } from 'react';
+// A tool-activity row (desktop polish wave 168) draws its expansion through
+// `renderRow`, so a folded run inside it is the set's own row again.
+import { createContext, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ChatItem } from './chatItems';
-import type { TranscriptItem } from './toolSummary';
+import type { TranscriptItem } from './toolActivity';
 
 export interface TranscriptRowValue {
-  /** The row to draw: a plain item, or a folded run of tool entries. */
+  /** The row to draw: a plain item, a folded run of tool entries, or a stretch of tool activity. */
   readonly item: TranscriptItem;
   /** Draw one plain item as the shared list does. */
   readonly renderItem: (item: ChatItem) => ReactNode;
+  /** Draw one row of a tool-activity row's expansion (a plain item or a folded run) through the set's own row part, as
+   *  the list draws a top-level row. */
+  readonly renderRow: (item: TranscriptItem) => ReactNode;
+  /** Which tool-activity rows the reader opened, kept for as long as the session view is open (`ExpansionMemo`). */
+  readonly expansion: ExpansionMemo;
+  /** The transcript's answer control, which a tool-activity row offers on its line for a live wait no call is identified
+   *  as (an approval, a menu, a question it does not single out): `onAnswer` raises the sheet (or, with `askBelow`, the
+   *  inline card below the transcript) and answers nothing itself. */
+  readonly answer: AnswerControl;
+}
+
+/** What the transcript's answer control needs: the list's own `onAnswer`, `answerLabel` and `askBelow`. */
+export interface AnswerControl {
+  readonly onAnswer?: () => void;
+  readonly answerLabel?: string;
+  readonly askBelow?: boolean;
+}
+
+/** The reader's open or closed choice per tool-activity row, by the row's key. It lives in the list, not in a row: the
+ *  virtual list unmounts a row scrolled out of reach, and the row's choice must outlive that. */
+export interface ExpansionMemo {
+  get(key: string): boolean;
+  set(key: string, open: boolean): void;
+}
+
+/** The list's memo for the session `id`: held in state, so React never drops it, and fresh when the session changes. */
+export function useExpansionMemo(id: string): ExpansionMemo {
+  const [held, setHeld] = useState(() => ({ id, memo: expansionMemo() }));
+  if (held.id === id) return held.memo;
+  const next = { id, memo: expansionMemo() };
+  setHeld(next);
+  return next.memo;
+}
+
+/** A fresh memo: every row closed until the reader opens it. */
+export function expansionMemo(): ExpansionMemo {
+  const open = new Set<string>();
+  return {
+    get: (key) => open.has(key),
+    set: (key, o) => { if (o) open.add(key); else open.delete(key); },
+  };
 }
 
 export const TranscriptRowContext = createContext<TranscriptRowValue | null>(null);

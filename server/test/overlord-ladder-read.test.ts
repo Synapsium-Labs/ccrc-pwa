@@ -21,7 +21,7 @@ function store() {
   db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
   return { db, coord: new CoordStore(db) };
 }
-const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'no-witness-since-boot': () => 'lifted' as const };
+const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'launch-profile-unengaged': () => 'lifted' as const, 'no-witness-since-boot': () => 'lifted' as const };
 const futureTable = { ...LADDER_CAUSE_MAP, 'condition-a': { kind: 'condition' } } as const;
 // @ts-expect-error A new condition row cannot ship without its input.
 const futureInputs: LadderConditionInputsFor<typeof futureTable> = lifted;
@@ -45,7 +45,7 @@ describe('generation degraded condition', () => {
 describe('composed ladder read', () => {
   it('defaults to chat and fails closed on invalid rows', () => {
     const { db, coord } = store();
-    expect(ladderRead(coord, ladderConditionInputs({ coord, serverCaps: [] }), NO_WITNESS_YET, [])).toMatchObject({ kind: 'measured', effective: { rung: 'chat', binding: [] }, conditions: [{ cause: 'generation-degraded', reading: 'lifted' }, { cause: 'off-model', reading: 'lifted' }, { cause: 'rung-word-missing', reading: 'lifted' }, { cause: 'shared-user', reading: 'unmeasured' }, { cause: 'no-witness-since-boot', reading: 'unmeasured' }] });
+    expect(ladderRead(coord, ladderConditionInputs({ coord, serverCaps: [] }), NO_WITNESS_YET, [])).toMatchObject({ kind: 'measured', effective: { rung: 'chat', binding: [] }, conditions: [{ cause: 'generation-degraded', reading: 'lifted' }, { cause: 'off-model', reading: 'lifted' }, { cause: 'rung-word-missing', reading: 'lifted' }, { cause: 'shared-user', reading: 'unmeasured' }, { cause: 'launch-profile-unengaged', reading: 'lifted' }, { cause: 'no-witness-since-boot', reading: 'unmeasured' }] });
     db.exec("INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy) VALUES ('latch-a', 'wrong', '', 1, 'actor')");
     expect(ladderRead(coord, lifted, NO_WITNESS_YET, []).kind).toBe('unmeasured');
     db.close();

@@ -383,3 +383,52 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.logs[0]).toContain('1 not written: ccd here has no route verb');
   });
 });
+
+// ── The skew notice (W1 sandbox B, Task 9, question 5): a dead Overlord under build skew raises one notice per build pair ──
+describe('the skew notice in the lane pass (W1 sandbox B)', () => {
+  const OV = 'overlord-quiet-otter';
+  const VIEW = { bound: { sessionId: OV, generation: 'g1' }, pending: null, term: 2, designatedTerm: 2, model: 'opus' as const,
+    accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] };
+  const bound: DesignationRead = { kind: 'designated', sessionId: OV, term: 2, row: VIEW };
+  const D = 'a'.repeat(64);
+  function skewed(over: { running?: boolean | 'unmeasured'; builds?: 'agreed' | 'skewed' | 'unknown'; digest?: boolean; designation?: DesignationRead } = {}) {
+    const h = harness({ builds: over.builds ?? 'skewed', designation: over.designation ?? bound });
+    const keys = new Set<string>();
+    const raised: { id: string; key: string; body: string }[] = [];
+    const deps: ProfileLaneDeps = { ...h.deps, skew: {
+      running: () => over.running ?? false, builds: () => ({ fleet: 'v0.9.1', server: 'v0.9.2' }),
+      noticed: (_id, key) => keys.has(key), raise: (id, key, body) => { keys.add(key); raised.push({ id, key, body }); },
+    } };
+    const rows = [row(OV, over.digest === false ? { profile: 'overlord' } : { profile: 'overlord', profiledigest: D })];
+    return { deps, rows, raised };
+  }
+  it('a dead designated body whose route carries profiledigest, under skew, raises one notice naming both builds, once', async () => {
+    const s = skewed();
+    await profilePass(s.deps, s.rows);
+    await profilePass(s.deps, s.rows);
+    expect(s.raised).toHaveLength(1);
+    expect(s.raised[0]).toMatchObject({ id: OV, key: `${OV}:v0.9.1:v0.9.2` });
+    expect(s.raised[0]!.body).toContain('v0.9.1');
+    expect(s.raised[0]!.body).toContain('v0.9.2');
+    expect(s.raised[0]!.body).toContain('can keep it from respawning');
+    expect(s.raised[0]!.body).not.toMatch(/refused|stays down/);
+  });
+  it('a pending attempt is not judged, dead or not: the notice is the designated body\'s alone (the plan; review 3346 F5)', async () => {
+    const pending = { kind: 'not-designated', row: { ...VIEW, bound: null,
+      pending: { sessionId: OV, kind: 'designate', deadlineAt: 9e12, since: 1, actor: 'op', generation: 'g1' } } } as unknown as DesignationRead;
+    const s = skewed({ designation: pending });
+    await profilePass(s.deps, s.rows);
+    expect(s.raised).toEqual([]);
+    const control = skewed();
+    await profilePass(control.deps, control.rows);
+    expect(control.raised).toHaveLength(1);
+  });
+  it('a running or unmeasured body, agreed builds, no digest and no designation raise none', async () => {
+    for (const over of [{ running: true }, { running: 'unmeasured' as const }, { builds: 'agreed' as const }, { digest: false },
+      { designation: { kind: 'not-designated', row: null } as DesignationRead }]) {
+      const s = skewed(over);
+      await profilePass(s.deps, s.rows);
+      expect(s.raised, JSON.stringify(over)).toEqual([]);
+    }
+  });
+});
