@@ -106,7 +106,7 @@ programme the operator wants Idle still reads Done is one deploy, not several.
    `server/src/coord/ledgersRoutes.ts`'s operator registration. Decisions in an L1 decider
    `programmeEdgePolicy.ts#edgeDecision(stored, placeholder, runs, edge, actorKind)` and the credential rule of spec §14
    in one L1 table; the route acts. Tests: the transition table (spec §5) row by row, including `end` over open runs
-   without and with `abandonRuns`, Done refused over open runs, reopen and repair refused for the Overlord, every edge
+   without and with `abandonRuns`, Done refused over open runs, every edge allowed for the Overlord without a step-up, every edge
    refused on a placeholder, pause working while sign-in is dark with actor `unmeasured` and `flag-off`, the step-ups,
    the Overlord's start refused without a coordinator.
 2. **`POST /api/programmes/:slug/end-proposal`**: box token, attribution, `claimsProgramme`; raises the decide row
@@ -207,11 +207,11 @@ programme the operator wants Idle still reads Done is one deploy, not several.
 
 ## W7: the Overlord (one PR)
 
-1. `RUNG_CELL_MAP` gains `programme-lifecycle` (full only); `overlordDoors.ts` rows for start, end, resume, hand over,
-   confirm, decline; each act also written to the D-8126 call record (measure whether it admits the Overlord as
-   caller; extend it, never a second record). No decision-model row. Tests: refused at chat and advise, allowed at
-   full; the event's `actorKind` is `overlord`; a call record row waits for Seen; pause, reopen and repair are not
-   reachable through the Overlord's door; below full, a proposal's item says it waits on the operator.
+1. `RUNG_CELL_MAP` gains `programme-lifecycle` (full only); `overlordDoors.ts` rows for every programme edge the
+   operator has (start, pause, resume, end, confirm, decline, reopen, repair, hand over, re-file, withdraw a placeholder).
+   No decision-model row, no call-record entry, no step-up. Tests: refused at chat and advise, allowed at full; the
+   event's `actorKind` is `overlord`; no call record row and no operator item is written for an Overlord act; below
+   full, a proposal's item says it waits on the operator.
 2. `OVERLORD_OPERATOR_DOORS` and CLAUDE.md's sentence updated in the same commit.
 
 ## Deviations found
@@ -251,13 +251,14 @@ programme the operator wants Idle still reads Done is one deploy, not several.
 - **D-8987 (2026-11-24)** — an-end-is-proposed-then-confirmed. The coordinator's end proposal raises a decide item
   (`action:'end-programme'`) with required evidence against the definition of done (free lines when none is pinned);
   `plan close` raises the same proposal with its own outcome and evidence and no longer ends anything; the operator or
-  the Overlord confirms (behind a step-up) or declines. The proposal belongs to the programme: a hand-over keeps it, a
+  the Overlord confirms (the operator behind a step-up, the Overlord through its door) or declines. The proposal belongs to the programme: a hand-over keeps it, a
   run opened withdraws it. A direct end over open runs must name `abandonRuns` and is always Abandoned; the archive
   door's programme end is an explicit decision. Changes pinned coordinator clause 22.
 - **D-8988 (2026-11-24)** — overlord-programme-lifecycle-cell. A `programme-lifecycle` cell (full rung only) and door
-  rows let the Overlord start, end, resume, hand over, confirm and decline; pause, reopen and repair stay the
-  operator's. The cell is the whole permission (no decision-model row), and each Overlord act is written to the D-8126
-  call record so the operator sees it until Seen.
+  rows give the Overlord every programme edge the operator has, pause, reopen and repair included. The cell is the whole
+  permission (no decision-model row, no step-up), and an Overlord act is recorded in the programme's history like any
+  other, with no call-record entry or Seen to clear (the operator's amendment of 2026-11-24: maximum autonomy, no
+  unnecessary admin burden).
 - **D-8989 (2026-11-24)** — the-programme-tells-its-story. `programme_events` (append-only and never deleted, one row per
   decision, mint, join, binding change, filing, withdrawal, end proposal and coordinator exit or return, each with actor
   kind, actor, why and detail) and `GET /api/programmes/:slug/history`, which merges them, and those of placeholders

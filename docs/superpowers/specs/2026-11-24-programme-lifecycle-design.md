@@ -13,7 +13,7 @@ does it read what it reads, who put it there, and when.
 |---|---|---|
 | R1 | Every coordinator joins a programme at spawn. Every session the operator starts, by any route, is a coordinator (spec 2026-10-17 §8, D-5301; D-8142). It joins the programme picked at creation, or a provisional one that it files into the right business objective on its first turn. A new objective gets a new programme. | D-8142's conditional "when your work belongs to a programme" in the start card; spec 2026-10-17 §8's "coordinator-ness is derived from claims" (the lighter run kind stays out of scope: a binding replaces the need for it) |
 | R2 | A programme is a business objective that can hold diverse work. It is not one feature, one code change or one session. No rule ties one session to one programme. | — |
-| R3 | The Overlord can start and end programmes, as the operator can. | — |
+| R3 | The Overlord can start and end programmes, as the operator can. Amended the same day: the Overlord has every programme act the operator has, at maximum autonomy, with no acknowledgement queue or other admin burden for the operator; the history records its acts like anyone else's. | — |
 | R4 | The coordinator proposes an end, with evidence against the definition of done; the operator or the Overlord confirms it. An end is a decision with a recorded reason, never a side effect. The auto-retire at zero open runs goes. A finished run moves the programme to Idle, not Done. | D-51 (the auto-retire); the coordinator's `plan close` as an end (skill clause 22) |
 | R5 | States: Open (a coordinator exists, nothing dispatched yet); Active (has an open run); Idle (not ended, nothing running); Paused (the operator's hold); Done and Abandoned (only by decision; the operator can reopen). | D-26's "exactly one `active` row" reading of `soleActiveCoordinator`; D-8558's "NOT `programs.state`" in `programmeLive` |
 | R6 | No Waiting-on-you item for an idle programme. The console makes idle programmes easy to jump to. | The `PROGRAMME_ENDED_SENTENCE` rule (a tick is refused whenever no run is open) |
@@ -132,9 +132,9 @@ stateDiagram-v2
     Open --> Active: a run is dispatched (derived)
     Active --> Idle: the last open run closes (derived)
     Idle --> Active: a new run is dispatched (derived)
-    Open --> Paused: pause (operator)
-    Active --> Paused: pause (operator)
-    Idle --> Paused: pause (operator)
+    Open --> Paused: pause (operator, Overlord)
+    Active --> Paused: pause (operator, Overlord)
+    Idle --> Paused: pause (operator, Overlord)
     Paused --> Open: resume (operator, Overlord)
     Paused --> Active: resume (operator, Overlord)
     Paused --> Idle: resume (operator, Overlord)
@@ -145,9 +145,9 @@ stateDiagram-v2
     Idle --> Abandoned: end (operator or Overlord)
     Paused --> Abandoned: end (operator or Overlord)
     Active --> Abandoned: end with "abandon the open runs" (operator or Overlord)
-    Done --> Idle: reopen (operator)
-    Abandoned --> Idle: reopen (operator)
-    Unknown --> Idle: repair (operator)
+    Done --> Idle: reopen (operator, Overlord)
+    Abandoned --> Idle: reopen (operator, Overlord)
+    Unknown --> Idle: repair (operator, Overlord)
     Unknown --> Paused: repair (operator)
     Unknown --> Done: repair (operator)
     Unknown --> Abandoned: repair (operator)
@@ -172,19 +172,19 @@ placeholder (`programme-provisional`). The credential each door takes is in §14
 | start (first run) | none → Open → Active | the coordinator | `POST /api/runs` (`openRun`) | today's guards | row (`active`); event `started`, actor the claimant, why "first run opened"; the claimant joins and is bound |
 | dispatch | Open/Idle → Active | derived | `openRun`, `advance` | `openRun` refuses an ended (`plan-closed`, the existing code, its words now "the programme has ended"), paused (`programme-paused`), unknown (`programme-unknown`) or placeholder (`programme-provisional`) programme, and a claimant other than the bound coordinator (`claimed-by-another`, today's code); a binding whose `no-coordinator` line the route measured is empty for this guard when the programme has no open run, so the claimant takes it over | nothing new: `run_events` records the run; a takeover writes `coordinator` with why "previous coordinator measured absent"; an open end proposal is withdrawn in the same transaction (system, why "run <id> opened") |
 | run closes | Active → Idle | derived | `closeRun` | — | nothing new: `run_events` records the close; no programme write (D-51 deleted) |
-| pause | Open/Active/Idle → Paused | operator | `POST /api/programmes/:slug/state {edge:'pause', why}` | not ended (`programme-ended`); not unknown | `state` `paused`; event with why; open runs keep running |
+| pause | Open/Active/Idle → Paused | operator, Overlord | `POST /api/programmes/:slug/state {edge:'pause', why}` | not ended (`programme-ended`); not unknown | `state` `paused`; event with why; open runs keep running |
 | resume | Paused → live | operator, Overlord | same door, `edge:'resume'` | was paused (`not-paused`) | `state` `active`; event with why |
 | propose end | (no change) | the bound coordinator | `POST /api/programmes/:slug/end-proposal`, and `plan close` (§8) | caller is the bound coordinator (`not-coordinator`); not ended; no open run (`programme-runs-open`); no open proposal (`already-asked`); evidence given (`evidence-required`) | an `operator_items` decide row, `action:'end-programme'`; event `end-proposed` with outcome, evidence, item id |
 | confirm end | Open/Idle/Paused → Done or Abandoned | operator, Overlord | `POST /api/items/:id/act {programme}` on the proposal | proposal open; no open run (`programme-runs-open`, and the proposal stays open) | `state`, `planEnd`/`planEndWhy`/`planEndAt`; item closed; event `ended` with outcome, why, evidence, item id |
 | decline end | (no change) | operator, Overlord | `POST /api/items/:id/decline` | proposal open | item closed; system mail to the coordinator bound at that moment (none when there is none: the decline stays in the history); event `end-declined` with why |
 | withdraw proposal | (no change) | the bound coordinator | `POST /api/items/:id/withdraw` (the existing coordinator door) | proposal open | item closed; event `end-withdrawn` |
 | end (direct) | Open/Idle/Paused → Done or Abandoned; Active → Abandoned | operator, Overlord | `POST /api/programmes/:slug/state {edge:'end', outcome, why, abandonRuns?}` | why required; open runs refuse (`programme-runs-open`) unless `abandonRuns:true`, which ends them first through the abandon door's own decision on the coordination serialiser, and then the outcome is always Abandoned | as confirm, plus each abandoned run's own `run_events`; an open proposal is closed with the end |
-| archive end | as direct end with `abandonRuns`, outcome Abandoned | operator | `POST /api/sessions/:id/archive {programme:'end'}` | today's archive guards | as direct end, why "archived with programme end" |
-| reopen | Done/Abandoned → live | operator only | `POST /api/programmes/:slug/state {edge:'reopen', why}` | was ended (`not-ended`) | `state` `active`; `planEnd` fields cleared; event `reopened` with why and the end it reverses |
-| repair | Unknown → `active`/`paused`/`done`/`abandoned` | operator only | `POST /api/programmes/:slug/state {edge:'repair', to, why}` | stored value is `unknown` or out of vocabulary (`not-unknown`); `done` and `abandoned` follow the end's guards | `state` (and `planEnd` fields for an end); event `repaired` with the unreadable value in `detail` |
+| archive end | as direct end with `abandonRuns`, outcome Abandoned | operator, Overlord (through its archive door, where it has one) | `POST /api/sessions/:id/archive {programme:'end'}` | today's archive guards | as direct end, why "archived with programme end" |
+| reopen | Done/Abandoned → live | operator, Overlord | `POST /api/programmes/:slug/state {edge:'reopen', why}` | was ended (`not-ended`) | `state` `active`; `planEnd` fields cleared; event `reopened` with why and the end it reverses |
+| repair | Unknown → `active`/`paused`/`done`/`abandoned` | operator, Overlord | `POST /api/programmes/:slug/state {edge:'repair', to, why}` | stored value is `unknown` or out of vocabulary (`not-unknown`); `done` and `abandoned` follow the end's guards | `state` (and `planEnd` fields for an end); event `repaired` with the unreadable value in `detail` |
 | hand over | (no change) | operator, Overlord; the reclaim door; `moveClaims` | `POST /api/programmes/:slug/coordinator {session, why}`; `POST /api/runs/:id/reclaim`; the archive and stop doors | not ended; the heir passes reclaim's heir rule; all through `CoordStore#reclaimProgram` (§3) | binding and open runs' `claimedBy` together; the heir joins; event `coordinator` with from, to, why; an open end proposal stays open and now names the heir |
-| file | placeholder → target | the placeholder's coordinator; operator (re-file) | `POST /api/programmes/:slug/file`; `POST /api/programmes/:slug/refile` | placeholder `unfiled` (`not-provisional`); `{into}` names a live real programme; `{name, title}` takes a free slug | `placeholder` `filed`, `filedInto` the target, in one transaction; the session joins the target (and is bound there when its binding is empty or measured absent, otherwise it joins as a member, §7); event `filed` on both rows |
-| withdraw placeholder | `unfiled` → `withdrawn` | operator (re-file door, `{withdraw:true, why}`); the sweep | as file | placeholder `unfiled` | `placeholder` `withdrawn`; event `withdrawn` with why; it is never ended, so it never counts as Abandoned |
+| file | placeholder → target | the placeholder's coordinator; operator or Overlord (re-file) | `POST /api/programmes/:slug/file`; `POST /api/programmes/:slug/refile` | placeholder `unfiled` (`not-provisional`); `{into}` names a live real programme; `{name, title}` takes a free slug | `placeholder` `filed`, `filedInto` the target, in one transaction; the session joins the target (and is bound there when its binding is empty or measured absent, otherwise it joins as a member, §7); event `filed` on both rows |
+| withdraw placeholder | `unfiled` → `withdrawn` | operator or Overlord (re-file door, `{withdraw:true, why}`); the sweep | as file | placeholder `unfiled` | `placeholder` `withdrawn`; event `withdrawn` with why; it is never ended, so it never counts as Abandoned |
 | coordinator exit | (no change) | system | the registry measure (§9) | bound incarnation measured `no-coordinator` on two consecutive passes | event `coordinator-gone`, once per incarnation; `coordinator-back` if the same incarnation reads `led` again |
 
 **What every event row holds** (`programme_events`): `id`, `program`, `at`, `edge`, `fromState`, `toState`,
@@ -343,12 +343,16 @@ every placeholder filed into it. `{into: slug}` joins an existing objective; `{n
 - A new cell in `shared/overlord-ladder.ts#RUNG_CELL_MAP`: `programme-lifecycle: {chat:'refuse', advise:'refuse',
   full:'allow'}`, the `link-team` pattern. That cell is the Overlord's whole permission for these acts, as the operator's
   sign-in is the operator's: no decision-model row is added.
-- Rows in `server/src/coord/overlordDoors.ts` for start, end (direct), resume, hand over, confirm and decline. Each
-  records `actorKind:'overlord'`, the designated session and its why. Pause and reopen (and repair) are the operator's
-  alone (R5 names the hold and the reopen).
-- **The operator sees each one.** Every Overlord programme act is also written to the D-8126 call record
-  (`coordCallsRoute.ts`'s store) as a big call, so it shows until the operator marks it Seen (`POST /api/calls/:id/seen`).
-  The plan measures whether that record admits the Overlord as caller and extends it rather than adding a second.
+- Rows in `server/src/coord/overlordDoors.ts` for every programme edge the operator has: start, pause, resume, end
+  (direct), confirm, decline, reopen, repair, hand over, and re-file or withdraw a placeholder. Each records
+  `actorKind:'overlord'`, the designated session and its why.
+- **No acknowledgement queue** (R3 as amended 2026-11-24: maximum autonomy, no unnecessary admin burden). An Overlord
+  programme act is not written to the D-8126 call record and waits for no Seen. It is recorded in the programme's
+  history (§11) with its actor and why, exactly as the operator's own acts are, and the history is where the operator
+  reads it if and when they choose to.
+- **No step-up for the Overlord.** The step-ups in §14 are the operator's sign-in check on the operator's own doors; the
+  Overlord's door is gated by its rung cell alone. A coordinator still cannot confirm its own end: the confirm is the
+  operator's or the Overlord's door, never a coordinator's.
 
 ## 11. The programme's story (R8)
 
@@ -436,7 +440,7 @@ A coordinator cannot confirm its own end by any door: the confirm takes a step-u
 | `POST /api/programmes/:slug/file` | box token, attribution, ownership of the placeholder | `requireMailToken`; `gate.ts` EXEMPT |
 | `POST /api/items/:id/act` on `action:'end-programme'` | session, step-up (new for this action; other actions unchanged) | `LEDGER_OPERATOR_DOORS` (existing) |
 | `POST /api/items/:id/decline` on `action:'end-programme'` | session; works dark, `flag-off` | `LEDGER_OPERATOR_DOORS` (existing) |
-| Overlord rows for start, end, resume, hand over, confirm, decline | the Overlord's door, `full` rung | `OVERLORD_OPERATOR_DOORS` |
+| Overlord rows for every programme edge the operator has | the Overlord's door, `full` rung, no step-up | `OVERLORD_OPERATOR_DOORS` |
 | Changed in behaviour only: `plan/close`, `items/:id/tick`, `items/:id/withdraw`, `sessions/:id/archive`, `runs/:id/reclaim`, `POST /api/runs`, `POST /api/sessions`, `POST /api/projects/:project/workspaces` | unchanged | unchanged |
 
 `box-token-census.test.ts` checks CLAUDE.md's box-token sentence against these sets in both directions, so the build
@@ -486,8 +490,9 @@ PR that adds a door edits that sentence in the same commit.
   child with a coordinator's long-lived profile; today's handling stays.
 - **A Waiting-on-you item for idle programmes**: R6.
 - **A decision-model row gating the Overlord's end**: R3 gives the Overlord the operator's authority; its rung cell is
-  that permission, and the call record makes each act visible.
-- **Letting the Overlord pause or reopen**: R5 names the hold and the reopen the operator's.
+  that permission, and the history records each act.
+- **Writing each Overlord act to the D-8126 call record until Seen**, and keeping pause, reopen and repair from it:
+  R3 as amended rules out the acknowledgement queue and gives the Overlord every programme act; the history records them.
 - **Committing the per-programme decisions as a migration or fixture**: operator data, and this repository is public.
 - **A new ccd verb to write the programme at spawn**: the Build 7 invariant; the server writes it.
 
