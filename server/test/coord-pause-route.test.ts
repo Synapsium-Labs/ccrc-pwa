@@ -300,6 +300,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/roll-idle',
     // Overlord W1a launch profiles PR B: Settings › Automation › Auto memory for plain sessions, an operator dial, the roll-idle shape.
     '/api/coord/plain-auto-memory',
+    // The coordinator advisor (D-8967): Settings › Automation › Coordinator advisor, an operator dial, the plain-auto-memory shape.
+    '/api/coord/coordinator-advisor',
     // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
     '/api/testbox/switch',
     // D-8289: Capture again on a failed Claude Code build, an act for the operator alone: it moves the queue of the trusted set, so

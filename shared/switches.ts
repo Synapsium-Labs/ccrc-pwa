@@ -381,6 +381,13 @@ export const SWITCHES = {
     meaning: 'Whether a session that is neither a coordinator nor a dispatched worker keeps Claude Code\'s auto memory at its next launch: off, or on.',
     writer: 'POST /api/coord/plain-auto-memory',
   },
+  // The coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8967): read by the store alone; the launch-profile lane
+  // reads the store, and changes no launch while that lane is shadow.
+  'coordinator-advisor': {
+    storage: { setting: 'advisor_settings.choice' }, default: 'off', owner: 'C3',
+    meaning: 'Whether coordinators on Opus are launched with an advisor model (off, opus or fable), up to a daily call cap, for every coordinator or a named list.',
+    writer: 'POST /api/coord/coordinator-advisor',
+  },
   'overlord-rung': {
     storage: { setting: 'overlord_ladder.operatorRung' }, default: 'chat', owner: 'C5',
     meaning: 'The operator\'s rung of the Overlord\'s ladder: off, chat, advise or full. The effective rung is never above it.',

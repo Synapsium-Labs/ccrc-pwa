@@ -152,6 +152,20 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(f.lines).toEqual([]);
   });
 
+  it('a coordinator current on its release whose route asks for an advisor its spawn did not apply is rolled (advisor-stale, D-8970)', async () => {
+    const route = { fields: { advisor: 'fable' }, degraded: null, inert: [], unreadable: [] };
+    // The act asks the verdict again of the row it re-reads: the same row here.
+    const withRow = (f: Fake, r: FleetSession): RollSweepDeps =>
+      ({ ...f.deps, act: { ...f.deps.act, rowAtAct: async () => ({ ok: true as const, row: r }) } }) as RollSweepDeps;
+    const f = fake({ startedAt: INSTALLED + MIN });
+    const stale = row(COORD, { route } as never);
+    expect(await rollPass(withRow(f, stale), mem(), [stale], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, advisor: true }]);
+    expect(f.lines.join('\n')).toContain('advisor-stale');
+    const g = fake({ startedAt: INSTALLED + MIN });
+    const applied = row(COORD, { route, advisorSpawn: { kind: 'applied', model: 'fable', at: NOW / 1000 - 3600 } } as never);
+    expect(await rollPass(withRow(g, applied), mem(), [applied], [rec(COORD)], [])).toEqual([]);
+  });
+
   it('a busy coordinator is not rolled', async () => {
     const f = fake();
     f.set.word = 'busy';

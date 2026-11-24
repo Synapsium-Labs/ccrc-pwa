@@ -1196,6 +1196,12 @@ export const BROWSER_ROUTE_CAP = 'browser-route-v1';
  *  `ccdCapTokens.ts` are the other spellings. */
 export const MAILHOLD_ROUTE_CAP = 'route-mailhold-v1';
 
+/** The `ccd caps` token that says `advisor` is a routing field this box takes (coordinator advisor, D-8967): the lane-only
+ *  model a coordinator's spawn renders as `--advisor`. An older ccd refuses an unknown field for the WHOLE call, which would
+ *  cost the launch-profile lane's other fields too, so the lane puts `advisor` in a diff only when this token is advertised.
+ *  Read with `capSupported` (null refuses). ccd's `echo route-advisor-v1` and `ccdCapTokens.ts` are the other spellings. */
+export const ADVISOR_ROUTE_CAP = 'route-advisor-v1';
+
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
  *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec

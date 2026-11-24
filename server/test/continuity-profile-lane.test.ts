@@ -86,9 +86,13 @@ function harness(w: World = {}) {
       if (w.designation === 'throws') throw new Error('locked');
       return w.designation ?? { kind: 'not-designated', row: null };
     },
+    // The coordinator advisor's reads (D-8967): read only when the fleet ccd advertises its caps word, which no case here does.
+    coordinatorAdvisorSettings: () => { throw new Error('read without route-advisor-v1'); },
+    advisorDayCounts: () => { throw new Error('read without route-advisor-v1'); },
+    advisorReadState: () => null,
   };
   const deps: ProfileLaneDeps = {
-    coord,
+    coord, now: () => 0,
     reads: {
       usage: async (id): Promise<UsageRead> => {
         usageAsked.push(id);
@@ -99,6 +103,7 @@ function harness(w: World = {}) {
       steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
       declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },
       buildAgreement: () => w.builds ?? 'agreed',
+      anthropicLane: () => 'unmeasured',
     },
     act: {
       runCcd: async (argv: CcdArgv): Promise<CcdResult> => {
