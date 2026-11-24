@@ -70,7 +70,7 @@ browser; the cursor (`line-start` or `skip-record`, and its byte offset); the wi
 **The key:** 32 random bytes made when the module loads, in memory only, never stored, logged or sent. A restart makes a
 new key and key id, so an earlier continuation is `expired` (its own word), not `invalid`.
 
-**Checks, in order, all before any file I/O:** one page in flight (`busy`); grammar and length (`invalid`); key id
+**Checks, in order, all before any file I/O** (`server/src/transcript/olderPageGate.ts#gateOlderPage`, a pure decider): one page in flight (`busy`); grammar and length (`invalid`); key id
 (`expired`); MAC, compared in constant time (`invalid`); field bounds (`invalid`); session id equals this socket's
 (`invalid`); what this stream serves now (§6; its own word); the path tag equals the tag of the file THIS stream resolved,
 and, when the stream's backlog measured a token, the identity tag equals its tag (`changed`). Then the page reads only the
@@ -160,6 +160,11 @@ nine end words: `more` (with the next continuation), `start` (offset 0 measured)
   - the end words respelled the absent and unreadable pair: they derive from `ReadFailure` now, as do two server types;
   - a helper-scan case still stubbed the decoded read: it now fails only the backlog's first byte read;
   - one heavy git case in the deviation-refs suite timed out at 20 s under load, and passed alone.
+- **The pull request's first fast run** (at `508d39cd23`) failed three guards this wave had not run: `growth-check`
+  (`sessionws.ts` grew 68 net code lines against a limit of 40) and two pins on `shared/api.ts`'s import list (the new
+  `olderPage.ts` import). The fix round moved every older-page decision out of the stream into a pure module,
+  `server/src/transcript/olderPageGate.ts` (decide in L1, act in L4: the stream keeps the in-flight flag, the
+  generation, the read and the send), and added the import to both pins with its reason.
 - **Compiler checks:** server source clean.
 
 ## 9. Unmeasured

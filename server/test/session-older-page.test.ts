@@ -15,6 +15,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
 import { CONTINUATION_MAX_CHARS, PROCESS_CONTINUATION_KEY } from '../src/transcript/continuation.js';
 import { OLDER_PAGE_LIMITS } from '../src/transcript/olderPage.js';
+import { servingOf } from '../src/transcript/olderPageGate.js';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api.js';
 import { OLDER_PAGE_ENDS, type OlderPageAnswer } from '../../shared/olderPage.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -365,6 +366,15 @@ describe('the socket\'s client-frame parser', () => {
 describe('the reply words', () => {
   it('are nine, each its own word', () => {
     expect(OLDER_PAGE_ENDS).toEqual(['more', 'start', 'changed', 'absent', 'unreadable', 'unmeasured', 'invalid', 'expired', 'busy']);
+  });
+
+  it('what a stream serves after each backlog outcome: ok (with its token or none), absent, unreadable, unmeasured', () => {
+    const older = { ident: TOKEN_A, anchor: 0, witness: { len: 1, sha256: '0'.repeat(64) } };
+    expect(servingOf('f', { events: [], offset: 0, missing: false, measured: true, older })).toEqual({ state: 'ok', file: 'f', ident: TOKEN_A });
+    expect(servingOf('f', { events: [], offset: 0, missing: false, measured: true })).toEqual({ state: 'ok', file: 'f', ident: null });
+    expect(servingOf('f', { events: [], offset: 0, missing: true, measured: true })).toEqual({ state: 'absent' });
+    expect(servingOf('f', { events: [], offset: 9, missing: false, measured: false })).toEqual({ state: 'unreadable' });
+    expect(servingOf('f', { events: [], offset: 0, missing: true, measured: false })).toEqual({ state: 'unmeasured' });
   });
 
   it('a stream whose backlog could not measure the file answers that word, before any read', async () => {
