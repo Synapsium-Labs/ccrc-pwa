@@ -1,5 +1,5 @@
 // Prints the next deviation numbers, measured on a base ref (resolveLedgerBase) and HEAD together. No server, no allocator.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { definitionsIn, nextDeviationNumbers } from '../src/coord/ledger.js';
 
@@ -101,7 +101,7 @@ function main(argv: string[]): number {
   }
   let numbers: number[];
   try {
-    const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] } as const;
+    const opts: ExecFileSyncOptionsWithStringEncoding = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'], opts).trim();
     ref ??= resolveLedgerBase(root);
     if (ref === null) return usage('no base resolved: fetch origin main, or upstream main on a fork, or pass --ref');
