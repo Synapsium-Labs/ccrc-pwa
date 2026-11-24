@@ -610,9 +610,9 @@ describe('review 3480 F6: Enter while a composition is open (refined, 1280px)', 
 describe('review 3589: a break is shown and held, and the browser’s undo walks back through it', () => {
   /** The break notice, its two controls, and whether Send is enabled. */
   const broken = (s: Opened) => s.page.locator('.paste-broken');
-  const undoControl = (s: Opened) => s.page.getByRole('button', { name: 'Undo the edit that broke the pasted block' });
+  const undoControl = (s: Opened) => s.page.getByRole('button', { name: 'Undo last edit' });
   const dismissControl = (s: Opened) =>
-    s.page.getByRole('button', { name: 'Dismiss the broken pasted block and keep the text as it shows' });
+    s.page.getByRole('button', { name: 'Dismiss the markers and keep the text as it shows' });
   /** Enter, then a settling window: whether any request left. */
   const enterSendsNothing = async (s: Opened): Promise<void> => {
     const before = s.bodies.length;

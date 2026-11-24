@@ -19,8 +19,8 @@ import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import {
-  coverChips, dismissPlan, emptyChips, expandChip, expandValue, hasMarker, inertMarkers, liveChips, normalizePaste,
-  planEdit, planPaste, removeChip, selectionText, snapSelection, type PasteChips, type Plan,
+  BROKEN_NOTICE, coverChips, dismissPlan, emptyChips, expandChip, expandValue, hasMarker, inertMarkers, liveChips,
+  normalizePaste, planEdit, planPaste, removeChip, selectionText, snapSelection, type PasteChips, type Plan,
 } from './pasteChips';
 import { PasteChipBar } from './PasteChipBar';
 import './chat.css';
@@ -77,8 +77,8 @@ const KEY_HINTS: readonly { keys: readonly string[]; word: string }[] = [
   { keys: PALETTE_KEYS, word: 'commands' },
 ];
 
-/** Why the send is held while a pasted block is broken (the chip row's notice says the same and offers the way out). */
-export const BROKEN_HOLD = 'Sending is held: undo the last edit or dismiss the broken pasted block first.';
+/** The way out of the hold from the draft-conflict sheet, whose modal keeps the chip row's undo and dismiss out of reach. */
+const BROKEN_SHEET_WAY = 'Cancel, then undo the last edit or dismiss the markers.';
 
 /** The hints line in words, for a screen reader. */
 const KEY_HINTS_SPOKEN = 'Keys: Enter sends, Shift Enter adds a newline, Escape stops the turn, Command K opens commands.';
@@ -118,8 +118,8 @@ export function Composer({
   // The table of pasted texts lives beside the value, so it survives exactly where the draft does; `nextChip` is the
   // number the next chip takes, never reset, so no number names two pastes for the life of the composer. `composing`
   // keeps the caret snap still while an input method composes. `caretTo` places the caret after a change the browser
-  // did not make itself. `focusWas` and `pointing` are what the caret snap reads: the selection's focus before this
-  // move, and whether a pointer is making the selection.
+  // did not make itself. `focusWas`, `valueWas` and `pointing` are what the caret snap reads: the selection's focus and
+  // the field's value at the last snap, and whether a pointer is making the selection.
   const [value, setValue] = useState('');
   const valueNow = useRef('');
   const chips = useRef<PasteChips>(emptyChips());
@@ -127,6 +127,7 @@ export function Composer({
   const composing = useRef(false);
   const caretTo = useRef<number | null>(null);
   const focusWas = useRef(0);
+  const valueWas = useRef('');
   const pointing = useRef(false);
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
   const [commands, setCommands] = useState<SlashCommand[] | null>(null);
@@ -232,8 +233,10 @@ export function Composer({
     if (!el || document.activeElement !== el || composing.current) return;
     const back = el.selectionDirection === 'backward';
     const sel = { anchor: back ? el.selectionEnd : el.selectionStart, focus: back ? el.selectionStart : el.selectionEnd };
-    const next = hasMarker(el.value) ? snapSelection(el.value, chips.current, sel, focusWas.current, pointing.current) : sel;
+    const prev = { focus: focusWas.current, value: valueWas.current };
+    const next = hasMarker(el.value) ? snapSelection(el.value, chips.current, sel, prev, pointing.current) : sel;
     focusWas.current = next.focus;
+    valueWas.current = el.value;
     if (next.anchor === sel.anchor && next.focus === sel.focus) return;
     el.setSelectionRange(Math.min(next.anchor, next.focus), Math.max(next.anchor, next.focus),
       next.focus < next.anchor ? 'backward' : 'forward');
@@ -357,8 +360,8 @@ export function Composer({
   // below reads this, never the labels.
   const expanded = expandValue(value, chips.current);
   const pasted = liveChips(value, chips.current);
-  // A marker outside every chip: an edit the composer did not plan broke a pasted block. Sending holds until the break
-  // is undone or dismissed, so a broken label never goes out in place of its text.
+  // A marker outside every chip (an edit the composer did not plan broke a block, markers came with no chip, or an undo
+  // brought back an old label). Sending holds until none is left, so a broken label never goes out in place of its text.
   const broken = inertMarkers(value, chips.current).length > 0;
   const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken
     && (expanded.trim() !== '' || attachments.length > 0);
@@ -592,7 +595,7 @@ export function Composer({
               className="send-btn"
               aria-label="Send"
               disabled={!canSend || askUp}
-              title={broken ? BROKEN_HOLD : undefined}
+              title={broken ? BROKEN_NOTICE : undefined}
               onClick={send}
             >
               <span aria-hidden="true">↑</span>
@@ -647,7 +650,7 @@ export function Composer({
                     + ' your message.'}
               </p>
               <Well className="draft-well" data-testid="draft-well">{conflict.draft}</Well>
-              {broken && <p className="composer-refusal" role="status">{BROKEN_HOLD}</p>}
+              {broken && <p className="composer-refusal" role="status">{`${BROKEN_NOTICE} ${BROKEN_SHEET_WAY}`}</p>}
               <div className="draft-actions">
                 <Button
                   variant="primary"

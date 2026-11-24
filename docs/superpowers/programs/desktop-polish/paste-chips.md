@@ -21,17 +21,19 @@ server's send path, the wire, the terminal, the edge-whitespace policy and the d
   paste's text.
 - **The composer never writes in answer to an edit it did not plan.** A marker outside every chip is inert: never a
   chip, drawn as nothing, stripped by the expansion, stepped over by the caret. Nothing removes it on its own, so the
-  browser's undo walks back through a break to the intact chip. While one stands, the chip row says a pasted block was
-  broken, with **undo** (one step of the browser's own undo) and **dismiss** (the inert markers go, as one ordinary
-  edit), and the send and both draft-conflict choices are held, saying why.
+  browser's undo walks back through a break to the intact chip. While one stands, the chip row says so in one sentence
+  true of every way markers arrive, with **undo last edit** (one step of the browser's own undo, whatever the newest
+  edit is) and **dismiss** (the inert markers go, as one ordinary edit), and the send and both draft-conflict choices
+  are held, saying why.
 - A chip row above the field lists each chip (number, line count, first non-blank line) with **expand** (the full text
   replaces the chip, as ordinary text) and **×** (the chip leaves the field; its text stays in the table, for an undo).
 - A chip is one object to the caret and the selection: a caret never rests inside one, and a selection that touches
   part of one covers all of it before an edit applies. Backspace right after a chip, or Delete right before one, takes
   it whole.
-- Sending, retry, both draft-conflict choices, copy and cut go through one expansion: each chip becomes its table text
-  byte for byte, its own markers included, and the field's own text loses every marker. Today's whole-message trim and
-  whitespace-only guard follow, unchanged.
+- Sending, retry, both draft-conflict choices, copy and cut go through one expansion: each live chip becomes its table
+  text byte for byte, its own markers included, and the field's own text loses every marker. Expand is the exception:
+  the text it puts back into the field is field text, so it loses any marker characters it held. Today's whole-message
+  trim and whitespace-only guard follow, unchanged.
 
 ## 2. Where the decisions live
 
@@ -47,7 +49,9 @@ server's send path, the wire, the terminal, the edge-whitespace policy and the d
 | `snapSelection`, `coverChips` | where a caret and a selection may rest; inert markers stepped over |
 | `planEdit`, `planPaste`, `expandChip`, `removeChip` | the edits a chip needs planned, performed as the browser's own |
 
-`CHIP_OPEN` and `CHIP_CLOSE` are defined once, as escapes, and every pattern is derived from them. `Composer.tsx` holds
+`CHIP_OPEN` and `CHIP_CLOSE` are defined once, as escapes (`\u2062`, `\u2063`; the label's no-break space too,
+`\u00a0`), so no invisible character sits in a string literal, and every pattern is derived from them. `BROKEN_NOTICE`
+is the one sentence the notice and the hold's reasons use. `Composer.tsx` holds
 the value, the table and the counter, performs every plan as the browser's own edit (`execCommand`), plans at a native
 `beforeinput` listener (React's synthetic one carries no `inputType`), snaps the selection on `selectionchange`, and
 holds the send while the value has an inert marker. It reads three facts only the browser has: whether an event is
@@ -77,12 +81,17 @@ decides nothing.
   (nor for any non-cancelable or composing event), and nothing is written while it runs or after it ends. **Enter while
   a composition is open never sends** (`isComposing`, or key code 229).
 - **A break is shown and held, never cleaned up.** What an unplanned edit breaks (a composition reaching into a label,
-  a drop into one) leaves its markers inert: the field keeps every character as the browser left it, the chip row says
-  "The last edit broke a pasted block. Sending is held until you undo it or dismiss it.", Send and both draft-conflict
-  choices are disabled and say why, and Enter sends nothing. The notice clears itself as soon as the value has no inert
-  marker, however that came about. **undo** is one step of the browser's own undo from the field, which brings the
-  intact chip back (measured); **dismiss** takes out the inert markers as one ordinary undoable edit and keeps every
-  other character, label-shaped text included. The pasted text stays in the table either way.
+  a drop into one) leaves its markers inert: the field keeps every character as the browser left it. Inert markers also
+  stand when marker characters arrive with no chip (a non-typing insert of MathML text) and when an undo or redo brings
+  back a label from before a send. In each, the chip row says "Hidden pasted-block markers stand in the message without
+  a whole block, so sending is held." (`BROKEN_NOTICE`, the one definition), Send is disabled with that sentence as its
+  title, both draft-conflict choices are disabled with that sentence and the way out the sheet can reach ("Cancel, then
+  undo the last edit or dismiss the markers.": the row sits behind the sheet's modal), and Enter sends nothing. The
+  notice clears itself as soon as the value has no inert marker, however that came about. **undo last edit** is one
+  step of the browser's own undo from the field, whatever the newest edit is: right after a break it brings the intact
+  chip back (measured); after more typing it takes the typing first (§9). **dismiss** takes out the inert markers as one
+  ordinary undoable edit and keeps every other character, label-shaped text included. After a dismiss no chip is left,
+  so the pasted text in the table is reachable only by undoing the dismiss.
 - **Copy and cut** of a selection holding a chip carry the chip's full text, never the label; a selection holding part
   of a chip gives that chip's whole text, and a cut takes the whole chip.
 - **A drag** of a selection holding a chip is refused at `dragstart`: dragged elsewhere it would carry a label, not the
@@ -133,18 +142,21 @@ long as the composer.
 
 ## 7. Tests and what they prove
 
-- `pwa/test/paste-chips.test.ts` (54): floors, grammar (no-break spaces, one marker definition), numbering by the
+- `pwa/test/paste-chips.test.ts` (56): floors, grammar (no-break spaces, one marker definition), numbering by the
   counter; the parse as the only identity (a bare, half-wrapped, unheld or miscounted label is text; a hand-typed copy
   is text; a whole chip twice is two chips); the one expansion, field markers stripped and table text byte for byte;
   Expand and Remove by position; the caret snap by key direction and by pointer, the inert step-over, the selection
   cover and a caret inside a chip; review 3480 F1 and F2 as plans; Backspace, Delete and word deletes beside a chip;
   every non-typing insert left to the browser; inert markers and Dismiss keeping every other character; the
-  clipboard's text; a paste with no text.
-- `pwa/test/composer-paste-chips.test.tsx` (50): the composer in jsdom, which has no `execCommand`, so every edit takes
+  clipboard's text; a paste with no text; review 3606 F2: an edit beside an inert marker is not a key move, and a step
+  over one crosses a whole code point.
+- `pwa/test/composer-paste-chips.test.tsx` (52): the composer in jsdom, which has no `execCommand`, so every edit takes
   the fallback path: focus and caret after Expand and ×; Backspace, Delete and a word delete beside a chip; the caret
   snap through `selectionchange`; the review 3480 cases; review 3589's: label-shaped text dropped after a label's `#`
   keeping every character, the notice, the held send, Dismiss and its one request; the notice clearing on an undo to
-  the intact chip; a line delete that broke a chip left as it is; the conflict choices held and saying why; drop, yank
+  the intact chip; a line delete that broke a chip left as it is; the conflict choices held, the sheet's line read
+  whole, and the Send control's title (review 3606 F4); a Backspace beside an inert marker leaving the caret where the
+  edit put it (review 3606 F2); drop, yank
   and replacement inserts left to the browser with and without data, and a chip brought back twice; numbering that goes
   on after a send and a slash pick; a paste with no text; a file with a long text; composition events left alone, a
   broken one shown; copy, cut and a refused drag; Retry, Replace draft and Append anyway through the real store.
@@ -181,6 +193,15 @@ fast run on this round's tip went red there: the notice's two acts and Expand sp
 times. The act is now one helper in `PasteChipBar.tsx`; the census, the chip suites (pure, composer, Chrome 33) and the
 typecheck are green again on the follow-up commit.
 
+**Review 3606, against the reviewed tip (52c1c64ade's sources).** F2's probes, through the pure function: a Backspace
+that moves a marker into the crossed range put the caret at 1 there and puts it at 2 now; a step right over a marker
+before an emoji landed at 3, between its surrogates, and lands at 4 now; a step left over a marker after one landed at
+2 and lands at 1 now. Mutants this round, each red: the snap's value check removed (2 red), the code-point step made
+one unit (1 red), the composer passing the current value instead of the last snap's (1 red, the composer case added for
+it), the sheet's reason line removed (1 red) and the Send control's title removed (1 red); the two reasons were unpinned
+before (review 3606 F4). Before this round's one push: the whole pwa jsdom suite, markup census included (597 files,
+18610 tests), the Chrome chip file (33) and the full pwa typecheck, all green.
+
 **Mutation, by hand** (the coordinator's helper drives Python only), each deleting or inverting one guard. Against the
 pure and composer suites, 37: the exact label check, a marker paste as a chip, the field-text strip and the table
 text's byte-for-byte expansion, the strip in Expand, the key direction, the pointer's nearer side, the anchor cover, the
@@ -216,14 +237,26 @@ no-break label, the snap, the Enter guard, edits not the browser's own, and no w
 - Firefox and Safari are not measured: `Selection.modify` on a textarea, the order of the last `input` and
   `compositionend`, `selectionchange` on a textarea and `execCommand`'s undo are Chrome's, as measured here.
 - A drag and a touch selection handle are not measured in Chrome.
-- How a screen reader speaks U+2062 and U+2063 around every label, read by character or by word, is not measured.
+- How a screen reader speaks U+2062 and U+2063 around every label, read by character or by word, is not measured, nor
+  whether it announces the break notice (a `role="status"` region that mounts already filled), nor that notice's
+  rendered contrast.
 - Two selection moves in one task reach the snap as one `selectionchange` (Chrome coalesces them), so the snap reads the
   direction from where the focus was before both. Either result covers the chip or leaves it whole.
 - An inert marker takes no arrow press of its own, but Backspace or Delete beside one removes it (an invisible change,
   which clears the notice when it was the last).
-- A pasted text holding U+2062 or U+2063 goes out byte for byte; a short one becomes a chip (MathML writes U+2062 for
-  implicit multiplication). If a draft-conflict choice later puts such a text back into the field, it shows those
-  markers as inert, with the break notice: an accepted limit.
+- A pasted text holding U+2062 or U+2063 goes out byte for byte while it is a live chip at send; a short one becomes a
+  chip (MathML writes U+2062 for implicit multiplication). Expanded first, it loses those characters (they draw nothing).
+- The notice's **undo last edit** is one step of the browser's own undo, whatever the newest edit is. Typing is not
+  blocked while the notice stands, so after typing past a break it takes the typing first (as one step or key by key,
+  Chrome's grouping, §4), and the notice stays until every later edit is undone; the typing waits in the redo stack and
+  nothing is sent. Chrome's grouping of typing after an input method's break is not measured.
+- An old label an undo or redo brings back from before a send raises the notice too; undo then walks further back and
+  cannot clear it, and dismiss sends the label as text. Nothing can expand to another paste's text.
+- Digits inserted natively inside a label (a drop between `#1` and its space) can make it another held number with the
+  same line count, which is then a chip of that number, with no notice; the row shows that number. It needs ten or more
+  pastes in one draft, equal line counts and a drop landing in the digits.
+- When a draft-conflict sheet opens while markers stand, the row's undo and dismiss sit behind its modal; the sheet says
+  so (cancel first), and Cancel closes the sheet until a Retry brings a fresh conflict.
 - Two copies of one chip share an accessible name in the row (`Expand pasted text #1, …`); each acts on its own copy.
 - Contrast is measured in two of the twelve palettes (phosphor and light) and not in the pressed state; by the
   palettes' tokens the ink on the chip's grounds is at least 6.75:1 in all twelve (review 3469's arithmetic, not

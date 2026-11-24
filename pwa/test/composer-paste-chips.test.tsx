@@ -16,6 +16,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
+import { BROKEN_NOTICE } from '../src/session/pasteChips';
 import { createSessionStore, type SessionStoreDeps } from '../src/stores/session';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
@@ -72,7 +73,7 @@ const blurField = (): void => {
 
 /** The numbers the chip row lists, in order. */
 /** The break notice (review 3589), or null. */
-const notice = (): HTMLElement | null => screen.queryByText(/The last edit broke a pasted block/);
+const notice = (): HTMLElement | null => screen.queryByText(BROKEN_NOTICE); // the row's notice: exactly the one sentence
 const rowNumbers = (): (string | null | undefined)[] =>
   screen.queryAllByRole('listitem').map((li) => li.querySelector('.paste-chip-n')?.textContent);
 
@@ -506,8 +507,8 @@ describe('a break is shown and held, never cleaned up on its own (review 3589)',
     fireEvent.click(sendButton());
     expect(onSend).not.toHaveBeenCalled();
     // Dismiss: the inert markers go as one edit, and every other character stays.
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss the broken pasted block and keep the text as it shows' }));
-    const shown = dropped.replace(/[⁢⁣]/g, '');
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss the markers and keep the text as it shows' }));
+    const shown = dropped.replace(/[\u2062\u2063]/g, '');
     expect(field().value).toBe(shown);
     expect(notice()).toBeNull();
     expect(send(onSend)).toBe(shown);
@@ -534,7 +535,7 @@ describe('a break is shown and held, never cleaned up on its own (review 3589)',
     edit(`xx${v.slice(2, 12)}`, 12, 'deleteSoftLineForward');
     expect(field().value).toBe(`xx${v.slice(2, 12)}`);
     expect(notice()).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Undo the edit that broke the pasted block' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo last edit' })).toBeInTheDocument();
   });
 
   it('the draft-conflict choices are held while the notice is up, and say why', async () => {
@@ -553,7 +554,33 @@ describe('a break is shown and held, never cleaned up on its own (review 3589)',
     edit(`${v.slice(0, 5)}X${v.slice(5)}`, 6, 'insertFromDrop');
     expect(screen.getByRole('button', { name: 'Replace draft' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Append anyway' })).toBeDisabled();
-    expect(screen.getAllByText(/Sending is held/).length).toBeGreaterThan(0);
+    // The sheet says why, and the way out it can reach: the row's undo and dismiss sit behind its modal (review 3606 F4, F5).
+    const sheet = screen.getByRole('dialog');
+    expect(sheet).toHaveTextContent(`${BROKEN_NOTICE} Cancel, then undo the last edit or dismiss the markers.`);
+  });
+
+  it('a Backspace beside an inert marker leaves the caret where the edit put it (review 3606 F2)', () => {
+    mount();
+    edit('abZ\u2062cd', 3, 'insertFromDrop'); // a marker that came with no chip
+    expect(notice()).toBeInTheDocument();
+    moveTo(3);
+    expect(sel()).toEqual([3, 3]);
+    edit('ab\u2062cd', 2, 'deleteContentBackward'); // the `Z` goes; the marker moves into the range the caret crossed
+    moveTo(2); // the browser's selectionchange for that edit
+    expect(sel()).toEqual([2, 2]);
+    // A real key move over the same marker still steps on.
+    moveTo(3);
+    moveTo(4);
+    expect(sel()).toEqual([4, 4]);
+  });
+
+  it('the Send control says why it is held, in the notice’s own sentence (review 3606 F4)', () => {
+    mount();
+    const v = setup();
+    expect(sendButton()).not.toHaveAttribute('title');
+    edit(`${v.slice(0, 6)}X${v.slice(6)}`, 7, 'insertFromDrop');
+    expect(sendButton()).toBeDisabled();
+    expect(sendButton()).toHaveAttribute('title', BROKEN_NOTICE);
   });
 });
 

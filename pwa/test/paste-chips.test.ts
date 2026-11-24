@@ -223,29 +223,29 @@ describe('a caret never rests inside a chip, and a selection covers it whole', (
   const at = (p: number) => ({ anchor: p, focus: p });
 
   it('a key moving right into a chip carries the caret to its end; moving left, to its start', () => {
-    expect(snapSelection(value, chips, at(s + 1), s, false)).toEqual(at(e));
-    expect(snapSelection(value, chips, at(e - 1), e, false)).toEqual(at(s));
-    expect(snapSelection(value, chips, at(s + 9), s - 5, false)).toEqual(at(e)); // a line move from above
+    expect(snapSelection(value, chips, at(s + 1), { focus: s, value: value }, false)).toEqual(at(e));
+    expect(snapSelection(value, chips, at(e - 1), { focus: e, value: value }, false)).toEqual(at(s));
+    expect(snapSelection(value, chips, at(s + 9), { focus: s - 5, value: value }, false)).toEqual(at(e)); // a line move from above
   });
 
   it('a pointer takes the nearer side', () => {
-    expect(snapSelection(value, chips, at(s + 3), 0, true)).toEqual(at(s));
-    expect(snapSelection(value, chips, at(e - 3), 0, true)).toEqual(at(e));
+    expect(snapSelection(value, chips, at(s + 3), { focus: 0, value: value }, true)).toEqual(at(s));
+    expect(snapSelection(value, chips, at(e - 3), { focus: 0, value: value }, true)).toEqual(at(e));
   });
 
   it('a caret at either edge or outside stays', () => {
-    for (const p of [0, s, e, value.length]) expect(snapSelection(value, chips, at(p), 0, false)).toEqual(at(p));
+    for (const p of [0, s, e, value.length]) expect(snapSelection(value, chips, at(p), { focus: 0, value: value }, false)).toEqual(at(p));
   });
 
   it('shift-arrow from the start covers the chip, and back again collapses to where it began', () => {
-    const grown = snapSelection(value, chips, { anchor: s, focus: s + 1 }, s, false);
+    const grown = snapSelection(value, chips, { anchor: s, focus: s + 1 }, { focus: s, value: value }, false);
     expect(grown).toEqual({ anchor: s, focus: e });
-    expect(snapSelection(value, chips, { anchor: s, focus: e - 1 }, e, false)).toEqual({ anchor: s, focus: s });
+    expect(snapSelection(value, chips, { anchor: s, focus: e - 1 }, { focus: e, value: value }, false)).toEqual({ anchor: s, focus: s });
   });
 
   it('a selection whose anchor is inside a chip covers the chip', () => {
-    expect(snapSelection(value, chips, { anchor: s + 4, focus: value.length }, value.length, false)).toEqual({ anchor: s, focus: value.length });
-    expect(snapSelection(value, chips, { anchor: s + 4, focus: 0 }, 0, false)).toEqual({ anchor: e, focus: 0 });
+    expect(snapSelection(value, chips, { anchor: s + 4, focus: value.length }, { focus: value.length, value: value }, false)).toEqual({ anchor: s, focus: value.length });
+    expect(snapSelection(value, chips, { anchor: s + 4, focus: 0 }, { focus: 0, value: value }, false)).toEqual({ anchor: e, focus: 0 });
   });
 
   it('coverChips widens a range to the chips it touches part of; a caret inside one stands at its end', () => {
@@ -258,12 +258,31 @@ describe('a caret never rests inside a chip, and a selection covers it whole', (
 
   it('a key steps over an inert marker as if it were not there; a pointer does not', () => {
     const v = `ab${CHIP_OPEN}cd`; // an inert marker at 2
-    expect(snapSelection(v, chips, at(3), 2, false)).toEqual(at(4)); // right across the marker: on over `c`
-    expect(snapSelection(v, chips, at(2), 3, false)).toEqual(at(1)); // left across it: on over `b`
-    expect(snapSelection(v, chips, at(4), 3, false)).toEqual(at(4)); // an ordinary step stays
-    expect(snapSelection(v, chips, at(3), 0, true)).toEqual(at(3));
+    const was = (focus: number) => ({ focus, value: v });
+    expect(snapSelection(v, chips, at(3), was(2), false)).toEqual(at(4)); // right across the marker: on over `c`
+    expect(snapSelection(v, chips, at(2), was(3), false)).toEqual(at(1)); // left across it: on over `b`
+    expect(snapSelection(v, chips, at(4), was(3), false)).toEqual(at(4)); // an ordinary step stays
+    expect(snapSelection(v, chips, at(3), was(0), true)).toEqual(at(3));
     const w = `a${CHIP_CLOSE}${CHIP_OPEN}b`; // two in a row
-    expect(snapSelection(w, chips, at(2), 1, false)).toEqual(at(4));
+    expect(snapSelection(w, chips, at(2), { focus: 1, value: w }, false)).toEqual(at(4));
+  });
+
+  it('an edit beside an inert marker is not a key move (review 3606 F2)', () => {
+    // Backspace took the `Z` before the marker: the caret went 3 -> 2 and the marker moved into the range it crossed.
+    const before = `abZ${CHIP_OPEN}cd`;
+    const after = `ab${CHIP_OPEN}cd`;
+    expect(snapSelection(after, chips, at(2), { focus: 3, value: before }, false)).toEqual(at(2));
+    // The same caret move over an unchanged value is a key move, and steps on over `b`.
+    expect(snapSelection(after, chips, at(2), { focus: 3, value: after }, false)).toEqual(at(1));
+    // An edit that leaves the caret inside a chip is still kept out of it.
+    expect(snapSelection(value, chips, at(s + 1), { focus: s, value: `${value}x` }, false)).toEqual(at(e));
+  });
+
+  it('a step over an inert marker crosses a whole code point (review 3606 F2)', () => {
+    const right = `x${CHIP_OPEN}\u{1F600}y`; // x, the marker, an emoji (two code units), y
+    expect(snapSelection(right, chips, at(2), { focus: 1, value: right }, false)).toEqual(at(4));
+    const left = `x\u{1F600}${CHIP_OPEN}y`; // x, an emoji, the marker, y
+    expect(snapSelection(left, chips, at(3), { focus: 4, value: left }, false)).toEqual(at(1));
   });
 });
 

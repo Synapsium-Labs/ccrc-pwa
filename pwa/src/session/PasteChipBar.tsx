@@ -1,13 +1,14 @@
 // The paste-chip row (desktop-polish wave 169): one chip per long paste the draft holds, above the field beside the
 // attachment tray. The chip in the field (its label, `[Pasted text #N +L lines]`, between two invisible markers) is
 // where the text sits; this row is where it is acted on. Expand puts the full text back into the field in place, as
-// ordinary text; Remove takes the chip out of the field (its text stays in the draft's table, for an undo). When an edit
-// the composer did not plan broke a pasted block, the row says so, with Undo (the browser's own, one step) and Dismiss
-// (the broken block's leftover markers go); the composer holds the send meanwhile. Ring L4: it renders what
+// ordinary text; Remove takes the chip out of the field (its text stays in the draft's table, for an undo). While markers
+// stand outside every chip (an edit the composer did not plan broke a block, markers came with no chip, or an undo
+// brought back an old label), the row says so, with Undo last edit (one step of the browser's own, whatever the newest
+// edit is) and Dismiss (the leftover markers go); the composer holds the send meanwhile. Ring L4: it renders what
 // `liveChips` (pasteChips.ts, L1) listed and what the composer decided, and calls back, deciding nothing.
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
-import { linesWord, type LiveChip } from './pasteChips';
+import { BROKEN_NOTICE, linesWord, type LiveChip } from './pasteChips';
 import './pasteChips.css';
 
 export interface PasteChipBarProps {
@@ -43,14 +44,12 @@ export function PasteChipBar({
     <>
       {broken && (
         <div className="paste-broken" role="status">
-          <p className="paste-broken-text">
-            The last edit broke a pasted block. Sending is held until you undo it or dismiss it.
-          </p>
-          <ChipAct label="Undo the edit that broke the pasted block" disabled={disabled} onClick={onUndo}>
-            undo
+          <p className="paste-broken-text">{BROKEN_NOTICE}</p>
+          {/* One step of the browser's own undo, whatever the newest edit is: it says so. */}
+          <ChipAct label="Undo last edit" disabled={disabled} onClick={onUndo}>
+            undo last edit
           </ChipAct>
-          <ChipAct label="Dismiss the broken pasted block and keep the text as it shows" disabled={disabled}
-            onClick={onDismiss}>
+          <ChipAct label="Dismiss the markers and keep the text as it shows" disabled={disabled} onClick={onDismiss}>
             dismiss
           </ChipAct>
         </div>

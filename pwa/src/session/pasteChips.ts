@@ -39,10 +39,10 @@ export const CHIP_MAX_PLAIN_LINES = 12;
  *  characters that draw nothing (measured in Chrome: zero width) and that typed text rarely carries (MathML uses the
  *  first for implicit multiplication: a paste holding one is a chip, see `shouldChip`). The one definition; every
  *  pattern below is derived from these two. */
-export const CHIP_OPEN = '⁢';
-export const CHIP_CLOSE = '⁣';
+export const CHIP_OPEN = '\u2062';
+export const CHIP_CLOSE = '\u2063';
 /** The label's spaces: no-break, so a label never wraps across lines and a soft line delete takes a whole chip or none. */
-const NBSP = ' ';
+const NBSP = '\u00a0';
 const MARKER_CLASS = `[${CHIP_OPEN}${CHIP_CLOSE}]`;
 const ANY_MARKER = new RegExp(MARKER_CLASS);
 const EVERY_MARKER = new RegExp(MARKER_CLASS, 'g');
@@ -128,6 +128,11 @@ export const parseChips = (value: string, chips: PasteChips): ChipSpan[] => {
   return out;
 };
 
+/** What the composer says while inert markers stand (the chip row's notice and the reason the send is held), in words
+ *  true of every way they arrive: a chip the last edit broke, markers that came with no chip, an old label an undo
+ *  brought back. */
+export const BROKEN_NOTICE = 'Hidden pasted-block markers stand in the message without a whole block, so sending is held.';
+
 /** Where the markers that are not part of a chip stand: inert, never a chip, drawn as nothing. */
 export const inertMarkers = (value: string, chips: PasteChips): number[] => {
   if (!hasMarker(value)) return [];
@@ -192,6 +197,14 @@ export const removeChip = (value: string, at: number, chips: PasteChips): Plan |
   return s === undefined ? null : { start: s.start, end: s.end, text: '' };
 };
 
+/** Whether the code unit at `i` is the half of a surrogate pair a move in direction `d` meets first. */
+const pairAt = (value: string, i: number, d: 1 | -1): boolean => {
+  const u = value.charCodeAt(i);
+  const v = value.charCodeAt(i + d);
+  return d > 0 ? u >= 0xd800 && u <= 0xdbff && v >= 0xdc00 && v <= 0xdfff
+    : u >= 0xdc00 && u <= 0xdfff && v >= 0xd800 && v <= 0xdbff;
+};
+
 const within = (spans: readonly ChipSpan[], p: number): ChipSpan | undefined => spans.find((s) => s.start < p && p < s.end);
 
 /** [start, end) widened to cover every chip it touches part of. A collapsed caret inside a chip stands at its end. */
@@ -204,35 +217,37 @@ export const coverChips = (value: string, chips: PasteChips, start: number, end:
   return { start: within(spans, start)?.start ?? start, end: within(spans, end)?.end ?? end };
 };
 
-/** Where the field's selection may rest. `anchor` is where it began and `focus` where it moves; `prevFocus` is the focus
- *  before this move, so a key that moved the focus into a chip carries it on to the chip's far side, and `pointer` (a
- *  click or a drag) takes the nearer side instead. A selection's anchor inside a chip moves to the side that makes the
- *  selection cover the chip. A key move that crossed only inert markers carries on over the next character, so an
- *  inert marker takes no key press of its own. */
+/** Where the field's selection may rest. `anchor` is where it began and `focus` where it moves; `prev` is the focus and
+ *  the value at the last snap, so a key that moved the focus into a chip carries it on to the chip's far side, and
+ *  `pointer` (a click or a drag) takes the nearer side instead. A selection's anchor inside a chip moves to the side that
+ *  makes the selection cover the chip. A key move that crossed only inert markers carries on over the next character (a
+ *  whole code point), so an inert marker takes no key press of its own; when the value changed since the last snap the
+ *  move was an edit, not a key move, and only the keep-out-of-a-chip rule applies. */
 export const snapSelection = (
   value: string,
   chips: PasteChips,
   sel: { readonly anchor: number; readonly focus: number },
-  prevFocus: number,
+  prev: { readonly focus: number; readonly value: string },
   pointer: boolean,
 ): { anchor: number; focus: number } => {
   const spans = parseChips(value, chips);
+  const prevFocus = prev.focus;
   let { anchor, focus } = sel;
   const collapsed = anchor === focus;
   const f = within(spans, focus);
   if (f !== undefined) {
     const nearer = focus - f.start <= f.end - focus ? f.start : f.end;
     focus = pointer || focus === prevFocus ? nearer : focus > prevFocus ? f.end : f.start;
-  } else if (!pointer && focus !== prevFocus && Math.abs(focus - prevFocus) <= 2) {
+  } else if (!pointer && value === prev.value && focus !== prevFocus && Math.abs(focus - prevFocus) <= 2) {
     const inert = new Set(inertMarkers(value, chips));
-    const d = focus > prevFocus ? 1 : -1;
+    const d: 1 | -1 = focus > prevFocus ? 1 : -1;
     let only = true;
     for (let i = Math.min(focus, prevFocus); only && i < Math.max(focus, prevFocus); i += 1) only = inert.has(i);
     if (only) {
       const ahead = (p: number): number => (d > 0 ? p : p - 1); // the character a move from p crosses
       const inside = (p: number): boolean => (d > 0 ? p < value.length : p > 0);
       while (inside(focus) && inert.has(ahead(focus))) focus += d;
-      if (inside(focus)) focus += d;
+      if (inside(focus)) focus += pairAt(value, ahead(focus), d) ? 2 * d : d;
       const g = within(spans, focus);
       if (g !== undefined) focus = d > 0 ? g.end : g.start;
     }
