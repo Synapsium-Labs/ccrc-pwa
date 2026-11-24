@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LEDGER_ALLOC_MAX, nextDeviationNumbers } from '../src/coord/ledger.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
-import { DEFINITION_DIRS, readDefinitionFilesAt } from '../scripts/next-deviation.js';
+import { DEFINITION_DIRS, readDefinitionFilesAt, resolveLedgerBase } from '../scripts/next-deviation.js';
 
 afterEach(() => removeTmpFixtures());
 
@@ -53,7 +53,46 @@ describe('nextDeviationNumbers', () => {
   });
 });
 
+describe('resolveLedgerBase (the one base resolver: the helper and the guard)', () => {
+  const withUpstream = (): string => {
+    const root = fixtureRepo();
+    execFileSync('git', ['update-ref', 'refs/remotes/upstream/main', 'HEAD'], { cwd: root });
+    return root;
+  };
+  it('picks upstream/main over origin/main when both resolve (a fork)', () => {
+    expect(resolveLedgerBase(withUpstream(), undefined)).toBe('upstream/main');
+  });
+  it('picks origin/main when there is no upstream', () => {
+    expect(resolveLedgerBase(fixtureRepo(), undefined)).toBe('origin/main');
+  });
+  it('the env var wins over both', () => {
+    expect(resolveLedgerBase(withUpstream(), 'HEAD')).toBe('HEAD');
+  });
+  it('an env var that does not resolve falls through, never guessed', () => {
+    expect(resolveLedgerBase(withUpstream(), 'no-such-ref')).toBe('upstream/main');
+  });
+  it('none resolves: null, with no local-main fallback (D-' + '2732)', () => {
+    const root = fixtureRepo();
+    execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/main'], { cwd: root });
+    expect(resolveLedgerBase(root, undefined)).toBeNull();
+  });
+});
+
 describe('next-deviation CLI', () => {
+  it('measures upstream/main by itself on a fork, and --ref still overrides', () => {
+    const root = fixtureRepo();
+    execFileSync('git', ['update-ref', 'refs/remotes/upstream/main', 'HEAD'], { cwd: root });
+    expect(run(root).stderr).toMatch(/measured upstream\/main at \w+/);
+    expect(run(root, '--ref', 'origin/main').stderr).toMatch(/measured origin\/main at \w+/);
+  });
+  it('exits 2 when no base resolves, naming both remotes', () => {
+    const root = fixtureRepo();
+    execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/main'], { cwd: root });
+    const r = run(root);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('upstream main');
+    expect(r.stdout).toBe('');
+  });
   it('prints the numbers for a fixture repo and names the ref it measured', () => {
     const r = run(fixtureRepo(), '2', '--ref', 'origin/main');
     expect(r.status).toBe(0);

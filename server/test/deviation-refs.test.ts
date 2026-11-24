@@ -14,8 +14,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { crossTreeCollisions, definitionsIn, definitionSubject, selfAssignedCollisions,
-         LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
-import { DEFINITION_DIRS, readDefinitionFilesAt } from '../scripts/next-deviation.js';
+         LEDGER_ALLOCATOR_ERA, SELF_ASSIGNED_ERA, type Definition } from '../src/coord/ledger.js';
+import { DEFINITION_DIRS, readDefinitionFilesAt, resolveLedgerBase } from '../scripts/next-deviation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -57,7 +57,7 @@ const entries = (): Entry[] => {
     if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
     for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
       const m = ENTRY.exec(line);
-      if (m) out.push({ file: f, n: Number(m[1]), subject: definitionSubject(line) });
+      if (m) out.push({ file: f, n: Number(m[1]), subject: definitionSubject(line, true) });
     }
   }
   return out;
@@ -193,33 +193,22 @@ describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)'
 
 /* ── F7: the same collision, one merge EARLIER ─────────────────────────────── */
 
-/** The base this branch's ledger is measured against — `topology-clean.test.ts`'s
- *  own `resolveBase`, for its own reason. Returns null rather than guessing, and
- *  the first row below turns that null RED: a shallow `actions/checkout` (depth 1,
- *  where `origin/main` does not exist) is exactly how this guard would come to
- *  measure nothing while reporting green. CI carries `fetch-depth: 0` already. */
-function resolveLedgerBase(cwd: string): string | null {
-  // D-2732: `'main'` was the third candidate, and on the fleet host local `main`
-  // is a FOSSIL — measured 356 commits behind `origin/main`, parked by another
-  // worktree that never moves it. With ~10 worktrees on one `.git`, a concurrent
-  // fetch rewrites `packed-refs`, so `rev-parse --verify origin/main` can fail
-  // TRANSIENTLY, which is how the chain reached that third candidate at all. The
-  // fallback was silent, so the gate would compare this branch against a tree
-  // hundreds of commits old and say nothing about which tree it read. An
-  // unresolvable `origin/main` must reach the null-base refusal below instead:
-  // "I could not measure" is an answer, "I measured a fossil" is not.
-  const candidates = [process.env['CCRC_LEDGER_BASE'], 'origin/main']
-    .filter((r): r is string => Boolean(r));
-  for (const ref of candidates) {
-    try {
-      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
-        { cwd, stdio: 'pipe' });
-      return ref;
-    } catch { /* try the next candidate */ }
-  }
-  return null;
-}
-
+/** The base this branch's ledger is measured against: the helper's own resolver
+ *  (`resolveLedgerBase` in `server/scripts/next-deviation.ts` — `$CCRC_LEDGER_BASE`, then
+ *  `upstream/main`, then `origin/main`), so the guard and the helper measure one tree. Null
+ *  rather than a guess, and the first row below turns that null RED: a shallow
+ *  `actions/checkout` (depth 1, where `origin/main` does not exist) is exactly how this guard
+ *  would come to measure nothing while reporting green. CI carries `fetch-depth: 0` already.
+ *
+ *  D-2732: `'main'` was once the last candidate, and on the fleet host local `main`
+ *  is a FOSSIL — measured 356 commits behind `origin/main`, parked by another
+ *  worktree that never moves it. With ~10 worktrees on one `.git`, a concurrent
+ *  fetch rewrites `packed-refs`, so `rev-parse --verify origin/main` can fail
+ *  TRANSIENTLY, which is how the chain reached that candidate at all. The
+ *  fallback was silent, so the gate would compare this branch against a tree
+ *  hundreds of commits old and say nothing about which tree it read. An
+ *  unresolvable base must reach the null-base refusal below instead:
+ *  "I could not measure" is an answer, "I measured a fossil" is not. */
 const LEDGER_BASE = resolveLedgerBase(ROOT);
 
 /** `docs/superpowers/plans/*.md` as a given REF holds them, keyed by basename, without checking it
@@ -274,7 +263,7 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
   // line wraps its subject, which `ENTRY` cannot match (D-1294).
   it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
     expect(LEDGER_BASE,
-      'no $CCRC_LEDGER_BASE or origin/main resolved (D-2732 removed the local-main fallback, which ' +
+      'no $CCRC_LEDGER_BASE, upstream/main or origin/main resolved (D-2732 removed the local-main fallback, which ' +
       'was a fossil): a shallow checkout cannot see the other ' +
       'tree, and this refuses to report a comparison nobody made')
       .not.toBeNull();
@@ -355,12 +344,16 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
         expect(read, `${name}: read ${read} files under ${dir}`).toBeGreaterThanOrEqual(1);
       }
     }
-    const hits = selfAssignedCollisions(head, base);
+    // A shared path is judged by the branch's copy only when the branch changed it since the merge base.
+    const changed = new Set(execFileSync('git', ['diff', '--name-only', '-z', `${LEDGER_BASE!}...HEAD`, '--', ...DEFINITION_DIRS],
+      { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 24 }).split('\0').filter(Boolean));
+    const hits = selfAssignedCollisions(head, base, changed);
     expect(hits.map((c) => `D-${c.n} is defined with two different subjects in ${c.files.join(', ')}`),
       `measured against ${LEDGER_BASE}. If they are the same deviation, make the lines identical (or cite it ` +
       'instead of defining it); if not, renumber the newer one (yours, never one already on the base) with ' +
-      '`cd server && npm run next-deviation -- <count>`, after `git fetch <remote> main` (the project\'s remote: ' +
-      'origin, or upstream when origin is your fork).').toEqual([]);
+      '`cd server && npm run next-deviation -- <count>`, after `git fetch origin main` (on a fork, add `upstream` and ' +
+      '`git fetch upstream main`: the helper and this guard then measure upstream/main by themselves; ' +
+      '$CCRC_LEDGER_BASE and --ref override).').toEqual([]);
   });
 
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
@@ -662,17 +655,25 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 // fence parser is written here.
 const DEFINITION_SHAPE = /^- \*\*D-(\d+)\.?\*\*/;
 
+/** The self-assigned era's wider net, over all three definition directories (the helper and the
+ *  guard read them all): any line that OPENS with the number, as a heading (`# D-N`), a bold
+ *  list item of any marker (`- `, `* `, `+ `, `1. `) or bare bold. Only for numbers at or above
+ *  `SELF_ASSIGNED_ERA`: measured on main, this shape holds 727 unreadable lines below it (665 in
+ *  plans, 34 in programs, 28 in specs), which the plans-only baseline above does not cover. */
+const SELF_ASSIGNED_SHAPE = /^(?:#{1,6} |[-*+] \*\*|\d+[.)] \*\*|\*\*)D-(\d+)(?!\.\d)\b/;
+
 /** Definition-shaped lines `DEFINITION` does not read, as `file -> numbers`, one
  *  number per line (so a number unreadable on two lines appears twice). */
 function unreadDefinitionShapes(
   files: readonly { readonly path: string; readonly text: string }[],
+  shape: RegExp = DEFINITION_SHAPE,
 ): Map<string, number[]> {
   const out = new Map<string, number[]>();
   for (const f of files) {
     const lines = f.text.split('\n');
     let before: Definition[] | null = null;   // the file as written, read once per file
     for (let i = 0; i < lines.length; i++) {
-      const m = DEFINITION_SHAPE.exec(lines[i]!);
+      const m = shape.exec(lines[i]!);
       if (!m) continue;
       // A shortcut, not a rule: the probe below gives a readable line the same answer,
       // but it re-reads the whole file, and most shaped lines are readable.
@@ -840,3 +841,37 @@ describe('every definition-shaped line is one the ledger reads (Task C33)', () =
     expect(multisetLess([n], [n, n])).toEqual([]);
   });
 });
+
+describe('every self-assigned definition-shaped line, in plans, programs and specs, is one the ledger reads', () => {
+  const selfAssignedUnread = (files: readonly { path: string; text: string }[]): string[] =>
+    [...unreadDefinitionShapes(files, SELF_ASSIGNED_SHAPE).entries()]
+      .map(([file, ns]) => [file, ns.filter((n) => n >= SELF_ASSIGNED_ERA)] as const)
+      .filter(([, ns]) => ns.length > 0)
+      .map(([file, ns]) => `${file}: ${ns.map((n) => 'D-' + n).join(', ')}`);
+
+  it('no file under the three definition directories holds an unreadable line for a number >= 10000', () => {
+    expect(selfAssignedUnread(readDefinitionFilesAt(ROOT, 'HEAD')),
+      'a definition-shaped line DEFINITION (server/src/coord/ledger.ts) cannot read: neither the helper nor the ' +
+      'collision guard sees the number, so it can be handed out twice. Write it as `- **D-N** — subject` (an em ' +
+      'dash), or `- **D-N** (…)` or `- **D-N**: …`; a line that only cites the number must not open with it').toEqual([]);
+  });
+
+  it('flags each unreadable shape, in a spec and a task note as in a plan', () => {
+    const n = SELF_ASSIGNED_ERA + 1;
+    const one = (text: string, at = 'docs/superpowers/specs/x.md'): string[] => selfAssignedUnread([{ path: at, text }]);
+    for (const line of [
+      `- **D-${n}** \u2013 en dash`, `- **D-${n}** - hyphen`, `### D-${n} \u2013 en-dash heading`, `**D-${n} \u2013 bare bold**`,
+      `* **D-${n}** \u2014 star marker`, `+ **D-${n}** \u2014 plus marker`, `1. **D-${n}** \u2014 numbered`, `# D-${n} \u2014 h1`,
+      `- **D-${n}.** dot form`,
+    ]) {
+      expect(one(line), line).toEqual([`docs/superpowers/specs/x.md: D-${n}`]);
+      expect(one(line, 'docs/superpowers/programs/p/task.md'), line).toEqual([`docs/superpowers/programs/p/task.md: D-${n}`]);
+    }
+    expect(one(`- **D-${n}** \u2014 readable`)).toEqual([]);
+    expect(one(`### D-${n} \u2014 readable heading`)).toEqual([]);
+    expect(one(`- **D-${n}.1** a sub-number`)).toEqual([]);
+    expect(one(['```', `* **D-${n}** \u2014 quoted`, '```'].join('\n'))).toEqual([]);
+    expect(one(`* **D-${SELF_ASSIGNED_ERA - 1}** \u2014 below the era`)).toEqual([]);
+  });
+});
+

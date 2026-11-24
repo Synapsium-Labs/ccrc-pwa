@@ -286,32 +286,42 @@ export function definitionsIn(
   return definitionLines(files).map(({ file, n }) => ({ file, n }));
 }
 
-/** `definitionsIn` with each definition's line kept, for the subject-aware rule. */
+/**
+ * `definitionsIn` with each definition's comparable subject, for the subject-aware rule. A subject
+ * wrapped onto the next line (`- **D-N** —` then the text) is read from the next non-blank line; one
+ * still empty gets a key of its own (file and line), so an empty subject never makes two definitions equal.
+ */
 function definitionLines(
   files: readonly { readonly path: string; readonly text: string }[],
-): (Definition & { readonly line: string })[] {
-  const out: (Definition & { readonly line: string })[] = [];
+): (Definition & { readonly subject: string })[] {
+  const out: (Definition & { readonly subject: string })[] = [];
   for (const f of files) {
     const lines = f.text.split('\n');
     const fenced = fencedLines(lines);
     for (let i = 0; i < lines.length; i++) {
       if (fenced !== null && fenced.has(i)) continue;
       const m = DEFINITION.exec(lines[i]!);
-      if (m) out.push({ file: f.path, n: Number(m[1]), line: lines[i]! });
+      if (!m) continue;
+      let subject = definitionSubject(lines[i]!);
+      if (subject === '') subject = tidySubject(lines.slice(i + 1).find((l) => l.trim() !== '') ?? '');
+      out.push({ file: f.path, n: Number(m[1]), subject: subject === '' ? `\0${f.path}:${i}` : subject });
     }
   }
   return out;
 }
 
+const tidySubject = (s: string): string => s.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '').trimEnd();
+
 /**
  * The subject of a definition line: the text after its first em dash (or, with no em dash, after the
  * number), whitespace collapsed and trailing punctuation trimmed. The one subject extractor: the
- * self-assigned rule and the old subject scanner in `deviation-refs.test.ts` both read it.
+ * self-assigned rule and the old subject scanner in `deviation-refs.test.ts` both read it. `exact`
+ * keeps the old scanner's comparison, which is main's and stays so below the era: the text only trimmed.
  */
-export function definitionSubject(line: string): string {
+export function definitionSubject(line: string, exact = false): string {
   const dash = line.indexOf('\u2014');
   const rest = dash >= 0 ? line.slice(dash + 1) : line.replace(/^.*?D-\d+(?:\*\*)?/, '');
-  return rest.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '').trimEnd();
+  return exact ? rest.trim() : tidySubject(rest);
 }
 
 /**
@@ -357,19 +367,25 @@ type Files = readonly { readonly path: string; readonly text: string }[];
  * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined with two different subjects. Identical
  * subjects in any number of paths or lines are one deviation: a spec mirroring its plan, a plan
  * repeating its own entry, a file renamed or moved on the branch. A path present in both trees is
- * judged by the branch's copy, so rewording a merged entry, or fixing a collision the base carries,
- * is not a collision; a base path the branch lacks (main moved on, or the branch renamed it) counts.
- * Two branches adding one number to the SAME file are seen only on the merged tree (the queue).
- * `files` lists each defining path once, sorted. Pure, like `crossTreeCollisions`.
+ * judged by the branch's copy only when the branch changed it since the merge base (`changed`), and
+ * by the base's copy otherwise: so rewording a merged entry, or fixing a collision the base carries,
+ * is not a collision, and main's later addition to a file the branch never touched still counts. A
+ * base path the branch lacks (main moved on, or the branch renamed it) counts. Two branches adding
+ * one number to the SAME file are seen only on the merged tree (the queue). `files` lists each
+ * defining path once, sorted. Pure, like `crossTreeCollisions`; the caller measures `changed`.
  */
-export function selfAssignedCollisions(branch: Files, base: Files): CrossTreeCollision[] {
+export function selfAssignedCollisions(branch: Files, base: Files, changed: ReadonlySet<string>): CrossTreeCollision[] {
+  const onBase = new Set(base.map((f) => f.path));
   const onBranch = new Set(branch.map((f) => f.path));
-  const defs = definitionLines([...branch, ...base.filter((f) => !onBranch.has(f.path))]);
+  const defs = definitionLines([
+    ...branch.filter((f) => !onBase.has(f.path) || changed.has(f.path)),
+    ...base.filter((f) => !onBranch.has(f.path) || !changed.has(f.path)),
+  ]);
   const byN = new Map<number, { subjects: Set<string>; files: Set<string> }>();
   for (const d of defs) {
     if (d.n < SELF_ASSIGNED_ERA) continue;
     const e = byN.get(d.n) ?? { subjects: new Set<string>(), files: new Set<string>() };
-    e.subjects.add(definitionSubject(d.line));
+    e.subjects.add(d.subject);
     e.files.add(d.file);
     byN.set(d.n, e);
   }

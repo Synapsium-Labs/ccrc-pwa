@@ -30,8 +30,9 @@ dispatched; their code is deleted in PR 2.
 
 1. A branch based on an old `main` runs the helper → it must read `origin/main` (after `git fetch`), not `HEAD`; the
    helper prints the ref and its short sha so a stale base is visible. Pinned in Task 1.
-2. `origin/main` missing (a fork with only `upstream`) → the helper exits non-zero naming the ref and the
-   `--ref` flag, never prints a number from an empty scan. Pinned in Task 1.
+2. `origin/main` missing (a fork with only `upstream`) → the helper measures `upstream/main` by itself (one
+   resolver with the guard); with no base at all it exits non-zero naming both remotes and the `--ref` flag, never
+   prints a number from an empty scan. Pinned in Task 1.
 3. Two task notes in different programmes with the same basename (`task-1.md`) → paths must stay repo-relative in
    the widened scan, or two unrelated notes collide. Pinned in Task 2.
 4. The same file on both trees defining the same new number once → not a collision (every unmerged note is on both

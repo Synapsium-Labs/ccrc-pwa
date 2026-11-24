@@ -54,12 +54,15 @@ the check makes that loud and cheap.
 ## What changes
 
 1. **The helper.** One command prints the next free numbers, so nobody counts by hand:
-   `cd server && npm run next-deviation -- [count]` (a tsx script, `server/scripts/next-deviation.ts`, because the guards' reader is TypeScript) reads the definitions on `origin/main` (or `--ref <ref>`, for a fork's `upstream/main`) and on `HEAD`, so a
+   `cd server && npm run next-deviation -- [count]` (a tsx script, `server/scripts/next-deviation.ts`, because the guards' reader is TypeScript) reads the definitions on the base (`$CCRC_LEDGER_BASE`, else `upstream/main` when a fork has added it, else `origin/main`, one resolver shared with the guard; `--ref <ref>` overrides) and on `HEAD`, so a
    stacked or unmerged branch never gets a number it already took, with the same `definitionsIn` the guards use and prints `max(highest + 1, 10000)` onward. No network, no token. (`ccrc-api ledger next` may wrap it later.)
 2. **The guard.** For numbers of 10000 and above, the cross-tree check reads `plans/`, `programs/` and `specs/`, and
    reds one number defined with two different subjects, in one file or in two (council cycle 1: identical subjects
-   are one deviation, so a spec mirroring its plan or a file renamed on the branch is not a collision, and a path on
-   both trees is judged by the branch's copy). Below 10000 the check stays exactly as it is:
+   are one deviation, so a spec mirroring its plan or a file renamed on the branch is not a collision; a path on
+   both trees is judged by the branch's copy only when the branch changed it since the merge base, and by the base's
+   copy otherwise (council cycle 2); a subject wrapped onto the next line is read from it, and an empty one equals
+   nothing). For these numbers a definition-shaped line the ledger cannot read (an en dash, a `*` or `1.` marker, a
+   `#` heading) reds in all three directories. Below 10000 the check stays exactly as it is:
    measured on 2026-11-23, `main` holds 44 allocator-era numbers defined twice in one file and 43 restated across a
    plan and a spec or note, all landed and harmless, so widening the old range would red `main` on day one. Each
    widening ships with a fixture that goes red without it. The grandfathered sets are untouched (they may still only
