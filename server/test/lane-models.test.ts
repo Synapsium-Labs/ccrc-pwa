@@ -101,7 +101,7 @@ describe('readLaneModels (D-8406, R3b)', () => {
       ...base.io, models: async (lane) => showOf(lane),
       readFileMeasured: async (p, t, s) => { reads.push(p); return base.io.readFileMeasured(p, t, s); },
     };
-    const r = await readLaneModels(io, base.cfg.ccrcDir, 'gpt');
+    const r = await readLaneModels(io, 'gpt');
     expect(r).toMatchObject({ kind: 'read', classes: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)) });
     expect(reads).toEqual([]);
   });
@@ -109,14 +109,14 @@ describe('readLaneModels (D-8406, R3b)', () => {
   it('a lane with no registry is absent: an Anthropic lane, or one init never ran on', async () => {
     const base = testDeps(mkTmp('ccrc-lanemodels-'));
     const io = (anthropic: boolean): FleetIO => ({ ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null, anthropic }) });
-    expect(await readLaneModels(io(true), base.cfg.ccrcDir, 'claude')).toEqual({ kind: 'absent', laneKind: 'anthropic' });
-    expect(await readLaneModels(io(false), base.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'absent', laneKind: 'never-made' });
+    expect(await readLaneModels(io(true), 'claude')).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await readLaneModels(io(false), 'gpt')).toEqual({ kind: 'absent', laneKind: 'never-made' });
   });
 
   it('local mode with no ccrc launcher in the configured home is not-started, even with the lane\'s files in place', async () => {
     const deps = testDeps(mkTmp('ccrc-lanemodels-'));
     seedLane(deps.cfg.home, 'gpt', REGISTRY, CATALOGUE);
-    expect(await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'not-started' });
+    expect(await readLaneModels(deps.io, 'gpt')).toEqual({ kind: 'not-started' });
   });
 });
 

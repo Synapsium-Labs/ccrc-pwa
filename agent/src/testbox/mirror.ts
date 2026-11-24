@@ -63,6 +63,8 @@ export function mirrorOps(git: Git): MirrorOps {
   };
 }
 
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
 /** D-7407 (TB5): the files at a run's tree, read from the mirror for its install keys (spec §2.2): the snapshot's
  *  working tree when the run carries one, its head otherwise. `null` when the run has no head or a path is not a file
  *  there, so the run installs in its own copy and no key is queued.
@@ -71,21 +73,42 @@ export function mirrorOps(git: Git): MirrorOps {
  *  string past it, so each blob's bytes as read are hashed as git hashes a blob and compared with the object id the
  *  tree names. A blob past the cap, or one whose bytes a UTF-8 decode would change, does not match, and the whole
  *  read is `null`: a key is never computed over bytes the file does not hold. */
-export async function runTreeFiles(git: Git, mirror: string, runId: string, paths: readonly string[]): Promise<{ path: string; bytes: Uint8Array }[] | null> {
+export async function runTreeFiles(
+  git: Git, mirror: string, runId: string, paths: readonly string[], optional: readonly string[] = [],
+): Promise<{ path: string; bytes: Uint8Array }[] | null> {
   if (!RUN_ID.test(runId)) throw new Error(`not a run id: ${JSON.stringify(runId)}`);
   const ref = async (name: string): Promise<boolean> =>
     (await git([...at(mirror), 'rev-parse', '--verify', '--quiet', `${RUN_REF_PREFIX}${runId}/${name}^{commit}`])).status === 0;
   const rev = (await ref('snap')) ? `${RUN_REF_PREFIX}${runId}/snap` : (await ref('head')) ? `${RUN_REF_PREFIX}${runId}/head` : null;
   if (rev === null) return null;
+  const blob = async (oid: string): Promise<Uint8Array | null> => {
+    const r = await git([...at(mirror), 'cat-file', 'blob', oid]);
+    if (r.status !== 0) return null;
+    const bytes = Buffer.from(r.stdout, 'utf8');
+    return blobId(bytes, oid.length === 40 ? 'sha1' : 'sha256') === oid ? bytes : null;
+  };
   const out: { path: string; bytes: Uint8Array }[] = [];
   for (const p of paths) {
     const id = await git([...at(mirror), 'rev-parse', '--verify', '--quiet', `${rev}:${p}`]);
     const oid = id.stdout.trim();
-    if (id.status !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid)) return null;
-    const r = await git([...at(mirror), 'cat-file', 'blob', oid]);
-    if (r.status !== 0) return null;
-    const bytes = Buffer.from(r.stdout, 'utf8');
-    if (blobId(bytes, oid.length === 40 ? 'sha1' : 'sha256') !== oid) return null;
+    if (id.status !== 0 || !OID.test(oid)) return null;
+    const bytes = await blob(oid);
+    if (bytes === null) return null;
+    out.push({ path: p, bytes });
+  }
+  // D-8966: an optional path (one a lifecycle script names, `pristine.ts#lifecycleInputPaths`) is read only when the
+  // tree holds it as a regular file, and skipped when it is absent, a directory, a link or a submodule. Its listing
+  // is literal, so no character in it is a pattern. A listing git refuses, or a file whose bytes do not read back
+  // exactly, still fails the whole set: absent is skipped, unmeasured never is.
+  for (const p of optional) {
+    const ls = await git([...at(mirror), '--literal-pathspecs', 'ls-tree', '-z', rev, '--', p]);
+    if (ls.status !== 0) return null;
+    if (ls.stdout === '') continue;
+    const m = /^(\d{6}) (\w+) ([0-9a-f]+)\t([^\0]*)\0$/.exec(ls.stdout);
+    if (m === null || m[4] !== p || !OID.test(m[3]!)) return null;
+    if (m[2] !== 'blob' || (m[1] !== '100644' && m[1] !== '100755')) continue;
+    const bytes = await blob(m[3]!);
+    if (bytes === null) return null;
     out.push({ path: p, bytes });
   }
   return out;

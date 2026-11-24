@@ -5,9 +5,9 @@ import { ApiError } from '../src/lib/apiError';
 import type { LaneClassAdvance, LaneClassModel } from '../../shared/models';
 import {
   anthropicFacts, anthropicModelLine, SUPERVISOR_RESIDUAL_WORDS,
-  advanceStateWords, asLaneModelsActAnswer, classActs, modelsActFailure, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, modelsReadStateWords, pendingWords,
-  revertConsequence, revertStillOffered, VERB_CODE_WORDS,
-  modelsActOffered, modelsSheetAnthropic,
+  actDoneWords, advanceStateWords, asLaneModelsActAnswer, classActs, holdWords, modelsActFailure, MODELS_READ_FAILED, MODELS_READ_UNREADABLE,
+  modelsReadStateWords, MODELS_REVERT_UNOFFERED, pendingWords, previousWords, revertConsequence, revertHoldEndsOn, revertStillOffered,
+  VERB_CODE_WORDS, modelsActOffered, modelsSheetAnthropic,
 } from '../src/accounts/modelsSheetWords';
 import { laneReadFailureOf } from '../src/lib/models';
 
@@ -15,14 +15,18 @@ const READ = { kind: 'read', classes: {
   haiku: { model: 'model-6-alpha', label: 'Alpha 6', efforts: null }, sonnet: { model: null, label: null, efforts: null },
   opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: ['high'] }, fable: { model: null, label: null, efforts: null },
 } };
-const OK = { ok: true, lane: 'lane-a', action: 'hold', class: 'opus', changed: true, partial: false, models: READ };
+const OK = { ok: true, lane: 'lane-a', action: 'revert', class: 'opus', changed: null, partial: false, models: READ };
 
 describe('asLaneModelsActAnswer', () => {
   it('reads the 200 whole, its models through the one reader', () => {
     const a = asLaneModelsActAnswer(OK);
-    expect(a).toMatchObject({ lane: 'lane-a', action: 'hold', class: 'opus', changed: true, partial: false });
+    expect(a).toMatchObject({ lane: 'lane-a', action: 'revert', class: 'opus', changed: null, partial: false });
     expect(a?.models.kind).toBe('read');
-    expect(asLaneModelsActAnswer({ ...OK, action: 'revert', changed: null, partial: true })).toMatchObject({ changed: null, partial: true });
+    expect(asLaneModelsActAnswer({ ...OK, partial: true })).toMatchObject({ changed: null, partial: true });
+  });
+  it('reads a revert answer only: a hold or a release answer is off the grammar (the sheet then re-reads)', () => {
+    expect(asLaneModelsActAnswer({ ...OK, action: 'hold', changed: true })).toBeNull();
+    expect(asLaneModelsActAnswer({ ...OK, action: 'release', changed: true })).toBeNull();
   });
   it('anything off the grammar reads null, and the sheet then re-reads rather than guess', () => {
     for (const bad of [null, 'ok', {}, { ...OK, ok: false }, { ...OK, lane: 3 }, { ...OK, action: 'show' }, { ...OK, class: 'wizard' },
@@ -40,7 +44,7 @@ describe('modelsActFailure: what a refused act says, and whether it may have hap
       [refused(404, { ok: false, error: 'not-found' }), /no lane named lane-a/i],
       [refused(400, { ok: false, error: 'bad-request', why: 'bad-body' }), /malformed/i],
       [refused(400, { ok: false, error: 'bad-request', why: 'bad-lane' }), /lane/i],
-      [refused(400, { ok: false, error: 'bad-request', why: 'bad-action' }), /action/i],
+      [refused(400, { ok: false, error: 'bad-request', why: 'bad-action' }), /not revert/i],
       [refused(400, { ok: false, error: 'bad-request', why: 'bad-class' }), /class/i],
       [refused(501, { ok: false, error: 'unsupported' }), /predates|cannot run/i],
       [refused(503, { ok: false, error: 'unavailable', cause: 'not-started' }), /did not start/i],
@@ -63,6 +67,27 @@ describe('modelsActFailure: what a refused act says, and whether it may have hap
     expect(f.text).not.toMatch(/models change/i);
     expect(f.text).toMatch(/own read|may be/i);
     expect(f.text).toMatch(/try again/i);
+  });
+
+  // revert-holds-until-newer (D-8757): the three refusals the server makes before the verb runs, by the fresh read it takes.
+  it('the server\'s pre-act refusals each say what happened and that nothing was changed', () => {
+    const cases: [ApiError, RegExp][] = [
+      [refused(501, { ok: false, error: 'unsupported', cause: 'revert-hold-ends' }), /does not end a revert's hold by itself, so the revert was not sent\. Update the fleet box, then try again\./],
+      [refused(503, { ok: false, error: 'unavailable', cause: 'lane-unreadable' }), /could not be read just before the revert, so it was not sent\./],
+      [refused(503, { ok: false, error: 'unavailable', cause: 'lane-absent' }), /no model record for this lane, so the revert was not sent\./],
+    ];
+    for (const [err, re] of cases) {
+      const f = modelsActFailure(err, 'lane-a', 'opus');
+      expect(f.outcome, JSON.stringify(err.body)).toBe('none');
+      expect(f.text, JSON.stringify(err.body)).toMatch(re);
+      expect(f.text, JSON.stringify(err.body)).toMatch(/Nothing was changed\.$/);
+    }
+    expect(new Set(cases.map(([e]) => modelsActFailure(e, 'lane-a', 'opus').text)).size).toBe(3);
+    // the other causes keep today's words
+    expect(modelsActFailure(refused(503, { ok: false, error: 'unavailable', cause: 'not-started' }), 'lane-a', 'opus').text).toMatch(/^The act did not start\./);
+    expect(modelsActFailure(refused(501, { ok: false, error: 'unsupported' }), 'lane-a', 'opus').text).toMatch(/predates this act/);
+    expect(modelsActFailure(refused(501, { ok: false, error: 'unsupported', cause: 'later' }), 'lane-a', 'opus').text).toMatch(/predates this act/);
+    expect(modelsActFailure(refused(503, { ok: false, error: 'unavailable', cause: 'later' }), 'lane-a', 'opus').text).toMatch(/^The act did not start\./);
   });
 
   it('outcome-unknown, by each cause, says the act MAY have happened and is never success or failure', () => {
@@ -149,6 +174,11 @@ describe('the lane advance and pending words', () => {
     expect(says({ state: 'invalid', detail: 'odd field', pending: null, classes: null })).toContain('odd field');
     expect(says(undefined)).toMatch(/not (known|read)/i);
   });
+  it('an unreported record says holds are not known, in one sentence for every lane kind, with no hold remedy', () => {
+    const a = { state: 'unreported', detail: null, pending: null, classes: null } as const;
+    expect(advanceStateWords(a).text).toBe('The fleet box\'s ccrc predates the advance record, so holds are not known. Update it to revert from here.');
+    expect(advanceStateWords(undefined).text).not.toMatch(/hold or|release/i);
+  });
   it('a detail that already ends in a period is not given a second one (F20); an absent detail says no reason', () => {
     expect(advanceStateWords({ state: 'unreadable', detail: '/x/advance.json could not be read: EACCES.', pending: null, classes: null }).text)
       .toBe('The advance record cannot be read: /x/advance.json could not be read: EACCES.');
@@ -169,33 +199,119 @@ describe('the lane advance and pending words', () => {
 });
 
 // ── which acts a class offers (F13): ONE pure function the sheet and the confirm both ask ──
+// revert-holds-until-newer (D-8757): Revert only, on both lane kinds, and only where the read proves the fleet box ends a
+// revert's hold by itself (`revertHoldEndsOn`, never inferred from the lane kind, the build or an absence).
 describe('classActs and revertStillOffered', () => {
   const adv = (over: Record<string, unknown> = {}): never => ({ family: null, hold: null, previous: null, revertable: false, lastMove: null, ...over }) as never;
+  const REVERTABLE = { revertable: true, previous: { model: 'm-before', effort: null } };
   const ok = (opus: unknown): never => ({ state: 'ok', detail: null, pending: null, classes: { haiku: adv(), sonnet: adv(), opus, fable: adv() } }) as never;
-  const readOf = (advance: unknown): never => ({ kind: 'read', classes: {}, ...(advance === undefined ? {} : { advance }) }) as never;
+  const readOf = (advance: unknown, endsHold = true): never =>
+    ({ kind: 'read', classes: {}, ...(advance === undefined ? {} : { advance }), ...(endsHold ? { revertHoldEnds: true } : {}) }) as never;
 
-  it('Hold where nothing is held, Release where something is, Revert only where the class is revertable', () => {
-    expect(classActs(ok(adv()), 'opus')).toMatchObject({ hold: 'hold', held: false, revert: false });
-    expect(classActs(ok(adv({ hold: { at: 'x', by: 'hand' } })), 'opus')).toMatchObject({ hold: 'release', held: true, revert: false });
-    expect(classActs(ok(adv({ revertable: true, previous: { model: null, effort: null } })), 'opus')).toMatchObject({ hold: 'hold', revert: true });
+  it('the capability is the read\'s own literal true: never a lane kind, a build, an absence or a non-read arm', () => {
+    expect(revertHoldEndsOn(readOf(undefined, true))).toBe(true);
+    expect(revertHoldEndsOn(readOf(undefined, false))).toBe(false);
+    expect(revertHoldEndsOn({ kind: 'read', classes: {}, revertHoldEnds: 'true' } as never)).toBe(false);
+    expect(revertHoldEndsOn({ kind: 'busy', revertHoldEnds: true } as never)).toBe(false);
+    expect(revertHoldEndsOn({ kind: 'absent' })).toBe(false);
+    expect(revertHoldEndsOn(null)).toBe(false);
   });
-  it('an absent record offers Hold only; no hold is guessed where the record is unreadable, invalid, unreported or not read', () => {
-    expect(classActs({ state: 'absent', detail: null, pending: null, classes: null }, 'opus')).toMatchObject({ hold: 'hold', held: false, revert: false });
-    for (const state of ['unreadable', 'invalid', 'unreported'] as const) {
-      expect(classActs({ state, detail: null, pending: null, classes: null }, 'opus'), state).toMatchObject({ hold: null, revert: false });
+
+  it('a class offers no hold key at all, and Revert only where the box ends holds, the class is revertable and names what to put back', () => {
+    const a = classActs(ok(adv(REVERTABLE)), 'opus', true);
+    expect(a).toMatchObject({ held: false, revert: true });
+    expect(Object.keys(a).sort()).toEqual(['adv', 'held', 'revert']);
+    expect(classActs(ok(adv(REVERTABLE)), 'opus', false)).toMatchObject({ revert: false });
+    expect(classActs(ok(adv()), 'opus', true)).toMatchObject({ revert: false });
+    // revertable but nothing on record to put back
+    expect(classActs(ok(adv({ revertable: true, previous: null })), 'opus', true)).toMatchObject({ revert: false });
+    expect(classActs(ok(adv({ previous: { model: 'm', effort: null } })), 'opus', true)).toMatchObject({ revert: false });
+  });
+  it('a held class reads held, and may still revert (a hand hold or a revert hold alike); an old hold stays visible without the capability', () => {
+    const held = adv({ ...REVERTABLE, hold: { at: 'x', by: 'hand' } });
+    expect(classActs(ok(held), 'opus', true)).toMatchObject({ held: true, revert: true });
+    expect(classActs(ok(held), 'opus', false)).toMatchObject({ held: true, revert: false });
+  });
+  it('no revert where the record is absent, unreadable, invalid, unreported or not read, with or without the capability', () => {
+    for (const state of ['absent', 'unreadable', 'invalid', 'unreported'] as const) {
+      expect(classActs({ state, detail: null, pending: null, classes: null }, 'opus', true), state).toMatchObject({ revert: false, held: false });
     }
-    expect(classActs(undefined, 'opus')).toMatchObject({ hold: null, revert: false });
+    expect(classActs(undefined, 'opus', true)).toMatchObject({ revert: false });
   });
-  it('a revert is still offered only while the CURRENT read says the class is revertable', () => {
-    expect(revertStillOffered(readOf(ok(adv({ revertable: true, previous: { model: 'm', effort: null } }))), 'opus')).toBe(true);
+  it('a revert is still offered only while the CURRENT read proves the capability AND says the class is revertable', () => {
+    const revertable = ok(adv(REVERTABLE));
+    expect(revertStillOffered(readOf(revertable), 'opus')).toBe(true);
+    expect(revertStillOffered(readOf(revertable, false), 'opus')).toBe(false);
     expect(revertStillOffered(readOf(ok(adv({ revertable: false }))), 'opus')).toBe(false);
     expect(revertStillOffered(readOf(undefined), 'opus')).toBe(false);
     expect(revertStillOffered({ kind: 'absent' }, 'opus')).toBe(false);
+    expect(revertStillOffered({ kind: 'busy' }, 'opus')).toBe(false);
     expect(revertStillOffered(null, 'opus')).toBe(false);
   });
-  it('the revert consequence names the model on record; it takes a previous that exists, so it never says an empty class for a missing one', () => {
-    expect(revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null })[0]).toContain('Put back m-before');
-    expect(revertConsequence('lane-a', 'opus', 'm-now', { model: null, effort: null })[0]).toContain('Put back an empty class');
+  it('the revert consequence names the model on record and says the hold ends by itself, never "until you release it"', () => {
+    const lines = revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null });
+    expect(lines).toEqual([
+      'Put back m-before and hold opus on lane-a.',
+      'The hold ends by itself once a newer model appears, so nothing needs doing to lift it.',
+      'As last read, that replaces m-now.',
+      'Sessions already running may keep their current model until they are relaunched.',
+    ]);
+    expect(lines.join(' ')).not.toMatch(/release/i);
+    expect(revertConsequence('lane-a', 'opus', null, { model: null, effort: null })[0]).toContain('Put back an empty class');
+    expect(revertConsequence('lane-a', 'opus', null, { model: null, effort: null })[2]).toContain('replaces an empty class');
+  });
+  it('on an Anthropic lane the revert consequence names the class and the self-ending hold, and no model it cannot prove (F1, D-8857)', () => {
+    const lines = revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null }, true);
+    const all = lines.join(' ');
+    expect(all).toContain('opus');
+    expect(all).toContain('lane-a');
+    expect(lines).toContain('The hold ends by itself once a newer model appears, so nothing needs doing to lift it.');
+    expect(lines).toContain('Sessions already running may keep their current model until they are relaunched.');
+    expect(all).not.toContain('m-before');
+    expect(all).not.toMatch(/release/i);
+    // a Codex lane keeps its exact target
+    expect(revertConsequence('lane-a', 'opus', 'm-now', { model: 'm-before', effort: null }, false)[0]).toBe('Put back m-before and hold opus on lane-a.');
+  });
+});
+
+describe('what a class card says about its hold, its previous and its revert', () => {
+  const AT = '2026-11-18T08:00:00Z';
+  const ENDS = 'It ends by itself once a newer model appears; nothing needs doing.';
+  it('a hold says who made it and since when; with the capability one shared sentence says it ends by itself, for both kinds', () => {
+    expect(holdWords({ at: AT, by: 'revert' }, false)).toBe('Held by a revert since 2026-11-18 08:00Z.');
+    expect(holdWords({ at: AT, by: 'hand' }, false)).toBe('Held by hand since 2026-11-18 08:00Z.');
+    expect(holdWords({ at: AT, by: 'revert' }, true)).toBe(`Held by a revert since 2026-11-18 08:00Z. ${ENDS}`);
+    expect(holdWords({ at: AT, by: 'hand' }, true)).toBe(`Held by hand since 2026-11-18 08:00Z. ${ENDS}`);
+    // a hand hold and a revert hold differ in their first sentence only
+    expect(holdWords({ at: AT, by: 'hand' }, true).split('. ').slice(1)).toEqual(holdWords({ at: AT, by: 'revert' }, true).split('. ').slice(1));
+    // without the capability: no ending sentence and no remedy
+    expect(holdWords({ at: AT, by: 'hand' }, false)).not.toMatch(/ends by itself|release|update/i);
+    expect(holdWords(null, true)).toBe(holdWords(null, false));
+    expect(holdWords(null, true)).toMatch(/^Not held/);
+  });
+  it('previousWords is unchanged, and null for nothing on record', () => {
+    expect(previousWords({ model: 'm-before', effort: null })).toBe('A revert would put back m-before.');
+    expect(previousWords(null)).toBeNull();
+  });
+  it('the unoffered note says what the fleet box lacks and what brings Revert back', () => {
+    expect(MODELS_REVERT_UNOFFERED).toBe('This fleet box\'s ccrc does not end a revert\'s hold by itself, so Revert is not offered. Updating the fleet box brings it back.');
+  });
+  it('a done revert says it was held and that the hold ends by itself; a partial one keeps its bookkeeping sentence', () => {
+    const answer = (partial: boolean): never => ({ lane: 'lane-a', action: 'revert', class: 'opus', changed: null, partial, models: { kind: 'busy' } }) as never;
+    expect(actDoneWords(answer(false))).toBe('Reverted the opus class and held it. The hold ends by itself once a newer model appears.');
+    const partial = actDoneWords(answer(true));
+    expect(partial).toMatch(/bookkeeping write failed after the model moved/);
+    expect(partial).toMatch(/The hold ends by itself once a newer model appears\.$/);
+  });
+  it('no Hold or Release sentence, label or remedy is left in the sheet\'s own copy', async () => {
+    const words = await import('../src/accounts/modelsSheetWords');
+    expect('holdAriaLabel' in words).toBe(false);
+    expect(advanceStateWords(undefined).text).not.toMatch(/\bhold or\b|release/i);
+    expect(modelsActFailure(refused(400, { ok: false, error: 'bad-request', why: 'bad-action' }), 'lane-a', 'opus').text).not.toMatch(/hold|release/i);
+    for (const code of ['no-registry', 'anthropic-lane'] as const) {
+      expect(VERB_CODE_WORDS[code], code).toMatch(/nothing to revert/i);
+      expect(VERB_CODE_WORDS[code], code).not.toMatch(/hold or revert/i);
+    }
   });
 });
 
@@ -342,23 +458,20 @@ describe('the Models act is offered by the lane kind (wave 9, Task A4.3)', () =>
   });
 });
 
-describe('an Anthropic lane: no class actions, refusals that state facts', () => {
+describe('an Anthropic lane: the same Revert rule, refusals that state facts', () => {
   const ok = (opus: Partial<LaneClassAdvance>): Parameters<typeof classActs>[0] => ({
     state: 'ok', detail: null, pending: null,
     classes: Object.fromEntries((['fable', 'opus', 'sonnet', 'haiku'] as const).map((c) => [c, {
       family: c, hold: null, previous: null, revertable: false, lastMove: null, ...(c === 'opus' ? opus : {}),
     }])) as never,
   });
-  it('classActs and the current-read recheck offer no Anthropic actions', () => {
-    expect(classActs(ok({}), 'opus', true)).toMatchObject({ hold: null, held: false, revert: false });
-    expect(classActs(ok({ hold: { at: 'x', by: 'hand' } }), 'opus', true)).toMatchObject({ hold: null, held: true });
+  it('the Anthropic withholding of Revert is gone: the rule is the lane-kind-free one', () => {
     const advance = ok({ revertable: true, previous: { model: 'm-before', effort: null } });
-    expect(classActs(advance, 'opus', true)).toMatchObject({ hold: null, revert: false });
-    const current = { kind: 'read', classes: {}, advance } as never;
-    expect(revertStillOffered(current, 'opus', true)).toBe(false);
-    expect(revertStillOffered(current, 'opus', false)).toBe(true);
-    expect(classActs({ state: 'absent', detail: null, pending: null, classes: null }, 'opus', true)).toMatchObject({ hold: null });
-    expect(classActs(ok({}), 'opus')).toMatchObject({ hold: 'hold' });
+    expect(classActs(advance, 'opus', true)).toMatchObject({ revert: true });
+    expect(classActs(advance, 'opus', false)).toMatchObject({ revert: false });
+    expect(classActs(ok({ hold: { at: 'x', by: 'hand' } }), 'opus', true)).toMatchObject({ held: true, revert: false });
+    const current = { kind: 'read', classes: {}, advance, revertHoldEnds: true } as never;
+    expect(revertStillOffered(current, 'opus')).toBe(true);
   });
   it('the Anthropic hold refusals ask no hand act', () => {
     for (const code of ['alias-source-absent', 'aliases-file-unreadable', 'aliases-file-invalid', 'settings-overrides-hold'] as const) {

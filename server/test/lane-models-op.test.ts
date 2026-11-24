@@ -83,7 +83,7 @@ function rig(answer: ModelsAsked | (() => Promise<ModelsAsked>)) {
     readFileMeasured: async (p, t, s) => { reads.push(p); return base.io.readFileMeasured(p, t, s); },
     models: async (lane, action, cls) => { calls.push([lane, action, cls]); return typeof answer === 'function' ? answer() : answer; },
   };
-  return { base, io, reads, calls, read: () => readLaneModels(io, base.cfg.ccrcDir, 'lane-a') };
+  return { base, io, reads, calls, read: () => readLaneModels(io, 'lane-a') };
 }
 
 describe('readLaneModels through the op (D-8686)', () => {
@@ -327,7 +327,7 @@ describe('readLaneModels through the op (D-8686)', () => {
 
   it('coalescing: two lanes at once call it twice, and two io objects do not share a call', async () => {
     const r = rig(async () => exited(refusal('no-such-account'), 1));
-    await Promise.all([r.read(), readLaneModels(r.io, r.base.cfg.ccrcDir, 'lane-b')]);
+    await Promise.all([r.read(), readLaneModels(r.io, 'lane-b')]);
     expect(r.calls.map((c) => c[0]).sort()).toEqual(['lane-a', 'lane-b']);
     const s = rig(async () => exited(refusal('no-such-account'), 1));
     await Promise.all([r.read(), s.read()]);
@@ -341,7 +341,6 @@ describe('the mixed pairs (D-8688)', () => {
   it('new server + an agent without the op: no frame is sent at all, and the read is unsupported', async () => {
     const home = mkTmp('ccrc-lanemodels-op-old-');
     seedLane(home, 'lane-a');
-    const ccrcDir = path.join(home, '.ccrc');
     const frames: Array<Record<string, unknown>> = [];
     const client = {
       state: { agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'overlord-history'] },
@@ -351,7 +350,7 @@ describe('the mixed pairs (D-8688)', () => {
         throw new Error(`unexpected frame ${String(f.op)}`);
       },
     };
-    const got = await readLaneModels(createIo(client as never), ccrcDir, 'lane-a');
+    const got = await readLaneModels(createIo(client as never), 'lane-a');
     expect(got).toEqual({ kind: 'unsupported' });
     expect(frames).toEqual([]);
   });
@@ -371,7 +370,7 @@ describe('the mixed pairs (D-8688)', () => {
           return onModels();
         },
       };
-      return { io: createIo(client as never), frames, ccrcDir: path.join(home, '.ccrc') };
+      return { io: createIo(client as never), frames };
     };
 
     it.each([
@@ -391,7 +390,7 @@ describe('the mixed pairs (D-8688)', () => {
       ['never sent', 'not-started', () => Promise.reject(new LinkNotSentError('aborted'))],
     ] as const)('readLaneModels over a %s answer is %s, and no read frame follows', async (_n, kind, onModels) => {
       const f = fake(onModels);
-      expect(await readLaneModels(f.io, f.ccrcDir, 'lane-a')).toEqual({ kind });
+      expect(await readLaneModels(f.io, 'lane-a')).toEqual({ kind });
       expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP]);
     });
 
@@ -403,7 +402,7 @@ describe('the mixed pairs (D-8688)', () => {
       const client = { state, request: async (f: Record<string, unknown>) => { frames.push(f); throw new Error('never asked'); } };
       const io = createIo(client as never);
       expect(await io.models('lane-a', 'show')).toEqual({ kind: 'not-started' });
-      expect(await readLaneModels(io, '/nonexistent/.ccrc', 'lane-a')).toEqual({ kind: 'not-started' });
+      expect(await readLaneModels(io, 'lane-a')).toEqual({ kind: 'not-started' });
       state.agentOps = ['update', 'token-sync'];
       expect(await io.models('lane-a', 'show')).toEqual({ kind: 'unsupported' });
       expect(frames).toEqual([]);
@@ -434,7 +433,7 @@ describe('the mixed pairs (D-8688)', () => {
       const fleet = connectToAgent(agent.port);
       closers.push(() => fleet.close());
       await expect.poll(() => fleet.client.state.agentOps ?? [], { timeout: 3000 }).toContain(MODELS_OP);
-      const got = await readLaneModels(fleet.io, path.join(fixture.home, '.ccrc'), 'lane-a');
+      const got = await readLaneModels(fleet.io, 'lane-a');
       expect(seen).toEqual([['models', 'lane-a', 'show']]);
       expect(got.kind).toBe('read');
       expect(got.kind === 'read' && got.advance?.state).toBe('ok');
@@ -563,7 +562,7 @@ describe('an Anthropic lane through the real show (model-class Anthropic arm A4.
   async function readLane(p: ReturnType<typeof plant>) {
     const s = showOf(p.home);
     const io: FleetIO = { ...p.base.io, models: async () => exited(s.stdout, s.code) };
-    return { got: await readLaneModels(io, p.base.cfg.ccrcDir, 'lane-a'), shown: JSON.parse(s.stdout) as Record<string, unknown> };
+    return { got: await readLaneModels(io, 'lane-a'), shown: JSON.parse(s.stdout) as Record<string, unknown> };
   }
   const readOf = async (p: ReturnType<typeof plant>) => {
     const { got } = await readLane(p);

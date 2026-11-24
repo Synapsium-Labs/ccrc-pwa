@@ -399,6 +399,30 @@ describe('asLaneModelsRead: the advance key', () => {
     }
   });
 
+  // revert-holds-until-newer (D-8757): the server already decodes the op's constant (`readLaneModels`); this reads the
+  // server's wire, and only the literal `true` counts: anything else is left out and never costs the read.
+  it('carries `revertHoldEnds` only as the literal true; any other value is left out and the read is kept', () => {
+    const read = (extra: Record<string, unknown>): Extract<LaneModelsRead, { kind: 'read' }> =>
+      asLaneModelsRead({ ok: true, lane: 'lane-a', models: { ...baseRead, advance: okAdvance(), ...extra } }) as Extract<LaneModelsRead, { kind: 'read' }>;
+    const on = read({ revertHoldEnds: true });
+    expect(on.kind).toBe('read');
+    expect(on.revertHoldEnds).toBe(true);
+    expect(on.advance?.state).toBe('ok');
+    for (const value of ['true', 1, false, null, {}, [true]]) {
+      const r = read({ revertHoldEnds: value });
+      expect(r.kind, JSON.stringify(value)).toBe('read');
+      expect('revertHoldEnds' in r, JSON.stringify(value)).toBe(false);
+      expect(r.advance?.state, JSON.stringify(value)).toBe('ok');
+    }
+    const absent = read({});
+    expect('revertHoldEnds' in absent).toBe(false);
+    // a read with no advance key keeps the flag too, and no other arm carries it
+    const bare = asLaneModelsRead({ ok: true, lane: 'lane-a', models: { ...baseRead, revertHoldEnds: true } }) as Extract<LaneModelsRead, { kind: 'read' }>;
+    expect(bare.revertHoldEnds).toBe(true);
+    expect('advance' in bare).toBe(false);
+    expect(asLaneModelsRead({ ok: true, lane: 'lane-a', models: { kind: 'busy', revertHoldEnds: true } })).toEqual({ kind: 'busy' });
+  });
+
   it('reads a pending intent', () => {
     const pending = { how: 'hand', class: 'opus', from: 'model-6-gamma', to: null, emptied: [], at: '2026-11-18T08:00:00Z' };
     const r = asLaneModelsRead(answer(okAdvance({ pending }))) as Extract<LaneModelsRead, { kind: 'read' }>;

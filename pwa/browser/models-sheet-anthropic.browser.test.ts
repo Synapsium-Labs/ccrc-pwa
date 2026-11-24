@@ -3,7 +3,8 @@
 // `telemetry: 'anthropic'`) at 360x740, 1280x800 and 1920x1080, with a read that has every Anthropic line drawn (a class held
 // on one id while its alias moved to another, a catalogue and a launch that disagree, an orphaned saved level, a class
 // with no id, and one the lane's build cannot launch). At each size nothing scrolls sideways, nothing a card holds leaves
-// the card, and no class action is offered. When `CCRC_BROWSER_SHOTS` names a directory the open sheet is saved there as
+// the card, and Revert (the one class action, drawn where the read says the fleet box ends a revert's hold by itself) is the
+// only control: no Hold, no Release. When `CCRC_BROWSER_SHOTS` names a directory the open sheet is saved there as
 // `models-anthropic-<width>.png`.
 //
 // Run: `( cd pwa && CCRC_BROWSER_SHOTS=<dir> CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/models-sheet-anthropic.browser.test.ts )`.
@@ -27,6 +28,7 @@ const MODELS = {
   ok: true, lane: 'lane-a',
   models: {
     kind: 'read',
+    revertHoldEnds: true,
     classes: {
       // held on 9-1 while the alias has moved to 9-2; the catalogue and the launch disagree about the alias's id
       opus: {
@@ -148,7 +150,7 @@ describe('the Models sheet on an Anthropic lane at a phone, a laptop and a wide 
         expect(m.pageOverflow, `${at}: no horizontal page scroll`).toBeLessThanOrEqual(0);
         expect(m.sheetOverflow, `${at}: nothing scrolls sideways in the sheet`).toBeLessThanOrEqual(1);
         expect(m.escapes, `${at}: nothing leaves its card`).toEqual([]);
-        expect(m.controls, `${at}: no class actions`).toEqual([]);
+        expect(m.controls, `${at}: Revert on the revertable class, and no Hold or Release`).toEqual(['Revert the opus class']);
         const shots = process.env['CCRC_BROWSER_SHOTS'];
         if (shots !== undefined && shots !== '') await page.screenshot({ path: path.join(shots, `models-anthropic-${size.width}.png`) });
         // On a phone the four cards are taller than the sheet: the lower half is saved too, scrolled to its end.

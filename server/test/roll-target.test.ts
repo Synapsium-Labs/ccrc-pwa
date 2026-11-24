@@ -11,9 +11,10 @@ import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
 import {
-  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, longLivedOf, modelCandidateOf,
+  AUTO_ROLL_SKIPS, ENTRY_PENDING_ROLL_MS, ENTRY_PENDING_SPAWN_GRACE_MS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, longLivedOf, modelCandidateOf,
   modelFactOf, rollTargetsOf, rollTargetVerdict, type AutoRollInput,
 } from '../src/coord/rollTarget.js';
+import type { EntryPendingEpisode } from '../src/cleanupHeldBy.js';
 import { CLASSES, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../shared/models.js';
 import type { FleetSession } from '../../shared/api.js';
 import { HIBERNATE_AFTER_MS_DEFAULT, hibernateVerdict, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
@@ -58,6 +59,7 @@ const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => 
   rolledFor: null,
   model: { kind: 'none' },
   rolledModelFor: null,
+  entryPending: null,
   optedOut: { roll: false, hibernate: false },
   hibernation: { armed: false, afterMs: HIBERNATE_AFTER_MS_DEFAULT },
   statusUpdatedAt: NOW - ageMs,
@@ -542,5 +544,55 @@ describe('the model term (typed-repick)', () => {
       .toEqual({ act: 'skip', reason: 'no-roll' });
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
     expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, model: behindX2, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+  });
+});
+
+describe('an entry identity that stays pending (D-8955)', () => {
+  // A pane that started after the install, so it is behind on nothing else; its spawn's entry line was first named pending
+  // by the cleanup lanes 30 minutes ago, and a read taken well after it started named it too.
+  const after = INSTALLED + MIN;
+  const since = NOW - 30 * MIN;
+  const ep = (o: Partial<EntryPendingEpisode> = {}): EntryPendingEpisode => ({ since, holds: 3, freshAfter: since - 5 * MIN, ...o });
+
+  it('ten minutes, the window: an idle session whose entry has stood pending that long is rolled, and says why', () => {
+    expect(ENTRY_PENDING_ROLL_MS).toBe(10 * MIN);
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep() })))
+      .toEqual({ act: 'roll', idleMs: 2 * HOUR, entryPending: true });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ since: NOW - ENTRY_PENDING_ROLL_MS }) })).act).toBe('roll');
+  });
+
+  it('pending for less than ten minutes, or not pending, is current: a spawn in progress is not rolled', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ since: NOW - ENTRY_PENDING_ROLL_MS + 1 }) }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: null }))).toEqual({ act: 'current' });
+  });
+
+  it('a naming no read after the spawn window repeated is current: it may be the spawn\'s own few seconds (review 3)', () => {
+    // A spawn writes `pending` before its pane exists; an audit in that window names the row, and the naming stands until
+    // that child is asked again, however long that is. Only a read taken after the window shows the entry stayed pending.
+    expect(ENTRY_PENDING_SPAWN_GRACE_MS).toBe(2 * MIN);
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: null }) }))).toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: after + ENTRY_PENDING_SPAWN_GRACE_MS - 1 }) })))
+      .toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep({ freshAfter: after + ENTRY_PENDING_SPAWN_GRACE_MS }) })).act).toBe('roll');
+  });
+
+  it('a process that started after the pending was first named is current: at most one roll for one pending episode', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: since + 1, entryPending: ep({ freshAfter: since + ENTRY_PENDING_SPAWN_GRACE_MS + 1 }) })))
+      .toEqual({ act: 'current' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: since - ENTRY_PENDING_SPAWN_GRACE_MS, entryPending: ep({ freshAfter: since }) })).act).toBe('roll');
+  });
+
+  it('the gates still hold it, by name: busy, opted out, the Overlord, the setting off', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS - MIN, { startedAt: after, entryPending: ep() })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'recent' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), optedOut: { roll: true, hibernate: false } })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { startedAt: after, entryPending: ep(), targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+  });
+
+  it('behind on the release as well: rolled, and the line still says the entry stayed pending', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { entryPending: ep({ since: since - 2 * HOUR, freshAfter: since - HOUR }) })))
+      .toEqual({ act: 'roll', idleMs: 2 * HOUR, entryPending: true });
   });
 });

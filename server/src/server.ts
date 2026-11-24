@@ -88,6 +88,7 @@ import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectRea
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
 import { registerApprovalCensusRoutes } from './coord/approvalCensusRoutes.js';
+import { registerDelegationBackfillRoutes } from './coord/delegationBackfillRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
@@ -1480,7 +1481,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { lane } = req.params as { lane: string };
     if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
     reply.header('cache-control', 'no-store');
-    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, lane) };
     return answer;
   });
 
@@ -2177,15 +2178,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Hold, Release and Revert, registered
+  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Revert only, registered
   // from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`MODELS_DOORS`) read by name.
   registerLaneModelsRoutes(app, {
-    io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
+    io: deps.io, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
   // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own
   // file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`APPROVAL_CENSUS_DOORS`) read by name.
   registerApprovalCensusRoutes(app, { sources: (fromMs, toMs) => questions.censusSources(fromMs, toMs), wall: () => deps.time.clock.wall() });
+  // The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): its dry run, pass and undo, session-gated,
+  // no box token, registered from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`DELEGATION_BACKFILL_DOORS`) read.
+  registerDelegationBackfillRoutes(app, {
+    applier: async () => (watcher === undefined ? null : watcher.delegationApplier()), io: deps.io, registryDir: deps.cfg.registryDir,
+    listedIds: () => watcher?.currentRegistryIds() ?? null, now: () => deps.time.clock.wall(), signedIn: (req) => deps.cfg.authEnabled && sessionAuth(req).reason === 'session',
+  });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({

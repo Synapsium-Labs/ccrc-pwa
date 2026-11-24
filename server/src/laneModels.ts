@@ -63,10 +63,7 @@ function showOnce(io: FleetIO, lane: string): Promise<ModelsAsked> {
  *  offers no act, and says the box was busy); the sheet reads the lane again after every act, and that read recovers it. */
 export interface LaneModelsReadOpts { readonly fresh?: boolean }
 
-/** `_ccrcDir` is unread since R3b, which retired the files fallback; it stays in the signature only because callers in a
- *  test file an open pull request holds still pass it (D-8757), and goes once that pull request has landed (the plan
- *  ticket `ccrcdir-param-drop`). */
-export async function readLaneModels(io: FleetIO, _ccrcDir: string, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {
+export async function readLaneModels(io: FleetIO, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {
   let asked: ModelsAsked;
   try { asked = await (opts.fresh === true ? io.models(lane, 'show') : showOnce(io, lane)); } catch { asked = { kind: 'lost' }; }
   switch (asked.kind) {

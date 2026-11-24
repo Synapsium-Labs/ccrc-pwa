@@ -97,6 +97,7 @@ import { TmpCensusBeat } from './tmpSweepLane.js';
 import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
+import { DiskLaneStallLane } from './diskLaneStallLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane, type TeamLinkInputs } from './linking/visibilityLane.js';
 import { ticketTally } from './linking/teamLink.js';
@@ -1114,6 +1115,8 @@ export class FleetWatcher {
    *  `readiness: null` on the wire rather than omitting the key. */
   /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  /** D-8955: a cleanup lane that stops finishing anything while the disk is under pressure raises one item and one push. */
+  private readonly diskLaneStall = new DiskLaneStallLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
   /** D-8147: one repository-visibility reading per PR pass at most; D-8405: then the automatic team link. */
@@ -1391,7 +1394,7 @@ export class FleetWatcher {
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
-  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map() };
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map(), entryPending: { rows: new Map(), seenAt: null } };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2537,8 +2540,10 @@ export class FleetWatcher {
           processStartedAt: (rec) => processStartedAtFor(reads, rec),
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
           // Typed-repick: an Anthropic lane's models, read only for a session past every other gate (rollLane.ts).
-          laneModels: (lane) => readLaneModels(this.deps.io, this.deps.cfg.ccrcDir, lane),
+          laneModels: (lane) => readLaneModels(this.deps.io, lane),
           anthropicLane: (lane) => this.deps.cfg.roster.byId.get(lane)?.telemetry === 'anthropic',
+          // D-8955: the holding rows the last coord frame carried (absent there: none), null before the first frame.
+          heldBy: () => (this.coord === null ? null : this.coord.cleanupHeldBy ?? []),
           log: (line) => console.warn(line),
           startedAt: this.sleepStartedAt, now: Date.now,
           act: {
@@ -2695,6 +2700,8 @@ export class FleetWatcher {
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
       // and the dialog detector must not wait behind it. Its clock is the `diskAlarm` row (D-7895).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-8955: the disk-lane stall alert, on the disk alarm's block, the last coord frame and listing. Its row is `diskLaneStall`.
+      void this.runLane('diskLaneStall', () => { this.diskLaneStall.pass(this.diskAlarm.block(), this.coord, this.lastFleet); });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
       // The backup-health beat (D-7858) reads no registry either, so it sits with the two above and never waits behind it.

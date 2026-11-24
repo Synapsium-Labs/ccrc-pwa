@@ -800,6 +800,71 @@ describe('programme remaining appends identity from the pane, last, and refuses 
   });
 });
 
+// A body that names the pane's own `byId` or `byUuid` is refused `bad-body`, unsent, on every door that carries the text test
+// (the append-last census of `ccrc-api-closed.test.ts`): the test is a substring match over the whitespace-stripped body, so a key
+// NESTED anywhere in the body and a key PADDED with whitespace (around the colon, or inside its quotes) are refused exactly as a
+// top-level one is (D-8808, D-8809; review 3245 A2, fix round 2 of review 3271, which corrected the comment to say so). Nothing
+// pins the nested and the padded spelling elsewhere. Red when the match runs over the unstripped body, or only at the top level.
+describe('a nested or whitespace-padded byId or byUuid is refused on every door with the text test (D-8808, D-8809)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+  const DOORS: ReadonlyArray<readonly [string, string[], string]> = [
+    ['linking.suggest', ['linking', 'suggest', '--json', '-'], '/api/linking/suggest'],
+    ['linking.confirm', ['linking', 'confirm', '--json', '-'], '/api/linking/confirm'],
+    ['calls.record', ['calls', 'record', 'prog-a', '--json', '-'], '/api/coord/programmes/prog-a/calls'],
+    ['note.add', ['note', 'add', 'lane-a-project-a', '--json', '-'], '/api/sessions/lane-a-project-a/notes'],
+    ['note.close', ['note', 'close', 'lane-a-project-a', '--json', '-'], '/api/sessions/lane-a-project-a/notes'],
+    ['note.handover', ['note', 'handover', 'lane-a-project-a', '--json', '-'], '/api/sessions/lane-a-project-a/handover'],
+    ['goals.pin', ['goals', 'pin', 'prog-a', '--json', '-'], '/api/programmes/prog-a/spec'],
+    ['goals.modify', ['goals', 'modify', 'prog-a', '--json', '-'], '/api/programmes/prog-a/modifications'],
+    ['goals.merged', ['goals', 'merged', 'prog-a', '--json', '-'], '/api/programmes/prog-a/modifications/merged'],
+    ['probe.answer', ['probe', 'answer', '--json', '-'], '/api/sessions/demo-ws/probe'],
+    ['programme.remaining', ['programme', 'remaining', 'prog-a', '--json', '-'], '/api/coord/programmes/prog-a/remaining'],
+  ];
+  const PLAIN = '{"text":"a plain body","n":1}';
+  // Each spelling is a body the server's parse would read as naming the identity key somewhere other than the top level, or
+  // with whitespace the stripped copy removes.
+  const SPELLINGS: ReadonlyArray<readonly [string, string]> = [
+    ['a nested byId', '{"text":"t","meta":{"byId":"lane-b-project-a"}}'],
+    ['a nested byUuid', '{"text":"t","meta":{"byUuid":"u-other"}}'],
+    ['a byId nested two deep', '{"text":"t","meta":{"deeper":{"byId":"lane-b-project-a"}}}'],
+    ['a byUuid in an array of objects', '{"text":"t","rows":[{"n":1},{"byUuid":"u-other"}]}'],
+    ['a byId padded around its colon', '{"text":"t","byId" : "lane-b-project-a"}'],
+    ['a byUuid padded around its colon', '{"text":"t","byUuid"\t:\n"u-other"}'],
+    ['a byId padded inside its quotes', '{"text":"t","byId ":"lane-b-project-a"}'],
+    ['a byUuid padded inside its quotes', '{"text":"t","byUuid\t":"u-other"}'],
+    ['a nested byId, padded', '{"text":"t","meta":{ "byId" :\n "lane-b-project-a" }}'],
+  ];
+
+  it.each(DOORS)('%s: every nested or padded spelling is refused bad-body, and nothing is sent', async (_key, args) => {
+    plantPane('demo-ws', 'uuid-7');
+    // Every spelling is run and compared at once, so a weakened test names each spelling it lets through, not only the first.
+    const got: Array<readonly [string, number | null, string]> = [];
+    for (const [what, body] of SPELLINGS) {
+      const r = await run(args, body, pane);
+      got.push([what, r.status, r.status === 0 ? 'sent' : errorOf(r)]);
+    }
+    expect(got).toEqual(SPELLINGS.map(([what]) => [what, 2, 'bad-body']));
+    expect(seen, 'a refused body must never reach the server').toEqual([]);
+  });
+
+  it.each(DOORS)('%s: a plain body still arrives, with the pane\'s pair appended last', async (_key, args, url) => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(args, PLAIN, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url]).toEqual(['POST', url]);
+    expect(seen[0]!.body).toBe(`${PLAIN.slice(0, -1)},"byId":"demo-ws","byUuid":"uuid-7"}`);
+  });
+
+  it.each(DOORS)('%s: prose that only mentions the words is not refused', async (_key, args) => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(args, '{"text":"does byId or byUuid matter","note":"a \\"byId\\" in prose"}', pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+  });
+});
+
 describe('the output contract', () => {
   it('puts the response body on stdout, verbatim and alone', async () => {
     reply = { code: 200, body: '{"ok":true,"runs":[]}' };

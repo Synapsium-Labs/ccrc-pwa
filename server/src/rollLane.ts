@@ -20,6 +20,8 @@ import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
 import type { DesignationFact } from './roleOf.js';
 import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
+import type { CleanupHeldByItem } from '../../shared/api.js';
+import { entryPendingEpisodesOf, type EntryPendingEpisode } from './cleanupHeldBy.js';
 
 /**
  * THE AUTOMATIC ROLL (D-7452; D-8276, the operator's ruling of 2026-11-10: every idle session, not only coordinators,
@@ -66,6 +68,10 @@ import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTarg
  * for `LANE_MODELS_KEEP_MS` (the models refresh's hour); the act's re-ask reads the pass's answer and never the op again. A roll for
  * the model names the class, the id it ran and the target in its line, and the target is kept (`modelFor`), so a session
  * whose relaunch kept the old id is rolled once per target.
+ *
+ * AN ENTRY IDENTITY THAT STAYS PENDING (D-8955): each pass reads the cleanup lanes' holding rows (`heldBy`, the coord
+ * frame's `cleanupHeldBy`, the one reader of ccd's held-by words) and keeps when each row was first named `entry-pending`
+ * (`RollSweepMemory.entryPending`); `autoRollVerdict` takes that episode, and the roll is ccd's own remedy (stop and start).
  */
 
 /** One roll a pass, fleet-wide. */
@@ -108,6 +114,9 @@ export interface RollSweepDeps {
    *  `telemetry: anthropic`, `isAnthropicLane`'s rule). Absent: no session is behind on its model. */
   readonly laneModels?: (lane: string) => Promise<LaneModelsRead>;
   readonly anthropicLane?: (lane: string) => boolean;
+  /** D-8955: the cleanup lanes' holding rows as the last coord frame carried them; null before a frame is built. Absent: no
+   *  session's entry reads pending. */
+  readonly heldBy?: () => readonly CleanupHeldByItem[] | null;
 }
 
 /** The node's install record, read for the roll. `none`: no completed install stands (a working-tree deploy, which
@@ -141,12 +150,17 @@ export interface RollSweepMemory {
   /** Typed-repick: each lane's last SUCCESSFUL models read (`kind: 'read'`) and when, kept for `LANE_MODELS_KEEP_MS`. An
    *  unread, busy or unreadable answer is never kept, so the next pass asks again. In-process, like the maps above. */
   readonly laneReads: Map<string, { readonly read: LaneModelsRead; readonly at: number }>;
+  /** D-8955: each row's standing `entry-pending` episode and the last pass that read a frame (`entryPendingEpisodesOf`).
+   *  In-process: a server restart starts each episode again, so a session still pending after its roll can be rolled once
+   *  more after each restart. */
+  readonly entryPending: { rows: Map<string, EntryPendingEpisode>; seenAt: number | null };
 }
 
 export type RollOutcome =
   /** `after` (D-7541): the target asked again on the serialiser once ccd answered, when it was no longer one (a
    *  coordination write landed while the call ran, which no longer waits on it): the word that says why. */
-  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string; readonly model?: RolledModel }
+  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string; readonly model?: RolledModel;
+      readonly entryPending?: true }
   /** The pane was still live after ccd's kill (`roll-kill-failed`, exit 6): nothing was rolled and no wake was tried,
    *  but the hibernated marker and the stopped unit the act wrote stand, so the line names the session to check. */
   | { readonly id: string; readonly kind: 'kill-failed'; readonly detail: string }
@@ -165,14 +179,16 @@ export type RollOutcome =
  *  a hold named by its words, and a row on the current release the hold `current`, which writes nothing. */
 type RolledModel = { readonly class: ModelClass; readonly from: string; readonly to: string };
 type RollAnswer =
-  | { readonly act: 'hibernate'; readonly idleMs: number; readonly model?: RolledModel }
+  | { readonly act: 'hibernate'; readonly idleMs: number; readonly model?: RolledModel; readonly entryPending?: true }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: string };
 
 const CURRENT = 'current';
 
 function answerOf(v: AutoRollVerdict): RollAnswer {
-  if (v.act === 'roll') return v.model === undefined ? { act: 'hibernate', idleMs: v.idleMs } : { act: 'hibernate', idleMs: v.idleMs, model: v.model };
+  if (v.act === 'roll') {
+    return { act: 'hibernate', idleMs: v.idleMs, ...(v.model === undefined ? {} : { model: v.model }), ...(v.entryPending ? { entryPending: true as const } : {}) };
+  }
   if (v.act === 'measure') return v;
   // Only the measured step reads a lane's models; anywhere else (the act's re-ask with no answer this pass) it is current.
   if (v.act === 'current' || v.act === 'read-models') return { act: 'hold', reason: CURRENT };
@@ -200,6 +216,8 @@ interface Pass {
   readonly modelFor: ReadonlyMap<string, string>;
   /** `RollSweepMemory.laneReads`: a successful read made this pass is kept there for the next. */
   readonly laneReads: Map<string, { readonly read: LaneModelsRead; readonly at: number }>;
+  /** D-8955: `RollSweepMemory.entryPending`'s episodes as this pass updated them. */
+  readonly entryPending: ReadonlyMap<string, EntryPendingEpisode>;
 }
 
 /** The hand-off's facts for one pass: the `continuity` row as the generations lane reads it, and, only while it is live, each
@@ -252,6 +270,7 @@ function verdictOf(deps: RollSweepDeps, p: Pass, names: readonly string[], row: 
     overlord: overlord ?? 'unmeasured',
     build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
     model: modelFactOf(candidate, p.models.get(row.wrapper)), rolledModelFor: p.modelFor.get(row.id) ?? null,
+    entryPending: p.entryPending.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
     sleep: { row, overlord: overlord ?? null, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
@@ -343,7 +362,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       if (r.kind === 'hibernated') {
         if (r.woke === undefined || r.woke === true) {
           // The act's own verdict names the model target (asked again at the act); the pass's idle time stays the line's.
-          const m = r.verdict.model === undefined ? {} : { model: r.verdict.model };
+          const m = { ...(r.verdict.model === undefined ? {} : { model: r.verdict.model }), ...(r.verdict.entryPending ? { entryPending: true as const } : {}) };
           return r.after === undefined ? { id, kind: 'rolled', idleMs: v.idleMs, ...m } : { id, kind: 'rolled', idleMs: v.idleMs, after: r.after, ...m };
         }
         return r.woke.restored ? { id, kind: 'woke-failed', detail: r.woke.failed } : { id, kind: 'woke-unrestored', detail: r.woke.failed };
@@ -411,8 +430,13 @@ export async function rollPass(
     if (passAt - kept.at < LANE_MODELS_KEEP_MS) models.set(lane, kept.read);
     else mem.laneReads.delete(lane);
   }
+  const pendingNow = entryPendingEpisodesOf(mem.entryPending, deps.heldBy === undefined ? [] : deps.heldBy(), passAt);
+  if (pendingNow !== mem.entryPending) {
+    mem.entryPending.rows = new Map(pendingNow.rows);
+    mem.entryPending.seenAt = pendingNow.seenAt;
+  }
   const pass: Pass = { targets, release, designation, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor,
-    models, modelFor: mem.modelFor, laneReads: mem.laneReads, ...handoffOf(deps.continuity, records, designation) };
+    models, modelFor: mem.modelFor, laneReads: mem.laneReads, entryPending: mem.entryPending.rows, ...handoffOf(deps.continuity, records, designation) };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))
@@ -439,7 +463,9 @@ export async function rollPass(
           : `; by the time ccd answered it was no longer a roll target (${o.after})`;
       const model = o.model === undefined ? ''
         : ` (behind its class's model: ${o.model.class} ran ${o.model.from}, its target is ${o.model.to})`;
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`}${model} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
+      const pending = o.entryPending === true
+        ? ' (its entry identity stayed pending, which holds cleanups that could share its tree; ccd\'s remedy is this stop and start; D-8955)' : '';
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`}${model}${pending} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {

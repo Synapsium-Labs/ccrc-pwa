@@ -1459,8 +1459,11 @@ describe('8. the closed scope census', () => {
       // It touches no lease, checkpoint or delegation journal, and it is listed by its exact printed line, so a second
       // `journal` route, or this one under another verb, is still red.
       const OTHER_JOURNAL = ['├── /api/coord/shadow-journal (GET, HEAD)'];
+      // Session helpers S2 opens the one-time pass's door BY NAME, by its exact printed line (D-8874): the dry run, the pass and its undo.
+      const S2_BACKFILL_DOOR = ['├── /api/coord/delegation-backfill (GET, HEAD, POST)'];
+      expect(routes.split('\n').filter((l) => S2_BACKFILL_DOOR.includes(l)), 'the one-time pass\'s door exists').toEqual(S2_BACKFILL_DOOR);
       expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l)
-        && !W5_SWITCH_DOOR.includes(l))).toEqual([]);
+        && !W5_SWITCH_DOOR.includes(l) && !S2_BACKFILL_DOOR.includes(l))).toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_JOURNAL.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_JOURNAL);
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call
@@ -1614,6 +1617,13 @@ describe('8. the closed scope census', () => {
       ['writeCarriedLocked', /^: \(held\.journal \?\?= await this\.port\.openRead\(this\.journalPath\)\);$/],
       ['copySuffixLocked', /^held\.src = await this\.port\.openRead\(this\.journalPath\);$/],
       ['copySuffixLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      // D-8874 (session helpers S2): the one-time pass's list, a file of its own beside the retained set (never a part of it), read, and
+      // written whole as a temp renamed onto it; and the dry run's read of the retained set for review 3026 F4, through `retainedRecords`.
+      ['readBackfillList', /^const bytes = await this\.port\.readFile\(file\);$/],
+      ['writeBackfillList', /^const handle = await this\.port\.createTemp\(temp\);$/],
+      ['writeBackfillList', /^await this\.port\.rename\(temp, file\);$/],
+      ['writeBackfillList', /^await this\.port\.fsyncDir\(this\.deps\.dir\);$/],
+      ['retainedTaskReportKeys', /^for await \(const record of this\.retainedRecords\(\)\) \{$/],
       ['replaceCheckpoint', /^await this\.port\.mkdirp\(this\.deps\.dir\);$/],
       ['replaceCheckpoint', /^held\.handle = await this\.port\.createTemp\(this\.tempPath\);$/],
       ['replaceCheckpoint', /^await this\.edge\('checkpoint-rename', \(\) => this\.port\.rename\(this\.tempPath, this\.checkpointPath\)\);$/],

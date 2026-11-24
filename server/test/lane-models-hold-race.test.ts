@@ -1,10 +1,13 @@
 // Programme model-class-advance, wave R4 (plan Review Focus line 1, races and locks; Task 19's end-to-end describe as
-// re-planned): `POST /api/models/:lane` holds against the lane-files lock the advance step's locked commit takes. The route
-// runs over `localIOFor(home)` ITSELF, so `localModels` (its `modelsEnv`, its bounded port, its `not-started` catch) runs
-// for real, against the REAL `ccd/ccrc` behind `_inst_shim`'s own launcher bytes, the real lane-files lock, and a real
+// re-planned): a hand Hold against the lane-files lock the advance step's locked commit takes. The Models door no longer
+// takes Hold (revert-holds-until-newer, D-8757: it takes Revert only, and Hold stays the shell's and the agent's verb), so
+// the Hold is issued the way those do, through the server's own local arm: `localIOFor(home).models(LANE, 'hold', CLS)`.
+// That is `localModels` (its `modelsEnv`, its bounded port, its `not-started` catch) running for real, against the REAL
+// `ccd/ccrc` behind `_inst_shim`'s own launcher bytes, the real lane-files lock, and a real
 // `flock` holder in another process (an inert `sh -c 'echo held; read _'`, so it stands in for ANY writer holding the lock,
-// not for the commit itself). `modelsEnv` copies PATH and LANG from `process.env`, so each case points those two at this
-// suite's contained environment for its duration and restores them after. That does NOT keep the poisoned gh and curl first:
+// not for the commit itself). The door is registered over the same io only to prove it refuses a hold. `modelsEnv` copies
+// PATH and LANG from `process.env`, so each case points those two at this suite's contained environment for its duration
+// and restores them after. That does NOT keep the poisoned gh and curl first:
 // `modelsEnv` (agent/src/modelsop.ts) puts node's own directory ahead of PATH, so where node is /usr/bin/node the real
 // gh and curl sit ahead of the poisoned copies. It makes no difference here, and the header says so rather than claim a
 // guard: the hold/release/revert path (`ccrc models <lane> hold|release|revert`, `_models_answer_locked` and
@@ -12,11 +15,12 @@
 // so the poisoned copies guard nothing it runs; they only keep a stray call from the harness itself contained.
 //
 // WHAT THE CASES PROVE, and no more:
-//  1. the hold serialises behind a held lane lock, answers nothing until it is released, then lands (200 done, held by hand);
+//  1. the hold serialises behind a held lane lock, answers nothing until it is released, then lands (exit 0, done, held by hand);
 //  2. hold first: the locked commit moves to the newer candidate and records that it ended the hold;
-//  3. commit first: the POST's new hand hold survives on the moved class;
+//  3. commit first: the hand hold survives on the moved class;
 //  4. released together from one held lock, both writers leave the end state that the commit's persisted move proves;
-//  5. a lock held past the verb's wait refuses the hold `lock-busy` (409) and writes nothing.
+//  5. a lock held past the verb's wait refuses the hold `lock-busy` (exit 1 or 2, a refusal body) and writes nothing;
+//  6. the door refuses a `hold` `bad-action` and the advance file stays as it was.
 // They do NOT run the hourly step itself: the test invokes its locked commit verb. The ordered cases prove both outcomes;
 // the concurrent case does not depend on which waiter the kernel wakes first.
 //
@@ -32,12 +36,14 @@ import fs from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { localIOFor } from '../src/io.js';
+import { localIOFor, type FleetIO } from '../src/io.js';
+import { readLaneModels } from '../src/laneModels.js';
 import { registerLaneModelsRoutes } from '../src/laneModelsRoutes.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADV_CATALOGUE, ADV_REGISTRY_BYTES } from './fixtures/advanceCases.js';
 import { mkTmp } from './tmpHelpers.js';
+import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -62,7 +68,7 @@ const ROSTER = {
   ],
 };
 
-describe('a POST hold against the lane-files lock: the real local arm (localIOFor), the real ccrc, a real flock holder', () => {
+describe('a hand hold against the lane-files lock: the real local arm (localIOFor), the real ccrc, a real flock holder', () => {
   const holders: ChildProcess[] = [];
   const homes: string[] = [];
   const apps: FastifyInstance[] = [];
@@ -135,19 +141,31 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     return child;
   }
 
-  /** The route over `localIOFor(home)`, the local arm as the server wires it. For this case's length the process's PATH and
-   *  LANG are the contained environment's, the two names `modelsEnv` copies (HOME is the fixture home by construction). */
-  async function serverOver(b: { home: string; env: NodeJS.ProcessEnv }): Promise<FastifyInstance> {
+  /** The local arm as the server wires it (`localIOFor(home)`), and the door over it. For this case's length the process's
+   *  PATH and LANG are the contained environment's, the two names `modelsEnv` copies (HOME is the fixture home by
+   *  construction). */
+  async function serverOver(b: { home: string; env: NodeJS.ProcessEnv }): Promise<{ app: FastifyInstance; io: FleetIO }> {
     process.env.PATH = b.env.PATH;
     process.env.LANG = b.env.LANG;
+    const io = localIOFor(b.home);
     const app = Fastify();
     registerLaneModelsRoutes(app, {
-      io: localIOFor(b.home), ccrcDir: join(b.home, '.ccrc'), hasLane: (l) => ROSTER.accounts.some((a) => a.id === l),
+      io, hasLane: (l) => ROSTER.accounts.some((a) => a.id === l),
       actorOf: () => 'device:race-test',
     });
     apps.push(app);
-    return app;
+    return { app, io };
   }
+
+  /** A hand Hold as the shell's `ccrc models <lane> hold <class>` runs it, through the server's own local arm: the verb's
+   *  exit code and its ONE JSON line. */
+  const handHold = async (io: FleetIO): Promise<{ code: number; body: Record<string, unknown> }> => {
+    const asked: ModelsAsked = await io.models(LANE, 'hold', CLS);
+    expect(asked.kind, JSON.stringify(asked)).toBe('exited');
+    if (asked.kind !== 'exited') throw new Error('unreachable');
+    expect(asked.stdout.endsWith('\n') && !asked.stdout.slice(0, -1).includes('\n'), asked.stdout).toBe(true);
+    return { code: asked.code, body: JSON.parse(asked.stdout) as Record<string, unknown> };
+  };
 
   const advanceFile = (home: string): string => join(home, '.ccrc', 'models', `${LANE}.advance.json`);
   const readClass = (home: string): ClassAdvance =>
@@ -172,25 +190,24 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     }
   }
 
-  it.skipIf(!HAVE_FLOCK)('the hold waits out a held lock and lands: it does not answer while the lock is held, then 200 done, held by hand', async () => {
+  it.skipIf(!HAVE_FLOCK)('the hold waits out a held lock and lands: it does not answer while the lock is held, then done, held by hand', async () => {
     const b = box();
-    const app = await serverOver(b);
+    const { io } = await serverOver(b);
     const holder = await holdLock(b.home);
     let settled = false;
-    const pending = app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } })
-      .then((r) => { settled = true; return r; });
+    const pending = handHold(io).then((r) => { settled = true; return r; });
     await new Promise((r) => setTimeout(r, 1_500));
     expect(settled, 'the hold answered while another writer held the lane').toBe(false);
     expect(fs.existsSync(advanceFile(b.home)), 'the hold wrote under a held lock').toBe(false);
     await release(holder);
     const res = await pending;
-    expect(res.statusCode, res.body).toBe(200);
-    const body = res.json();
-    expect(body).toMatchObject({ ok: true, lane: LANE, action: 'hold', class: CLS, changed: true, partial: false });
-    // the fresh read, asked after the act: the lane's classes and its advance state, the hold in it
-    expect(body.models.kind).toBe('read');
-    expect(body.models.advance.state).toBe('ok');
-    expect(body.models.advance.classes[CLS].hold).toMatchObject({ by: 'hand' });
+    expect(res.code, JSON.stringify(res.body)).toBe(0);
+    expect(res.body).toMatchObject({ ok: true, op: 'hold', id: LANE, class: CLS, changed: true });
+    // the lane read afresh, as the door's own read after an act does: the lane's classes and its advance state, the hold in it
+    const models = await readLaneModels(io, LANE, { fresh: true });
+    if (models.kind !== 'read') throw new Error(`the fresh read was ${models.kind}`);
+    expect(models.advance?.state).toBe('ok');
+    expect(models.advance?.classes?.[CLS]?.hold).toMatchObject({ by: 'hand' });
     // the advance file itself records the hold
     const hold = readHold(b.home);
     expect(hold).toMatchObject({ by: 'hand' });
@@ -219,27 +236,25 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
 
   it.skipIf(!HAVE_FLOCK).each(['hold', 'commit'] as const)('%s first: the later locked writer leaves the right hold state', async (first) => {
     const b = box();
-    const app = await serverOver(b);
-    const post = () => app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
-    const resFirst = first === 'hold' ? await post() : null;
+    const { io } = await serverOver(b);
+    const resFirst = first === 'hold' ? await handHold(io) : null;
     if (resFirst !== null) expect(readHold(b.home)).toMatchObject({ by: 'hand' });
     const commitRes = await lockedCommit(b);
     expect(commitRes.code, commitRes.stdout).toBe(0);
     expect(commitRes.first).toMatchObject({ outcome: 'moved' });
-    const res = resFirst ?? await post();
-    expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, action: 'hold', class: CLS, changed: true });
+    const res = resFirst ?? await handHold(io);
+    expect(res.code, JSON.stringify(res.body)).toBe(0);
+    expect(res.body).toMatchObject({ ok: true, op: 'hold', class: CLS, changed: true });
     expectMoveAndHold(b.home, first);
   }, 60_000);
 
-  it.skipIf(!HAVE_FLOCK)('a locked advance-commit and the POST\'s hold both wait on one held lock: whichever takes it first, the end state is consistent', async () => {
+  it.skipIf(!HAVE_FLOCK)('a locked advance-commit and a hand hold both wait on one held lock: whichever takes it first, the end state is consistent', async () => {
     const b = box();
-    const app = await serverOver(b);
+    const { io } = await serverOver(b);
     const holder = await holdLock(b.home);
     let postSettled = false;
     let commitSettled = false;
-    const pending = app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } })
-      .then((r) => { postSettled = true; return r; });
+    const pending = handHold(io).then((r) => { postSettled = true; return r; });
     const committing = lockedCommit(b).then((r) => { commitSettled = true; return r; });
     await new Promise((r) => setTimeout(r, 2_000));
     expect(postSettled, 'the hold answered while the lock was held').toBe(false);
@@ -247,25 +262,36 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
     expect(fs.existsSync(advanceFile(b.home)), 'a writer wrote under a held lock').toBe(false);
     await release(holder);
     const [res, commitRes] = await Promise.all([pending, committing]);
-    expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, action: 'hold', class: CLS, changed: true });
+    expect(res.code, JSON.stringify(res.body)).toBe(0);
+    expect(res.body).toMatchObject({ ok: true, op: 'hold', class: CLS, changed: true });
     expect(commitRes.code, commitRes.stdout).toBe(0);
     expect(commitRes.first).toMatchObject({ ok: true, op: 'advance-commit', class: CLS, outcome: 'moved' });
-    // The POST re-reads after its write, so its response may already reflect a later commit. Use the persisted move.
+    // Which writer took the lock first is the kernel's choice, so the proof is the persisted move, not either answer.
     expectMoveAndHold(b.home);
   }, 90_000);
 
-  it.skipIf(!HAVE_FLOCK)('a lock held past the verb\'s wait is 409 lane-act-refused lock-busy, inside the spawn bound, and writes nothing', async () => {
+  it.skipIf(!HAVE_FLOCK)('a lock held past the verb\'s wait refuses the hold lock-busy (a refusal body, exit 1 or 2), inside the spawn bound, and writes nothing', async () => {
     const b = box();
-    const app = await serverOver(b);
+    const { io } = await serverOver(b);
     await holdLock(b.home);
     const t0 = Date.now();
-    const res = await app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
+    const res = await handHold(io);
     const took = Date.now() - t0;
-    expect(res.statusCode, res.body).toBe(409);
-    expect(res.json()).toEqual({ ok: false, error: 'lane-act-refused', verbCode: 'lock-busy' });
+    expect([1, 2], JSON.stringify(res.body)).toContain(res.code);
+    expect(res.body).toMatchObject({ ok: false, error: 'lock-busy' });
     expect(took, 'the verb gave up before its own lock wait').toBeGreaterThanOrEqual(19_000);
     expect(took, 'the agent had to stop the child').toBeLessThan(40_000);
     expect(fs.existsSync(advanceFile(b.home))).toBe(false);
   }, 90_000);
+
+  it.skipIf(!HAVE_FLOCK)('the door refuses a hold bad-action, asks the box nothing, and leaves the advance file as it was', async () => {
+    const b = box();
+    const { app, io } = await serverOver(b);
+    expect((await handHold(io)).code).toBe(0);   // a hand hold stands, so the file exists to be compared
+    const before = fs.readFileSync(advanceFile(b.home), 'utf8');
+    const res = await app.inject({ method: 'POST', url: `/api/models/${LANE}`, payload: { action: 'hold', class: CLS } });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-request', why: 'bad-action' });
+    expect(fs.readFileSync(advanceFile(b.home), 'utf8'), 'the door wrote the advance file').toBe(before);
+  }, 60_000);
 });
