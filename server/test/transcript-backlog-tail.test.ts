@@ -89,6 +89,31 @@ describe('the held last line arrives exactly once, from the tailer', () => {
   });
 });
 
+/** Every `events` frame a tailer from `offset` emits, with the offset it reports, until `stop()`. */
+const frames = (file: string, offset: number) => {
+  const t = new TranscriptTailer(localIO, file, offset);
+  const out: Array<{ uuids: string[]; offset: number }> = [];
+  t.on('events', (e, o) => { out.push({ uuids: uuidsOf(e), offset: o }); });
+  t.start();
+  return { out, stop: () => t.stop() };
+};
+
+describe('the offset an events frame reports (review 3643 A2, characterised)', () => {
+  it('a frame whose chunk ends inside a held line reports an offset that counts the held bytes', { timeout: 10_000 }, async () => {
+    const file = tmpFile();
+    const u0 = userLine('u0', 'zero');
+    writeFileSync(file, u0);
+    const t = frames(file, Buffer.byteLength(u0));
+    tailers.push(t);
+    await settle();
+    const u1 = userLine('u1', 'one');
+    const held = userLine('held', 'arrives in two parts');
+    appendFileSync(file, u1 + held.slice(0, 30));
+    await settle(1500);
+    expect(t.out).toEqual([{ uuids: ['u1'], offset: Buffer.byteLength(u0 + u1) + 30 }]);
+  });
+});
+
 describe('a resume that presents the held offset never shows the held line twice', () => {
   const ID = 'claude-a-project-f';
   const UUID_A = 'a'.repeat(36);
