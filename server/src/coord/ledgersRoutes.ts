@@ -69,6 +69,9 @@ import type { BoundRowRef } from './pushOutboxStore.js';
 import { WAITING_URL } from '../pushOutbox.js';
 import { itemBoundOf, type OutboxView } from '../pushSender.js';
 import type { OtherLane } from './otherLanes.js';
+import { isEndProgrammeAction } from '../../../shared/ledgers.js';
+import { isEnded } from '../../../shared/programmeLifecycle.js';
+import { parseEndProposal, programmeDoors, raiseEndProposal, type ProgrammeDoorPorts } from './programmeLifecycleRoutes.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
@@ -479,6 +482,12 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (head === null) return;
     const item = ownedItem(coord, reply, head);
     if (item === null) return;
+    // Programme lifecycle W2 (spec §5's withdraw row): the bound coordinator withdraws its end proposal, recorded as `end-withdrawn`.
+    if (isEndProgrammeAction(item.action)) {
+      if (!coord.withdrawProgrammeEnd(item, head.byId, deps.now())) return refuseRoute(reply, 'not-open', { detail: `item ${item.id} cannot be withdrawn from here` });
+      changed();
+      return reply.code(200).send({ ok: true });
+    }
     return move(coord, reply, item, 'withdraw', null, head.byId);
   });
 
@@ -604,6 +613,27 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (marked > 0) changed();
     return reply.code(200).send({ ok: true, marked });
   });
+
+  // Programme lifecycle W2 (spec §8, D-8987): the bound coordinator proposes its programme's end, with evidence against the
+  // definition of done. Box token, attribution, ownership (the binding), then the guards and one transaction.
+  app.post('/api/programmes/:slug/end-proposal', async (req, reply) => {
+    if (!deps.requireMailToken(req, reply, 'POST /api/programmes/:slug/end-proposal')) return;
+    const coord = deps.coord;
+    if (!coord) return notConfigured(reply);
+    const slug = (req.params as { slug: string }).slug;
+    const who = identityOf(req.body);
+    if (who === null) return bad(reply, 'byId and byUuid are required strings');
+    const parsed = parseEndProposal(req.body);
+    if (!parsed.ok) return bad(reply, parsed.detail);
+    const outside = outsideDocLink([parsed.why, ...parsed.evidence]);
+    if (outside !== null) return refuseOutsideDocLink(reply, outside);
+    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
+    const out = raiseEndProposal(coord, { slug, by: who.byId, outcome: parsed.outcome, why: parsed.why, evidence: parsed.evidence, via: 'door' }, deps.now());
+    if (!out.ok) return refuseRoute(reply, out.why as RouteRefusal, { detail: out.detail, ...(out.itemId === undefined ? {} : { itemId: out.itemId }) });
+    changed();
+    return reply.code(200).send({ ok: true, id: out.id });
+  });
 }
 
 // ── the OPERATOR'S routes (plan PL4) ─────────────────────────────────────────────────────────────────────────────
@@ -649,12 +679,16 @@ export interface LedgerOperatorDeps {
    *  watcher's `liveSpendReading`. Absent (a test, or no watcher): every reading is `not-ready`, so live spend reads as
    *  unmeasured, never 0. */
   liveSpend?: SpendUsageRead;
+  /** Programme lifecycle W2: the reclaim ladder, the serialiser and one registry reading, for the start naming a session,
+   *  the hand-over and the session's programme read. Absent, those answer `not-configured`. */
+  lifecycle?: ProgrammeDoorPorts;
 }
 
-/** The tick's words to the operator, and the reasons behind the two programme refusals. */
-const PROGRAMME_ENDED_SENTENCE = 'the programme has no open run, so no coordinator is waiting on this tick: dismiss the item instead';
-const PROGRAMME_UNCLAIMED_SENTENCE =
-  'the programme\'s open run has no coordinator to mail: end that run with the operator\'s abandon door first (a dismiss is refused while it is open)';
+/** The tick's words to the operator, and the reasons behind the two programme refusals. Programme lifecycle W2 (D-8992):
+ *  a tick is refused `programme-ended` only for a programme that has ENDED (Done or Abandoned, `isEnded`); an Idle one's
+ *  tick mails its bound coordinator, and one with no coordinator is `no-coordinator` (hand it to one first). */
+const PROGRAMME_ENDED_SENTENCE = 'the programme has ended, so no coordinator is waiting on this tick: dismiss the item instead';
+const NO_COORDINATOR_SENTENCE = 'the programme has no coordinator to mail: hand it to a coordinator first';
 
 /** The secret route's body cap: a value of `SECRET_VALUE_MAX` characters each JSON-escaped to six bytes (`\u0001`, the longest
  *  escape), the `{"value":""}` around it and room to spare (plan PL6; review 1391 A-9: 16384 refused a value the panel takes).
@@ -727,12 +761,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    */
   type TickPlan = { ok: true; coordinator: string; mail: { subject: string; body: string } } | { ok: false; why: RouteRefusal; detail: string };
   const tickPlan = (coord: CoordStore, item: ItemRow, answer: string | null): TickPlan => {
-    const coordinator = coord.programmeCoordinator(item.program);
-    if (coordinator === null) {
-      return coord.programmeHasOpenRun(item.program)
-        ? { ok: false, why: LEDGER_ROUTE_REFUSALS.programmeUnclaimed, detail: PROGRAMME_UNCLAIMED_SENTENCE }
-        : { ok: false, why: LEDGER_ROUTE_REFUSALS.programmeEnded, detail: PROGRAMME_ENDED_SENTENCE };
-    }
+    const row = coord.programmeLifecycleRow(item.program);
+    if (row === null || isEnded(row.state)) return { ok: false, why: LEDGER_ROUTE_REFUSALS.programmeEnded, detail: PROGRAMME_ENDED_SENTENCE };
+    const coordinator = row.coordinator;
+    if (coordinator === null) return { ok: false, why: 'no-coordinator', detail: NO_COORDINATOR_SENTENCE };
     const mail = tickMail(item, answer);
     if (!mail.ok) {
       return { ok: false, why: LEDGER_ROUTE_REFUSALS.tooLarge, detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` };
@@ -880,6 +912,35 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
   });
 
+  // ── programme lifecycle W2: the operator's doors and the two reads (spec §5, §11, §14; D-8987, D-8989, D-8992, D-8993) ──
+  // Each door's credential is `doorCredential`'s (spec §14), asked first by the handler in `programmeLifecycleRoutes.ts`; none
+  // consults the box token. The two reads are EXEMPT-BUT-AUTHENTICATED, the goals read's shape: a live session OR the box
+  // token, 401 only when both fail, with no ownership check (a history and a session's programme name no secret).
+  const doors = programmeDoors({
+    coord: deps.coord, now: deps.now, gate: deps.gate, identity: deps.identity, authEnabled: deps.authEnabled,
+    sessionAuth: deps.sessionAuth, withAbandon: deps.withAbandon, sendClose: deps.sendClose,
+    changed: () => { deps.bus.emit('waiting'); }, ports: deps.lifecycle,
+  });
+  /** The answer of a read whose two credentials both failed (the goals read's words). */
+  const unauthenticated = (req: FastifyRequest, reply: FastifyReply) =>
+    refuseRoute(reply, 'unauthenticated', { verdict: deps.sessionAuth(req).verdict, detail: `this read takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})` });
+  const hasSession = (req: FastifyRequest): boolean => !deps.authEnabled || deps.sessionAuth(req).reason === 'session';
+  app.post('/api/programmes', (req, reply) => doors.start(req, reply));
+  app.post('/api/programmes/:slug/state', (req, reply) => doors.state(req, reply));
+  app.post('/api/programmes/:slug/coordinator', (req, reply) => doors.handOver(req, reply));
+  app.get('/api/programmes/:slug/history', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      if (hasSession(req) || checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/programmes/:slug/history') === 'ok') return undefined;
+      return unauthenticated(req, reply);
+    },
+  }, (req, reply) => doors.history(req, reply));
+  app.get('/api/sessions/:id/programme', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      if (hasSession(req) || checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/sessions/:id/programme') === 'ok') return undefined;
+      return unauthenticated(req, reply);
+    },
+  }, (req, reply) => doors.sessionProgramme(req, reply));
+
   // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
   // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
   // (`LEDGER_OPERATOR_DOORS`). The body names the version by the stamp the operator was shown (`parseGoalsVersion`); a pin
@@ -966,6 +1027,11 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (id === null) return bad(reply, 'the item id is a positive integer');
     const first = coord.itemById(id);
     if (first === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    // Programme lifecycle W2 (spec §5's confirm row): the confirm of an end proposal, behind the step-up; it abandons nothing.
+    if (isEndProgrammeAction(first.action)) {
+      if (first.heldUntil !== null && first.heldUntil > deps.now()) return refuseRoute(reply, 'not-open', { detail: `item ${id} is held and is not yet on the operator's list` });
+      return doors.confirm(req, reply, first);
+    }
     // D-8293: Release on a review child kept past its ceiling. The act IS the release (`CoordStore.reviewChildReleased` reads it
     // back), so it is the item's own move and nothing else: no run moves and no fleet act runs here; the child reclaim sweep takes
     // the workspace on its next passes, pinning its work first. No await: the item is read and moved in one step.
@@ -1047,6 +1113,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (id === null) return bad(reply, 'the item id is a positive integer');
     const item = coord.itemById(id);
     if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    // Programme lifecycle W2 (spec §5's decline row): Keep it open, on an end proposal; works while sign-in is dark.
+    if (isEndProgrammeAction(item.action)) return doors.decline(req, reply, item);
     const now = deps.now();
     const refusal = endRunItemRefusal(item, 'decline', now);
     if (refusal !== null) return refuseRoute(reply, refusal.why, { detail: refusal.detail });

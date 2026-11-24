@@ -111,7 +111,15 @@ export type ItemAction =
   // D-8955: a disk cleanup lane (`lane`) has stalled under disk pressure, for `reason` (a held-by word, ccd's token, or
   // `unknown`). One open item per lane and reason; ccrc settles it once the lane finishes one again, so it names no run and
   // takes no act of its own.
-  | { verb: 'disk-lane-stall'; lane: string; reason: string };
+  | { verb: 'disk-lane-stall'; lane: string; reason: string }
+  // Programme lifecycle W2 (D-8987, spec §8): the programme's coordinator proposes its end; the operator's `act` confirms it
+  // (behind a step-up) and `decline` keeps it open. It names no run, so it abandons none; the programme is the item's own.
+  | { verb: 'end-programme'; outcome: 'done' | 'abandoned' };
+/** The end-proposal action's verb, the one spelling its readers bind (programme lifecycle W2, D-8987). */
+export const END_PROGRAMME_VERB = 'end-programme' as const;
+export type EndProgrammeAction = Extract<ItemAction, { verb: 'end-programme' }>;
+export const isEndProgrammeAction = (a: ItemAction | null): a is EndProgrammeAction => a !== null && a.verb === END_PROGRAMME_VERB;
+export const endProgrammeAction = (outcome: 'done' | 'abandoned'): EndProgrammeAction => ({ verb: END_PROGRAMME_VERB, outcome });
 /** The disk-lane stall action's verb, the one spelling its readers bind (D-8955). */
 export const DISK_LANE_STALL_VERB = 'disk-lane-stall' as const;
 export type DiskLaneStallAction = Extract<ItemAction, { verb: 'disk-lane-stall' }>;
@@ -218,6 +226,9 @@ export function parseItemAction(text: string): ItemAction | null {
     const lane = word('lane');
     const reason = word('reason');
     return lane === null || reason === null ? null : { verb: DISK_LANE_STALL_VERB, lane, reason };
+  }
+  if (o['verb'] === END_PROGRAMME_VERB) {
+    return o['outcome'] === 'done' || o['outcome'] === 'abandoned' ? endProgrammeAction(o['outcome']) : null;
   }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
   if (o['verb'] === 'release-review') {
