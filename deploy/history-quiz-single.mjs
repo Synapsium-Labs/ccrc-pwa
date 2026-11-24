@@ -45,7 +45,16 @@
 // pins the week to the release measured now and pilots again as the next round, on the week's own ledger and --budget. A
 // round that stopped before its result was written is resumed only on the release it was pinned to, else it refuses
 // `repilot-release-moved`. When to ask for it is the unattended runner's decision, never this file's: passed by hand, the
-// flag is a permission and decides nothing (no cap, no same-release rule).
+// flag is a permission and decides nothing (no cap, no same-key rule). Both write sites of the pin record the pilot key the
+// act measured (stage B, B0: the build's --version line and the gate's code shas), which the runner reads as the key of the
+// week's first pilot.
+//
+// The pilot, stage B (the note quiz-pilot-stage-b.md; the rules are history-quiz-pilot.mjs's). `arms` pins the shipped
+// history skill's source before --out, and every treatment-arm run, step 0b's probes and the week's questions, finds it
+// staged in its own working folder as a project skill (B1); the box run, step 0b's first run, is observed, and every later
+// run of the round, the week's questions and the judge run under one settings value switching off each entry it reported
+// that is not the build's own (B3); a run that left something passes persistence only on its proof (B4); and when the skill
+// alone fails under restricted, one probe under the fallback mode is recorded, the verdict staying restricted's (B2).
 //
 // Where it writes and what it spends (F7). Its files go under --out, the driver's --out rule (prepareOut: outside any git
 // tree, 0700, the driver's marker) plus this file's own marker beside it, written only into a directory it has just made:
