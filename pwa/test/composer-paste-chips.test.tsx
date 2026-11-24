@@ -3,14 +3,16 @@
 // chip in the field (its label between two invisible markers) and one chip in the row above it; the send carries the
 // full text byte for byte through today's send rules; Expand and Remove act from the row and leave focus and the caret
 // in the field; Backspace and Delete beside a chip take it whole, with typed text kept on both sides; the caret and the
-// selection are kept off a chip's inside; an edit that breaks one anyway is cleaned up; a label that is only text stays
-// text; undo and redo are whatever value the browser restores, parsed; the cases of review 3480 (F1, F2, F3, F6); copy
-// and cut carry a chip's full text, and a drag of one is refused; and the retry and draft-conflict paths re-send the
+// selection are kept off a chip's inside; an edit that breaks one anyway is shown and holds the send, and nothing is
+// written back until the user undoes or dismisses it (review 3589); numbers are never reused; a chip that comes back
+// whole is a chip again; a label that is only text stays text; undo and redo are whatever value the browser restores,
+// parsed; the cases of review 3480 (F1, F2, F3, F6); copy and cut carry a chip's full text, and a drag of one is
+// refused; a paste with no text, or with a file, makes no chip; and the retry and draft-conflict paths re-send the
 // expanded text through the real session store. jsdom has no `execCommand`, so every edit here takes the composer's
 // fallback path; the browser leg (`browser/paste-chips.browser.test.ts`) measures the native one.
 //
-// The review 3480 cases read positions from the field's value and history steps carry a value captured from the field,
-// so they run unchanged against the revision that review read (the task note's red-first count).
+// The review cases read positions from the field's value, and history steps carry a value captured from the field, so
+// they run unchanged against the revisions those reviews read (the task note's red-first counts).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
@@ -27,10 +29,13 @@ afterEach(() => {
 
 const lines = (n: number, tag = 'line'): string => Array.from({ length: n }, (_, i) => `${tag} ${i + 1}`).join('\n');
 /** The visible label, and the chip as the field holds it: that label between the two markers. */
-const token = (n: number, l: number): string => `[Pasted text #${n} +${l} ${l === 1 ? 'line' : 'lines'}]`;
+const token = (n: number, l: number): string =>
+  `[Pasted text #${n} +${l} ${l === 1 ? 'line' : 'lines'}]`.replace(/ /g, '\u00a0');
 const label = (n: number, l: number): string => `\u2062${token(n, l)}\u2063`;
 
-const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+/** The field, also while a sheet hides the page from the accessibility tree. */
+const field = (): HTMLTextAreaElement =>
+  (screen.queryByRole('textbox', { name: 'Message' }) ?? document.querySelector('textarea[aria-label="Message"]')) as HTMLTextAreaElement;
 const sendButton = (): HTMLElement => screen.getByRole('button', { name: 'Send' });
 const chipRow = (): HTMLElement | null => screen.queryByRole('list', { name: 'Pasted text' });
 
@@ -66,6 +71,8 @@ const blurField = (): void => {
 };
 
 /** The numbers the chip row lists, in order. */
+/** The break notice (review 3589), or null. */
+const notice = (): HTMLElement | null => screen.queryByText(/The last edit broke a pasted block/);
 const rowNumbers = (): (string | null | undefined)[] =>
   screen.queryAllByRole('listitem').map((li) => li.querySelector('.paste-chip-n')?.textContent);
 
@@ -178,7 +185,7 @@ describe('the floors', () => {
 });
 
 describe('numbering', () => {
-  it('counts up within a draft and starts again at #1 after a send', () => {
+  it('counts up and never reuses a number, not even after a send (review 3589 F5)', () => {
     const onSend = mount();
     pasteText(lines(13));
     caretAt(field().value.length);
@@ -186,10 +193,26 @@ describe('numbering', () => {
     expect(field().value).toBe(`${label(1, 13)}${label(2, 14)}`);
     send(onSend);
     pasteText(lines(15));
-    expect(field().value).toBe(label(1, 15));
+    expect(field().value).toBe(label(3, 15));
   });
 
-  it('a slash command picked from the menu replaces the draft, so its chips number from #1 again (review 3480 A9)', async () => {
+  it('after a send, a label an undo brings back names nothing: never the new paste’s text (review 3589 F5)', () => {
+    const onSend = mount();
+    edit('x');
+    caretAt(1);
+    pasteText(lines(20, 'old'));
+    const before = field().value;
+    expect(send(onSend)).toBe(`x${lines(20, 'old')}`);
+    pasteText(lines(20, 'new')); // the same length, so the same line count
+    expect(rowNumbers()).toEqual(['#2']);
+    // Were a browser to restore the value from before the send, its label is no chip of this draft.
+    edit(before, before.length, 'historyUndo');
+    expect(chipRow()).toBeNull();
+    expect(notice()).toBeInTheDocument();
+    expect(sendButton()).toBeDisabled();
+  });
+
+  it('a slash command picked from the menu replaces the draft and its table; numbers go on (review 3480 A9)', async () => {
     vi.spyOn(api, 'commands').mockResolvedValue({
       builtins: [{ name: 'compact', desc: 'summarize the conversation', kind: 'builtin' }], skills: [],
     });
@@ -200,7 +223,11 @@ describe('numbering', () => {
     expect(field().value).toBe('/compact ');
     caretAt(field().value.length);
     pasteText(lines(14));
-    expect(field().value).toBe(`/compact ${label(1, 14)}`);
+    expect(field().value).toBe(`/compact ${label(2, 14)}`);
+    // The old chip's text is gone with the table: its label brought back is no chip.
+    edit(`/compact ${label(2, 14)}${label(1, 13)}`);
+    expect(rowNumbers()).toEqual(['#2']);
+    expect(notice()).toBeInTheDocument();
   });
 });
 
@@ -288,7 +315,7 @@ describe('Backspace and Delete beside a chip take it whole, with typed text kept
   it('typed text loses any marker', () => {
     const onSend = mount();
     caretAt(0);
-    expect(beforeInput('insertText', 'x⁢y⁣')).toBe(false);
+    expect(beforeInput('insertText', 'x\u2062y\u2063')).toBe(false);
     expect(field().value).toBe('xy');
     expect(send(onSend)).toBe('xy');
   });
@@ -455,46 +482,130 @@ describe('review 3480: chips through a paste over a selection, a key over a chip
   });
 });
 
-describe('what an edit breaks anyway is cleaned up, never sent as a bare label', () => {
-  it('text dropped inside a label: the broken chip goes, the dropped text stays, the caret after it', () => {
-    const onSend = mount();
-    const text = lines(14);
+describe('a break is shown and held, never cleaned up on its own (review 3589)', () => {
+  /** `a` + chip + `b`; returns the chip's value. */
+  const setup = (): string => {
     edit('ab');
     caretAt(1);
-    pasteText(text);
-    const v = field().value;
-    edit(`${v.slice(0, 6)}X${v.slice(6)}`, 7, 'insertFromDrop');
-    expect(field().value).toBe('aXb');
-    expect(sel()).toEqual([2, 2]);
+    pasteText(lines(14));
+    return field().value;
+  };
+
+  it('label-shaped text dropped inside a label: every dropped character stays, the break shows and holds the send', () => {
+    const onSend = mount();
+    const v = setup();
+    // Dropped right after the label's `#`, so the dropped text continues the label's grammar (review 3589 F4).
+    const at = v.indexOf('#') + 1;
+    const dropped = `${v.slice(0, at)}2024 report ${v.slice(at)}`;
+    expect(beforeInput('insertFromDrop')).toBe(true); // the browser's own
+    edit(dropped, at + 12, 'insertFromDrop');
+    expect(field().value).toBe(dropped); // nothing written back
     expect(chipRow()).toBeNull();
-    // The text stays in the table, so the browser's undo brings the chip back.
-    edit(v, v.length, 'historyUndo');
-    expect(field().value).toBe(v);
-    expect(rowNumbers()).toEqual(['#1']);
-    expect(send(onSend)).toBe(`a${text}b`);
+    expect(notice()).toBeInTheDocument();
+    expect(sendButton()).toBeDisabled();
+    fireEvent.click(sendButton());
+    expect(onSend).not.toHaveBeenCalled();
+    // Dismiss: the inert markers go as one edit, and every other character stays.
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss the broken pasted block and keep the text as it shows' }));
+    const shown = dropped.replace(/[⁢⁣]/g, '');
+    expect(field().value).toBe(shown);
+    expect(notice()).toBeNull();
+    expect(send(onSend)).toBe(shown);
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
-  it('a line delete that took part of a chip takes the rest of its label', () => {
+  it('the notice clears as soon as the value holds no inert marker, an undo to the intact chip included', () => {
     const onSend = mount();
+    const v = setup();
+    edit(`${v.slice(0, 6)}X${v.slice(6)}`, 7, 'insertFromDrop');
+    expect(notice()).toBeInTheDocument();
+    edit(v, v.length, 'historyUndo'); // what Chrome restores (browser leg)
+    expect(notice()).toBeNull();
+    expect(rowNumbers()).toEqual(['#1']);
+    expect(send(onSend)).toBe(`a${lines(14)}b`);
+  });
+
+  it('a line delete that took part of a chip: nothing is removed on its own, and the break shows', () => {
+    mount();
     edit('xx');
     caretAt(2);
     pasteText(lines(14));
     const v = field().value;
     edit(`xx${v.slice(2, 12)}`, 12, 'deleteSoftLineForward');
-    expect(field().value).toBe('xx');
-    expect(send(onSend)).toBe('xx');
+    expect(field().value).toBe(`xx${v.slice(2, 12)}`);
+    expect(notice()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo the edit that broke the pasted block' })).toBeInTheDocument();
   });
 
-  it('after a send, an old chip a browser brought back is no chip and no label', () => {
+  it('the draft-conflict choices are held while the notice is up, and say why', async () => {
+    const prompt = vi.fn<Prompt>().mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'draft-present', draft: 'left over' }));
+    const store = createSessionStore('lane-a-project-a', { api: { prompt } });
+    function Harness() {
+      const pending = store((s) => s.pending);
+      return <Composer onSend={store.getState().send} pending={pending} onResolve={store.getState().resolve} />;
+    }
+    render(<Harness />);
+    pasteText(lines(14));
+    await act(async () => { fireEvent.click(sendButton()); });
+    await screen.findByRole('button', { name: 'Replace draft' });
+    pasteText(lines(15));
+    const v = field().value;
+    edit(`${v.slice(0, 5)}X${v.slice(5)}`, 6, 'insertFromDrop');
+    expect(screen.getByRole('button', { name: 'Replace draft' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Append anyway' })).toBeDisabled();
+    expect(screen.getAllByText(/Sending is held/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a chip that comes back whole is a chip again (review 3589 F3)', () => {
+  it('drop, yank and replacement inserts are the browser’s own; a whole chip they bring is a chip, twice too', () => {
     const onSend = mount();
-    pasteText(lines(30));
-    const withChip = field().value;
-    edit(`${withChip}x`);
-    expect(send(onSend)).toBe(`${lines(30)}x`);
-    // Chrome's undo after a send does nothing (browser leg); were a browser to restore the old value, its label goes.
-    edit(`${withChip}x`, withChip.length + 1, 'historyUndo');
-    expect(field().value).toBe('x');
+    pasteText(lines(14));
+    const chip = field().value;
+    caretAt(chip.length);
+    for (const kind of ['insertFromDrop', 'insertFromYank', 'insertReplacementText']) {
+      expect(beforeInput(kind, chip), kind).toBe(true);
+      expect(beforeInput(kind, null), kind).toBe(true);
+    }
+    edit(`${chip} ${chip}`, chip.length * 2 + 1, 'insertFromYank');
+    expect(rowNumbers()).toEqual(['#1', '#1']);
+    expect(notice()).toBeNull();
+    // Each act names the chip it is on: Expand the second, the first stays a chip.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Expand pasted text #1, 14 lines, into the message' })[1]!);
+    expect(field().value).toBe(`${chip} ${lines(14)}`);
+    expect(rowNumbers()).toEqual(['#1']);
+    expect(send(onSend)).toBe(`${lines(14)} ${lines(14)}`);
+  });
+});
+
+describe('pastes that bring no text, or a file', () => {
+  it('a paste with no text over part of a chip plans nothing (review 3589 A2)', () => {
+    mount();
+    pasteText(lines(14));
+    const v = field().value;
+    caretAt(0, 4);
+    expect(pasteText('')).toBe(true);
+    expect(field().value).toBe(v);
+  });
+
+  it('a file pasted together with a long text is staged, and no chip is made (review 3589 A6)', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue({ path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    render(<Composer onSend={vi.fn()} pending={[]} id="claude:project-a" />);
+    const shot = new File([new Uint8Array(64)], 'image.png', { type: 'image/png' });
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [shot], types: ['Files', 'text/plain'],
+        items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }, { kind: 'file', type: 'image/png', getAsFile: () => shot }],
+        getData: () => lines(30),
+      },
+    });
+    fireEvent(field(), event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(field().value).toBe('');
     expect(chipRow()).toBeNull();
+    await screen.findByAltText('image.png');
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -545,7 +656,7 @@ describe('an input method’s composition is never scripted', () => {
     expect(send(onSend)).toBe(`a${text}かb`);
   });
 
-  it('a composition that broke a chip is left alone while it runs and cleaned up when it ends', () => {
+  it('a composition that broke a chip is left as the input method made it, during and after: the break shows', () => {
     const onSend = mount();
     edit('ab');
     caretAt(1);
@@ -555,10 +666,13 @@ describe('an input method’s composition is never scripted', () => {
     const mid = `${v.slice(0, 6)}k${v.slice(6)}`;
     edit(mid, 7, 'insertCompositionText');
     expect(field().value).toBe(mid);
-    edit(`${v.slice(0, 6)}か${v.slice(6)}`, 7, 'insertCompositionText');
+    const done = `${v.slice(0, 6)}か${v.slice(6)}`;
+    edit(done, 7, 'insertCompositionText');
     fireEvent.compositionEnd(field());
-    expect(field().value).toBe('aかb');
-    expect(send(onSend)).toBe('aかb');
+    expect(field().value).toBe(done);
+    expect(notice()).toBeInTheDocument();
+    fireEvent.click(sendButton());
+    expect(onSend).not.toHaveBeenCalled();
   });
 });
 
@@ -570,10 +684,10 @@ describe('a label that is only text stays text', () => {
     pasteText(lines(14, 'new'));
     caretAt(field().value.length);
     // Copy gives a chip's text, never its label, so the label arrives as typed text.
-    expect(pasteText(` ${token(1, 14)}`)).toBe(true);
-    edit(`${label(1, 14)} ${token(1, 14)}`, label(1, 14).length + 1 + token(1, 14).length, 'insertFromPaste');
-    expect(rowNumbers()).toEqual(['#1']);
-    expect(send(onSend)).toBe(`${lines(14, 'new')} ${token(1, 14)}`);
+    expect(pasteText(` ${token(2, 14)}`)).toBe(true);
+    edit(`${label(2, 14)} ${token(2, 14)}`, label(2, 14).length + 1 + token(2, 14).length, 'insertFromPaste');
+    expect(rowNumbers()).toEqual(['#2']);
+    expect(send(onSend)).toBe(`${lines(14, 'new')} ${token(2, 14)}`);
   });
 
   it('a label inside a pasted text stays literal, before and after Expand', () => {
@@ -590,10 +704,10 @@ describe('a label that is only text stays text', () => {
 
   it('a paste holding a marker is a chip, whatever its length', () => {
     const onSend = mount();
-    const text = 'a⁣b';
+    const text = 'a\u2063b';
     expect(pasteText(text)).toBe(false);
     expect(field().value).toBe(label(1, 1));
-    expect(send(onSend)).toBe('ab');
+    expect(send(onSend)).toBe(text); // the pasted text goes out byte for byte (review 3589 A3)
   });
 });
 

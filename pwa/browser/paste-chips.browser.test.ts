@@ -10,12 +10,15 @@
 // through Chrome's own; copy and cut carry the full text; undo and redo after each; review 3480's F1 (a long paste over
 // a selection ending inside a chip, from plain text and from another chip), F2 (`[` and a short paste starting with one
 // over a fully selected chip) and F3 (a hand-typed copy of a live label beside the chip, and the label retyped after the
-// chip was deleted, through undo and redo); and in both skins and both palettes the chip's label, its expand control
-// and its remove glyph read at 4.5:1 or better on the ground drawn behind them, at rest, hovered and keyboard-focused.
-// At a phone width with a touch screen the controls reach the 44px floor and the page does not scroll sideways.
+// chip was deleted, through undo and redo); review 3589's cases (a label never wraps at 390 px; a soft line delete
+// beside a chip takes it whole; a composition reaching into a label shows the break and holds the send, and undo, redo,
+// the notice's Undo and its Dismiss walk through it; after a send, a label the redo brings back names nothing); and in
+// both skins and both palettes the chip's label, its expand control and its remove glyph read at 4.5:1 or better on the
+// ground drawn behind them, at rest, hovered and keyboard-focused. At a phone width with a touch screen the controls
+// reach the 44px floor and the page does not scroll sideways.
 //
-// The review 3480 cases compare the field with its markers taken out (`shown`), so they run unchanged against the
-// revision that review read (the task note's red-first count).
+// The review cases compare what the field shows (`shown`, and `seen` where the label's spaces differ between
+// revisions), so they run unchanged against the revisions those reviews read (the task note's red-first counts).
 //
 // The clipboard is Chrome's own (`navigator.clipboard.writeText` with the context granted clipboard access for the
 // served origin), not the operating system's; the prompt route is simulated (`{"ok":true}`), so this pins the browser
@@ -58,10 +61,12 @@ const FIXTURE: AppFixture = {
 const LONG = 'paste probe head\n' + Array.from({ length: 40 }, (_, i) => (i % 9 === 4 ? '' : `\tline ${String(i + 1).padStart(2, '0')}\tof the paste probe   ${'x'.repeat(20)}`))
   .join('\n') + '\nZQX-END-chip';
 /** A visible label, and the chip as the field holds it: that label between the two markers. */
-const token = (n: number, l: number): string => `[Pasted text #${n} +${l} lines]`;
+/** The label's spaces are no-break (review 3589), so it never wraps. `TYPED` is the same label typed by hand. */
+const token = (n: number, l: number): string => `[Pasted text #${n} +${l} lines]`.replace(/ /g, '\u00a0');
 const chip = (n: number, l: number): string => `\u2062${token(n, l)}\u2063`;
 const TOKEN = token(1, 42);
 const CHIP = chip(1, 42);
+const TYPED = '[Pasted text #1 +42 lines]';
 /** What the field shows: its value without the invisible markers. */
 const shown = (v: string): string => v.replace(/[\u2062\u2063]/g, '');
 
@@ -162,9 +167,11 @@ const settled = async (s: Opened, value: string): Promise<string[]> => {
   await expect.poll(() => s.field.inputValue()).toBe(value);
   return s.page.locator('.paste-chip-n').allTextContents();
 };
-/** The same, once the field SHOWS `text` (its value without the markers). */
+/** What a reader sees, with a no-break space read as a space: the same for the reviewed revisions' labels. */
+const seen = (v: string): string => shown(v).replace(/\u00a0/g, ' ');
+/** The same as `settled`, once the field SHOWS `text` (both read by `seen`). */
 const shows = async (s: Opened, text: string): Promise<string[]> => {
-  await expect.poll(async () => shown(await s.field.inputValue())).toBe(text);
+  await expect.poll(async () => seen(await s.field.inputValue())).toBe(seen(text));
   return s.page.locator('.paste-chip-n').allTextContents();
 };
 /** The selection after a key, once the browser has had its say. */
@@ -512,8 +519,8 @@ describe('review 3480: a paste over a selection, a key over a chip, a retyped la
     try {
       await pasteLong(s);
       expect(await shows(s, TOKEN)).toEqual(['#1']);
-      await s.page.keyboard.type(` ${TOKEN}`);
-      expect(await shows(s, `${TOKEN} ${TOKEN}`)).toEqual(['#1']);
+      await s.page.keyboard.type(` ${TYPED}`);
+      expect(await shows(s, `${TOKEN} ${TYPED}`)).toEqual(['#1']);
       // Every undo and redo, read: the row lists the chip exactly when the field starts with it, and never the copy.
       // (Read from what the field shows, so this case means the same against the reviewed revision.)
       const step = async (key: () => Promise<void>, what: string): Promise<string> => {
@@ -526,8 +533,8 @@ describe('review 3480: a paste over a selection, a key over a chip, a retyped la
       let steps = 0;
       for (let v = await s.field.inputValue(); v !== '' && steps < 60; steps += 1) v = await step(() => undo(s), `undo ${steps}`);
       for (let i = 0; i < steps; i += 1) await step(() => redo(s), `redo ${i}`);
-      expect(await shows(s, `${TOKEN} ${TOKEN}`)).toEqual(['#1']);
-      expect(await sendAndSettle(s)).toEqual([{ text: `${LONG} ${TOKEN}` }]);
+      expect(await shows(s, `${TOKEN} ${TYPED}`)).toEqual(['#1']);
+      expect(await sendAndSettle(s)).toEqual([{ text: `${LONG} ${TYPED}` }]);
       expect(s.errors).toEqual([]);
     } finally {
       await s.ctx.close();
@@ -542,10 +549,10 @@ describe('review 3480: a paste over a selection, a key over a chip, a retyped la
       await s.page.keyboard.press('Backspace');
       expect(await shows(s, '')).toEqual([]);
       await s.page.keyboard.type('x');
-      await s.page.keyboard.type(`${TOKEN} z`);
+      await s.page.keyboard.type(`${TYPED} z`);
       await s.page.keyboard.press('Home');
       await s.page.keyboard.press('Delete');
-      expect(await shows(s, `${TOKEN} z`)).toEqual([]);
+      expect(await shows(s, `${TYPED} z`)).toEqual([]);
       // Undo back to the chip, reading every step: the row lists the chip exactly when the field holds it, and the
       // hand-typed label is never one. (Chrome undoes a delete and the typing after it as one step, and its redo of
       // that step brings back the delete alone, in a plain textarea too: measured, so redo is not read here.)
@@ -594,6 +601,197 @@ describe('review 3480 F6: Enter while a composition is open (refined, 1280px)', 
       expect(shown(await s.field.inputValue())).toBe(`${TOKEN}か\n`);
       expect(await sendAndSettle(s)).toEqual([{ text: `${LONG}か` }]);
       expect(s.errors).toEqual([]);
+    } finally {
+      await s.ctx.close();
+    }
+  });
+});
+
+describe('review 3589: a break is shown and held, and the browser’s undo walks back through it', () => {
+  /** The break notice, its two controls, and whether Send is enabled. */
+  const broken = (s: Opened) => s.page.locator('.paste-broken');
+  const undoControl = (s: Opened) => s.page.getByRole('button', { name: 'Undo the edit that broke the pasted block' });
+  const dismissControl = (s: Opened) =>
+    s.page.getByRole('button', { name: 'Dismiss the broken pasted block and keep the text as it shows' });
+  /** Enter, then a settling window: whether any request left. */
+  const enterSendsNothing = async (s: Opened): Promise<void> => {
+    const before = s.bodies.length;
+    await s.field.focus();
+    await s.page.keyboard.press('Enter');
+    await s.page.waitForTimeout(400);
+    expect(s.bodies).toHaveLength(before);
+  };
+
+  it('at 390 px a label never wraps, whatever stands before it on its line', async () => {
+    const s = await open({ skin: REFINED, theme: PHOSPHOR, width: 390 });
+    try {
+      await pasteLong(s);
+      expect(await shows(s, TOKEN)).toEqual(['#1']);
+      const written = await s.field.inputValue(); // the chip as the composer wrote it
+      // Measured on the field itself: for each run of text before the chip, the line the chip's end sits on starts at or
+      // before the chip, and the line its start sits on ends at or after it. (Values written for the reading, then put
+      // back; no input event.)
+      const wraps = await s.field.evaluate((el: HTMLTextAreaElement, c: string) => {
+        const keep = el.value;
+        const bad: number[] = [];
+        for (let k = 0; k < 40; k += 1) {
+          el.value = `${'w'.repeat(k)} ${c} tail`;
+          const s0 = k + 1;
+          const e0 = s0 + c.length;
+          el.setSelectionRange(e0, e0);
+          document.getSelection()!.modify('move', 'backward', 'lineboundary');
+          const from = el.selectionStart;
+          el.setSelectionRange(s0, s0);
+          document.getSelection()!.modify('move', 'forward', 'lineboundary');
+          if (from > s0 || el.selectionEnd < e0) bad.push(k);
+        }
+        el.value = keep;
+        return bad;
+      }, written);
+      expect(wraps).toEqual([]);
+    } finally {
+      await s.ctx.close();
+    }
+  });
+
+  it('a line delete from after the chip takes it whole; undo and redo walk through it (390 px)', async () => {
+    const s = await open({ skin: REFINED, theme: PHOSPHOR, width: 390 });
+    try {
+      await s.field.focus();
+      await s.page.keyboard.type('www ');
+      await pasteLong(s);
+      await s.page.keyboard.type(' tail');
+      const whole = `www ${CHIP} tail`;
+      expect(await shows(s, whole)).toEqual(['#1']);
+      await caretAt(s, 4 + CHIP.length);
+      await s.field.evaluate((el) => {
+        const w = window as unknown as { kinds: string[] };
+        w.kinds = [];
+        el.addEventListener('beforeinput', (e) => w.kinds.push((e as InputEvent).inputType));
+      });
+      await s.page.keyboard.press('Control+Shift+Backspace');
+      // A soft line delete, the browser's own (the composer plans none).
+      expect(await s.page.evaluate(() => (window as unknown as { kinds: string[] }).kinds)).toEqual(['deleteSoftLineBackward']);
+      const after = await s.field.inputValue();
+      expect(seen(after)).not.toContain('Pasted');
+      expect(seen(after)).toContain(' tail');
+      expect(await broken(s).count()).toBe(0); // a whole chip or none: nothing broken
+      await undo(s);
+      expect(await shows(s, whole)).toEqual(['#1']);
+      await redo(s);
+      expect(await shows(s, after)).toEqual([]);
+      await undo(s);
+      expect(await shows(s, whole)).toEqual(['#1']);
+      // A touch-width view: Enter is a newline there, and Ctrl+Enter sends.
+      await s.page.keyboard.press('Control+Enter');
+      await expect.poll(() => s.bodies.length, { timeout: 5_000 }).toBeGreaterThan(0);
+      await s.page.waitForTimeout(400);
+      expect(s.bodies).toEqual([{ text: `www ${LONG} tail` }]);
+      expect(s.errors).toEqual([]);
+    } finally {
+      await s.ctx.close();
+    }
+  });
+
+  it('a composition reaching into a label: the break shows, Send holds, undo and redo walk back and forth, Undo releases', async () => {
+    const s = await open({ skin: REFINED, theme: PHOSPHOR, width: 1280 });
+    try {
+      await s.field.focus();
+      await s.page.keyboard.type('ab');
+      await s.page.keyboard.press('ArrowLeft');
+      await pasteLong(s);
+      const whole = `a${CHIP}b`;
+      expect(await shows(s, whole)).toEqual(['#1']);
+      // Chrome's own composition, replacing a range that starts in `a` and ends inside the label.
+      const cdp = await s.page.context().newCDPSession(s.page);
+      await cdp.send('Input.imeSetComposition', { text: 'Q', selectionStart: 1, selectionEnd: 1, replacementStart: 0, replacementEnd: 8 });
+      await cdp.send('Input.insertText', { text: 'Q' });
+      const hurt = await s.field.inputValue();
+      expect(seen(hurt)).toBe(seen(`Q${CHIP.slice(7)}b`));
+      expect(await s.page.locator('.paste-chip-n').count()).toBe(0);
+      await expect.poll(() => broken(s).count()).toBe(1);
+      expect(await s.page.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      await enterSendsNothing(s);
+      expect(await s.field.inputValue()).toBe(hurt); // nothing written back on its own
+      // The browser's undo walks back to the intact chip, and its redo forward to the break.
+      await undo(s);
+      expect(await shows(s, whole)).toEqual(['#1']);
+      expect(await broken(s).count()).toBe(0);
+      await redo(s);
+      expect(await shows(s, hurt)).toEqual([]);
+      expect(await broken(s).count()).toBe(1);
+      // The notice's own Undo, with its controls at the 44px floor.
+      for (const c of [undoControl(s), dismissControl(s)]) {
+        const box = (await c.boundingBox())!;
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+      await undoControl(s).click();
+      expect(await shows(s, whole)).toEqual(['#1']);
+      expect(await broken(s).count()).toBe(0);
+      expect(await state(s)).toMatchObject({ focused: true });
+      expect(await sendAndSettle(s)).toEqual([{ text: `a${LONG}b` }]);
+      expect(s.errors).toEqual([]);
+    } finally {
+      await s.ctx.close();
+    }
+  });
+
+  it('Dismiss keeps every character the field shows, as one undoable edit, and releases the send', async () => {
+    const s = await open({ skin: REFINED, theme: PHOSPHOR, width: 1280 });
+    try {
+      await s.field.focus();
+      await s.page.keyboard.type('ab');
+      await s.page.keyboard.press('ArrowLeft');
+      await pasteLong(s);
+      const cdp = await s.page.context().newCDPSession(s.page);
+      await cdp.send('Input.imeSetComposition', { text: 'Q', selectionStart: 1, selectionEnd: 1, replacementStart: 0, replacementEnd: 8 });
+      await cdp.send('Input.insertText', { text: 'Q' });
+      const hurt = await s.field.inputValue();
+      await expect.poll(() => broken(s).count()).toBe(1);
+      await enterSendsNothing(s);
+      await dismissControl(s).click();
+      expect(await shows(s, hurt)).toEqual([]);
+      expect(await broken(s).count()).toBe(0);
+      await undo(s);
+      expect(await shows(s, hurt)).toEqual([]);
+      expect(await broken(s).count()).toBe(1);
+      await redo(s);
+      expect(await shows(s, hurt)).toEqual([]);
+      expect(await sendAndSettle(s)).toEqual([{ text: shown(hurt) }]);
+      expect(s.errors).toEqual([]);
+    } finally {
+      await s.ctx.close();
+    }
+  });
+
+  it('after a send, a label the browser’s redo brings back names nothing: no chip, the break shows, nothing sends (F5)', async () => {
+    const s = await open({ skin: REFINED, theme: PHOSPHOR, width: 1280 });
+    try {
+      await s.field.focus();
+      await s.page.keyboard.type('x');
+      await pasteLong(s);
+      expect(await sendAndSettle(s)).toEqual([{ text: `x${LONG}` }]);
+      const other = LONG.replace('paste probe head', 'other probe head'); // the same line count
+      await pasteText(s, other);
+      expect(await shows(s, token(2, 42))).toEqual(['#2']);
+      // Chrome's history from before the send survives it (measured): undos past the new paste change nothing visible,
+      // and the redo after them brings values from before the send back.
+      for (let i = 0; i < 4; i += 1) await undo(s);
+      expect(await shows(s, '')).toEqual([]);
+      await redo(s);
+      await expect.poll(async () => seen(await s.field.inputValue())).toContain(seen(token(1, 42)));
+      expect(await s.page.locator('.paste-chip-n').allTextContents()).toEqual([]);
+      await expect.poll(() => broken(s).count()).toBe(1);
+      await enterSendsNothing(s);
+      await dismissControl(s).click();
+      const plain = shown(await s.field.inputValue());
+      expect(seen(plain)).toContain(seen(token(1, 42)));
+      await s.page.keyboard.press('Enter');
+      await expect.poll(() => s.bodies.length, { timeout: 5_000 }).toBe(2);
+      await s.page.waitForTimeout(400);
+      expect(s.bodies).toEqual([{ text: `x${LONG}` }, { text: plain.trim() }]);
+      expect(JSON.stringify(s.bodies[1])).not.toContain('probe head'); // no pasted text, old or new, behind the label
     } finally {
       await s.ctx.close();
     }

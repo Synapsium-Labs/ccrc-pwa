@@ -47,3 +47,22 @@
   white-space: nowrap;
   font-weight: var(--weight-regular);
 }
+/* The break notice: the chip's own audited ground and ink, its two controls the same ghost Buttons as a chip's. */
+.paste-broken {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--fs-xs) / 1.3 var(--family-ui);
+}
+.paste-broken-text {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+}

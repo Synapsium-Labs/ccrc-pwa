@@ -19,8 +19,8 @@ import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import {
-  coverChips, emptyChips, expandChip, expandValue, hasMarker, liveChips, normalizePaste, planEdit, planPaste,
-  removeChip, removeRanges, selectionText, snapSelection, strayRanges, type PasteChips, type Plan,
+  coverChips, dismissPlan, emptyChips, expandChip, expandValue, hasMarker, inertMarkers, liveChips, normalizePaste,
+  planEdit, planPaste, removeChip, selectionText, snapSelection, type PasteChips, type Plan,
 } from './pasteChips';
 import { PasteChipBar } from './PasteChipBar';
 import './chat.css';
@@ -77,6 +77,9 @@ const KEY_HINTS: readonly { keys: readonly string[]; word: string }[] = [
   { keys: PALETTE_KEYS, word: 'commands' },
 ];
 
+/** Why the send is held while a pasted block is broken (the chip row's notice says the same and offers the way out). */
+export const BROKEN_HOLD = 'Sending is held: undo the last edit or dismiss the broken pasted block first.';
+
 /** The hints line in words, for a screen reader. */
 const KEY_HINTS_SPOKEN = 'Keys: Enter sends, Shift Enter adds a newline, Escape stops the turn, Command K opens commands.';
 
@@ -112,14 +115,15 @@ export function Composer({
   // Paste chips (wave 169). The field's value is the draft, chips included (pasteChips.ts header): the live chips are a
   // parse of it after every change, so nothing about them is tracked between changes. `valueNow` mirrors the state for
   // handlers that run inside one browser call (a paste's own `input` event reaches `onChange` before React re-renders).
-  // The table of pasted texts lives beside the value, so it survives exactly where the draft does. `composing` holds
-  // back the clean-up of a broken chip until an input method's composition ends, because a value written
-  // mid-composition leaves the input method's own text behind (measured in Chrome, review 3469). `caretTo` places the
-  // caret after a change the browser did not make itself. `focusWas` and `pointing` are what the caret snap reads: the
-  // selection's focus before this move, and whether a pointer is making the selection.
+  // The table of pasted texts lives beside the value, so it survives exactly where the draft does; `nextChip` is the
+  // number the next chip takes, never reset, so no number names two pastes for the life of the composer. `composing`
+  // keeps the caret snap still while an input method composes. `caretTo` places the caret after a change the browser
+  // did not make itself. `focusWas` and `pointing` are what the caret snap reads: the selection's focus before this
+  // move, and whether a pointer is making the selection.
   const [value, setValue] = useState('');
   const valueNow = useRef('');
   const chips = useRef<PasteChips>(emptyChips());
+  const nextChip = useRef(1);
   const composing = useRef(false);
   const caretTo = useRef<number | null>(null);
   const focusWas = useRef(0);
@@ -158,40 +162,16 @@ export function Composer({
     }
     if (done) return;
     const caret = plan.start + plan.text.length;
-    change(before.slice(0, plan.start) + plan.text + before.slice(plan.end), caret);
-    caretTo.current ??= caret;
+    change(before.slice(0, plan.start) + plan.text + before.slice(plan.end));
+    caretTo.current = caret;
   };
 
-  /** Every change to the field goes through here, an undo or redo included: the value is the draft. A change that left
-   *  a marker outside a chip (one the composer did not plan: a composition, a drop, a line delete) is cleaned up at
-   *  once, as one more edit of the browser's own: the stray marker goes with the piece of label beside it
-   *  (pasteChips.ts `strayRanges`). Mid-composition nothing is written back; `endComposition` does it. */
-  const change = (next: string, caret: number): void => {
-    put(next);
-    if (composing.current) return;
-    const stray = strayRanges(next, chips.current);
-    const first = stray[0];
-    const last = stray.at(-1);
-    if (first === undefined || last === undefined) return;
-    const kept = removeRanges(next.slice(first.start, last.end), stray.map((r) => ({
-      start: r.start - first.start, end: r.end - first.start,
-    })), 0).value;
-    const el = box.current;
-    if (el && typeof document.execCommand === 'function' && document.activeElement === el) {
-      el.setSelectionRange(first.start, last.end);
-      try {
-        if (document.execCommand(kept === '' ? 'delete' : 'insertText', false, kept) && el.value !== next) return;
-      } catch {
-        // falls through to the written value
-      }
-    }
-    const r = removeRanges(next, stray, caret);
-    put(r.value, r.caret);
-  };
+  /** Every change to the field goes through here, an undo or redo included: the value is the draft, and the composer
+   *  writes nothing back in answer to an edit it did not plan (review 3589). A marker such an edit left outside a chip
+   *  is inert, and the break shows until it is undone or dismissed (`broken`, below). */
+  const change = (next: string): void => put(next);
   const endComposition = (): void => {
     composing.current = false;
-    const el = box.current;
-    if (el) change(el.value, el.selectionEnd);
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -204,9 +184,10 @@ export function Composer({
     }
     const el = e.currentTarget;
     const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '');
-    // A short paste that touches no chip has no plan: the browser's own, as it always was.
-    const p = planPaste(valueNow.current, chips.current, el.selectionStart, el.selectionEnd, text);
+    // A short paste that touches no chip, or one with no text, has no plan: the browser's own, as it always was.
+    const p = planPaste(valueNow.current, chips.current, el.selectionStart, el.selectionEnd, text, nextChip.current);
     chips.current = p.chips;
+    if (p.added) nextChip.current += 1;
     if (p.plan === null) return;
     e.preventDefault();
     perform(p.plan);
@@ -278,12 +259,29 @@ export function Composer({
     };
   }, []);
 
-  const expandPaste = (n: number): void => {
-    const plan = expandChip(valueNow.current, n, chips.current);
+  const expandPaste = (at: number): void => {
+    const plan = expandChip(valueNow.current, at, chips.current);
     if (plan !== null) perform(plan);
   };
-  const removePaste = (n: number): void => {
-    const plan = removeChip(valueNow.current, n, chips.current);
+  const removePaste = (at: number): void => {
+    const plan = removeChip(valueNow.current, at, chips.current);
+    if (plan !== null) perform(plan);
+  };
+  /** The break notice's Undo: one step of the browser's own undo, from the field. */
+  const undoBreak = (): void => {
+    const el = box.current;
+    if (!el) return;
+    el.focus();
+    try {
+      if (typeof document.execCommand === 'function') document.execCommand('undo');
+    } catch {
+      // nothing to undo: the notice stays, and Dismiss is still there
+    }
+  };
+  /** The break notice's Dismiss: the inert markers go, as one ordinary edit the user asked for; every other character
+   *  stays. */
+  const dismissBreak = (): void => {
+    const plan = dismissPlan(valueNow.current, chips.current);
     if (plan !== null) perform(plan);
   };
 
@@ -311,7 +309,7 @@ export function Composer({
   const matches = query !== null && commands ? filterCommands(commands, query) : [];
 
   const pickCommand = (name: string): void => {
-    // A value the composer writes itself replaces the draft, so the table starts again with it.
+    // A value the composer writes itself replaces the draft, so the table starts again with it (its numbers go on).
     put(`/${name} `);
     chips.current = emptyChips();
     box.current?.focus();
@@ -359,7 +357,10 @@ export function Composer({
   // below reads this, never the labels.
   const expanded = expandValue(value, chips.current);
   const pasted = liveChips(value, chips.current);
-  const canSend = !disabled && !staged.hasFailed && !staged.uploading
+  // A marker outside every chip: an edit the composer did not plan broke a pasted block. Sending holds until the break
+  // is undone or dismissed, so a broken label never goes out in place of its text.
+  const broken = inertMarkers(value, chips.current).length > 0;
+  const canSend = !disabled && !staged.hasFailed && !staged.uploading && !broken
     && (expanded.trim() !== '' || attachments.length > 0);
 
   // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
@@ -388,7 +389,7 @@ export function Composer({
     else onSend(text);
     sentAt.current = Date.now();
     put('');
-    chips.current = emptyChips(); // a new draft numbers its chips from #1 again
+    chips.current = emptyChips(); // a new draft's table; its numbers go on from the last one
     staged.release();
   };
 
@@ -534,7 +535,8 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
-      <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled} />
+      <PasteChipBar chips={pasted} onExpand={expandPaste} onRemove={removePaste} disabled={disabled}
+        broken={broken} onUndo={undoBreak} onDismiss={dismissBreak} />
       {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
           Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
       {askUp && (
@@ -555,7 +557,7 @@ export function Composer({
           value={value}
           placeholder={placeholder}
           disabled={disabled}
-          onChange={(e) => change(e.target.value, e.target.selectionEnd)}
+          onChange={(e) => change(e.target.value)}
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={endComposition}
           onCopy={(e) => onCopy(e, false)}
@@ -590,6 +592,7 @@ export function Composer({
               className="send-btn"
               aria-label="Send"
               disabled={!canSend || askUp}
+              title={broken ? BROKEN_HOLD : undefined}
               onClick={send}
             >
               <span aria-hidden="true">↑</span>
@@ -644,10 +647,11 @@ export function Composer({
                     + ' your message.'}
               </p>
               <Well className="draft-well" data-testid="draft-well">{conflict.draft}</Well>
+              {broken && <p className="composer-refusal" role="status">{BROKEN_HOLD}</p>}
               <div className="draft-actions">
                 <Button
                   variant="primary"
-                  disabled={askUp}
+                  disabled={askUp || broken}
                   onClick={() => resolveConflict(conflict.text)}
                 >
                   Replace draft
@@ -656,7 +660,7 @@ export function Composer({
                     because `conflict.draft` is now the whole box. */}
                 <Button
                   variant="ghost"
-                  disabled={askUp}
+                  disabled={askUp || broken}
                   onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
                 >
                   Append anyway

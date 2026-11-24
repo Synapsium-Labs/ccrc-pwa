@@ -1,10 +1,10 @@
 // Paste chips, the decision (desktop-polish wave 169; Goals modification 90, second half). A long text paste enters
-// the draft as a chip: its `[Pasted text #N +L lines]` label wrapped in two invisible markers, with the full text in a
-// table beside the draft. This file pins the pure L1 half (`pwa/src/session/pasteChips.ts`): when a paste becomes a
-// chip, the label grammar, the parse that is the chips' only identity (the coordinator's ruling on review 3480: the
-// value carries it), the one expansion into the send payload byte for byte, the caret and selection kept off a chip's
-// inside, the plans that keep an edit from breaking one, the clean-up of one that lands anyway, and the clipboard's
-// text. The composer half is `composer-paste-chips.test.tsx`; the browser half is `browser/paste-chips.browser.test.ts`.
+// the draft as a chip: its `[Pasted text #N +L lines]` label (no-break spaces) wrapped in two invisible markers, with
+// the full text in a table beside the draft. This file pins the pure L1 half (`pwa/src/session/pasteChips.ts`): when a
+// paste becomes a chip, the label grammar, the parse that is the chips' only identity (the coordinator's ruling on
+// review 3480: the value carries it), the one expansion into the send payload byte for byte, the caret and selection
+// kept off a chip's inside, the plans that keep an edit from breaking one, the inert markers an unplanned edit leaves
+// and the user's Dismiss of them (review 3589: nothing is cleaned up on its own), and the clipboard's text. The composer half is `composer-paste-chips.test.tsx`; the browser half is `browser/paste-chips.browser.test.ts`.
 import { describe, expect, it } from 'vitest';
 import {
   CHIP_CLOSE,
@@ -15,9 +15,11 @@ import {
   chipField,
   chipToken,
   coverChips,
+  dismissPlan,
   emptyChips,
   expandChip,
   expandValue,
+  inertMarkers,
   lineCount,
   linesWord,
   liveChips,
@@ -26,11 +28,9 @@ import {
   planEdit,
   planPaste,
   removeChip,
-  removeRanges,
   selectionText,
   shouldChip,
   snapSelection,
-  strayRanges,
   stripMarkers,
   type PasteChips,
   type Plan,
@@ -45,7 +45,7 @@ const table = (...texts: string[]): { chips: PasteChips; fields: string[] } => {
   let chips: PasteChips = emptyChips();
   const fields: string[] = [];
   for (const t of texts) {
-    const a = addChip(chips, t);
+    const a = addChip(chips, t, fields.length + 1);
     chips = a.chips;
     fields.push(a.field);
   }
@@ -90,22 +90,21 @@ describe('when a paste becomes a chip', () => {
 });
 
 describe('the label grammar, with one owner for the line count', () => {
-  it('is the console’s, numbered, with the line count; in the field it sits between the two markers', () => {
-    expect(chipToken(1, 40)).toBe('[Pasted text #1 +40 lines]');
-    expect(chipToken(3, 1)).toBe('[Pasted text #3 +1 line]');
+  it('is the console’s, numbered, with the line count, its spaces no-break; in the field it sits between the markers', () => {
+    expect(chipToken(1, 40)).toBe('[Pasted\u00a0text\u00a0#1\u00a0+40\u00a0lines]');
+    expect(chipToken(3, 1).replace(/\u00a0/g, ' ')).toBe('[Pasted text #3 +1 line]');
+    expect(chipToken(3, 1)).not.toContain(' ');
     expect(linesWord(1)).toBe('1 line');
     expect(linesWord(2)).toBe('2 lines');
-    expect(chipField(2, 5)).toBe('⁢[Pasted text #2 +5 lines]⁣');
+    expect(chipField(2, 5)).toBe(`\u2062${chipToken(2, 5)}\u2063`);
+    expect([CHIP_OPEN, CHIP_CLOSE]).toEqual(['\u2062', '\u2063']);
   });
 
-  it('numbers chips per draft from 1 and never reuses a number', () => {
-    const a = addChip(emptyChips(), long(900));
-    expect(a.n).toBe(1);
-    const b = addChip(a.chips, lines(20));
-    expect(b.n).toBe(2);
-    expect(b.field).toBe(chipField(2, 20));
-    // The table keeps every text, so the next number follows the highest held.
-    expect(addChip(b.chips, long(1000)).n).toBe(3);
+  it('a chip takes the number it is given (the composer’s counter, never reset)', () => {
+    const a = addChip(emptyChips(), long(900), 7);
+    expect(a.field).toBe(chipField(7, 1));
+    expect(a.chips.get(7)?.text).toBe(long(900));
+    expect(planPaste('', a.chips, 0, 0, lines(20), 8).plan?.text).toBe(chipField(8, 20));
   });
 });
 
@@ -116,9 +115,10 @@ describe('the parse is the only identity', () => {
     expect(parseChips(value, chips)).toEqual([{ n: 1, start: 1, end: 1 + fields[0]!.length }]);
   });
 
-  it('a label without both markers is text, whatever it says', () => {
+  it('a label without both markers is text, whatever it says, with ordinary or no-break spaces', () => {
     const { chips } = table(lines(14));
     const bare = chipToken(1, 14);
+    expect(parseChips(`${CHIP_OPEN}[Pasted text #1 +14 lines]${CHIP_CLOSE}`, chips)).toEqual([]);
     expect(parseChips(bare, chips)).toEqual([]);
     expect(parseChips(`${CHIP_OPEN}${bare}`, chips)).toEqual([]);
     expect(parseChips(`${bare}${CHIP_CLOSE}`, chips)).toEqual([]);
@@ -131,9 +131,13 @@ describe('the parse is the only identity', () => {
     expect(parseChips(chipField(1, 13), chips)).toEqual([]);
   });
 
-  it('a number is one chip: a second wrapped copy of the same label is not', () => {
-    const { chips, fields } = table(lines(14));
-    expect(parseChips(`${fields[0]} ${fields[0]}`, chips).map((s) => s.start)).toEqual([0]);
+  it('a chip that comes back whole is a chip, twice too: each expands to its text and the row lists both (review 3589 F3)', () => {
+    const t = lines(14);
+    const { chips, fields } = table(t);
+    const value = `${fields[0]} ${fields[0]}`;
+    expect(parseChips(value, chips).map((s) => s.start)).toEqual([0, fields[0]!.length + 1]);
+    expect(expandValue(value, chips)).toBe(`${t} ${t}`);
+    expect(liveChips(value, chips).map((c) => [c.n, c.at])).toEqual([[1, 0], [1, fields[0]!.length + 1]]);
   });
 
   it('a hand-typed copy of a live label beside the real chip is text (review 3480 F3)', () => {
@@ -170,10 +174,11 @@ describe('one expansion into the send payload, byte for byte', () => {
     expect(expandValue(`x${fields[0]}y`, chips)).toBe(`x${text}y`);
   });
 
-  it('every marker is stripped after the chips are expanded, a pasted text’s own included', () => {
+  it('the field’s own markers are stripped; a pasted text goes out byte for byte, its own markers included (A3)', () => {
     const text = `a${CHIP_OPEN}b${lines(13)}`;
     const { chips, fields } = table(text);
-    expect(expandValue(`${CHIP_CLOSE}${fields[0]}${CHIP_OPEN}`, chips)).toBe(stripMarkers(text));
+    expect(expandValue(`${CHIP_CLOSE}x${fields[0]}y${CHIP_OPEN}`, chips)).toBe(`x${text}y`);
+    expect(stripMarkers(`a${CHIP_OPEN}b${CHIP_CLOSE}`)).toBe('ab');
   });
 
   it('a label inside a pasted text stays literal', () => {
@@ -189,12 +194,16 @@ describe('expand and remove', () => {
     const { chips, fields } = table(t);
     const value = `a${fields[0]}b`;
     expect(apply(value, expandChip(value, 1, chips)!)).toBe(`a${lines(13)}b`);
+    expect(expandChip(value, 0, chips)).toBeNull(); // named by where it starts
   });
 
   it('Remove plans the span away; the table keeps the text', () => {
     const { chips, fields } = table(lines(13));
     const value = `a${fields[0]}b`;
     expect(apply(value, removeChip(value, 1, chips)!)).toBe('ab');
+    // One number twice: each act takes the one it names.
+    const two = `${fields[0]}x${fields[0]}`;
+    expect(apply(two, removeChip(two, fields[0]!.length + 1, chips)!)).toBe(`${fields[0]}x`);
     expect(chips.get(1)?.text).toBe(lines(13));
   });
 
@@ -239,10 +248,22 @@ describe('a caret never rests inside a chip, and a selection covers it whole', (
     expect(snapSelection(value, chips, { anchor: s + 4, focus: 0 }, 0, false)).toEqual({ anchor: e, focus: 0 });
   });
 
-  it('coverChips widens a range to the chips it touches part of', () => {
+  it('coverChips widens a range to the chips it touches part of; a caret inside one stands at its end', () => {
     expect(coverChips(value, chips, 0, s + 3)).toEqual({ start: 0, end: e });
     expect(coverChips(value, chips, s + 3, value.length)).toEqual({ start: s, end: value.length });
     expect(coverChips(value, chips, 0, 1)).toEqual({ start: 0, end: 1 });
+    expect(coverChips(value, chips, s + 3, s + 3)).toEqual({ start: e, end: e });
+    expect(coverChips(value, chips, s, s)).toEqual({ start: s, end: s });
+  });
+
+  it('a key steps over an inert marker as if it were not there; a pointer does not', () => {
+    const v = `ab${CHIP_OPEN}cd`; // an inert marker at 2
+    expect(snapSelection(v, chips, at(3), 2, false)).toEqual(at(4)); // right across the marker: on over `c`
+    expect(snapSelection(v, chips, at(2), 3, false)).toEqual(at(1)); // left across it: on over `b`
+    expect(snapSelection(v, chips, at(4), 3, false)).toEqual(at(4)); // an ordinary step stays
+    expect(snapSelection(v, chips, at(3), 0, true)).toEqual(at(3));
+    const w = `a${CHIP_CLOSE}${CHIP_OPEN}b`; // two in a row
+    expect(snapSelection(w, chips, at(2), 1, false)).toEqual(at(4));
   });
 });
 
@@ -252,7 +273,7 @@ describe('a paste over a selection replaces whole chips and inserts its own (rev
     const t2 = lines(20, 'two');
     const { chips, fields } = table(t1);
     const value = `a${fields[0]}b`;
-    const p = planPaste(value, chips, 0, 5, t2);
+    const p = planPaste(value, chips, 0, 5, t2, 2);
     const next = apply(value, p.plan!);
     expect(next).toBe(`${chipField(2, 20)}b`);
     expect(expandValue(next, p.chips)).toBe(`${t2}b`);
@@ -264,7 +285,7 @@ describe('a paste over a selection replaces whole chips and inserts its own (rev
     const t3 = lines(16, 'three');
     const { chips, fields } = table(t1, t2);
     const value = `a${fields[0]}m${fields[1]}b`;
-    const p = planPaste(value, chips, 5, 1 + fields[0]!.length + 1 + 5, t3);
+    const p = planPaste(value, chips, 5, 1 + fields[0]!.length + 1 + 5, t3, 3);
     const next = apply(value, p.plan!);
     expect(next).toBe(`a${chipField(3, 16)}b`);
     expect(expandValue(next, p.chips)).toBe(`a${t3}b`);
@@ -273,19 +294,32 @@ describe('a paste over a selection replaces whole chips and inserts its own (rev
   it('a short paste over part of a chip replaces the whole chip with the text', () => {
     const { chips, fields } = table(lines(14));
     const value = `a${fields[0]}b`;
-    expect(apply(value, planPaste(value, chips, 3, 4, 'hi').plan!)).toBe('ahib');
+    expect(apply(value, planPaste(value, chips, 3, 4, 'hi', 2).plan!)).toBe('ahib');
   });
 
   it('a short paste that touches no chip is the browser’s own', () => {
     const { chips, fields } = table(lines(14));
-    expect(planPaste(`a${fields[0]}b`, chips, 0, 1, 'hi').plan).toBeNull();
+    expect(planPaste(`a${fields[0]}b`, chips, 0, 1, 'hi', 2).plan).toBeNull();
+  });
+
+  it('a paste with no text plans nothing, even over part of a chip (review 3589 A2)', () => {
+    const { chips, fields } = table(lines(14));
+    const p = planPaste(`a${fields[0]}b`, chips, 0, 4, '', 2);
+    expect(p).toEqual({ chips, plan: null, added: false });
   });
 
   it('a short paste holding a marker is a chip, its text untouched in the table', () => {
     const text = `x${CHIP_CLOSE}y`;
-    const p = planPaste('', emptyChips(), 0, 0, text);
+    const p = planPaste('', emptyChips(), 0, 0, text, 1);
     expect(p.plan?.text).toBe(chipField(1, 1));
+    expect(p.added).toBe(true);
     expect(p.chips.get(1)?.text).toBe(text);
+  });
+
+  it('a long paste with the caret inside a chip goes in after it', () => {
+    const { chips, fields } = table(lines(14));
+    const value = `a${fields[0]}b`;
+    expect(apply(value, planPaste(value, chips, 4, 4, lines(20), 2).plan!)).toBe(`a${fields[0]}${chipField(2, 20)}b`);
   });
 });
 
@@ -317,7 +351,7 @@ describe('edits that touch a chip are planned whole (rule 5)', () => {
     expect(planEdit(value, chips, 1, e, 'insertText', '[')).toBeNull();
     expect(apply(value, { start: 1, end: e, text: '[' })).toBe('a[b');
     expect(expandValue('a[b', chips)).toBe('a[b');
-    expect(planPaste(value, chips, 1, e, '[short').plan).toBeNull();
+    expect(planPaste(value, chips, 1, e, '[short', 2).plan).toBeNull();
   });
 
   it('typing over a selection ending inside a chip replaces the whole chip', () => {
@@ -325,8 +359,24 @@ describe('edits that touch a chip are planned whole (rule 5)', () => {
     expect(apply(value, planEdit(value, chips, 0, 4, 'deleteContentBackward', null)!)).toBe('b');
   });
 
-  it('typed text loses its markers', () => {
+  it('typed text loses its markers, at a caret and over a selection', () => {
     expect(planEdit('ab', emptyChips(), 1, 1, 'insertText', `x${CHIP_OPEN}y`)).toEqual({ start: 1, end: 1, text: 'xy' });
+    expect(planEdit('ab', emptyChips(), 0, 1, 'insertText', `x${CHIP_OPEN}y`)).toEqual({ start: 0, end: 1, text: 'xy' });
+  });
+
+  it('every other insert lands natively, a whole chip in its data included, and the parse decides (review 3589 F3)', () => {
+    for (const kind of ['insertFromYank', 'insertFromDrop', 'insertReplacementText', 'insertFromPaste']) {
+      expect(planEdit(value, chips, e, e, kind, f), kind).toBeNull();
+      expect(planEdit(value, chips, e, e, kind, null), kind).toBeNull();
+    }
+    expect(parseChips(`${value}${f}`, chips)).toHaveLength(2);
+  });
+
+  it('a caret inside a chip (before the snap) stands at its end: a key goes in after it, a delete takes it', () => {
+    expect(apply(value, planEdit(value, chips, 4, 4, 'insertText', 'x')!)).toBe(`a${f}xb`);
+    expect(apply(value, planEdit(value, chips, 4, 4, 'deleteContentBackward', null)!)).toBe('ab');
+    expect(apply(value, planEdit(value, chips, 4, 4, 'deleteContentForward', null)!)).toBe('ab');
+    expect(apply(value, planEdit(value, chips, 4, 4, 'deleteWordForward', null, { start: 4, end: 9 })!)).toBe('ab');
   });
 
   it('line deletes, undo, redo and keys away from a chip are left to the browser (review 3480 F5)', () => {
@@ -338,49 +388,41 @@ describe('edits that touch a chip are planned whole (rule 5)', () => {
   });
 });
 
-describe('what an unplanned edit leaves behind is cleaned up (rule 7)', () => {
+describe('what an unplanned edit leaves behind is inert, and only the user’s Dismiss removes it (review 3589)', () => {
   const t = lines(14);
   const { chips, fields } = table(t);
   const f = fields[0]!;
-  const clean = (v: string): string => removeRanges(v, strayRanges(v, chips), 0).value;
 
-  it('a clean value has nothing to clean', () => {
-    expect(strayRanges(`a${f}b`, chips)).toEqual([]);
-    expect(strayRanges('plain', chips)).toEqual([]);
+  it('a clean value has no inert marker', () => {
+    expect(inertMarkers(`a${f}b`, chips)).toEqual([]);
+    expect(inertMarkers('plain', chips)).toEqual([]);
+    expect(dismissPlan(`a${f}b`, chips)).toBeNull();
   });
 
-  it('text dropped inside a label: the broken chip goes, label and markers, and the dropped text stays', () => {
+  it('text dropped inside a label: both markers are inert, no chip, and the field’s text goes out as it shows', () => {
     const v = `a${f.slice(0, 5)}XY${f.slice(5)}b`;
-    expect(clean(v)).toBe('aXYb');
-    expect(expandValue(clean(v), chips)).toBe('aXYb');
+    expect(parseChips(v, chips)).toEqual([]);
+    expect(inertMarkers(v, chips)).toEqual([1, v.length - 2]);
+    expect(expandValue(v, chips)).toBe(stripMarkers(v));
   });
 
-  it('a line delete that took the opening marker and the label’s start: the rest of the label goes', () => {
-    expect(clean(`${f.slice(12)}yy`)).toBe('yy');
+  it('Dismiss takes out the inert markers as one edit and keeps every other character, label-shaped ones too (F4)', () => {
+    const v = `a${f.slice(0, 5)}2024 report ${f.slice(5)}b`;
+    const plan = dismissPlan(v, chips)!;
+    expect(apply(v, plan)).toBe(stripMarkers(v));
+    expect(apply(v, plan)).toContain('2024 report ');
   });
 
-  it('one that took the end: the start goes', () => {
-    expect(clean(`xx${f.slice(0, 9)}`)).toBe('xx');
+  it('Dismiss leaves a whole chip beside the break as it is', () => {
+    const v = `${CHIP_OPEN}x${f}y${CHIP_CLOSE}`;
+    expect(inertMarkers(v, chips)).toEqual([0, v.length - 1]);
+    expect(apply(v, dismissPlan(v, chips)!)).toBe(`x${f}y`);
   });
 
-  it('a lone marker typed by an input method goes alone', () => {
-    expect(clean(`ab${CHIP_OPEN}cd${CHIP_CLOSE}`)).toBe('abcd');
-  });
-
-  it('a wrapped label the table does not hold goes whole, so no label is sent without its text', () => {
-    expect(clean(`x${chipField(7, 3)}y`)).toBe('xy');
-    expect(clean(`x${chipField(1, 14)}y`)).toBe(`x${f}y`); // the live one stays
-    expect(clean(`${f}${f}`)).toBe(f);
-  });
-
-  it('the clean-up never touches a well-formed chip beside the damage', () => {
-    expect(clean(`${CHIP_OPEN}[Pas${f}`)).toBe(f);
-    expect(clean(`${f}nes]${CHIP_CLOSE}`)).toBe(f);
-  });
-
-  it('removeRanges moves a caret with what was removed', () => {
-    expect(removeRanges('abcdef', [{ start: 1, end: 3 }], 5)).toEqual({ value: 'adef', caret: 3 });
-    expect(removeRanges('abcdef', [{ start: 1, end: 3 }], 2)).toEqual({ value: 'adef', caret: 1 });
+  it('a wrapped label the table does not hold is inert, and sends as the label it shows', () => {
+    const v = `x${chipField(7, 3)}y`;
+    expect(inertMarkers(v, chips)).toEqual([1, v.length - 2]);
+    expect(expandValue(v, chips)).toBe(`x${chipToken(7, 3)}y`);
   });
 });
 
