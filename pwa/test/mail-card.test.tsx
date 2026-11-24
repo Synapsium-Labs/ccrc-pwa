@@ -13,7 +13,7 @@
 // JSONL bytes. The `derives from the event` test below is that property,
 // asserted rather than described.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
@@ -72,12 +72,17 @@ const mailTurn = (uuid = 'm1', over: Parameters<typeof envelopeText>[0] = {}): C
   ({ kind: 'user', uuid, ts: TS, text: envelopeText(over) });
 
 const card = (): HTMLElement | null => document.querySelector('.mail-card');
+/** Open every closed card (desktop polish wave 176: a card is one closed line by default) so a test can read inside. */
+const openCards = (): void => {
+  for (const head of document.querySelectorAll('.mail-card-head[aria-expanded="false"]')) fireEvent.click(head);
+};
 const textOf = (sel: string): string[] =>
   [...document.querySelectorAll(sel)].map((n) => n.textContent ?? '');
 
 describe('MailCard', () => {
   it('renders a delivered envelope as a mail card attributed to its sender', () => {
     render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    openCards();
 
     expect(card()).not.toBeNull();
     // The attribution is the whole point: sender AND recipient, both named.
@@ -100,6 +105,7 @@ describe('MailCard', () => {
     // and grows the line from 16px to 19px. Only the glyph is centred; the
     // → arrow is text and keeps the baseline.
     render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    openCards();
     expect(document.querySelector('.mail-card-glyph')!).toHaveClass('self-center');
     expect(document.querySelector('.mail-card-arrow')!).not.toHaveClass('self-center');
   });
@@ -108,6 +114,7 @@ describe('MailCard', () => {
     render(<ChatListInner id="s" events={[mailTurn('m1', {
       artifacts: ['docs/superpowers/plans/build4.md', '/tmp/wave4.log'],
     })]} pending={[]} />);
+    openCards();
 
     expect(textOf('.mail-card-kind')).toEqual(['status']);
     expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
@@ -132,6 +139,7 @@ describe('MailCard', () => {
 
   it('folds the ack boilerplate away and shows the body', () => {
     render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
+    openCards();
 
     const body = document.querySelector('.mail-card-body')?.textContent ?? '';
     expect(body).toBe('Implement Tasks 15-19 in order, red-first.');
@@ -158,10 +166,18 @@ describe('MailCard', () => {
     // Negative pin, the `mail-strip.test.tsx` "offers no way to answer" idiom.
     // Ack is box-token gated and is the AGENT's act (`envelope.ts`'s own `ack:`
     // lines); a PWA control for it would be a second door on one act.
+    // Its ONE control is its own disclosure (desktop polish wave 176), which opens and closes the card and acts on
+    // nothing else: closed and open, there is exactly that one button, and no word of acking, replying or answering.
     render(<ChatListInner id="s" events={[mailTurn()]} pending={[]} />);
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
-    expect(screen.queryByRole('textbox')).toBeNull();
-    expect(document.body.textContent ?? '').not.toMatch(/\back\b|reply|answer/i);
+    for (const state of ['false', 'true']) {
+      const buttons = screen.queryAllByRole('button');
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]).toHaveAttribute('aria-expanded', state);
+      expect(buttons[0]!.getAttribute('aria-label') ?? '').not.toMatch(/\back\b|reply|answer/i);
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(document.body.textContent ?? '').not.toMatch(/\back\b|reply|answer/i);
+      openCards();
+    }
   });
 
   it('leaves a MALFORMED envelope as an ordinary bubble, never a half-populated card', () => {
@@ -306,6 +322,7 @@ describe('MailCard from the live lane: a fetched envelope', () => {
 
   it('renders a card for the RAW FENCE shape — the fetch that printed the envelope', () => {
     render(<ChatListInner id="s" events={fetchOf(RAW)} pending={[]} />);
+    openCards();
     expect(card()).not.toBeNull();
     expect(document.querySelector('.mail-card-from')?.textContent ?? '').toContain('coordinator');
     expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
@@ -313,6 +330,7 @@ describe('MailCard from the live lane: a fetched envelope', () => {
 
   it('renders a card for the JSON-WRAPPED shape — what a bare curl leaves behind', () => {
     render(<ChatListInner id="s" events={fetchOf(WRAPPED)} pending={[]} />);
+    openCards();
     expect(card()).not.toBeNull();
     expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
   });

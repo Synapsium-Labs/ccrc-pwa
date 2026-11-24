@@ -687,16 +687,18 @@ describe('a row is priced by what it RENDERS', () => {
   // Built directly: what is under test is the shape of the card, not the grammar
   // that produces one.
   const event: ChatEvent = { kind: 'user', uuid: 'src', ts: at(0), text: 'x' };
-  it('a mail card is its sender and meta rows, a row per artifact, and its body\'s capped well', () => {
-    const mail = (artifacts: string[], body: string): ChatItem => ({
-      kind: 'mail', key: 'm', event: event as Extract<ChatItem, { kind: 'mail' }>['event'],
+  it('a mail card open by default is its head line, sender and meta rows, a row per artifact, and its body\'s capped well', () => {
+    const mail = (artifacts: string[], body: string, opens = true): ChatItem => ({
+      kind: 'mail', key: 'm', event: event as Extract<ChatItem, { kind: 'mail' }>['event'], opens,
       envelope: { id: 1, fromId: 'a', toId: 'b', runId: null, program: null, wave: null, waveOf: null,
         kind: 'status', subject: 'done', artifacts, body },
     });
     // A well neither wraps nor grows past its cap, and is not Markdown.
-    expect(shapeOf(mail(['/x/a.md', '/x/b.md'], linesOf(40, 'body')))).toEqual({ bucket: 'mail', lines: 2 + 2 + WELL_LINES });
-    expect(shapeOf(mail([], 'x'.repeat(600)))).toEqual({ bucket: 'mail', lines: 2 + 1 });
-    expect(shapeOf(mail([], ''))).toEqual({ bucket: 'mail', lines: 2 });
+    expect(shapeOf(mail(['/x/a.md', '/x/b.md'], linesOf(40, 'body')))).toEqual({ bucket: 'mail', lines: 3 + 2 + WELL_LINES });
+    expect(shapeOf(mail([], 'x'.repeat(600)))).toEqual({ bucket: 'mail', lines: 3 + 1 });
+    expect(shapeOf(mail([], ''))).toEqual({ bucket: 'mail', lines: 3 });
+    // Closed (every card but the newest asking one, desktop polish wave 176): one line, whatever it carries.
+    expect(shapeOf(mail(['/x/a.md'], linesOf(40, 'body'), false))).toEqual({ bucket: 'mail-line', lines: 1 });
   });
 
   it('a task card is its summary row, and the closed details toggle when it has details', () => {

@@ -94,4 +94,70 @@
   .mail-card .mail-card-body {
     margin: 0;
   }
+
+  /* THE CLOSABLE FORM (desktop polish wave 176). Closed, the card is its head
+     line alone: one row at the tap floor, so a chat that is mostly mail reads
+     as a list of lines rather than a wall of cards. Open, the head stays and
+     today's rows sit under it. Still no glow, no animation, no shadow. */
+  .mail-card.mail-card--fold {
+    padding: 0;
+    gap: 0;
+  }
+  .mail-card .mail-card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    min-width: 0;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-3);
+    border: none;
+    border-radius: var(--r-md);
+    background: none;
+    color: var(--ink-secondary);
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-ui);
+  }
+  .mail-card .mail-card-chev {
+    flex: none;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .mail-card.mail-card--open .mail-card-chev { transform: rotate(90deg); }
+  .mail-card .mail-card-line-sender,
+  .mail-card .mail-card-line-subject {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The sender keeps its name before the subject gives way; the subject takes
+     what is left and gives way first. */
+  .mail-card .mail-card-line-sender {
+    flex: 0 1 auto;
+    max-width: 40%;
+    font-weight: var(--weight-semibold);
+    color: var(--ink-primary);
+  }
+  .mail-card .mail-card-line-subject { flex: 1 1 auto; color: var(--ink-primary); }
+  .mail-card .mail-card-line-kind {
+    flex: none;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-caps-sm);
+    color: var(--ink-tertiary);
+  }
+  .mail-card .mail-card-time {
+    flex: none;
+    margin-left: auto;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  .mail-card .mail-card-open {
+    display: grid;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3) var(--sp-2);
+  }
 }

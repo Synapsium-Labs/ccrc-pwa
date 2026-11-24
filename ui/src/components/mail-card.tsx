@@ -30,7 +30,11 @@
 // (`coord/envelope.ts`'s own `ack:` lines tell it exactly how); composing mail
 // from the PWA is a stated non-goal. A control here would be a second door on
 // one act — the same reasoning that keeps `Answer` in `ToolCard` from
-// answering anything.
+// answering anything. The one exception is the disclosure of the closable
+// form (`fold`, desktop polish wave 176): it opens and closes the card on
+// this screen, and acts on nothing else.
+import { useId } from 'react';
+import { FOCUS_RING } from '../lib/focus';
 import { RESET_LIST } from '../lib/text';
 import { Icon } from '../primitives/icon';
 import type { ReactNode } from 'react';
@@ -52,10 +56,27 @@ export function runLabel(e: MailEnvelope): string | null {
   return `run ${e.runId}${program}${wave}`;
 }
 
-export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
+/** The closed card's spoken name: what it is, who sent it, what it is about, its kind and when (desktop polish wave 176).
+ *  Whether it is open is the button's `aria-expanded`, said by the reader's own words. */
+export function mailLineLabel(e: MailEnvelope, time: string | null): string {
+  return `Mail from ${e.fromId}: ${e.subject}, ${e.kind}${time === null ? '' : `, ${time}`}`;
+}
+
+/** The card's disclosure (desktop polish wave 176, the operator's "nicely wrapped up"): closed, one line; open, the head
+ *  line and today's card whole under it. The caller keeps the open state (the chat list keeps it across its virtual rows
+ *  unmounting a row), so the card only draws it and reports a tap. */
+export interface MailCardFold {
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  /** When the mail reached the session (`14:02`), or null when the transcript does not say. */
+  readonly time: string | null;
+}
+
+/** The rows of today's card, under its head. */
+function CardRows({ envelope }: { envelope: MailEnvelope }): ReactNode {
   const run = runLabel(envelope);
   return (
-    <article className="mail-card">
+    <>
       <p className="mail-card-from">
         {/* self-center: a block svg has no baseline in this baseline row (D-5100). */}
         <span className="mail-card-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
@@ -83,6 +104,44 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
         </ul>
       )}
       {envelope.body !== '' && <Well className="mail-card-body">{envelope.body}</Well>}
+    </>
+  );
+}
+
+/** With `fold`, the card is a disclosure: its head is one line (sender, subject, kind, time) and a button that opens it,
+ *  the only control the card has; it answers, acks and fetches nothing. Without `fold`, today's card, unchanged. */
+export function MailCard({ envelope, fold }: { envelope: MailEnvelope; fold?: MailCardFold }): ReactNode {
+  const bodyId = useId();
+  if (fold === undefined) {
+    return (
+      <article className="mail-card">
+        <CardRows envelope={envelope} />
+      </article>
+    );
+  }
+  const { open, onToggle, time } = fold;
+  return (
+    <article className={`mail-card mail-card--fold${open ? ' mail-card--open' : ''}`}>
+      <button
+        type="button"
+        className={`mail-card-head ${FOCUS_RING}`}
+        aria-expanded={open}
+        aria-controls={open ? bodyId : undefined}
+        aria-label={mailLineLabel(envelope, time)}
+        onClick={onToggle}
+      >
+        <span className="mail-card-chev" aria-hidden="true">▸</span>
+        <span className="mail-card-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
+        <span className="mail-card-line-sender">{envelope.fromId}</span>
+        <span className="mail-card-line-subject">{envelope.subject}</span>
+        <span className="mail-card-line-kind">{envelope.kind}</span>
+        {time !== null && <span className="mail-card-time">{time}</span>}
+      </button>
+      {open && (
+        <div className="mail-card-open" id={bodyId}>
+          <CardRows envelope={envelope} />
+        </div>
+      )}
     </article>
   );
 }

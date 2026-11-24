@@ -48,6 +48,12 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
         <span className="tool-activity-title">{words.title}</span>
         <Dot />
         <span className="tool-activity-calls">{words.calls}</span>
+        {words.messages !== null && (
+          <>
+            <Dot />
+            <span className="tool-activity-calls tool-activity-messages">{words.messages}</span>
+          </>
+        )}
         {words.state !== null && (
           <>
             <Dot />
@@ -81,6 +87,11 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
           Answer), else the first failure. Opened, the same cards are in the body, in order. */}
       {!open && first !== undefined && (
         <div className="tool-activity-first" data-attention={first.kind}>{renderItem(first.entry)}</div>
+      )}
+      {/* Closed, a mail card that opens by default (the newest, asking the session shown) is drawn under it too, so a
+          question is never hidden behind a tap (desktop polish wave 176). Opened, it is in the body, in order. */}
+      {!open && item.surfaced !== null && (
+        <div className="tool-activity-first" data-attention="mail">{renderItem(item.surfaced)}</div>
       )}
       {open && (
         <div id={bodyId} className="tool-activity-body">

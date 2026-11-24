@@ -234,12 +234,12 @@ export function wellLines(text: string): number {
  */
 export type RowKind =
   | 'user' | 'assistant' | 'system' | 'folded'
-  | 'divider' | 'tool' | 'group' | 'activity' | 'mail' | 'task' | 'pending' | 'working';
+  | 'divider' | 'tool' | 'group' | 'activity' | 'mail' | 'mail-line' | 'task' | 'pending' | 'working';
 export type HeightBucket = RowKind | 'attach';
 
 const BUCKET_MAP: Record<HeightBucket, true> = {
   user: true, assistant: true, system: true, folded: true,
-  divider: true, tool: true, group: true, activity: true, mail: true, task: true, pending: true, working: true,
+  divider: true, tool: true, group: true, activity: true, mail: true, 'mail-line': true, task: true, pending: true, working: true,
   attach: true,
 };
 

@@ -1,0 +1,62 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Mail prompt line — the lane's own line, quiet (desktop polish      *
+   *  wave 176). Self-grounded (background + colour together), so its   *
+   *  descendants are measured through it, as `.mail-card` is.          *
+   * ------------------------------------------------------------------ */
+  .mail-prompt {
+    background: var(--bg-page);
+    color: var(--ink-secondary);
+    display: grid;
+  }
+  /* One row at the tap floor, the ink of a system pill: the machine typed it,
+     so it never reads as the person speaking. */
+  .mail-prompt .mail-prompt-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    min-width: 0;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-3);
+    border: none;
+    border-radius: var(--r-md);
+    background: none;
+    color: var(--ink-tertiary);
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+  }
+  .mail-prompt .mail-prompt-chev { flex: none; }
+  .mail-prompt.mail-prompt--open .mail-prompt-chev { transform: rotate(90deg); }
+  .mail-prompt .mail-prompt-glyph { flex: none; }
+  .mail-prompt .mail-prompt-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-secondary);
+  }
+  .mail-prompt .mail-prompt-count { flex: none; font-variant-numeric: tabular-nums; }
+  .mail-prompt .mail-prompt-time {
+    flex: none;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .mail-prompt .mail-prompt-body {
+    display: grid;
+    gap: var(--sp-1);
+    padding: 0 var(--sp-3) var(--sp-2);
+  }
+  /* Verbatim and wrapped: the lane's line is one long sentence. */
+  .mail-prompt .mail-prompt-text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--ink-secondary);
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
+  }
+}

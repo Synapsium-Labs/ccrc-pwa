@@ -12,6 +12,13 @@
 // ends at anything that is not a tool entry (assistant prose, a user prompt, a mail or task card, a divider, a pending
 // send, the working pulse), so every item keeps its place.
 //
+// A FETCHED MAIL CARD BELONGS WITH ITS FETCH (desktop polish wave 176). The live mail lane's card is derived from the
+// result of the session's own mail fetch, so it sits among that stretch's calls: it joins the stretch open when it
+// arrives rather than ending it, so one stretch is never cut in two by its own fetch, and the row counts the cards it
+// holds ("2 messages"). A legacy typed card is a user turn, a prompt, and still ends a stretch; a card with no stretch
+// open before it stands alone as before. A card that opens by default (the newest, asking the session shown) is drawn
+// under the closed row, as the first entry that wants the reader is, so a question is never hidden behind a tap.
+//
 // NOTHING THAT WANTS THE READER IS HIDDEN. Unlike `groupToolRun`, a failed call or the question asked now does not end a
 // stretch: it sits inside it in order, and it is listed on the item's `attention`, which the row surfaces while collapsed
 // (a count, and the first such entry drawn as its own card). A live wait the transcript cannot tie to one call (an
@@ -24,6 +31,7 @@ import type { ChatItem } from './chatItems';
 import { groupToolRun, toolSummary, type RunItem } from './toolSummary';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
+type MailItem = Extract<ChatItem, { kind: 'mail' }>;
 
 /** Why an entry of a stretch wants the reader: its call failed, or it is the question the session is asking now. */
 export type AttentionKind = 'failed' | 'question';
@@ -40,6 +48,10 @@ export interface ToolActivityItem {
   key: string;
   /** Every tool entry of the stretch, in transcript order. */
   entries: ToolItem[];
+  /** The fetched mail cards the stretch holds, in transcript order (`joinsStretch`). */
+  mail: MailItem[];
+  /** The card of `mail` that opens by default (`MailItem.opens`), drawn under the closed row, or null. */
+  surfaced: MailItem | null;
   /** What the row shows expanded: the entries under the skin's own grouping, in order. */
   inner: RunItem[];
   /** The session is working, this stretch is in the CURRENT turn (after the last user prompt), and one of its calls has
@@ -101,9 +113,17 @@ export interface ActivityFold {
 
 const ASK = 'AskUserQuestion';
 
-/** A user prompt: what starts a turn. A user message, or mail typed into the pane as one (the legacy mail lane). */
+/** A user prompt: what starts a turn. A user message, mail typed into the pane as one (the legacy mail lane), or the
+ *  mail lane's prompt, alone or in a run. */
 function isPrompt(item: ChatItem): boolean {
+  if (item.kind === 'mail-prompt' || item.kind === 'mail-prompts') return true;
   return (item.kind === 'message' || item.kind === 'mail') && item.event.kind === 'user';
+}
+
+/** Whether a card joins the stretch open before it: a card from the live lane, the result of the session's own fetch
+ *  (a `tool_result`), never a legacy typed one (a user turn, a prompt). */
+export function joinsStretch(item: ChatItem): item is MailItem {
+  return item.kind === 'mail' && item.event.kind === 'tool_result';
 }
 
 const failed = (e: ToolItem): boolean => e.result != null && e.result.isError === true;
@@ -145,6 +165,7 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
 
   const out: (ChatItem | ToolActivityItem)[] = [];
   let stretch: ToolItem[] = [];
+  let members: (ToolItem | MailItem)[] = []; // the stretch's tool entries and cards, in order
   let from = 0; // the index of the stretch's first entry
   const close = (to: number): void => {
     const first = stretch[0];
@@ -155,11 +176,14 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       ...stretch.filter((e) => e === question).map((entry) => ({ kind: 'question' as const, entry })),
       ...stretch.filter(failed).map((entry) => ({ kind: 'failed' as const, entry })),
     ];
+    const mail = members.filter((m): m is MailItem => m.kind === 'mail');
     out.push({
       kind: 'tool-activity',
       key: `activity-${first.key}`,
       entries: stretch,
-      inner: fold.runs === 'tool-runs' ? groupToolRun(stretch) : [...stretch],
+      mail,
+      surfaced: mail.find((m) => m.opens) ?? null,
+      inner: fold.runs === 'tool-runs' ? groupToolRun(members) : [...members],
       live: fold.busy && current && stretch.some((e) => e.result == null),
       latest: toolSummary(last).sentence,
       attention,
@@ -168,11 +192,17 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       past: !current,
     });
     stretch = [];
+    members = [];
   };
   items.forEach((item, i) => {
     if (item.kind === 'tool') {
       if (stretch.length === 0) from = i;
       stretch.push(item);
+      members.push(item);
+      return;
+    }
+    if (stretch.length > 0 && joinsStretch(item)) {
+      members.push(item);
       return;
     }
     close(i);
@@ -229,6 +259,8 @@ export interface ActivityWords {
   readonly title: string;
   /** "1 call", "5 calls". */
   readonly calls: string;
+  /** "1 message", "2 messages": the fetched mail cards the stretch holds, or null when it holds none. */
+  readonly messages: string | null;
   /** "running" while the stretch is live, else null. */
   readonly state: string | null;
   /** The newest call's one-line summary. */
@@ -245,6 +277,7 @@ export function activityWords(item: ToolActivityItem): ActivityWords {
   return {
     title: 'Tool activity',
     calls: n === 1 ? '1 call' : `${n} calls`,
+    messages: item.mail.length === 0 ? null : item.mail.length === 1 ? '1 message' : `${item.mail.length} messages`,
     state: item.live ? 'running' : null,
     latest: item.latest,
     attention: [
