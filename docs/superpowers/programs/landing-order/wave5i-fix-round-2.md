@@ -88,7 +88,7 @@ Deadline note: the pass-level R2 cases now use a 2000 ms deadline instead of 60 
 **Defect.** `landingOrder` built `outstanding` from the display state, so a target stored `landed`, `closed` or `withdrawn` whose
 retained fields were damaged (display `unknown`) held every dependent head `empty-or-blocked` forever. Fix round 1 recorded this as a
 limitation; **that limitation is withdrawn** (plan Task 3 Step 5: terminal rows with retained diagnostic damage do not become open
-blockers). `fix-round-1.md` is not edited.
+blockers). `wave5i-fix-round-1.md` is not edited.
 
 **Rule.** A display-`unknown` target is settled (not outstanding) only when all hold: its id is a safe positive integer; exactly one
 entry of the project carries that id; exactly one `stateWords` record carries that id; and that record's word has
@@ -197,13 +197,13 @@ Commits: `6ae3f2daa` (A1), `7177edd4c` (A2), `af7410dbc` (A5 and the control bod
 
 ## R5 records
 
-**Statement.** The control-tx-module placement (departure `control-tx-module`, `fix-round-1.md#r5`) is permitted by the coordinator only
+**Statement.** The control-tx-module placement (departure `control-tx-module`, `wave5i-fix-round-1.md#r5`) is permitted by the coordinator only
 within the measured boundary: one call from `CoordStore.applyLandingControl` inside its owned synchronous transaction; the guard, the
 catch, the rollback/boundary and the fence stay with the store; no async, no wrapper transaction, no extra state or writer, no widened
 port. Passing the new-file growth waiver is a measured rule result, not an architecture license. No further decomposition and no
 exemption is requested.
 
-**Correction of a stale explanation (A4).** `task-5.md`'s `control-tx-takes-port` bullet and `fix-round-1.md`'s closing note said
+**Correction of a stale explanation (A4).** `wave5i-task-5.md`'s `control-tx-takes-port` bullet and `wave5i-fix-round-1.md`'s closing note said
 the body reads `const { db } = coord` because core-vocab's REACH forbids `coord.db`. The code (`server/src/coord/landingControlTx.ts`)
 uses `coord.db`, legal only because that file is in `HANDLE_HOLDERS` (`server/test/single-definition/core-vocab.test.ts`, the set with
 the wave 5i comment). Each of those two places now carries one added sentence pointing here; the old text is kept.
@@ -213,7 +213,7 @@ the wave 5i comment). Each of those two places now carries one added sentence po
 rationale: one store owner (one call site, inside the store's `tx`); no transaction of its own; no async; no state; one `coord.db`
 statement. No other port consumer gains handle access: the set gained this one file and no other. The core-vocab file is NOT edited in
 this round (it conflicts with main; an absorb needs an operator decision). The next independent review is asked to assess the
-membership. The slug is added to `task-5.md`'s `## Departures` and to `task-7.md`'s list.
+membership. The slug is added to `wave5i-task-5.md`'s `## Departures` and to `wave5i-task-7.md`'s list.
 
 **The red-able guards that hold it** (`server/test/landing-entry-census.test.ts`, the "wave 5i ownership" block):
 - "mainRedHold is written by ONE statement, the UPSERT in landingControlTx.ts, and operatorPaused is not in its SET": one write to
@@ -225,7 +225,7 @@ membership. The slug is added to `task-5.md`'s `## Departures` and to `task-7.md
   `the handle is named exactly once: expected [ 'coord.db', 'coord.db' ] to have a length of 1 but got 2`; a value import of
   `landingControlTx.js` in `landingNext.ts`, rc 1, `expected [ …(2) ] to deeply equal [ 'server/src/coord/store.ts' ]`. Each restored
   with `cmp` equal (see "R5 and R6 (code)").
-- core-vocab itself: with the file removed from `HANDLE_HOLDERS` the suite is red (`fix-round-1.md`, task-7 F6).
+- core-vocab itself: with the file removed from `HANDLE_HOLDERS` the suite is red (`wave5i-fix-round-1.md`, task-7 F6).
 
 **Growth figures (A6, A7).** Counted with the growth check's own rule: `server/test/growthCheck.ts`'s `netGrowth` (`codeLines` of
 `git show <sha>:<file>`, an absent base counting as 0), run through `tsx` from `server/` (a throwaway script outside the tree). The
@@ -251,7 +251,7 @@ it is in neither `server/test/growth-frozen/` (one other file) nor `server/test/
 so a waiver does count and the new-file waiver is the only one in play. If `landingControlTx.ts` left this PR, `store.ts` at +50 would be over.
 `GROWTH_CHECK=1 timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/growth-check.test.ts --maxWorkers=2` at HEAD: rc 0, 1 file,
 95 passed. The test prints neither a merge-base nor a per-file figure, so the figures above are mine, not read from its output.
-`fix-round-1.md` R5's table cell for `landingControlTx.ts` is corrected to +47.
+`wave5i-fix-round-1.md` R5's table cell for `landingControlTx.ts` is corrected to +47.
 
 ## R6 records
 
@@ -265,12 +265,12 @@ so a waiver does count and the new-file waiver is the only one in play. If `land
   (optional fifth argument, passed `read.facts.stateWords` by the landing read route in `routes.ts`); and the landing write path in
   `store.ts` (`CoordStore.advanceLanding`), which finds the stored word of the current entry and passes it to `decideLandingWrite` as
   `storedState` (R1). `landingNext.ts` and `landingReadView.ts` reach it only through `landingBindingOf` (the latter passes `{ ...facts, flags }`). No other reader.
-- **Publication** in the central plan and spec interface blocks is the coordinator's, not this PR's. The slug is in `task-7.md`'s list
+- **Publication** in the central plan and spec interface blocks is the coordinator's, not this PR's. The slug is in `wave5i-task-7.md`'s list
   with `order-reads-stored-words`, `retreat-reads-stored-word` and `control-tx-handle-holder`.
 
-**A5, the task-7 record.** Departure `run-absent-word` (`task-5.md`) is withdrawn: fix round 2 aligned a missing run to the approved
-`run-unreadable` (`fix-round-2.md#r5-and-r6-code`). It is marked so in both `task-5.md` and `task-7.md`'s list, and the F4 text in
-`task-7.md` that recorded the unreachable `episode-changed` branch as behaviour has a correcting sentence after it.
+**A5, the task-7 record.** Departure `run-absent-word` (`wave5i-task-5.md`) is withdrawn: fix round 2 aligned a missing run to the approved
+`run-unreadable` (`wave5i-fix-round-2.md#r5-and-r6-code`). It is marked so in both `wave5i-task-5.md` and `wave5i-task-7.md`'s list, and the F4 text in
+`wave5i-task-7.md` that recorded the unreachable `episode-changed` branch as behaviour has a correcting sentence after it.
 
 ## R7 (the M1-M27 audit against this round's transitive changes)
 
@@ -322,7 +322,7 @@ fixture or a typecheck, none of which a hunk above touches.
 | M16 | `landingEntry.ts#decideLandingWrite` (projection refusal only at a stale head) | route `advanceAct` -> `store.advanceLanding` (`storedState`) -> `decideLandingWrite` | both changed (R1) | RE-RUN, `landing-advance-route` + `landing-entry-store -t M16`. rc 1, 6 failed: four 200 bodies where 503 `landing-projection-unreadable` was asserted (`AssertionError: {"ok":true,"run":{"id":1,…,"state":"working",…`), `expected { act: 'eject', id: 3, …(3) } to deeply equal { act: 'refuse', …(1) }` (twice, including the R1 pure case). Green 15 passed |
 | M17 marker, binding, token, identity (invalid run id, blank project), retained-fields | `landingEntry.ts#terminalRepairOf` per-clause; `decideLandingLand` token comparison | `terminalRepairOf` is called from `landingFactsOf`'s fold in `store.ts#landingFactsInner`; `decideLandingLand` from the land arm; asserts the verdict/land answer | `terminalRepairOf`, `decideLandingLand` and the fold: no hunk. The only `landingEntry.ts` and `store.ts` hunks are in the run arm (`decideLandingWrite`, `advanceLanding`'s write path). `landing-land-store.test.ts` (~lines 78 and 371) does call `advanceLanding` with a `retreat` as fixture setup, through the new owned-stored-pinned branch and `storedState` line, but on healthy rows (stored pinned = displayed pinned), so the outcome is identical; the asserted verdict/land answer is computed after, from the land arm. `landingOrder` is also on this selection's path (`landing-land-store`'s `lineOf`, line 311, and `landing-journal-store`, which calls it with three arguments): they omit the new `stateWords` input, which gives the display-only rule exactly, pinned by the pure R4 case `omitted input is the display-only rule` in `landing-line-order.test.ts` (omitted = today's answer). The test files have no commit | RETAINED for the six mutants. `landing-land-store` and `landing-land-words` green at HEAD (below) |
 | M18 | `store.ts#readLanding` (ambient guard, read caught inside) | `readLanding` <- `landing-journal-store` ambient cases | `readLanding` and its test: no hunk (`store.ts`'s hunk is at the run arm). `landing-journal-store` calls `landingOrder` with three arguments (lines 277, 284, 375, 387): omitted `stateWords` is the display-only rule, pinned by the R4 pure case (omitted = today's answer) | RETAINED. `landing-journal-store` green at HEAD (below) |
-| M19 | a: `rundefsTx.ts#queueRunlessNoticeTx` dedupe on outstanding mail; b/c: `landingControlTx.ts` run-arm observation detail made unique | `applyLandingControlTx` -> `queueRunlessNoticeTx` / `queueLandingNoticeTx` | `applyLandingControlTx` changed; `rundefsTx.ts` not | RE-RUN, `landing-next-mail -t M19`. (a) rc 1, 2 failed (no-run arm `acked`, `rejected`): `expected { kind: 'queued', mailId: 2, …(2) } to deeply equal { kind: 'duplicate', …(1) }`. (c, detail `…:${Math.random()}`) rc 1, 4 failed (run arm, all four delivery states), same assertion. Fix round 1's text for this mutant is exactly "`landingControlTx.ts` run-arm observation detail made unique" (`fix-round-1.md`, M19 row, line 92); it gives no source text. Form (c) is MY RECONSTRUCTION of it (`${digest}:${Math.random()}`, unique per call), not a quotation of round 1's mutant; (b) is a second reconstruction that is not unique across calls under a fixed clock. **(b, detail `…:${nowMs}`) SURVIVED** (rc 0, 8 passed): the case's clock is fixed across the retry, so the suffix is the same string and the dedupe still holds; it is not the recorded mutant (fix round 1 made the detail unique per call), and the unique form (c) is red. Recorded as survived with its reason. Green 8 passed |
+| M19 | a: `rundefsTx.ts#queueRunlessNoticeTx` dedupe on outstanding mail; b/c: `landingControlTx.ts` run-arm observation detail made unique | `applyLandingControlTx` -> `queueRunlessNoticeTx` / `queueLandingNoticeTx` | `applyLandingControlTx` changed; `rundefsTx.ts` not | RE-RUN, `landing-next-mail -t M19`. (a) rc 1, 2 failed (no-run arm `acked`, `rejected`): `expected { kind: 'queued', mailId: 2, …(2) } to deeply equal { kind: 'duplicate', …(1) }`. (c, detail `…:${Math.random()}`) rc 1, 4 failed (run arm, all four delivery states), same assertion. Fix round 1's text for this mutant is exactly "`landingControlTx.ts` run-arm observation detail made unique" (`wave5i-fix-round-1.md`, M19 row, line 92); it gives no source text. Form (c) is MY RECONSTRUCTION of it (`${digest}:${Math.random()}`, unique per call), not a quotation of round 1's mutant; (b) is a second reconstruction that is not unique across calls under a fixed clock. **(b, detail `…:${nowMs}`) SURVIVED** (rc 0, 8 passed): the case's clock is fixed across the retry, so the suffix is the same string and the dedupe still holds; it is not the recorded mutant (fix round 1 made the detail unique per call), and the unique form (c) is red. Recorded as survived with its reason. Green 8 passed |
 | M20 | `landingNext.ts#nextLandingNoticeOf` identity tuple: base, episode, recipient omitted | `nextLandingNoticeOf` (changed, R5/A5) | the changed line (`run === 'missing'`) is above the identity | RE-RUN, `-t M20`. base rc 1, 1 failed (`M20: a distinct base yields one new cue…`); episode rc 1, 1 failed (`NOTICE-same-ms`); recipient rc 1, 1 failed (`NOTICE-return`), each `expected { kind: 'duplicate', …(1) } to match object { kind: 'queued' }`. Green 4 passed |
 | M21 | `nextLandingNoticeOf` episode PR/head comparison; `run-not-merging` check | same | same function (A5) | RE-RUN, `-t M21`. episode rc 1, 1 failed: `expected { kind: 'queued', mailId: 1, …(2) } to deeply equal { kind: 'no-send', …(2) }`; state rc 1, 1 failed: `expected { kind: 'no-send', …(2) } to match object { kind: 'no-send', …(1) }`. Green 8 passed |
 | M22 | `rundefsTx.ts#insertSystemMailTx` unstamped throw | `applyLandingControlTx` -> `queueRunlessNoticeTx`/`queueLandingNoticeTx` -> `insertSystemMailTx` | `applyLandingControlTx` changed; `rundefsTx.ts` not | RE-RUN, `-t M22`. rc 1, 1 failed: `expected { kind: 'queued', mailId: 1, …(2) } to match object { kind: 'failure', …(1) }`. Green 10 passed |

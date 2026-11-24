@@ -125,13 +125,13 @@ Per-file counts of the notice-body callers are in R6.
 
 Departure `related-selection-substituted`: Task 5 ran the three grep-found callers (`landing-checks-lane`, `mail-revive`,
 `delegation-wave3.integration`, 134 passed) instead of the plan's `vitest related` selection, which is a subset chosen by a text search and
-not the import-graph selection, so it was not a replacement. It is now recorded in `task-5.md` and `task-7.md`.
+not the import-graph selection, so it was not a replacement. It is now recorded in `wave5i-task-5.md` and `wave5i-task-7.md`.
 
 ## R5
 
 **Reconciliation.** The slug `control-tx-module` was in the wave-done mail and in the body of PR #2837 (one occurrence, as the controller measured with `gh pr view 2837 --json body`), but in no file of the tree (`grep -rn control-tx-module` over `docs/` and `.superpowers/` found it nowhere before this round). So the
-reviewer's "no departure slug of its own" is right about the notes: `task-5.md` `## Departures` named `control-tx-takes-port` (the
-`WatcherCoordPort` parameter) but not the split itself, and `task-7.md`'s slug list likewise. Both now carry `control-tx-module`, pointing here.
+reviewer's "no departure slug of its own" is right about the notes: `wave5i-task-5.md` `## Departures` named `control-tx-takes-port` (the
+`WatcherCoordPort` parameter) but not the split itself, and `wave5i-task-7.md`'s slug list likewise. Both now carry `control-tx-module`, pointing here.
 The split was a coordinator ruling recorded in `.superpowers/sdd/.../progress.md` ("Ruling (T5 ...)"), made because `store.ts` stood at +35 of 40.
 
 **Growth figures, measured at HEAD.** `GROWTH_CHECK=1 timeout 600s ccrc test -- ./node_modules/.bin/vitest run test/growth-check.test.ts --maxWorkers=2`:
@@ -144,7 +144,7 @@ HEAD as already fetched (`a6b87cf79`, no fetch run), in a throwaway test file th
 | `server/src/coord/store.ts` | 5341 | 5390 | +49 |
 | `server/src/coord/landingControlTx.ts` (new, 66 physical lines) | absent | 47 | +47 (corrected in fix round 2) |
 
-The delta +49 equals the +49 recorded in `task-5.md`, over the limit of 40; the absolute figures there (5332 and 5381) are 9 lower on both
+The delta +49 equals the +49 recorded in `wave5i-task-5.md`, over the limit of 40; the absolute figures there (5332 and 5381) are 9 lower on both
 sides because the recorded measurement was taken against the dispatch base 391b5c65b. The clause-16 absorb merge 9210e7a37 (origin/main into this branch) moved the merge-base to a6b87cf79 (`git merge-base HEAD origin/main`), and origin/main grew `store.ts` between those two commits. The delta stays +49 (as the controller measured; not re-run). Task 4's +35 became +49 with
 Task 5's `applyLandingControl` method (+14 net: guard, owned transaction, catch, fence). `GROWTH_OVER: (none)` stands only because the new L3 C5 file
 takes the new-file rule (D-8563): a passing growth rule is not design approval.
@@ -176,8 +176,8 @@ companions in that the store, not the companion, owns the transaction.
 
 **Request.** The growth rule passing is not design approval. No further decomposition or exemption is requested, no port is widened and no
 growth guard is edited. The next independent architecture review is asked to assess the existing split before coordinator acceptance.
-Departure `control-tx-module` is added to `task-5.md` and `task-7.md`. Note (not changed here): `task-5.md`'s `control-tx-takes-port` bullet
-still says the body reads `const { db } = coord`; fix round 1 of the final review wave changed that to plain `coord.db` (task-7 F6). Correction (fix round 2): the old text was wrong about why; `coord.db` is legal only because `landingControlTx.ts` is in `HANDLE_HOLDERS`, see `fix-round-2.md#r5-records`.
+Departure `control-tx-module` is added to `wave5i-task-5.md` and `wave5i-task-7.md`. Note (not changed here): `wave5i-task-5.md`'s `control-tx-takes-port` bullet
+still says the body reads `const { db } = coord`; fix round 1 of the final review wave changed that to plain `coord.db` (task-7 F6). Correction (fix round 2): the old text was wrong about why; `coord.db` is legal only because `landingControlTx.ts` is in `HANDLE_HOLDERS`, see `wave5i-fix-round-2.md#r5-records`.
 
 ## R6
 
@@ -209,10 +209,10 @@ now count 57 + 41 + 36 = 134.
 - Growth and rings for R5: `GROWTH_CHECK=1 ... vitest run test/growth-check.test.ts` and `test/landing-entry-census.test.ts test/single-definition/core-vocab.test.ts`.
 - Do not use `vitest related src/coord/rundefsTx.ts` on this box: it was OOM-killed twice (R4).
 
-**Stale note text corrected.** In `task-7.md`: the matrix header sentence "A row was re-run only when its mutated code changed after the
+**Stale note text corrected.** In `wave5i-task-7.md`: the matrix header sentence "A row was re-run only when its mutated code changed after the
 owner measured it." now has one added sentence saying the `Re-run` column records the state at the reviewed tip and that fix round 1 re-ran every row
 except M8-M10; and the paragraph "Re-run decision: ..." has one sentence added at its end saying it records the state at the reviewed tip and that
-fix round 1 re-ran the rows, both pointing at `fix-round-1.md#r2`. No column value and no existing text was changed.
+fix round 1 re-ran the rows, both pointing at `wave5i-fix-round-1.md#r2`. No column value and no existing text was changed.
 
 ## Absorb and gates
 

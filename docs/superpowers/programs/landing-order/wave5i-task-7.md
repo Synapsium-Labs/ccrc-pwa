@@ -35,7 +35,7 @@
   - G4 `run-routes ccd-land-probe -t 'mark that throws|lander key and its mirror'`: 2 files, 13 passed.
 
 ## Mutation matrix M1 to M27
-"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it. The `Re-run` column records the state at the reviewed tip; fix round 1 re-ran every row except M8-M10, see `fix-round-1.md#r2`. Fix round 2 re-audited the rows, see `fix-round-2.md#r7`.
+"Owner note" is the task note that measured the row. A row was re-run only when its mutated code changed after the owner measured it. The `Re-run` column records the state at the reviewed tip; fix round 1 re-ran every row except M8-M10, see `wave5i-fix-round-1.md#r2`. Fix round 2 re-audited the rows, see `wave5i-fix-round-2.md#r7`.
 | Row | Mutant | Measured red assertion | Owner note | Re-run |
 |---|---|---|---|---|
 | M1 | project read refusal `skip` not `stop` | `a store stop in the first project ends the pass`: expected { read: 1, ... } to match { read: 0, stopped: 'store' } | task-1 | no |
@@ -49,9 +49,9 @@
 | M9 | marker chain follows a symlink | `expected { ok: true, doc: ... } to deeply equal { ok: false, reason: 'absent' }` (3 failed) | task-2 | no |
 | M10 | no pre-read cap / whole-remainder range | `the oversized probe was read: expected [ Array(1) ] to deeply equal []`; `expected false to be 524288` | task-2 | no |
 | M11 | probe base binding removed | `base mismatch...: expected { mode: 'ready', ... } to deeply equal { mode: 'held', ... }` | task-3 | no |
-| M12 | selected head not fully compared (M12a: pinned sha dropped; M12b: binding searches a later entry) | pure: `head mismatch...: expected ready to deeply equal held`; real store and mail: `expected { kind: 'queued', mailId: 1, ... } to deeply equal { kind: 'no-send', ... }` (M12a 2 failed, M12b 6 failed) | task-3 (pure); `fix-round-1.md#r2` (real store, mail, later clean entry queues 0 mails) | yes, R2 |
-| M13 | pending/unmeasured clears red (M13a); binding `health-unmeasured` arm removed (M13b) | pure: `expected { kind: 'set', value: false, ... } to deeply equal { kind: 'keep', value: true }`; real store: flag cleared (M13a), `queued` instead of `no-send` and `ready` instead of `held` (M13b) | task-3 (pure); `fix-round-1.md#r2` (real store and mail) | yes, R2 |
-| M14 | health UPSERT also writes `operatorPaused = 0` | `M14: a pause standing before red to green...` and `M14: a pause placed between red and green...`: `expected { operatorPaused: false, ... } to deeply equal { operatorPaused: true, ... }` (2 failed); also pinned structurally by this task's census (`operatorPaused` absent from the UPSERT) | `fix-round-1.md#r2` (task 5 recorded no M14 mutant) | yes, R2 |
+| M12 | selected head not fully compared (M12a: pinned sha dropped; M12b: binding searches a later entry) | pure: `head mismatch...: expected ready to deeply equal held`; real store and mail: `expected { kind: 'queued', mailId: 1, ... } to deeply equal { kind: 'no-send', ... }` (M12a 2 failed, M12b 6 failed) | task-3 (pure); `wave5i-fix-round-1.md#r2` (real store, mail, later clean entry queues 0 mails) | yes, R2 |
+| M13 | pending/unmeasured clears red (M13a); binding `health-unmeasured` arm removed (M13b) | pure: `expected { kind: 'set', value: false, ... } to deeply equal { kind: 'keep', value: true }`; real store: flag cleared (M13a), `queued` instead of `no-send` and `ready` instead of `held` (M13b) | task-3 (pure); `wave5i-fix-round-1.md#r2` (real store and mail) | yes, R2 |
+| M14 | health UPSERT also writes `operatorPaused = 0` | `M14: a pause standing before red to green...` and `M14: a pause placed between red and green...`: `expected { operatorPaused: false, ... } to deeply equal { operatorPaused: true, ... }` (2 failed); also pinned structurally by this task's census (`operatorPaused` absent from the UPSERT) | `wave5i-fix-round-1.md#r2` (task 5 recorded no M14 mutant) | yes, R2 |
 | M15 | fix jumps after/recovery/operator pause | 3 failed (`expected { paused: false, ... } to match object { paused: true, by: ['main-red'] }`) | task-3 | no |
 | M16 | equal-head projection check removed | `expect(res.statusCode).toBe(503)` with the 200 success body, 4 rows | task-4 | no |
 | M17 marker | quarantine exclusion removed | `expected { kind: 'eligible', ... } to deeply equal { kind: 'blocked', ... }` (3 failed) | task-4 | no |
@@ -77,14 +77,14 @@ task 4 (task 5 added the `creations` fact and the cue transaction). The mutated 
 token, the closed-row gate, the retreat refusal) were not touched by those commits, and the task 4 selections are in the
 Step 6 groups at this tip and green; so they were not re-mutated. M27's guarded line and M19-M22's code were last changed by
 task 5's own fix round and measured there. `landing-control.test.ts` and `landed-lane.test.ts`, the selections of M13, M14, M1-M4,
-are green at this tip (G1). This paragraph records the state at the reviewed tip; fix round 1 re-ran the rows (see `fix-round-1.md#r2`).
+are green at this tip (G1). This paragraph records the state at the reviewed tip; fix round 1 re-ran the rows (see `wave5i-fix-round-1.md#r2`).
 
 ## Departures (by slug, collected from tasks 1 to 6, then this task)
 task 1: node-modules-install, gate-literal. task 2: probe-reasons, health-ancestors. task 3: shared-api-import, flag-not-gate
 (and the rewrite of row C17 to the Amendment A behaviour). task 4: subjects-whole-union, tests-beyond-the-list,
 no-verdict-for-terminal-rows. task 5: port-member-deferred (superseded: task 6 added the member), control-tx-takes-port,
 run-absent-word (withdrawn in fix round 2), facts-literals, related-selection-substituted, control-tx-module. task 6: new-l1-view-file, shared-landing-line-untouched.
-Fix round 2: order-reads-stored-words, retreat-reads-stored-word, control-tx-handle-holder, facts-state-words (see `fix-round-2.md`).
+Fix round 2: order-reads-stored-words, retreat-reads-stored-word, control-tx-handle-holder, facts-state-words (see `wave5i-fix-round-2.md`).
 Task 7: none beyond the above; the census scan treats `Date.parse` as no clock read (`landed.ts` is unchanged).
 
 ## Limitations
@@ -100,7 +100,7 @@ Task 7: none beyond the above; the census scan treats `Date.parse` as no clock r
 - F2: README landing-section text corrected (main-red pause under D-8625, re-pin condition D-8626, retreat refusal and `recovery: 'repair'` D-8627, the `lander` row), plus one paragraph on the single main-red writer, the next-to-land mail, the landed reader's retirement of damaged rows and the opt-out trap. The auth paragraph and install text are unchanged.
 - F3: `currentLandingControl(project, nowMs = Date.now())` in `watch.ts` answers `undefined` once the pass that wrote the cache is older than `freshWithin(..., RADAR_PROBE_FRESH_S, ...)` allows (pass time kept in `landingControlsAt`, stamped through `iso` because a server radar reader may not build a Date, which `single-definition/core-vocab` pins). Existing getter calls in `radar-lane.test.ts` pass the pass's `NOW`. New test: "a cached control older than the radar freshness allows answers nothing, so the route holds".
   Mutant row: getter ignores age (age check replaced by `void nowMs`) -> `radar-lane.test.ts -t "older than the radar freshness"` rc=1, `AssertionError: expected { lander: { ok: true, …(1) }, …(2) } to be undefined`; restored from the saved copy, same selection rc=0.
-- F4: `landingControlTx.ts` checks a missing run row for a run episode before the phase moves to `apply` and answers `no-send` `episode-changed`; no invariant throw remains. `landing-next-mail` green. Correction (fix round 2): that branch was unreachable (a missing run already answers no-send before any send, now `run-unreadable`), so the check was replaced by an explicit invariant throw; see `fix-round-2.md#r5-and-r6-code`.
+- F4: `landingControlTx.ts` checks a missing run row for a run episode before the phase moves to `apply` and answers `no-send` `episode-changed`; no invariant throw remains. `landing-next-mail` green. Correction (fix round 2): that branch was unreachable (a missing run already answers no-send before any send, now `run-unreadable`), so the check was replaced by an explicit invariant throw; see `wave5i-fix-round-2.md#r5-and-r6-code`.
 - F5: unused `LandingInfrastructureCode` import removed from `advance.ts`.
 - Gates: skill/verdict, radar-lane/landing-read-route/landing-control/landing-next-mail, `single-definition` + `rings` (45 files), `GROWTH_CHECK=1 growth-check` (pass), anchors/citations/deviation-refs/dtbd/topology-clean, production `tsc --noEmit` rc=0, private-names scan rc 0 with no output, `git diff --check` clean.
 - F6: `landingControlTx.ts` is added to `HANDLE_HOLDERS` in `single-definition/core-vocab.test.ts` (reason comment beside the set, at its end) and spells its access plainly as `coord.db`; the destructure is gone. This is the guard change that departure `control-tx-takes-port` rests on. Proof: with the file removed from the set, `core-vocab` is red, `AssertionError: server/src/coord/landingControlTx.ts names a database handle on a coord/store receiver: expected true to be false`; restored from the saved copy, `single-definition` + `rings` + `landing-next-mail` + `landing-control` green (46 files), `tsc --noEmit` rc=0.

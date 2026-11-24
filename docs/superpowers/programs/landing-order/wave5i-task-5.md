@@ -26,7 +26,7 @@ route, ccd verb, wire op or exec-whitelist change.
 - Step 5, the existing notice callers after the extraction and before the new caller (`landing-checks-lane`, `mail-revive`,
   `delegation-wave3.integration`): 3 files, 134 passed. The `vitest related src/coord/rundefsTx.ts` selection was not run: the
   three files above are the concrete callers found by grep, run directly. That substitution is the departure
-  `related-selection-substituted`; the selection was attempted in fix round 1 and its outcome is in `fix-round-1.md#r4`.
+  `related-selection-substituted`; the selection was attempted in fix round 1 and its outcome is in `wave5i-fix-round-1.md#r4`.
 - Green: `landing-control` + `landing-next-mail` + `landing-line-order`: 3 files, 138 passed; `landed-lane` (with
   single-definition): green.
 - `test/single-definition` (directory): 32 files green after the structural-handle fix below.
@@ -49,7 +49,7 @@ route, ccd verb, wire op or exec-whitelist change.
 | M27 | `this.landingFence = recovery` removed from the catch | `-t "fault\|COMMIT\|rolled back"`: 6 failed | `expected { ok: true, facts: { …(11) } } to match object { ok: false, error: 'landing-fenced' }` for the five faults and the COMMIT fault |
 Also in this task: real-store cases in `landing-control.test.ts` for a pause before or between red and green (M14) and for
 pending and unmeasured health (M13). This task recorded no mutant for either and measured no M12 mail half (the M21 rows
-above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
+above are a different mutant); those rows are measured in `wave5i-fix-round-1.md#r2`.
 
 ## Departures
 - departure: port-member-deferred. `applyLandingControl` is NOT added to `WatcherCoordMember` in this task. The census
@@ -60,17 +60,17 @@ above are a different mutant); those rows are measured in `fix-round-1.md#r2`.
   `WatcherCoordPort`, so `applyLandingControlTx` takes it too; it receives no other private store field than the one
   `landingFactsInner` closure. There is no separate `db` parameter: the body reads the handle as `const { db } = coord`, because
   `single-definition/core-vocab.test.ts` (REACH) forbids the dotted `coord.db` spelling in any coord file but the store.
-  Correction (fix round 2): the code uses `coord.db`, legal only because `landingControlTx.ts` is a member of `HANDLE_HOLDERS` in that test; see `fix-round-2.md#r5-records`.
-- departure: control-tx-handle-holder. `landingControlTx.ts` is a member of core-vocab's `HANDLE_HOLDERS` (rationale and guards: `fix-round-2.md#r5-records`).
+  Correction (fix round 2): the code uses `coord.db`, legal only because `landingControlTx.ts` is a member of `HANDLE_HOLDERS` in that test; see `wave5i-fix-round-2.md#r5-records`.
+- departure: control-tx-handle-holder. `landingControlTx.ts` is a member of core-vocab's `HANDLE_HOLDERS` (rationale and guards: `wave5i-fix-round-2.md#r5-records`).
 - departure: related-selection-substituted. The plan's `vitest related src/coord/rundefsTx.ts` selection was replaced by three
-  grep-found caller files (see `fix-round-1.md#r4`; the selection itself was later attempted and was OOM-killed twice).
+  grep-found caller files (see `wave5i-fix-round-1.md#r4`; the selection itself was later attempted and was OOM-killed twice).
 - departure: control-tx-module. `CoordStore.applyLandingControl` keeps the guard, the owned transaction, the phase-classified catch
-  and the fence, and its transaction body lives in the same-ring companion `landingControlTx.ts` (see `fix-round-1.md#r5`).
+  and the fence, and its transaction body lives in the same-ring companion `landingControlTx.ts` (see `wave5i-fix-round-1.md#r5`).
 - departure: run-absent-word. `NextLandingFacts.run` is `NextLandingRun | 'missing' | 'unreadable'` (not a nullable run), so a
   run row that is not there answers `run-absent` and one that does not read (or names another run or project) answers
   `run-unreadable`. The literal is `'missing'` because `single-definition/vocabularies.test.ts` reserves the quoted
   `'absent' | 'unreadable'` pair for `shared/agent-protocol.ts`.
-  Withdrawn in fix round 2: the missing run was aligned to the approved `run-unreadable` (`fix-round-2.md#r5-and-r6-code`), so `run-absent` no longer exists.
+  Withdrawn in fix round 2: the missing run was aligned to the approved `run-unreadable` (`wave5i-fix-round-2.md#r5-and-r6-code`), so `run-absent` no longer exists.
 - departure: facts-literals. Adding the required `creations` fact meant adding `creations: []` to the facts literals of
   `landed-decide`, `landing-writes`, `landing-control` and the two pinned literals of `landing-facts-scope`.
 

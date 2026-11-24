@@ -38,7 +38,7 @@ mail-routes kebab-token scan (the `'not-ran'` act word). The lane now narrows `r
 retry memory, same `link` stop), `landedCallStep` takes the ran arm only and answers `parse` | `failed`, and the `'not-ran'`
 act word is gone. Behaviour unchanged: landed-decide, landed-lane (link-stop rows included) and landing-entry-census 112
 passed; `test/single-definition` 1331 passed; production tsc rc 0; the census test passes.
-Fix round 1 of review 2123 reversed this workaround (the not-ran decision went back to `landedCallStep` in L1): see `fix-round-1.md#r3`.
+Fix round 1 of review 2123 reversed this workaround (the not-ran decision went back to `landedCallStep` in L1): see `wave5i-fix-round-1.md#r3`.
 Part 2: the mail-routes kebab-token scan refused 17 wave 5i tokens (no-send, episode-changed, retained-fields, main-red,
 opt-in-unknown, projection-unreadable, empty-or-blocked, health-unmeasured, base-mismatch, head-mismatch,
 composition-not-clean, run-not-merging, episode-unreadable, recipient-missing, creation-unrecorded, landing-next,
