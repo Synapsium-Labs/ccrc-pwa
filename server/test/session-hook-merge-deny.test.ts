@@ -118,17 +118,17 @@ const MENTIONS: string[] = [
   'git commit -m "fix; gh pr merge is the coordinator\'s"',
   'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
   "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
-  "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
+  "gh pr create --draft --title t --body 'landing is `gh pr merge <n>` with no --admin'",
   // A plain quoted mention, and one holding a separator; a heredoc body is
   // text up to its terminator line — bash runs none of it, even a line
   // that begins `gh pr merge`.
   'echo "gh pr merge"', 'git commit -m "docs; gh pr merge 42 is how"',
   "git commit -F - <<'EOF'\nfix: it's the strip\ngh pr merge 42 enqueues\nEOF",
-  "gh pr create --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
+  "gh pr create --draft --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
   "x=$(cat <<'EOF'\nbody: gh pr merge 42 lands it\nEOF\n)",
   // Precision, now that what the strip cannot complete is kept raw: each of
   // these is parsed to its end, so the heredoc mention after it stays text.
-  "gh pr create --body \"$(cat <<'EOF'\nit's\ngh pr merge 42 lands it\nEOF)\"",
+  "gh pr create --draft --body \"$(cat <<'EOF'\nit's\ngh pr merge 42 lands it\nEOF)\"",
   "(( x << y ))\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
   "x=\"$(date # it's\n)\"\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
   "git commit -F - <<-'EOF'\n\tgh pr merge 42 is how\n\tEOF\necho done",
@@ -518,7 +518,7 @@ describe('the worker merge deny', () => {
         'ccrc-api mail send --json - <<JSON\n{"body":"' + sized('the wave is done and the suite is green. ', '', pad) +
         'I read PR state with gh pr view 248 and gh pr checks, and the coordinator may merge it after the panel"}\nJSON'],
       ['a trailing `# comment` that says merge', (pad: number): string =>
-        'gh pr create --title x --body-file /tmp/b.md --base main ' + sized('--label wave ', '', pad) + ' # merge later'],
+        'gh pr create --draft --title x --body-file /tmp/b.md --base main ' + sized('--label wave ', '', pad) + ' # merge later'],
     ])('refuses %s over the cap, the ACCEPTED cost (review 273 F2, ruling 3510: see the hook header\'s THE COST sentence) — and passes it under the cap', (_n, build) => {
       hold(WAVE_HOLD);
       const short = build(0);
