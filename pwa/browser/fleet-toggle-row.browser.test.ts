@@ -88,7 +88,7 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
       try { localStorage.setItem(key!, value!); } catch { /* no storage: the app opens on status */ }
     }, [GROUP_MODE_KEY, mode]);
     await page.setViewportSize({ width, height: 800 });
-    await page.goto(server!.origin + '/');
+    await page.goto(server!.origin + '/fleet');
     await page.waitForSelector('.shell-nav [role="radiogroup"]', { timeout: 20_000 });
     await settleRow(page);
     if (zoom !== 100) await scaleText(page, zoom);

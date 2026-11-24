@@ -1735,7 +1735,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold advisor)
 # `mailhold` (mid-turn mail spec 2026-11-19 §3.3): the furthest `until` may sit past this box's clock at a write,
 # `shared/mailHold.ts#MAILHOLD_REACH_S` (`mailhold-parity.test.ts` holds the two equal).
 MAILHOLD_REACH_S=360
@@ -9503,6 +9503,10 @@ EOF
   # `route-mailhold-v1` (mid-turn mail spec §3.3): `mailhold` is a lane-only route field, bounded at the write site. A server
   # that does not see this token composes no marker, and the hold is off on this box.
   echo route-mailhold-v1
+  # `route-advisor-v1` (coordinator advisor, D-8967): `advisor` is a lane-only route field and every spawn renders it as
+  # `--advisor <model>` (`_advisor_spawn_compose`). An older ccd refuses the field by name, the whole call, so a server that
+  # does not see this token sends none.
+  echo route-advisor-v1
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -10186,12 +10190,13 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     # composed by the server, is not a session's shell. Before the empty-value clear, so a clear is refused too.
     [[ ( "$f" == poolset || "$f" == acctorder ) && -n "${CLAUDECODE:-}" ]] && die "pool-set-operator-only: a Claude Code session may not write $f"
     # `mailhold` is the projection lane's alone (mid-turn mail spec §3.3), and a session's shell never writes or clears it.
-    [[ "$f" == mailhold && -n "${CLAUDECODE:-}" ]] && die "mailhold-lane-only: a Claude Code session may not write mailhold"
+    # So is `advisor` (coordinator advisor plan, D-8967): the launch-profile lane's alone.
+    [[ ( "$f" == mailhold || "$f" == advisor ) && -n "${CLAUDECODE:-}" ]] && die "$f-lane-only: a Claude Code session may not write $f"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
     # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
     # designation's retire and rebind, plan slug poolset-empty-value-clears), and so does `profiledigest` (Overlord W1 sandbox:
     # retire, rebind and a failed pending designation), and so does `mailhold` (the projection's clear). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest || "$f" == mailhold ) ]] && continue
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest || "$f" == mailhold || "$f" == advisor ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -22333,9 +22338,9 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. THE POOL SET'S TWO (`poolset`,
   # `acctorder`; the Overlord's W1, plan slug pool-fields-outside-route-any) decide placement, never the spawn's model or flags.
   # Nor `profiledigest` (Overlord W1 sandbox): `_profile_spawn_compose` reads it, and an Overlord row is not a routed row.
-  # Nor `mailhold` (mid-turn mail spec §3.3): the session hook reads it, and a held row is not a routed row.
+  # Nor `mailhold` (mid-turn mail spec §3.3): the session hook reads it, and a held row is not a routed row. Nor `advisor` (D-8967).
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest|mailhold) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest|mailhold|advisor) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 # @ccd-lib:poolset — a session's pool set (the Overlord's W1, C46): its bounds, its spelling's parser and the ordered list's shape check, which `_route_valid` reads, live in ccd/lib/pool-set.sh
@@ -22387,6 +22392,7 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     profiledigest) [[ "$v" =~ ^[0-9a-f]{64}$ ]] ;;
     # `mailhold` (mid-turn mail spec §3.3): the grammar and the two role words only, copied character for character from
     # `shared/mailHold.ts#MAILHOLD_RE_BODY`. The bound on `until` is `cmd_route`'s, at the write site.
+    advisor)  _route_word_in "$v" "fable opus" ;;   # the coordinator advisor's model (D-8967); the server decides who
     mailhold) [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ ]] ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
@@ -22508,7 +22514,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     # place their account BEFORE they write the record, so a set on their `--route` would mint a session outside the set it
     # was handed. Only `ccd route --session` writes one, and it is `cmd_route`'s to accept, so this refusal is argv-only.
     # `mailhold` is refused here too (mid-turn mail spec §3.3): the projection lane is its one writer, never a mint.
-    [[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"
+    [[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold || "$f" == advisor ]] && die "'$f' is written only by ccd route --session; nothing was touched"
     # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
     # (controller ruling S4-R4) — it is the one place the two validators are
     # allowed to differ in ARMS rather than wording, because only this side
@@ -25440,6 +25446,7 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
   echo "free"; return 0
 }
 
+_TMX_SDRUN_V=''   # `systemd-run --version`'s number (254 or later), or `unread`, for `_tmux_new_session` ('' = ask; D-8953)
 _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the server if this call creates it
   # Every session on this box is a child of ONE tmux server, and that server
   # lives in whichever cgroup happened to create it — so the unit file's
@@ -25545,6 +25552,22 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # drop-in gets an uncapped slice, which is exactly what it has today.
     scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server
            --slice='app-claude\x2dsession.slice')
+    # NOTHING IN THE PANE COMMAND MAY BE EXPANDED (D-8953). systemd 254 added `--expand-environment=`, off for
+    # `--scope` there and on by default in a later release, which then replaces every `${NAME}` in the argv, an
+    # unknown name with nothing. Measured on a fleet box, 2026-11-22, systemd 259: the pane writer's `${p%?.}`
+    # became empty, so the writer wrote nothing, the parent's pending entry line stood for ever, and every child
+    # reclaim on the fleet held behind that one row for 13 hours. Before 254 `--scope` expanded nothing (systemd
+    # NEWS, 254), so the option is not passed there and no `$` is doubled: a `$$` would reach sh as its pid. A
+    # version that cannot be read passes the option: an older systemd-run refuses it and the session is created
+    # bare below, a misplaced server, never a pane command rewritten. Read bounded, and kept for the process only
+    # once it passes the option: a supervisor lives for weeks, and a pre-254 answer kept across an in-place upgrade
+    # would strip the writer again, so that answer is asked again at the next slow-path spawn, which is rare.
+    if [[ -z "$_TMX_SDRUN_V" ]]; then
+      _TMX_SDRUN_V=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" systemd-run --version 2>/dev/null </dev/null) || :
+      [[ "$_TMX_SDRUN_V" =~ ^systemd\ ([0-9]{1,6})[^0-9] ]] && _TMX_SDRUN_V="${BASH_REMATCH[1]}" || _TMX_SDRUN_V=unread
+    fi
+    if [[ "$_TMX_SDRUN_V" != unread ]] && (( 10#$_TMX_SDRUN_V < 254 )); then _TMX_SDRUN_V=''
+    else scope+=(--expand-environment=no); fi
   fi
   if [[ ${#scope[@]} -gt 0 ]]; then
     # systemd-run may still refuse (no D-Bus, no user manager, or a scope of
@@ -26508,6 +26531,28 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
   _door_spawn "$id" || { _profile_refused "$id" "door process: $DOOR_SPAWN_WHY"; return 1; }
 }
+# THE COORDINATOR ADVISOR (plan 2026-11-23-coordinator-advisor, D-8967, D-8968): the route's lane-only `advisor` adds
+# `--advisor <model>`. `$REG/<id>.advisorspawn` (`.advisor` is the field's own file) records what this spawn applied:
+# `<model> <epoch>`, `off <epoch>` (no field, a record standing), or `off fastdeath <epoch>`. A row that never had the
+# field gains no file. FAIL OPEN AT LAUNCH: the
+# build exits an interactive launch whose advisor it refuses (D-8968), so a spawn within ADVISOR_FAST_DEATH_S of one that
+# applied it omits the flag and says so once in swap.log; the server reads that as `dropped` and clears the field for the day.
+# A false positive (a deliberate respawn inside the window, such as a swap) costs the advisor for the rest of that UTC day.
+ADVISOR_FAST_DEATH_S=90
+_advisor_spawn_compose() {   # id launchflags -> sets ADVISOR_SPAWN_FLAGS; writes $REG/<id>.advisorspawn; never fails
+  local id="$1" want prev="" now
+  ADVISOR_SPAWN_FLAGS="$2"; printf -v now '%(%s)T' -1; want=$(_route_get "$id" advisor)
+  [[ -n "$want" || -e "$REG/$id.advisorspawn" ]] || return 0
+  _reg_get_to prev "$id" advisorspawn 2>/dev/null || prev=""
+  # A fast-death record stands until a spawn applies the flag again, so the server keeps the drop for its UTC day.
+  [[ -n "$want" ]] || { [[ "$prev" == "off fastdeath "* ]] || _reg_set "$id" advisorspawn "off $now" || true; return 0; }
+  if [[ "$prev" =~ ^(fable|opus)\ ([0-9]{1,12})$ ]] && (( now - 10#${BASH_REMATCH[2]} < ADVISOR_FAST_DEATH_S )); then
+    _reg_set "$id" advisorspawn "off fastdeath $now" || true
+    echo "$(date '+%F %T') advisor-dropped $id: the spawn that applied --advisor $want ended within ${ADVISOR_FAST_DEATH_S}s; this spawn omits it" >> "$REG/swap.log"
+    return 0
+  fi
+  ADVISOR_SPAWN_FLAGS="${ADVISOR_SPAWN_FLAGS:+$ADVISOR_SPAWN_FLAGS }--advisor $want"; _reg_set "$id" advisorspawn "$want $now" || true
+}
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
 # only while `continuity` is live (decision compaction-text-follows-continuity, ruling R8): arming `launch-profile`
@@ -27162,6 +27207,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
   _profile_spawn_compose "$id" "$launchflags" || die "$id: launch profile refused, no pane started (swap.log names the step)"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
+  _advisor_spawn_compose "$id" "$launchflags"; launchflags="$ADVISOR_SPAWN_FLAGS"   # the coordinator advisor (D-8967), never fails
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -34642,7 +34688,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # BEFORE any arm below can `continue` past the row, so a row the string arms
   # leave unplaced is still placed by it, and it never adds a `continue`. A
   # VALID field joins the one walk; a PENDING one (a spawn whose pane never
-  # recorded where it entered) and an UNMEASURED one (not a regular file, or
+  # recorded where it entered), unless its spelling resolves `complete` to
+  # itself (D-8954, at the arm), and an UNMEASURED one (not a regular file, or
   # unreadable) hold the child, by row id, with their remedies; a LEGACY one
   # (absent, a link, unparseable, or naming another logical spelling) is today's
   # string rule plus the row's current identity, and is only counted. A valid
@@ -34807,7 +34854,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     efst="$_WS_WDID_STATE"
     case "$efst" in
       valid) efid="$_WS_WDID_IDENT"; efo+=("$o"); efi+=("$efid"); efp+=("$_WS_WDID_PHYS"); efw+=("") ;;
-      pending) npending=$(( npending + 1 )); unpend+="${unpend:+, }$o"; _ws_held_by_put entry-pending "$o" ;;
+      pending) npending=$(( npending + 1 )) ;;   # held below, once its spelling is resolved (D-8954)
       legacy-*) nlegacy=$(( nlegacy + 1 )) ;;
       *) unfield+="${unfield:+, }$o"; _ws_held_by_put entry-unmeasured "$o" ;;
     esac
@@ -34823,6 +34870,14 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
     basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
     [[ -n "$wr" ]] || rok=0
+    # A PENDING FIELD HOLDS ONLY WHERE ITS PANE COULD BE (D-8954). Its logical spelling is `.workdir` itself, so a
+    # spelling that resolves `complete` to itself crossed no link and no `..`: the pane's `cd` went where it reads
+    # now, the row is placed by it as a legacy row is, and every arm below still refuses it at, inside or through
+    # the child or a leaf. Any other answer (a link on it, an unplain form, a gone or unresolvable component) holds,
+    # by row id, as every pending field did before. Measured on a fleet box, 2026-11-22: ONE unrelated pending row
+    # held every child reclaim for 13 hours. A row that left above (not plain, under `/proc`) holds by its word.
+    [[ "$efst" != pending ]] || [[ "$basis" == complete && "$wr" == "$w" ]] \
+      || { unpend+="${unpend:+, }$o"; _ws_held_by_put entry-pending "$o"; }
     [[ "$basis" != complete || -z "$wr" ]] || req+=("A"$'\t'"$ri"$'\t'"$wr")   # ancestry of where it reads now
     # A valid field's row resolved `complete` has its current identity asked (its `A` request): rule (d) reads it.
     [[ "$efst" == valid && "$basis" == complete && -n "$wr" ]] && efw[${#efw[@]}-1]="$wr"
@@ -42829,6 +42884,18 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # device the witness records (`_ws_collect_root_dev`): a physical `~/.cc-tmp`
 # on another device, or one whose device cannot be read, is unmeasured
 # `device`, since an empty mount point is no proof that the leaf is gone.
+# ONE RELEASE (D-8948, `_ws_collect_absence_dev`): a
+# recorded device PROVEN gone from this box (`_ws_collect_dev_gone`: no mount,
+# no block device, and a block listing proven to be this box's own) can never
+# be matched again, so the id starts over: the absence is believed on the
+# device `~/.cc-tmp` stands on now, the token binds that device (`on=`), and
+# the document says `"recordedDevice":"gone"`. A device that is mounted,
+# attached as a block device or of major 0 keeps `device`, with the reason
+# after the sentence; one whose state could not be measured is unmeasured
+# `identity`. A quarantine record on a gone device whose slot stands empty
+# resumes as `restart` (`_ws_collect_resume_eval`): its empty slot and the
+# record are cleared, the witness is kept, and nothing is removed on the
+# record's word.
 # Then a slot of the id that no record names is the operator's
 # (`quarantine-kept`, and the witness stays beside it), and a quarantine that
 # is a link or not a directory, or whose slots cannot be listed, is unmeasured
@@ -42868,14 +42935,14 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # document, which the server reads as a failed audit and retries: it fails closed.
 _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
 _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_DEVGONE=''
 _WS_COLLECT_RECORDS=()
 
 _ws_collect_reset() {   # -> every answer the collector's evaluation sets, cleared: no earlier read is ever printed
   REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
   _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
   _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''; _WS_COLLECT_DEVGONE=''
   _WS_COLLECT_WITNESS=''; _WS_COLLECT_LDEV=''; _WS_COLLECT_LINO=''; _WS_COLLECT_LBTIME=''
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
@@ -42984,10 +43051,11 @@ _ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarant
   return 0
 }
 
-_WS_ROOTDEV_WHY=''
+_WS_ROOTDEV_WHY=''; _WS_ROOTDEV_HAVE=''
 _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on device dev (decimal, as a witness and a
   #                             record spell it); 1 when it is on another; 2 when its device could not be read — 1 and
-  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries
+  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries;
+  #                             0 and 1 with _WS_ROOTDEV_HAVE, the device it is on ('' on 2)
   # AN ABSENCE NEEDS THE RECORDED DEVICE (spec §5.10): with `~/.cc-tmp`'s volume
   # missing and its mount point standing empty, every leaf and slot under it
   # reads absent. So an arm that would act on an absence — the witness-only
@@ -42995,8 +43063,12 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
   # `~/.cc-tmp` (`_ws_collect_qpath`, never made) is on the device the witness
   # or the record carries. A `~/.cc-tmp` that cannot be resolved, PROVEN absent
   # included, has no device to read: 2. Reads only.
+  # ITS 1 IS NOT ALWAYS THE END (D-8948): the two arms of the collector's evaluation ask
+  # through `_ws_collect_absence_dev`, which releases a recorded device PROVEN gone from this box
+  # (`_ws_collect_dev_gone`) so that the id starts over. The reclaim tail's witness drop and the box-move release's M4
+  # ask this function alone, and read its three answers as they always did.
   local want="${1-}" what="${2-}" root have
-  _WS_ROOTDEV_WHY=''
+  _WS_ROOTDEV_WHY=''; _WS_ROOTDEV_HAVE=''
   _ws_collect_qpath \
     || { _WS_ROOTDEV_WHY="$_WS_QPATH_WHY, so its device was never compared with device $want that $what carries"; return 2; }
   root="${_WS_QPATH%/.ccd-quarantine}"
@@ -43004,11 +43076,13 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
     || { _WS_ROOTDEV_WHY="$what carries no device, so the device of $root was never compared with it"; return 2; }
   have=$(_plat_devino "$root" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] \
     || { _WS_ROOTDEV_WHY="the device of $root could not be read, so it was never compared with device $want that $what carries"; return 2; }
-  have="${have%%:*}"
+  have="${have%%:*}"; _WS_ROOTDEV_HAVE="$have"
   [[ "$have" == "$want" ]] && return 0
   _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — a mount point on another device is never read as the leaf's absence"
   return 1
 }
+
+# @ccd-lib:devgone — a recorded device that is GONE from this box (D-8948): the block listing's seam (`_ws_collect_sysblock`), the decode (`_ws_collect_devmm`), the one owner of "gone" (`_ws_collect_dev_gone`) and the one composer the absence arms ask (`_ws_collect_absence_dev`) live in ccd/lib/disk-retention.sh
 
 _ws_collect_leaf_owned() { [[ -O "${1-}" ]]; }   # path -> 0 when this user owns it (M3's owner half): a seam a test can answer
 _WS_MOVED_HOST_WHY=''
@@ -43109,9 +43183,12 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     # silence (the resume arm does not ask `_ws_collect_slots_of`: a record
     # names its own slot there).
     # FIRST, the absence is believed only on the device the witness carries:
-    # an empty mount point is no proof that the leaf is gone.
-    _ws_collect_root_dev "$_WS_WIT_DEV" "$wof" \
-      || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+    # an empty mount point is no proof that the leaf is gone. A witness whose
+    # device is PROVEN gone from this box (rc 3: a box moved, or restored onto
+    # other storage) starts over instead: the absence is believed on the
+    # device `~/.cc-tmp` stands on now, and the token below binds that device
+    # (`on=`), so it is never the same-device token (`_ws_collect_absence_dev`).
+    _ws_collect_absence_dev "$_WS_WIT_DEV" "$wof" || (( $? == 3 )) || return 1
     _WS_COLLECT_LEAF=absent
     # This arm lists the quarantine's slots, so a quarantine that is a link or
     # not a directory, or whose slots cannot be listed, answers unmeasured
@@ -43123,7 +43200,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
       || { _ws_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
-      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
+      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" ${_WS_COLLECT_DEVGONE:+"on=$_WS_COLLECT_DEVGONE"})
     [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
       || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
     REAP_VERDICT=collectable
@@ -43209,7 +43286,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
 }
 
 _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collectable` with REAP_TOKEN and
-  #                                _WS_COLLECT_PHASE (`unmoved`, `moved` or `removed`), a word, or `unmeasured`.
+  #                                _WS_COLLECT_PHASE (`unmoved`, `moved`, `removed` or `restart`), a word, or `unmeasured`.
   #                                The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only, and never the tree's walk.
   # THE PHASE IS READ OFF THE DISK, never off the journal: `moved` — the
   # record's directory stands in its slot (`<slot>/leaf`, the record's dev, ino
@@ -43217,7 +43294,13 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # id and the slot holds nothing; `removed` — it stands at neither (the slot's
   # leaf was removed, or the restore and a later tail took it), which is believed
   # only while the physical `~/.cc-tmp` is on the device the record carries
-  # (`_ws_collect_root_dev`: an empty mount point proves nothing). The slot is
+  # (`_ws_collect_root_dev`: an empty mount point proves nothing); `restart` —
+  # the slot STANDS EMPTY and the record's device is PROVEN gone from this box
+  # (`_ws_collect_absence_dev`, D-8948: a box moved, or
+  # restored onto other storage; a slot that does not stand stays `device`),
+  # so the record is believed about nothing,
+  # whatever stands at the id: the verb clears the empty slot and the record,
+  # KEEPS the witness, and the id is audited afresh. The slot is
   # never read from the record: Task 4's reader DERIVES it from the record's
   # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
   # body carries no slot path), and the slot may hold `leaf` and nothing else.
@@ -43304,9 +43387,19 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     absent:match) phase=unmoved ;;
     *)          # NEITHER PLACE holds it, which is believed only on the device
                 # the record carries (`moved` and `unmoved` prove it by identity).
-                _ws_collect_root_dev "$_WS_QREC_PDEV" "the quarantine record $name" \
-                  || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
-                phase=removed ;;
+                # A record whose device is PROVEN gone from this box (rc 3)
+                # is believed about nothing: `restart`, whatever stands at the
+                # id, never `removed`, whose order would drop the witness on
+                # the record's word (`_ws_collect_absence_dev`).
+                # ONLY A SLOT STANDING EMPTY licenses the restart: a slot that
+                # does not stand is also what a volume attached but not active
+                # shows (its device-mapper node, and so its number, gone until
+                # it is), and the record may name a leaf waiting in its slot
+                # there; dropping it would leave that slot recordless, the
+                # terminal `quarantine-kept`, when the volume came back.
+                _ws_collect_absence_dev "$_WS_QREC_PDEV" "the quarantine record $name" || (( $? == 3 )) || return 1
+                phase=removed; [[ -z "$_WS_COLLECT_DEVGONE" ]] || phase=restart
+                [[ "$phase" != restart || -d "$slot" ]] || { _WS_COLLECT_DEVGONE=''; _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again (device $_WS_QREC_PDEV is gone from this box, but the slot $slot does not stand, as it would not on a volume not mounted here, so the record is not restarted)"; return 1; } ;;
   esac
   _WS_COLLECT_PHASE="$phase"
   # THE REGISTRY, asked only now: a retaken original path is TERMINAL above,
@@ -43332,10 +43425,12 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # still encoded: the verb hands that list to the removal as the checkouts it
   # accepts, so a record whose list changed is another consent. The witness is
   # NOT an input: the record is the resume's authority. A record a released
-  # leaf left binds its `leaf=` too (Task R4); any other mints today's token.
+  # leaf left binds its `leaf=` too (Task R4), and a `restart` binds the device
+  # `~/.cc-tmp` stands on now (`on=`, D-8948); any
+  # other mints today's token.
   REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-resume "id=$id" "record=$name" "phase=$phase" "slot=$slot" \
     "dev=$_WS_QREC_DEV" "ino=$_WS_QREC_INO" "btime=$_WS_QREC_BTIME" "run=${_WS_QREC_RUN-}" "at=${_WS_QREC_AT-}" \
-    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}" ${_WS_QREC_LEAF:+"leaf=$_WS_QREC_LEAF"})
+    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}" ${_WS_QREC_LEAF:+"leaf=$_WS_QREC_LEAF"} ${_WS_COLLECT_DEVGONE:+"on=$_WS_COLLECT_DEVGONE"})
   [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
     || { REAP_TOKEN=''; _ws_collect_unmeasured token "the resume token of $id could not be minted"; return 1; }
   REAP_VERDICT=collectable
@@ -43623,6 +43718,9 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
   # A leaf released after a box move (Task R4), or a record that names one, says so whatever a later rung answered;
   # the key is absent otherwise.
   [[ "${_WS_COLLECT_WITNESS-}" != moved-host ]] || printf '"witness":"moved-host",'
+  # An absence believed although its witness or record names another device, because that device is PROVEN gone from
+  # this box (D-8948), says so whatever a later rung answered; the key is absent otherwise.
+  [[ -z "${_WS_COLLECT_DEVGONE-}" ]] || printf '"recordedDevice":"gone",'
   if [[ "$REAP_VERDICT" == collectable ]]; then
     printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
     return 0
@@ -43966,7 +44064,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
   local id="$1" surface="$2" actor="$3" reason="$4" lctx
   lctx=$(_lc_tx)
   _lc_intent collect "$id" "$lctx" verb ws-collect \
-    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness")" \
+    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness${_WS_COLLECT_DEVGONE:+, whose device ${_WS_WIT_DEV-} is gone from this box}")" \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   _ws_collect_witness_cad "$id" "${_WS_WIT_DEV-}" "${_WS_WIT_INO-}" "${_WS_WIT_BTIME-}" "${_WS_WIT_RUN-}" "${_WS_WIT_AT-}" \
     || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
@@ -44300,21 +44398,27 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
       _ws_collect_gap moved "$id" "$slot"
       _ws_collect_after_move "$id" "$rec" "$orig" "$lctx" "$name" "$surface" "$actor" "$reason"
       return ;;
-    unmoved)
+    unmoved|restart)
       # THE MOVE NEVER HAPPENED (or was undone): the leaf stands at its path and
       # the slot holds nothing. The slot and the record are cleared, the witness
       # is KEPT, and the answer is `state-changed`: the leaf is audited afresh
       # (ruling T6 OPEN10).
+      # `restart` IS THE SAME ACT for another reason (D-8948):
+      # the record names a device PROVEN gone from this box, so nothing it says
+      # is believed. Nothing at the id is touched or looked at here; what stands
+      # there is the fresh rungs' to judge, every one of them, on the next audit.
+      local rdid="record $name: $orig never left, or came back" rsaid="record $name described a collection whose move never happened or was undone" rheld="the leaf never left $orig"
+      [[ "${_WS_COLLECT_PHASE-}" != restart ]] || { rdid="record $name names device ${_WS_QREC_PDEV-}, which is gone from this box: $id starts over"; rsaid="record $name names device ${_WS_QREC_PDEV-}, which is gone from this box, so nothing it says of $id is believed and $id starts over"; rheld="record $name names a device gone from this box"; }
       _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
-        detail "$(_ws_leaf_why_line "record $name: $orig never left, or came back")" \
+        detail "$(_ws_leaf_why_line "$rdid")" \
         dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
       if _ws_collect_unwind "$slot" "$rec"; then
         _ws_collect_refused "$id" "$lctx" state-changed \
-          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: record $name described a collection whose move never happened or was undone" \
+          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: $rsaid" \
           "$surface" "$actor" "$reason"
         return 0
       fi
-      _ws_collect_keep "$id" "$rec" "$lctx" "the leaf never left $orig, but its slot or the record could not be cleared"
+      _ws_collect_keep "$id" "$rec" "$lctx" "$rheld, but its slot or the record could not be cleared"
       return 1 ;;
     removed)
       # THE REMOVAL HAD FINISHED before the run stopped: the order resumes from
@@ -44467,7 +44571,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
   # record, its slot's leaf and the phase read off the disk; else the registry
   # and the witness, then, beside a leaf PROVEN absent, the physical
-  # `~/.cc-tmp`'s device against the witness's and the id's recordless slots;
+  # `~/.cc-tmp`'s device against the witness's (or the proof that the
+  # witness's device is gone from this box) and the id's recordless slots;
   # beside a present leaf, the quarantine (read-only), the id's recordless
   # slots, the leaf's identity and owner write, the idle floor, the tree's
   # newest ctime and count, the probe, the checkouts and the row rule — all

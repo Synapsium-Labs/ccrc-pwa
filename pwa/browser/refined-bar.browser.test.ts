@@ -94,7 +94,7 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
         // Six lanes fold at every desk width here (a folded line holds fewer than six cards), and this case checks all six
         // cards' fit, so the stored choice is expanded; lanes-row.browser.test.ts holds the fold.
         await seedStripExpanded(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         // The lanes and the three badges have landed once the lanes row's cards and the three counted tab names are in place.
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 6
           && document.querySelector('.ref-bar [aria-label="Inbox, 12 waiting for you"]') !== null
@@ -147,6 +147,76 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
             .map(({ name, r }) => `${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`)];
         });
         expect(small).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});
+
+// Overlord W1 home, Task 3 (ruled F5, plan question 14): with the Overlord designated, Refined's tabs gain the Overlord's and
+// the Fleet's, nothing in the bar is cut, the page does not scroll sideways, and `/fleet` marks the Fleet tab alone.
+const FIXTURE_OVERLORD: AppFixture = {
+  ...FIXTURE,
+  api: {
+    ...FIXTURE.api,
+    '/health': { ok: true, build: null, caps: ['overlord-v1'] },
+    '/api/overlord/designation': {
+      ok: true,
+      designation: {
+        bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+        accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+      },
+    },
+    '/api/overlord/ladder': {
+      ok: true, operatorRung: 'chat', operatorRungSource: 'set', effectiveRung: 'chat', binding: [], latches: [], conditions: [],
+      readBy: [], lastChange: null, rungs: [],
+    },
+  },
+};
+
+// The plan's matrix asks a light and a dark palette (review 3319 A6): Daylight at every width, Phosphor (the dark) on both sides
+// of the roomy line and at 1280.
+const OVERLORD_VIEWS = [
+  ...[900, 1000, 1100, 1199, 1200, 1280, 1920].map((width) => ['light', width] as const),
+  [PHOSPHOR, 1100], [PHOSPHOR, 1280],
+] as const;
+describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
+  for (const [theme, width] of OVERLORD_VIEWS) {
+    it(`${theme}, ${width}px: the tabs, nothing cut, no sideways scroll, and /fleet marks the Fleet tab alone`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin: REFINED, theme, width }, FIXTURE_OVERLORD);
+      try {
+        await seedStripExpanded(ctx);
+        await page.goto(server!.origin + '/fleet');
+        await page.waitForSelector('.ref-tabs [data-command="go-fleet"]', { timeout: 20_000 });
+        await page.waitForTimeout(300);
+        const m = await page.evaluate(() => {
+          const line = document.querySelector<HTMLElement>('header.shell-accounts .ref-bar')!.getBoundingClientRect();
+          const tabs = [...document.querySelectorAll<HTMLElement>('.ref-tabs > [data-command]')];
+          const cut = [...tabs, document.querySelector<HTMLElement>('.ref-bar-new')!].filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width === 0 || r.right > line.right + 0.5 || r.right > window.innerWidth + 0.5;
+          }).map((el) => el.getAttribute('data-command'));
+          return {
+            tabs: tabs.map((t) => t.getAttribute('data-command')),
+            current: [...document.querySelectorAll('header.shell-accounts [aria-current="page"]')].map((c) => c.getAttribute('data-command')),
+            cut, sideways: document.documentElement.scrollWidth - window.innerWidth,
+            newName: document.querySelector('.ref-bar-new')!.getAttribute('aria-label') ?? document.querySelector('.ref-bar-new')!.textContent,
+            newText: document.querySelector('.ref-bar-new')!.textContent,
+            waiting: document.querySelector('.ref-tabs [data-command="go-waiting"]')!.textContent,
+          };
+        });
+        expect(m.tabs).toEqual(['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs']);
+        expect(m.current, '/fleet marks exactly one tab').toEqual(['go-fleet']);
+        expect(m.cut, 'nothing in the bar is cut').toEqual([]);
+        expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
+        // Under 1200 the crowded bar sheds words (`REF_ROOMY_QUERY`): New session is its "+", named, and Waiting its short word.
+        // The pins tell the two apart (review 3319 A7): "Waiting on you 99+" also starts with "Waiting ".
+        const crowded = width < 1200;
+        expect(m.newName).toMatch(/New session/);
+        expect(m.newText, 'the "+" alone when crowded, the words when roomy').toBe(crowded ? '+' : '+New session');
+        expect(m.waiting!, 'the short word when crowded, the full title when roomy').toMatch(crowded ? /^Waiting (?!on you)/ : /^Waiting on you /);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

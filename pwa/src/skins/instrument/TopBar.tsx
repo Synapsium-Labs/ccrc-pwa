@@ -3,19 +3,21 @@
 // branch.
 //
 // Left to right on its line, which is its DOM and focus order: the bar's one `<nav aria-label="Primary">`, holding the
-// wordmark door (the way home, `commandDoor('go-fleet')`, the command `g f` runs too) and the six desk doors (`DESK_DOORS`);
+// wordmark door (the way home, `commandDoor('go-home')`, the command `g h` runs too) and the desk doors (`deskDoorsFor`);
 // the command field, a door that opens the palette (`commandDoor('open-palette')`), never a second text field, so the palette
 // keeps its one input (D-5103); the bell and Settings; and `+`, New session (`commandDoor('new-session')`). The landmark holds
 // the doors only (`nav-holds-doors-only`, as Refined's `AppBar` draws its nav): a palette opener, a toggle and an action are
 // not navigation. Under the line the header holds the lanes row, the full accounts strip (T2c, D-6329): every lane's card,
 // one instance, since the bar mounts only at the desk. No breadcrumb: every page says where it is (spec §2.4).
 //
-// ONE REGISTRY, `DESK_DOORS`, left to right: the console's desk places (`DESK_PLACES`, `lib/places.ts`, the one list Refined's
-// desk bar and the phone's bottom bar read too), with Archive, Instrument's own door, after Accounts. A door's word is
+// ONE REGISTRY, `deskDoorsFor`, left to right: the console's desk places (`deskPlacesFor`, `lib/places.ts`, the one derivation
+// Refined's desk bar and the phone's bottom bar read too), with Archive, Instrument's own door, after Accounts. A door's word is
 // `ROUTES`' title for its id and its door is the registry's own "Go to" command (`commandDoor('go-<id>')`), so the bar, the
 // palette and the keys run one command. The door the page is on or under carries `aria-current="page"` (`topRouteOf`), the
-// wordmark door included: it is current wherever `topRouteOf` answers Fleet, on `/` and on a session
-// (`home-door-follows-toprouteof`). Every place's badge is `placeBadge`'s (`fleet/navBadges.ts`; review 1466 F4), so no skin's
+// wordmark door included, but only where no other door is (Overlord W1 home, plan question 14): while no Fleet door is drawn
+// it is current wherever `topRouteOf` answers Fleet, on `/fleet` and on a session (`home-door-follows-toprouteof`); with the
+// Fleet door drawn, that door is current there and the wordmark nowhere, so every path marks at most one door. The wordmark
+// runs "Go home", which lands where `homePlace` answers: the Overlord's place or the Fleet. Every place's badge is `placeBadge`'s (`fleet/navBadges.ts`; review 1466 F4), so no skin's
 // door counts for itself: a badged door's accessible name reads `Inbox, 2 waiting for you`, and a `CountBadge` prints the
 // number while it is above zero.
 //
@@ -40,10 +42,11 @@ import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges, type NavBadges } from '../../fleet/navBadges';
 import { FaceMark } from '../../face/FaceMark';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { DESK_PLACES } from '../../lib/places';
+import { deskPlacesFor, FLEET_PLACE, type Place } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { ROUTES, topRouteOf } from '../../lib/routes';
 import { useMediaQuery } from '../../lib/useMediaQuery';
+import { useDesignationState, useHome, useOverlordShown } from '../../stores/overlord';
 
 export type DeskDoor =
   /** A door to the top route `id`. */
@@ -54,12 +57,14 @@ export type DeskDoor =
 /** Instrument's own door among the places: Archive, after Accounts (its place before PL10). */
 const ARCHIVE_AFTER = 'accounts';
 
-/** The bar's doors after the wordmark, left to right. Bell and Settings are not doors of this list: the bar places them by
- *  hand after the command field. */
-export const DESK_DOORS: readonly DeskDoor[] = [
-  ...DESK_PLACES.flatMap((p): DeskDoor[] => (p.id === ARCHIVE_AFTER ? [p, { id: 'archive', icon: 'archive' }] : [p])),
-  { id: 'activity', reserved: 'F4, W4' },
-];
+/** The bar's doors after the wordmark, left to right, for the desk places in force (`deskPlacesFor`). Bell and Settings are
+ *  not doors of this list: the bar places them by hand after the command field. */
+export function deskDoorsFor(places: readonly Place[]): readonly DeskDoor[] {
+  return [
+    ...places.flatMap((p): DeskDoor[] => (p.id === ARCHIVE_AFTER ? [p, { id: 'archive', icon: 'archive' }] : [p])),
+    { id: 'activity', reserved: 'F4, W4' },
+  ];
+}
 
 /** At and above this width each door shows its icon and its word; below it, the icon and a tip. */
 export const DOOR_WORDS_QUERY = '(min-width: 1280px)';
@@ -71,8 +76,8 @@ function titleOf(id: string): string {
   return route.title;
 }
 
-/** The wordmark door's accessible name: the wordmark's own word first (label in name), then the place it opens. */
-export const HOME_DOOR_NAME = `ccrc, ${titleOf('fleet')}`;
+/** The wordmark door's accessible name: the wordmark's own word first (label in name), then where it leads, the home. */
+export const HOME_DOOR_NAME = `ccrc, ${titleOf('home')}`;
 
 function DeskDoorEntry({ id, icon, current, badges, words }: {
   id: string; icon: IconName; current: string | null; badges: NavBadges; words: boolean;
@@ -104,6 +109,9 @@ export function TopBar(): ReactNode {
   const current = topRouteOf(path)?.id ?? null;
   const badges = useNavBadges();
   const words = useMediaQuery(DOOR_WORDS_QUERY);
+  const doors = deskDoorsFor(deskPlacesFor(useOverlordShown(), useDesignationState(), useHome()));
+  // The wordmark is current only where no other door is: on the Fleet while no Fleet door is drawn.
+  const homeCurrent = current === FLEET_PLACE && !doors.some((d) => d.id === FLEET_PLACE);
   return (
     <>
       <div className="ins-topbar">
@@ -114,12 +122,12 @@ export function TopBar(): ReactNode {
             glyph={null}
             className="ins-door ins-home"
             aria-label={HOME_DOOR_NAME}
-            aria-current={current === 'fleet' ? 'page' : undefined}
-            {...commandDoor('go-fleet')}
+            aria-current={homeCurrent ? 'page' : undefined}
+            {...commandDoor('go-home')}
           >
             <Wordmark />
           </Door>
-          {DESK_DOORS.map((d) => ('reserved' in d
+          {doors.map((d) => ('reserved' in d
             ? null
             : <DeskDoorEntry key={d.id} id={d.id} icon={d.icon} current={current} badges={badges} words={words} />))}
         </nav>

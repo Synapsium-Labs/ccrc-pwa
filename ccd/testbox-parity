@@ -86,7 +86,7 @@
 #
 # AN OPERATOR TOOL, NOT A SESSION DOOR. The session hook routes sessions to `ccrc test`, whose remote arm obeys the
 # switch; nothing routes a session here. It writes only its own temporary directory and the worktrees it adds (removed
-# before it exits), with the five git location variables scrubbed.
+# before it exits), with the five git location variables scrubbed, and the objects of a revision the clone did not hold yet.
 set -uo pipefail
 
 TP_HERE="${BASH_SOURCE[0]}"
@@ -584,6 +584,13 @@ for r in ${revs[@]+"${revs[@]}"}; do
   _tp_bound || { echo "$PROG: $rev: not run: the time given to this run is over (--until)" >&2; total=$((total + 1)); continue; }
   tag="r${#TP_WTS[@]}"
   wt="$TP_TMP/wt-$tag"
+  # A revision the clone does not hold yet (the newest merge, listed by gh before the fleet's own fetch brought it, D-8965):
+  # fetched from origin by its id under the step's bound, into the object store alone (no ref, no FETCH_HEAD), never prompting.
+  if ! _tp_git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null; then
+    _tp_leg "$repo" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY GIT_TERMINAL_PROMPT=0 \
+      git fetch --quiet --no-write-fetch-head origin "$rev" >/dev/null 2>&1 </dev/null \
+      || { echo "$PROG: $rev: not in the clone, and fetching it from origin failed or did not end within its bound" >&2; total=$((total + 1)); continue; }
+  fi
   _tp_git -C "$repo" worktree add --detach --quiet "$wt" "$rev" >/dev/null 2>&1 \
     || { echo "$PROG: $rev: cannot add a worktree" >&2; total=$((total + 1)); continue; }
   TP_WTS+=("$wt")

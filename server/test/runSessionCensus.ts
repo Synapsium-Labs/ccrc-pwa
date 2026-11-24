@@ -84,6 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/envelope.ts', text: 'designated.sessionId === m.toId',
+    why: 'a mail\'s recipient against the designated Overlord\'s session, read once a mail sweep (the fixed-line table, Overlord W1 inbox): no run is read' },
   { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
     why: 'a lookup of a REGISTRY record by its id (the approval raise\'s child gate, moved from coord/routes.ts with raiseApproval, W3 Q3e): no run is read' },
   { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',
@@ -275,6 +277,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
   { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
+  { file: 'server/src/continuity/sandboxCheck.ts', text: 'p.sessionId !== newest.sessionId',
+    why: "the designation row's pending session against the session of the newest reported start (sandboxSettle, Overlord W1 sandbox B): the designation read and one start row, no run is read" },
   { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
     why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
   { file: 'server/src/continuity/renewalReadings.ts', text: 'd.sessionId === sessionId',

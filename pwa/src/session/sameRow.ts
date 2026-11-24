@@ -4,7 +4,7 @@
 // rows it changed (the streaming turn, a new row, a call whose result arrived), never the rest.
 //
 // L1: pure, and `import type` only.
-import type { TranscriptItem } from './toolSummary';
+import type { TranscriptItem } from './toolActivity';
 
 /** The fields an item derives from its own `event`: `buildChatItems` parses them again on every build (a mail item's
  *  envelope, a task item's notification), so they are compared through `event` alone. */
@@ -23,17 +23,34 @@ function sameFields(a: object, b: object, skip: readonly string[]): boolean {
   return true;
 }
 
+/** Whether two lists of rows are the same rows, element by element, each by `sameTranscriptItem`. */
+function sameList(a: readonly TranscriptItem[], b: readonly TranscriptItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (!sameTranscriptItem(a[i]!, b[i]!)) return false;
+  return true;
+}
+
 /** Whether `a` and `b` draw the same row: the same kind and key, and every own field the same value, except the fields
- *  derived from the item's event (compared through `event`) and a tool group's `entries` (compared element by element,
- *  each entry by this same rule). A field added to an item later is compared by identity, the safe direction: at worst
- *  the row renders again. */
+ *  derived from the item's event (compared through `event`), a tool group's `entries` and a tool-activity row's lists
+ *  (compared element by element, each entry by this same rule). A field added to an item later is compared by
+ *  identity, the safe direction: at worst the row renders again. */
 export function sameTranscriptItem(a: TranscriptItem, b: TranscriptItem): boolean {
   if (Object.is(a, b)) return true;
   if (a.kind !== b.kind || a.key !== b.key) return false;
   if (a.kind === 'tool-group' && b.kind === 'tool-group') {
-    if (a.entries.length !== b.entries.length) return false;
-    for (let i = 0; i < a.entries.length; i += 1) if (!sameTranscriptItem(a.entries[i]!, b.entries[i]!)) return false;
-    return sameFields(a, b, ['entries']);
+    return sameList(a.entries, b.entries) && sameFields(a, b, ['entries']);
+  }
+  // A tool-activity row (desktop polish wave 168): its entries, the rows it opens into and what it surfaces are compared
+  // element by element; `attention` by its kind and its entry. Every other field is a word or a flag.
+  if (a.kind === 'tool-activity' && b.kind === 'tool-activity') {
+    if (!sameList(a.entries, b.entries) || !sameList(a.inner, b.inner)) return false;
+    if (a.attention.length !== b.attention.length) return false;
+    for (let i = 0; i < a.attention.length; i += 1) {
+      const x = a.attention[i]!;
+      const y = b.attention[i]!;
+      if (x.kind !== y.kind || !sameTranscriptItem(x.entry, y.entry)) return false;
+    }
+    return sameFields(a, b, ['entries', 'inner', 'attention']);
   }
   const derived = DERIVED_FROM_EVENT[a.kind];
   return sameFields(a, b, derived === undefined ? [] : [derived]);

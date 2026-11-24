@@ -12,12 +12,12 @@
 // gates measure; it does not isolate the frame: the page's handling of an answer delivered in a drain, and its
 // timers, can still run into a window. The first two self-test cases pin the deferral by the order of the harness's log.
 //
-// - Two gated cases, each in Refined and in Instrument at 1920 on `/`: the median cost of 15 changing frames stays under
+// - Two gated cases, each in Refined and in Instrument at 1920 on `/fleet`: the median cost of 15 changing frames stays under
 //   `FRAME_CEILING_MS` (a ceiling only), and the median number of components React renders for each of 5 identical
 //   frames sent after them stays under `IDENTICAL_RENDER_RATIO` of the changing frames' median (what C6 changed),
 //   counted by `countRenders` (`browser/app.ts`), not timed. The fixture is READY before it is measured: the rows are
 //   drawn (not only received), the page has no sideways scroll and threw nothing.
-// - The measurement block runs only on demand (`CCRC_MEASURE=1`): 8 configurations (`/` and a long session, in both
+// - The measurement block runs only on demand (`CCRC_MEASURE=1`): 8 configurations (`/fleet` and a long session, in both
 //   skins, at 1920 and 390), each 15 changing frames, one identical frame and one idle window, one console line each.
 //   When `CCRC_RENDERS` names a directory the same block also writes the viewport screenshots there (both pages, both
 //   skins, Phosphor and light, 360 / 390 / 1280 / 1920), with the page clock fixed, for a before/after comparison.
@@ -46,7 +46,7 @@ import {
   type HarnessEvent, type OpenedApp,
 } from './app';
 
-/** A CEILING only: it catches a gross regression of a CHANGING frame on `/`, and it is not below the before-measurement.
+/** A CEILING only: it catches a gross regression of a CHANGING frame on `/fleet`, and it is not below the before-measurement.
  *  C6 does not change what a changing frame costs there: the list's own rows re-render, and memoising the list is a
  *  later task (C9), so no mutant row claims this value. Measured on this box under a load average of 15 to 28, not on
  *  CI's runner, 80 rows, 15 changing frames 2 s apart (median TaskDuration per frame), with the fixture's answers still
@@ -149,7 +149,7 @@ async function boot(view: AppView, route: string, renders = false): Promise<{ ap
   const app = await openApp(browser!, view, fixture());
   if (renders) await countRenders(app.ctx);
   await app.page.goto(server!.origin + route);
-  const rows = await ready(app.page, route !== '/');
+  const rows = await ready(app.page, route !== '/fleet');
   // A transcript's markdown and code blocks finish after the rows are in the DOM: let that work end, so the idle window
   // measures a page at rest.
   await app.page.waitForTimeout(1500);
@@ -187,7 +187,7 @@ const ofPath = (app: OpenedApp, kind: 'intercept' | 'fulfil-start' | 'fulfil-don
 
 describe('the deferred fixture answers (R104): the harness self-test', () => {
   it('an answer requested inside a window is fulfilled only after it, and the next window waits for that fulfilment', async () => {
-    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/fleet');
     let release = (): void => undefined;
     try {
       app.answerAfter(SELFTEST, new Promise<void>((done) => { release = done; }));
@@ -246,7 +246,7 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
   }, 90_000);
 
   it('a fulfilment that never settles fails the attempt with drain-inflight-timeout, and leaves no answer parked', async () => {
-    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/fleet');
     const stuck = '/api/selftest-stuck';
     const parked = '/api/selftest-parked';
     let release = (): void => undefined;
@@ -300,7 +300,7 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
   }, 90_000);
 
   it('a window that overruns its span fails the attempt with window-overrun, and the record keeps it', async () => {
-    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/fleet');
     try {
       const record: FrameCostRecord = { windows: [] };
       // `during` runs inside window 0, so a wait there longer than the gap and the slack makes that window overrun.
@@ -322,7 +322,7 @@ describe('the deferred fixture answers (R104): the harness self-test', () => {
   }, 90_000);
 
   it('the idle window that overruns its span fails the attempt with window-overrun, and the record keeps it', async () => {
-    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/');
+    const { app } = await boot({ skin: REFINED, theme: PHOSPHOR, width: 1920 }, '/fleet');
     try {
       const record: FrameCostRecord = { windows: [] };
       // `during` runs inside the idle window too, with index -1, so a wait there past the gap and the slack overruns it.
@@ -402,7 +402,7 @@ function keepOnFinish(ctx: { task: { meta: object }; onTestFinished: (fn: () => 
 describe('frame cost (D-6438)', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
     it(`a fleet frame of ${ROWS} rows on / costs under the ceiling (${skin}, 1920)`, async (ctx) => {
-      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/');
+      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/fleet');
       const record: FrameCostRecord = { windows: [] };
       keepOnFinish(ctx, record);
       try {
@@ -423,7 +423,7 @@ describe('frame cost (D-6438)', () => {
     // not hide the other. The changing frames come first, as in the ceiling case, so the identical ones follow a page
     // that has just rendered a changed list.
     it(`an identical fleet frame renders under 35% of the components a changing frame renders (${skin}, 1920)`, async (ctx) => {
-      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/', true);
+      const { app } = await boot({ skin, theme: PHOSPHOR, width: 1920 }, '/fleet', true);
       const record: FrameCostRecord = { windows: [] };
       keepOnFinish(ctx, record);
       try {
@@ -465,7 +465,7 @@ const MEASURE = process.env['CCRC_MEASURE'] === '1';
 const ms = (n: number): string => n.toFixed(1);
 
 describe('measurement — C6 Step 0/4', () => {
-  const PAGES = [{ name: 'fleet', route: '/' }, { name: 'session', route: `/s/${SESSION_ID}` }] as const;
+  const PAGES = [{ name: 'fleet', route: '/fleet' }, { name: 'session', route: `/s/${SESSION_ID}` }] as const;
 
   for (const pg of PAGES) {
     for (const skin of [REFINED, INSTRUMENT]) {

@@ -197,6 +197,15 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
       for (const check of [...settled]) check();
     }
   });
+  // The server's capability words (Overlord W1 home): `GET /health` sits outside `/api`, so it is routed on its own, by its
+  // exact path (a glob would also take `/api/fleet/health`). Unnamed, it answers a server with no words, so the console draws
+  // nothing of the Overlord's and reads none of its routes; a case that wants the Overlord names `/health` with
+  // `overlord-v1` and the designation and ladder reads in `api`.
+  await ctx.route((url) => url.pathname === '/health', async (route) => {
+    if (offline) { await route.abort('internetdisconnected'); return; }
+    const body = Object.hasOwn(fixture.api, '/health') ? fixture.api['/health'] : { ok: true, build: null, caps: [] };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
   // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
   // (a reconnect replaced it) leaves the list.
   const sockets = new Map<string, WebSocketRoute[]>();

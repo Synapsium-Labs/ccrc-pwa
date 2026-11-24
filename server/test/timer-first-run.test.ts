@@ -112,14 +112,36 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     expect(unit('ccd-land-probe.timer'), 'the timer no longer cites D-1981 where it states the anchor').toContain('D-1981');
   });
 
+  it('the weekly quiz timer carries exactly one wall-clock line, no Persistent=, DeferReactivation=yes and no random delay (run 3508)', () => {
+    // What the keys buy: a fresh enable has no last trigger and counts its first slot from the arming, so it waits for the
+    // next slot. NOT pinned here, because no unit key can say it: once per box, the first reload over the OLD, armed,
+    // never-fired unit counts the new calendar from that old arming time and can fire at once (a reading of systemd v259's
+    // timer.c, not measured on a box; the unit's comment and the task note say so).
+    // Measured on a fleet box: its `OnActiveSec=30min` was re-based to "now" at every reload of the user manager (timer.c's
+    // coldplug re-arms a monotonic elapse from the dead state, so its base is the reload's moment), and fleet sessions'
+    // own unit acts reload that manager every few minutes. The timer stood active for a day and never fired. An
+    // `OnCalendar=` elapse is computed from the last trigger, or from when the timer was armed, never from now.
+    const k = keys('ccd-quiz-weekly.timer');
+    expect(k.filter((l) => /^On[A-Za-z]+=/.test(l)), 'the quiz timer must carry exactly its one wall-clock line and no monotonic elapse')
+      .toEqual(['OnCalendar=*-*-* 00/6:17:00 UTC']);
+    // D-1981's reason, said for a calendar timer: `Persistent=true` fires a slot missed while the timer was not armed AT
+    // ONCE when it is armed, on top of the deploy's supervisor sweep.
+    expect(k.filter((l) => l.startsWith('Persistent=')), 'Persistent= would fire a missed slot at once on a deploy').toEqual([]);
+    // No second run started the moment a long one ends: the next slot is counted from the run's end (systemd 257+).
+    expect(k, 'the quiz timer lost DeferReactivation=, so a run spanning a slot is followed by another at once').toContain('DeferReactivation=yes');
+    expect(k.filter((l) => /^RandomizedDelaySec=/.test(l)), 'a random delay is re-rolled at every reload: none here').toEqual([]);
+    expect(unit('ccd-quiz-weekly.timer'), 'the timer no longer cites D-1981 where it argues against Persistent=').toContain('D-1981');
+  });
+
   it('every timer in deploy/systemd carries exactly one first-run anchor', () => {
     // The census, so a timer joining the others cannot arrive with no anchor
     // at all (first run then waits for OnUnitActiveSec from an activation that
     // never happened) or with both (two elapse points, and `man 5
     // systemd.timer` fires on whichever comes first — a stagger nobody chose).
-    // `ccrc-ddns.timer` is the one deliberate abstainer: it is a CALENDAR
-    // timer, which is also the only shape `Persistent=` means anything for,
-    // and it carries that key.
+    // The CALENDAR timers abstain, deliberately: a calendar elapse needs no
+    // first-run anchor. `ccrc-ddns.timer` carries `Persistent=`, the only shape
+    // that key means anything for; `ccd-quiz-weekly.timer` (run 3508) carries
+    // none, for D-1981's reason, which the quiz case above pins.
     //
     // DERIVED FROM THE DIRECTORY (ruling T4-R2), not hand-kept, on
     // `macos-platform.test.ts:184-189`'s precedent under D-1250: "Deriving the
@@ -132,7 +154,9 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     // never opening two of the files it claims. Deriving closed both in one
     // move, and neither new timer needed an exception: both carry exactly one
     // `OnBootSec=`.
-    const CALENDAR = new Set(['ccrc-ddns.timer']);
+    // `ccd-quiz-weekly.timer` joined it in run 3508: a wall-clock timer, which reloads of the user manager cannot starve
+    // (the quiz case above pins why, and that it sets no `Persistent=`).
+    const CALENDAR = new Set(['ccrc-ddns.timer', 'ccd-quiz-weekly.timer']);
     const timers = readdirSync(SYSTEMD).filter((n) => n.endsWith('.timer')).sort();
     // ANTI-VACUITY: a `readdirSync` that suddenly answers nothing (a moved
     // directory, a renamed suffix) would make this loop green over an empty

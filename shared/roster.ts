@@ -339,6 +339,14 @@ export function inRoster(roster: Roster, v: unknown): boolean {
   return typeof v === 'string' && roster.byId.has(v);
 }
 
+/** Whether a lane is an Anthropic lane (`telemetry: anthropic`), the one rule the roll and the launch-profile lane ask. A
+ *  lane the roster does not name is `unmeasured`: the roll reads it as not Anthropic (no model target), the advisor leaves
+ *  its field alone (review F9). */
+export function anthropicLaneOf(roster: Roster, lane: string): boolean | 'unmeasured' {
+  const a = roster.byId.get(lane);
+  return a === undefined ? 'unmeasured' : a.telemetry === 'anthropic';
+}
+
 /** What kind of credential a lane runs on, in the words the Accounts screen's kind chip reads (spec §4.1,
  *  D-5517): `sign-in` (an Anthropic lane signed in through its config dir), `token` (an Anthropic lane on a
  *  long-lived token), `codex` (a ChatGPT/Codex lane) and `key` (an API-key lane: OpenRouter or compatible).

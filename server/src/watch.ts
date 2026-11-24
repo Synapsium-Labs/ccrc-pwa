@@ -21,9 +21,10 @@ import {
 import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
 import type { LiveSpendReading } from '../../shared/portfolio.js';
 import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.js';
+import { anthropicLaneOf } from '../../shared/roster.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, inventoryBuilds, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -97,6 +98,7 @@ import { TmpCensusBeat } from './tmpSweepLane.js';
 import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
+import { DiskLaneStallLane } from './diskLaneStallLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane, type TeamLinkInputs } from './linking/visibilityLane.js';
 import { ticketTally } from './linking/teamLink.js';
@@ -189,6 +191,8 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { skewRunningOf } from './continuity/sandboxCheck.js';
+import { ADVISOR_COUNT_LANE_ROW, advisorCountPass } from './continuity/advisorLane.js';
 import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
@@ -220,9 +224,12 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { mailNudgeOf } from './coord/envelope.js';
+import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
-import { settleOperatorNudge } from './operatorModel/nudgeLane.js';
+import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
+import { createInboxWakeLane } from './coord/overlordInboxWake.js';
+import type { overlordReadGate } from './coord/overlordGateRun.js';
+import { isInboxWakeMail } from '../../shared/overlordInbox.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
@@ -1111,6 +1118,8 @@ export class FleetWatcher {
    *  `readiness: null` on the wire rather than omitting the key. */
   /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  /** D-8955: a cleanup lane that stops finishing anything while the disk is under pressure raises one item and one push. */
+  private readonly diskLaneStall = new DiskLaneStallLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
   /** D-8147: one repository-visibility reading per PR pass at most; D-8405: then the automatic team link. */
@@ -1285,6 +1294,9 @@ export class FleetWatcher {
    *  gone. */
   private mailInFlight = new Set<string>();
   private readonly designationEpisode = new DesignationEpisode();
+  /** The inbox wake lane, made at its first pass (its ports read `deps`), and the read gate `buildServer` hands over. */
+  private inboxWake: ReturnType<typeof createInboxWakeLane> | undefined;
+  private inboxReadGate: ReturnType<typeof overlordReadGate> | undefined;
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -1385,7 +1397,7 @@ export class FleetWatcher {
    *  serialiser above, the one `CoordMutex`. Its clock and single flight are the `sleepIdleHours` row (D-7045). */
   private readonly hibernateMemory: HibernateSweepMemory = { lastLine: new Map(), lastActLine: new Map() };
   /** The automatic coordinator roll's journal throttle (D-7452). Its clock and single flight are the `rollIdle` row. */
-  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map() };
+  private readonly rollMemory: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map(), entryPending: { rows: new Map(), seenAt: null } };
   private readonly staleArchive = new StaleArchiveBeat(() => this.deps, this, (a) => this.transcripts.resolve(a));
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
@@ -2332,6 +2344,12 @@ export class FleetWatcher {
     return this.deadCoordinatorState;
   }
 
+  /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
+   *  does, the wake holds `unmeasured`. */
+  useInboxReadGate(gate: ReturnType<typeof overlordReadGate>): void {
+    this.inboxReadGate = gate;
+  }
+
   /** `buildServer` hands the lane the coordination serialiser's sweep handle (workspace lifecycle spec §5.4: "the lane
    *  runs on the coordination serialiser, exported from `registerCoordRoutes`"). The lane's ONLY way to end a run. */
   useCoordSerialiser(h: Pick<CoordRoutesHandle, 'withSweepAbandon'>): void {
@@ -2526,7 +2544,9 @@ export class FleetWatcher {
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
           // Typed-repick: an Anthropic lane's models, read only for a session past every other gate (rollLane.ts).
           laneModels: (lane) => readLaneModels(this.deps.io, lane),
-          anthropicLane: (lane) => this.deps.cfg.roster.byId.get(lane)?.telemetry === 'anthropic',
+          anthropicLane: (lane) => anthropicLaneOf(this.deps.cfg.roster, lane) === true,
+          // D-8955: the holding rows the last coord frame carried (absent there: none), null before the first frame.
+          heldBy: () => (this.coord === null ? null : this.coord.cleanupHeldBy ?? []),
           log: (line) => console.warn(line),
           startedAt: this.sleepStartedAt, now: Date.now,
           act: {
@@ -2683,6 +2703,8 @@ export class FleetWatcher {
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
       // and the dialog detector must not wait behind it. Its clock is the `diskAlarm` row (D-7895).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-8955: the disk-lane stall alert, on the disk alarm's block, the last coord frame and listing. Its row is `diskLaneStall`.
+      void this.runLane('diskLaneStall', () => { this.diskLaneStall.pass(this.diskAlarm.block(), this.coord, this.lastFleet); });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
       // The backup-health beat (D-7858) reads no registry either, so it sits with the two above and never waits behind it.
@@ -2904,6 +2926,7 @@ export class FleetWatcher {
       void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the LAUNCH-PROFILE lane (Overlord §3.6 H1, W1a), in shadow until its row is live.
       void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepAdvisorCount(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
@@ -2939,6 +2962,8 @@ export class FleetWatcher {
       void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the MAILHOLD projection (mid-turn mail §3.4), run under `mail-disabled` too, where it only clears.
       void this.sweepMailHold(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the Overlord inbox's coalesced wake, which only queues mail (the mail lane types it).
+      void this.sweepInboxWake(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // The question sweep (W3 Q3c, D-7027): its two halves, each NEVER awaited, same reasoning as `sweepMail`
       // immediately above — the release CAS and its own registry listing must not sit in front of the dialog detector.
       this.sweepQuestions(registryRead);
@@ -3438,7 +3463,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -6325,8 +6350,37 @@ export class FleetWatcher {
             (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
           // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
           buildAgreement: () => inventoryBuildAgreement(coord),
+          anthropicLane: (lane) => anthropicLaneOf(cfg.roster, lane),
         },
-      }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
+        // The skew notice (W1 sandbox B): the body's liveness from its fleet-state row (`skewRunningOf`), both builds from the node inventory,
+        // and one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
+        skew: {
+          running: (id) => skewRunningOf(this.currentFleet()?.find((r) => r.id === id)),
+          builds: () => { const b = inventoryBuilds(coord); const w = (i: typeof b.own) => (i === null ? null : i.version ?? i.sha.slice(0, 9)); return { fleet: w(b.fleet), server: w(b.own) }; },
+          noticed: (id, key) => coord.hasNotice('coord', id, key),
+          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord is down while the builds differ', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
+        },
+        now: () => this.deps.time.clock.wall(),
+      }, records.map((r) => ({ id: r.id, child: r.child, route: r.route, wrapper: r.unmeasured.includes('wrapper') ? null : r.wrapper,
+        ...(r.advisorSpawn === undefined ? {} : { advisorSpawn: r.advisorSpawn }) })));
+    });
+  }
+
+  /** The coordinator advisor's count lane (plan 2026-11-23-coordinator-advisor PR C): advised coordinators' transcripts read
+   *  forward, their calls recorded. Rungs 1-5 of the resolver only (no other account's frozen copy). PUBLIC for a test. */
+  async sweepAdvisorCount(records: readonly SessionRecord[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane(ADVISOR_COUNT_LANE_ROW, async () => {
+      const r = await advisorCountPass({
+        coord, io: this.deps.io, now: () => this.deps.time.clock.wall(), log: (line) => console.warn(line),
+        transcriptOf: async (rec) => {
+          const cfgDir = configDirFor(this.deps.cfg, rec.wrapper);
+          if (!cfgDir || rec.uuid === '') return null;
+          return (await this.transcripts.resolve({ configDir: cfgDir, dir: rec.workdir, registryWorkdir: rec.workdir, uuid: rec.uuid })).path;
+        },
+      }, records);
+      if (r.failed > 0) console.warn(`ccrc-server: advisor count: ${r.failed} advised session(s) not read this pass`);
     });
   }
 
@@ -6339,6 +6393,16 @@ export class FleetWatcher {
       coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, wallMs: () => this.deps.time.clock.wall(),
       log: (line) => console.warn(line), memory: this.mailHoldMemory,
     }, read.records.map((r) => ({ id: r.id, route: r.route })), read.switches[MAIL_DISABLED_MARKER] === 'set'));
+  }
+
+  /** The Overlord inbox's wake (`coord/overlordInboxWake.ts`) on this tick's listing. PUBLIC so a test can await it. */
+  async sweepInboxWake(read: FleetReadModel): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    this.inboxWake ??= createInboxWakeLane({ coord, operatorModel: this.deps.operatorModel, gate: () => this.inboxReadGate,
+      log: (line) => console.warn(line) });
+    const lane = this.inboxWake;
+    await this.runLane('inboxWake', () => lane.pass({ mailDisabled: read.switches[MAIL_DISABLED_MARKER] }, this.deps.time.clock.wall()));
   }
 
   /** The timers lane (Overlord §3.3.12, W1a; `continuity/timerLane.ts`), on this tick's own listing, passed rather than read
@@ -8833,7 +8897,9 @@ export class FleetWatcher {
         // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
-        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin);
+        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8850,8 +8916,8 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // stashes the `/clear` as a draft and restores it (D-5912).
-        const ownStrandedClear = store.strandedClear(d.toId);
+        // stashes the `/clear` as a draft and restores it (D-5912). It is
+        // read in the send's own options below.
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
         // different from what it held at the park (`parkBoxSeen`) — or, on this
         // timer, when the box holds exactly OUR OWN nudge. That case goes to
@@ -8880,13 +8946,13 @@ export class FleetWatcher {
         // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin).line,
-          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin, sweepDesignationOf(designation), now).line,
+          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear: store.strandedClear(d.toId), holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
-          if (nudge.operatorMessageId !== null) settleOperatorNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge.operatorMessageId);
+          settleNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge);
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own

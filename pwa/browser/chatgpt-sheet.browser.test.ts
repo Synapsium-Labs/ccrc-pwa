@@ -172,7 +172,7 @@ describe('the ChatGPT device-code sheet at every width and skin (D-8051)', () =>
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         const box = await routes(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
 
@@ -319,7 +319,7 @@ describe('Sign in again on a Codex lane, and its Remove line, at every width and
       const { ctx, page, errors } = await openApp(browser!, view, REAUTH_FIXTURE);
       try {
         const box = await routes(ctx, OLD);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         const acts = `.accounts-row[data-lane="${OLD}"] .acct-trouble-acts`;
         await page.waitForSelector(acts, { timeout: 30_000 });

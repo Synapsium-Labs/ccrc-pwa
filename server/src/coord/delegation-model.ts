@@ -717,6 +717,10 @@ export function formatDelegationInstant(ms: number): string {
   return iso;
 }
 
+/** The later of two canonical instants: canonical UTC millisecond strings order as strings. Its one writer (review 3026 F9, D-8874): the
+ *  checkpoint's fold and `delegation-end-basis.ts` import it, and `single-definition/delegation-end-rules.test.ts` holds that. */
+export const maxInstant = (a: string, b: string): string => (a >= b ? a : b);
+
 // ── The lease guard ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The cleanup columns. Wave 5 has no cleaner (D-7002), so every one stays null and `cleanupState` stays `not-due`. */

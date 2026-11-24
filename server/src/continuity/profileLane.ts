@@ -21,6 +21,14 @@
 // whole while the marker stands, and so is one whose marker could not be read, so the lane never moves a session in the
 // steering cohort (the history coordinator's request of 2026-11-14).
 //
+// THE COORDINATOR ADVISOR (plan 2026-11-23-coordinator-advisor, D-8967): the lane is the one writer of `advisor` too, from
+// `advisorFor` and the Settings row "Coordinator advisor". Unlike the profile's fields it enters a diff ONLY when the fleet
+// ccd advertises `route-advisor-v1` (`ADVISOR_ROUTE_CAP`): an older ccd refuses an unknown field for the whole call, which
+// would cost every other field of that row's write. An unmeasured fact leaves it alone (`advisorUnread`).
+// A CLEAR OF `advisor` IS WRITTEN WHATEVER THE LANE'S MODE AND THE STEER MARKER (review F2), alone in its call: it only
+// narrows a launch, and a field the lane wrote while live must still go at the cap, a drop or Off once the lane is back in
+// shadow ("legitimately different": the opposite safety direction to the profile's fields, which shadow never writes).
+//
 // AN OLDER FLEET ccd. A ccd from before launch profiles PR A refuses the three fields by name, the whole call, before any
 // write (`unknown routing field`). The lane's call carries only its own fields, so such a refusal loses nothing else; it
 // is counted as failed and logged, and no capability word is added (the departure `no-cap-word-the-lane-call-is-its-own`).
@@ -28,7 +36,7 @@ import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE, laneArmGate, type LaneArmLane } f
 import { ROUTE_WRITABLE_FIELDS, isRegistryId, type BuildAgreement, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
 import { HISTORY_STEER_ON_DIR, type ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
-import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
+import { ADVISOR_ROUTE_CAP, CCD_ARGV, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import { routeSetOutcome } from '../routeSetOutcome.js';
 import type { CoordStore } from '../coord/store.js';
 import type { RunCcd } from '../coord/ports.js';
@@ -39,15 +47,19 @@ import type { SessionRecord } from '../registry.js';
 import { designationFactFrom, roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
 import { plainAutoMemoryOf, profileDigestWriteOf, profileFor } from './profileFor.js';
+import { skewNoticeOf } from './sandboxCheck.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import { advisorFor, coordinatorAdvisorOf, droppedOn, utcDayOf, type AdvisorFacts } from './advisorPolicy.js';
+import type { AdvisorDay } from '../coord/advisorStore.js';
 
 /** The lane's `LANE_SCHEDULE` row. */
 export const LAUNCH_PROFILE_LANE_ROW = 'launchProfile';
 /** At most this many route writes succeed a pass (the plan's five): a fleet armed at once converges over a few passes. A failed
  *  write does not count, so a row that fails every pass never starves the rest (review 2024 F12). */
 export const PROFILE_WRITES_PER_PASS = 5;
-type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow' | 'profiledigest'>;
+type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow' | 'profiledigest' | 'advisor'>;
 const PROFILE_FIELD: Readonly<Record<ProfileField, true>> = { compact: true, profile: true, automem: true, compactwindow: true,
-  profiledigest: true };
+  profiledigest: true, advisor: true };
 const isProfileField = (f: RouteField): f is ProfileField => Object.hasOwn(PROFILE_FIELD, f);
 /** The route fields the lane writes, in the route vocabulary's order (`ROUTE_WRITABLE_FIELDS`), narrowed by a type guard, so
  *  no later route field enters the diff unseen by the compiler (review 2024 F11). */
@@ -58,7 +70,8 @@ const CLEARED = '';
 export const PROFILE_LANE_ACTOR = 'launch-profile lane';
 
 /** The store members the pass reaches, declared by this consumer. */
-export type ProfileCoord = Pick<CoordStore, 'laneArmSetting' | 'openCoordinatorIds' | 'run' | 'plainAutoMemorySettings' | 'designationRead'>;
+export type ProfileCoord = Pick<CoordStore, 'laneArmSetting' | 'openCoordinatorIds' | 'run' | 'plainAutoMemorySettings' | 'designationRead'
+  | 'coordinatorAdvisorSettings' | 'advisorDayCounts' | 'advisorReadState'>;
 
 /** One registry row, as the tick listed it. */
 export interface ProfileRow {
@@ -66,6 +79,9 @@ export interface ProfileRow {
   readonly child: ChildMark;
   /** The routing record as the registry read it: null for a session never routed; `unreadable` names a field whose read failed. */
   readonly route: SessionRecord['route'];
+  /** The row's lane (its wrapper), or null when unmeasured; and its advisor spawn record (absent: none). */
+  readonly wrapper?: string | null;
+  readonly advisorSpawn?: SessionRecord['advisorSpawn'];
 }
 
 /** The fleet reads the pass makes, declared by this consumer. */
@@ -80,6 +96,9 @@ export interface ProfileReads {
   /** Whether the fleet node's measured build equals the server's, from the update control plane's per-node inventory
    *  (`buildAgreement` over `inventoryBuilds`); read once a pass, and only `agreed` lets `profiledigest` be written. */
   buildAgreement(): BuildAgreement;
+  /** Whether a lane is an Anthropic lane (`anthropicLaneOf`): a lane the roster does not name is unmeasured. Required, so
+   *  a composition that forgets it does not compile (review R2-5). */
+  anthropicLane(lane: string): boolean | 'unmeasured';
 }
 
 /** The W3 steer marker of one session on the fleet node, as the session hook reads it (`<ccrcDir>/history/steer-on/<id>`):
@@ -104,6 +123,18 @@ export interface ProfileLaneDeps {
   /** A row's gate (`laneArmGate`), unless a test opens one; nothing in the server passes it. */
   readonly gate?: (lane: LaneArmLane) => string | null;
   readonly memory: ProfileLaneMemory;
+  /** The skew notice's reads and its one raise (W1 sandbox B, question 5; `skewNoticeOf`). Absent, the pass raises none. */
+  readonly skew?: {
+    /** Whether the session runs: false for a dead row, `unmeasured` when the fleet state does not list it. */
+    running(id: string): boolean | 'unmeasured';
+    /** The fleet node's and the server's builds, as the inventory names them (a tag, else a short sha), or null. */
+    builds(): { readonly fleet: string | null; readonly server: string | null };
+    /** Whether a notice with this once-only key was raised (`CoordStore.hasNotice`), and the raise that records it. */
+    noticed(id: string, key: string): boolean;
+    raise(id: string, key: string, body: string): void;
+  };
+  /** The wall clock (epoch ms) the advisor's UTC day is taken from (the time port). Required for the same reason. */
+  readonly now: () => number;
 }
 
 export interface ProfileLaneResult {
@@ -127,9 +158,11 @@ export interface ProfileLaneResult {
   readonly steerUnread: number;
   /** Plain rows whose `automem` was left alone because the Settings row could not be read. */
   readonly memoryUnread: number;
+  /** Coordinators whose `advisor` was left alone because a fact `advisorFor` needs could not be read. */
+  readonly advisorUnread: number;
 }
 
-const zeroFields = (): Record<ProfileField, number> => ({ profile: 0, automem: 0, compact: 0, compactwindow: 0, profiledigest: 0 });
+const zeroFields = (): Record<ProfileField, number> => ({ profile: 0, automem: 0, compact: 0, compactwindow: 0, profiledigest: 0, advisor: 0 });
 
 /** One pass. It awaits the fleet reads and each write in turn; nothing it holds is a decision's durable state. */
 export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileRow[]): Promise<ProfileLaneResult> {
@@ -148,7 +181,16 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   // The designation is read once a pass; unmeasured, no row is written (a pending Overlord read as plain would be given a
   // plain profile): every row counts with `roleUnread`, which the pass line journals once.
   let designation: ReturnType<typeof designationFactFrom>;
-  try { designation = designationFactFrom(coord.designationRead()); } catch { designation = 'unmeasured'; }
+  let designationRaw: DesignationRead | null = null;
+  try { designationRaw = coord.designationRead(); designation = designationFactFrom(designationRaw); } catch { designation = 'unmeasured'; }
+  // The advisor's facts, read once a pass: the Settings row, today's counts, and whether this box takes the field.
+  const advisorCap = deps.act !== null && capSupported(deps.act.fleetState, ADVISOR_ROUTE_CAP);
+  const advisorSetting = advisorCap ? coordinatorAdvisorOf(coord.coordinatorAdvisorSettings()) : null;
+  // The day comes through the time port only.
+  const day = utcDayOf(deps.now());
+  let counts: ReadonlyMap<string, AdvisorDay> | 'unmeasured' = 'unmeasured';
+  if (advisorCap) { try { counts = coord.advisorDayCounts(day); } catch { counts = 'unmeasured'; } }
+  let advisorUnread = 0;
   const byField = zeroFields();
   let would = 0; let written = 0; let failed = 0; let deferred = 0; let unsupported = 0;
   let routeUnread = 0; let roleUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
@@ -179,8 +221,14 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
       compact: row.compaction === null ? (continuityLive ? CLEARED : null) : want.compact === null ? null : String(want.compact),
       compactwindow: row.compaction === null ? CLEARED : want.compactwindow === null ? null : String(want.compactwindow),
       profiledigest: null,
+      advisor: null,
     };
     const have = r.route?.fields ?? {};
+    if (advisorCap) {
+      const a = advisorFor(await advisorFactsFor(deps, r, reading, advisorSetting, counts, day, have.class));
+      if (a === null && advisorSetting !== null && advisorSetting.choice !== 'off') advisorUnread += 1;
+      target = { ...target, advisor: a === null ? null : a === 'clear' ? CLEARED : a };
+    }
     // `profiledigest` (Overlord W1 sandbox): written only at build agreement, held under skew, cleared for a role with no surface.
     if (want.profiledigest !== undefined || have.profiledigest !== undefined) {
       if (want.profiledigest !== undefined && builds === null) builds = deps.reads.buildAgreement();
@@ -194,14 +242,19 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     }
     if (Object.keys(diff).length === 0) continue;
     const steer = await deps.reads.steerMarker(r.id);
-    if (steer === 'present') { steered += 1; continue; }
-    if (steer !== 'absent') { steerUnread += 1; continue; }   // only a proven absence writes (review 2024 F11)
+    // The advisor's clear alone, when the row is otherwise not written (review F2; the header's legitimately-different note).
+    const clearOnly: RouteFields | null = diff.advisor === CLEARED ? { advisor: CLEARED } : null;
+    let send: RouteFields = diff;
+    if (steer !== 'absent') {   // only a proven absence writes the profile (review 2024 F11)
+      if (clearOnly === null) { if (steer === 'present') steered += 1; else steerUnread += 1; continue; }
+      send = clearOnly;
+    }
     would += 1;
-    for (const f of PROFILE_ROUTE_FIELDS) if (diff[f] !== undefined) byField[f] += 1;
-    if (!live) continue;
+    for (const f of PROFILE_ROUTE_FIELDS) if (send[f] !== undefined) byField[f] += 1;
+    if (!live) { if (clearOnly === null) continue; send = clearOnly; }
     if (deps.act === null || !ccdCan(deps.act.fleetState, 'routeSet')) { unsupported += 1; continue; }
     if (written >= PROFILE_WRITES_PER_PASS) { deferred += 1; continue; }   // a failing row never starves the rest (review 2024 F12)
-    const res = await deps.act.runCcd(CCD_ARGV.routeSet(r.id, diff, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR)));
+    const res = await deps.act.runCcd(CCD_ARGV.routeSet(r.id, send, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR)));
     const out = routeSetOutcome(res);
     // A call that never ran (the agent link dropped) is unmeasured, never ccd's refusal: it is retried next pass all the same.
     if (out.kind === 'written') written += 1;
@@ -209,10 +262,57 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   }
   const result: ProfileLaneResult = {
     live, continuityLive, would, byField, written, failed, deferred, unsupported, routeUnread, roleUnread, steered, steerUnread,
-    memoryUnread,
+    memoryUnread, advisorUnread,
   };
   logPass(deps, result, failures);
+  skewPass(deps, rows, designationRaw, builds);
   return result;
+}
+
+/** The skew notice (W1 sandbox B, question 5, slug `dead-overlord-waits-for-build-agreement`): the designated Overlord's body
+ *  (the plan's scope; a pending attempt is not judged, review 3346 F5) is down while its route carries `profiledigest` and the
+ *  two boxes run different builds, where a digest mismatch can keep ccd from respawning it (review 3325 F1: nothing here
+ *  reads a refusal). `skewNoticeOf` decides; this raises its one notice, keyed once per session and build pair in the feed
+ *  (`hasNotice`), so a restart does not raise it again. A designation it cannot read raises nothing. */
+function skewPass(deps: ProfileLaneDeps, rows: readonly ProfileRow[], read: DesignationRead | null, seen: BuildAgreement | null): void {
+  const s = deps.skew;
+  if (s === undefined || read === null || read.kind === 'unmeasured') return;
+  if (read.kind !== 'designated') return;
+  const id = read.sessionId;
+  try {
+    const route = rows.find((r) => r.id === id)?.route ?? null;
+    const pair = s.builds();
+    const n = skewNoticeOf({ sessionId: id, running: s.running(id), digestStands: route?.fields.profiledigest !== undefined,
+      agreement: seen ?? deps.reads.buildAgreement(), fleetBuild: pair.fleet, serverBuild: pair.server, noticed: (key) => s.noticed(id, key) });
+    if (n !== null) s.raise(id, n.key, n.body);
+  } catch (e) {
+    deps.log(`ccrc-server: launch-profile: the skew notice could not be read: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** The facts `advisorFor` decides from for one row. The usage sidecar (the main loop's measured model) is read only for a
+ *  coordinator in scope whose route names no class; every other fact is the pass's or the row's own. */
+async function advisorFactsFor(deps: ProfileLaneDeps, r: ProfileRow, reading: AdvisorFacts['reading'],
+  setting: AdvisorFacts['setting'], counts: ReadonlyMap<string, AdvisorDay> | 'unmeasured', day: string,
+  routeClass: string | undefined): Promise<AdvisorFacts> {
+  const coordinator = reading.kind === 'role' && reading.role === 'coordinator';
+  const wants = setting !== null && setting.choice !== 'off' && coordinator;
+  const anthropic = r.wrapper === undefined || r.wrapper === null ? 'unmeasured' as const : deps.reads.anthropicLane(r.wrapper);
+  let mainClass: AdvisorFacts['mainClass'] = 'unmeasured';
+  let mainModel: AdvisorFacts['mainModel'] = 'unmeasured';
+  if (wants) {
+    const u = await deps.reads.usage(r.id);
+    if (u.kind === 'reading' && !u.usage.stale) { mainClass = u.usage.class; mainModel = u.usage.model; }
+  }
+  const spawn = r.advisorSpawn ?? null;
+  let dropped: boolean | 'unmeasured' = 'unmeasured';
+  if (spawn !== 'unreadable') {
+    try { dropped = droppedOn(deps.coord.advisorReadState(r.id), spawn, day); } catch { dropped = 'unmeasured'; }
+  }
+  return {
+    setting, sessionId: r.id, reading, anthropic, routeClass, mainClass, mainModel,
+    today: counts === 'unmeasured' ? 'unmeasured' : counts.get(r.id)?.calls ?? 0, droppedToday: dropped,
+  };
 }
 
 /** The measured window of a usage read, or null: a stale or missing reading is unmeasured, never a window. */
@@ -236,6 +336,7 @@ function logPass(deps: ProfileLaneDeps, r: ProfileLaneResult, failures: readonly
     r.steered > 0 ? `${r.steered} carrying the history W3 steer marker` : '',
     r.steerUnread > 0 ? `${r.steerUnread} whose steer marker could not be read` : '',
     r.memoryUnread > 0 ? `${r.memoryUnread} plain, automem left alone: the Settings row could not be read` : '',
+    r.advisorUnread > 0 ? `${r.advisorUnread} with the advisor left alone: a fact it needs could not be read` : '',
   ].filter((s) => s !== '');
   if (skips.length > 0) parts.push(`skipped ${skips.join(', ')}`);
   const line = `ccrc-server: launch-profile (${mode}${r.continuityLive ? ', continuity live' : ''}): ${parts.join('; ')}`;

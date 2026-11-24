@@ -625,7 +625,7 @@ describe('back is up one level, and the crumbs (spec 4.4 layout)', () => {
     ['/docs/demo/specs/d/', '/docs/demo/specs'],
     ['/docs/demo/specs?ref=ws/a', '/docs/demo?ref=ws/a'],
     ['/docs/demo', '/docs'],
-    ['/docs', '/'],
+    ['/docs', '/fleet'],
   ])('%s goes up to %s, with a history entry', (url, up) => {
     navigate(url);
     head(url, null);

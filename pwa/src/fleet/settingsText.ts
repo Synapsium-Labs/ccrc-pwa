@@ -18,6 +18,7 @@ import { createElement, Fragment, useCallback, useEffect, useId, useRef, useStat
 import type { FocusEvent, MouseEvent, ReactNode } from 'react';
 import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
 import { PLAIN_AUTO_MEMORY_TEXT } from '../../../shared/plainAutoMemory';
+import { COORDINATOR_ADVISOR_TEXT } from '../../../shared/coordinatorAdvisor';
 import type { RenewalMode } from '../../../shared/continuity';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
@@ -362,6 +363,10 @@ export const SETTINGS_CARDS = {
     /** Overlord W1a launch profiles PR B (H14): auto memory for plain sessions, after Roll idle sessions. */
     plainMemory: {
       scope: SETTINGS_SCOPE.fleet, title: PLAIN_AUTO_MEMORY_TEXT.legend, purpose: PLAIN_AUTO_MEMORY_TEXT.purpose,
+    },
+    /** The coordinator advisor (D-8967), after Auto memory for plain sessions. */
+    coordinatorAdvisor: {
+      scope: SETTINGS_SCOPE.fleet, title: COORDINATOR_ADVISOR_TEXT.legend, purpose: COORDINATOR_ADVISOR_TEXT.purpose,
     },
     /** Overlord W1a hand-offs: when soft renewals happen, after Auto memory for plain sessions. */
     renewalMode: {

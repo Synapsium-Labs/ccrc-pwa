@@ -151,7 +151,7 @@ describe('Re-authenticate an existing lane at every width and skin (D-7872)', ()
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await reauthRoutes(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-c"] .acct-trouble-acts', { timeout: 30_000 });
 
@@ -237,7 +237,7 @@ describe('a re-auth offline mid-attempt, one cell per skin at 360 and 1280, dark
       const app = await openApp(browser!, view, FIXTURE);
       try {
         const { expiresAt } = await reauthRoutes(app.ctx);
-        await app.page.goto(server!.origin + '/');
+        await app.page.goto(server!.origin + '/fleet');
         await go(app.page, '/accounts');
         await app.page.waitForSelector('.accounts-row[data-lane="lane-a"] .acct-trouble-acts', { timeout: 30_000 });
         // lane-c's Replace token, then the mint, to the code field; then the link drops.

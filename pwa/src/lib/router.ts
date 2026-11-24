@@ -24,10 +24,18 @@ type DocWithVT = Document & {
  *  of `popstate`: only the history call differs.
  *
  *  After a release, a pending reload runs here (console speed, Task C3): the gate in `swupdate.ts` is asked first,
- *  and when it loads `href` as a full page nothing is pushed, so the old build never draws the new screen. */
-export function navigate(href: string, opts?: { replace?: boolean }): void {
+ *  and when it loads `href` as a full page nothing is pushed, so the old build never draws the new screen.
+ *
+ *  `opts.from` names the address (path and search) the move leaves. With it the move lands only while the page is still
+ *  there: it is checked when `navigate` is called and again when the history call runs, which a view transition defers
+ *  to a later frame. So a move that waited never overwrites a navigation made meanwhile (Overlord W1 home, review 3319
+ *  F1: the home's replace of `/` landed over the page a test or a tap had opened). */
+export function navigate(href: string, opts?: { replace?: boolean; from?: string }): void {
+  const still = (): boolean => opts?.from === undefined || read() === opts.from;
+  if (!still()) return;
   if (reloadOnMove(href, opts?.replace === true)) return;
   const go = (): void => {
+    if (!still()) return;
     if (opts?.replace === true) history.replaceState(null, '', href);
     else history.pushState(null, '', href);
     // flushSync so the new screen is in the DOM before the transition

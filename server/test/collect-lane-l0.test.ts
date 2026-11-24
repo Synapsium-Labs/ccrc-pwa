@@ -64,8 +64,13 @@ const IMPORTS = [
   "import type { ReadFailure } from './agent-protocol.js';",
   "import type { PerfHealth } from './perf.js';",
   "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
+  // The session socket's older chat pages (desktop polish wave 171): type-only, from `shared/olderPage.ts`, whose own
+  // imports are types from this file and agent-protocol.ts.
+  "import type { OlderPageAnswer, OlderPageRequest } from './olderPage.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+  // The coordinator advisor (D-8967): type-only, from `shared/coordinatorAdvisor.ts`, whose one import is a value of this file.
+  "import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';",
   // The cap in force (D-8920): type-only, from `shared/runCap.ts`, whose own imports are L0.
   "import type { CoordCapNow } from './runCap.js';",
   "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",

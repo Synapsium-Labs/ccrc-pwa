@@ -164,6 +164,11 @@ import {
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import {
+  ADVISOR_CAP_MAX, ADVISOR_CAP_MIN, ADVISOR_CHOICES, ADVISOR_SCOPE_MAX_IDS, COORDINATOR_ADVISOR_DEFAULT, advisorScopeOf, isAdvisorCap,
+  isAdvisorChoice, type CoordinatorAdvisorView,
+} from '../../../shared/coordinatorAdvisor.js';
 import { compactRefusal } from '../continuity/compactOwner.js';
 import {
   PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
@@ -3333,6 +3338,36 @@ export function registerCoordRoutes(
         'record-only', { degraded: 'plain auto memory written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
+  });
+
+  /** `GET`/`POST /api/coord/coordinator-advisor` — Settings › Automation › "Coordinator advisor" (plan
+   *  2026-11-23-coordinator-advisor, D-8967): `{choice, cap, scope}`, the `plain-auto-memory` door's shape (session-gated when
+   *  sign-in is armed, no box token). It moves no session until the `launch-profile` lane is live. The one writer is
+   *  `CoordStore.setCoordinatorAdvisor`; a change is a record-only feed row naming the actor. */
+  const advisorView = (coord: NonNullable<typeof deps.coord>): CoordinatorAdvisorView => ({
+    setting: coordinatorAdvisorOf(coord.coordinatorAdvisorSettings()), default: COORDINATOR_ADVISOR_DEFAULT,
+    choices: ADVISOR_CHOICES, capMin: ADVISOR_CAP_MIN, capMax: ADVISOR_CAP_MAX,
+  });
+  app.get('/api/coord/coordinator-advisor', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...advisorView(deps.coord) });
+  });
+  app.post('/api/coord/coordinator-advisor', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const b = (req.body ?? {}) as { choice?: unknown; cap?: unknown; scope?: unknown };
+    const scope = advisorScopeOf(b.scope);
+    if (!isAdvisorChoice(b.choice) || !isAdvisorCap(b.cap) || scope === null) {
+      return refuseRoute(reply, 'bad-request', { detail: `choice must be one of ${ADVISOR_CHOICES.join(', ')}, cap ${ADVISOR_CAP_MIN}..${ADVISOR_CAP_MAX}, scope {kind:'all'} or {kind:'sessions', ids} (1..${ADVISOR_SCOPE_MAX_IDS} session ids)` });
+    }
+    const next = { choice: b.choice, cap: b.cap, scope };
+    const before = coordinatorAdvisorOf(deps.coord.setCoordinatorAdvisor(next, Date.now()).before);
+    if (JSON.stringify(before) !== JSON.stringify(next) && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      const word = (v: typeof next | null): string => (v === null ? 'unreadable' : `${v.choice}, cap ${v.cap}, ${v.scope.kind === 'all' ? 'every coordinator' : v.scope.ids.join(' ')}`);
+      notice({ kind: 'coord', sessionId: '', title: 'coordinator advisor changed', body: `coordinator advisor: ${word(before)} -> ${word(next)}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'coordinator advisor written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...advisorView(deps.coord) });
   });
 
   /**

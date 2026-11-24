@@ -265,13 +265,15 @@ export function quizStatusMailOf(i: { readonly status: LaneArmQuizTick; readonly
       + 'doctor\'s quiz line on the fleet box says more. You are told once per week and word.' } };
 }
 
-/** The word of the mail that says the setup's account has waited two weeks running (review 3232 F9). */
+/** The word of the mail that says the quiz has waited on its account two weeks running (review 3232 F9). The word keeps its
+ *  first name, `setup-account-gone`, so a subject the coordinator already matches does not change (run 3538). */
 export const QUIZ_SETUP_ACCOUNT_GONE = 'setup-account-gone';
-/** The setup account's waiting streak (review 3232 F9). The setup's account is never re-picked, because a new account is a new
- *  setup and breaks comparability; so a run of `waiting` ticks (no room, a switched-off account, a missing record path) that
- *  spans two ISO weeks mails the coordinator once, with `QUIZ_SETUP_ACCOUNT_GONE`, for a fix to be dispatched. A tick with any
- *  other outcome ends the streak; a setup-phase tick (no week) leaves it as it stands. `goneKey` is the streak's first week once
- *  mailed; a mail that is not queued keeps the stored key, so a later tick mails again. */
+/** The waiting streak (review 3232 F9). Since run 3538 the account is the week's: a week that has spawned nothing picks it
+ *  again at every tick from the setup's candidates with room, and a week that has spawned stays on its recorded account. So a
+ *  run of `waiting` ticks (no candidate with room, the recorded account out of room, a switched-off lane, a missing record path)
+ *  that spans two ISO weeks mails the coordinator once, with `QUIZ_SETUP_ACCOUNT_GONE`, for a fix to be dispatched. A tick with
+ *  any other outcome ends the streak; a setup-phase tick (no week) leaves it as it stands. `goneKey` is the streak's first week
+ *  once mailed; a mail that is not queued keeps the stored key, so a later tick mails again. */
 export function quizWaitingStreakOf(i: {
   readonly status: LaneArmQuizTick; readonly waitingSince: string | null; readonly goneMailedKey: string | null; readonly coordinator: string | null;
 }): { readonly waitingSince: string | null; readonly goneKey: string | null;
@@ -283,9 +285,10 @@ export function quizWaitingStreakOf(i: {
     return { waitingSince: since, goneKey: i.goneMailedKey, mail: null };
   }
   return { waitingSince: since, goneKey: since, mail: { toId: i.coordinator, subject: `${QUIZ_STATUS_MAIL_SUBJECT} ${t.week} ${QUIZ_SETUP_ACCOUNT_GONE}`,
-    body: `The weekly unattended replay quiz has waited on its setup's account since ${since} (now ${t.week}: at ${t.act}, word `
-      + `${t.word ?? 'none'}). The account is never re-picked, because a new account is a new setup and breaks comparability, so this `
-      + 'needs a fix to be dispatched: the account\'s room, its lane switch, or a new setup. You are told once for this run of weeks.' } };
+    body: `The weekly unattended replay quiz has waited on its account since ${since} (now ${t.week}: at ${t.act}, word `
+      + `${t.word ?? 'none'}). A week that has spawned nothing picks its account again at every tick, from the setup's candidates `
+      + 'with room; a week that has spawned stays on its recorded account. Check whether any candidate has room (its limits row '
+      + 'is fresh and under the threshold) and whether the lane is switched on. You are told once for this run of weeks.' } };
 }
 
 // ── The record door's decider (plan `2026-11-17-overlord-quiz-record.md` §5, F2; slugs the-door-checks-the-sha,

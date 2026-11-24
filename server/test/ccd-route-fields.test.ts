@@ -155,8 +155,8 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(swapLog()).toBe('');
   });
 
-  it('ROUTE_FIELDS is the sixteen-field record, in the spec\'s order (`browser` after `compact`, D-8121; the launch profile\'s three, Overlord W1a; `precompact`, the compaction piece; the pool set\'s `poolset acctorder`, Overlord W1; `profiledigest`; `mailhold` last, the mid-turn mail hold)', () => {
-    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold');
+  it('ROUTE_FIELDS is the seventeen-field record, in the spec\'s order (`browser` after `compact`, D-8121; the launch profile\'s three, Overlord W1a; `precompact`, the compaction piece; the pool set\'s `poolset acctorder`, Overlord W1; `profiledigest`; `mailhold`, the mid-turn mail hold; `advisor` last, the coordinator advisor)', () => {
+    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold advisor');
   });
 
   // Overlord W1a compaction, Task 4: the PreCompact refusal arm's switch. `refuse` or `allow`; the hook reads it, ccd's

@@ -770,7 +770,7 @@ export interface CcdHarness {
   /** Every argv the contained `systemctl` saw — i.e. every systemd call that
    *  was not shadowed by a stub shell function. */
   systemctlCalls(): string[];
-  /** Every argv the contained `systemd-run` saw (`_tmux_server_ensure`). */
+  /** Every argv the contained `systemd-run` saw (`_tmux_server_ensure`), less its `--version` reads (D-8953). */
   systemdRunCalls(): string[];
   /** Every argv the contained `tmux` saw (`_lc_obs`'s `list-panes`). */
   tmuxCalls(): string[];
@@ -920,7 +920,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       ? readLines(path.join(home, 'systemctl-calls'))
       : asManagerCalls(readLines(path.join(home, 'launchctl-calls')).map((l) => `launchctl ${l}`))
         .map((l) => l.replace(/^systemctl /, ''))),
-    systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')),
+    // Less `_tmux_new_session`'s `--version` read (D-8953): a query, never a placement.
+    systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')).filter((l) => l !== '--version'),
     tmuxCalls: () => readLines(path.join(home, 'tmux-calls')),
     makeRepo: makeRepoAt,
     /** A repo that reads as GitHub and behaves as a local bare repo.

@@ -8,17 +8,21 @@ import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { FACE_MUTANT_SETS } from './faceSets.js';
+import { HOME_MUTANT_SETS } from './homeSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
 import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
 import { MAIL_HOLD_POLICY_MUTANT_SETS } from './mailHoldPolicySets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
+import { SANDBOX_MUTANT_SETS } from './sandboxSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
+import { OVERLORD_INBOX_MUTANT_SETS } from './overlordInboxSets.js';
+import { FIXED_LINE_MAIL_MUTANT_SETS } from './fixedLineMailSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
@@ -199,11 +203,15 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...URGENT_MAIL_MUTANT_SETS,
   ...MAIL_HOLD_POLICY_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
+  ...HOME_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
+  ...SANDBOX_MUTANT_SETS,
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
   ...PROBE_DOOR_MUTANT_SETS,
+  ...OVERLORD_INBOX_MUTANT_SETS,
+  ...FIXED_LINE_MAIL_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,

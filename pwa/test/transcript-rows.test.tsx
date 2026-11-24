@@ -8,6 +8,11 @@
 // through the set's `TranscriptRow`. Refined's draws a group as one
 // plain-language row; Instrument's (until S14) draws each item as today.
 //
+// Since desktop polish wave 168 both sets fold each stretch of a turn's tool activity into one collapsed row above this
+// fold (`tool-activity.test.tsx` pins that, and that the row opens into these groups unchanged). The cases here pin the
+// run fold itself, so they mount each set with its `toolActivity` off: the groups are then the top-level rows, exactly
+// as an opened activity row draws them.
+//
 // Virtuoso is replaced by a list that renders every row and CAPTURES its props
 // (as `chat-scroller.test.tsx` does), so the item count, the jump's index and
 // the seeded sizes are read off what the list was really handed.
@@ -47,6 +52,10 @@ vi.mock('react-virtuoso', async () => {
 });
 
 const { ChatList, ChatListInner, shapeOf } = await import('../src/session/ChatList');
+
+/** Each set with its tool-activity fold off: the run fold is then the top-level one (see the header). */
+const REFINED_RUNS: SkinSet = { ...REFINED_SET, toolActivity: 'none' };
+const INSTRUMENT_RUNS: SkinSet = { ...INSTRUMENT_SET, toolActivity: 'none' };
 
 afterEach(() => {
   cleanup();
@@ -91,7 +100,7 @@ const THREE = (): ChatEvent[] => [
 
 describe("Refined's transcript folds each run of tool entries into one row", () => {
   it('in Refined, three consecutive tool entries render as one grouped row with the sentence; expanding it shows the three cards', () => {
-    const { container } = mount(REFINED_SET, THREE());
+    const { container } = mount(REFINED_RUNS, THREE());
     const rows = groupRows(container);
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -116,7 +125,7 @@ describe("Refined's transcript folds each run of tool entries into one row", () 
     const ask = use('AskUserQuestion', {
       questions: [{ question: 'Which colour reads best?', header: 'Colour', options: [{ label: 'Ink' }, { label: 'Paper' }] }],
     });
-    const { container } = mount(REFINED_SET, [
+    const { container } = mount(REFINED_RUNS, [
       ...call('Read', { file_path: '/repo/a.ts' }),
       ask, result(ask),
       ...call('Read', { file_path: '/repo/b.ts' }),
@@ -129,7 +138,7 @@ describe("Refined's transcript folds each run of tool entries into one row", () 
 
   it('a live entry is never inside a collapsed group', () => {
     const live = use('Bash', { command: 'npm run build' });
-    const { container } = mount(REFINED_SET, [
+    const { container } = mount(REFINED_RUNS, [
       ...call('Read', { file_path: '/repo/a.ts' }),
       ...call('Read', { file_path: '/repo/b.ts' }),
       live,
@@ -141,7 +150,7 @@ describe("Refined's transcript folds each run of tool entries into one row", () 
   });
 
   it('a failed entry stands alone too', () => {
-    const { container } = mount(REFINED_SET, [
+    const { container } = mount(REFINED_RUNS, [
       ...call('Read', { file_path: '/repo/a.ts' }),
       ...call('Bash', { command: 'npm test' }, true),
       ...call('Read', { file_path: '/repo/b.ts' }),
@@ -155,7 +164,7 @@ describe("Refined's transcript folds each run of tool entries into one row", () 
 describe('Instrument (until S14)', () => {
   it('in Instrument (until S14), each tool entry renders as today', () => {
     const events = THREE();
-    const { container } = mount(INSTRUMENT_SET, events);
+    const { container } = mount(INSTRUMENT_RUNS, events);
     expect(groupRows(container)).toHaveLength(0);
     expect(container.querySelectorAll('.toolcard')).toHaveLength(3);
     expect(seen.props?.totalCount).toBe(buildChatItems(events, [], false).length);
@@ -191,7 +200,7 @@ describe('the grouped list is the one Virtuoso is handed', () => {
     const events = FIVE();
     const grouped = groupToolRun(buildChatItems(events, [], false));
     expect(grouped).toHaveLength(3);
-    mount(REFINED_SET, events);
+    mount(REFINED_RUNS, events);
     expect(seen.props?.totalCount).toBe(3);
 
     const snap = seen.props?.restoreStateFrom as { ranges: { startIndex: number; endIndex: number; size: number }[] };
@@ -207,7 +216,7 @@ describe('the grouped list is the one Virtuoso is handed', () => {
 
   it('ChatListInner, the jsdom renderer, takes the same path', () => {
     const { container } = render(
-      <SkinSetProvider set={REFINED_SET}>
+      <SkinSetProvider set={REFINED_RUNS}>
         <ChatListInner id="s" events={THREE()} pending={[]} />
       </SkinSetProvider>,
     );
@@ -226,7 +235,7 @@ describe("the grouped row's height", () => {
     expect(HEIGHT_BUCKETS).toContain('group');
     expect(shapeOf(group)).toEqual({ bucket: 'group', lines: 1 });
     // And it is the row Refined draws: one line, whatever the run holds.
-    const { container } = mount(REFINED_SET, events);
+    const { container } = mount(REFINED_RUNS, events);
     const row = container.querySelector('.ref-tool-group');
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getAllByRole('button')).toHaveLength(1);

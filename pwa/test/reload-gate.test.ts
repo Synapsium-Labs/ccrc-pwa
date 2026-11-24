@@ -180,7 +180,9 @@ describe('screenOf: two epics of one programme (D-8184)', () => {
 
 describe('screenOf: the screen a path is on (Task C3)', () => {
   it('names the route and its parameter', () => {
-    expect(screenOf('/')).toBe('fleet ');
+    expect(screenOf('/fleet')).toBe('fleet ');
+    expect(screenOf('/')).toBe('home ');   // the home (Overlord W1 home): a screen of its own, which replaces itself
+    expect(screenOf('/overlord')).toBe('overlord ');
     expect(screenOf('/s/a')).toBe('session a');
     expect(screenOf('/s/a/')).toBe('session a');
     expect(screenOf('/docs/a/b')).toBe('docs ');

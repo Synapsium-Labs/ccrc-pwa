@@ -9,7 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type BuildCaptureTransport,
+  BUILD_CAPTURE_SWEEP_MS, BuildCaptureLane, type BuildCaptureAnswer, type BuildCaptureTransport, type BuildCopyAnswer, type BuildCopyTransport,
 } from '../src/buildCaptureLane.js';
 import { testboxCaptureTransport } from '../src/testboxCapture.js';
 import type { CaptureAsked } from '../src/io.js';
@@ -30,7 +30,7 @@ function fake(answer: (job: BuildCaptureJob) => BuildCaptureAnswer | Promise<Bui
 const pass = (job: BuildCaptureJob): BuildCaptureAnswer => ({ kind: 'answered', result: { build: job.build, pass: true, cwd: true, output: 'replay: 40 passed' } });
 const fail = (job: BuildCaptureJob): BuildCaptureAnswer => ({ kind: 'answered', result: { build: job.build, pass: false, cwd: true, output: 'replay: 1 failed\nStop: missing field' } });
 
-async function setup(transport: BuildCaptureTransport | undefined) {
+async function setup(transport: BuildCaptureTransport | undefined, copier?: BuildCopyTransport) {
   const home = mkTmp('ccrc-capture-lane-');
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
@@ -39,7 +39,9 @@ async function setup(transport: BuildCaptureTransport | undefined) {
   const record = notifyLog.record.bind(notifyLog);
   notifyLog.record = (e) => { const ev = record(e); if (ev.kind === 'coord') notices.push(ev); return ev; };
   let clock = 1_000_000_000_000;
-  const lane = new BuildCaptureLane(() => ({ coord, notifyLog, ...(transport === undefined ? {} : { buildCapture: transport }) }), () => clock);
+  const lane = new BuildCaptureLane(() => ({
+    coord, notifyLog, ...(transport === undefined ? {} : { buildCapture: transport }), ...(copier === undefined ? {} : { buildCopy: copier }),
+  }), () => clock);
   return { coord, notices, lane, tick: (ms: number) => { clock += ms; }, now: () => clock };
 }
 const row = (coord: CoordStore, build: string) => coord.claudeBuilds().find((r) => r.build === build);
@@ -256,5 +258,90 @@ describe('the capture queue (D-8289)', () => {
     s.tick(BUILD_CAPTURE_RETRY_MS);
     await s.lane.sweep(['2.1.318', '2.1.320']);
     expect(captureBlockedBy(s.coord.claudeBuilds())).toBe('no-test-box');
+  });
+});
+
+// Capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.2, D7: a box that holds no checked
+// copy of the build refuses it `build-absent`; the pass then copies the fleet's own copy and sends the capture again. The
+// rule is `captureNextAct`'s; the lane only carries it out. The copier here is a FAKE: nothing reaches a box.
+describe('the copy after a build-absent refusal (spec §2.2, D7)', () => {
+  function copier(answer: () => BuildCopyAnswer | Promise<BuildCopyAnswer>): BuildCopyTransport & { copies: string[] } {
+    const copies: string[] = [];
+    return { copies, copy: async (job) => { copies.push(job.build); return answer(); } };
+  }
+  /** A box that answers `build-absent` until the copy placed the build, then `then`. */
+  function boxOf(c: { copies: string[] }, then: (job: BuildCaptureJob) => BuildCaptureAnswer = pass) {
+    return fake((job) => (c.copies.length === 0 ? { kind: 'unavailable', why: 'build-absent' } : then(job)));
+  }
+
+  it('build-absent, then the copy, then the capture again in the same pass: its verdict lands, and one job counts', async () => {
+    const c = copier(() => 'copied');
+    const t = boxOf(c);
+    const s = await setup(t, c);
+    await s.lane.sweep(['2.1.320']);
+    expect(t.jobs).toEqual(['2.1.320', '2.1.320']);
+    expect(c.copies).toEqual(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'pass', attempts: 1, notSent: null });
+  });
+
+  it('a box that holds the build is never copied', async () => {
+    const c = copier(() => 'copied');
+    const t = fake(pass);
+    const s = await setup(t, c);
+    await s.lane.sweep(['2.1.320']);
+    expect(c.copies).toEqual([]);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'pass' });
+  });
+
+  it('after the copy the box still has no runner (PR 2 on the box): recorded no-runner, no attempt counted', async () => {
+    const c = copier(() => 'copied');
+    const s = await setup(boxOf(c, () => ({ kind: 'unavailable', why: 'no-runner' })), c);
+    await s.lane.sweep(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'queued', attempts: 0, notSent: 'no-runner', lastAttemptAt: s.now() });
+  });
+
+  it.each(['copy-refused', 'copy-failed', 'no-admin-lane'] as const)(
+    'a copy that answers %s sends nothing more; the row records that word, counts no attempt, and keeps no verdict', async (w) => {
+      const c = copier(() => w);
+      const t = boxOf(c);
+      const s = await setup(t, c);
+      await s.lane.sweep(['2.1.320']);
+      expect(t.jobs).toEqual(['2.1.320']);
+      expect(row(s.coord, '2.1.320')).toMatchObject({ capture: 'queued', attempts: 0, notSent: w, verdictAt: null });
+    });
+
+  it('a copier that throws reads as copy-failed', async () => {
+    const c = copier(() => { throw new Error('boom'); });
+    const s = await setup(boxOf(c), c);
+    await s.lane.sweep(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ attempts: 0, notSent: 'copy-failed' });
+  });
+
+  it('with no copier the refusal is answered no-admin-lane, and nothing is sent again', async () => {
+    const t = fake(() => ({ kind: 'unavailable', why: 'build-absent' }));
+    const s = await setup(t);
+    await s.lane.sweep(['2.1.320']);
+    expect(t.jobs).toEqual(['2.1.320']);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ attempts: 0, notSent: 'no-admin-lane' });
+  });
+
+  it('a box still answering build-absent after the copy: one copy a pass, two sends, recorded build-absent; the next pass waits the spacing', async () => {
+    const c = copier(() => 'copied');
+    const t = fake(() => ({ kind: 'unavailable', why: 'build-absent' }));
+    const s = await setup(t, c);
+    await s.lane.sweep(['2.1.320']);
+    expect([t.jobs.length, c.copies.length]).toEqual([2, 1]);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ attempts: 0, notSent: 'build-absent' });
+    s.tick(BUILD_CAPTURE_SWEEP_MS);
+    await s.lane.sweep(['2.1.320']);
+    expect([t.jobs.length, c.copies.length], 'the retry clock spaces the next pass').toEqual([2, 1]);
+  });
+
+  it.each(['path-refused', 'not-started', 'busy', 'no-test-box'] as const)('a box that refuses %s is not copied to, and the row says that word', async (w) => {
+    const c = copier(() => 'copied');
+    const s = await setup(fake(() => ({ kind: 'unavailable', why: w })), c);
+    await s.lane.sweep(['2.1.320']);
+    expect(c.copies).toEqual([]);
+    expect(row(s.coord, '2.1.320')).toMatchObject({ attempts: 0, notSent: w });
   });
 });

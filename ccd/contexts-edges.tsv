@@ -1,5 +1,8 @@
 _accept_first_run_prompts -> _tmux_at
 _accept_first_run_prompts -> _tmx
+_advisor_spawn_compose -> _reg_get_to
+_advisor_spawn_compose -> _reg_set
+_advisor_spawn_compose -> _route_get
 _alias_launch_fill -> _reg_read_to
 _alias_launch_mark -> _is_anthropic_backend
 _alias_launch_observe -> _reg_read_to

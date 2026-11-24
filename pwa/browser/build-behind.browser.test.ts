@@ -60,7 +60,7 @@ afterAll(async () => {
 
 async function boot(view: AppView): Promise<{ page: Page; errors: string[]; close: () => Promise<void> }> {
   const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
-  await page.goto(server!.origin + (view.width >= 900 ? `/s/${SELECTED}` : '/'));
+  await page.goto(server!.origin + (view.width >= 900 ? `/s/${SELECTED}` : '/fleet'));
   await page.waitForFunction(([skin, theme]) => {
     const root = document.documentElement;
     return root.getAttribute('data-skin') === skin && (root.getAttribute('data-theme') ?? 'phosphor') === theme;

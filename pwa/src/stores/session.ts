@@ -437,6 +437,9 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // The heartbeat belongs to the socket (the watchdog in `lib/ws.ts` reads it); the store keeps its state.
     case 'beat':
       return s;
+    // Desktop polish wave 171: older chat pages are served, but no screen asks for one yet; the store keeps its state.
+    case 'older-page':
+      return s;
     default:
       // Two guarantees, not one. `satisfies never` keeps the compile-time
       // exhaustiveness this switch had before this arm existed: add a

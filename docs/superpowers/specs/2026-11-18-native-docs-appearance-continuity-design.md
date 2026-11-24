@@ -634,4 +634,5 @@ none - design of a recorded required follow-on of the native Docs reader program
 
 ### Later
 - The library's release and signed tag, and ccrc's exact re-pin: the operator's.
+- *Amended 2026-11-24 (wave 41, run 3605; D-8974, D-8976):* the release is the library's 1.2.0, verified as a candidate at `996a39b2…` and not yet published. It is the first version under the package's new name, `@synapsium-labs/pinax-lib`, so wave C's re-pin is also a rename of every import, test and provenance line that names the old package. Wave C is first in the Reader Mode order: it can be built ahead against a tarball packed from that commit, and its pull request opens only after publication. The plan's § Amendment 2026-11-24 carries this.
 - Whether the standalone reader also adopts the token contract. Not needed: it is retired by the operator later.

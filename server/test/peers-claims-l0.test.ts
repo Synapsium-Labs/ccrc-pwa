@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly twenty-three import lines: twenty types, and three values from import-free L0 siblings (D-3021)', () => {
+  it('shared/api.ts has exactly twenty-five import lines: twenty-two types, and three values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -192,8 +192,16 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { ReadFailure } from './agent-protocol.js';",
       "import type { PerfHealth } from './perf.js';",
       "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
+      // The session socket's older chat pages (desktop polish wave 171) a twenty-fifth line, a type-only import from
+      // olderPage.ts, which holds that vocabulary because this file is growth-capped: it imports only types (`ChatEvent`
+      // from this file, `ReadFailure` from agent-protocol.ts), so the import is erased at compile and nothing cycles.
+      "import type { OlderPageAnswer, OlderPageRequest } from './olderPage.js';",
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+      // The coordinator advisor (D-8967), a twenty-first type: `shared/coordinatorAdvisor.ts` holds the vocabulary because
+      // this file is growth-capped. Type-only, so erased at compile; its one import is `isRegistryId` from this file, so
+      // nothing cycles at run time.
+      "import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';",
       // The cap in force (D-8920), a twentieth type: `shared/runCap.ts` holds the vocabulary because this file is
       // growth-capped. Type-only, so erased at compile, and its own imports are L0 (a type from this file, and
       // `pressure.ts`'s list of reasons).

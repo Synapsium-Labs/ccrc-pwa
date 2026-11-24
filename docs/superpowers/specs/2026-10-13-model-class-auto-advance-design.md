@@ -1,6 +1,6 @@
 # Model classes follow new releases automatically
 
-**Spec** · 2026-10-13 · Status: Accepted 2026-10-15, amended 2026-11-16, 2026-11-18 and 2026-11-22 · Owner: ccrc · Linear: none · Related:
+**Spec** · 2026-10-13 · Status: Accepted 2026-10-15, amended 2026-11-16, 2026-11-18 and 2026-11-22, and read against what shipped on 2026-11-23 (the programme's wave 10) · Owner: ccrc · Linear: none · Related:
 `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` (amended here),
 `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`
 
@@ -28,7 +28,11 @@ the written spec with them on 2026-10-15.
 > in the same write as the move, once a model newer than that one appears: on a Codex lane a newer version of the
 > same family, on an Anthropic lane the alias resolving to a third id after the hold. Doctor stops telling anyone to
 > release a hold. The phone's sheet offers Revert alone, on both kinds of lane, wherever the box reports that it ends
-> holds itself. A hold written before this, with no record of what it reverted from, ends at the next newer model.
+> holds itself. Holds written before this differ by kind. A hand hold takes the held id as its baseline and ends at the
+> first model newer than it. A Revert with a recorded baseline ends on a model newer than the one it left. An older Revert
+> with no record reads the class's history for that baseline, on either kind of lane; with no usable history, a
+> trustworthy refresh records the current candidate as the baseline and does not end the hold on that pass. The
+> retirement exception and the canary are unchanged.
 > Where the sections below still describe a Hold switch, a Release, a hold as a standing brake, or when doctor warns
 > about a held class, this note governs.
 > The programme records it as modification 94 of its definition of done (done-when 5 and 6).
@@ -119,8 +123,16 @@ applies to Codex lanes. Anthropic lanes take their families from Claude Code's c
   version and family) is never a candidate until one of them leaves the catalogue.
 - **Eligible.** A model is eligible when the catalogue lists it as visible and it is inside the lane's discovery
   scope.
-- **Forwards, with one exception.** A class moves only to a newer version. The exception: when its pin has left
-  the catalogue, it moves to the newest eligible model left in its family, through the same canary.
+- **Forwards, with one exception.** A normal advance moves a class only to a version strictly above its pin, and never
+  waits (a `newer` move). The one exception is the retirement of a pin the catalogue no longer lists, and it is not
+  immediate. The class moves to the newest eligible model left in its family (cause `retired`, through the same canary)
+  only after six hours of continuous fresh sightings of that absence. Time is counted on the catalogue's own fetch
+  times, never the wall clock: a gap of more than 90 minutes between two sightings, a stale catalogue or a failed
+  probe restarts the count, so hours the lane was not observed never count, and there is no shortcut by the clock. The
+  six hours are a backstop against a short absence, whatever caused it (a lane's catalogue left a current pin out for
+  about two hours on 2026-11-10, and the class stepped to an older model and back). While the grace runs, doctor names
+  the class (`pin-missing`). The same retirement ends a Revert's hold on that pin (§2.7). This amends the first
+  version of this rule, which moved at once (D-8838, programme wave 3).
 - **Seeding.** `family` is stored. The backfill derives it from each pin. A class that is empty has no pin, so
   `init codex` writes the family of each class it seeds into the advance file as data, and the backfill gives an
   existing lane's empty class the family `init` would have seeded. A family with no eligible model leaves its
@@ -389,30 +401,35 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
 - **The canary is a marked launch.** A synthetic request would gate nothing, because every new launch already goes to
   the new model. So running sessions move only after a fresh alias launch on that lane has reported the new id
   (§2.5.2): the newest kept launch reading must be the class's current id, never merely present.
-- **ccd's routing record gains the model id beside the class,** on every lane, and its readback compares the id when
-  the pending change is an id change (`_route_readback` confirms by family today, through `_model_family_class`, so an
-  id change alone has nothing to confirm it). The id is recorded from the session's own reading, never typed, by a
-  step of the supervise tick of its own, beside the applier and outside its pending check: in the steady state
-  nothing is pending, and the applier returns before it reads anything. The same step fills a launch's mark. A
-  reading counts only when it is strictly later than the record's stamp and the process start, as the readback holds
-  it today. Every spawn rewrites the routing record, and a class change drops the id, so the id is recorded again
-  after either. A session with no routing record gets none, and a session with no recorded id is never pending. The
-  step costs the tick no fork while nothing has changed.
-- **A model picked by hand is never typed over, and a move is typed at most once.** A move is typed only while a
-  fresh reading of the session shows the recorded id and its transcript holds no `/model` since the record's stamp
-  that ccd's own keystroke journal does not explain. When ccd types a move, acknowledged or not, or stands down for a
-  positive hand pick (a fresh reading of another id, or an unexplained `/model` since the stamp), it records the new
-  id in the routing record as picked, without moving the record's stamp, and a session whose picked id is the class's
-  current id is not pending. A session with no fresh reading is no hand pick: it waits for its next render, so it runs
-  at most one turn on the old model. A re-pick that lands is recorded from the session's next reading. One that does
-  not land leaves the session to its next spawn, and `model-sessions-behind` names it after a day. A newer id reopens
-  the session. The stood-down state costs the tick nothing. A changed id counts as pending on an Anthropic lane when
-  the class is not held, and on a Codex lane only under D11's fallback.
-- **The move is a re-pick of the alias row** in the `/model` picker, session-only, as ccd applies a class today
-  (`_route_type_model`). Whether a re-pick re-resolves the alias in a running session is unmeasured, so the
-  Anthropic plan's ccd wave measures it first, on a throwaway session (D-8748). If it does not, a running session moves at
-  its next relaunch, and `model-sessions-behind` names it with that remedy. Either way this closes a known leak: a
-  session resumed without `--model` came back on its old model.
+- **ccd's routing record gains the model id beside the class,** on every lane. An observed id is recorded, never
+  queued or typed as an id change: nothing is pending on an id change (D-8833). The class readback still confirms by
+  family (`_route_readback`, through `_model_family_class`) and records the id it confirmed (D-8853); it does not compare
+  against a pending id. The id is recorded from the session's own reading, never typed, by a step of the supervise tick
+  of its own, beside the applier: in the steady state nothing is pending, and the applier returns before it reads
+  anything. The same step fills a launch's mark. A reading counts only when it is strictly later than the record's
+  stamp and the process start, as the readback holds it. Every spawn rewrites the routing record, and a class change
+  drops the id, so the id is recorded again after either. A session with no routing record gets none. The step costs
+  the tick no fork while nothing has changed. (The approved text had a pending id change and a readback that compared
+  ids; neither was built.)
+- **A running session moves by the existing idle relaunch, and nothing is typed (#3238, call 409).** This replaces the
+  typed re-pick the approved text described (see the history below). A running Anthropic session whose model is not its
+  class's current target becomes one more reason for the automatic roll (`ccd hibernate --roll`, decided in
+  `server/src/coord/rollTarget.ts`, with the shared predicate `aliasModelBehind`): once it is idle, it is relaunched, and
+  the same conversation resumes on the held id while the class is held, else on the class's resolved, launchable id. The
+  roll's inputs are the session's routed class and its usage model reading rendered strictly after its current pane
+  started (`modelCandidateOf`; there is no further reading-age gate, and an unknown start is no candidate), compared with
+  that class's held or resolved launchable id; the route record's own model id is not an input. The safeguards stand: the
+  alias's id is a target only after a fresh launch has been seen on it (the canary above), a session is behind only when
+  its model is of its class's family and no other class's current or held id, a session with no routed class, or none
+  whose usage reading was rendered after its current pane started, is never named, and an id is acted on once per
+  target. A model picked by hand
+  in a running session is therefore never typed over, because nothing is typed. The relaunch moves the session; it is
+  not proof that a real release has moved a class on the fleet, which stays with the natural-move check, and any claim
+  about session renewal belongs to the renewal programme's evaluation.
+- **Superseded history: the typed re-pick.** The first design typed the move into the `/model` picker, at most once
+  per id, standing down for a hand pick, and measured first whether a re-pick re-resolves the alias in a running
+  session (D-8748). That measurement was never made, the plan's fallback recorded the id change without typing (D-8833),
+  and calls 176 and 409 dropped the typed arm; its `picked=` bound survives only as a field name.
 - **One push** per class move, in the Codex step's own line shape, through the same push (D-8751).
 
 #### 2.5.7 Holds at launch (D19, D24)
@@ -519,9 +536,9 @@ sequenceDiagram
   - a `/model` typed with a name saves the account default (sourced: `ccd/ccrc-doctor-checks:7111`).
 - **D12 (Agreed): shell verbs.** The same `ccrc models <id> hold|release|revert <class>` the operation spawns are
   documented for shell use, for a box whose console is down. The verbs exist either way, because the operation
-  needs them; D12 decides only whether the README offers them to the operator. (Amended 2026-11-22: the console
-  offers Revert alone; whether the shell keeps `hold` and `release` is decided by the run that removes them from the
-  sheet and the door, and nothing tells the operator to run them.)
+  needs them; D12 decides only whether the README offers them to the operator. (Amended 2026-11-22, shipped in #3246: the
+  console's sheet and its write door offer Revert alone; `hold` and `release` remain shell verbs and agent vocabulary,
+  and nothing tells the operator to run them.)
 
 ### 2.8 What doctor reports
 
@@ -531,7 +548,7 @@ accept them before they ship. The approved design named the first three; D15 (Ag
 | WARN | When it fires | When it clears |
 |---|---|---|
 | `model-advance-held-back` | A canary or a materialise failed. Names the lane, class and candidate. | An advance succeeds |
-| `model-held-behind` | A held class has a newer eligible model in its family. Since 2026-11-22: only once its hold should have ended by itself and still stands past the next refresh. | The hold ends |
+| `model-held-behind` | A hold whose end has come, by what doctor can measure, and which still stands: a model newer than the one a Revert left, the held pin gone from the catalogue past the retirement grace, or on an Anthropic lane the alias, seen after the hold began, naming a third id. It is reported once the hold has stood more than 90 minutes after the refresh that saw the end (the hourly span plus half an hour of slack). A hold still waiting for something newer is not a finding. | The hold ends |
 | `model-sessions-behind` | A session is still on the old model 24 h after a move. Names the session and ccd's reason. | The session moves |
 | `model-advance-blocked` | A lane or class cannot advance: its advance file, registry or catalogue is present but unreadable, its pin breaks the id grammar, or, on an Anthropic lane, the home has no source, its newest cache is stale or in the older format, or its aliases file cannot be read (§2.5.2, §2.5.3). Names which. | The cause is gone |
 
@@ -554,7 +571,12 @@ outside the check. The Anthropic rows carry the fields the Codex rows carry, so 
 check reads both. `model-advance-held-back` has no Anthropic
 cause, because there is no canary to fail. The Anthropic causes of `model-advance-blocked` are `alias-source-absent`,
 `alias-cache-stale`, `aliases-file-unreadable` and `aliases-file-invalid`; `alias-source-absent` WARNs only once the
-box's ccd marks alias launches, and before that it is a note.
+box's ccd marks alias launches, and before that it is a note. Programme wave 3 added three more causes to the same
+check (D-8838, D-8842): `pin-missing` (a class waiting out the retirement grace), `effort-dropped` (a registry still
+refused for a stored effort level its model no longer offers) and `effort-fallback` (a class running at the fallback
+the refresh recorded). It also added a fifth check, `model-release-lookup`, which WARNs when the Codex release lookup
+has failed for over a day. What doctor says rests on the files it reads: it does not promise when the next refresh
+acts.
 
 ## 3. Decisions
 
@@ -662,11 +684,13 @@ Each part ships with tests that go red when its guard is removed, measured, per 
     id the lane cannot launch, names no session.
   - The aliases file: an unreadable or invalid one is never written over; a move cut short between its two writes is
     recorded once.
-  - A model picked by hand in a running session is never typed over, a re-pick of a given id is typed at most once,
-    and a cache target with only an older kept launch reading types nothing.
+  - A running session behind its class's id is relaunched by the idle roll and nothing is typed: the alias's id is a
+    target only after a launch has been seen on it, a held id needs no launch, and a cache target with only an older
+    kept launch reading is not a target (#3238; the typed re-pick tests of the first design are superseded).
   - The canary by real use: no move before a marked launch reports the new id, and a move after one.
-  - ccd's routing record with the model id: a newer id counts as pending on an Anthropic lane, and the readback
-    compares the id.
+  - ccd's routing record with the model id: an id change is recorded, never typed or pending, and the readback confirms
+    by family and records the id it confirmed (D-8833, D-8853). The first design's tests (a newer id pending on an
+    Anthropic lane, a readback comparing the id) are superseded.
   - The hold's launch-environment id is present only while held, and an unreadable advance file still launches.
   - Effort: the composed `--effort` is unchanged by an id move, and an orphaned saved level is carried only under
     `auto`.
@@ -701,6 +725,21 @@ Each part ships with tests that go red when its guard is removed, measured, per 
   - #2942: R1, picker labels keyed on the roster's lane kind.
   - #2960: R3, the agent's `models` op, read first by `GET /api/models/:lane`.
   - #3023: the programme's wave 1, the Codex catalogue asked as the current Codex client.
+  - #2943 (2026-11-19): doctor's four model-advance checks and `advance-health`.
+  - #3025: the client version follows published Codex releases, with the shipped constant as a floor (D-8743).
+  - #3027: the 2026-11-18 amendment and the Anthropic arm's plan.
+  - #3028: `POST /api/models/:lane` and the Models sheet (D-8752 to D-8756); #3041: the file-read grant retired.
+  - #3107: the Anthropic arm's aliases file, holds, hourly refresh and doctor causes.
+  - #3118: the retirement grace, the effort fallback, a Revert's refusals before any write, and the release lookup
+    warning.
+  - #3122: ccd on an Anthropic lane: the launch marker, the held id at launch, effort from data and the model id in the
+    record.
+  - #3221: an Anthropic lane's labels and Models sheet from its aliases file, and one push per class move across lanes.
+  - #3237: a Revert records what it left, and the refresh ends its hold by itself, on both kinds of lane.
+  - #3238: a session behind its class's id is one more reason for the existing idle roll, which types no command.
+  - #3246: the Models sheet and its door offer Revert alone, where the box reports that it ends holds.
+  - Follow-ups #3085, #3086, #3216, #3217, #3219, #3222 and #3223 (usage poll version, transient answers, release
+    lookup pins, effort pins, the no-key guard, one reader of `ccd caps`, one bad cache row).
 - 2026-11-16: the owner delegated this programme's operator role to its coordinator, with merge authority through
   the merge queue; box-level acts stay the owner's.
 - The rulings of 2026-11-16 (D-8683 to D-8690, issued by the allocator):
@@ -721,7 +760,9 @@ Each part ships with tests that go red when its guard is removed, measured, per 
     issue.
 - Recorded on 2026-11-16, not departures:
   - The typed-`/model` test keeps the 10-19 go. It runs on a Codex lane at the next real model release, with a watch
-    armed for that moment, as part of the natural-event acceptance. It blocks no wave.
+    armed for that moment, as part of the natural-event acceptance. It blocks no wave. (On an Anthropic lane the typed
+    re-pick was replaced on 2026-11-22: a session behind its class's id is relaunched at idle by the existing roll
+    and nobody types a command, #3238.)
   - R-O9, the gate before any wave reached the fleet, was replaced by ruling on 2026-10-17, and its replacement
     criteria were verified met on 2026-10-19.
   - A stray temporary registry file left in the models directory on 2026-10-23 is reaped by the writer in W3, never
@@ -743,13 +784,13 @@ Each part ships with tests that go red when its guard is removed, measured, per 
 
 ### Waiting on you
 
-- **The server box's build.** It must run v0.0.1259 or later before the grant is retired (the programme's item 406).
-- **The server box's roster.** Both Codex lanes need `exec.kind: "codex"` there (read on the wire as `kind: 'codex'`,
-  `managed: true`; the plan's runbook step 7). It can be
-  measured only through the console.
-- **Any rollback** of a wave that reached the fleet.
-- **Reaping the throwaway workspaces** the typed-`/model` test and the ccd wave's measurements leave behind, once
-  they have run.
+No automatic advance needs anything from the owner, and no step below is a chore for them. The pinned definition of done and the owner-only safety boundaries (the box's reaping verbs, installing and rolling a build, account management) are unchanged; a correction to done-when 3 is proposed in the programme ledger, not applied. The two build and roster gates read in 2026-11-18 (the server box on v0.0.1259 or later, both
+Codex lanes marked as Codex lanes in its roster). Live checks the programme still owes, none of them a step for the
+owner: `moves-only-forward` measured on the fleet box once a release with wave 3 is installed there; the Models
+sheet's live acceptance once the build with #3246 is installed; the natural move at the next real model release (the
+class moves after a canary, a new session replies on the new model, and doctor shows no sessions-behind warning 24
+hours later); and the renewal programme's own evaluation, which owns any claim about session renewal. A merged change
+is not a released one, and a release is not an installation: each is read where it is measured.
 
 ### Later
 

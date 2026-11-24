@@ -298,6 +298,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
   verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first. `ccd-collect-device-gone` (D-8948)
+  runs the real audit and verb end to end on Linux over a copied mount table and a planted block listing; its case C
+  audits a present leaf through the fresh rungs with the real in-use probe (`_ws_path_users`, a real `/proc` walk), one
+  of them with a real process standing in the leaf, at up to 120 s a case. Under load those cases fail as vitest's
+  `Test timed out in <n>ms`, or as an unmeasured `in-use` answer (`the walk of /proc did not finish within 10s`); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing
@@ -564,8 +569,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
   files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
   `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
-  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a top-level session that runs it itself.
   `keep-awake` acts on one session's sleep markers, not on coordination state, so the rule does not cover it either.
+- **A dispatched child never runs `ccd ws-add`, in any form** (D-8978). This is a child-only rule, not a SAFETY verb:
+  the operator, a top-level session and the server's dispatch (an agent exec through `CcdArgv`, which no hook sees)
+  still run it. A workspace a worker makes itself belongs to no run, so the console lists it under "Not in a
+  programme" and its coordinator never sees it; a child that needs another tree asks its coordinator. The child deny
+  file (`childDenyRules`, `shared/api.ts`) and the hook's `CCD_WSADD_RE` refuse it, as an accident guard (D-8979),
+  and they cannot tell a fixture `HOME` from the live one, so a child's `HOME=<fixture> ./ccd/ccd ws-add` is refused
+  too: a worker exercises `ws-add` through the test harness (`makeCcdHarness`), whose calls no hook sees.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
@@ -597,7 +609,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   a lane source of its own, checked the same way and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
-  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
+  caller holds the token and has no cookie). The Overlord's inbox doors, `GET /api/overlord/inbox`,
+  `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge` (Overlord W1 inbox; their handlers are in
+  `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
+  `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
+  confirm. The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
@@ -612,7 +628,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
   operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
   operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/plain-auto-memory` (Overlord W1a,
-  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/coordinator-advisor` (D-8967, the
+  operator's Settings row for the coordinator advisor and its daily cap, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
   switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
   on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
   the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
@@ -623,7 +640,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other seventeen are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other eighteen are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -673,7 +690,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and
   `POST /api/overlord/restore/confirm` (behind the step-up), consults no box token either and is session-gated when armed, and
   refuses `auth-off` dark. All three sets of doors register from `server/src/coord/overlordRoutes.ts`
-  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The Models sheet's write door, `POST /api/models/:lane` (Revert of a class only, behind a fresh read that the fleet box ends a revert's hold by itself; the answer re-read, never inferred), consults no box token either and is session-gated when armed, its audit line naming the device; it registers from `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The approval census's read, `GET /api/approvals/census` (approvals PR 1: counts by path, state, class, thread, deny currency, programme and authority, M38 and the redacted rows, never an input), consults no box token either and is session-gated when armed; it registers from `server/src/coord/approvalCensusRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `APPROVAL_CENSUS_DOORS` in both directions. The replay quiz's
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The Models sheet's write door, `POST /api/models/:lane` (Revert of a class only, behind a fresh read that the fleet box ends a revert's hold by itself; the answer re-read, never inferred), consults no box token either and is session-gated when armed, its audit line naming the device; it registers from `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The approval census's read, `GET /api/approvals/census` (approvals PR 1: counts by path, state, class, thread, deny currency, programme and authority, M38 and the redacted rows, never an input), consults no box token either and is session-gated when armed; it registers from `server/src/coord/approvalCensusRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `APPROVAL_CENSUS_DOORS` in both directions. The door of the one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874), `GET /api/coord/delegation-backfill` (the dry run, which writes nothing) and `POST /api/coord/delegation-backfill` (the pass, which carries the dry run's count and refuses `count-changed` on any other, or its undo), consults no box token either and is session-gated when armed: the pass refuses `sign-in-unarmed` while sign-in is dark or the caller holds no session; it registers from `server/src/coord/delegationBackfillRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DELEGATION_BACKFILL_DOORS` in both directions. The replay quiz's
 rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
 run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
 either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is
@@ -733,7 +750,7 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its twenty-two clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twenty-three clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by

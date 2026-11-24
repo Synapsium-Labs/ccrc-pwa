@@ -44,9 +44,10 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has twelve uniquely named rows, the readers\' `read` last', () => {
-    // D-8809: `link_team`, the Overlord's confirm of a team candidate.
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team', 'read']);
+  it('has fifteen uniquely named rows, the readers\' `read` last', () => {
+    // D-8809: `link_team`, the Overlord's confirm of a team candidate. The inbox piece (Overlord W1): `inbox`, `messages`
+    // and `acknowledge`.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'link_team', 'read']);
   });
 
   it('every name is a legal tool name after the hook\'s prefix, and the prefix is the L0 constant', () => {
@@ -92,8 +93,10 @@ describe('DOOR_TOOLS', () => {
     expect(JSON.stringify(read.input)).not.toContain('"enum"');
   });
 
-  it('card is the one view row that is fenced, and every operate row is fenced', () => {
-    expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card']);
+  // The fenced view rows are those whose Overlord door row is a write (`door-tools-argv.test.ts` derives it from the door
+  // table): the card, whose recording page records a read, and the inbox piece's two fenced reads (its plan's question 15).
+  it('card, inbox and messages are the view rows that are fenced, and every operate row is fenced', () => {
+    expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card', 'inbox', 'messages']);
     expect(ROWS.filter((r) => r.class === 'operate' && !r.fenced).map((r) => r.name)).toEqual([]);
     expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'read', 'timer_list']);
   });

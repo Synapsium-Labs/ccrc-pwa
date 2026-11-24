@@ -1,4 +1,5 @@
 import type { CcrcConfig } from './config.js';
+import { advisorReadoutsOf } from './continuity/advisorReadout.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import { pidFromListing, verdictFromListing, type PaneListing } from './tickPlan.js';
 import type { Tmux } from './exec.js';
@@ -645,6 +646,8 @@ export async function assembleFleetWithPanePids(
   // Workspace lifecycle §5.1: ONE run read for the whole assembly, like the placement read above.
   const released = readReleased(coord, recs.map((r) => r.id));
   const nowMs = now * 1000;
+  // The coordinator advisor's readout (plan 2026-11-23-coordinator-advisor PR D): ONE batched read, like the two above.
+  const advisors = advisorReadoutsOf(coord, recs, nowMs);
   const sessions = await Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
@@ -897,6 +900,9 @@ export async function assembleFleetWithPanePids(
       hibernatedAt: r.hibernatedAt,
       // D-8121: the spawn's browser MCP record, carried as is; null when the row has none.
       browserMcp: r.browserMcp ?? null,
+      // The coordinator advisor (D-8967): both absent for a row the advisor never touched, so its shape is unchanged.
+      ...(r.advisorSpawn === undefined ? {} : { advisorSpawn: r.advisorSpawn }),
+      ...((a) => (a === undefined ? {} : { advisor: a }))(advisors.get(r.id)),
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

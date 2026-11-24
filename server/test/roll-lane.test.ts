@@ -9,7 +9,9 @@ import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { LANE_MODELS_KEEP_MS, ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
-import { ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
+import { ENTRY_PENDING_ROLL_MS, ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
+import type { CleanupHeldByItem, HeldByWord } from '../../shared/api.js';
+import type { EntryPendingEpisode } from '../src/cleanupHeldBy.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, type HibernateMark } from '../src/coord/hibernate.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { CcdResult } from '../src/lifecycle.js';
@@ -18,6 +20,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { withBindingsOf } from './bindingsFake.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { CLASSES, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../shared/models.js';
@@ -93,7 +96,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   };
   return { deps, coord, lines, calls, wakes, refunds, set };
 }
-const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map() });
+const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map(), entryPending: { rows: new Map(), seenAt: null } });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
   rollPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
 
@@ -147,6 +150,20 @@ describe('rollPass: what is rolled (D-7452)', () => {
     expect(await pass(f)).toEqual([]);
     expect(f.calls).toEqual([]);
     expect(f.lines).toEqual([]);
+  });
+
+  it('a coordinator current on its release whose route asks for an advisor its spawn did not apply is rolled (advisor-stale, D-8970)', async () => {
+    const route = { fields: { advisor: 'fable' }, degraded: null, inert: [], unreadable: [] };
+    // The act asks the verdict again of the row it re-reads: the same row here.
+    const withRow = (f: Fake, r: FleetSession): RollSweepDeps =>
+      ({ ...f.deps, act: { ...f.deps.act, rowAtAct: async () => ({ ok: true as const, row: r }) } }) as RollSweepDeps;
+    const f = fake({ startedAt: INSTALLED + MIN });
+    const stale = row(COORD, { route } as never);
+    expect(await rollPass(withRow(f, stale), mem(), [stale], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, advisor: true }]);
+    expect(f.lines.join('\n')).toContain('advisor-stale');
+    const g = fake({ startedAt: INSTALLED + MIN });
+    const applied = row(COORD, { route, advisorSpawn: { kind: 'applied', model: 'fable', at: NOW / 1000 - 3600 } } as never);
+    expect(await rollPass(withRow(g, applied), mem(), [applied], [rec(COORD)], [])).toEqual([]);
   });
 
   it('a busy coordinator is not rolled', async () => {
@@ -1095,6 +1112,109 @@ describe('rollPass: a session behind its class\'s model (typed-repick)', () => {
     const { f, deps } = modelFake(rows, () => lane(X2));
     const bare: RollSweepDeps = { ...deps, laneModels: undefined };
     expect(await run(bare, rows)).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: an entry identity that stays pending (D-8955)', () => {
+  /** Started after the node's install, so it is behind on nothing else. */
+  const STARTED_AT = INSTALLED + MIN;
+  const fresh = (): Fake => fake({ startedAt: STARTED_AT });
+  const held = (rowId: string, word: HeldByWord = 'entry-pending', reclaim = 3): CleanupHeldByItem => ({
+    rowId, word, sentence: 'held', holds: { reclaim, expire: 0, collect: 0 }, act: 'recheck',
+  });
+  const withHeld = (f: Fake, items: () => readonly CleanupHeldByItem[] | null): RollSweepDeps => ({ ...f.deps, heldBy: items });
+  /** A memory whose last pass was at `seenAt`, with `rows` as its episodes. */
+  const memAt = (seenAt: number | null, rows: [string, EntryPendingEpisode][] = []): RollSweepMemory => {
+    const m = mem();
+    m.entryPending.seenAt = seenAt;
+    for (const [id, e] of rows) m.entryPending.rows.set(id, e);
+    return m;
+  };
+  const LATER = STARTED_AT + 30 * MIN;
+
+  it('a row newly named after an earlier pass is a fresh read: ten minutes on, the idle session is rolled', async () => {
+    const f = fresh();
+    const m = memAt(LATER);
+    const deps = withHeld(f, () => [held(COORD)]);
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m.entryPending.rows.get(COORD)).toEqual({ since: NOW, holds: 3, freshAfter: LATER });
+    expect(m.entryPending.seenAt).toBe(NOW);
+    expect(f.calls).toEqual([]);
+    m.entryPending.rows.set(COORD, { since: NOW - ENTRY_PENDING_ROLL_MS, holds: 3, freshAfter: LATER });
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+    expect(f.lines.join('\n')).toMatch(/entry identity stayed pending/);
+    expect(m.entryPending.rows.get(COORD)?.since, 'the episode is kept: the restarted process started after it').toBe(NOW - ENTRY_PENDING_ROLL_MS);
+  });
+
+  it('a naming that no later read repeated never rolls, however long it stands: it may be the spawn\'s own (review 3)', async () => {
+    // The first pass to see it had no pass before it, and the row holds no more than it did: no read since says pending.
+    const f = fresh();
+    const first = memAt(null);
+    await rollPass(withHeld(f, () => [held(COORD)]), first, [row(COORD)], [rec(COORD)], []);
+    expect(first.entryPending.rows.get(COORD)?.freshAfter).toBeNull();
+    const m = memAt(NOW - 5 * MIN, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: null }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(f.calls).toEqual([]);
+    // A spawn-window naming: first seen after a pass taken before the pane could have written its entry.
+    const early = memAt(NOW - 5 * MIN, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: STARTED_AT }]]);
+    expect(await rollPass(withHeld(fresh(), () => [held(COORD)]), early, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+  });
+
+  it('a row that holds more than it did was named by a new read: that is the fresh read, and the session is rolled', async () => {
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, { since: NOW - HOUR, holds: 1, freshAfter: null }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD, 'entry-pending', 4)]), m, [row(COORD)], [rec(COORD)], []))
+      .toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(m.entryPending.rows.get(COORD)).toEqual({ since: NOW - HOUR, holds: 4, freshAfter: LATER });
+  });
+
+  it('a process that started after the first naming is not rolled again for the same episode', async () => {
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, { since: INSTALLED, holds: 3, freshAfter: LATER }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a server restart forgets the episode, so a session still pending can be rolled once more (review 8)', async () => {
+    // The memory is in-process: after a restart the held-by facts are re-read one audit at a time, the row is newly named
+    // after the new process's first pass, and the session whose restart did not clear it is rolled once more.
+    const f = fresh();
+    const restarted = memAt(null);
+    expect(await rollPass(withHeld(f, () => []), restarted, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(restarted.entryPending.seenAt).toBe(NOW);
+    restarted.entryPending.seenAt = LATER;
+    await rollPass(withHeld(f, () => [held(COORD)]), restarted, [row(COORD)], [rec(COORD)], []);
+    restarted.entryPending.rows.set(COORD, { ...restarted.entryPending.rows.get(COORD)!, since: NOW - ENTRY_PENDING_ROLL_MS });
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), restarted, [row(COORD)], [rec(COORD)], []))
+      .toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+  });
+
+  it('another held-by word is no pending; a row no read names any more is forgotten; an unread frame keeps the memory', async () => {
+    const ep = { since: NOW - HOUR, holds: 3, freshAfter: LATER };
+    const f = fresh();
+    const m = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(f, () => null), m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, entryPending: true }]);
+    expect(m.entryPending.seenAt, 'a pass that read no frame observed nothing').toBe(LATER);
+    const m2 = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(fresh(), () => [held(COORD, 'not-plain')]), m2, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m2.entryPending.rows.has(COORD)).toBe(false);
+    const m3 = memAt(LATER, [[COORD, ep]]);
+    expect(await rollPass(withHeld(fresh(), () => []), m3, [row(COORD)], [rec(COORD)], [])).toEqual([]);
+    expect(m3.entryPending.rows.size).toBe(0);
+  });
+
+  it('the watcher hands the roll the last coord frame\'s holding rows, null before the first frame', () => {
+    expect(sourceOfSymbol(path.join(import.meta.dirname, '../src/watch.ts'), 'FleetWatcher.sweepRoll'))
+      .toContain('heldBy: () => (this.coord === null ? null : this.coord.cleanupHeldBy ?? [])');
+  });
+
+  it('a busy session whose entry is pending is held by the idle gate, by name', async () => {
+    const f = fresh();
+    f.set.word = 'busy';
+    const m = memAt(LATER, [[COORD, { since: NOW - HOUR, holds: 3, freshAfter: LATER }]]);
+    expect(await rollPass(withHeld(f, () => [held(COORD)]), m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:live-word' }]);
     expect(f.calls).toEqual([]);
   });
 });

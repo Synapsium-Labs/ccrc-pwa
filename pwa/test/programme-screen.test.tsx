@@ -160,7 +160,7 @@ describe('the programme view: the head', () => {
     expect(screen.getByText('wave 2 of 5')).toBeTruthy();
     history.replaceState(null, '', '/programmes/prog-a');
     fireEvent.click(screen.getByRole('button', { name: 'Back to Fleet' }));
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
   });
 
   // Carry C (D-7951), review 1386 F12: the "wave N of M" template is spelled once (`waveOfWords`, the work-wave half of

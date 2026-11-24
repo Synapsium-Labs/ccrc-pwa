@@ -3,9 +3,10 @@
 // typed reason, never a guess. The same L0 file holds the queue's two pure choices and the capture result's one reader.
 import { describe, expect, it } from 'vitest';
 import {
-  BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_OUTPUT_MAX, BUILD_CAPTURE_RETRY_MS, BUILD_UNTRUSTED_REASONS, buildTrustOf, buildUntrustedSentence,
-  captureBlockedBy, captureGivenUp, captureRetryAfterMs, captureStandingOf, capturesToRetry, givenUpToTell, nextCaptureJob, readBuildCaptureResult, readClaudeBuildRecords,
-  unrecordedBuilds, type ClaudeBuildRecord,
+  BUILD_CAPTURE_FAIL_CEILING, BUILD_CAPTURE_NOT_SENT_MAP, BUILD_CAPTURE_OUTPUT_MAX, BUILD_CAPTURE_RETRY_MS,
+  BUILD_UNTRUSTED_REASONS, buildTrustOf, buildUntrustedSentence, captureBlockedBy, captureGivenUp, captureNextAct,
+  captureRetryAfterMs, captureStandingOf, capturesToRetry, captureTryOf, givenUpToTell, nextCaptureJob,
+  readBuildCaptureResult, readClaudeBuildRecords, unrecordedBuilds, type CapturePassStep, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 
 const rec = (build: string, over: Partial<ClaudeBuildRecord> = {}): ClaudeBuildRecord => ({
@@ -186,5 +187,60 @@ describe('a failed capture is captured again before anyone is told (slug capture
   it('one rule for "a passed capture is trusted": buildTrustOf and captureStandingOf agree on every row (review 3234 F16)', () => {
     const rows = [rec('2.1.302', { capture: 'pass', cwd: true }), rec('2.1.320'), failed('2.1.321', 1), failed('2.1.322', 3)];
     for (const r of rows) expect(buildTrustOf(rows, r.build).kind === 'trusted', r.build).toBe(captureStandingOf(r).kind === 'trusted');
+  });
+});
+
+// Capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.2 and D7: the copy rule is decided
+// here, and the lane only carries it out. Send first; copy only after a `build-absent`, once a pass; then send again.
+describe('captureNextAct and captureTryOf: the copy rule (spec §2.2, D7)', () => {
+  const next = (...steps: CapturePassStep[]) => captureNextAct(steps);
+  it('a pass sends first', () => { expect(next()).toBe('send'); });
+  it('a box that answered, or refused for any other reason, stops the pass: a build the box holds is never copied', () => {
+    for (const w of ['sent', 'no-test-box', 'no-runner', 'path-refused', 'not-started', 'busy'] as const) expect(next(w), w).toBe('stop');
+  });
+  it('a build-absent refusal copies, a copy that placed the build sends again, and a failed copy stops', () => {
+    expect(next('build-absent')).toBe('copy');
+    expect(next('build-absent', 'copied')).toBe('send');
+    for (const w of ['copy-refused', 'copy-failed', 'no-admin-lane'] as const) expect(next('build-absent', w), w).toBe('stop');
+  });
+  it('at most one copy a pass: a second build-absent after the copy stops, whatever came before', () => {
+    expect(next('build-absent', 'copied', 'build-absent')).toBe('stop');
+    expect(next('build-absent', 'copy-failed', 'build-absent')).toBe('stop');
+  });
+  it('whatever the answers, a pass ends within two sends and one copy', () => {
+    const words = ['sent', ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP)] as CapturePassStep[];
+    for (const first of words) for (const copy of ['copied', 'copy-refused', 'copy-failed', 'no-admin-lane'] as const) for (const second of words) {
+      const steps: CapturePassStep[] = [];
+      let sends = 0; let copies = 0;
+      for (let act = captureNextAct(steps), i = 0; act !== 'stop'; act = captureNextAct(steps), i++) {
+        expect(i, 'the pass ends').toBeLessThan(3);
+        if (act === 'copy') { copies++; steps.push(copy); } else { steps.push(sends++ === 0 ? first : second); }
+      }
+      expect(sends).toBeLessThanOrEqual(2);
+      expect(copies).toBeLessThanOrEqual(1);
+    }
+  });
+  it('the try a pass records is its last act: the send\'s answer, or the failed copy\'s word', () => {
+    expect(captureTryOf(['sent'])).toBe('sent');
+    expect(captureTryOf(['build-absent', 'copied', 'sent'])).toBe('sent');
+    expect(captureTryOf(['build-absent', 'copied', 'no-runner'])).toBe('no-runner');
+    expect(captureTryOf(['build-absent', 'copied', 'build-absent'])).toBe('build-absent');
+    expect(captureTryOf(['build-absent', 'copy-refused'])).toBe('copy-refused');
+    expect(captureTryOf([]), 'nothing went out').toBe('not-started');
+    expect(captureTryOf(['build-absent', 'copied']), 'nothing went out after the copy').toBe('not-started');
+  });
+});
+
+describe('the not-sent words, each its own (spec §2.5, Table 6)', () => {
+  it('nine words, and the wire reader takes each; a job that went out is still none of them', () => {
+    expect(Object.keys(BUILD_CAPTURE_NOT_SENT_MAP).sort()).toEqual([
+      'build-absent', 'busy', 'copy-failed', 'copy-refused', 'no-admin-lane', 'no-runner', 'no-test-box', 'not-started', 'path-refused',
+    ]);
+    for (const w of Object.keys(BUILD_CAPTURE_NOT_SENT_MAP)) {
+      expect(readClaudeBuildRecords([rec('2.1.321', { lastAttemptAt: 5, notSent: w as ClaudeBuildRecord['notSent'] })])?.[0]?.notSent, w).toBe(w);
+      expect(captureBlockedBy([rec('2.1.321', { lastAttemptAt: 5, notSent: w as ClaudeBuildRecord['notSent'] })]), w).toBe(w);
+    }
+    expect(readClaudeBuildRecords([{ ...rec('2.1.321'), notSent: 'copied' }])).toBeNull();
+    expect(readClaudeBuildRecords([{ ...rec('2.1.321'), notSent: 'sent' }])).toBeNull();
   });
 });

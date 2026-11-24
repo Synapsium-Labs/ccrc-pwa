@@ -1402,7 +1402,14 @@ no quarantine record and no quarantine slot of the id, is collectable at once, u
 physical `~/.cc-tmp` is shown to be on the device the witness carries
 (`collect-absence-needs-the-recorded-device`): the device is asked first on this arm, and a mismatch, a device that
 cannot be read, or a `~/.cc-tmp` that cannot be resolved, one proven absent included, answers unmeasured `device` and
-drops nothing, so an empty mount point is never read as the leaf's absence. The verb then drops the witness and
+drops nothing, so an empty mount point is never read as the leaf's absence.
+Amended by D-8948 (task note
+`docs/superpowers/programs/overlord/collector-witness-device.md`): a mismatch whose recorded device is PROVEN gone
+from the box, with no line in the mount table, no entry in the block-device listing, and a listing that shows the
+device `~/.cc-tmp` stands on now, is believed on that current device, under a token that binds it (`on=`), and the
+document says `"recordedDevice":"gone"`. A recorded device that is mounted, attached as a block device or of major
+0, and a listing that fails that control, still answer unmeasured `device`; a mount table that cannot be read
+answers unmeasured `identity`. The verb then drops the witness and
 nothing else, and makes no quarantine, record or slot for a leaf that is not there. A witnessed id whose leaf is
 absent while any of its quarantine slots stands, with no record naming it, is refused `quarantine-kept` and its
 witness stays, and so is a witnessed id whose leaf is present beside such a slot (above): the collector's own arms
@@ -1532,7 +1539,12 @@ step 5 and the rest; an `unmoved` one clears the empty slot and the record, keep
 `state-changed`, so that the leaf is audited afresh; a `removed` one finishes the order from the slot's `rmdir`. A
 `removed` phase is believed only while the physical `~/.cc-tmp`'s device equals the record's `dev=`; on a mismatch, or
 a device that cannot be read, the answer is unmeasured `device` and nothing is dropped
-(`collect-absence-needs-the-recorded-device`), while `moved` and `unmoved` never ask it. A
+(`collect-absence-needs-the-recorded-device`), while `moved` and `unmoved` never ask it.
+Amended by D-8948: a mismatch whose recorded device is proven gone (the release above) and
+whose slot stands empty is `restart`, whatever stands at the id. The verb clears the empty slot and the record,
+keeps the witness and refuses `state-changed`, as for `unmoved`, so what stands at the id is audited afresh by the
+fresh rungs and never taken on the record's word. A record whose slot does not stand stays unmeasured `device`,
+because a volume attached but not active shows that too. A
 slot that holds anything the collector did not put there, a slot leaf that is not the record's directory, several
 records for one id, and a directory that stands both in its slot and at the id are `quarantine-kept`: a forged slot
 or record fails one of these and is listed, never taken. A record whose leaf stands in its slot, and whose original path is retaken, answers
@@ -1642,6 +1654,9 @@ or slot whose absence cannot be proven; and a token that cannot be minted. The a
   (`permanent-device-change-holds-every-absence`). It fails closed, loses nothing and never heals by itself, so a lane
   must not read a standing `device` answer as transient. Wave 9's lane does not: `device` is a per-leaf answer that enters
   its failing run's tier at once and is listed at once. The cure is ccd's.
+  NARROWED by D-8948, not closed: a recorded device proven gone from the box (§5.10's
+  release) heals by itself. The residual still stands for a device of major 0, for a number another device took, for
+  a record whose slot does not stand, and for a box whose block listing fails its control.
 - The reclaim tail's own witness drop keeps two pre-existing behaviours the collector's arms refuse: it believes a
   leaf's absence without asking the device (`tail-drop-believes-an-absent-leaf`), and it drops the witness of an id
   whose recordless slot stands (`tail-drop-ignores-a-recordless-slot`). Both are the tail's, and the lane reads `not-witnessed` as ending nothing; they go to the path-identity follow-up.

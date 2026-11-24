@@ -40,10 +40,13 @@ import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../
 import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { CoordinatorAdvisorSetting, CoordinatorAdvisorView } from '../../../shared/coordinatorAdvisor';
 import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { DesignationView } from '../../../shared/overlord-designation';
+import type { LadderWire } from '../../../shared/overlord-ladder';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
@@ -140,6 +143,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
   const getJson = async <T>(path: string, opts?: ReadOpts): Promise<T> =>
     (await request(path, undefined, opts)).json() as Promise<T>;
+
+  /** `getJson`, with a 404 from the read's own path answered as `{ absent: true }`: only an older server, which has no such
+   *  read, sends one (Overlord W1 home, plan question 3). Every other failure throws exactly as `getJson` does. */
+  const getJsonOrAbsent = async <T>(path: string, opts?: ReadOpts): Promise<T | { readonly absent: true }> =>
+    getJson<T>(path, opts).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 404) return { absent: true } as const;
+      throw err;
+    });
 
   const postInit = (body?: unknown): RequestInit =>
     body === undefined
@@ -329,6 +340,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
+    /** The Overlord's reads (Overlord W1 home, Task 2), each read only by `stores/overlord.ts`: the designation row, the ladder,
+     *  and `GET /health`'s capability words (an older server's body has no `caps`). */
+    overlordDesignation: (opts?: ReadOpts) => getJsonOrAbsent<{ readonly designation: DesignationView | null }>('/api/overlord/designation', opts),
+    overlordLadder: (opts?: ReadOpts) => getJsonOrAbsent<LadderWire>('/api/overlord/ladder', opts),
+    serverCaps: (opts?: ReadOpts) => getJson<{ readonly caps?: readonly string[] }>('/health', opts),
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
@@ -1074,6 +1090,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
     setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
       postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET`/`POST /api/coord/coordinator-advisor` (D-8967): Settings › Automation › Coordinator advisor (`setting` null when
+     *  the server could not read its row). Session-gated when armed; no box token. `postJsonOr`, for `setCoordCaps`' reason. */
+    coordinatorAdvisor: () => getJson<CoordinatorAdvisorView & { readonly ok: true }>('/api/coord/coordinator-advisor'),
+    setCoordinatorAdvisor: (setting: CoordinatorAdvisorSetting) =>
+      postJsonOr<(CoordinatorAdvisorView & { readonly ok: true }) | 'unreadable'>('/api/coord/coordinator-advisor', 'unreadable', setting),
     /** `GET /api/coord/renewal-mode` (Overlord W1a hand-offs): Settings › Automation › When soft renewals happen, `when-away`
      *  or `on-schedule` (`mode` null when the stored word could not be read). Session-gated when armed; no box token. */
     renewalMode: () => getJson<RenewalModeView & { readonly ok: true }>('/api/coord/renewal-mode'),

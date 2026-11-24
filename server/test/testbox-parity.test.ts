@@ -298,6 +298,33 @@ describe.skipIf(!HAS_ALL)('testbox-parity: its scope and its record (D-8166, TC9
     expect(r.out.split('\n').filter((l) => l.startsWith('== '))).toEqual([`== ${t.revs[2]}`]);
   });
 
+  it('a revision the clone does not hold yet is fetched from origin by its id, writing no ref and no FETCH_HEAD (D-8965)', () => {
+    // The newest merge, listed by gh before the fleet's own fetch reached the clone: measured on the fleet box as
+    // "<rev>: cannot add a worktree", so a parity run right after a merge ran nothing.
+    const t = toolFixture();
+    const origin = join(t.dir, 'origin.git');
+    git(t.dir, 'clone', '-q', '--bare', t.repo, origin);
+    const work = join(t.dir, 'work');
+    git(t.dir, 'clone', '-q', origin, work);
+    writeFileSync(join(work, 'server', 'f.txt'), 'merged after the clone last fetched\n');
+    git(work, 'commit', '-q', '-am', 'newer');
+    const newer = git(work, 'rev-parse', 'HEAD');
+    git(work, 'push', '-q', 'origin', 'HEAD:main');
+    git(t.repo, 'remote', 'add', 'origin', origin);
+    const refs = git(t.repo, 'for-each-ref');
+    expect(spawnSync('git', ['-C', t.repo, 'cat-file', '-e', `${newer}^{commit}`]).status).not.toBe(0);
+    const r = runTool(t, ['--rev', newer]);
+    expect(r.rc, r.out + r.err).toBe(0);
+    expect(r.out.split('\n').filter((l) => l.startsWith('== '))).toEqual([`== ${newer}`]);
+    expect(git(t.repo, 'for-each-ref')).toBe(refs);
+    expect(existsSync(join(t.repo, '.git', 'FETCH_HEAD'))).toBe(false);
+    // a revision origin does not have either fails that revision, said so, and runs no leg
+    const gone = 'e'.repeat(40);
+    const g = runTool(t, ['--rev', gone]);
+    expect(g.rc).toBe(1);
+    expect(g.err).toContain(`${gone}: not in the clone, and fetching it from origin failed or did not end within its bound`);
+  });
+
   it('refuses a --recent that is not 1 to 20, a --record without its measurements, and a run with no --sample-budget', () => {
     const t = toolFixture();
     expect(runTool(t, ['--recent', '21']).rc).toBe(2);

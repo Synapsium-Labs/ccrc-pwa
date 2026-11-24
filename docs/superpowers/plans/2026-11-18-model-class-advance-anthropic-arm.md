@@ -1215,6 +1215,18 @@ built from the lanes that hold a class registry, so it never sees an Anthropic l
 A2.5's. A test reds when an Anthropic move never reaches the push. Cost if wrong: the push decision and the `lanes`
 answer carry one more lane kind.
 
+Corrected 2026-11-23 (wave 10, from #3221's D-8927). The paragraph above, and Task A2.4's line per `moved` entry, describe
+the first build: one push per lane. What shipped is one push per class move: the refresh sends one line per (class, from,
+to) over every Anthropic lane that made it, after the loop has run them all, naming the lanes in roster order
+(`lane-a, lane-b: <class> <from> → <to>`). Each lane's advance record stays its own. An older server box reads a line that
+names several lanes as no model line, so that move gets its banner and one log line but no phone push until the server
+box is updated. Two limits stand, recorded rather than built. The server's over-cap log detail still reads "the line is
+longer than the push cap of 300 characters; a failure line with long model ids is refused this way by design, and the
+banner carries it", which names only a failure line, although a moved line naming many lanes can pass the cap too and is
+refused the phone push the same way; the line is not split. And a grouped push skipped because the box has no strong
+deadline substrate writes no log line (`_models_aliases_push` returns before it would), where one skipped for the
+deadline logs it.
+
 ### D-8818 — the Anthropic arm is its own module, `deploy/models-anthropic.mjs`
 
 Where: wave A2 (Tasks A2.3 to A2.5; the plan's file lists name `deploy/models-op.mjs`). Ruled by the programme's
