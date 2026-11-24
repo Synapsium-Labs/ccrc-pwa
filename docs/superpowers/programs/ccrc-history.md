@@ -104,20 +104,21 @@ Against the definition of done:
    - Done-item 2 asks for the operator's explicit choice to leave steering off. The final close records that choice.
    - Act 6, the end of the spike, is the operator's and is not yet performed: both `steer-on/<id>` markers and the four
      roll-hold markers still stand.
-3. **W4 is built and released.** W4-4's release, v0.0.1139, reached the session node on 2026-11-11 at about 23:35Z. The
-   rest is the operator's: subagent history turned on per node, then capture, parent-link coverage and the
-   resource-bound checks measured and recorded, and the staging and rollout policy recorded.
+3. **W4 is built and released.** W4-4's release, v0.0.1139, reached the session node on 2026-11-11 at about 23:35Z. What
+   remains starts with the operator turning subagent history on per node. The coordinator then measures and records
+   capture, parent-link coverage and the resource-bound checks, and the operator's staging and rollout policy is
+   recorded.
 4. **The held runs are disposed of.** Unchanged since 2026-11-09.
 5. **Recall use was reported on 2026-11-07**, under "Recall use, the definition of done's report (item 5)", over the
    window 2026-10-31 23:18Z to 2026-11-07 23:18Z.
    - Correction: the checkpoint of 2026-11-11 lists "the recall-use report" among run 1834's close work. That was wrong:
      the report was already done.
-6. **This ledger is not the final one.** The final close waits on act 6, on W4's per-node acceptance and on the operator
-   lifting the filing postponement. The follow-up list in the evidence below adds to the enhancement candidates.
+6. **This ledger is not the final one.** The final close waits on act 6, on the operator's confirmation of the
+   direction, on W4's per-node acceptance and on the operator lifting the filing postponement. The follow-up list in the evidence below adds to the enhancement candidates.
 
 - **No run is open.** The run-close lane's never-started sweep closed run 1834 (wave 33, planned, no worker) at
-  2026-11-14 20:17Z, as failed. It was the programme's last open run, so the programme reads abandoned until a final
-  close sets it done. Nothing on the fleet was lost: the run had no worker, workspace, claim or item.
+  2026-11-14 20:17Z, as failed. It was the programme's last open run, so by the store's close transaction (D-51) the
+  programme reads abandoned until a final close sets it done. No read of the programme's state confirms this. Nothing on the fleet was lost: the run had no worker, workspace, claim or item.
   - Wave 34 opens only once the closing acts can run inside the sweep's 72-hour quiet bound. The final close runs on it.
 - **Open with the operator:**
   - act 6;
@@ -385,7 +386,7 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | 31 | W4-3: subagent rows show only under `--agents` (W4 plan Task 3) | fleet | #2594 | **merged** 2026-11-10 22:06Z as `e3d91a7b6` at head `6e904736f` (run 1761, done; reviews 1763 and 1765; one fix round); defines D-8175 and D-8176; numbers 8177 and 8178 unwritten |
 | 32 | W4-4: `touched`, read-only (W4 plan Tasks 4A to 4C) | fleet | #2663 | **merged** 2026-11-11 18:30Z as `88bdf0f4e` at head `bfd3d7daa` (run 1767, done; reviews 1822, 1830 and 1833; two fix rounds; one queue ejection on an unrelated browser row, re-enqueued); defines D-8188 to D-8191 |
 | 33 | Programme close: act 5's report, W1-b, the recall-use report, W4's per-node acceptance, the final ledger | coordinator | — | **closed failed** on 2026-11-14 20:17Z by the run-close lane's never-started sweep (run 1834, no worker); act 5 and W1-b ran without an open run, the recall-use report was already done (2026-11-07), and the rest moves to wave 34 |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface releases v0.0.1078 and v0.0.1088 not on the node; the samples closed at 2026-11-11 04:12Z (gateway) and 2026-11-15 16:52Z (Anthropic, pooled over both sessions), and act 5 ran for both; §7.5's headroom passes, the +10% limit on added p50 compaction time fails on both (+27.7%, +32.7%); **built and unarmed** on direction (a) (2026-11-24), W3-2 and W3-3 not built; act 6 is the operator's and not yet performed |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 **merged** (#2510, wave 26); W3-4 **merged** (#2540, wave 28); release v0.0.1065 carries both, and v0.0.1070 is the cohort's tag; the cohort **started** 16:57:50Z on v0.0.1070 (item 135, confirmed 17:00Z), and ends at O2's bound (20 receipted main compactions per backend, or 2026-11-17 16:57Z); O11 amended 2026-11-10: a release no longer splits it; steering-surface release v0.0.1088 reached the node at 2026-11-10 22:46:34Z (SB1), and SB2 to SB8 followed (the 2026-11-12 to 2026-11-24 evidence); the samples closed at 2026-11-11 04:12Z (gateway) and 2026-11-15 16:52Z (Anthropic, pooled over both sessions), and act 5 ran for both; §7.5's headroom passes, the +10% limit on added p50 compaction time fails on both (+27.7%, +32.7%); **built and unarmed** on direction (a) (2026-11-24), W3-2 and W3-3 not built; act 6 is the operator's and not yet performed |
 | 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan **accepted and merged** (#2503, wave 27); W4-1 to W4-4 **merged** (#2554, #2563, #2594, #2663; waves 29 to 32); act M3 measured; W4-4 released to the session node in v0.0.1139 (2026-11-11 about 23:35Z); no node armed (subagent history per node is the operator's); B4 live still required |
 
 ## Decisions & deviations
@@ -395,37 +396,38 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 **The cohort's samples.** Both samples were read with `deploy/history-counters.mjs spike` from the node's installed
 tree, read-only, against the store opened read-only. The baseline is O21's: the node's other sessions on the same
 backend over the same range.
-- **Gateway backend.** O2's bound was met when the 20th receipted main compaction fell at 2026-11-11 04:12:11Z. Only B1
+- **Gateway backend.** O2's bound was met when the 20th receipted main compaction fell at 2026-11-11 04:12:11Z. Only SB1
   falls inside this sample. Act 5 ran on 2026-11-12. The sample:
   - 20/20 receipted;
-  - compliance 17/20, the 3 misses all absent with no block and all before B1;
+  - compliance 17/20, the 3 misses all absent with no block and all before SB1;
   - cut 0/20;
   - unclosed 3/20 against the baseline's 8/12 (O19 (b): at most, true);
   - duration p50 420 s, p95 559 s;
   - added p50 +27.7%;
   - add-ons 2/3;
   - contamination 0, sweep caught up, a 12-span baseline.
-  After B1, 59 of 59 spans were ok up to 09:43Z on 2026-11-12. Added p50 reads +0.4% after B1 (10 spans against a 3-span
-  baseline) and -2.0% from B1 to B2 (25 against 5). The later slices have no baseline.
+  After SB1, 59 of 59 spans were ok up to 09:43Z on 2026-11-12. Added p50 reads +0.4% after SB1 (10 spans against a 3-span
+  baseline) and -2.0% from SB1 to SB2 (25 against 5). The later slices have no baseline.
 - **Anthropic backend.** The gateway-lane session moved to an Anthropic account at 2026-11-14 06:38:49Z, on the same
   Claude Code 2.1.319, so there is no version split. From then on it compacts on the Anthropic backend. All 123 of its
-  gateway spans fall before B4.
+  gateway spans fall before SB4.
   - O2 read literally pools by backend. The coordinator gave the operator that default on 2026-11-15, and no other
     answer came.
-  - The 20th pooled receipted main compaction fell at 2026-11-15 16:52:30Z, 10 from each session, between B5 and B6.
-    B1 to B5 fall inside the sample.
+  - The 20th pooled receipted main compaction fell at 2026-11-15 16:52:30Z, 10 from each session, between SB5 and SB6.
+    SB1 to SB5 fall inside the sample.
   - Act 5 ran on 2026-11-16 at about 01:00Z. Run twice, it gives the same digest.
   - The sample: 20/20 receipted, compliance 20/20, cut 0/20, contamination 0, add-ons 3/3.
   - Duration p50 83.4 s against the baseline's 62.8 s over 198 spans: added p50 +32.7%. By session it is +24.6% for the
     Anthropic-lane session and +34.1% for the gateway-lane session. By boundary it runs from +14.5% to +66.1%, and no
     slice is of O2's size.
 - **O19 (b)'s one unclosed summary on Anthropic is a false positive of the measure.** As printed it reads 1/20 against
-  0/198 (at most: false). The span is the Anthropic-lane session's compaction at 2026-11-14 03:39:48Z, between B3 and
-  B4. Its stored summary holds no real `<summary>` tag, because Claude Code strips them. `summaryParts` (`lib.mjs`)
+  0/198 (at most: false). The span is the Anthropic-lane session's compaction at 2026-11-14 03:39:48Z, between SB3 and
+  SB4. Its stored summary holds no real `<summary>` tag, because Claude Code strips them. `summaryParts` (`lib.mjs`)
   matched a `<summary>` quoted in the summary's prose, the steer template's own words, as an opening tag with no close.
   Its leaf block is closed and its compliance is ok. Read correctly, the figure is 0/20 against 0/198 (at most: true).
 - **Method note.** `producer-unknown` leaves every headroom figure unmeasured, and it appears when the newest span's
-  post-summary assistant row is not stored yet. So act 5 ran only after a recount read it as 0.
+  post-summary assistant row is not stored yet. It was found on 2026-11-13, after the gateway run, whose report reads
+  it as 0 in every row. The Anthropic run went ahead only after a recount read it as 0.
 
 **W3's direction.** §7.5's headroom passes on both backends: cut 0, and unclosed is not raised once the false positive
 is read correctly. The W3 row's fixed limit (spec §10.7) is at most +10% added p50 compaction time, and both samples
@@ -470,21 +472,22 @@ ledger on (a) unless (b) or (c) was chosen. Neither was chosen by 2026-11-24.
 - Ruled: accepted by cause, with both figures recorded.
 
 **The cohort's releases (O11 as amended).** Every release that reached the session node is recorded from its install
-record. A steering boundary is a release whose diff touches `ccd/history/**` or `deploy/history-counters.mjs`, or the
+record or, where no install was seen, from its kept version tree. The steering boundaries are named SB1 to SB8 here, so
+that they are not read as W1's B1 to B4. A steering boundary is a release whose diff touches `ccd/history/**` or `deploy/history-counters.mjs`, or the
 steer, history or PreCompact parts of `ccd/session-hook.sh`. The coordinator also watches `shared/redact.mjs`.
 
 | Boundary | Release | Installed (UTC) | Change | Relative to the samples |
 |---|---|---|---|---|
-| B1 | v0.0.1088 | 2026-11-10 22:46:34 | W4-2 and W4-3 | inside both |
-| B2 | v0.0.1121 | 2026-11-11 13:33:15 | #2651 (`lib.mjs`, `shared/redact.mjs`) | inside Anthropic's |
-| B3 | v0.0.1139 | 2026-11-11 about 23:35:07 | W4-4 (#2663); not seen live, its time derived from the node's backups (window 23:35:05 to 23:35:18) | inside Anthropic's |
-| B4 | v0.0.1192 | 2026-11-14 06:33:08 | #2739, #2740 and #2787: a dark refusal arm before PreCompact's history print, and a role section before the steer text only for a route with a launch profile; neither cohort session had one, so their print was unchanged | inside Anthropic's |
-| B5 | v0.0.1214 | 2026-11-15 06:35:14 | #2803, the anchor piece: an owed-anchor marker after a main auto compaction, dark while the anchor-slot lane is in Shadow | inside Anthropic's |
-| B6 | v0.0.1221 | 2026-11-15 20:13:49 | #2841, the Overlord's read-only history operation: a verbatim move of the store helpers and a read scope no argument can select | after both |
-| B7 | v0.0.1287 | 2026-11-18 07:49:09 | #2999 (D-8726): FTS5 merge steps fold only when no merge is in progress | after both |
-| B8 | v0.0.1309 | 2026-11-19 10:35:23 | #3052: the history PEM rule built from `shared/redact.mjs`'s source, byte-identical, with the profile and belt version unchanged | after both |
+| SB1 | v0.0.1088 | 2026-11-10 22:46:34 | W4-2 and W4-3 | inside both |
+| SB2 | v0.0.1121 | 2026-11-11 13:33:15 | #2651 (`lib.mjs`, `shared/redact.mjs`) | inside Anthropic's |
+| SB3 | v0.0.1139 | 2026-11-11 about 23:35:07 | W4-4 (#2663); not seen live, its time derived from the node's backups (window 23:35:05 to 23:35:18) | inside Anthropic's |
+| SB4 | v0.0.1192 | 2026-11-14 06:33:08 | #2739, #2740 and #2787: a dark refusal arm before PreCompact's history print, and a role section before the steer text only for a route that carries both `profile` and `compactwindow`; neither cohort session's did, so their print was unchanged | inside Anthropic's |
+| SB5 | v0.0.1214 | 2026-11-15 06:35:14 | #2803, the anchor piece: an owed-anchor marker after a main auto compaction, dark while the anchor-slot lane is in Shadow | inside Anthropic's |
+| SB6 | v0.0.1221 | 2026-11-15 20:13:49 | #2841, the Overlord's read-only history operation: a verbatim move of the store helpers and a read scope no argument can select | after both |
+| SB7 | v0.0.1287 | 2026-11-18 07:49:09 | #2999 (D-8726): FTS5 merge steps fold only when no merge is in progress | after both |
+| SB8 | v0.0.1309 | 2026-11-19 10:35:23 (kept tree) | #3052: the history PEM rule built from `shared/redact.mjs`'s source, byte-identical, with the profile and belt version unchanged | after both |
 
-B6 to B8 count by path alone; none of them was expected to change steering. From v0.0.1144 to v0.0.1428 (installed
+SB6 to SB8 count by path alone; none of them was expected to change steering. From v0.0.1144 to v0.0.1428 (installed
 2026-11-23 20:35:34Z), every other release did one of three things: it changed no watched path, it changed the hook
 only outside its steer, history and PreCompact parts, or it changed `shared/redact.mjs` only outside the history
 profiles. The hook changes outside those parts were:
@@ -502,7 +505,7 @@ The coordinator's full per-release record is kept outside the repository.
 |---|---|---|
 | `deploy/history-gate.mjs` | `dc187648` | unchanged |
 | `deploy/measure-history.py` | `86521a22` | unchanged |
-| `ccd/history/lib.mjs` | `826c9e8c` | `0bce3b50` before B7 (after W3, W4 and #2651), then `e5b60c71` at B7 and `e2f5a182` at B8 |
+| `ccd/history/lib.mjs` | `826c9e8c` | on the session node: `051fd75d` at SB1, `c2b2cc22` at SB2, `1d58e1ab` at SB3, `0bce3b50` at SB6 (#2841), `e5b60c71` at SB7 and `e2f5a182` at SB8 |
 | `deploy/history-replay.mjs` | `1002fc6a` | `aeda5514` from #2988, `724d79fd` from #3253, `e69cb005` on `main` from #3262 and #3267 |
 
 **The replay quiz's single-arm mode (another programme's).**
@@ -530,22 +533,30 @@ The coordinator's full per-release record is kept outside the repository.
 - **Residuals for whoever resumes W2:**
   - The driver's own `checkOut` still accepts a single-arm output directory. The single-arm module refuses a W2 output
     directory, but not the other way round.
-  - #3253, #3262 and #3267 edited `deploy/history-replay.mjs` again between 2026-11-23 and 2026-11-24, and this
-    coordinator was not asked about any of them.
-    - #3253: step 0b's checks read a reported `Task` as `Agent`, admit the build's own plugins, and record a leftover's
-      shape.
-    - #3262: two limits functions and their constants moved to a module of their own, which the driver re-exports.
-    - #3267: the pilot's stage B.
-    - W2 is not run or scheduled, so nothing signed depends on the old digest. Before a resumed W2 relies on step 0b,
-      it reviews these edits.
-  - If W2 resumes, `shared/redact.mjs` and `shared/workflow-ids.mjs` join `GATE_CODE_FILES` and the frozen-tree diff
-    set first.
+  - #3253, #3262 and #3267 edited `deploy/history-replay.mjs` again on 2026-11-23 and 2026-11-24. The Overlord
+    coordinator ruled each one alone (its calls 592, 633 and 734), and this coordinator was not asked. The operator ruled
+    on none of them. The Overlord coordinator confirmed this in mail 33426, and said #3052's `lib.mjs` edit (SB8) was its
+    own too, and also unasked.
+    - #3253: step 0b's checks read a reported `Task` as `Agent` and admit the build's own plugins. A run that left files
+      records the shape of what it left.
+    - #3262: the limits decision moved into `deploy/history-limits.mjs`, which the gate's code hash does not cover, and
+      its rules changed there: a rolled-over window is refused, and a weekly-only row is judged on its weekly figure.
+      Every caller of the driver's limits gate, W2's batches among them, now gets that rule.
+    - #3267: the pilot's stage B. It adds optional inputs, which the gate's own pilot does not pass, to the shared
+      spawn, launch, arm, judge and persistence functions, and an optional file list to the code hash. A left run's
+      shape now goes three levels deep.
+    - W2 is not run or scheduled, so nothing signed depends on the old digests. Before a resumed W2 relies on step 0b
+      or the limits gate, it reviews these edits.
+    - From now on, an edit to any of the four gate-code files goes to this coordinator first until the programme
+      closes, and to the operator after that (mail 33426).
+  - If W2 resumes, `shared/redact.mjs`, `shared/workflow-ids.mjs` and, since #3262, `deploy/history-limits.mjs` join
+    `GATE_CODE_FILES` and the frozen-tree diff set first.
 - The single-arm mode comes off this programme's follow-ups; it is carried by the Overlord programme.
 
 **Run 1834.** On 2026-11-13 the run-close lane warned that run 1834 (wave 33, planned, no worker) would close at
 2026-11-14 20:16:30Z unless the programme acted (mail 18599). The coordinator did not send mail only to keep it open:
-the programme's next real acts fell after that time. The sweep closed it at 20:17Z as failed (mail 19593), and the
-programme reads abandoned until a final close. Nothing on the fleet was lost. A planned run that holds the programme
+the programme's next real acts fell after that time. The sweep closed it at 20:17Z as failed (mail 19593). By the store's
+close transaction (D-51), the programme reads abandoned until a final close. Nothing on the fleet was lost. A planned run that holds the programme
 open would meet the same 72-hour rule while the programme waits on the operator's acts. So wave 34 opens only when
 the closing acts can run.
 
