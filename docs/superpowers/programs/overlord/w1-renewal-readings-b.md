@@ -46,11 +46,17 @@ for them; the coordinator folds them into the plan's ledger. Measured on `main` 
 - **`start-by-id-tests-in-own-file`**: `startById`'s tests are in a new `server/test/continuity-start-by-id.test.ts`, not the
   generations store's suite, as PR C did for its column (`designated-class-tests-in-own-file`).
 
+- **`registry-lookup-named-in-the-run-session-census`**: the wiring finds the session's registry record by the generation's
+  session id (`r.id === g.sessionId`). The ARCH-62 census (`server/test/runSessionCensus.ts`) counts any comparison naming
+  `sessionId`, so this lookup is named in its `NOT_BINDING_SITES` with its reason, as `coord/questions.ts`'s registry lookup is:
+  no run is read. The local battery did not run that census; the PR's first CI run caught it.
+
 ## Files held by W1 peers
 
 Own hunks, with a one-line notice to the holder (Sequence A, run 3297): `server/src/continuity/continuityStore.ts`,
 `server/src/coord/store.ts`, `server/src/coord/ports.ts` and `server/test/sim/mutation-floors.json` (one floor row,
-`renewalReadings.ts#notLocalOf`). Whichever of us lands second merges the other's.
+`renewalReadings.ts#notLocalOf`); and, to designation B (run 3652), `server/test/runSessionCensus.ts` (one
+`NOT_BINDING_SITES` row). Whichever of us lands second merges the other's.
 
 ## Measured, not assumed
 
