@@ -223,9 +223,12 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { mailNudgeOf } from './coord/envelope.js';
+import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
-import { settleOperatorNudge } from './operatorModel/nudgeLane.js';
+import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
+import { createInboxWakeLane } from './coord/overlordInboxWake.js';
+import type { overlordReadGate } from './coord/overlordGateRun.js';
+import { isInboxWakeMail } from '../../shared/overlordInbox.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
@@ -1290,6 +1293,9 @@ export class FleetWatcher {
    *  gone. */
   private mailInFlight = new Set<string>();
   private readonly designationEpisode = new DesignationEpisode();
+  /** The inbox wake lane, made at its first pass (its ports read `deps`), and the read gate `buildServer` hands over. */
+  private inboxWake: ReturnType<typeof createInboxWakeLane> | undefined;
+  private inboxReadGate: ReturnType<typeof overlordReadGate> | undefined;
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -2337,6 +2343,12 @@ export class FleetWatcher {
     return this.deadCoordinatorState;
   }
 
+  /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
+   *  does, the wake holds `unmeasured`. */
+  useInboxReadGate(gate: ReturnType<typeof overlordReadGate>): void {
+    this.inboxReadGate = gate;
+  }
+
   /** `buildServer` hands the lane the coordination serialiser's sweep handle (workspace lifecycle spec §5.4: "the lane
    *  runs on the coordination serialiser, exported from `registerCoordRoutes`"). The lane's ONLY way to end a run. */
   useCoordSerialiser(h: Pick<CoordRoutesHandle, 'withSweepAbandon'>): void {
@@ -2949,6 +2961,8 @@ export class FleetWatcher {
       void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the MAILHOLD projection (mid-turn mail §3.4), run under `mail-disabled` too, where it only clears.
       void this.sweepMailHold(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the Overlord inbox's coalesced wake, which only queues mail (the mail lane types it).
+      void this.sweepInboxWake(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // The question sweep (W3 Q3c, D-7027): its two halves, each NEVER awaited, same reasoning as `sweepMail`
       // immediately above — the release CAS and its own registry listing must not sit in front of the dialog detector.
       this.sweepQuestions(registryRead);
@@ -3448,7 +3462,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -6372,6 +6386,16 @@ export class FleetWatcher {
     }, read.records.map((r) => ({ id: r.id, route: r.route })), read.switches[MAIL_DISABLED_MARKER] === 'set'));
   }
 
+  /** The Overlord inbox's wake (`coord/overlordInboxWake.ts`) on this tick's listing. PUBLIC so a test can await it. */
+  async sweepInboxWake(read: FleetReadModel): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    this.inboxWake ??= createInboxWakeLane({ coord, operatorModel: this.deps.operatorModel, gate: () => this.inboxReadGate,
+      log: (line) => console.warn(line) });
+    const lane = this.inboxWake;
+    await this.runLane('inboxWake', () => lane.pass({ mailDisabled: read.switches[MAIL_DISABLED_MARKER] }, this.deps.time.clock.wall()));
+  }
+
   /** The timers lane (Overlord §3.3.12, W1a; `continuity/timerLane.ts`), on this tick's own listing, passed rather than read
    *  from `this.listedIds` mid-pass. `mail-disabled` holds its firing only; its cleanup and purge run. */
   async sweepTimers(records: readonly SessionRecord[], listedIds: ReadonlySet<string> | null, listedAt: number,
@@ -8864,7 +8888,9 @@ export class FleetWatcher {
         // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
-        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin);
+        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8881,8 +8907,8 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // stashes the `/clear` as a draft and restores it (D-5912).
-        const ownStrandedClear = store.strandedClear(d.toId);
+        // stashes the `/clear` as a draft and restores it (D-5912). It is
+        // read in the send's own options below.
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
         // different from what it held at the park (`parkBoxSeen`) — or, on this
         // timer, when the box holds exactly OUR OWN nudge. That case goes to
@@ -8911,13 +8937,13 @@ export class FleetWatcher {
         // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin).line,
-          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin, sweepDesignationOf(designation), now).line,
+          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear: store.strandedClear(d.toId), holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
-          if (nudge.operatorMessageId !== null) settleOperatorNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge.operatorMessageId);
+          settleNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge);
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own

@@ -7399,7 +7399,8 @@ export class CoordStore {
 
   /** Who sent a mail, under which run, and about what — the three fields a
    *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
-   *  select. A dedicated one-row read rather than a JOIN widening
+   *  select — and its body, which only the mail lane's fixed line of the wake
+   *  reads (`envelope.ts#FIXED_LINE_MAIL`). A dedicated one-row read rather than a JOIN widening
    *  `dueDeliveries`: that query runs over every due row on every sweep, and
    *  this runs only when a notification is actually about to be raised.
    *  SYNCHRONOUS, like everything here.
@@ -7409,9 +7410,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 
