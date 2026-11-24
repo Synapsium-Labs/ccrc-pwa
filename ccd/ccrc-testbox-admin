@@ -552,8 +552,8 @@ _tba_ssh_class() {
   elif grep -qiE 'Permission denied|Too many authentication failures' "$f" 2>/dev/null; then echo auth-refused
   else echo unreachable; fi
 }
-# `_tba_ssh <command word>...` — run one command on the box. stdout is the command's; stdin passes through (a secret
-# rides it and nothing else); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
+# `_tba_ssh <command word>...` — run one command on the box. stdout is the command's; stdin passes through (a secret, or
+# the build copy's bytes, rides it); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
 # TBA_SSH_CODE to a closed code. rc 97 with TBA_SSH_CODE `not-connected` or `no-access-key` when ccrc has no
 # connection or no key to use. Under a sudo login every command is `sudo -n --` prefixed; each word is quoted for the
 # box's shell with `printf %q`. TBA_SSH_NOSUDO=1 drops the prefix for the one read that sudo's environment reset would

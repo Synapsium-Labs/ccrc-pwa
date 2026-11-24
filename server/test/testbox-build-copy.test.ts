@@ -1,7 +1,7 @@
 // Build capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md §2.2: the copy port's production
 // adapter (`server/src/testboxBuildCopy.ts`). It runs one admin lane sub and maps what it came to onto the port's words, one
 // case per row of its header's table. The arm here is a FAKE: nothing reaches a fleet host or a box.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { testboxBuildCopy } from '../src/testboxBuildCopy.js';
 import type { TestboxAdminOutcome } from '../src/testboxAdmin.js';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
@@ -74,5 +74,30 @@ describe('testboxBuildCopy: one sub, mapped onto the copy port (spec §2.2)', ()
     ['an arm that throws', new Error('boom')],
   ])('%s: copy-failed', async (_n, outcome) => {
     expect(await copy(outcome)).toBe('copy-failed');
+  });
+});
+
+// The fold keeps the lane's one not-sent word, and the verb's own code survives in one server log line (review 3623 F7).
+describe('testboxBuildCopy: every typed refusal writes one log line with the verb\'s own code', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([
+    ['build-store-refused', 'copy-failed'], ['build-hash-mismatch', 'copy-failed'], ['build-too-large', 'copy-refused'], ['not-connected', 'no-admin-lane'],
+  ])('refused %s: answers %s and logs the code once', async (code, word) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await copy(refusedWith(code))).toBe(word);
+    expect(warn.mock.calls).toEqual([[`ccrc-server: build copy of ${BUILD} refused by the test box admin lane: ${code} (recorded as ${word})`]]);
+  });
+
+  it('a code off the word grammar is logged as unreadable, never as its text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await copy(refusedWith('Not A Word; rm'))).toBe('copy-failed');
+    expect(warn.mock.calls).toEqual([[`ccrc-server: build copy of ${BUILD} refused by the test box admin lane: unreadable (recorded as copy-failed)`]]);
+  });
+
+  it('a copy that succeeds logs nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await copy(exited(`{"ok":true,"build":"${BUILD}","sha256":"${'a'.repeat(64)}"}\n`))).toBe('copied');
+    expect(warn).not.toHaveBeenCalled();
   });
 });

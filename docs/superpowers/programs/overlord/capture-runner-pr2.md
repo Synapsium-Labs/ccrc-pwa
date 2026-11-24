@@ -11,8 +11,8 @@ records what the ledger should learn; the coordinator folds it into the ledger o
   its own sourced file, `ccd/testbox-build-copy`. On the fleet host it reads the build in Claude Code's versions directory,
   never writing it: the file must exist, be a regular file and not a link, and be at most 1 GiB, and it is hashed. Its bytes
   stream over the lane in one box call, whose program stages them where only root can enter, hashes them, and hands them to
-  a writer that runs as the box root's owner, which places them read only at `<box root>/captures/builds/<version>` (fix
-  round 1, below). Each refusal is its own code (`build-not-on-fleet`, `build-not-regular`, `build-too-large`,
+  a writer that runs as the owner of `captures` (the test service's user), which places them read only at
+  `<box root>/captures/builds/<version>` (fix rounds 1 and 2, below). Each refusal is its own code (`build-not-on-fleet`, `build-not-regular`, `build-too-large`,
   `build-hash-mismatch`, `build-store-refused`, `build-copy-failed`), and the stage is removed on every way out. The server's adapter, `server/src/testboxBuildCopy.ts`, runs that one sub through the one admin
   lane arm and maps it onto the lane's copy port.
 - **The copy rule, in L1.** `shared/claudeBuildTrust.ts#captureNextAct` names each act of a capture pass: send; copy only
@@ -109,6 +109,9 @@ the designated-class test takes `main`'s side, which had made the same change to
 
 ## Fix round 1: the copy's box step hardened
 
+(Fix round 2 below moves the writer's identity from the box root's owner to the owner of `captures`, and moves every check
+that needs no bytes before the stream. The rest of this section stands.)
+
 The coordinator's ruling (programme call 822) took the build copy's box side out of "as built" and set five properties. The
 copy is now one box call, and its program holds them:
 
@@ -161,4 +164,81 @@ that root's 0700 stage directory is out of the service user's reach; that the pr
 and clears the groups; that the box's sudo leaves root's temporary directory outside the box root; and that the box's
 `ls` prints owner and group as numbers. The box runs the fleet host's own distribution release (the preflight's `os`
 check), whose util-linux carries the privilege drop.
+
+## Fix round 2: the identity, the store's layout, and refusals before the stream
+
+The coordinator's ruling on review 3623 (programme call 865). On an installed box the box root is root's, and the
+installer made no `captures`, so fix round 1's copy refused on every installed box. This round:
+
+- **The layout.** `captures` is one of the service's own directories, made by the installer's run-root step
+  (`deploy/testbox/box-steps`, `tbs_run_root_dirs`) beside `results`, `logs` and `out`, with their mode (0750) and owner (the
+  service user). A fresh install, every reapply and every repair run that step.
+- **The backfill, a second writer of one fact (programme call 868, slug `captures-backfill`).** The copy's root step makes
+  `captures` itself when it is absent, only directly inside a box root it has just proved a real directory owned by root,
+  with the installer's mode, owner and group. The recorded reason: the unattended tool sync never re-runs the installer,
+  and the box's own updater has no driver yet, so without the backfill a box installed before this release has no
+  `captures` until an operator acts. In a parent only root can write, a directory root has just made cannot be renamed or
+  replaced by anyone else, so handing it over there is no race. The pin: one case reads the installer's step and the copy's
+  program and fails when the name, the mode or the owner rule of `captures` differs between them.
+- **The identity is the owner of `results`, read as numbers.** The admin verb does not hold the configured service user's
+  name: it reads it only while pairing, and its state keeps no copy. So the copy reads the owner of the installer-made
+  `results` directory instead. That is trusted because its parent is root's: the copy first requires the box root to be a
+  real directory owned by root, then `results` to be a real directory, not a link, owned by a user and a group that are not
+  root; and `captures`, when present, to be a real directory owned by exactly that user and group. Anything else refuses
+  `build-store-refused` and changes nothing. No name has to travel to the box.
+- **Every refusal that needs no bytes comes before the stream:** the box root, `captures`, the identity, and the stage's
+  parent. A lasting refusal costs no stream. Only the hash check comes after the bytes.
+- **Each refusal says one word** on the box's output (`box-root-kind`, `box-root-owner`, `results-absent`, `results-link`,
+  `results-kind`, `results-owner`, `captures-link`, `captures-kind`, `captures-owner`, `stage-parent`, `stage-under-root`,
+  `hash`, and the writer's `builds-link`,
+  `builds-kind`, `target-link`, `target-kind`). The fleet host's admin log keeps it beside the verb's code, and a word off
+  its grammar is logged as `unsaid`.
+- **The stage's parent** (root's temporary folder) must be a real directory, owned by root or sticky. It must not be under
+  the box root, compared after dropping a trailing slash from both.
+- **The writer** starts in the box root (root changes into it first, since the drop tool has no working-folder flag), with
+  a reset environment, groups cleared, and no inheritable capability. It holds neither of the copy's two reads.
+- **The stage is removed** before the hash, and on every exit the box's shell sees: a hangup, an interrupt and a
+  termination now end the shell through its exit trap. Only a kill during the stream can leave a stage: one directory
+  only root can enter, in root's temporary folder, holding what had arrived of the stream.
+- **The adapter's fold** (review F7). `server/src/testboxBuildCopy.ts` still folds the verb's refusals into the lane's three
+  not-sent words, and now writes one server log line per typed refusal, carrying the verb's own code (a code off the word
+  grammar is logged as `unreadable`). Why the fold is safe: the lane's only decision on a not-sent word is to try again
+  within the hour without counting an attempt, and every word answers that the same way. What tells an operator why is
+  the verb's code, which this line and the fleet host's admin log both keep.
+- **The card's sentence** for `build-store-refused` says what is wrong and what cures it: the box's folders are not set up
+  the way its installer makes them (a box root that is not root's, or a `results` or `captures` that is a link, a file or
+  another user's), and Repair on the box's card fixes that.
+
+**How an installed box gets `captures`:** the backfill, at the first copy; the installer's run-root step, at any install,
+reapply or repair; and the box's own updater (`deploy/testbox/bin/box-update`, whose render step runs the same step) once
+the managed-node design's driver runs it.
+
+**What the code guarantees, and what it assumes of the box.**
+
+| | |
+|---|---|
+| Guarantees | no write under the box root as root but the backfill of an absent `captures`; a box root that is not a real root-owned directory, a `results` that is not a real directory of a non-root owner and group, and a `captures` that is not a real directory of exactly that owner and group, are refused before any byte is read; the stage is a fresh 0700 directory in a parent that is root's or sticky and not under the box root; the hashed bytes are the handed-over bytes; no link or wrong kind in the store is followed or replaced |
+| Assumes | the box root's ancestors are not writable by the service user (the installer's path policy); root's temporary folder on the box is root's or sticky (refused otherwise); the box's `ls` prints owner and group as numbers with `-n`; util-linux's privilege drop takes the flags used; nothing but a kill ends the shell untrapped |
+
+**Tests, measured by mutation.** Every guard of the copy's box programs, the host's words, the adapter's log line and the
+installer's `captures` was removed in turn (applied in place, measured, restored byte for byte). The full table is in
+the section below.
+
+**What only a real box shows**, beyond fix round 1's list: that the box root is root's and `results` and `captures` the
+service user's on an installed box (the installer's run-root step makes them, and the characterization test pins the
+step); the backfill on a real installed box; and that root's temporary folder is root's or sticky.
+
+**Bookkeeping (review F11).** The spec's §2.2 describes the copy as the repair sub's three phases; the copy is one box
+call (the coordinator amends the spec on the ledger's pull request). The candidate rewrote the migration case in
+`server/test/decision-model-records.test.ts`: it builds the predecessor database from the historical prefix of migrations,
+instead of undoing every later entry. That stays correct when a later entry rebuilds a table (Capture's does), and it also
+checks the rows the later entries seed. The admin verb's remote-call helper's header no longer says stdin carries only a
+secret: it carries the build copy's bytes as well.
+
+**Carried to PR 3 (review F3, F5, F6), no code here.**
+- The capture desk's "build present" is any regular file reached through links, with no hash re-check, and the store is
+  the service user's. PR 3 either re-hashes a build when it is captured or refuses links, so a build under capture cannot
+  change another version's bytes before that version is captured. The spec's "checked copy" means checked when copied.
+- A launcher that cannot answer whether the build is alive must not read as "exited".
+- The runner's bounded wait must watch the build, not its terminal server.
 

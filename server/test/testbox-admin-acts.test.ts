@@ -16,7 +16,7 @@
 // and the fake `ccrc-api` are two tiny scripts. HOME is a fixture; ghContainedEnv poisons the user manager and tmux. Every
 // row runs a fixed bash program; values are its arguments.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
@@ -1320,7 +1320,7 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
     expect(json(copy(h))).toEqual({ ok: true, build: V, sha256: SUM });
     const calls = boxCmds(h, before).filter((c) => !c.includes('ssh-keyscan'));
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatch(/^sh -c set -e; r=\$1; umask 077; s=\$\(mktemp -d .*\.ccrc-build-copy\.XXXXXXXX.* exec setpriv .* sh \/srv\/box /);
+    expect(calls[0]).toMatch(/^sh -c set -e; r=\$\{1%\/\}; e=\$r\/results; c=\$r\/captures; .*\.ccrc-build-copy\.XXXXXXXX.* exec setpriv .* sh \/srv\/box /);
     expect(calls[0]).toContain(` sh /srv/box ${V} ${SUM} set -e; umask 022; `);
     expect(calls[0]!.endsWith('; echo installed')).toBe(true);
     expect(stdinOfLast(h, '.ccrc-build-copy.XXXXXXXX'), 'the build\'s bytes ride the copy call\'s stdin').toBe(BYTES);
@@ -1371,18 +1371,19 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
   });
 
   it.each([
-    ['the box\'s hash of what arrived differs', '4', '', 'build-hash-mismatch'],
-    ['the box refuses its store', '5', '', 'build-store-refused'],
-    ['the box program fails otherwise', '1', '', 'build-copy-failed'],
-    ['the box answers something else', '0', 'what\\n', 'build-copy-failed'],
-  ])('%s (exit %s, out "%s"): refused %s, in that one call, with nothing left for this host to remove', (_n, rc, out, code) => {
+    ['the box\'s hash of what arrived differs', '4', 'hash\\n', 'build-hash-mismatch', 'hash'],
+    ['the box refuses its store', '5', 'captures-absent\\n', 'build-store-refused', 'captures-absent'],
+    ['the box program fails otherwise', '1', 'stage-parent\\n', 'build-copy-failed', 'stage-parent'],
+    ['the box answers something else', '0', 'what\\n', 'build-copy-failed', 'what'],
+    ['the box says a word off the grammar', '5', 'Not A Word\\n', 'build-store-refused', 'unsaid'],
+  ])('%s (exit %s, out "%s"): refused %s, in that one call, the box\'s word in the log', (_n, rc, out, code, word) => {
     const h = fixture({}, COPY_RULES(rc, out));
     connectedTo(h);
     placed(h);
     const before = sshCalls(h).length;
     expect(json(copy(h))).toEqual({ ok: false, code });
     expect(boxCmds(h, before).filter((c) => !c.includes('ssh-keyscan'))).toHaveLength(1);
-    expect(readFileSync(h.lg, 'utf8')).toContain(`build-copy: refused ${code} (${V}: the box)`);
+    expect(readFileSync(h.lg, 'utf8')).toContain(`build-copy: refused ${code} (${V}: the box: ${word})`);
   });
 
   it('with no connection it answers not-connected and reaches no box', () => {
@@ -1425,48 +1426,67 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
     expect(r.out.trim().split('\n').map((x) => x === '1')).toEqual(corpus.map((v) => /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)));
   });
 
-  // The box's programs, run for real against a fixture root. A test cannot run as root, so shims on PATH stand in where the
-  // box differs: `setpriv` records how it was asked to drop privilege, marks what it starts as dropped and starts it as this
-  // user; `chown` records and fails (the copy changes no owner); `chmod`, `mkdir`, `mv` and `mktemp` record whether they ran
-  // dropped and then run the real tool; `sha256sum` can tamper with the stage after it hashes. What only a real box shows
-  // (that root's stage directory is out of the service user's reach, and that the drop really changes identity) is in the
-  // task note.
-  describe('the box\'s two programs, run for real against a fixture root', () => {
-    const REAL = Object.fromEntries(['chmod', 'mkdir', 'mv', 'mktemp', 'sha256sum', 'stat'].map((t) =>
+  // The box's programs, run for real against a fixture root laid out as the installer lays one out (`captures` the service
+  // user's, here the test's own user). A test cannot run as root, so shims on PATH stand in where the box differs: `ls` reads
+  // the box root as root's (and can read `captures` or the stage's parent as told); `setpriv` records how it was asked to
+  // drop privilege, marks what it starts as dropped and starts it as this user; `chown` records and fails (the copy changes
+  // no owner); `chmod`, `mkdir`, `mv` and `mktemp` record whether they ran dropped (the dropped `mktemp` also records its
+  // working folder and open descriptors) and then run the real tool; root's `rm` can plant a link at, or change, the staged
+  // file just before it removes the stage, and says so; `sha256sum` records whether any stage path is left when it hashes;
+  // root's `cat` can fail. Every hook records that it acted. What only a real box shows is in the task note.
+  describe.skipIf(process.getuid?.() === 0)('the box\'s two programs, run for real against a fixture root', () => {
+    const REAL = Object.fromEntries(['chmod', 'mkdir', 'mv', 'mktemp', 'sha256sum', 'stat', 'ls', 'rm', 'cat', 'ln', 'install'].map((t) =>
       [t, spawnSync('bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim()]));
     const VICTIM = 'NOT-THE-BUILD\n';
 
     interface Box { h: Home; root: string; tmp: string; shims: string; log: string; victim: string }
-    function box(opts: { tamperAfterHash?: boolean; plantAtHandover?: boolean; lsOwner?: string } = {}): Box {
+    function box(): Box {
       const h = fixture();
       const root = join(h.home, 'boxroot');
       const tmp = join(h.home, 'box-tmp');
       const shims = join(h.home, 'box-shims');
       const log = join(h.home, 'box-shim-log');
       const victim = join(h.home, 'victim');
-      for (const d of [root, tmp, shims]) mkdirSync(d, { recursive: true });
+      for (const d of [root, join(root, 'results'), join(root, 'captures'), tmp, shims]) mkdirSync(d, { recursive: true });
+      for (const d of ['results', 'captures']) chmodSync(join(root, d), 0o750);
+      chmodSync(tmp, 0o1777);
       writeFileSync(victim, VICTIM, { mode: 0o640 });
-      const rec = (tool: string): string => `#!/bin/sh\nprintf '%s %s %s\\n' ${tool} "\${TB_DROPPED:-0}" "$*" >> '${log}'\nexec '${REAL[tool]}' "$@"\n`;
-      for (const t of ['chmod', 'mkdir', 'mv']) writeFileSync(join(shims, t), rec(t), { mode: 0o755 });
-      writeFileSync(join(shims, 'mktemp'),
-        `#!/bin/sh\no=$('${REAL['mktemp']}' "$@") || exit $?\nprintf 'mktemp %s %s %s\\n' "\${TB_DROPPED:-0}" "$o" "$('${REAL['stat']}' -c %a "$o")" >> '${log}'\nprintf '%s\\n' "$o"\n`, { mode: 0o755 });
-      writeFileSync(join(shims, 'chown'), `#!/bin/sh\nprintf 'chown %s %s\\n' "\${TB_DROPPED:-0}" "$*" >> '${log}'\nexit 1\n`, { mode: 0o755 });
-      const plant = opts.plantAtHandover
-        ? `for b in '${tmp}'/.ccrc-build-copy.*/b; do [ -e "$b" ] || continue; rm -f -- "$b"; ln -s '${victim}' "$b"; done\n` : '';
-      writeFileSync(join(shims, 'setpriv'),
-        `#!/bin/sh\nprintf 'setpriv %s\\n' "$*" >> '${log}'\nprintf 'stages-at-handover %s\\n' "$(ls -A '${tmp}' | wc -l)" >> '${log}'\n${plant}`
-        + 'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift\nTB_DROPPED=1 exec "$@"\n', { mode: 0o755 });
-      const tamper = opts.tamperAfterHash
-        ? `for b in '${tmp}'/.ccrc-build-copy.*/b; do [ -f "$b" ] && printf 'TAMPERED\\n' >> "$b"; done\nexit 0\n` : '';
-      if (opts.lsOwner !== undefined) writeFileSync(join(shims, 'ls'), `#!/bin/sh\nprintf 'drwxr-xr-x 2 ${opts.lsOwner} 4096 Jan  1 00:00 x\\n'\n`, { mode: 0o755 });
-      writeFileSync(join(shims, 'sha256sum'), `#!/bin/sh\n'${REAL['sha256sum']}' "$@" || exit $?\n${tamper}`, { mode: 0o755 });
+      const sh = (name: string, body: string): void => writeFileSync(join(shims, name), `#!/bin/sh\n${body}`, { mode: 0o755 });
+      const rec = (tool: string, failVar: string | null): string =>
+        `printf '%s %s %s\\n' ${tool} "\${TB_DROPPED:-0}" "$*" >> '${log}'\n`
+        + (failVar === null ? '' : `[ -n "\${TB_DROPPED-}" ] && [ -n "\${${failVar}-}" ] && exit 1\n`)
+        + `exec '${REAL[tool]}' "$@"\n`;
+      sh('chmod', rec('chmod', 'TB_FAIL_CHMOD'));
+      for (const t of ['mkdir', 'mv', 'install']) sh(t, rec(t, null));
+      sh('mktemp', `o=$('${REAL['mktemp']}' "$@") || exit $?\n`
+        + `printf 'mktemp %s %s %s\\n' "\${TB_DROPPED:-0}" "$o" "$('${REAL['stat']}' -c %a "$o")" >> '${log}'\n`
+        + `[ -z "\${TB_DROPPED-}" ] || printf 'writer-cwd %s\\n' "$PWD" >> '${log}'\n`
+        + 'printf \'%s\\n\' "$o"\n');
+      sh('chown', `printf 'chown %s %s\\n' "\${TB_DROPPED:-0}" "$*" >> '${log}'\nexit 1\n`);
+      sh('setpriv', `'${REAL['ls']}' /proc/$$/fd > '${log}.fds'\nprintf 'setpriv %s\\n' "$*" >> '${log}'\n`
+        + `printf 'stages-at-handover %s\\n' "$('${REAL['ls']}' -A '${tmp}' | wc -l)" >> '${log}'\n`
+        + 'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift\nTB_DROPPED=1 exec "$@"\n');
+      sh('sha256sum', `printf 'stages-at-hash %s\\n' "$('${REAL['ls']}' -A '${tmp}' | wc -l)" >> '${log}'\nexec '${REAL['sha256sum']}' "$@"\n`);
+      sh('rm', `if [ -z "\${TB_DROPPED-}" ]; then for a; do s=$a; done\n`
+        + `  if [ -n "\${TB_PLANT-}" ] && [ -f "$s/b" ] && [ ! -L "$s/b" ]; then '${REAL['rm']}' -f -- "$s/b"; '${REAL['ln']}' -s '${victim}' "$s/b"; echo planted >> '${log}'; fi\n`
+        + `  if [ -n "\${TB_TAMPER-}" ] && [ -f "$s/b" ]; then printf 'TAMPERED\\n' >> "$s/b"; echo tampered >> '${log}'; fi\nfi\n`
+        + `exec '${REAL['rm']}' "$@"\n`);
+      sh('cat', `if [ -z "\${TB_DROPPED-}" ]; then echo 'cat 0' >> '${log}'; [ -z "\${TB_FAIL_CAT-}" ] || exit 1; fi\nexec '${REAL['cat']}' "$@"\n`);
+      sh('ls', 'for a; do p=$a; done\ncase "$p" in\n'
+        + `  '${root}') [ -n "\${TB_LS_ROOT-}" ] && { printf 'drwxr-xr-x 2 %s 4096 Jan  1 00:00 x\\n' "$TB_LS_ROOT"; exit 0; } ;;\n`
+        + `  '${root}/captures') [ -n "\${TB_LS_CAPTURES+x}" ] && { printf '%s\\n' "$TB_LS_CAPTURES"; exit 0; } ;;\n`
+        + `  '${root}/results') [ -n "\${TB_LS_RESULTS+x}" ] && { printf '%s\\n' "$TB_LS_RESULTS"; exit 0; } ;;\n`
+        + `  '${tmp}') [ -n "\${TB_LS_TMP+x}" ] && { printf '%s\\n' "$TB_LS_TMP"; exit 0; } ;;\n`
+        + `esac\nexec '${REAL['ls']}' "$@"\n`);
       return { h, root, tmp, shims, log, victim };
     }
-    const env = (b: Box): NodeJS.ProcessEnv => ({ ...b.h.env, PATH: `${b.shims}:${b.h.env['PATH'] ?? ''}`, TMPDIR: b.tmp });
+    const env = (b: Box, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+      ({ ...b.h.env, PATH: `${b.shims}:${b.h.env['PATH'] ?? ''}`, TMPDIR: b.tmp, TB_LS_ROOT: '0 0', ...extra });
+    const PROG = '. "$1"; shift; exec sh -c "$TBA_BUILD_COPY_SH" sh "$@" "$TBA_BUILD_WRITE_SH"';
     /** The copy program as the box runs it: the box root, the build, the hash, the writer; stdin the bytes. */
-    const runCopy = (b: Box, sum = SUM, bytes = BYTES): { out: string; err: string; rc: number } => {
-      const r = spawnSync(BASH, ['-c', '. "$1"; shift; sh -c "$TBA_BUILD_COPY_SH" sh "$@" "$TBA_BUILD_WRITE_SH"', '_', VERB, b.root, V, sum],
-        { env: env(b), encoding: 'utf8', cwd: b.h.home, input: bytes });
+    const runCopy = (b: Box, o: { sum?: string; root?: string; env?: NodeJS.ProcessEnv } = {}): { out: string; err: string; rc: number } => {
+      const r = spawnSync(BASH, ['-c', PROG, '_', VERB, o.root ?? b.root, V, o.sum ?? SUM],
+        { env: env(b, o.env), encoding: 'utf8', cwd: b.h.home, input: BYTES });
       return { out: r.stdout ?? '', err: r.stderr ?? '', rc: r.status ?? -1 };
     };
     const shimLog = (b: Box): string[] => (existsSync(b.log) ? readFileSync(b.log, 'utf8').trim().split('\n').filter((l) => l !== '') : []);
@@ -1491,6 +1511,13 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(statSync(b.victim).mode & 0o7777).toBe(0o640);
     };
     const builds = (b: Box): string => join(b.root, 'captures', 'builds');
+    const handedOver = (b: Box): string[] => shimLog(b).filter((l) => l.startsWith('setpriv '));
+    /** Nothing was streamed or staged: the refusal came before the bytes were read. */
+    const noStream = (b: Box): void => {
+      const log = shimLog(b);
+      expect(log.filter((l) => l === 'cat 0' || l.startsWith('mktemp 0 ')), log.join('\n')).toEqual([]);
+      expect(readdirSync(b.tmp)).toEqual([]);
+    };
 
     it('installs the bytes read only at the build\'s name, prints installed, and leaves no stage and no temporary file', () => {
       const b = box();
@@ -1506,132 +1533,248 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
 
     it('a build already there is replaced by the new bytes', () => {
       const b = box();
-      mkdirSync(builds(b), { recursive: true });
+      mkdirSync(builds(b));
       writeFileSync(join(builds(b), V), 'OLDER\n', { mode: 0o555 });
       expect(runCopy(b).rc).toBe(0);
       expect(readFileSync(join(builds(b), V), 'utf8')).toBe(BYTES);
     });
 
-    // P1: every write under the box root is the box root owner's own act, through the drop, and root changes no owner.
-    it('P1: hands over through setpriv as the box root\'s owner, with groups cleared, and every write under the root runs dropped', () => {
+    // P1: every write under the box root is the owner of captures' own act, through the drop, and root changes no owner.
+    it('P1: hands over through setpriv as the owner of results, groups cleared, no inheritable capability, a reset environment', () => {
       const b = box();
       expect(runCopy(b).rc).toBe(0);
+      const st = statSync(join(b.root, 'results'));
+      expect(handedOver(b)).toEqual([expect.stringMatching(new RegExp(
+        `^setpriv --reuid=${st.uid} --regid=${st.gid} --clear-groups --inh-caps=-all --reset-env -- sh -c set -e; umask 022; `))]);
       const log = shimLog(b);
-      const st = statSync(b.root);
-      expect(log.filter((l) => l.startsWith('setpriv '))).toEqual([
-        expect.stringMatching(new RegExp(`^setpriv --reuid=${st.uid} --regid=${st.gid} --clear-groups -- sh -c set -e; umask 022; `)),
-      ]);
       expect(log.filter((l) => l.startsWith('chown '))).toEqual([]);
-      const underRoot = log.filter((l) => /^(chmod|mkdir|mv|mktemp) /.test(l) && l.includes(b.root));
-      expect(underRoot.map((l) => l.split(' ')[0])).toEqual(['mkdir', 'mkdir', 'mktemp', 'chmod', 'mv']);
+      const underRoot = log.filter((l) => /^(chmod|mkdir|mv|mktemp|install) /.test(l) && l.includes(b.root));
+      expect(underRoot.map((l) => l.split(' ')[0]), 'captures is there, so root makes nothing').toEqual(['mkdir', 'mktemp', 'chmod', 'mv']);
       for (const l of underRoot) expect(l, l).toMatch(/^\w+ 1 /);
     });
 
-    // P2: the stage is root's alone (mode 0700, outside the box root) and is gone before the hand-over and on every way out.
-    it('P2: stages outside the box root in a directory only its maker can enter, already removed when the bytes are handed over', () => {
+    it('P1: the writer is started holding neither of the copy\'s two reads, and works in the box root', () => {
       const b = box();
       expect(runCopy(b).rc).toBe(0);
       const log = shimLog(b);
-      const stage = log.find((l) => l.startsWith('mktemp 0 '));
-      expect(stage, log.join('\n')).toMatch(new RegExp(`^mktemp 0 ${escapeRe(b.tmp)}/\\.ccrc-build-copy\\.\\w+ 700$`));
+      expect(log).toContain(`writer-cwd ${b.root}`);
+      // listed by a plain command into a file, so the probe itself holds no pipe
+      const fds = readFileSync(`${b.log}.fds`, 'utf8').trim().split('\n');
+      expect(fds).toContain('0');
+      expect(fds).not.toContain('3');
+      expect(fds).not.toContain('4');
+    });
+
+    // P2: the stage is root's alone (mode 0700, in a parent that is root's or sticky, outside the box root), and is gone
+    // before the hash and the hand-over.
+    it('P2: stages in a 0700 directory of root\'s temporary folder, already removed when the bytes are hashed and handed over', () => {
+      const b = box();
+      expect(runCopy(b).rc).toBe(0);
+      const log = shimLog(b);
+      expect(log.find((l) => l.startsWith('mktemp 0 ')), log.join('\n')).toMatch(new RegExp(`^mktemp 0 ${escapeRe(b.tmp)}/\\.ccrc-build-copy\\.\\w+ 700$`));
+      expect(log).toContain('stages-at-hash 0');
       expect(log).toContain('stages-at-handover 0');
     });
 
-    it.each([
-      ['the hash differs', (b: Box) => runCopy(b, '0'.repeat(64)), 4],
-      ['the store is refused', (b: Box) => { mkdirSync(join(b.h.home, 'elsewhere')); symlinkSync(join(b.h.home, 'elsewhere'), join(b.root, 'captures')); return runCopy(b); }, 5],
-      ['the writer fails', (b: Box) => { mkdirSync(builds(b), { recursive: true }); chmodSync(builds(b), 0o500); return runCopy(b); }, 1],
-    ])('P2: %s: the stage is removed on that way out too', (_n, act, rc) => {
+    it('P2: a stage parent that is root\'s but not sticky is accepted', () => {
       const b = box();
-      expect(act(b).rc).toBe(rc);
+      chmodSync(b.tmp, 0o755);
+      const r = runCopy(b, { env: { TB_LS_TMP: 'drwxr-xr-x 2 0 0 4096 Jan  1 00:00 x' } });
+      expect(r.rc, r.out + r.err).toBe(0);
+    });
+
+    it.each([
+      ['neither root\'s nor sticky', (b: Box) => { chmodSync(b.tmp, 0o755); }, {}],
+      ['a link owned by root', (b: Box) => { const real = join(b.h.home, 'real-tmp'); mkdirSync(real); chmodSync(real, 0o1777); rmSync(b.tmp, { recursive: true }); symlinkSync(real, b.tmp); },
+        { TB_LS_TMP: 'lrwxrwxrwx 1 0 0 8 Jan  1 00:00 x' }],
+      ['a file owned by root', (b: Box) => { rmSync(b.tmp, { recursive: true }); writeFileSync(b.tmp, 'x'); }, { TB_LS_TMP: '-rw-r--r-- 1 0 0 1 Jan  1 00:00 x' }],
+      ['a link', (b: Box) => { const real = join(b.h.home, 'real-tmp'); mkdirSync(real, { mode: 0o1777 }); chmodSync(real, 0o1777); rmSync(b.tmp, { recursive: true }); symlinkSync(real, b.tmp); }, {}],
+    ])('P2: a stage parent that is %s refuses stage-parent (exit 1) before the stream', (_n, arrange, extra) => {
+      const b = box();
+      arrange(b);
+      const was = tree(b.root);
+      const r = runCopy(b, { env: extra });
+      expect([r.rc, r.out]).toEqual([1, 'stage-parent\n']);
+      expect(tree(b.root)).toEqual(was);
+      expect(shimLog(b).filter((l) => l === 'cat 0' || l.startsWith('mktemp 0 '))).toEqual([]);
+    });
+
+    it.each([
+      ['as given', (root: string) => root],
+      ['given with a trailing slash', (root: string) => `${root}/`],
+    ])('P2: a stage parent under the box root (the root %s) refuses stage-under-root (exit 1) before the stream', (_n, spell) => {
+      const b = box();
+      const inside = join(b.root, 'tmp-inside');
+      mkdirSync(inside);
+      chmodSync(inside, 0o1777);
+      const r = runCopy(b, { root: spell(b.root), env: { TMPDIR: inside } });
+      expect([r.rc, r.out]).toEqual([1, 'stage-under-root\n']);
+      expect(readdirSync(inside)).toEqual([]);
+      expect(handedOver(b)).toEqual([]);
+    });
+
+    it('P2: a stream that fails after the stage is made leaves no stage', () => {
+      const b = box();
+      const r = runCopy(b, { env: { TB_FAIL_CAT: '1' } });
+      expect(r.rc).not.toBe(0);
+      expect(shimLog(b)).toContain('cat 0');
       expect(readdirSync(b.tmp)).toEqual([]);
-      if (existsSync(builds(b))) chmodSync(builds(b), 0o755);
+      expect(handedOver(b)).toEqual([]);
     });
 
-    // P3: the hash that gates the install is of the very bytes handed over: a change to the stage after the hash reaches nothing.
-    it('P3: bytes changed in the stage after the hash are not what is installed', () => {
-      const b = box({ tamperAfterHash: true });
-      const r = runCopy(b);
-      expect(r.rc, r.err).toBe(0);
-      expect(readFileSync(join(builds(b), V), 'utf8')).toBe(BYTES);
+    it('P2: a termination during the stream removes the stage', async () => {
+      const b = box();
+      const child = spawn(BASH, ['-c', PROG, '_', VERB, b.root, V, SUM], { env: env(b), cwd: b.h.home, stdio: ['pipe', 'pipe', 'pipe'] });
+      const exited = new Promise<number | null>((res) => child.on('exit', (code) => res(code)));
+      child.stdin.write('PARTIAL');
+      const deadline = Date.now() + 10_000;
+      while (readdirSync(b.tmp).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      expect(readdirSync(b.tmp)).toHaveLength(1);
+      child.kill('SIGTERM');
+      await new Promise((r) => setTimeout(r, 100));
+      child.stdin.end();
+      expect(await exited).not.toBe(0);
+      expect(readdirSync(b.tmp)).toEqual([]);
+      expect(handedOver(b)).toEqual([]);
     });
 
-    it('P3: a hash that differs refuses with exit 4 before anything under the box root is made', () => {
+    // P3: the hash that gates the install is of the very bytes handed over.
+    it('P3: a change to the staged file before its path is removed is caught by the hash: exit 4, hash, nothing made', () => {
       const b = box();
       const was = tree(b.root);
-      const r = runCopy(b, '0'.repeat(64));
-      expect(r.rc).toBe(4);
-      expect(r.out).toBe('');
+      const r = runCopy(b, { env: { TB_TAMPER: '1' } });
+      expect(shimLog(b)).toContain('tampered');
+      expect([r.rc, r.out]).toEqual([4, 'hash\n']);
       expect(tree(b.root)).toEqual(was);
-      expect(shimLog(b).filter((l) => l.startsWith('setpriv '))).toEqual([]);
+      expect(handedOver(b)).toEqual([]);
     });
 
-    it('a link planted at the stage at the hand-over is not followed: the build\'s own bytes are installed and the link\'s target is untouched', () => {
-      const b = box({ plantAtHandover: true });
-      const r = runCopy(b);
+    it('P3: a link planted at the staged file before its path is removed is not followed: the build\'s own bytes are installed', () => {
+      const b = box();
+      const r = runCopy(b, { env: { TB_PLANT: '1' } });
+      expect(shimLog(b)).toContain('planted');
       expect(r.rc, r.err).toBe(0);
       expect(readFileSync(join(builds(b), V), 'utf8')).toBe(BYTES);
       victimAsWas(b);
     });
 
-    // P4: a link or an entry of the wrong kind refuses with exit 5 (build-store-refused), and the refusal changes nothing.
+    it('P3: a hash that differs refuses with exit 4 and the word hash, before anything under the box root is made', () => {
+      const b = box();
+      const was = tree(b.root);
+      const r = runCopy(b, { sum: '0'.repeat(64) });
+      expect([r.rc, r.out]).toEqual([4, 'hash\n']);
+      expect(tree(b.root)).toEqual(was);
+      expect(handedOver(b)).toEqual([]);
+      expect(readdirSync(b.tmp)).toEqual([]);
+    });
+
+    // P4, before the stream: the box root and captures, each refusal with its own word, changing nothing.
     it.each([
-      ['a link at captures', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); symlinkSync(d, join(b.root, 'captures')); }],
-      ['a link at captures/builds', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); mkdirSync(join(b.root, 'captures')); symlinkSync(d, builds(b)); }],
-      ['a dangling link at captures/builds', (b: Box) => { mkdirSync(join(b.root, 'captures')); symlinkSync(join(b.h.home, 'nowhere'), builds(b)); }],
-      ['a file at captures', (b: Box) => { writeFileSync(join(b.root, 'captures'), 'x'); }],
-      ['a file at captures/builds', (b: Box) => { mkdirSync(join(b.root, 'captures')); writeFileSync(builds(b), 'x'); }],
-      ['a link where the build goes', (b: Box) => { mkdirSync(builds(b), { recursive: true }); symlinkSync(b.victim, join(builds(b), V)); }],
-      ['a dangling link where the build goes', (b: Box) => { mkdirSync(builds(b), { recursive: true }); symlinkSync(join(b.h.home, 'nowhere'), join(builds(b), V)); }],
-      ['a directory where the build goes', (b: Box) => { mkdirSync(join(builds(b), V), { recursive: true }); }],
-    ])('P4: %s: exit 5, and nothing under the box root or outside it changes', (_n, arrange) => {
+      ['a box root owned by another user', (_b: Box) => ({ TB_LS_ROOT: '4242 4242' }), 'box-root-owner'],
+      ['a box root that is a file', (b: Box) => { rmSync(b.root, { recursive: true }); writeFileSync(b.root, 'x'); return {}; }, 'box-root-kind'],
+      ['a box root that is a link', (b: Box) => { const real = join(b.h.home, 'realroot'); mkdirSync(join(real, 'captures'), { recursive: true }); rmSync(b.root, { recursive: true }); symlinkSync(real, b.root); return {}; }, 'box-root-kind'],
+      ['no results directory', (b: Box) => { rmSync(join(b.root, 'results'), { recursive: true }); return {}; }, 'results-absent'],
+      ['a link at results', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); rmSync(join(b.root, 'results'), { recursive: true }); symlinkSync(d, join(b.root, 'results')); return {}; }, 'results-link'],
+      ['a file at results', (b: Box) => { rmSync(join(b.root, 'results'), { recursive: true }); writeFileSync(join(b.root, 'results'), 'x'); return {}; }, 'results-kind'],
+      ['a link at captures', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); rmSync(join(b.root, 'captures'), { recursive: true }); symlinkSync(d, join(b.root, 'captures')); return {}; }, 'captures-link'],
+      ['a dangling link at captures', (b: Box) => { rmSync(join(b.root, 'captures'), { recursive: true }); symlinkSync(join(b.h.home, 'nowhere'), join(b.root, 'captures')); return {}; }, 'captures-link'],
+      ['a file at captures', (b: Box) => { rmSync(join(b.root, 'captures'), { recursive: true }); writeFileSync(join(b.root, 'captures'), 'x'); return {}; }, 'captures-kind'],
+      ['results owned by root\'s uid', (_b: Box) => ({ TB_LS_RESULTS: 'drwxr-x--- 2 0 4242 4096 Jan  1 00:00 x' }), 'results-owner'],
+      ['results owned by root\'s group', (_b: Box) => ({ TB_LS_RESULTS: 'drwxr-x--- 2 4242 0 4096 Jan  1 00:00 x' }), 'results-owner'],
+      ['a results owner that is not a number', (_b: Box) => ({ TB_LS_RESULTS: 'drwxr-x--- 2 svc svc 4096 Jan  1 00:00 x' }), 'results-owner'],
+      ['an empty results owner and group', (_b: Box) => ({ TB_LS_RESULTS: 'drwxr-x---' }), 'results-owner'],
+      ['a results owner with no group', (_b: Box) => ({ TB_LS_RESULTS: 'drwxr-x--- 2 4242' }), 'results-owner'],
+      ['captures owned by another user than results', (_b: Box) => ({ TB_LS_CAPTURES: 'drwxr-x--- 2 4242 4242 4096 Jan  1 00:00 x' }), 'captures-owner'],
+    ])('P4: %s refuses %s (exit 5) before the stream, and nothing changes', (_n, arrange, word) => {
+      const b = box();
+      const extra = arrange(b);
+      const was = existsSync(b.root) && lstatSync(b.root).isDirectory() ? tree(b.root) : null;
+      const outside = existsSync(join(b.h.home, 'elsewhere')) ? tree(join(b.h.home, 'elsewhere')) : null;
+      const r = runCopy(b, { env: extra });
+      expect([r.rc, r.out], r.err).toEqual([5, `${word}\n`]);
+      if (was !== null) expect(tree(b.root)).toEqual(was);
+      if (outside !== null) expect(tree(join(b.h.home, 'elsewhere'))).toEqual(outside);
+      noStream(b);
+      expect(handedOver(b)).toEqual([]);
+      victimAsWas(b);
+    });
+
+    // The backfill (programme call 868): an absent captures is made by root, before the stream, only directly inside a box root
+    // just proved root's, with the installer's mode and the owner of results; then the copy goes on as usual.
+    it('backfill: captures absent under a root-owned box root is made 0750, owned as results is, and the copy succeeds', () => {
+      const b = box();
+      rmSync(join(b.root, 'captures'), { recursive: true });
+      const r = runCopy(b);
+      expect(r.rc, r.out + r.err).toBe(0);
+      const res = statSync(join(b.root, 'results'));
+      const cap = statSync(join(b.root, 'captures'));
+      expect([cap.mode & 0o7777, cap.uid, cap.gid]).toEqual([0o750, res.uid, res.gid]);
+      expect(readFileSync(join(builds(b), V), 'utf8')).toBe(BYTES);
+      const log = shimLog(b);
+      expect(log.filter((l) => l.startsWith('install '))).toEqual([`install 0 -d -m 0750 -o ${res.uid} -g ${res.gid} -- ${b.root}/captures`]);
+      expect(log.indexOf(log.find((l) => l.startsWith('install '))!), 'made before the stream').toBeLessThan(log.indexOf('cat 0'));
+    });
+
+    it.each([
+      ['a box root that is not root\'s', { TB_LS_ROOT: '4242 4242' }, 'box-root-owner'],
+      ['a results directory that is root\'s', { TB_LS_RESULTS: 'drwxr-x--- 2 0 0 4096 Jan  1 00:00 x' }, 'results-owner'],
+      ['a stage parent that is refused', { TB_LS_TMP: 'drwxr-xr-x 2 4242 4242 4096 Jan  1 00:00 x' }, 'stage-parent'],
+    ])('backfill: with captures absent, %s refuses %s and makes nothing', (_n, extra, word) => {
+      const b = box();
+      rmSync(join(b.root, 'captures'), { recursive: true });
+      const r = runCopy(b, { env: extra });
+      expect(r.out).toBe(`${word}\n`);
+      expect(existsSync(join(b.root, 'captures'))).toBe(false);
+      expect(shimLog(b).filter((l) => l.startsWith('install '))).toEqual([]);
+      noStream(b);
+    });
+
+    // Two writers of one fact (the installer's run-root step and the copy's backfill): the name, the mode and the owner rule
+    // of captures must agree, and the copy's identity must come from a directory the same step makes with the same owner.
+    it('the installer\'s run-root step and the copy\'s backfill agree on captures: its name, its mode, and its owner', () => {
+      const steps = readFileSync(join(REPO, 'deploy', 'testbox', 'box-steps'), 'utf8');
+      const loop = /^ {2}for d in ([a-z ]+); do dir (0[0-7]{3}) "\$SVC" "\$SVC" "\$ROOT\/\$d"; done$/m.exec(steps);
+      expect(loop, 'the run-root step\'s loop over the service\'s own directories').not.toBeNull();
+      const svcDirs = loop![1]!.split(' ');
+      const prog = sh(fixture(), '. "$1"; printf %s "$TBA_BUILD_COPY_SH"', [VERB]).out;
+      const made = /\[ -e "\$c" \] \|\| install -d -m (0[0-7]{3}) -o "\$u" -g "\$g" -- "\$c"; /.exec(prog);
+      expect(made, 'the copy\'s one backfill').not.toBeNull();
+      expect(made![1]).toBe(loop![2]);
+      const names = /r=\$\{1%\/\}; e=\$r\/(\w+); c=\$r\/(\w+); /.exec(prog);
+      expect(names).not.toBeNull();
+      expect(names![2]).toBe('captures');
+      expect(svcDirs).toContain(names![2]);
+      expect(svcDirs, 'the identity is read from a directory the same loop gives the service user').toContain(names![1]);
+      expect(prog, 'u and g are the owner of e').toContain('o=$(ls -ldn -- "$e" | awk \'{print $3" "$4}\'); u=${o% *}; g=${o#* }; ');
+    });
+
+    // P4, in the writer: captures/builds and the build's place, each refusal with its own word, changing nothing.
+    it.each([
+      ['a link at captures/builds', (b: Box) => { const d = join(b.h.home, 'elsewhere'); mkdirSync(d); symlinkSync(d, builds(b)); }, 'builds-link'],
+      ['a dangling link at captures/builds', (b: Box) => { symlinkSync(join(b.h.home, 'nowhere'), builds(b)); }, 'builds-link'],
+      ['a file at captures/builds', (b: Box) => { writeFileSync(builds(b), 'x'); }, 'builds-kind'],
+      ['a link where the build goes', (b: Box) => { mkdirSync(builds(b)); symlinkSync(b.victim, join(builds(b), V)); }, 'target-link'],
+      ['a dangling link where the build goes', (b: Box) => { mkdirSync(builds(b)); symlinkSync(join(b.h.home, 'nowhere'), join(builds(b), V)); }, 'target-link'],
+      ['a directory where the build goes', (b: Box) => { mkdirSync(join(builds(b), V), { recursive: true }); }, 'target-kind'],
+    ])('P4: %s refuses %s (exit 5), and nothing under the box root or outside it changes', (_n, arrange, word) => {
       const b = box();
       arrange(b);
       const was = tree(b.root);
       const outside = existsSync(join(b.h.home, 'elsewhere')) ? tree(join(b.h.home, 'elsewhere')) : null;
       const r = runCopy(b);
-      expect(r.rc, r.out + r.err).toBe(5);
-      expect(r.out).toBe('');
+      expect([r.rc, r.out], r.err).toEqual([5, `${word}\n`]);
       expect(tree(b.root)).toEqual(was);
       if (outside !== null) expect(tree(join(b.h.home, 'elsewhere'))).toEqual(outside);
       victimAsWas(b);
       expect(readdirSync(b.tmp)).toEqual([]);
     });
 
-    it.each([
-      ['root\'s own uid', '0 4242', 5],
-      ['root\'s own group', '4242 0', 5],
-      ['an owner that is not a number', 'svc svc', 1],
-      ['an owner it cannot read', '', 1],
-    ])('P1: a box root owned by %s (read as "%s") is never handed to: exit %i, nothing handed over or made', (_n, owner, rc) => {
-      const b = box({ lsOwner: owner });
-      const r = runCopy(b);
-      expect(r.rc).toBe(rc);
-      expect(shimLog(b).filter((l) => l.startsWith('setpriv '))).toEqual([]);
-      expect(readdirSync(b.root)).toEqual([]);
-      expect(readdirSync(b.tmp)).toEqual([]);
-    });
-
-    it('P2: a stage that would land under the box root is refused (exit 1), removed, and nothing is handed over', () => {
+    it('the writer removes its temporary file when placing the build fails, and installs nothing', () => {
       const b = box();
-      const r = spawnSync(BASH, ['-c', '. "$1"; shift; sh -c "$TBA_BUILD_COPY_SH" sh "$@" "$TBA_BUILD_WRITE_SH"', '_', VERB, b.root, V, SUM],
-        { env: { ...env(b), TMPDIR: b.root }, encoding: 'utf8', cwd: b.h.home, input: BYTES });
-      expect(r.status).toBe(1);
-      expect(readdirSync(b.root)).toEqual([]);
-      expect(shimLog(b).filter((l) => l.startsWith('setpriv '))).toEqual([]);
-    });
-
-    it('P4: a box root that is a link is refused with exit 5 and nothing is handed over', () => {
-      const b = box();
-      const real = join(b.h.home, 'realroot');
-      mkdirSync(real);
-      const linked = join(b.h.home, 'linkroot');
-      symlinkSync(real, linked);
-      const r = spawnSync(BASH, ['-c', '. "$1"; shift; sh -c "$TBA_BUILD_COPY_SH" sh "$@" "$TBA_BUILD_WRITE_SH"', '_', VERB, linked, V, SUM],
-        { env: env(b), encoding: 'utf8', cwd: b.h.home, input: BYTES });
-      expect(r.status).toBe(5);
-      expect(readdirSync(real)).toEqual([]);
-      expect(shimLog(b).filter((l) => l.startsWith('setpriv '))).toEqual([]);
+      const r = runCopy(b, { env: { TB_FAIL_CHMOD: '1' } });
+      expect(r.rc).toBe(1);
+      expect(shimLog(b).some((l) => l.startsWith('chmod 1 '))).toBe(true);
+      expect(readdirSync(builds(b))).toEqual([]);
     });
   });
 });

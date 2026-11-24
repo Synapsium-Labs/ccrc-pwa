@@ -15,11 +15,17 @@
 //     a builder refusal, a frame that never left, a deadline or a lost answer ................. `copy-failed`
 // A lost answer may have placed the build after all: the next capture finds out, since the box answers `build-absent` only
 // for a build it does not hold.
+// THE FOLD, and why it is safe: the lane needs only whether to try again within the hour, which every not-sent word answers
+// the same way, and it counts no attempt for any of them. What tells the operator why is the verb's own code, which this
+// adapter writes into one server log line on every typed refusal (and the fleet host's admin log keeps with the box's word).
 import type { BuildCopyAnswer, BuildCopyTransport } from './buildCaptureLane.js';
 import type { TestboxAdminOps } from './testboxAdmin.js';
 
 const REFUSED: ReadonlySet<string> = new Set(['build-not-on-fleet', 'build-not-regular', 'build-too-large']);
 const NO_LANE: ReadonlySet<string> = new Set(['not-connected', 'no-access-key']);
+
+/** A refusal code as the log line carries it: the verb's word when it is one, never free text from the answer. */
+const codeWord = (code: string): string => (/^[a-z0-9-]{1,64}$/.test(code) ? code : 'unreadable');
 
 /** The verb's last line: null if it does not describe this copy or a typed refusal. */
 function answerLine(stdout: string, build: string): { readonly ok: true } | { readonly ok: false; readonly code: string } | null {
@@ -50,8 +56,10 @@ export function testboxBuildCopy(ops: () => Pick<TestboxAdminOps, 'run'> | undef
         const line = answerLine(ran.stdout, job.build);
         if (line === null) return 'copy-failed';
         if (line.ok) return ran.code === 0 ? 'copied' : 'copy-failed';
-        if (REFUSED.has(line.code)) return 'copy-refused';
-        return NO_LANE.has(line.code) ? 'no-admin-lane' : 'copy-failed';
+        const word: BuildCopyAnswer = REFUSED.has(line.code) ? 'copy-refused' : NO_LANE.has(line.code) ? 'no-admin-lane' : 'copy-failed';
+        // The fold keeps the lane's one not-sent word; the verb's own code survives in this one line (and the admin log).
+        console.warn(`ccrc-server: build copy of ${job.build} refused by the test box admin lane: ${codeWord(line.code)} (recorded as ${word})`);
+        return word;
       } catch {
         return 'copy-failed';
       }

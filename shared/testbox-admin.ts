@@ -332,7 +332,7 @@ export const TESTBOX_ADMIN_CODE_SENTENCE: Record<TestboxAdminCode, string> = {
   'build-too-large': 'The fleet host\'s copy of that Claude Code build is larger than ccrc copies, so nothing was copied.',
   'build-hash-mismatch': 'The Claude Code build did not arrive on the box intact, so ccrc removed what arrived.',
   'build-copy-failed': 'The Claude Code build could not be copied to the box.',
-  'build-store-refused': 'The test box\'s build store holds a link or an entry of the wrong kind, so ccrc left it as it was.',
+  'build-store-refused': 'The test box\'s folders are not set up the way its installer makes them, so ccrc copied nothing there; use Repair on the box\'s card.',
 };
 /** The codes whose refusal carries `line`: the PUBLIC words of an access key whose line the operator removes from the box's
  *  authorized_keys by hand (D-8337). Never a private key; the route holds it to one printable line. */
