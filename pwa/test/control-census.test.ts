@@ -40,7 +40,8 @@
 //             under a fine pointer, the floor under a coarse one. The rule,
 //             the token's two values and the own floor are each checked.
 //   VARIANT   an anchor takes the floor from `buttonVariants()`'s class
-//             string, which is read: a floor removed inside `@ccrc/ui` reds.
+//             string, or from `LIST_ROW`'s for an anchor wearing the list row,
+//             which is read: a floor removed inside `@ccrc/ui` reds.
 //   INLINE    a link inside a sentence, which WCAG 2.2 SC 2.5.8 exempts.
 //             Checked in the NEGATIVE: an entry whose class gains a floor is
 //             no longer inline prose, and reds.
@@ -104,7 +105,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
-import { buttonVariants } from '@ccrc/ui';
+import { LIST_ROW, buttonVariants } from '@ccrc/ui';
 
 const PKG = path.join(import.meta.dirname, '..', '..');
 const APP_SRC = path.join(PKG, 'pwa', 'src');
@@ -248,6 +249,12 @@ const CONTROLS: Record<string, string> = {
   'fleet/AbandonSheet.tsx <a> (computed)':
     'VARIANT buttonVariants. The abandon sheet\'s two stand-alone links (the runs rebuild, D-8073): "See this run" and, under '
     + '"This run already closed.", "Open record": `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks.',
+  'fleet/SessionActionsSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The session actions sheet\'s Docs row (docs design 4.8; a link since desktop polish wave 174, so the '
+    + 'browser\'s middle click and copy link work on it): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks.',
+  'session/SessionFlows.tsx <a> (computed)':
+    'VARIANT LIST_ROW. The session menu\'s Docs item (docs design 4.8; a link since desktop polish wave 174): an anchor wearing '
+    + '`LIST_ROW`, the menu\'s own row, whose `min-h-row` (52px, `--row-h`) this census checks.',
   'fleet/GroupAbandonSheet.tsx <a> (computed)':
     'VARIANT buttonVariants. The group sheet\'s "Open record" links (the runs rebuild, D-8074): `GHOST_ANCHOR`, the ghost button on an anchor, '
     + 'whose `min-h-tap` this census checks.',
@@ -689,6 +696,11 @@ describe('hand-drawn controls', () => {
     const cited = Object.entries(CONTROLS).filter(([, v]) => v.startsWith('VARIANT'));
     expect(cited.length, 'the VARIANT arm has entries').toBeGreaterThan(0);
     for (const [k, v] of cited) {
+      // An anchor wearing the list row (the session menu's Docs item, desktop polish wave 174) reads `LIST_ROW`'s string.
+      if (v.startsWith('VARIANT LIST_ROW')) {
+        expect(LIST_ROW, k).toMatch(/(?:^|\s)min-h-(?:tap|row)(?:\s|$)/);
+        continue;
+      }
       expect(v, k).toContain('buttonVariants');
       expect(buttonVariants({ variant: 'ghost' }), k).toContain('min-h-tap');
     }

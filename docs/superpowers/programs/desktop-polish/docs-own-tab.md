@@ -116,7 +116,9 @@ refusal in `isDocsHref` that the route's pattern already made, was removed rathe
 - **The control census** registers an anchor only when it spells `href` or `onClick` as attributes, so the two anchors whose
   props are spread (`ConsoleLink`, `PlaceDoor`'s anchor) are outside it; their floors are measured in the browser leg (the
   link back, 44 px) and by `DOOR`'s `min-h-tap` (inferred). The two that are inside it (the sheet's row, the menu's item) are
-  registered by an edit to the census (see the wave-done mail for how that edit was cleared).
+  registered under VARIANT, the arm now reading `LIST_ROW`'s class string for the list-row anchor (no category covered
+  one). The census file was another worker's claim (6821); the edit was made on that worker's yes and the coordinator's
+  ruling to keep the anchors.
 - **A Docs tab narrowed below 900** remounts the reader (it becomes the console's tree); its scroll is not kept (inferred
   from the tree shape, not measured in a browser).
 - Two tabs on the same document at different refs carry the same title.
