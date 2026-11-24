@@ -111,9 +111,12 @@ describe('the upload route stores any file', () => {
     await app.close();
   });
 
-  it(`takes an extension of exactly ${String(CLIP_EXT_MAX)} characters`, async () => {
+  // Pinned as numbers, not from the constant (review 3647 F2c).
+  it('takes an extension of exactly twelve characters, and refuses thirteen', async () => {
+    expect(CLIP_EXT_MAX).toBe(12);
     const { app } = await makeApp();
-    const ext = 'a'.repeat(CLIP_EXT_MAX);
+    expect((await upload(app, `x.${'b'.repeat(13)}`)).statusCode).toBe(415);
+    const ext = 'a'.repeat(12);
     const res = await upload(app, `x.${ext}`);
     expect(res.statusCode).toBe(200);
     expect((res.json().clip as Clip).name.endsWith(`.${ext}`)).toBe(true);
@@ -164,6 +167,7 @@ describe('the limits that remain', () => {
   });
 
   it(`refuses a message naming a fifth file, whatever its type`, async () => {
+    expect(CLIP_MAX_PER_MESSAGE).toBe(4);
     const { app } = await makeApp();
     const paths: string[] = [];
     for (let i = 0; i <= CLIP_MAX_PER_MESSAGE; i++) paths.push(((await upload(app, `f${String(i)}.zip`)).json().clip as Clip).path);
@@ -259,6 +263,22 @@ describe('serving back stays an allow-list', () => {
       expect(res.headers['content-type']).toBe('application/octet-stream');
       expect(res.headers['x-content-type-options']).toBe('nosniff');
       expect(res.rawPayload.toString('utf8')).toBe(body);
+    });
+  }
+
+  // Every inline type keeps its own type on the wire, documents as well as
+  // pictures (a PDF is served inline, as on main).
+  for (const [ext, type] of [
+    ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['webp', 'image/webp'],
+    ['md', 'text/markdown'], ['txt', 'text/plain'], ['log', 'text/plain'], ['csv', 'text/csv'],
+    ['tsv', 'text/tab-separated-values'], ['json', 'application/json'], ['yaml', 'text/yaml'],
+    ['yml', 'text/yaml'], ['rtf', 'application/rtf'], ['pdf', 'application/pdf'],
+  ] as const) {
+    it(`serves an uploaded .${ext} inline as ${type}, with nosniff`, async () => {
+      const res = await served(`f.${ext}`, 'x');
+      expect(res.statusCode).toBe(200);
+      expect(String(res.headers['content-type']).split(';')[0]).toBe(type);
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
     });
   }
 

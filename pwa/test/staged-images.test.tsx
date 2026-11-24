@@ -150,7 +150,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={five} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByText(/Four attachments per message/)).toBeInTheDocument();
+    expect(await screen.findByText(/4 attachments per message/)).toBeInTheDocument();
     expect(screen.queryByTestId('img-s4.png')).not.toBeInTheDocument();
   });
 

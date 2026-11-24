@@ -129,8 +129,10 @@ export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code]
 const UPLOAD_ERROR_TEXT: Record<string, string> = {
   'too-large': 'That file is too large — 12 MB is the limit.',
   // Any file is admitted (2026-11-24): the server refuses only a name with no
-  // extension of the admitted shape, which the composer never sends (it adds
-  // `.noext`), so this is another client's or an older build's refusal.
+  // extension of the admitted shape. The composer gives every name such an
+  // extension before upload (a declared picture's, or `.noext`), reading its
+  // type table with no prototype to inherit from, so this is another client's
+  // or an older build's refusal.
   'unsupported-type': "Can't attach that — its name has no extension the server can store.",
   'bad-request': "That upload didn't arrive — try attaching it again.",
   'unknown-session': 'That session is not running.',

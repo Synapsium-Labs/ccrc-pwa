@@ -115,6 +115,17 @@ describe('the admitted extension shape', () => {
     expect(CLIP_IMAGE_EXTS.filter((e) => CLIP_MIME[e] === undefined)).toEqual([]);
   });
 
+  // Review 3647 F2d: the whole inline table, entry by entry, so deleting a
+  // document type (a PDF served as a download) or adding one is a red here.
+  it('is exactly the fourteen inline types, pictures and documents', () => {
+    expect({ ...CLIP_MIME }).toEqual({
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+      md: 'text/markdown', txt: 'text/plain', log: 'text/plain',
+      csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json',
+      yaml: 'text/yaml', yml: 'text/yaml', rtf: 'application/rtf', pdf: 'application/pdf',
+    });
+  });
+
   // These are bytes a client uploaded, served back from the app's own origin.
   // A script type in this table would make the clip route a same-origin script
   // host, and this is a security property rather than a judgement.

@@ -24,14 +24,16 @@ const SMALL_PNG_MAX = 1024 * 1024;
 const MAX_EDGE = 2048;
 const JPEG_QUALITY = 0.85;
 
-/** The picture types a nameless clipboard image is named for, so it still
- *  thumbnails and may still downscale. Clipboard-only: a picked or dropped file
- *  brings its own name, and that name is what decides. */
-const EXT_FOR_TYPE: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-};
+/** The declared picture types, and the extension each is named for when its
+ *  file's own name has no usable one, so it still thumbnails and may still
+ *  downscale, as on main. The type decides nothing else: it never overrides a
+ *  usable extension. A frozen table with no prototype, because the key is a
+ *  type the browser declares: `constructor` or `__proto__` must find nothing
+ *  (review 3647 F7, the repair `CLIP_MIME` got on the server). */
+const EXT_FOR_TYPE: Readonly<Partial<Record<string, string>>> = Object.freeze(Object.assign(
+  Object.create(null) as Record<string, string>,
+  { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' },
+));
 
 /**
  * The OS picker's filter: NONE. Any file is admitted, and an `accept` with no
@@ -52,8 +54,9 @@ export const ATTACH_ACCEPT: string | undefined = undefined;
  *  `clip-…-README.noext`. */
 export const NEUTRAL_EXT = 'noext';
 
-/** Bytes, the way the refusal says them: one decimal place of MB. */
-const mb = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** Bytes, the way the refusal says them: one decimal place of MB, rounded UP,
+ *  so a file one byte over the limit never reads as the limit itself. */
+const mb = (bytes: number): string => `${(Math.ceil((bytes * 10) / (1024 * 1024)) / 10).toFixed(1)} MB`;
 
 /** The one refusal that remains before an upload: the per-file limit, said
  *  with the file's name and its size. */
@@ -103,22 +106,19 @@ export async function downscaleImage(file: File | Blob): Promise<Blob> {
 }
 
 /**
- * The name the upload will carry. A file the user PICKED or dropped with an
- * extension of the admitted shape is handed back untouched, so the stem that
- * reaches the prompt is the name the user recognises. A nameless clipboard
- * picture — Safari leaves the name empty — is named from its MIME type, with
- * the timestamp keeping two pastes from colliding. Anything else with no
- * usable extension (none at all, one with symbols in it, one longer than
- * `CLIP_EXT_MAX`, a name made only of dots) keeps its own name and gains
- * `.noext`, so the server's gate, which admits by the extension's shape,
- * stores it rather than refusing it.
+ * The name the upload will carry. A file with an extension of the admitted
+ * shape is handed back untouched, whatever type it declares, so the stem that
+ * reaches the prompt is the name the user recognises. Otherwise the name gains
+ * an extension: a DECLARED picture (`image/png`, `image/jpeg`, `image/webp`)
+ * gains that picture's, so it thumbnails and may downscale as on main, and any
+ * other file gains `.noext`. A nameless file takes `pasted-<ms>` as its stem,
+ * the timestamp keeping two pastes from colliding; any other keeps its own
+ * name whole as the stem (`shot` becomes `shot.png`, `README` `README.noext`).
  */
 export function namedUpload(file: File, now: number): File {
   if (hasClipExt(file.name)) return file;
-  const ext = EXT_FOR_TYPE[file.type];
-  if (ext !== undefined && file.name === '') return new File([file], `pasted-${String(now)}.${ext}`, { type: file.type });
-  const base = file.name === '' ? `pasted-${String(now)}` : file.name;
-  return new File([file], `${base}.${NEUTRAL_EXT}`, { type: file.type });
+  const stem = file.name === '' ? `pasted-${String(now)}` : file.name;
+  return new File([file], `${stem}.${EXT_FOR_TYPE[file.type] ?? NEUTRAL_EXT}`, { type: file.type });
 }
 
 /** Every attachable file on the clipboard. Text pastes give []. */
@@ -213,7 +213,7 @@ export function useStagedImages(
   const add = (files: readonly File[]): void => {
     const cur = listRef.current;
     const room = MAX_IMAGES - cur.length;
-    if (files.length > room) toast(`Four attachments per message — send these first`, 'error');
+    if (files.length > room) toast(`${String(CLIP_MAX_PER_MESSAGE)} attachments per message — send these first`, 'error');
 
     // Built OUTSIDE any updater: pure, so StrictMode's double-invoke cannot
     // duplicate chips or leak an extra object URL, and two add() calls in the
@@ -221,14 +221,17 @@ export function useStagedImages(
     // closure over `cur`.
     const accepted: StagedImage[] = [];
     for (const file of files.slice(0, Math.max(0, room))) {
-      // A file that is not a picture goes up byte for byte, so its size now is
-      // its size at the server: refuse it here, with no chip, rather than
-      // upload 40 MB to be told no. A picture waits for its downscale.
-      if (!isImageClip(file.name) && file.size > CLIP_MAX_BYTES) {
-        toast(tooLargeText(file.name, file.size), 'error');
+      // Named FIRST: whether this is a picture is decided on the name it will
+      // carry, so a nameless clipboard picture waits for its downscale as on
+      // main, and the refusal always has a name to say (review 3647 F1).
+      const named = namedUpload(file, Date.now() + accepted.length);
+      // Anything else goes up byte for byte, so its size now is its size at
+      // the server: refuse it here, with no chip, rather than upload 40 MB to
+      // be told no.
+      if (!isImageClip(named.name) && named.size > CLIP_MAX_BYTES) {
+        toast(tooLargeText(named.name, named.size), 'error');
         continue;
       }
-      const named = namedUpload(file, Date.now() + accepted.length);
       seq.current += 1;
       accepted.push({
         key: `img${seq.current}`,

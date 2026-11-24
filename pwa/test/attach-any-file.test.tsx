@@ -56,6 +56,13 @@ describe('the extension shape, from the one definition', () => {
     }
   });
 
+  // Pinned as numbers, not from the constant, so a change to it is a red here.
+  it('takes an extension of twelve characters and not of thirteen', () => {
+    expect(CLIP_EXT_MAX).toBe(12);
+    expect(clipExtOf(`x.${'a'.repeat(12)}`)).toBe('aaaaaaaaaaaa');
+    expect(clipExtOf(`x.${'a'.repeat(13)}`)).toBe('');
+  });
+
   it('keeps the four pictures as the only thumbnails', () => {
     for (const n of ['a.png', 'a.JPG', 'a.jpeg', 'a.webp']) expect(isImageClip(n), n).toBe(true);
     for (const n of ['a.gif', 'a.svg', 'a.heic', 'a.pdf', 'a.zip', 'a']) expect(isImageClip(n), n).toBe(false);
@@ -86,6 +93,42 @@ describe('namedUpload gives every file a name the store admits', () => {
     expect(namedUpload(new File(['x'], '', { type: 'image/png' }), 7).name).toBe('pasted-7.png');
     expect(namedUpload(new File(['x'], '', { type: 'image/gif' }), 7).name).toBe('pasted-7.noext');
     expect(namedUpload(new File(['x'], '', { type: '' }), 7).name).toBe('pasted-7.noext');
+  });
+
+  // Review 3647 F1 case 1: a DECLARED picture whose name has no usable
+  // extension stays a picture, as on main — its own name kept as the stem —
+  // and only a file that is not a declared picture takes the neutral one.
+  it('gives a declared picture with an unusable name its picture extension, keeping its name', () => {
+    for (const [n, type, want] of [
+      ['photo.jpeg_large', 'image/jpeg', 'photo.jpeg_large.jpg'], ['shot', 'image/png', 'shot.png'],
+      ['frame', 'image/webp', 'frame.webp'], ['x.t~t', 'image/png', 'x.t~t.png'],
+    ] as const) {
+      const named = namedUpload(new File(['x'], n, { type }), 1);
+      expect(named.name, n).toBe(want);
+      expect(isImageClip(named.name), n).toBe(true);
+      expect(named.type, n).toBe(type);
+    }
+  });
+
+  it('gives the same names the neutral extension when the declared type is not one of the pictures', () => {
+    for (const type of ['application/octet-stream', 'image/gif', 'image/svg+xml', 'text/plain', '']) {
+      expect(namedUpload(new File(['x'], 'photo.jpeg_large', { type }), 1).name, type).toBe('photo.jpeg_large.noext');
+      expect(namedUpload(new File(['x'], 'shot', { type }), 1).name, type).toBe('shot.noext');
+    }
+  });
+
+  it('never lets the declared type override a usable extension', () => {
+    const md = new File(['# hi'], 'notes.md', { type: 'image/png' });
+    expect(namedUpload(md, 1)).toBe(md);
+  });
+
+  // Review 3647 F7: the type table is read by a browser-declared string, so a
+  // type named like an Object.prototype member must find nothing in it.
+  it('finds nothing for a declared type named like an object member', () => {
+    for (const type of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+      expect(namedUpload(new File(['x'], '', { type }), 7).name, type).toBe('pasted-7.noext');
+      expect(namedUpload(new File(['x'], 'shot', { type }), 7).name, type).toBe('shot.noext');
+    }
   });
 
   it('keeps the bytes: the renamed file is the same content', async () => {
@@ -183,7 +226,7 @@ function Harness({ files, downscale }: { files: File[]; downscale?: (f: File) =>
 
 describe('the limits that remain', () => {
   it('says the per-file limit with the name and the size', () => {
-    expect(tooLargeText('big.zip', CLIP_MAX_BYTES + 1)).toBe('big.zip is 12.0 MB — 12 MB per file is the limit');
+    expect(tooLargeText('big.zip', CLIP_MAX_BYTES + 1)).toBe('big.zip is 12.1 MB — 12 MB per file is the limit');
     expect(tooLargeText('huge.iso', 40 * 1024 * 1024)).toBe('huge.iso is 40.0 MB — 12 MB per file is the limit');
   });
 
@@ -191,7 +234,7 @@ describe('the limits that remain', () => {
     const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
     render(<><Harness files={[sized('big.zip', CLIP_MAX_BYTES + 1)]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('big.zip is 12.0 MB — 12 MB per file is the limit');
+    expect(await screen.findByRole('alert')).toHaveTextContent('big.zip is 12.1 MB — 12 MB per file is the limit');
     expect(upload).not.toHaveBeenCalled();
     expect(screen.queryByTestId('state-big.zip')).toBeNull();
   });
@@ -209,7 +252,8 @@ describe('the limits that remain', () => {
     const files = Array.from({ length: CLIP_MAX_PER_MESSAGE + 1 }, (_, i) => new File(['x'], `f${String(i)}.zip`));
     render(<><Harness files={files} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Four attachments per message/);
+    expect(CLIP_MAX_PER_MESSAGE).toBe(4);
+    expect(await screen.findByRole('alert')).toHaveTextContent('4 attachments per message');
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(CLIP_MAX_PER_MESSAGE));
     expect(screen.queryByTestId(`state-f${String(CLIP_MAX_PER_MESSAGE)}.zip`)).toBeNull();
   });
@@ -236,7 +280,52 @@ describe('the limits that remain', () => {
     render(<><Harness files={[sized('photo.jpg', 30 * 1024 * 1024, 'image/jpeg')]} downscale={async () => big} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
     await waitFor(() => expect(screen.getByTestId('state-photo.jpg')).toHaveTextContent('failed'));
-    expect(screen.getByTestId('error-photo.jpg')).toHaveTextContent('photo.jpg is 12.0 MB — 12 MB per file is the limit');
+    expect(screen.getByTestId('error-photo.jpg')).toHaveTextContent('photo.jpg is 12.1 MB — 12 MB per file is the limit');
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  // Review 3647 F9: a refusal never names the limit as the size.
+  it('never says the limit as the size of a file over it', () => {
+    for (const over of [1, 1000, 52_428]) {
+      const mbSaid = Number(/is ([0-9.]+) MB/.exec(tooLargeText('f', CLIP_MAX_BYTES + over))![1]);
+      expect(mbSaid, String(over)).toBeGreaterThan(12);
+    }
+  });
+
+  // Review 3647 F2b: the size arm skips one file and goes on with the batch.
+  it('in a batch, refuses the file over the limit and still stages the one beside it', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    render(<><Harness files={[sized('big.zip', CLIP_MAX_BYTES + 1), new File(['x'], 'ok.zip')]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('big.zip is 12.1 MB');
+    await waitFor(() => expect(screen.getByTestId('state-ok.zip')).toHaveTextContent('staged'));
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('state-big.zip')).toBeNull();
+  });
+
+  // Review 3647 F1 case 2: a nameless clipboard picture is a picture by its
+  // NAMED form, so its size is judged after the downscale, as on main.
+  it('downscales a nameless clipboard picture over the limit and stages it when the result fits', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1000);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const downscale = vi.fn().mockResolvedValue(new Blob(['small'], { type: 'image/jpeg' }));
+    render(<Harness files={[sized('', 15 * 1024 * 1024, 'image/jpeg')]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-pasted-1000.jpg')).toHaveTextContent('staged'));
+    expect(downscale).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a nameless clipboard picture still over the limit after its downscale fails with a name in the words', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1000);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const big = new Blob([new Uint8Array(CLIP_MAX_BYTES + 1)], { type: 'image/jpeg' });
+    render(<><Harness files={[sized('', 15 * 1024 * 1024, 'image/jpeg')]} downscale={async () => big} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-pasted-1000.jpg')).toHaveTextContent('failed'));
+    expect(screen.getByTestId('error-pasted-1000.jpg')).toHaveTextContent('pasted-1000.jpg is 12.1 MB — 12 MB per file is the limit');
     expect(upload).not.toHaveBeenCalled();
   });
 

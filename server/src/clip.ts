@@ -28,11 +28,15 @@ export const CLIP_NAME_RE = new RegExp(`^clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_AL
  * as `application/octet-stream` with `nosniff` — an opaque download, which no
  * browser renders. That fallback is the point, not a gap.
  *
- * Nothing here is a script type, and nothing ever should be: these are bytes a
- * client uploaded, served back from the app's OWN origin. `text/html`,
- * `image/svg+xml`, an XML or a JavaScript type in this table would make the
- * clip route a same-origin script host. The route also sends `nosniff`, so a
- * browser cannot promote one of these to HTML on its own.
+ * Nothing here is a type a browser runs as script in the page, and nothing
+ * ever should be: these are bytes a client uploaded, served back from the
+ * app's OWN origin. `text/html`, `image/svg+xml`, an XML or a JavaScript type
+ * in this table would make the clip route a same-origin script host. The one
+ * inline type that is more than a picture or text is `application/pdf`: a PDF
+ * is served inline, as on main, and opens in the browser's own viewer. The
+ * route also sends `nosniff`, so a browser cannot promote one of these to
+ * HTML on its own. A sandbox policy and a download disposition on the reply
+ * are a recorded follow-up (review 3647), in the route's file.
  *
  * A NULL-PROTOTYPE table, frozen. The route reads it as `CLIP_MIME[ext]`, and
  * now that any extension of the admitted shape is stored, `constructor` is
