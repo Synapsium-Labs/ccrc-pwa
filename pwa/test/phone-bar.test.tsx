@@ -61,9 +61,12 @@ const DESK_TABS = ['go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs'
 const phoneBar = (): HTMLElement | null => document.querySelector<HTMLElement>('nav.shell-phone-nav');
 const doorsOf = (el: Element): string[] => [...el.querySelectorAll('[data-command]')].map((d) => d.getAttribute('data-command')!);
 
+/** The app at `path`, reached inside the console: a tab whose first page is a Docs address is a Docs tab at any width, which
+ *  draws no phone bar (desktop polish wave 174, fix round 1 L1; `docs-own-tab.test.tsx`). */
 function mount(path: string): void {
-  act(() => { navigate(path); });
+  act(() => { navigate('/fleet'); });
   render(<App />);
+  act(() => { navigate(path); });
   act(() => useFleetStore.setState({ conn: 'open', sessions: [SESSION], fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
 }
 

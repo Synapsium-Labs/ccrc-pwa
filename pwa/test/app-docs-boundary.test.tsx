@@ -50,8 +50,11 @@ const detail = (): HTMLElement => document.querySelector('.shell-detail') as HTM
 
 describe('a throwing DocsScreen keeps the shell (M4.B1, W5 half)', () => {
   it('draws the fallback inside .shell-detail at /docs while .shell-nav stays mounted', () => {
-    navigate('/docs');
+    // Reached inside the console: a tab whose first page is a Docs address is a Docs tab, with no nav column (desktop
+    // polish wave 174, fix round 1 L1; `docs-own-tab.test.tsx`).
+    navigate('/fleet');
     render(<App />);
+    act(() => { navigate('/docs'); });
     expect(document.querySelector('.shell-nav')).not.toBeNull();
     expect(detail()).toContainElement(screen.getByText(FALLBACK));
     expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.objectContaining({ message: 'docs screen broke' }));
