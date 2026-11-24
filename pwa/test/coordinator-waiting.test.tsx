@@ -107,6 +107,8 @@ describe('the rule (waitingOnWorkers): its table', () => {
     const head = coord({ role: 'child' });
     const f = fleetOf(head, [working]);
     expect(workersOf('coord', f.sessions, f.runs)).toHaveLength(1);
+    // The row's selector answers `false` at once for a session that is not a coordinator: no worker is read for it.
+    expect(workersBusyOf(f.sessions.find((s) => s.id === 'coord')!, f.sessions, f.runs)).toBe(false);
     expect(rowWord(head, f)).toBe(STATE_WORD.done);
   });
 
