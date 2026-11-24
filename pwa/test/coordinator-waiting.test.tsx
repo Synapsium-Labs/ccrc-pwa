@@ -19,7 +19,7 @@ import { summaryParts, type WorkerRow } from '../src/fleet/rollup';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { sessionHeaderView } from '../src/session/sessionHeaderView';
 import { useFleetStore } from '../src/stores/fleet';
-import { setSkin } from '../src/lib/skin';
+import { setSkin, storedSkin } from '../src/lib/skin';
 import { DEAD_LIFECYCLE, fleetSession, hibernatedSession } from './fleetFixture';
 import { HOUR, MIN, NOW, run, sess } from './rollupFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -110,6 +110,51 @@ describe('the rule (waitingOnWorkers): its table', () => {
     expect(rowWord(head, f)).toBe(STATE_WORD.done);
   });
 
+  it('a closed run is no worker of it: its session still working leaves the coordinator done', () => {
+    const head = coord();
+    const w = sess('w1', 'project-c', { role: 'child', ...working });
+    const runs = [run(10, 'coord', 'w1', { state: 'done', closedAt: NOW - MIN })];
+    const f = { sessions: withRunBinding([head, w], runs), runs };
+    expect(workersOf('coord', f.sessions, f.runs)).toEqual([]);
+    expect(rowWord(head, f)).toBe(STATE_WORD.done);
+  });
+
+  it('a run the coordinator claims for itself is no worker of it', () => {
+    const head = coord();
+    const runs = [run(10, 'coord', 'coord')];
+    const f = { sessions: withRunBinding([head], runs), runs };
+    expect(workersOf('coord', f.sessions, f.runs)).toEqual([]);
+  });
+
+  it('a worker two of its runs name is one worker row', () => {
+    const head = coord();
+    // The wire binds it to both: its open run is 11 and its newest run is 12 (`workerOf` accepts either).
+    const w = sess('w1', 'project-c', {
+      role: 'child', ...working,
+      openRun: { id: 11, state: 'working', claimedBy: 'coord' }, run: { id: 12, state: 'working', claimedBy: 'coord' },
+    });
+    const runs = [run(11, 'coord', 'w1', { state: 'working' }), run(12, 'coord', 'w1', { state: 'working' })];
+    expect(workersOf('coord', [head, w], runs).map((r) => (r.kind === 'session' ? r.session.id : 'spawn'))).toEqual(['w1']);
+  });
+
+  it('a session the run names but whose binding names another run is no worker of it (workerOf, #746)', () => {
+    const head = coord();
+    const w = sess('w1', 'project-c', { role: 'child', ...working });
+    const bound = withRunBinding([head, w], [run(11, 'other', 'w1')]);
+    const runs = [run(10, 'coord', 'w1'), run(11, 'other', 'w1')];
+    expect(workersOf('coord', bound, runs)).toEqual([]);
+    expect(rowWord(head, { sessions: bound, runs })).toBe(STATE_WORD.done);
+  });
+
+  it('a dispatch whose session row already exists is that session, never a spawn as well', () => {
+    const head = coord();
+    const w = sess('w1', 'project-c', { role: 'child', status: 'idle', bucket: 'idle' });
+    const runs = [run(10, 'coord', 'w1', { state: 'planned', dispatchStartedAt: NOW - MIN })];
+    const f = { sessions: withRunBinding([head, w], runs), runs };
+    expect(workersOf('coord', f.sessions, f.runs).map((r) => r.kind)).toEqual(['session']);
+    expect(rowWord(head, f)).toBe(STATE_WORD.done);
+  });
+
   it('a coordinator with no workers reads done', () => {
     const head = coord();
     expect(rowWord(head, fleetOf(head, []))).toBe(STATE_WORD.done);
@@ -197,13 +242,16 @@ describe('the lamp', () => {
   });
 });
 
-describe('the row, in both skins, at desk and phone widths', () => {
+// Both skins draw this one row (`ProjectCard` and `FleetTable` both place `SessionLine`). Its desk and phone forms differ
+// only in CSS (container queries and the name's `fit-short`/`fit-full` pair, both in the DOM), which jsdom does not lay
+// out: the width budget below is the measured character budget of the phone's column, read off the rendered cell.
+describe('the row, in both skins', () => {
+  const before = storedSkin();
+  afterEach(() => { setSkin(before); });
   for (const skin of ['refined', 'instrument'] as const) {
-    for (const width of [360, 390, 1280, 1920]) {
-      it(`${skin} at ${width} px: the word on the meta line, the lamp speaking it, the name on its own`, () => {
+    {
+      it(`${skin}: the word on the meta line within the phone budget, the lamp speaking it, the name on its own`, () => {
         setSkin(skin);
-        window.innerWidth = width;
-        window.dispatchEvent(new Event('resize'));
         const head = coord({ name: 'a-rather-long-coordinator-name-here' });
         const f = fleetOf(head, [working]);
         act(() => useFleetStore.setState({ sessions: f.sessions, runs: f.runs }));
@@ -215,8 +263,9 @@ describe('the row, in both skins, at desk and phone widths', () => {
         expect(container.querySelector('.sess-lamp [role="img"]')?.getAttribute('aria-label')).toBe(WAITING_ON_WORKERS);
         // The word is never inside the name's button, so it cannot push the name off its line.
         expect(container.querySelector('.sess-open')?.textContent).not.toContain(WAITING_ON_WORKERS);
-        // The budget: the word is no longer than a phone name (`NAME_BUDGET`, measured at 360 for the same column).
-        expect(WAITING_ON_WORKERS.length).toBeLessThanOrEqual(NAME_BUDGET);
+        // The budget: the drawn word is no longer than a phone name (`NAME_BUDGET`, measured at 360 px for the same
+        // 226 px column), so at 360 it fits the meta line whole beside nothing longer than it.
+        expect(cell?.textContent?.length ?? Infinity).toBeLessThanOrEqual(NAME_BUDGET);
       });
     }
   }
