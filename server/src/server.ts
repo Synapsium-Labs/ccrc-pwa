@@ -117,6 +117,7 @@ import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overl
 import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
+import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
@@ -2288,12 +2289,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
     projectsChanged: () => projectWalk.drop(),
   });
-  // The Overlord's inbox doors (W1 inbox piece): box-token lanes behind the gate above, each read counted and recorded by the one runner.
+  // The Overlord's inbox doors (W1 inbox piece) and its history door (W1 PR B1): box-token lanes behind the gate above, each read
+  // counted and recorded by the one runner; the history door's link is the fleet state's, the one agent link this server holds.
+  const readRunner = runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
+    turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) });
   registerOverlordInboxRoutes(app, {
-    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(),
-    readRunner: runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
-      turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) }),
+    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(), readRunner,
   });
+  registerOverlordHistoryRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, io: deps.io, links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]) });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
