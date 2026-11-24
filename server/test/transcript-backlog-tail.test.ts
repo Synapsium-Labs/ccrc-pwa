@@ -1,6 +1,6 @@
-// The backlog's tail, characterized (desktop polish wave 171): today an unterminated last line is parsed when it parses
-// and the backlog's offset is the file's size, so a half-written last line is lost from the live view (neither half
-// parses). Fixture homes and temp files only.
+// The backlog's tail (desktop polish wave 171, the coordinator's ruling on run 3609's question): an unterminated last
+// line is not a record. The backlog holds its offset at the end of the last whole record, and the tailer delivers the
+// held line whole, exactly once, once its newline lands. Fixture homes and temp files only.
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,23 +44,23 @@ const tail = (file: string, offset: number) => {
 const tailers: Array<{ stop: () => void }> = [];
 afterEach(() => { for (const t of tailers.splice(0)) t.stop(); });
 
-describe('the last line, unterminated at the backlog (characterized)', () => {
-  it('a complete-JSON line whose newline had not landed: in the backlog at once, and not again from the tailer', { timeout: 10_000 }, async () => {
+describe('the held last line arrives exactly once, from the tailer', () => {
+  it('a complete-JSON line whose newline had not landed: not in the backlog, then once from the tailer', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     const held = userLine('held', 'complete but unterminated');
     writeFileSync(file, userLine('u1', 'one') + held.trimEnd());
     const b = await readBacklog(localIO, file, 50);
-    expect(uuidsOf(b.events)).toEqual(['u1', 'held']);
+    expect(uuidsOf(b.events)).toEqual(['u1']);
     const t = tail(file, b.offset);
     tailers.push(t);
     await settle();
     expect(t.events).toEqual([]);
     appendFileSync(file, `\n${userLine('u2', 'two')}`);
     await settle(1500);
-    expect(uuidsOf(t.events)).toEqual(['u2']);
+    expect(uuidsOf(t.events)).toEqual(['held', 'u2']);
   });
 
-  it('a half-written line is lost: not in the backlog, and never from the tailer', { timeout: 10_000 }, async () => {
+  it('a half-written line: not in the backlog, then once, whole, from the tailer', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     const held = userLine('held', 'written in two parts');
     const cut = Math.floor(held.length / 2);
@@ -71,10 +71,10 @@ describe('the last line, unterminated at the backlog (characterized)', () => {
     tailers.push(t);
     appendFileSync(file, held.slice(cut));
     await settle(1500);
-    expect(t.events).toEqual([]);
+    expect(t.events).toEqual([{ kind: 'user', uuid: 'held', ts: '2026-11-24T10:00:00.000Z', text: 'written in two parts' }]);
   });
 
-  it('a half-written helper fact is lost from the backlog and the tailer alike', { timeout: 10_000 }, async () => {
+  it('a held helper fact is not in the backlog\'s facts and comes once from the tailer; the scan\'s seam does not move', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     const held = launchLine('a1');
     writeFileSync(file, userLine('u1', 'one') + held.slice(0, 40));
@@ -85,11 +85,11 @@ describe('the last line, unterminated at the backlog (characterized)', () => {
     tailers.push(t);
     appendFileSync(file, held.slice(40));
     await settle(1500);
-    expect(t.helpers).toEqual([]);
+    expect(t.helpers.map((h) => h.id)).toEqual(['a1']);
   });
 });
 
-describe('a resume that presents the backlog\'s offset (characterized)', () => {
+describe('a resume that presents the held offset never shows the held line twice', () => {
   const ID = 'claude-a-project-f';
   const UUID_A = 'a'.repeat(36);
   const WORKDIR = '/data/projects/project-f';
@@ -128,7 +128,7 @@ describe('a resume that presents the backlog\'s offset (characterized)', () => {
   const events = (frames: SessionStreamMsg[]): string[] =>
     frames.flatMap((f) => (f.type === 'backlog' || f.type === 'events' ? uuidsOf(f.events) : []));
 
-  it('a half-written line is lost across the reconnect too', { timeout: 15_000 }, async () => {
+  it('the first stream holds it back, the resumed stream shows it once its newline lands', { timeout: 15_000 }, async () => {
     const held = userLine('held', 'held across a reconnect');
     const { home: h, file } = home(userLine('u1', 'one') + held.slice(0, 30));
     const first: SessionStreamMsg[] = [];
@@ -145,6 +145,6 @@ describe('a resume that presents the backlog\'s offset (characterized)', () => {
     expect(second.some((f) => f.type === 'backlog')).toBe(false);
     appendFileSync(file, held.slice(30));
     await settle(1500);
-    expect([...events(first), ...events(second)]).toEqual(['u1']);
+    expect([...events(first), ...events(second)]).toEqual(['u1', 'held']);
   });
 });

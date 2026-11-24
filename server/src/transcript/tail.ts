@@ -49,8 +49,11 @@ const decoder = new TextDecoder();
  *
  * THE SEAM (desktop polish wave 171). The window is framed in BYTES into whole records (a record is a line that ends in a
  * newline the window read). The backlog begins at a record start: the record holding the oldest of the last `lastN` events
- * is emitted whole, so the backlog may exceed `lastN` by the rest of that one record. The window's last line is framed as
- * a record even when it is unterminated, and the offset is the file's size, as before.
+ * is emitted whole, so the backlog may exceed `lastN` by the rest of that one record. An unterminated last line is not a
+ * record: it is neither parsed nor counted, and the offset is held at the end of the last whole record, so the tailer
+ * delivers that line whole once its newline lands (the coordinator's ruling on run 3609's ask). A window with no newline
+ * at all after a non-zero start lies wholly inside one record; it frames nothing and its offset stays the file's size, as
+ * before.
  */
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
   const st = await io.statMeasured(file);
@@ -85,15 +88,17 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
     head = nl >= 0 ? nl + 1 : bytes.length;
     cut = decoder.decode(bytes.subarray(0, nl >= 0 ? nl : bytes.length));
   }
-  const offset = st.size;
+  const last = bytes.lastIndexOf(0x0a);
+  /** Whole records are [head, recordsEnd): everything after the window's last newline is unterminated. */
+  const recordsEnd = last + 1 >= head ? last + 1 : head;
+  const offset = start > 0 && last < 0 ? st.size : start + recordsEnd;
 
   const records: { at: number; line: string; events: ChatEvent[] }[] = [];
-  for (let from = head; from < bytes.length;) {
+  for (let from = head; from < recordsEnd;) {
     const nl = bytes.indexOf(0x0a, from);
-    const end = nl < 0 ? bytes.length : nl;
-    const line = decoder.decode(bytes.subarray(from, end));
+    const line = decoder.decode(bytes.subarray(from, nl));
     if (line.trim() !== '') records.push({ at: from, line, events: parseTranscriptLine(line) });
-    from = end + 1;
+    from = nl + 1;
   }
   const helpers = records.flatMap((r) => helperFactsOf(r.line));
 

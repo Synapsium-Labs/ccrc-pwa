@@ -48,12 +48,13 @@ describe('the backlog seam: a record start', () => {
     expect(b.events.map(textOf)).toEqual(['m1 call 0', 'm1 call 1', 'two']);
   });
 
-  it('an unterminated last line is still parsed when it parses, and the offset is the file size (the tail is unchanged)', async () => {
+  it('an unterminated last line is not a record: not parsed, and the offset is held at the end of the last whole record', async () => {
     const file = tmpFile();
-    writeFileSync(file, userLine('u1', 'one') + userLine('u2', 'two').trimEnd());
+    const whole = userLine('u1', 'one');
+    writeFileSync(file, whole + userLine('u2', 'two').trimEnd());
     const b = await readBacklog(localIO, file, 50);
-    expect(b.events.map(textOf)).toEqual(['one', 'two']);
-    expect(b.offset).toBe(statSync(file).size);
+    expect(b.events.map(textOf)).toEqual(['one']);
+    expect(b.offset).toBe(Buffer.byteLength(whole));
   });
 
   it('a window read that succeeds with fewer bytes than it asked for is unreadable, never a short window', async () => {
@@ -65,6 +66,14 @@ describe('the backlog seam: a record start', () => {
       return r.ok ? { ...r, bytes: r.bytes.slice(1) } : r;
     } };
     expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: false, measured: false, scanEnd: size });
+  });
+
+  it('a file that is one unterminated line answers no event at offset 0', async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one').trimEnd());
+    const b = await readBacklog(localIO, file, 50);
+    expect(b.events).toEqual([]);
+    expect(b.offset).toBe(0);
   });
 
   it('multibyte text across a read boundary decodes whole', async () => {
