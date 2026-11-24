@@ -421,6 +421,39 @@ export function sessionProgramme<R extends { readonly id: number; readonly progr
   return boundOpenRun(runs, session)?.program ?? claimedRunsOf(runs, session.id)[0]?.program ?? null;
 }
 
+/** A finished worker its programme still keeps (D-8981): the closed run it did, that run's programme and wave, and the
+ *  coordinator that holds the programme's open work now. */
+export interface KeptRun {
+  readonly id: number;
+  readonly program: string;
+  /** The closed run's wave, or `null` when the wire did not carry one this build can read. */
+  readonly wave: number | null;
+  /** The closed run's claimant, which still claims open work of the same programme. */
+  readonly coordinatorId: string;
+}
+
+/** THE KEPT WORKER (D-8981), one decider: non-null when the session's NEWEST bound run (`sessionRunOf`, the server's
+ *  incarnation binding, so a recycled workspace name is never kept for an occupant before it) has closed, no open run
+ *  binds it, the wire names that run's programme (D-8980; an older server does not, and the row stays where it was), and
+ *  the run's claimant still claims an open run of that programme whose worker is not itself (`claimedRunsOf`, less a
+ *  run a session claims for itself, which is no box: `programmeBoxes.ts#boxRunsOf`'s rule).
+ *
+ *  `runs` is the FLEET's open runs (the runs frame): "the programme is still active" means its coordinator holds open work
+ *  of it, the same fact that draws the programme's box, so the box and the kept row never disagree within a frame.
+ *  `programs.state` is not read, on purpose: the close retires a programme whenever its open-run count reaches 0 and the
+ *  next wave's open never sets it back (`CoordStore#programmeLive`'s note), so it can read `done` while a wave is open.
+ *  A programme left with no open run (done, abandoned) keeps no one, and its workers read as in no programme. */
+export function keptRunOf<R extends { readonly program: string; readonly claimedBy: string | null; readonly sessionId: string | null; readonly state: RunState }>(
+  session: BoundSession, runs: readonly R[],
+): KeptRun | null {
+  if (sessionRunOf(session, 'open') !== null) return null;
+  const last = sessionRunOf(session);
+  if (last === null || !isRunClosed(last) || last.claimedBy === null || last.program === undefined) return null;
+  const { program, claimedBy } = last;
+  const active = claimedRunsOf(runs, claimedBy).some((r) => r.program === program && r.claimedBy !== r.sessionId);
+  return active ? { id: last.id, program, wave: last.wave ?? null, coordinatorId: claimedBy } : null;
+}
+
 /** THE WORKER READER (D-7182, D-7205): the listed session that is this run's worker, or `null`.
  *
  *  OPEN RUN: the session carrying the run's `sessionId` counts only when its own wire binding names this run
@@ -980,6 +1013,9 @@ export interface ChildRunContext {
   /** `id` is the run's number when the context was built from a run row (a `RunSummary` always has one), so a door can open its page. */
   readonly run: { id?: number; program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind?: RunKind } | null;
   readonly coordinator: string | null;
+  /** The closed run its programme still keeps it for (`keptRunOf`, D-8981), read only when no open run names it. Absent
+   *  or `null`: the label says what it said before (D-8982). */
+  readonly kept?: KeptRun | null;
 }
 
 const NO_RUN: ChildRunContext = { run: null, coordinator: null };
@@ -1037,6 +1073,16 @@ export const runSentence = (
     + (reclaimed ? '; it is stopped or reclaimed when the wave is done' : '');
 };
 
+/** A kept worker's label (D-8982): `<programme> · wave 3 · run closed`, or `<programme> · run closed` with no wave the
+ *  wire could carry. The programme and wave are said as an open child's are (`programmeWave`), so a finished worker reads
+ *  beside its working siblings in the same words, and "run closed" says why it does no wave now. */
+export const keptRunWords = (k: KeptRun): string =>
+  `${k.program}${k.wave === null ? '' : ` · wave ${k.wave}`} · run closed`;
+
+/** The kept label's title: the run's number, and why the row is still in its programme's box. */
+export const keptRunTitle = (k: KeptRun, coordinator: string | null): string =>
+  `run #${k.id} (${k.program}${k.wave === null ? '' : `, wave ${k.wave}`}) has closed; ${k.program} still has open work under ${coordinator ?? 'its coordinator'}, so this workspace stays in its box until it is released or reclaimed`;
+
 /**
  * The fleet line's label, projected from `childMarkOf` (the one reader of
  * `FleetSession.child`). THREE answers and no boolean (spec §5.1), worded by the
@@ -1057,6 +1103,10 @@ export const childOfRunLabel = (
   const m = childMarkOf(session);
   if (m.kind === 'child') {
     const r = ctx.run;
+    const kept = ctx.kept ?? null;
+    if (r === null && kept !== null) {
+      return { text: keptRunWords(kept), data: 'child', title: keptRunTitle(kept, ctx.coordinator) };
+    }
     if (r === null) {
       return {
         text: 'run not on the board',

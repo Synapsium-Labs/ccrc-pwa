@@ -35,7 +35,10 @@
 // top level — a child's position is a fact about the programme, everyone
 // else's is a fact about the fleet, and the two orders must not contend.
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { isDispatchPending, workerOf } from './runWords';
+import { isDispatchPending, workerOf, type KeptRun } from './runWords';
+
+/** No kept worker: `nestFleet`'s default, the five-rule tree. */
+const NO_KEPT: ReadonlyMap<string, KeptRun> = new Map();
 
 /** How deep a row sits. ONE level, deliberately — see `nestFleet`'s rule 4. */
 export type RowDepth = 0 | 1;
@@ -49,7 +52,7 @@ export type RowDepth = 0 | 1;
  *  "this row is a phantom" and "this row's session could not be read" the same
  *  value at the seam. */
 export type FleetRow =
-  | { kind: 'session'; depth: RowDepth; session: FleetSession }
+  | { kind: 'session'; depth: RowDepth; session: FleetSession; kept?: KeptRun }
   | { kind: 'pending'; depth: RowDepth; run: RunSummary };
 
 /** A row's one React key and identity, spelled ONCE for the card, a programme box's tray and its footer: a session by
@@ -100,7 +103,7 @@ const attentionFirst =
  * `project`, and a helper handed one session list cannot answer it (an empty
  * list has no project to read). Pure: returns new rows, mutates neither input.
  *
- * The five rules, each pinned on its own in `nestFleet.test.ts`:
+ * The six rules, 1 to 5 each pinned on its own in `nestFleet.test.ts` and 6 in `kept-worker.test.ts`:
  *
  *  1. A run whose owner AND worker are both on this list brackets the worker
  *     under the owner, exactly once — the child is REMOVED from the top level,
@@ -126,15 +129,23 @@ const attentionFirst =
  *     row the run has already bound, since two rows for one spawn is worse
  *     than none. With no parent on this list it renders at top level rather
  *     than vanishing: the operator still needs to know a spawn is happening.
+ *  6. A KEPT worker (D-8981: its run closed, and its coordinator still holds open work of that programme, `keptRunOf`,
+ *     decided once per fleet by the caller and handed in as `kept`) brackets under that coordinator when the coordinator
+ *     is on this list, after the working children and before a spawn: the programme's past, kept beside its present.
+ *     Rule 4 holds for it as for any edge (its coordinator is a parent; a kept worker that is a parent stays at top
+ *     level), and rule 3 too (a coordinator not on this list leaves it at depth 0). Every row of a kept session carries
+ *     its `kept` answer, so the box and the label read the decision instead of making it again. With no `kept` (the
+ *     default) the tree is rules 1 to 5, exactly.
  *
- * The delegation broker's rows (wave 4, spec §5.8: rules 6 to 11) are not drawn here any more. A session's subagents and
+ * The delegation broker's rows (wave 4, spec §5.8: its own rules 6 to 11, not rule 6 above) are not drawn here any more. A session's subagents and
  * workflows, its worktrees, the unowned trees and the groups that held them are no row of the fleet list, by the operator's
- * ruling of 2026-11-19 (D-8782): the tree is the five rules above and nothing else, and the session's own details list
+ * ruling of 2026-11-19 (D-8782): the tree is the six rules above and nothing else, and the session's own details list
  * its activities.
  */
 export function nestFleet(
   sessions: readonly FleetSession[],
   runs: readonly RunSummary[],
+  kept: ReadonlyMap<string, KeptRun> = NO_KEPT,
 ): FleetRow[] {
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
   const onList = (id: string | null): boolean => id !== null && byId.has(id);
@@ -162,6 +173,16 @@ export function nestFleet(
   const parents = new Set<string>();
   for (const r of settled) parents.add(r.claimedBy!);
   for (const r of pending) if (onList(r.claimedBy)) parents.add(r.claimedBy!);
+  // Rule 6's edges: a kept session whose coordinator is on this list, never under itself.
+  const keptUnder = sessions.flatMap((s) => {
+    const k = kept.get(s.id);
+    return k !== undefined && k.coordinatorId !== s.id && onList(k.coordinatorId) ? [[s, k.coordinatorId] as const] : [];
+  });
+  for (const [, parent] of keptUnder) parents.add(parent);
+  const row = (s: FleetSession, depth: RowDepth): FleetRow => {
+    const k = kept.get(s.id);
+    return k === undefined ? { kind: 'session', depth, session: s } : { kind: 'session', depth, session: s, kept: k };
+  };
 
   const kids = new Map<string, FleetRow[]>();
   const under = (parent: string, row: FleetRow): void => {
@@ -178,7 +199,14 @@ export function nestFleet(
     const child = r.sessionId!;
     if (parents.has(child) || placed.has(child)) continue;
     placed.add(child);
-    under(r.claimedBy!, { kind: 'session', depth: 1, session: byId.get(child)! });
+    under(r.claimedBy!, row(byId.get(child)!, 1));
+  }
+
+  // Rule 6, after every working child: a kept worker its run's open edge did not already place.
+  for (const [s, parent] of keptUnder) {
+    if (parents.has(s.id) || placed.has(s.id)) continue;
+    placed.add(s.id);
+    under(parent, row(s, 1));
   }
 
   // Rule 5, pushed after every settled child so the phantom reads last under
@@ -193,7 +221,7 @@ export function nestFleet(
   const rows: FleetRow[] = [];
   for (const s of sessions) {
     if (placed.has(s.id)) continue;
-    rows.push({ kind: 'session', depth: 0, session: s });
+    rows.push(row(s, 0));
     for (const row of kids.get(s.id) ?? []) rows.push(row);
   }
   // A parentless spawn has no session to sit beside — it is not in any bucket

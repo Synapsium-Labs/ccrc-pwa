@@ -77,7 +77,7 @@ import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
 import { useFolded } from '../../fleet/foldState';
-import { cardsOf, childRunContext, fleetTree, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
+import { cardsOf, childRunContext, fleetTree, keptOfFleet, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
 import { orphanNote } from '../../fleet/orphanWords';
 import { ProgrammeBox } from '../../fleet/ProgrammeBox';
 import type { ProgHue } from '../../fleet/programmeBoxes';
@@ -238,6 +238,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const treeGroups = useMemo(() => fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks),
     [sessions, chrome.projects.knownProjects, activeRuns, acks]);
   const tree = useMemo(() => new Map<string, FleetTreeGroup>(treeGroups.map((g) => [g.project, g] as const)), [treeGroups]);
+  // D-8982: a finished worker its programme still keeps says so on its line, by the tree's own decider over the same runs.
+  const kept = useMemo(() => keptOfFleet(sessions, activeRuns), [sessions, activeRuns]);
   // By id, once per fleet: what `sessions.find` answered, without a scan per row.
   const sessionById = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
   const lookup = useCallback((id: string): FleetSession | null => sessionById.get(id) ?? null, [sessionById]);
@@ -267,7 +269,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           projectPool={chrome.projects.poolFor(s.project)}
           onOpenRun={openRunDoor(runs, s)}
           workingOn={workingOn(s, cards)}
-          childRun={childRunContext(s, runs, lookup)}
+          childRun={childRunContext(s, runs, lookup, kept.get(s.id) ?? null)}
           coordinator={orphan?.presence ?? null}
           {...(orphan === null ? {} : { coordinatorTitle: orphan.title })}
         />
