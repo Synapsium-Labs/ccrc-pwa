@@ -31,7 +31,7 @@ Dated amendments, each marked "Amended 2026-11-24". Results, Deviations found an
   - **D-8974** reader-mode-first, defined in the reader-mode plan;
   - **D-8975** reader-mode-one-wave, defined in the reader-mode plan. It moves the layout rule, AR-X6's layout clause and FS-9 to P5.1, and records FS-10 against the overlay's Aa;
   - **D-8976** library-package-rename, defined in X1's appearance plan.
-- **The rename** is one commit in wave C's Task 1. It covers 24 files outside `docs/`:
+- **The rename** is wave C's Task 1, in two parts. Every import, test and script reference moves in its first commit, on the branch as built. Only the pin, the lock and the pin and asset tests' literals wait for the wave's last commit. It covers 24 files outside `docs/`:
   - `pwa/package.json` and its lock;
   - four source files;
   - fourteen pwa tests and one browser test;
@@ -47,3 +47,21 @@ Dated amendments, each marked "Amended 2026-11-24". Results, Deviations found an
 
 - One item of the brief's slice list is not P5's or P6's: "the `reader` place kind" is reader mode's own (XR1.3 adds it to P5.3's `Place.kind`). The amendment traces it that way. Nothing else in the brief was found false.
 - `main` had moved from `b8242bfa98` to `2b5b5e32a6`, a measured descendant. The intervening commits touch none of these documents.
+
+## Fix round 1 (review 3626 at `aa7f35875a`, the coordinator's rulings)
+
+Documents only, one push. Results, Deviations found and the review records stay byte-unchanged, and no new departure is defined.
+
+- **C1:** the rename's split is stated once, in the reader-mode plan's §3 and §4 and in X1's amendment. Every reference moves in Task 1's first commit, ahead of Tasks 2 to 7 and of PH, and only the registry-dependent pieces sit in the last commit. X1's Task 1 steps and Task 6 Step 1's BASE are reconciled by amendment note.
+- **C2:** the design spec now has a governs sentence, and dated lines under the acceptance row, the FS table, Waiting on you, the device item, Agreed (the library pin, the XR1 line) and R11.
+- **A1:** PH is built ahead on wave C's branch.
+- **A2:** the governs clauses read "the rest of the plan" in the three plans.
+- **A4:** the per-release import-list read sits in X1's Task 1 Step 1.
+- **A5:** X6.20's red test follows XR1.3's rename.
+- **A3, the coordinator's ruling:** with the overlay hidden, the leading focus guard sends focus to the frame, with a browser row and mutation row X6.77. It is a consequence of D-8975.
+- **The refuted findings' residues:**
+  - P5.1 plans a same-document remount during reader mode in the default layout;
+  - PH's `onPlace` rides input presence in `bridge.ts`;
+  - P2 to P4 share `pwa/package.json` and its lock, and `docs-parity.test.ts`, with wave C.
+- **Two rows the definition of done needs:** first paint in reader mode on a new mount, and `off` sent to the new mount after a same-document remount (X6.78).
+- **The HTML-artifacts plan's wave A5** still waits for P6, so it lands later under the new order.
