@@ -97,7 +97,8 @@ interface ScannedRoute { method: string; routePath: string; file: string }
  *  a `app.delete(...)` added tomorrow must be swept, not silently skipped. */
 function scanRoutes(file: string): ScannedRoute[] {
   const src = readFileSync(path.join(srcRoot, file), 'utf8');
-  return [...src.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)]
+  const scanned = file === 'review/routes.ts' ? src.replace(/\bscope\./g, 'app.') : src;
+  return [...scanned.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)]
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
@@ -141,6 +142,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('laneModelsRoutes.ts'),
   ...scanRoutes('coord/delegationBackfillRoutes.ts'),
   ...scanRoutes('coord/approvalCensusRoutes.ts'),
+  ...scanRoutes('review/routes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -773,7 +775,9 @@ describe('the scanner is looking at something', () => {
     // gated count 186 -> 188, the exempt-HTTP count stays 108.
     // 301 since `GET`/`POST /api/coord/coordinator-advisor` (the coordinator advisor, D-8967), session-gated and NOT EXEMPT, no box
     // token: the HTTP half 296 -> 298, the gated count 188 -> 190, the exempt-HTTP count stays 108.
-    expect(ROUTES.length).toBe(301);
+    // 302 with the draft-review read door (X3 R1): class 9, not a box-token lane. HTTP 298 -> 299; gated stays 190; exempt HTTP 108 -> 109.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
+    expect(ROUTES.length).toBe(302);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -964,7 +968,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 301 scanned + the static wildcard when the bundle is built.
+    // 302 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -978,6 +982,17 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
 // ── EXEMPT, in both directions ───────────────────────────────────────────
 
 describe('EXEMPT is complete in both directions', () => {
+  it('admits the capability read without a session under the armed gate', () => {
+    const decision = authVerdict({ method: 'POST', routeOptions: { url: '/api/review/open' }, headers: {} },
+      { enabled: true, secret: SECRET_UNREAD, store: new SessionStore(path.join(mkTmp('review-gate-'), 'sessions')) }, 0);
+    expect(decision).toEqual({ allow: true, verdict: 'ok', reason: 'exempt', device: null });
+  });
+
+  it('documents nine exemption classes', () => {
+    const source = readFileSync(path.join(srcRoot, 'auth/gate.ts'), 'utf8');
+    expect(source).toContain('THE NINE REASONS, and there are only nine:');
+  });
+
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
@@ -1005,7 +1020,7 @@ describe('EXEMPT is complete in both directions', () => {
     }
   });
 
-  it('exempts exactly the eight classes the plan names — nothing has crept in', () => {
+  it('exempts exactly the nine classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
     // that edits this list with a reviewer looking at it. 30 = /health + the 15
     // hard-token coordination lanes + /api/notify + login + status + the SPA shell
@@ -1141,6 +1156,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/questions/:id/release',
       'POST /api/questions/:id/rule',
       'POST /api/reader-lab/probe/:nonce/:name',
+      'POST /api/review/open',
       'POST /api/runs',
       'POST /api/runs/:id/advance',
       'POST /api/runs/:id/close',
@@ -1745,7 +1761,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 298 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 299 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1809,7 +1825,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 298 HTTP routes, not the 108 exempt.
+          //    is not itself flag-aware — the assertion that covers all 299 HTTP routes, not the 109 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
