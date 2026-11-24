@@ -129,7 +129,8 @@ describe('the six doors and the table agree (a door this file does not drive wou
   it('every overlord row is one of the six doors driven here, card-record being the card door\'s second page', () => {
     const rows = Object.entries(OVERLORD_DOORS).filter(([, r]) => r.group === 'overlord').map(([k]) => k);
     // D-8809: `link-team` (POST /api/linking/confirm) is driven through the real gate in `linking-overlord-confirm.test.ts`.
-    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record', 'link-team'].sort());
+    // The inbox piece's three doors (`inbox`, `messages`, `acknowledge`) are driven through the real gate in `overlord-inbox-routes.test.ts`.
+    expect(rows.sort()).toEqual([...DOORS.map((d) => d.key), 'card-record', 'link-team', 'inbox', 'messages', 'acknowledge'].sort());
   });
 });
 

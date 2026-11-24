@@ -1,0 +1,19 @@
+[
+  "grep -n 'ccd ws-add' ccd/ccd",
+  "grep -rn ws-add server/test",
+  "rg -n \"ccd ws-add --child\" ccd",
+  "echo \"ccd ws-add project-a\"",
+  "echo run ccd ws-add later",
+  "echo hi # ccd ws-add project-a",
+  "git commit -m \"fix(ccd): ccd ws-add refuses a blank title\"",
+  "git commit -F - <<'EOF'\nccd ws-add is the server's to compose\nEOF",
+  "gh pr create --title 'the child ws-add deny' --body-file /tmp/body.md",
+  "ccd ws-addx project-a",
+  "xccd ws-add project-a",
+  "ccd ws-list",
+  "ccd caps",
+  "ccd swap-self lane-b",
+  "ccd/ccd --help | grep ws-add",
+  "./node_modules/.bin/vitest run test/ccd-ws-add-base.test.ts",
+  "git diff origin/main -- ccd/ccd | grep -n ws-add"
+]

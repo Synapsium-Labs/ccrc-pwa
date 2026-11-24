@@ -244,7 +244,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     // runs under: before a set is in place, and always on a managed box, whose act restarts the service when node
     // changes and writes `tools.json` only after that start (spec 2026-11-22 §2.5).
     pristine: {
-      settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),
+      settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths, optional) => runTreeFiles(git, m, id, paths, optional)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
     probes: probeDeskFor(cfg, seams.probeRunner ?? null), captures: captureDeskFor(cfg),

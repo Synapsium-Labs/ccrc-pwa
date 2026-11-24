@@ -81,6 +81,11 @@ const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
  *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
 const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
 
+/** The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): `GET` and `POST
+ *  /api/coord/delegation-backfill`, a routes file of its own with NO box-token lane. The operator's, session-gated:
+ *  `DELEGATION_BACKFILL_DOORS`. */
+const DELEGATION_BACKFILL_SRC = read('server/src/coord/delegationBackfillRoutes.ts');
+
 /** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
  *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
  *  `DECISION_MODEL_DOORS`. */
@@ -102,10 +107,14 @@ const REMAINING_LANES = lanesIn(REMAINING_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
 const QUIZ_LANES = lanesIn(QUIZ_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
+/** The Overlord's inbox doors (Overlord W1, inbox piece), a routes file of its own beside `overlordRoutes.ts`, which registers only the
+ *  operator's session-gated doors: three box-token machine lanes, each behind the Overlord gate. */
+const OVERLORD_INBOX_SRC = read('server/src/coord/overlordInboxRoutes.ts');
+const OVERLORD_INBOX_LANES = lanesIn(OVERLORD_INBOX_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES, ...OVERLORD_INBOX_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -217,6 +226,12 @@ const MODELS_DOORS = ['/api/models/:lane'];
  *  EXEMPT table. */
 const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
 
+/** The one-time pass's door (session helpers S2, D-8874), registered from `server/src/coord/delegationBackfillRoutes.ts`, which no harvest
+ *  above can see: the dry run (`GET`) and the pass or its undo (`POST`), one path registered twice, so listed once per registration and
+ *  compared with the file's registrations in both directions below. The operator's, behind the session gate, no box token, in no EXEMPT
+ *  table; the pass also refuses while sign-in is dark. */
+const DELEGATION_BACKFILL_DOORS = ['/api/coord/delegation-backfill', '/api/coord/delegation-backfill'];
+
 /** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
  *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
 const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
@@ -225,7 +240,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
-  ...DECISION_MODEL_DOORS, ...MODELS_DOORS, ...APPROVAL_CENSUS_DOORS];
+  ...DECISION_MODEL_DOORS, ...DELEGATION_BACKFILL_DOORS, ...MODELS_DOORS,...APPROVAL_CENSUS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -299,7 +314,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Run 3212: POST /api/continuity/quiz-runs/:id/confirm (the weekly timer's unattended confirmation), POST
   // /api/continuity/quiz-status (its tick report) and POST /api/continuity/quiz-baseline/live (the coordinator's Live on the
   // baseline), three box-token lanes in the quiz file: ninety-nine machine lanes in all.
-  'ninety-seven', 'ninety-eight', 'ninety-nine'];
+  'ninety-seven', 'ninety-eight', 'ninety-nine',
+  // The Overlord's inbox doors (W1 inbox piece): GET /api/overlord/inbox, GET /api/overlord/messages/:id and POST
+  // /api/overlord/messages/:id/acknowledge, three box-token lanes in the inbox routes file: one hundred and two in all.
+  'one hundred', 'one hundred and one', 'one hundred and two'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -459,7 +477,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost a box-token lane, or the rule door gained a token check')
       .toEqual(['POST /api/continuity/quiz-runs', 'POST /api/continuity/quiz-runs/:id/confirm', 'POST /api/continuity/quiz-status',
         'POST /api/continuity/quiz-baseline/live']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
+    // …and the Overlord's inbox doors' three (Overlord W1, inbox piece): the inbox, one message and its acknowledge, by name.
+    expect(OVERLORD_INBOX_LANES, 'coord/overlordInboxRoutes.ts lost a box-token lane, or gained a door with no census row')
+      .toEqual(['GET /api/overlord/inbox', 'GET /api/overlord/messages/:id', 'POST /api/overlord/messages/:id/acknowledge']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length + OVERLORD_INBOX_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -542,6 +563,18 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(lanesIn(APPROVAL_CENSUS_SRC), 'the census read consults the box token — it is the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of APPROVAL_CENSUS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('DELEGATION_BACKFILL_DOORS is exactly what the one-time pass\'s file registers, in both directions; none is a lane or EXEMPT (D-8874)', () => {
+    const keys = registrationsIn(DELEGATION_BACKFILL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'delegationBackfillRoutes.ts and DELEGATION_BACKFILL_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...DELEGATION_BACKFILL_DOORS].sort());
+    expect([...keys].sort(), 'the dry run is a GET, the pass and the undo one POST').toEqual(['GET /api/coord/delegation-backfill', 'POST /api/coord/delegation-backfill']);
+    expect(lanesIn(DELEGATION_BACKFILL_SRC), 'a door of the one-time pass consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of DELEGATION_BACKFILL_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
     }
   });

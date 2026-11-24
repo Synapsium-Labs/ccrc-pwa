@@ -223,7 +223,7 @@ describe('the screen\'s own wiring — each prop is the store\'s act, not a copy
   it('Back leaves for the fleet, which is the only way out of a session on a phone', () => {
     renderScreen();
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/fleet');
   });
 
   it('Retry on a failed send calls the STORE\'s retry, with that send\'s own key', async () => {

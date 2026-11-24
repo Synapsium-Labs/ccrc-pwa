@@ -1791,8 +1791,9 @@ const boxEnvAssignments = (t: string): string[] => shellCode(t).filter((l) => /\
 
 /** D-7568, named exception: TB7's installer checks its staging tree's MANIFEST in phase 1, as plan task TB7 requires
  *  (the first release is trusted on its transport checksum and its MANIFEST, D-7424), through ccd/ccrc's own
- *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. */
-const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/install.sh: ( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
+ *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. It is a step of
+ *  `deploy/testbox/box-steps` since D-8903, where the installer and the box updater both call it: still one line. */
+const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/box-steps: ( cd "$1" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
 
 describe('counted exits (D-7408, D-7457)', () => {
   it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0 (TB7\'s installer MANIFEST line the one named exception, D-7568)', async () => {

@@ -1,13 +1,17 @@
 # A pristine install (D-7407, D-7409; spec §2.2 "Pristine installs", §2.3): `npm ci` from one key's inputs alone, as
 # the install user, with the prepare's network (loopback and the proxy, whose address is in
 # ccrc-testbox-install.service.d/50-ccrc-testbox.conf with User= and RuntimeMaxSec=) and the run caps (its slice).
-# The privileged first step makes `install/run`; the privileged last step, on success, moves the build's node_modules
-# to pristine/<key>, root's. No environment file: every value comes from specs/install (D-7451).
+# The privileged first step makes `install/run`, the only writable path, optional (`-`) as in the prepare unit
+# (D-8961); the privileged last step, on success, moves the build's node_modules to pristine/<key>, root's.
+# Type=oneshot, so that last step (`ExecStartPost=`) runs once `npm ci` has EXITED 0: under Type=exec it ran as soon as
+# the main was started, found no node_modules and failed the unit, killing the install (D-8964). Its time
+# bound is therefore TimeoutStartSec= in the drop-in (RuntimeMaxSec= does nothing for a oneshot). No environment file:
+# every value comes from specs/install (D-7451).
 [Unit]
 Description=ccrc test box: a pristine install
 
 [Service]
-Type=exec
+Type=oneshot
 User=ccrc-tb-install
 Slice=ccrc-testbox-install.slice
 ExecStartPre=+@@TREE@@/deploy/testbox/bin/install-pre @@ROOT@@/specs/install
@@ -23,4 +27,4 @@ PrivateDevices=yes
 PrivateTmp=yes
 RemoveIPC=yes
 ProtectSystem=strict
-ReadWritePaths=@@ROOT@@/install/run
+ReadWritePaths=-@@ROOT@@/install/run

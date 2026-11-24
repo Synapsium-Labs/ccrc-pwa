@@ -3,25 +3,29 @@
 // only, and not in an open session, where the composer owns the bottom of the screen (`phoneBarShown`): mounted, never
 // CSS-hidden, like every width-gated part.
 //
-// ITS DOORS ARE THE CONSOLE'S PLACES, fleet first (`PLACES`, `lib/places.ts`, the one list both desk bars read
-// too), then the Search door. Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by the word it
+// ITS DOORS ARE THE CONSOLE'S PLACES (`placesFor`, `lib/places.ts`, the one derivation both desk bars read too): the
+// Overlord's first while its door is drawn, then the fleet, and then the Search door. As many places as fit beside Search
+// at `PHONE_DOOR_FIT_PX` each (50 px: the tap minimum raised to the width "Accounts" needs, slug
+// `phone-door-floor-is-the-word`) are drawn (`phoneDoorsFit`, over the bar's own measured width), dropped from the end of the
+// list, never the Overlord's or the Fleet's; a dropped place stays reachable through Search (Overlord W1 home, plan question 13). Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by the word it
 // shows (its route's title, or the place's `short` word where it has one: "Waiting", review 1722) and, while it counts
 // something, by its count too ("Inbox, 2 waiting for you", "Waiting, 3 waiting on you", `placeBadge`); the place the page is on
 // or under carries `aria-current="page"` (`topRouteOf`, the reader of Instrument's top bar doors too). Search is
 // `commandDoor('open-palette')`, the desk bar's search door. This file holds markup and its own class names only
 // (`styles/shell.css`).
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useState, type ReactNode } from 'react';
 import { CountBadge, Door, Icon } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
 import { badgePrint, placeBadge, useNavBadges } from '../fleet/navBadges';
-import { PLACES, type Place } from '../lib/places';
+import { phoneDoorsFit, placesFor, type Place } from '../lib/places';
 import { useLocation } from '../lib/router';
 import { ROUTES, topRouteOf } from '../lib/routes';
+import { useDesignationState, useOverlordShown } from '../stores/overlord';
 
 /** `ROUTES`' title for a place, so the bar never spells a place's name of its own. */
 function titleOf(id: string): string {
   const route = ROUTES.find((r) => r.id === id);
-  if (route === undefined) throw new Error(`PLACES names ${id}, which is not a route`);
+  if (route === undefined) throw new Error(`placesFor names ${id}, which is not a route`);
   return route.title;
 }
 
@@ -44,13 +48,31 @@ function PlaceDoor({ place, here, count, word }: { place: Place; here: boolean; 
   );
 }
 
+/** The bar's own width, measured: the window's until the bar is laid out, then its box's, followed as it resizes. */
+function useBarWidth(): [(el: HTMLDivElement | null) => void, number] {
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useLayoutEffect(() => {
+    if (el === null) return undefined;
+    const measure = (): void => { if (el.clientWidth > 0) setWidth(el.clientWidth); };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [setEl, width];
+}
+
 export function PhoneBar(): ReactNode {
   const { path } = useLocation();
   const here = topRouteOf(path)?.id ?? null;
   const badges = useNavBadges();
+  const places = placesFor(useOverlordShown(), useDesignationState());
+  const [barRef, width] = useBarWidth();
   return (
-    <div className="phone-bar">
-      {PLACES.map((place) => <PlaceDoor key={place.id} place={place} here={here === place.id} {...placeBadge(place.id, badges)} />)}
+    <div className="phone-bar" ref={barRef}>
+      {phoneDoorsFit(width, places).map((place) => <PlaceDoor key={place.id} place={place} here={here === place.id} {...placeBadge(place.id, badges)} />)}
       <Door {...commandDoor('open-palette')} glyph={<Icon name="search" />} aria-label="Search and commands" className="phone-bar-door">
         <span className="phone-bar-word" aria-hidden="true">Search</span>
       </Door>

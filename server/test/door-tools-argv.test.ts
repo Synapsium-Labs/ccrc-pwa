@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DOOR_TOOLS } from '../../ccd/door-process.mjs';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER, WITNESS_KEY_HEADER } from '../../shared/continuity-door.js';
 import { harnessBin } from './ccdWsHelpers.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
@@ -197,6 +198,36 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     expect(JSON.parse(s.body)).toEqual({ fromId: ID, fromUuid: UUID });
   });
 
+  it('inbox: GET /api/overlord/inbox with the pane\'s pair in the query, no body', async () => {
+    const r = await door('inbox', {});
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.inbox');
+    expect(q(s.url)).toEqual(PAIR);
+    expect(s.body).toBe('');
+  });
+
+  it('messages: GET /api/overlord/messages/9 with the pane\'s pair in the query, no body', async () => {
+    const r = await door('messages', { id: 9 });
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.messages', '9');
+    expect(q(s.url)).toEqual(PAIR);
+    expect(s.body).toBe('');
+  });
+
+  it('acknowledge: POST /api/overlord/messages/9/acknowledge with exactly the pane\'s pair as the body', async () => {
+    const r = await door('acknowledge', { id: 9 });
+    expect(r.status, r.stderr).toBe(0);
+    const s = arrived('overlord.acknowledge', '9');
+    expect(JSON.parse(s.body)).toEqual(PAIR);
+    expect(s.url.search).toBe('');
+  });
+
+  it('messages and acknowledge refuse an id that is not a positive integer before anything runs', () => {
+    for (const n of ['messages', 'acknowledge']) {
+      for (const bad of [undefined, 0, -1, 1.5, '7', null]) expect(() => row(n).argv({ id: bad }, ID), `${n} ${String(bad)}`).toThrow('id is a message id');
+    }
+  });
+
   it('read: with no row marked a reader, every input is refused by the row\'s own argv builder, so nothing is run or sent', () => {
     for (const input of [{ door: 'card' }, { door: 'note_list', args: {} }, { door: 'messages' }, {}, { door: 5 }]) {
       expect(() => row('read').argv(input, ID), JSON.stringify(input)).toThrow(/no door is readable yet|door is the name/);
@@ -205,8 +236,46 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
   });
 
   it('covers every row of the table', () => {
-    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team', 'read'];
+    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'inbox', 'messages', 'acknowledge', 'link_team', 'read'];
     expect(ROWS.map((r) => r.name)).toEqual(covered);
+  });
+});
+
+/** The fence follows the Overlord's door table (the inbox plan's question 15): a tool whose route has an `OVERLORD_DOORS` row of
+ *  the overlord group carries that row's verb class as its `class`, and is fenced exactly when a row for the route is a write.
+ *  A route has more than one row when a read can also write (the card's recording page), and then a write among them fences it. */
+describe('every tool\'s class and fence follow the Overlord door table', () => {
+  type Meta = { name: string; verb: string | null; class: string; fenced: boolean; reader: boolean };
+  const META = DOOR_TOOLS as unknown as Meta[];
+  const doorsOf = (verb: string) => {
+    const { method, tmpl } = route(verb);
+    const p = tmpl.replace('{id}', ':id');
+    return Object.values(OVERLORD_DOORS).filter((d) => d.group === 'overlord' && d.method === method && d.path === p);
+  };
+
+  it('a tool whose route is an Overlord door carries the row\'s verb class and its write as fenced', () => {
+    for (const t of META.filter((m) => m.verb !== null)) {
+      const doors = doorsOf(t.verb!);
+      if (doors.length === 0) continue;
+      expect(doors.map((d) => d.verbClass), `${t.name}: class`).toEqual(doors.map(() => t.class));
+      expect(t.fenced, `${t.name}: fenced`).toBe(doors.some((d) => d.group === 'overlord' && d.write));
+    }
+  });
+
+  it('a fenced view tool is allowed exactly when its route has a write door row, and an unfenced one when it has none', () => {
+    for (const t of META.filter((m) => m.verb !== null && m.class === 'view')) {
+      const writes = doorsOf(t.verb!).some((d) => d.group === 'overlord' && d.write);
+      if (t.fenced) expect(writes, `${t.name} is a fenced view tool with no write door row`).toBe(true);
+    }
+    expect(META.filter((m) => m.class === 'view' && m.fenced).map((m) => m.name).sort()).toEqual(['card', 'inbox', 'messages']);
+  });
+
+  it('the three inbox tools exist with their classes, and messages is never a reader', () => {
+    const by = (n: string) => META.find((m) => m.name === n)!;
+    expect([by('inbox').class, by('inbox').fenced, by('inbox').reader]).toEqual(['view', true, false]);
+    expect([by('messages').class, by('messages').fenced, by('messages').reader]).toEqual(['view', true, false]);
+    expect([by('acknowledge').class, by('acknowledge').fenced, by('acknowledge').reader]).toEqual(['operate', true, false]);
+    expect(META.filter((m) => m.reader).map((m) => m.name)).not.toContain('messages');
   });
 });
 

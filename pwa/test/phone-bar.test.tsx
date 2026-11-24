@@ -25,9 +25,17 @@ vi.mock('../src/lib/push', () => ({
 
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
-const { DESK_PLACES, PLACES, phoneBarShown } = await import('../src/lib/places');
+const { deskPlacesFor, placesFor, phoneBarShown } = await import('../src/lib/places');
 const { ROUTES, topRouteOf } = await import('../src/lib/routes');
-const { DESK_DOORS } = await import('../src/skins/instrument/TopBar');
+const { deskDoorsFor } = await import('../src/skins/instrument/TopBar');
+const { useOverlordStore } = await import('../src/stores/overlord');
+
+/** No Overlord: the places every bar draws before `overlord-v1` (Overlord W1 home). */
+const NONE = { kind: 'none' } as const;
+const HOME_NONE = { place: 'fleet', why: 'none' } as const;
+const PLACES = placesFor(false, NONE);
+const DESK_PLACES = deskPlacesFor(false, NONE, HOME_NONE);
+const DESK_DOORS = deskDoorsFor(DESK_PLACES);
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 
@@ -66,9 +74,25 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  act(() => { navigate('/'); });
+  act(() => { navigate('/fleet'); });
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
+  act(() => useOverlordStore.setState({ caps: { state: 'loading' }, designation: { state: 'loading' }, ladder: { state: 'loading' } }));
 });
+
+/** A server advertising `overlord-v1` with a bound Overlord on the `chat` rung (`over` changes the caps); the shell's own reads
+ *  then fail offline, which keeps each answer as stale (Overlord W1 home). */
+function withOverlord(words: readonly string[] = ['overlord-v1']): void {
+  const at = 1_700_000_000_000;
+  const row = {
+    bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+    accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+  } as const;
+  act(() => useOverlordStore.setState({
+    caps: { state: 'answered', value: words, at },
+    designation: { state: 'answered', value: row, at },
+    ladder: { state: 'answered', value: { operatorRung: 'chat' } as never, at },
+  }));
+}
 
 describe('the one list of places', () => {
   it('every place is a top route, in the operator\'s order, fleet first; the desk list is the same less the fleet', () => {
@@ -78,7 +102,7 @@ describe('the one list of places', () => {
   });
 
   it('the bar shows on every page but an open session', () => {
-    for (const path of ['/', '/waiting', '/waiting/1', '/programmes/prog-a', '/docs', '/docs/project-a/specs/a.md', '/settings', '/runs', '/nope']) {
+    for (const path of ['/', '/fleet', '/waiting', '/waiting/1', '/programmes/prog-a', '/docs', '/docs/project-a/specs/a.md', '/settings', '/runs', '/nope']) {
       expect(phoneBarShown(path), path).toBe(true);
     }
     expect(phoneBarShown(`/s/${SESSION.id}`)).toBe(false);
@@ -92,9 +116,11 @@ describe('the one list of places', () => {
     }
     const under: Array<[string, string]> = [
       ['/waiting/1', 'waiting'], ['/settings/measure-highlighting', 'settings'], ['/docs/project-a/specs/a.md', 'docs'],
-      [`/s/${SESSION.id}`, 'fleet'], ['/runs', 'runs'], ['/', 'fleet'],
+      [`/s/${SESSION.id}`, 'fleet'], ['/runs', 'runs'], ['/fleet', 'fleet'],
     ];
     for (const [path, id] of under) expect(topRouteOf(path)?.id ?? null, path).toBe(id);
+    // The home, `/`, is no place's page: it replaces itself with the place it answers (Overlord W1 home, plan question 1).
+    expect(topRouteOf('/')).toBeNull();
   });
 });
 
@@ -104,7 +130,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
 
     it('the phone bar shows the desk places with their badges on the ledger pages', () => {
       for (const width of [360, 390, 899]) {
-        for (const path of ['/waiting', '/waiting/1', '/programmes/prog-a', '/docs', '/settings', '/']) {
+        for (const path of ['/waiting', '/waiting/1', '/programmes/prog-a', '/docs', '/settings', '/fleet']) {
           atWidth(width);
           mount(path);
           const bar = phoneBar();
@@ -127,11 +153,38 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       }
     });
 
+    // Overlord W1 home, Task 3 (plan question 13): the Overlord's door is first while one is designated, under its word only;
+    // a door keeps the width its word needs (`PHONE_DOOR_FIT_PX`), so the bar sheds places from the end, reached through Search.
+    it('with overlord-v1 and an Overlord the Overlord door is first; narrower bars shed Docs, then Accounts, to Search', () => {
+      const cases: ReadonlyArray<readonly [number, readonly string[]]> = [
+        [412, ['go-overlord', ...PHONE_DOORS]],
+        [390, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
+        [360, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs')]],
+        [320, ['go-overlord', ...PHONE_DOORS.filter((d) => d !== 'go-docs' && d !== 'go-accounts')]],
+      ];
+      for (const [width, doors] of cases) {
+        atWidth(width);
+        vi.stubGlobal('innerWidth', width);
+        withOverlord();
+        mount('/fleet');
+        expect(doorsOf(phoneBar()!), `${skin} ${width}`).toEqual(doors);
+        cleanup();
+      }
+    });
+
+    it('without overlord-v1 no Overlord door is drawn, whatever the designation reads; today\'s seven at 360 px', () => {
+      atWidth(360);
+      vi.stubGlobal('innerWidth', 360);
+      withOverlord(['continuity-v1']);
+      mount('/fleet');
+      expect(doorsOf(phoneBar()!)).toEqual(PHONE_DOORS);
+    });
+
     // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At 100 or more the pill prints "99+" and the name
     // carries the real count, by design (`badgePrint`), so label in name is read on the door's word, not on its pill.
     it('at a count of 100 or more the pill prints 99+, the name the real count, and the word is in the name', () => {
       atWidth(390);
-      mount('/');
+      mount('/fleet');
       const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
       act(() => useFleetStore.setState({ waiting: waitingView({ items }) }));
       const door = within(phoneBar()!).getByRole('button', { name: 'Waiting, 120 waiting on you' });
@@ -147,7 +200,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
     // own case below.
     it('at a low count the door\'s whole shown text is in its name (review 1689 F9)', () => {
       atWidth(390);
-      mount('/');
+      mount('/fleet');
       const runs = [1, 2].map((id) => ({ id, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'sess-a' }) as unknown as RunSummary);
       act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'sess-a', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
       const door = within(phoneBar()!).getByRole('button', { name: 'Runs, 2 needs you' });
@@ -160,7 +213,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
     // nothing waiting it shows "Waiting" and is named so. The desk bars and the route's title keep "Waiting on you".
     it("the Waiting door's name starts with the word it shows, so its whole shown text is in its name (review 1722)", () => {
       atWidth(390);
-      mount('/');
+      mount('/fleet');
       act(() => useFleetStore.setState({ waiting: waitingView({ items: [] }) }));
       expect(within(phoneBar()!).getByRole('button', { name: 'Waiting' })).toHaveAttribute('data-command', 'go-waiting');
       act(() => useFleetStore.setState({ waiting: waitingView({ items: [1, 2, 3].map((id) => itemView({ id })) }) }));
@@ -171,7 +224,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
 
     it('on a fleet with no sessions the Accounts and Inbox doors are there, the durable doors to both (D-161, D-2)', () => {
       atWidth(390);
-      act(() => { navigate('/'); });
+      act(() => { navigate('/fleet'); });
       render(<App />);
       act(() => useFleetStore.setState({ conn: 'open', sessions: [], fleetFrameSeen: true }));
       const bar = phoneBar();
@@ -187,7 +240,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       const lane = { wrapper: 'lane-a', five: 10, seven: 20, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false };
       for (const usage of [null, [lane]]) {
         atWidth(390);
-        mount('/');
+        mount('/fleet');
         act(() => useFleetStore.setState({ usage }));
         const heads = [...document.querySelectorAll<HTMLElement>('.shell-nav .ref-phone-head, .shell-nav .fleet-head, .shell-nav .accounts-strip')];
         expect(heads.length, `${skin}: the phone head`).toBeGreaterThan(0);
@@ -216,7 +269,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       const current = (): string[] => [...phoneBar()!.querySelectorAll('[aria-current="page"]')].map((d) => d.getAttribute('data-command')!);
       expect(current()).toEqual(['go-docs']);
       fireEvent.click(within(phoneBar()!).getByRole('button', { name: 'Fleet' }));
-      expect(location.pathname).toBe('/');
+      expect(location.pathname).toBe('/fleet');
       expect(current()).toEqual(['go-fleet']);
       fireEvent.click(within(phoneBar()!).getByRole('button', { name: /^Waiting\b/ }));
       expect(location.pathname).toBe('/waiting');
@@ -240,15 +293,17 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       }
     });
 
-    // Desk-nav Task A (D-8100): Instrument's wordmark is the desk's one way home, a door that runs go-fleet; no place door does.
+    // Desk-nav Task A (D-8100): Instrument's wordmark is the desk's one way home, a door that runs go-home since Overlord W1 home
+    // (it lands on the Fleet while no Overlord is designated); no place door goes to the Fleet at a desk (D25).
     it('the desk bar shows no fleet place, and the phone bar shows it first', () => {
       atWidth(1280);
       mount('/waiting');
       const primary = document.querySelector('nav[aria-label="Primary"]')!;
-      const desk = doorsOf(primary).filter((c) => c.startsWith('go-') && c !== 'go-fleet' && c !== 'go-settings' && c !== 'go-archive');
+      const desk = doorsOf(primary).filter((c) => c.startsWith('go-') && c !== 'go-home' && c !== 'go-settings' && c !== 'go-archive');
       expect(desk, 'the desk navigation').toEqual(DESK_TABS);
-      const home = [...document.querySelectorAll('[data-command="go-fleet"]')];
-      expect(home, 'the one go-fleet at a desk is the wordmark door').toHaveLength(skin === INSTRUMENT ? 1 : 0);
+      expect(document.querySelectorAll('[data-command="go-fleet"]'), 'no Fleet door at a desk (D25)').toHaveLength(0);
+      const home = [...document.querySelectorAll('[data-command="go-home"]')];
+      expect(home, 'the one go-home at a desk is the wordmark door').toHaveLength(skin === INSTRUMENT ? 1 : 0);
       if (skin === INSTRUMENT) expect(home[0]!.querySelector('[data-wordmark]'), 'it holds the wordmark').not.toBeNull();
       cleanup();
       atWidth(390);
@@ -288,5 +343,52 @@ describe("Instrument's desk doors read the one list", () => {
   it('they are the desk places with Archive after Accounts', () => {
     const ids = DESK_DOORS.filter((i) => !('reserved' in i)).map((i) => i.id);
     expect(ids).toEqual(['waiting', 'inbox', 'runs', 'accounts', 'archive', 'docs']);
+  });
+});
+
+// Review 3319 A5 and A7 (Overlord W1 home, plan question 14 and slug `refined-crowded-bar-sheds-words`): with the Overlord's
+// and the Fleet's tabs drawn, Refined's Fleet tab is current on `/fleet` and on a session, as Instrument's door is; below 1200 px
+// (`REF_ROOMY_QUERY`) the seven-tab bar names Waiting by its short word and draws New session as its "+" alone, and at 1200 and
+// above, or with five tabs, the full words come back. jsdom lays nothing out, so the widths are the media queries' answers.
+describe("Refined's desk tabs with the Overlord's and the Fleet's", () => {
+  beforeEach(() => { setSkin(REFINED); });
+  afterEach(() => { setSkin(REFINED); });
+  const tabs = (): HTMLElement => document.querySelector<HTMLElement>('header .ref-tabs')!;
+  const current = (): string[] => [...document.querySelectorAll('header [aria-current="page"]')].map((d) => d.getAttribute('data-command')!);
+
+  it('the Fleet tab is current on /fleet and on a session, in both skins, and on no other place', () => {
+    for (const skin of [REFINED, INSTRUMENT]) {
+      setSkin(skin);
+      for (const [where, want] of [['/fleet', ['go-fleet']], [`/s/${SESSION.id}`, ['go-fleet']], ['/waiting', ['go-waiting']]] as const) {
+        atWidth(1280);
+        withOverlord();
+        mount(where);
+        expect(current(), `${skin} ${where}`).toEqual([...want]);
+        cleanup();
+      }
+    }
+  });
+
+  it('below 1200 px the seven tabs shed words (Waiting, a "+" New session); from 1200, or with five tabs, the full words', () => {
+    const shown = (): { waiting: string; newText: string; newName: string | null } => {
+      const fresh = document.querySelector<HTMLElement>('header .ref-bar-new')!;
+      return {
+        waiting: within(tabs()).getByRole('button', { name: /^Waiting/ }).textContent!.replace(/\s+/g, ' ').trim(),
+        newText: fresh.textContent!.trim(),
+        newName: fresh.getAttribute('aria-label') ?? fresh.textContent,
+      };
+    };
+    for (const [width, words, crowded] of [[1100, ['overlord-v1'], true], [1199, ['overlord-v1'], true], [1200, ['overlord-v1'], false], [1100, [], false]] as const) {
+      atWidth(width);
+      withOverlord(words);
+      mount('/fleet');
+      const m = shown();
+      const label = `${width} ${words.length > 0 ? 'seven tabs' : 'five tabs'}`;
+      expect(m.waiting.startsWith(crowded ? 'Waiting' : 'Waiting on you'), `${label}: ${m.waiting}`).toBe(true);
+      expect(m.waiting.startsWith('Waiting on you'), `${label}: ${m.waiting}`).toBe(!crowded);
+      expect(m.newText, label).toBe(crowded ? '+' : '+New session');
+      expect(m.newName, label).toMatch(/New session$/);
+      cleanup();
+    }
   });
 });

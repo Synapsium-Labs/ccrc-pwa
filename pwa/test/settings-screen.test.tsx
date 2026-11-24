@@ -104,11 +104,11 @@ describe('SettingsScreen — the shell', () => {
 
   it('has a back affordance that returns to the fleet', () => {
     // Starts ON /settings, so the assertion cannot pass by the route never
-    // having moved (accounts-screen.test.tsx's own back case starts on '/').
+    // having moved (accounts-screen.test.tsx's own back case starts on '/', which is no longer the Fleet's path).
     navigate('/settings');
     renderSettings(null);
     fireEvent.click(screen.getByRole('button', { name: /back to fleet/i }));
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
   });
 });
 
@@ -2457,13 +2457,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(location.pathname).toBe('/settings/measure-highlighting');
   });
 
-  it('LOADING state: the Automation page is Stall watch, Overrides in force (D-8382), Temp root collector, Shadow lanes (D-8274), Dispatches that never came back, Cleanup pause, Browser tools (D-8121), Roll idle sessions (D-7453), Auto memory for plain sessions (Overlord W1a), When soft renewals happen (Overlord W1a hand-offs), Stop leftovers (D-7902), Leftover processes (D-7994), Worktrees left behind (D-8114), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Overrides in force (D-8382), Temp root collector, Shadow lanes (D-8274), Dispatches that never came back, Cleanup pause, Browser tools (D-8121), Roll idle sessions (D-7453), Auto memory for plain sessions (Overlord W1a), Coordinator advisor (D-8967), When soft renewals happen (Overlord W1a hand-offs), Stop leftovers (D-7902), Leftover processes (D-7994), Worktrees left behind (D-8114), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Coordinator advisor', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {

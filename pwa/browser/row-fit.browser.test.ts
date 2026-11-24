@@ -253,7 +253,7 @@ function expectFits(fit: RowFit, where: string): void {
 describe('D-5570: an account picker row fits the sheet body, ring and all', () => {
   for (const view of VIEWS) {
     it(`the new-session sheet, and the swap picker's suggested and crossing rows (${named(view)})`, async () => {
-      const { page, errors, close } = await boot(view, '/');
+      const { page, errors, close } = await boot(view, '/fleet');
       try {
         await page.getByRole('button', { name: 'New session' }).first().click();
         await page.locator('.sheet-body .acct-list > button').nth(ROSTER.length - 1).waitFor();
@@ -352,7 +352,7 @@ function expectCappedName(m: CardName, where: string): void {
 describe('D-5576: every project card keeps its name, open and folded', () => {
   for (const view of VIEWS) {
     it(`a long meta wraps under a whole name; a long name is cut only at its cap (${named(view)})`, async () => {
-      const route = view.width < 900 ? '/' : `/s/${OTHER_SESSION}`;
+      const route = view.width < 900 ? '/fleet' : `/s/${OTHER_SESSION}`;
       const { page, errors, close } = await boot(view, route);
       try {
         for (const project of ['project-a', LONG_PROJECT]) {
@@ -966,7 +966,7 @@ describe('D-6332: a session row shows its name whole where it has room', () => {
 
   for (const { view, mode } of fitViews([360, 390])) {
     it(`on a phone a 30-character name keeps its token-shortened form (${named(view)}, ${mode})`, async () => {
-      const { page, errors, close } = await bootFit(view, mode, '/');
+      const { page, errors, close } = await bootFit(view, mode, '/fleet');
       try {
         const m = await measureFit(page, NAME_30, 'name');
         expect(m.paired).toBe(true);

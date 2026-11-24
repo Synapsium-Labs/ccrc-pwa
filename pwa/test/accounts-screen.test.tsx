@@ -287,7 +287,7 @@ describe('AccountsScreen — back control', () => {
     render(<AccountsScreen />);
     const back = screen.getByRole('button', { name: /back to fleet/i });
     fireEvent.click(back);
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
   });
 });
 

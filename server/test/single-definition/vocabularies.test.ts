@@ -50,6 +50,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
       'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
+      'server/src/coord/overlordInbox.ts', // the inbox wake's hold named for the marker it honours (the Overlord W1 inbox piece)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'server/src/stopDone.ts',         // run-done's hold word for the waiting case under that marker (D-8791); `sleep.ts` holds it by the constant
       'shared/api.ts',                  // the refusal-code vocabulary

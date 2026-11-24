@@ -43,7 +43,7 @@ const ms = (t: string): number => {
 };
 
 async function boot(page: Page, view: AppView): Promise<void> {
-  await page.goto(server!.origin + '/');
+  await page.goto(server!.origin + '/fleet');
   await page.waitForFunction(([skin, theme]) => {
     const root = document.documentElement;
     return root.getAttribute('data-skin') === skin && (root.getAttribute('data-theme') ?? 'phosphor') === theme;

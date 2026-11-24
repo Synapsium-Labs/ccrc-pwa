@@ -269,8 +269,8 @@ export function quizPendingRead(db: DatabaseSync): QuizPendingRead {
   }
 }
 
-/** What the status row keeps beside the tick: the week and word the coordinator was last mailed for, and the setup account's
- *  waiting streak (review 3232 F9). */
+/** What the status row keeps beside the tick: the week and word the coordinator was last mailed for, and the waiting streak
+ *  on the week's account (review 3232 F9; the account is the week's since run 3538). */
 export interface QuizStatusKept { mailedKey: string | null; waitingSince: string | null; goneMailedKey: string | null }
 /** The unattended run's last status (run 3212), with what the row keeps beside it, or no row yet, or why the read failed
  *  (never folded into "no row"). */

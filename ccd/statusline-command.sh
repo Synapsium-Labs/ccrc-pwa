@@ -481,7 +481,8 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
     # ceiling is the one every session has left, so no ccd session renders there
     # and nothing above can show a change: an early reset on it went unseen until
     # the old window ended. `ccd-telemetry-keepalive` starts one process, which
-    # makes one API call and renders that call's figures; it exports
+    # makes one API call and hands this writer that call's figures (from the
+    # turn's stream, D-8957, since a `-p` turn renders nothing); it exports
     # `CCRC_KEEPALIVE_PROBE`, the second it started the turn, and that is the
     # proof for an `older` reading. NARROW ON PURPOSE: only a render with no ccd
     # id (a session is judged by its own history whatever its environment says,

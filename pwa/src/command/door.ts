@@ -12,6 +12,7 @@
 // `DOOR_EVENT` and runs the command by id; it is mounted once, above the frame, in `app.tsx`. Pure: no store.
 
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 
 /** The event a door dispatches; `CommandLayer` is its one listener. */
 export const DOOR_EVENT = 'ccrc:command';
@@ -40,7 +41,7 @@ export function actionDoor(id: string, fn: () => void): { 'data-action': string;
 }
 
 /** A page's back to the fleet (W2 Task S5, the door table's `go-fleet` row on a phone): `PageScaffold`'s `back`, marked
- *  as the `go-fleet` door. A back whose target is not `/` carries no mark. */
+ *  as the `go-fleet` door. A back whose target is not the Fleet's path (`FLEET_PATH`) carries no mark. */
 export function backToFleet(className?: string): { label: string; onClick: () => void; className?: string; 'data-command': string } {
-  return { label: 'Back to fleet', onClick: () => navigate('/'), className, ...doorMark('go-fleet') };
+  return { label: 'Back to fleet', onClick: () => navigate(FLEET_PATH), className, ...doorMark('go-fleet') };
 }

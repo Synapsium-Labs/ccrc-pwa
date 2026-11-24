@@ -130,6 +130,7 @@ const READ_DOOR_MAP = {
   messages: "the operator's messages read",
   inbox: "the Overlord's inbox read",
   history: "the Overlord's history read",
+  sequence: "the sequence cursor's read",
 } as const;   // W4 adds model, feed
 export type ReadDoor = keyof typeof READ_DOOR_MAP;
 export const READ_DOORS = Object.keys(READ_DOOR_MAP) as ReadDoor[];

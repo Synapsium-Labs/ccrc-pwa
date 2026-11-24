@@ -47,6 +47,7 @@ const CONTINUITY = 'server/src/continuity/routes.ts';
 const OVERLORD = 'server/src/coord/overlordRoutes.ts';
 const LEDGERS = 'server/src/coord/ledgersRoutes.ts';
 const LINKING = 'server/src/linking/routes.ts';
+const INBOX = 'server/src/coord/overlordInboxRoutes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -85,6 +86,20 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   'link-team': {
     group: 'overlord', method: 'POST', path: '/api/linking/confirm', file: LINKING, verbClass: 'operate', write: true,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'link-team',
+  },
+  // The Overlord's inbox doors (W1 inbox piece, Task 3; question 15): `write: true` on the two reads is the fence, as on `card-record`,
+  // so a forger of the attribution reads no word and spends no ceiling; their verb class stays `view`.
+  inbox: {
+    group: 'overlord', method: 'GET', path: '/api/overlord/inbox', file: INBOX, verbClass: 'view', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
+  },
+  messages: {
+    group: 'overlord', method: 'GET', path: '/api/overlord/messages/:id', file: INBOX, verbClass: 'view', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
+  },
+  acknowledge: {
+    group: 'overlord', method: 'POST', path: '/api/overlord/messages/:id/acknowledge', file: INBOX, verbClass: 'operate', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge',
   },
 };
 

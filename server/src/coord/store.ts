@@ -13,6 +13,8 @@ import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from 
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
+import * as advisor from './advisorStore.js';
+import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvisor.js';
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
@@ -64,6 +66,7 @@ import type { ChildMark } from '../../../shared/api.js';
 import type { CapMode } from '../../../shared/runCap.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
+import { lifecycleLaneRowsSince, type LifecycleLaneRow } from './lifecycleLaneRows.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
@@ -5716,6 +5719,11 @@ export class CoordStore {
     return raiseReviewCapAsk(this.db, workRunId, now);
   }
 
+  /** D-8955: the disk cleanup lanes' journal rows since `atMs`, oldest first, at most `limit` (`lifecycleLaneRows.ts`). */
+  lifecycleLaneRowsSince(atMs: number, acts: readonly string[], limit: number): LifecycleLaneRow[] {
+    return lifecycleLaneRowsSince(this.db, atMs, acts, limit);
+  }
+
   /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */
   liftReviewCapByCoordinator(i: Parameters<typeof liftReviewCapByCoordinator>[1]): CoordLiftResult {
     return liftReviewCapByCoordinator(this.db, i);
@@ -7391,7 +7399,8 @@ export class CoordStore {
 
   /** Who sent a mail, under which run, and about what — the three fields a
    *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
-   *  select. A dedicated one-row read rather than a JOIN widening
+   *  select — and its body, which only the mail lane's fixed line of the wake
+   *  reads (`envelope.ts#FIXED_LINE_MAIL`). A dedicated one-row read rather than a JOIN widening
    *  `dueDeliveries`: that query runs over every due row on every sweep, and
    *  this runs only when a notification is actually about to be raised.
    *  SYNCHRONOUS, like everything here.
@@ -7401,9 +7410,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 
@@ -11715,6 +11724,14 @@ export class CoordStore {
   isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
   /** Whether the programme holds a `blocking` item in state `open`, waiting on the operator (a `checking` one is the coordinator's). */
   programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
+
+  // ── the coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8967, D-8970) ───────────────────────────────────
+  // The SQL lives in `advisorStore.ts`; one writer per table (see its header).
+  coordinatorAdvisorSettings(): advisor.CoordinatorAdvisorRead { return advisor.coordinatorAdvisorSettings(this.db); }
+  setCoordinatorAdvisor(s: CoordinatorAdvisorSetting, at: number): { before: advisor.CoordinatorAdvisorRead; after: advisor.CoordinatorAdvisorRead } { return advisor.setCoordinatorAdvisor(this.db, s, at); }
+  advisorReadState(sessionId: string): advisor.AdvisorReadState | null { return advisor.advisorReadState(this.db, sessionId); }
+  recordAdvisorRead(sessionId: string, state: advisor.AdvisorReadState, rows: readonly advisor.AdvisorCallRow[], now: number, oldestDay: string): void { advisor.recordAdvisorRead(this.db, sessionId, state, rows, now, oldestDay); }
+  advisorDayCounts(day: string): Map<string, advisor.AdvisorDay> { return advisor.advisorDayCounts(this.db, day); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).

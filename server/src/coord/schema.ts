@@ -4277,6 +4277,8 @@ export const MIGRATIONS: readonly string[] = [
   // before merge (it must print 119 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // Since run 3538 the status row's `account` is the week's account when the week's folder records one, else the setup's.
+  // The SQL comment on that column says "the setup's account id": it is stored text of this frozen entry, so it stays.
   `
   CREATE TABLE continuity_quiz_status (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -4345,6 +4347,62 @@ export const MIGRATIONS: readonly string[] = [
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
+  `,
+
+  // ── 123: user_version 122 -> 123 ──────────────────────────────────────────
+  // The coordinator advisor (plan `2026-11-23-coordinator-advisor.md`, D-8967, D-8970, D-8971). `advisor_settings` is the
+  // Settings row "Coordinator advisor": ONE ROW, `CHECK (id = 1)`, the `plain_memory_settings` idiom. `choice` (an
+  // `AdvisorChoice`), `cap` and `scope` (an `AdvisorScope` as JSON) are read back through `coordinatorAdvisorOf`'s
+  // narrowings, never cast, so NO CHECK on them: a word a newer build writes reads as unknown, and the lane writes nothing
+  // from it. Its one writer is `CoordStore.setCoordinatorAdvisor` (`POST /api/coord/coordinator-advisor`), its one reader
+  // `CoordStore.coordinatorAdvisorSettings`. `advisor_calls` holds one row per advisor call a coordinator's transcript
+  // carried, keyed by the session and the call's own id, so a duplicate streamed line or a transcript a swap carried
+  // counts once; `day` is the UTC day of the line's timestamp, and the four token columns are the `advisor_message`
+  // usage of the call's message (NULL until a line carries it). `advisor_reads` is the forward reader's place in each
+  // coordinator's transcript and what it saw since the spawn it last read for, and `droppedDay` the UTC day of a drop,
+  // which outlives a new spawn. ONE writer of both: the count lane
+  // (`advisorStore.ts#recordAdvisorRead`). Rows older than 14 days are pruned by it.
+  // THREE NEW TABLES: an older build opening a file at `user_version 123` takes rule 3 (it warns, reads as-is, migrates
+  // nothing) and never names them.
+  // RE-MEASURE the slot before merge (it must print 122 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE advisor_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    choice TEXT NOT NULL,
+    cap INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO advisor_settings (id, choice, cap, scope, updatedAt) VALUES (1, 'off', 12, '{"kind":"all"}', 0);
+  CREATE TABLE advisor_calls (
+    sessionId TEXT NOT NULL,
+    callId TEXT NOT NULL,
+    day TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    model TEXT,
+    inputTokens INTEGER,
+    outputTokens INTEGER,
+    cacheReadTokens INTEGER,
+    cacheWriteTokens INTEGER,
+    PRIMARY KEY (sessionId, callId)
+  );
+  CREATE INDEX advisor_calls_by_day ON advisor_calls (sessionId, day);
+  CREATE TABLE advisor_reads (
+    sessionId TEXT PRIMARY KEY,
+    file TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    spawnAt INTEGER NOT NULL,
+    requests INTEGER NOT NULL,
+    lastMessageId TEXT,
+    available TEXT,
+    availableAt INTEGER,
+    lastCallAt INTEGER,
+    unreadable INTEGER NOT NULL,
+    droppedDay TEXT,
+    updatedAt INTEGER NOT NULL
+  );
   `,
 ];
 

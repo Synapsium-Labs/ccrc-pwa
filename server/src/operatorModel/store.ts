@@ -18,9 +18,11 @@ import { tx } from '../coord/tx.js';
 import {
   MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
   isReadTurnState, isSettledBy,
-  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadLine,
+  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadDoor, type ReadLine,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
+import { READ_CEILING_OUTCOME, READ_SERVED_OUTCOME } from '../../../shared/overlordInbox.js';
+import type { CeilingCount, MessageFacts } from '../coord/overlordInbox.js';
 import { isNameListMode, type NameListMode } from '../../../shared/privateNames.js';
 import { chainedTailHealPlan, type ChainedTail } from '../chainedJournal.js';
 import { chainedJournalFileAt, type ChainedFileSeen, type ChainedJournalFile } from '../chainedJournalFile.js';
@@ -106,9 +108,17 @@ const revive = (r: RawRow): OperatorMessageRow => ({
   settledBy: r.settledBy === null ? null : isSettledBy(r.settledBy) ? r.settledBy : 'unknown', spentAt: r.spentAt,
 });
 
+/** The facts readers' columns: the ones the inbox needs, never `text` or `sha256` (the inbox plan, question 20). */
+const FACT_COLUMNS = 'id, at, term, state, cut';
+interface RawFacts { id: number; at: number; term: number; state: string; cut: number }
+const factsOf = (r: RawFacts): MessageFacts => ({ id: r.id, at: r.at, term: r.term, state: isMessageState(r.state) ? r.state : 'unknown', cut: r.cut === 1 });
+
 /** Every state before `settled`, in the vocabulary's order: what the card and the inbox list as unsettled. */
 const UNSETTLED_STATES = MESSAGE_STATES.slice(0, MESSAGE_STATES.indexOf('settled'));
 const UNSETTLED_SQL = UNSETTLED_STATES.map((s) => `'${s}'`).join(', ');
+/** The states from `settled` on: every row NOT in one of them is unsettled to the inbox, a state this build does not know included
+ *  (review 3389 F5). */
+const SETTLED_SQL = MESSAGE_STATES.slice(MESSAGE_STATES.indexOf('settled')).map((s) => `'${s}'`).join(', ');
 
 const OUTCOME_WORD = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
@@ -223,14 +233,34 @@ export class OperatorModelStore {
     }
   }
 
-  /** How many ledger lines of these callers fall at or after `from` and at or before `to` (closed-book's `ReadLedgerCount`
-   *  port). The ledger names a caller by role, never a session, so `['overlord', 'reader']` is the designated session's and its
-   *  readers' reads, whoever held the designation then; an empty list or an unknown word is unmeasured, never zero. */
+  /** How many SERVED ledger lines of these callers fall at or after `from` and at or before `to` (closed-book's
+   *  `ReadLedgerCount` port). The ledger names a caller by role, never a session, so `['overlord', 'reader']` is the designated
+   *  session's and its readers' reads, whoever held the designation then; an empty list or an unknown word is unmeasured, never
+   *  zero. A line whose door is `inbox` is left out, and so is a line whose outcome is not the served one (a refused or
+   *  unmeasured read served nothing): the inbox read that tells the Overlord a round is open must not open its book (the inbox
+   *  plan, question 6). The `messages`, `board`, `history` and `sequence` lines still open it. */
   readsBetween(callers: readonly ReadCaller[], from: number, to: number): StoreRead<number> {
     if (callers.length === 0 || !callers.every(isReadCaller)) return { kind: 'unmeasured', why: 'callers: a non-empty list of ledger caller words' };
     if (!isCount(from) || !isCount(to)) return { kind: 'unmeasured', why: 'from and to: non-negative safe integers' };
-    return this.read(() => (this.db.prepare(`SELECT count(*) AS c FROM read_ledger WHERE caller IN (${callers.map(() => '?').join(', ')}) AND at >= ? AND at <= ?`)
-      .get(...callers, from, to) as { c: number }).c);
+    return this.read(() => (this.db.prepare(`SELECT count(*) AS c FROM read_ledger WHERE caller IN (${callers.map(() => '?').join(', ')}) AND at >= ? AND at <= ? `
+      + 'AND door <> ? AND outcome = ?')
+      .get(...callers, from, to, 'inbox', READ_SERVED_OUTCOME) as { c: number }).c);
+  }
+
+  /** The read ceiling's counter (the inbox plan, Task 2): a door's served lines after `sinceMs` by any caller but the console,
+   *  the oldest one's time, and the newest `read-ceiling` line's time of the door. Two statements over `read_ledger_door_at`. An
+   *  oldest time that is null beside a count above zero cannot be (the same rows) and reads `unmeasured`, never a number. */
+  servedReadsSince(door: ReadDoor, sinceMs: number): StoreRead<CeilingCount> {
+    if (!isReadDoor(door)) return { kind: 'unmeasured', why: 'door: not a read door' };
+    if (!isCount(sinceMs)) return { kind: 'unmeasured', why: 'sinceMs: a non-negative safe integer' };
+    return this.read((): CeilingCount => {
+      const served = this.db.prepare("SELECT count(*) AS c, min(at) AS oldest FROM read_ledger WHERE door = ? AND at > ? AND outcome = ? AND caller <> 'operator'")
+        .get(door, sinceMs, READ_SERVED_OUTCOME) as { c: number; oldest: number | null };
+      const refused = this.db.prepare('SELECT max(at) AS last FROM read_ledger WHERE door = ? AND outcome = ?')
+        .get(door, READ_CEILING_OUTCOME) as { last: number | null };
+      if (served.oldest === null && served.c > 0) throw new Error('the counter has lines and no oldest time');
+      return { count: served.c, oldestAt: served.oldest ?? 'none', lastRefusalAt: refused.last ?? 'none' };
+    });
   }
 
   /** The one writer of the uploaded name list (Overlord W2, private names B): deletes every entry, inserts `entries` in their
@@ -312,6 +342,21 @@ export class OperatorModelStore {
   unsettledMessages(): StoreRead<readonly OperatorMessageRow[]> {
     return this.read(() => (this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages WHERE state IN (${UNSETTLED_SQL}) ORDER BY id`)
       .all() as unknown as RawRow[]).map(revive));
+  }
+
+  /** Every unsettled message as facts, never its text or hash: id order, never trimmed (the inbox plan, question 20). A row whose
+   *  state this build does not know is kept, as an `unknown` fact, never dropped (review 3389 F5). */
+  unsettledFacts(): StoreRead<readonly MessageFacts[]> {
+    return this.read(() => (this.db.prepare(`SELECT ${FACT_COLUMNS} FROM operator_messages WHERE state NOT IN (${SETTLED_SQL}) ORDER BY id`)
+      .all() as unknown as RawFacts[]).map(factsOf));
+  }
+
+  /** One message's facts, never its text or hash, or `absent`. */
+  messageFactsById(id: number): StoreRead<MessageFacts | 'absent'> {
+    return this.read(() => {
+      const r = this.db.prepare(`SELECT ${FACT_COLUMNS} FROM operator_messages WHERE id = ?`).get(id) as RawFacts | undefined;
+      return r === undefined ? 'absent' : factsOf(r);
+    });
   }
 
   /** How many messages were recorded at or after `sinceMs`: the `turns` reading's count. */

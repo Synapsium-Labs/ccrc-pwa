@@ -7,15 +7,24 @@ import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { fleetTree } from '../fleet/fleetTree';
 import { isRunClosed } from '../fleet/runWords';
-import { matchRoute, ROUTES, sessionPath } from '../lib/routes';
+import { matchRoute, placePath, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
 import { CHARACTER_CHOICES } from '../fleet/characterWords';
 
 /** The `g` chord's second key per route. Archive and Docs have none: `a` is
  *  Accounts and `d` is unclaimed, and both are doors off the fleet rather
- *  than places visited every day. */
-const CHORDS: Readonly<Record<string, string>> = { fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
+ *  than places visited every day. `g o` is the Overlord's place, and `g h`
+ *  is "Go home" (not a route, so its keys are on its own entry below). */
+const CHORDS: Readonly<Record<string, string>> = { overlord: 'o', fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
+
+/** A "Go to" command offered only in some contexts: the Overlord's place only while the server advertises `overlord-v1`
+ *  (plan question 9), so the palette offers no "Go to Overlord" without the word. `useShortcuts` binds a chord whatever its
+ *  `when`, so the run asks the same question and does nothing where the command is not offered: `g o` without the word moves
+ *  nothing (review 3319 A1), as the inspector's `i` does with no rail placed. */
+const GO_TO_WHEN: Readonly<Record<string, (ctx: CommandContext) => boolean>> = {
+  'go-overlord': (ctx) => ctx.overlordShown,
+};
 
 /** The top row whose page a path sits under (`/settings` for `/settings/updates`), or null. */
 function parentOf(path: string): (typeof ROUTES)[number] | null {
@@ -95,8 +104,17 @@ export function baseCommands(): Command[] {
       title: g.title,
       group: 'Go to',
       keys: g.chord === undefined ? undefined : ['g', g.chord],
-      run: (ctx) => ctx.navigate(g.path),
+      when: GO_TO_WHEN[g.id],
+      run: (ctx) => { if (GO_TO_WHEN[g.id]?.(ctx) !== false) ctx.navigate(g.path); },
     })),
+    {
+      // The wordmark's command (Overlord W1 home, Task 3): the place `homePlace` answers, the Overlord's or the Fleet's.
+      id: 'go-home',
+      title: 'Go home',
+      group: 'Go to',
+      keys: ['g', 'h'],
+      run: (ctx) => ctx.navigate(placePath(ctx.home.place)),
+    },
     {
       id: 'new-session',
       title: 'New session',

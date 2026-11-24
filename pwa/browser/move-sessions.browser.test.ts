@@ -142,7 +142,7 @@ describe('the Move sessions sheet at every width and skin (D-7736)', () => {
         await ctx.route((u) => u.pathname === swapPath('lane-b-three'), (route) => route.fulfill({
           status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'hibernated' }),
         }));
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.evaluate(() => { history.pushState(null, '', '/accounts'); dispatchEvent(new PopStateEvent('popstate')); });
         const open = page.locator('.accounts-row[data-lane="lane-b"] button', { hasText: 'Move 4 sessions off' });
         await open.waitFor({ timeout: 30_000 });
@@ -250,7 +250,7 @@ describe('the Move sessions sheet offline, one cell per skin at 360 and 1280, da
           await held;
           await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'session-busy' }) });
         });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await goTo(page, '/accounts');
         const open = page.locator('.accounts-row[data-lane="lane-b"] button', { hasText: 'Move 4 sessions off' });
         await open.waitFor({ timeout: 30_000 });
@@ -305,7 +305,7 @@ describe('the Move sessions sheet offline, one cell per skin at 360 and 1280, da
         const snapshot = { savedAt: now - 600_000, sessions: SESSIONS, roster: ACCOUNTS.roster };
         await ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
         app.cut();
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         // three, not four: the count is of running sessions, and one of the four is hibernated
         await page.getByText('3 sessions', { exact: true }).first().waitFor({ timeout: 30_000 });
         await goTo(page, '/accounts');

@@ -26,6 +26,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationJournalRecordV1,
 } from './delegation-model.js';
+import { hasMeasuredEnd } from './delegation-end-basis.js';
 
 /** A cut is made only when it frees at least this share of the journal's bytes, net of what it carries out of the journal. */
 export const DELEGATION_COMPACTION_MIN_SHARE = 0.25;
@@ -253,10 +254,12 @@ export class DelegationCompactionPlanner {
       if (h.reason === 'identity-candidate') this.k2.add(h.ownerId);
     }
     const byId = new Map(this.cp.activities.map((a) => [a.activityId, a] as const));
-    for (const a of this.cp.activities) if (a.executionState !== 'ended') this.k3.add(a.identityJournalId);
+    // D-8874 (S2, spec Table 10): a record the one-time pass closed has no measured end, so both holds hold it as an open one, and the
+    // retirable set below never takes it (`hasMeasuredEnd`).
+    for (const a of this.cp.activities) if (!hasMeasuredEnd(a)) this.k3.add(a.identityJournalId);
     for (const [encoded, id] of Object.entries(this.cp.activityIdsByNaturalKey)) {
       const a = byId.get(id);
-      if (a !== undefined && a.sourceKind === 'workflow' && a.executionState !== 'ended') this.k4.add(encoded);
+      if (a !== undefined && a.sourceKind === 'workflow' && !hasMeasuredEnd(a)) this.k4.add(encoded);
     }
     const windows: Array<[number, number]> = [];
     for (const l of this.cp.leases) {
@@ -273,7 +276,7 @@ export class DelegationCompactionPlanner {
     for (const l of this.cp.leases) named.add(l.activityId);                                // released or not
     for (const n of this.cp.lineage) if (n.activityId !== null) named.add(n.activityId);   // open or closed
     for (const a of this.cp.activities) {
-      if (a.executionState === 'ended' && !named.has(a.activityId) && !held.has(a.identityJournalId)) this.wanted.add(a.activityId);
+      if (hasMeasuredEnd(a) && !named.has(a.activityId) && !held.has(a.identityJournalId)) this.wanted.add(a.activityId);
     }
     for (const [encoded, id] of Object.entries(this.cp.activityIdsByNaturalKey)) if (this.wanted.has(id)) this.wantedByKey.set(encoded, id);
   }

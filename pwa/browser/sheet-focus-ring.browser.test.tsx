@@ -64,7 +64,7 @@ describe('a keyboard-opened Sheet focuses its panel and draws no ring on it', ()
         const { ctx, page } = await openApp(browser!, view, FIXTURE);
         try {
           await page.emulateMedia({ reducedMotion: 'reduce' });
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           // The first VISIBLE landmark: on a phone the frame's `main#content` is hidden on the fleet route (the swap)
           // and the fleet column, a `section.fleet`, is what shows (W2 S2b; D-5466).
           await page.locator('main:visible, section.fleet:visible, [data-page-scaffold]:visible').first().waitFor({ timeout: 20_000 });

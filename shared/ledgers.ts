@@ -107,7 +107,15 @@ export type ItemAction =
   | ReleaseReviewAction
   // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2), narrowed by the Overlord's slug item-only-when-given-up: ccrc gave up
   // capturing this Claude Code build. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
-  | { verb: 'untrusted-build'; build: string };
+  | { verb: 'untrusted-build'; build: string }
+  // D-8955: a disk cleanup lane (`lane`) has stalled under disk pressure, for `reason` (a held-by word, ccd's token, or
+  // `unknown`). One open item per lane and reason; ccrc settles it once the lane finishes one again, so it names no run and
+  // takes no act of its own.
+  | { verb: 'disk-lane-stall'; lane: string; reason: string };
+/** The disk-lane stall action's verb, the one spelling its readers bind (D-8955). */
+export const DISK_LANE_STALL_VERB = 'disk-lane-stall' as const;
+export type DiskLaneStallAction = Extract<ItemAction, { verb: 'disk-lane-stall' }>;
+export const isDiskLaneStallAction = (a: ItemAction | null): a is DiskLaneStallAction => a !== null && a.verb === DISK_LANE_STALL_VERB;
 /** The untrusted-build action's verb, the one spelling its readers bind (approvals PR 2, Task 2.2). */
 export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;
 export type UntrustedBuildAction = Extract<ItemAction, { verb: 'untrusted-build' }>;
@@ -205,6 +213,11 @@ export function parseItemAction(text: string): ItemAction | null {
   if (o['verb'] === UNTRUSTED_BUILD_VERB) {
     const build = word('build');
     return build === null ? null : { verb: UNTRUSTED_BUILD_VERB, build };
+  }
+  if (o['verb'] === DISK_LANE_STALL_VERB) {
+    const lane = word('lane');
+    const reason = word('reason');
+    return lane === null || reason === null ? null : { verb: DISK_LANE_STALL_VERB, lane, reason };
   }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
   if (o['verb'] === 'release-review') {

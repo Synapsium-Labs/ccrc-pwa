@@ -192,6 +192,12 @@ _tb_key_policy() {
   TB_POLICY_WHY=""
   case "$k" in
     CCRC_TESTBOX_ROOT|CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR)
+      # The rows directory is written into the push user's forced command: authorized_keys ends command= at a ", and
+      # git-shell, which sshd runs it through, reads quotes and backslashes in it (D-8956).
+      if [ "$k" = CCRC_TESTBOX_REPOS ] && [[ "$v" == *[\"\'\\]* ]]; then
+        TB_POLICY_WHY="$k=$v holds a quote or a backslash, which the push user's forced command cannot carry (authorized_keys ends command= at a \", and git-shell reads quotes and backslashes)"
+        return 1
+      fi
       _tb_path_ok "$v" "$r" && return 0
       TB_POLICY_WHY="$k=$v is not a directory below /srv, /mnt, /media, /opt, /data, /etc/ccrc-testbox or /var/lib/ccrc-testbox, and the installer makes it root's"
       return 1 ;;

@@ -65,7 +65,7 @@ describe('the disk banner fits at every width, skin and theme (D-6617)', () => {
       it(`${level}: ${named(view)}`, async () => {
         const { ctx, page, errors } = await openApp(browser!, view, fixture(level));
         try {
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           await page.waitForSelector('[data-banner="disk"] [role="status"]', { timeout: 20_000 });
           const m = await page.evaluate(() => {
             const banners = [...document.querySelectorAll<HTMLElement>('[data-banner="disk"] [role="status"]')]
