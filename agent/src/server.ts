@@ -325,8 +325,8 @@ function readB64Payload(r: ReadB64Result): { dataB64: string | null; absent?: tr
  *  byte-identical to what it was, and a failure never wears bytes. */
 function readFromPayload(
   r: ReadFromResult,
-): { data: string; dataB64?: string; size: number } | { data: null; absent?: true } {
-  if (r.ok) return { data: r.data, ...(r.dataB64 !== undefined ? { dataB64: r.dataB64 } : {}), size: r.size };
+): { data: string; dataB64?: string; ident?: string; size: number } | { data: null; absent?: true } {
+  if (r.ok) return { data: r.data, ...(r.dataB64 !== undefined ? { dataB64: r.dataB64 } : {}), ...(r.ident !== undefined ? { ident: r.ident } : {}), size: r.size };
   return { data: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
 }
 

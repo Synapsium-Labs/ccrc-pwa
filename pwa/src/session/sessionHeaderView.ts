@@ -5,6 +5,7 @@
 // and its `dead` override, the status word, the chips in the order the header draws them, the ⋯ menu's items
 // (`sessionMenu`, the menu's own reader, each with its command id) and Stop's state. The hooks stay in the part: it
 // passes the clock (`now`, ticking at `headerTickMs`), the pointer query (`finePointer`) and the desk query (`desk`) in.
+import { advisorLineOf, type AdvisorLine } from '../fleet/advisorWords';
 import {
   backgroundWork, backgroundWords, isArchivedRow, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
@@ -119,6 +120,8 @@ export interface DetailRows {
   readonly pr: number | null;
   readonly lane: string | null;
   readonly asks: string | null;
+  /** The coordinator advisor's readout (`advisorLineOf`, the one reader), or null when the advisor never touched it. */
+  readonly advisor: AdvisorLine | null;
 }
 
 export function detailRows(facts: SessionFactSet, coordination: Coordination | null): DetailRows {
@@ -133,6 +136,7 @@ export function detailRows(facts: SessionFactSet, coordination: Coordination | n
     pr: s.pr?.number ?? null,
     lane: facts.lane.away && facts.offPool === null && facts.lane.label !== undefined ? facts.lane.label : null,
     asks: asking ? (s.askSummary ?? '') : null,
+    advisor: advisorLineOf(s.advisor),
   };
 }
 

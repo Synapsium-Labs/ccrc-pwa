@@ -6,6 +6,7 @@
 import type { WatcherCoordPort } from '../coord/ports.js';
 import type { OperatorModelStore } from './store.js';
 import { isOperatorMessageMail, operatorMessageIdOf } from '../../../shared/operatorMessages.js';
+import { fixedLineReplayOf } from '../coord/envelope.js';
 
 const BEFORE_DELIVERED: ReadonlySet<string> = new Set(['recorded', 'queued']);
 
@@ -27,8 +28,44 @@ export function settleOperatorNudge(
   deps: NudgeLaneDeps, delivery: { readonly id: number; readonly deliveredAt: number | null }, messageId: number,
 ): void {
   deliverWhileQueued(deps, messageId, delivery.deliveredAt === null);
-  const acked = deps.coord.markAcked(delivery.id, deps.now);
-  if (!acked.ok) deps.warn(`ccrc-server: mail sweep: delivery ${delivery.id}: ack refused (${acked.why})`);
+  ackDelivery(deps, delivery.id);
+}
+
+/** The delivery's ack through the one writer, a refusal logged and nothing after it assuming it. */
+function ackDelivery(deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, deliveryId: number): void {
+  const acked = deps.coord.markAcked(deliveryId, deps.now);
+  if (!acked.ok) deps.warn(`ccrc-server: mail sweep: delivery ${deliveryId}: ack refused (${acked.why})`);
+}
+
+/** The first delivery of a fixed line that moves nothing in the private store (a wake, a spot-probe notice): the delivery is acked on
+ *  its first delivery only, through the same writer, and a refused ack is logged as `settleOperatorNudge` logs it. A replay (a
+ *  delivery already delivered once) acks nothing here: `finishFixedLineAck` finished it before the pass could type. */
+export function settleFixedLine(
+  deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, delivery: { readonly id: number; readonly deliveredAt: number | null },
+): void {
+  if (delivery.deliveredAt === null) ackDelivery(deps, delivery.id);
+}
+
+/** Before the mail lane types a due delivery: a fixed line delivered once whose ack never landed (`fixedLineReplayOf` answers
+ *  `ack-only`, review 3389 F1) is acked through the same writer, and nothing is typed. True when the pass is done with the row; a
+ *  refused ack (an ack already landed: terminal) is logged and changes nothing. */
+export function finishFixedLineAck(
+  deps: Pick<NudgeLaneDeps, 'coord' | 'now' | 'warn'>, delivery: { readonly id: number; readonly deliveredAt: number | null },
+  nudge: { readonly firstDelivery?: 'none' },
+): boolean {
+  if (fixedLineReplayOf(nudge, delivery.deliveredAt) !== 'ack-only') return false;
+  ackDelivery(deps, delivery.id);
+  return true;
+}
+
+/** After the mail lane typed a nudge and `markDelivered` landed: an operator message's move and ack, a fixed line's
+ *  first-delivery ack, or nothing for the generic nudge. The table row decided which (`mailNudgeOf`); this only dispatches. */
+export function settleNudge(
+  deps: NudgeLaneDeps, delivery: { readonly id: number; readonly deliveredAt: number | null },
+  nudge: { readonly operatorMessageId: number | null; readonly firstDelivery?: 'none' },
+): void {
+  if (nudge.operatorMessageId !== null) settleOperatorNudge(deps, delivery, nudge.operatorMessageId);
+  else if (nudge.firstDelivery === 'none') settleFixedLine(deps, delivery);
 }
 
 /** The ack route's half (review 2627 F-1): a session that acks its operator-message nudge itself, before the lane types it or

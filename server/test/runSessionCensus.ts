@@ -84,6 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/envelope.ts', text: 'designated.sessionId === m.toId',
+    why: 'a mail\'s recipient against the designated Overlord\'s session, read once a mail sweep (the fixed-line table, Overlord W1 inbox): no run is read' },
   { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
     why: 'a lookup of a REGISTRY record by its id (the approval raise\'s child gate, moved from coord/routes.ts with raiseApproval, W3 Q3e): no run is read' },
   { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',

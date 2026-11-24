@@ -111,11 +111,11 @@ describe('the index and the section routes', () => {
     expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(6);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its sixteen cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its seventeen cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -397,7 +397,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
     appearance: ['Layout and theme', 'Character'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
+    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Coordinator advisor', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Approvals', 'Permission prompts (M38)'],
     integrations: ['Linear', 'Project linking', 'GitHub'],
   };

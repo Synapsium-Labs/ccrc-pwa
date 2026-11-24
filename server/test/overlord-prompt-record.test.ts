@@ -24,6 +24,8 @@ import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/sto
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { settleOperatorNudge } from '../src/operatorModel/nudgeLane.js';
 import { isOperatorMessageMail, isSendKey, operatorMessageSubject } from '../../shared/operatorMessages.js';
+import { INBOX_WAKE_SUBJECT, readInboxWakeBody, renderInboxWakeBody, renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordInbox.js';
+import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
 import * as bodyDeciders from '../src/operatorModel/promptBody.js';
 import { settlementMarkCases, promptTargetCases, promptBodyCases } from './sim/operatorModelSets.js';
@@ -657,6 +659,113 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes('operator message 7') && l.includes('refused'))).toBe(true);
   });
 
+  // The table's other two rows (question 8): a wake and the spot-probe notice, each typed to the designated session as its own fixed line.
+  describe('the fixed-line table\'s other rows', () => {
+    const WAKE_BODY = renderInboxWakeBody({ keys: ['probe-round:r1'], waiting: 2, firstDue: { kind: 'by', at: NOW + 140_000 } });
+    const WAKE_LINE = renderInboxWakeLine(readInboxWakeBody(WAKE_BODY), NOW);
+    const SPOT_LINE = renderSpotProbeLine();
+    const designate = (coord: CoordStore, id: string): void => {
+      coord.designationRead = () => ({ kind: 'designated', sessionId: id, term: 1,
+        row: { bound: { sessionId: id, generation: 'inc-1' }, pending: null, term: 1, designatedTerm: 1 } }) as unknown as DesignationRead;
+    };
+    const queueBody = (coord: CoordStore, fromId: string, subject: string, body: string): { id: number } => {
+      const mail = coord.insertMail({ fromId, fromUuid: fromId, toId: ID, runId: null, kind: 'status', subject, body, artifacts: [] });
+      return { id: coord.queueDelivery(mail.id, ID, 'ccrc-mail test payload').id };
+    };
+
+    it('a wake to the designated session types its line (the time left at the mail pass clock), moves nothing in the private store, acks on its first delivery and is never replayed', async () => {
+      const om = store();
+      const { h, coord, w } = await primed([emptyBox, emptyBox, echoedBox(WAKE_LINE), emptyBox], om);
+      designate(coord, ID);
+      const { id } = queueBody(coord, 'operator', INBOX_WAKE_SUBJECT, WAKE_BODY);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([WAKE_LINE]);
+      expect(WAKE_LINE).toContain('the first lapses in 140 s');
+      expect(WAKE_LINE).not.toContain('ccrc-api');
+      expect(stateOf(coord, id)).toBe('acked');
+      expect(om.moveMessage).not.toHaveBeenCalled();
+      vi.setSystemTime(NOW + MAIL_REPLAY_MS * 3);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([WAKE_LINE]);
+    });
+
+    it('a spot-probe notice to the designated session types the probe door\'s line, not the notice\'s body, and acks on its first delivery', async () => {
+      const om = store();
+      const { h, coord, w } = await primed([emptyBox, emptyBox, echoedBox(SPOT_LINE), emptyBox], om);
+      designate(coord, ID);
+      const { id } = queueBody(coord, 'operator', SPOT_PROBE_SUBJECT, 'A probe round is open for you. Answer it with `ccrc-api probe`.');
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([SPOT_LINE]);
+      expect(stateOf(coord, id)).toBe('acked');
+      expect(om.moveMessage).not.toHaveBeenCalled();
+    });
+
+    it('a box holding the wake\'s own line is resumed (Enter, no retype); a box holding a message\'s line is held as a draft', async () => {
+      const a = await primed([framedBox(WAKE_LINE)], store(), {}, true);
+      designate(a.coord, ID);
+      const own = queueBody(a.coord, 'operator', INBOX_WAKE_SUBJECT, WAKE_BODY);
+      await a.w.sweepMail();
+      expect(keyPresses(a.h.calls)).toEqual(['Enter']);
+      expect(literalSends(a.h.calls)).toEqual([]);
+      expect(stateOf(a.coord, own.id)).toBe('acked');
+
+      const b = await primed([framedBox(LINE)], store());
+      designate(b.coord, ID);
+      const draft = queueBody(b.coord, 'operator', INBOX_WAKE_SUBJECT, WAKE_BODY);
+      await b.w.sweepMail();
+      expect(keyPresses(b.h.calls)).toEqual(['C-s']);          // the stash of a draft, never an Enter
+      expect(literalSends(b.h.calls)).toEqual([]);
+      expect(stateOf(b.coord, draft.id)).toBe('queued');
+    });
+
+    it('the same notice to a coordinator keeps its generic nudge and its own ack, and a wake to a session that is not designated is generic too', async () => {
+      const om = store();
+      const nudge = renderMailNudge(ID);
+      const a = await primed([emptyBox, echoedBox(nudge), emptyBox], om);
+      designate(a.coord, 'lane-z-overlord');                   // some other session is the Overlord
+      const spot = queueBody(a.coord, 'operator', SPOT_PROBE_SUBJECT, 'A probe round is open for you.');
+      await a.w.sweepMail();
+      expect(literalSends(a.h.calls)).toEqual([nudge]);
+      expect(stateOf(a.coord, spot.id)).toBe('delivered');     // the recipient's own ack, as the renewal act builds it
+      const b = await primed([emptyBox, echoedBox(nudge), emptyBox], om);
+      const wake = queueBody(b.coord, 'operator', INBOX_WAKE_SUBJECT, WAKE_BODY);   // nobody designated
+      await b.w.sweepMail();
+      expect(literalSends(b.h.calls)).toEqual([nudge]);
+      expect(stateOf(b.coord, wake.id)).toBe('delivered');
+      expect(om.moveMessage).not.toHaveBeenCalled();
+    });
+
+    it('a refused ack of a wake\'s first delivery is logged and leaves the delivery delivered, never moving anything in the private store', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { coord, w } = await primed([emptyBox, emptyBox, echoedBox(WAKE_LINE), emptyBox], store());
+      designate(coord, ID);
+      const { id } = queueBody(coord, 'operator', INBOX_WAKE_SUBJECT, WAKE_BODY);
+      vi.spyOn(coord, 'markAcked').mockReturnValue({ ok: false, why: 'fixture' } as never);
+      await w.sweepMail();
+      expect(stateOf(coord, id)).toBe('delivered');
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes(`delivery ${id}`) && l.includes('ack refused'))).toBe(true);
+    });
+
+    // Review 3506 F1: the recovery measured end to end on the real pass, not by call order. A fixed line whose first delivery moves
+    // nothing (the wake, the spot-probe notice) was delivered once and its ack never landed (the process stopped between
+    // `markDelivered` and the ack). Past the replay window the row is due again; the pass must ack it and type nothing, no line and
+    // no key. Red when the pass's early exit after `finishFixedLineAck` is removed: the row is acked, then the line is typed again.
+    it.each([
+      ['a wake', INBOX_WAKE_SUBJECT, WAKE_BODY],
+      ['a spot-probe notice', SPOT_PROBE_SUBJECT, 'A probe round is open for you. Answer it with `ccrc-api probe`.'],
+    ])('%s delivered once and never acked is replayed past the replay window: acked, and nothing is typed again', async (_what, subject, body) => {
+      const { h, coord, w } = await primed([emptyBox], store());
+      designate(coord, ID);
+      const { id } = queueBody(coord, 'operator', subject, body);
+      expect(coord.markDelivered(id, NOW)).toMatchObject({ changed: true, state: 'delivered' });
+      vi.setSystemTime(NOW + MAIL_REPLAY_MS * 3);
+      await w.sweepMail();
+      expect(stateOf(coord, id)).toBe('acked');
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(keyPresses(h.calls)).toEqual([]);
+    });
+  });
+
   it('settleOperatorNudge: a replay (the ack was refused earlier) moves nothing and tries the ack again', () => {
     const om = store();
     const ack = vi.fn(() => ({ ok: true as const, state: 'acked' as const }));
@@ -694,5 +803,19 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     coord.queueDelivery(nudge.id, ID, 'e');
     await w.tick();
     expect(sent).toEqual([]);
+  });
+
+  it('pushNewMail records the inbox wake and pushes nothing', async () => {
+    const sent: { title: string; body: string }[] = [];
+    const push = { notify: async (p: { title: string; body: string }) => { sent.push(p); } };
+    const { coord, w } = await primed([emptyBox], undefined, { push: push as never });
+    const wake = coord.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: ID, runId: null, kind: 'status', subject: INBOX_WAKE_SUBJECT, body: 'inbox-wake v1\nwaiting: 1\nfirst-due: none', artifacts: [] });
+    coord.queueDelivery(wake.id, ID, 'e');
+    const ordinary = coord.insertMail({ fromId: 'lane-b-project-a', fromUuid: 'u', toId: ID, runId: null, kind: 'status', subject: 'ordinary news', body: 'b', artifacts: [] });
+    coord.queueDelivery(ordinary.id, ID, 'e');
+    await w.tick();
+    // The control: the ordinary mail beside it is pushed, so the tick read both; the wake is not (a host-pressure push, if the disk is full, is not this test's).
+    expect(sent.map((p) => p.body)).toContain('ordinary news');
+    expect(sent.map((p) => p.body)).not.toContain(INBOX_WAKE_SUBJECT);
   });
 });

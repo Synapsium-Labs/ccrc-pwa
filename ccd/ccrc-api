@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, ninety-eight rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-one rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Ninety-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -368,6 +368,14 @@ declare -A ROUTES=(
   [timer.set]='POST|/api/timers|no|-'
   [timer.list]='GET|/api/timers|no|-'
   [timer.cancel]='POST|/api/timers/{id}/cancel|yes|-'
+  # The Overlord's inbox (Overlord W1, the inbox piece): the list of what waits for it, one message by its id, and the
+  # acknowledgement of one. The `{id}` of the last two is the MESSAGE's id, positive digits only (`bad-id` otherwise, unsent).
+  # The pair is the pane's, never typed, and a body or a flag that names it is refused: the two reads carry it in the QUERY, after
+  # any declared key, and `acknowledge` sends a body this client builds, exactly `{"byId":…,"byUuid":…}`; a `--json` of any kind
+  # on it is refused `bad-body`.
+  [overlord.inbox]='GET|/api/overlord/inbox|no|-'
+  [overlord.messages]='GET|/api/overlord/messages/{id}|yes|-'
+  [overlord.acknowledge]='POST|/api/overlord/messages/{id}/acknowledge|yes|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -1108,6 +1116,9 @@ main() {
   if [[ "$needs" == 'yes' ]]; then
     [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
     [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-id' 'id is not a plain id'
+    if [[ "$group" == 'overlord' ]]; then
+      [[ "$id" =~ ^[1-9][0-9]{0,9}$ ]] || refuse 'bad-id' 'the message id is not a positive number'
+    fi
     if [[ "$group" == 'linear' ]]; then
       [[ "$id" =~ $LINEAR_REF_RE ]] || refuse 'bad-ref' 'the issue reference is not an identifier such as AAA-12'
     fi
@@ -1369,6 +1380,21 @@ main() {
     derive_identity
     append_body_field 'byId' "$DERIVED_ID" 'the statement body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the statement body is not a JSON object; byUuid cannot be added'
+  fi
+  # THE OVERLORD INBOX ROWS' IDENTITY: the pane's, derived here, never typed. The two reads carry the pair in the query after
+  # any declared key (`--byId` is `unknown-query`); `acknowledge` is attributed to this pane and carries nothing else, so a
+  # `--json` of any kind is refused `bad-body`, unsent, and the body is built here over `{}`, byId then byUuid, LAST.
+  if [[ "$key" == 'overlord.inbox' || "$key" == 'overlord.messages' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+  if [[ "$key" == 'overlord.acknowledge' ]]; then
+    [[ -z "$body_src" ]] \
+      || refuse 'bad-body' 'the acknowledgement takes no body; it is attributed to this pane, and the client builds it'
+    derive_identity
+    body='{}'
+    append_body_field 'byId' "$DERIVED_ID" 'the acknowledgement body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the acknowledgement body is not a JSON object; byUuid cannot be added'
   fi
   if [[ "$key" == 'note.list' ]]; then
     derive_identity

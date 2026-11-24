@@ -524,9 +524,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 60 of 60 are monotonic (the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 61 of 61 are monotonic (the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(60);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(61);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -629,6 +629,16 @@ describe('the mailhold projection row (mid-turn mail plan Task 4.3)', () => {
   it('sits right after the mail row', () => {
     const names = LANE_SCHEDULE.map((r) => r.name);
     expect(names.indexOf('mailHold')).toBe(names.indexOf('mail') + 1);
+  });
+});
+
+describe('the inbox wake row (Overlord W1 inbox piece, Task 4)', () => {
+  it('beats at the mail lane\'s cadence by reference, skips an overlap and names its warning', () => {
+    expect(laneRow('inboxWake')).toEqual({
+      name: 'inboxWake', cadenceMs: 10_000, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the inbox wake lane failed', derivedFrom: { name: 'MAIL_SWEEP_MS', reason: expect.any(String) },
+    });
+    expect(laneRow('inboxWake').cadenceMs).toBe(laneRow('mail').cadenceMs);
   });
 });
 

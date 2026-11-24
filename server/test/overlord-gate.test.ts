@@ -21,11 +21,14 @@ describe('overlordGate (the order)', () => {
   for (const [name, fn] of Object.entries(overlordGateCases(gate))) it(name, fn);
 });
 describe('the door table the gate reads', () => {
-  it('every Overlord row but the team link (D-8809) is a start door today, and the card recording page is the one write whose act is read', () => {
+  // The W1 inbox piece's three doors are of class `other` too (every step runs), and its two reads are fenced, as the card's
+  // recording page is (the inbox plan's question 15).
+  it('every Overlord row but the team link (D-8809) and the inbox piece\'s three is a start door today, and the fenced reads are the card recording page and the inbox\'s two', () => {
     expect(GATE_DOOR_KEYS.length).toBeGreaterThan(0);
-    for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(k !== 'link-team');
+    const notStart = new Set(['link-team', 'inbox', 'messages', 'acknowledge']);
+    for (const k of GATE_DOOR_KEYS) expect(isStart(OVERLORD_DOORS[k] as never), k).toBe(!notStart.has(k));
     const reads = GATE_DOOR_KEYS.filter((k) => { const r = doorRow(k) as { write: boolean; act: string }; return r.write && r.act === 'read'; });
-    expect(reads).toEqual(['card-record']);
+    expect(reads).toEqual(['card-record', 'inbox', 'messages']);
   });
   it('a passing fact set passes at every row', () => {
     for (const k of GATE_DOOR_KEYS) expect(gate.overlordGate(passFacts(doorRow(k) as never)), k).toEqual({ kind: 'pass' });

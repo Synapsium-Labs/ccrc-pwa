@@ -892,6 +892,16 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
   });
 
+  it('the Overlord inbox doors (W1 inbox piece): the two GETs are masked by the one answer hook, and the acknowledge POST by the write-answer rule', () => {
+    for (const p of ['/api/overlord/inbox', '/api/overlord/messages/:id']) {
+      expect(MASKED_GET_ROUTES.has(p), p).toBe(true);
+      expect(answerMasked('GET', p), p).toBe(true);
+    }
+    const ack = '/api/overlord/messages/:id/acknowledge';
+    expect(WRITE_ANSWER_EXEMPT.test(ack), ack).toBe(false);
+    expect(answerMasked('POST', ack), ack).toBe(true);
+  });
+
   it('POST /api/landing/entries and /api/landing/order answers are masked: neither is write-answer exempt, and an assembled credential never leaves (wave 5f)', async () => {
     for (const p of ['/api/landing/entries', '/api/landing/order']) {
       expect(WRITE_ANSWER_EXEMPT.test(p), p).toBe(false);
