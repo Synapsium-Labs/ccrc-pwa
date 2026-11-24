@@ -18,6 +18,7 @@ import {
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
 import type { TestboxEventRow } from '../../../shared/api';
+import { isTestboxName, parseRepoRow } from '../../../shared/testbox';
 import { boxSettingsOf } from './boxSettingsWords';
 
 /** The preflight's one code that carries a corrected access line (`fixLine`), spelled once. */
@@ -326,6 +327,33 @@ export function actWord(act: string): string {
  *  head, and the box matches runs by that head (every row in the tree uses it), so a package manager's `npm test` would hand vitest
  *  none of the flags: no JUnit report is written, every pull request leg reads DIFFERS and the switch never arms. */
 export const TESTBOX_DEFAULT_RUNNER = './node_modules/.bin/vitest';
+
+/** One repository row as the card's step 4 holds it, as typed; `inputs` blank means the package's own pair (D-9009). */
+export interface TestboxRepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
+export const blankRepoDraft = (): TestboxRepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_RUNNER });
+
+const REPO_URL = /^(?:https|ssh):\/\/[^\s@/]+(?:@[^\s/]+)?\/[^\s]+$/;
+const COMMAND_HEAD = /^[^\s]+(?: [^\s]+)*$/;
+
+/** The row's JSON object for one draft, with the mirror under the box's root. */
+export function repoRowOf(d: TestboxRepoDraft, root: string): Record<string, unknown> {
+  const inputs = d.inputs.trim() === '' ? [`${d.pkg}/package.json`, `${d.pkg}/package-lock.json`] : d.inputs.trim().split(/\s+/);
+  return {
+    name: d.name, fetchUrl: d.fetchUrl, mirrorPath: `${root.replace(/\/+$/, '')}/mirrors/${d.name}.git`,
+    packages: [{ name: d.pkg, installInputs: inputs, commands: [d.command] }], buildOutputs: [], systemTools: [],
+  };
+}
+
+/** What is wrong with one repository draft, by field; empty for a row that parses. */
+export function repoDraftProblems(d: TestboxRepoDraft, root: string): Partial<Record<keyof TestboxRepoDraft | 'row', string>> {
+  const out: Partial<Record<keyof TestboxRepoDraft | 'row', string>> = {};
+  if (!isTestboxName(d.name)) out.name = TESTBOX_CONNECT_TEXT.badRepoName;
+  if (!REPO_URL.test(d.fetchUrl)) out.fetchUrl = TESTBOX_CONNECT_TEXT.badRepoUrl;
+  if (!isTestboxName(d.pkg)) out.pkg = TESTBOX_CONNECT_TEXT.badRepoName;
+  if (!COMMAND_HEAD.test(d.command)) out.command = TESTBOX_CONNECT_TEXT.badRepoWord;
+  if (Object.keys(out).length === 0 && !parseRepoRow(JSON.stringify(repoRowOf(d, root))).ok) out.row = TESTBOX_CONNECT_TEXT.badRepoRow;
+  return out;
+}
 
 /** The fleet's repository, as the card offers it: GitHub's https form of a slug `_gh_repo_slug` measured (`owner/name`). */
 export const GIT_HOST_BASE = 'https://github.com/';
