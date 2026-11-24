@@ -3,7 +3,7 @@
 // CCRC_RELEASE_BASE_URL to a second value (the default being the first); root's and the service user's fixture
 // ~/.ccrc/ccrc.env each set every one of them to a third, and the caller's environment to a fourth. Then:
 //   (a) the installer, run into the fixture root, renders drop-ins whose MemoryMax=, MemorySwapMax=, CPUQuota=,
-//       IPAddressAllow=, User= and RuntimeMaxSec= are the box file's;
+//       IPAddressAllow=, User= and RuntimeMaxSec= (TimeoutStartSec= for the oneshot install unit) are the box file's;
 //   (b) `ccrc-test --testbox-knobs box` under the service user's fixture HOME, as agent/src/testbox/config.ts runs it,
 //       prints the box file's value of every box key with `from` `file`, and config.ts's read gives the same values
 //       while process.env holds the fourth;
@@ -108,7 +108,9 @@ const expectedDropIns = (v: Record<string, string>): Record<string, string[]> =>
   const p = v.CCRC_TESTBOX_RUN_USER_PREFIX!;
   return {
     service: [`[Service] User=${v.CCRC_TESTBOX_SERVICE_USER}`, `[Service] Group=${v.CCRC_TESTBOX_SERVICE_USER}`],
-    prepare: [`[Service] User=${p}%i`, allow, max], run: [`[Service] User=${p}%i`, max], install: [`[Service] User=${p}install`, allow, max],
+    prepare: [`[Service] User=${p}%i`, allow, max], run: [`[Service] User=${p}%i`, max],
+    // The install unit is a oneshot, whose bound is TimeoutStartSec= (D-8964).
+    install: [`[Service] User=${p}install`, allow, `[Service] TimeoutStartSec=${v.CCRC_TESTBOX_UNIT_MAX}`],
     slice: caps, islice: caps,
   };
 };
@@ -157,7 +159,8 @@ describe('(a) the installer renders the drop-ins from the box file, never a home
   it('mutation: an installer that reads the caller\'s home ccrc.env (BOX_ENV_FILE) renders the third value, and the row reds', async () => {
     const st = path.join(mkTmp('ccrc-tb-mut-a-'), 'staging');
     cpSync(W.staging, st, { recursive: true });
-    const f = path.join(st, 'deploy', 'testbox', 'install.sh');
+    // The installer's one reader of a box value, `k`, is in deploy/testbox/box-steps, which it sources.
+    const f = path.join(st, 'deploy', 'testbox', 'box-steps');
     const from = `k() { printf '%s' "\${TBK[$1]}"; }`;
     const text = readFileSync(f, 'utf8');
     expect(text.split(from).length, 'the mutation applies once').toBe(2);

@@ -1,6 +1,22 @@
-// Settings › Security › Project linking (the linking standard, D-8147; plan Task 8). One row per project, from the
-// `linking` cell of `GET /api/projects` (D-8405: one per project NAME, `linkingRowsOf`, though the route answers one row
-// per checkout directory):
+// Settings › Integrations › Project linking (the linking standard, D-8147; plan Task 8; the compact list,
+// D-8932). One row per project, from the `linking` cell of `GET /api/projects` (D-8405: one per
+// project NAME, `linkingRowsOf`, though the route answers one row per checkout directory).
+//
+// THE LIST, as `linkingList` (linkingWords.ts) decides it; this file draws the answer and decides nothing:
+//   * The card's head says the counts once: how many rows need a decision, how many are linked, how many are not.
+//   * A row that WAITS FOR THE OPERATOR (a suggested team, a key two workspaces hold, a shared key with no owning project,
+//     a map waiting, inbound issues with no live owner) comes first, open and flagged. Each reason is said in words with
+//     the ONE control that settles it directly under it (`LinkingDecision.control`); the rest of the row's form sits
+//     behind "More settings". A row the operator settles keeps its place and its controls until they shut it.
+//   * A LINKED project is ONE LINE: its name, the team it is linked to (key and name), how it was linked, who owns the
+//     team now, where its migration stands, and a few words where it differs from a quiet row. The line is a native
+//     disclosure; it opens to every control below.
+//   * Every project with NO TEAM and nothing to decide sits in one group at the foot ("N projects not linked to Linear"),
+//     which opens to a plain list that names the field once: the name, the key field, Save and "More settings" on a line.
+// One `<ul>` holds every row, whatever its kind, so a row a write moves from one kind to another keeps its state (the
+// lock its write needs, its result line): the group is a control of that list, never a second list.
+//
+// THE CONTROLS, unchanged from the card's first shape (the same writes, the same routes):
 //   * Team key: a short field (uppercased as typed), Save; empty clears it. D-8405: a key the automatic pass linked says
 //     so under the field, with its evidence; a project with no key shows the pass's candidates, each a one-tap Link that
 //     saves its key as the operator's (the action sits on the row). The pass never writes over the operator's key.
@@ -8,31 +24,32 @@
 //     the override select (Automatic, Private, Public), written the moment it changes.
 //   * PR template: Present / Absent, and, for a private project with no template and a team key, "Open a template PR"
 //     behind a `QuickConfirm` that names the repository and the file.
+//   * The hierarchy cell (D-8184): the Linear owner, the initiatives toggle, the owning-project toggle, the state.
 // THE ANSWER IS WHAT IS SHOWN. A write renders the row the server stored (`api.saveLinking`'s answer), and the template
 // act shows the pull request's URL as a link. A refusal is its word's fixed sentence (`LINKING_REFUSAL_TEXT`); the box's
 // own text never reaches the screen. A project whose cell is absent (an older server) draws nothing.
 // Layout is `settings.css`'s `.linking-*` (a container query on the card, so the pane's width decides, not the window's).
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, elapsedWords, useNow } from '@ccrc/ui';
+import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, cn, elapsedWords, useNow } from '@ccrc/ui';
 import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamCandidateWire } from '../../../../shared/linking';
 import type { LinearLegacyRow, LinearWorkspaceShown } from '../../../../shared/linear';
 import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
-import type { ProjectRow } from '../../../../shared/api';
-import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/plan';
-import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
+import type { HierarchyAnswer, HierarchyProjectRow, HierarchyState } from '../../../../shared/plan';
+import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, migrateOutcomeUnknown, migrateWriteText, reshapeConsequence, reshapeOffered, reshapeTitle, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, NOT_LIVE_WORDS, coordinatorChoices, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, migrateOutcomeUnknown, migrateWriteText, reshapeConsequence, reshapeOffered, reshapeTitle, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
-import { loadProjects } from '../../fleet/useProjectRows';
 import {
-  PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
-  linkingRowsOf, overlordCallLink, pickerWorkspacesOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  LINKING_ROW_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
+  liftedControls, linkingCountsWords, linkingList, overlordCallLink, pickerWorkspacesOf, teamLinkLine, templateOffered, unlinkedGroupOpenAtFirst, unlinkedGroupWords, workspaceToWrite, workspacesHoldingKey,
+  type LinkingControl, type LinkingListRow,
 } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
+import type { ProjectList } from './useProjectList';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
 export const LINKING_TEXT = {
@@ -75,19 +92,74 @@ export function visibilityLine(m: ProjectLinkingWire['measured'], now: number): 
 
 const overrideOf = (v: string): LinkingOverride | null => (v === 'private' || v === 'public' ? v : null);
 
-/** The template button's rule: a private project (measured or overridden), a template reading of `absent`, and a key. */
-export const templateOffered = (l: ProjectLinkingWire): boolean =>
-  l.mode === 'private' && l.teamKey !== null && l.measured.state === 'measured' && l.measured.template === 'absent';
+/** A listed row's line: a native `<details>`, so it needs no script to be reached and worked from the keyboard. */
+function Fold({ summary, open, onOpen, children }: {
+  summary: ReactNode; open: boolean; onOpen: (open: boolean) => void; children: ReactNode;
+}): ReactNode {
+  return (
+    <details className="settings-release-fold linking-fold" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
+      <summary className="linking-sum">{summary}</summary>
+      {children}
+    </details>
+  );
+}
 
-/** The hierarchy cell of one row (D-8184): the Linear owner, the initiatives toggle, the owning-project toggle where the team
+/** What "More settings" shows: the rest of a row's form, kept in the page (its fields keep their state) and out of the
+ *  layout and the keyboard's reach until asked for. */
+function Rest({ id, shown, children }: { id: string; shown: boolean; children: ReactNode }): ReactNode {
+  return <div id={id} className="linking-body" hidden={!shown}>{children}</div>;
+}
+
+/** A select of coordinators (the row's Linear owner, and the one coordinator for every project): what
+ *  `coordinatorChoices` offers, and its control that shows the rest, in a group of their own. `first` is the empty
+ *  option's words, which state the default. `between` is drawn after the select and before that control, so a caller's
+ *  act that sits beside the select comes next in the keyboard's order too. */
+function CoordinatorSelect({ id, value, disabled, first, coordinators, unlisted, onPick, between }: {
+  id: string; value: string; disabled: boolean; first: string; coordinators: HierarchyAnswer['coordinators'];
+  unlisted: (id: string) => string; onPick: (id: string) => void; between?: ReactNode;
+}): ReactNode {
+  const [all, setAll] = useState(false);
+  const c = coordinatorChoices(coordinators, value === '' ? null : value, all, unlisted);
+  return (
+    <>
+      <Select id={id} value={value} disabled={disabled} onChange={(e) => onPick(e.target.value)}>
+        <option value="">{first}</option>
+        {c.selected !== null && <option value={c.selected.id}>{c.selected.words}</option>}
+        {c.live.map((o) => <option key={o.id} value={o.id}>{o.words}</option>)}
+        {c.notLive.length > 0 && (
+          <optgroup label={NOT_LIVE_WORDS.group}>
+            {c.notLive.map((o) => <option key={o.id} value={o.id}>{o.words}</option>)}
+          </optgroup>
+        )}
+      </Select>
+      {between}
+      {c.more !== null && (
+        <Button variant="ghost" size="fit" className="linking-more" data-linking-more="" aria-expanded={all} onClick={() => setAll(!all)}>{c.more}</Button>
+      )}
+    </>
+  );
+}
+
+/** The pieces of one row's hierarchy settings (D-8184), so the row can draw the one a reason names directly under that
+ *  reason and the rest in the hierarchy cell. `owning` is null where the team key is not shared; `map` is null unless a
+ *  map waits. */
+interface HierarchyParts {
+  owner: ReactNode; initiatives: ReactNode; owning: ReactNode | null; map: ReactNode | null;
+  state: HierarchyState; stateWords: string; rest: ReactNode; confirm: ReactNode;
+}
+
+/** One row's hierarchy settings (D-8184): the Linear owner, the initiatives toggle, the owning-project toggle where the team
  *  key is shared, and the state. Every value shown, and every body written, is the hierarchy answer's row, the one source the
  *  server re-measures after each write (it clears `ownsTeam` on a sibling in the same transaction). Each control writes the
- *  moment it changes, the whole settings body at once. */
-function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, track, result }: {
-  name: string; answer: HierarchyAnswer; reread: () => number; busy: boolean; locked: boolean; setBusy: (b: boolean) => void;
+ *  moment it changes, the whole settings body at once. Null while there is no answer. */
+function useHierarchyParts({ name, answer, reread, busy, locked, setBusy, raise, track, result }: {
+  name: string; answer: HierarchyAnswer | null; reread: () => number; busy: boolean; locked: boolean; setBusy: (b: boolean) => void;
   raise: (seq: number) => void; track: (d: 1 | -1) => void; result: ReturnType<typeof useResultLine>;
-}): ReactNode {
+}): HierarchyParts | null {
   const ownerId = useId();
+  // Reshape in Linear (D-8186): asks the team's Linear owner for the map. The hierarchy is read again, so the state line follows.
+  const [reshaping, setReshaping] = useState(false);
+  if (answer === null) return null;
   // A project the answer does not list is drawn at the server's defaults (`defaultHierarchyRow`), and a write sends them.
   const h = answer.projects.find((p) => p.project === name) ?? defaultHierarchyRow(name);
   const write = (patch: Partial<Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>>): void => {
@@ -108,8 +180,6 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
       )
       .finally(() => { track(-1); setBusy(false); });
   };
-  // Reshape in Linear (D-8186): asks the team's Linear owner for the map. The hierarchy is read again, so the state line follows.
-  const [reshaping, setReshaping] = useState(false);
   const reshape = (): void => {
     setBusy(true);
     track(1);
@@ -125,50 +195,74 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
       .finally(() => { track(-1); setBusy(false); });
   };
   const inbound = inboundWords(h.inboundWaiting);
-  const named = h.linearOwner;
   const inheritedNote = ownerInheritedNote(h);
-  const known = answer.coordinators.some((c) => c.id === named);
-  return (
-    <div className="linking-cell linking-hier" data-linking-hier="">
+  const off = busy || locked;
+  return {
+    owner: (
       <div className="linking-cell linking-owner">
         <label htmlFor={ownerId} className="settings-note">{HIERARCHY_TEXT.owner}</label>
-        <Select id={ownerId} value={named ?? ''} disabled={busy || locked} onChange={(e) => write({ linearOwner: e.target.value === '' ? null : e.target.value })}>
-          <option value="">{defaultOwnerWords(h)}</option>
-          {named !== null && !known && <option value={named}>{namedOwnerWords(h, named)}</option>}
-          {answer.coordinators.map((c) => <option key={c.id} value={c.id}>{coordinatorWords(c)}</option>)}
-        </Select>
+        <CoordinatorSelect id={ownerId} value={h.linearOwner ?? ''} disabled={off} first={defaultOwnerWords(h)}
+          coordinators={answer.coordinators} unlisted={(id) => namedOwnerWords(h, id)}
+          onPick={(id) => write({ linearOwner: id === '' ? null : id })} />
         {inheritedNote !== null && <p className="settings-note">{inheritedNote}</p>}
       </div>
-      <div className="linking-cell linking-toggles">
-        <OptionRow label={HIERARCHY_TEXT.initiatives} checked={h.initiatives === 'on'} disabled={busy || locked}
-          onClick={() => write({ initiatives: h.initiatives === 'on' ? 'off' : 'on' })} />
-        {sharesTeamKey(name, answer.projects) && (
-          <OptionRow label={HIERARCHY_TEXT.owning} checked={h.ownsTeam} disabled={busy || locked} onClick={() => write({ ownsTeam: !h.ownsTeam })} />
-        )}
-      </div>
-      <div className="linking-cell linking-state" data-linking-state={h.state}>
-        {h.state === 'map-waiting' && h.itemId !== null
-          ? <TextLink href={itemPath(h.itemId)} onClick={inAppClick(itemPath(h.itemId))}>{HIERARCHY_TEXT.mapWaiting}</TextLink>
-          : <p className="settings-note">{stateWords(h)}</p>}
+    ),
+    initiatives: (
+      <OptionRow label={HIERARCHY_TEXT.initiatives} checked={h.initiatives === 'on'} disabled={off}
+        onClick={() => write({ initiatives: h.initiatives === 'on' ? 'off' : 'on' })} />
+    ),
+    owning: !sharesTeamKey(name, answer.projects) ? null : (
+      <OptionRow label={HIERARCHY_TEXT.owning} checked={h.ownsTeam} disabled={off} onClick={() => write({ ownsTeam: !h.ownsTeam })} />
+    ),
+    map: h.state === 'map-waiting' && h.itemId !== null
+      ? <TextLink href={itemPath(h.itemId)} onClick={inAppClick(itemPath(h.itemId))}>{HIERARCHY_TEXT.mapWaiting}</TextLink>
+      : null,
+    state: h.state,
+    stateWords: stateWords(h),
+    rest: (
+      <>
         {inbound !== null && <p className="settings-note">{inbound}</p>}
         {reshapeOffered(h) && (
-          <Button variant="ghost" className="linking-reshape" disabled={busy || locked} onClick={() => setReshaping(true)}>{HIERARCHY_TEXT.reshape}</Button>
+          <Button variant="ghost" className="linking-reshape" disabled={off} onClick={() => setReshaping(true)}>{HIERARCHY_TEXT.reshape}</Button>
         )}
         {h.teamKey !== null && <TextLink href={upkeepPath(name)} onClick={inAppClick(upkeepPath(name))}>{HIERARCHY_TEXT.upkeep}</TextLink>}
-      </div>
+      </>
+    ),
+    confirm: (
       <QuickConfirm open={reshaping} onClose={() => setReshaping(false)} title={reshapeTitle(h.teamKey ?? '')}
         consequence={reshapeConsequence(h.teamKey ?? '')} confirmLabel={HIERARCHY_TEXT.reshapeConfirm} onConfirm={reshape} />
+    ),
+  };
+}
+
+/** The hierarchy cell: every piece but the ones the row drew under a reason (`lifted`). */
+function HierarchyCell({ parts, lifted }: { parts: HierarchyParts; lifted: readonly LinkingControl[] }): ReactNode {
+  const mapAbove = lifted.includes('map') && parts.map !== null;
+  return (
+    <div className="linking-cell linking-hier" data-linking-hier="">
+      {!lifted.includes('owner') && parts.owner}
+      <div className="linking-cell linking-toggles">
+        {parts.initiatives}
+        {!lifted.includes('owning') && parts.owning}
+      </div>
+      <div className="linking-cell linking-state" data-linking-state={parts.state}>
+        {!mapAbove && (parts.map ?? <p className="settings-note">{parts.stateWords}</p>)}
+        {parts.rest}
+      </div>
     </div>
   );
 }
 
-function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, answer, landed, floor, inflight, raise, track, reread }: {
-  name: string; linking: ProjectLinkingWire; now: number; workspaces: readonly LinearWorkspaceShown[] | null; onStored: (project: string, linking: ProjectLinkingWire) => void; refreshList: () => Promise<void>;
+function LinkingRow({ row, hidden, onReveal, now, workspaces, onStored, refreshList, answer, landed, floor, inflight, raise, track, reread }: {
+  row: LinkingListRow; hidden: boolean; onReveal: () => void; now: number; workspaces: readonly LinearWorkspaceShown[] | null;
+  onStored: (project: string, linking: ProjectLinkingWire) => void; refreshList: () => Promise<void>;
   answer: HierarchyAnswer | null; landed: number; floor: number; inflight: number; raise: (seq: number) => void; track: (d: 1 | -1) => void; reread: () => number;
 }): ReactNode {
+  const { name, linking, kind, decisions, summary } = row;
   const keyId = useId();
   const overrideId = useId();
   const workspaceId = useId();
+  const restId = useId();
   const [draft, setDraft] = useState(linking.teamKey ?? '');
   const [busy, setBusy] = useState(false);
   const [listBusy, setListBusy] = useState(false);
@@ -178,6 +272,46 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
   const [asking, setAsking] = useState(false);
   const [pr, setPr] = useState<string | null>(null);
   const result = useResultLine();
+  const parts = useHierarchyParts({ name, answer, reread, busy: locked, locked: inflight > 0 || landed < Math.max(need, floor), setBusy, raise, track, result });
+
+  // The row's line is open while it waits for the operator, and opens when it starts to; a row that stops waiting stays as
+  // the operator left it, so the answer of the write that settled it stays in view.
+  const waiting = kind === 'decision';
+  const [open, setOpen] = useState(waiting);
+  useEffect(() => { if (waiting) setOpen(true); }, [waiting]);
+  // The controls drawn under a reason, above the rest of the form (`liftedControls`): each stays where it was drawn while
+  // the row stays open, so the control the operator just used is the same element after its reason went. Shutting the
+  // line forgets them: a settled row opens again as the whole form.
+  const kept = useRef<LinkingControl[]>([]);
+  kept.current = kind === 'unlinked' ? [] : liftedControls(kept.current, decisions);
+  const lifted = kept.current;
+  const toggle = (o: boolean): void => { if (!o) kept.current = []; setOpen(o); };
+  // "More settings": the rest of an unlinked row's form, and of a row's that draws a control under a reason.
+  const [more, setMore] = useState(false);
+  // A write of this row's own that moves it between the listed rows and the group takes the operator with it: the row is
+  // shown where it now sits (its line opened, or the group opened), and focus goes to it, since the control that was
+  // pressed is gone. A row that moves for any other reason (a read, another project's write) is left alone.
+  const li = useRef<HTMLLIElement | null>(null);
+  const wrote = useRef(false);
+  const was = useRef(kind);
+  const [focusOn, setFocusOn] = useState<'input' | 'summary' | null>(null);
+  useEffect(() => {
+    const from = was.current;
+    was.current = kind;
+    const moved = (from === 'unlinked') !== (kind === 'unlinked');
+    if (moved && wrote.current) {
+      if (kind === 'unlinked') onReveal(); else setOpen(true);
+      setFocusOn(kind === 'unlinked' ? 'input' : 'summary');
+    }
+    wrote.current = false;
+  }, [linking, kind, onReveal]);
+  // Focus goes there once it can be taken: the field is no longer locked by the write that moved the row (a locked field
+  // is disabled, and a disabled field takes no focus). The group is open by then: `onReveal` and `setFocusOn` are one update.
+  useEffect(() => {
+    if (focusOn === null || locked) return;
+    li.current?.querySelector<HTMLElement>(focusOn)?.focus();
+    setFocusOn(null);
+  }, [focusOn, locked]);
 
   // The stored row is what the field shows: a re-read (the answer of a write) puts the field back on it.
   useEffect(() => { setDraft(linking.teamKey ?? ''); }, [linking.teamKey]);
@@ -188,6 +322,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
 
   const write = (body: LinkingWriteBody): void => {
     setBusy(true);
+    wrote.current = true;
     result.clear();
     void api.saveLinking(name, body)
       .then(
@@ -195,6 +330,8 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
         (err: unknown) => {
           // The project list holds the linking cell, so it is read again too, and the row's controls stay locked until it lands (D-8186 A1).
           if (hierarchyOutcomeUnknown(err)) { setNeed(reread()); setListBusy(true); void refreshList().finally(() => setListBusy(false)); }
+          // A refusal wrote nothing, so no later move of this row is this write's.
+          else wrote.current = false;
           result.say(keyWriteText(err, holders.length), 'refusal');
         },
       )
@@ -231,55 +368,60 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
 
   const slug = linking.measured.state === 'measured' ? linking.measured.slug : name;
   const template = linking.measured.state === 'measured' ? linking.measured.template : null;
-  return (
-    <li className="linking-row" data-linking-row={name}>
-      <p className="linking-name">{name}</p>
-      <div className="linking-cell linking-key">
-        <label htmlFor={keyId} className="settings-note">{LINKING_TEXT.teamKey}</label>
-        <div className="linking-key-line">
-          <TextInput
-            id={keyId}
-            value={draft}
-            maxLength={16}
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            disabled={locked}
-            onChange={(e) => setDraft(e.target.value.toUpperCase())}
-            onKeyDown={(e) => { if (e.key === 'Enter') saveKey(); }}
-          />
-          <Button variant="ghost" disabled={locked || needsWorkspace} onClick={saveKey}>{LINKING_TEXT.save}</Button>
-        </div>
-        {holders.length > 1 && (
-          <div className="linking-workspace" data-linking-workspace="">
-            <label htmlFor={workspaceId} className="settings-note">{PICKER_WORDS.label}</label>
-            <Select id={workspaceId} value={chosen} disabled={locked} onChange={(e) => setChosen(e.target.value)}>
-              <option value="">{PICKER_WORDS.choose}</option>
-              {holders.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-            </Select>
-            {needsWorkspace && <p className="settings-note">{PICKER_WORDS.needed}</p>}
-          </div>
-        )}
-        {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
-        {callLink !== null && (
-          <TextLink href={callLink.href} onClick={inAppClick(callLink.href)}>{callLink.words}</TextLink>
-        )}
-        {candidates.length > 0 && (
-          <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>
-            <p className="settings-note">{LINKING_TEXT.candidates}</p>
-            {candidates.map((c) => (
-              <div key={candidateKeyOf(c)} className="linking-candidate" data-linking-candidate={c.key}>
-                <Button variant="ghost" disabled={locked} aria-label={candidateAriaLabel(c)}
-                  onClick={() => tapCandidate(c)}>
-                  {candidateLabel(c)}
-                </Button>
-                {candidateWorkspaceLine(c) !== null && <p className="settings-note">{candidateWorkspaceLine(c)}</p>}
-                <p className="settings-note">{candidateWhy(c)}</p>
-              </div>
-            ))}
-          </div>
-        )}
+  // An unlinked row's field has no label of its own: the group says "Team key" once, and the field is named for its project.
+  const plain = kind === 'unlinked';
+  const keyCell = (
+    <div className="linking-cell linking-key">
+      {!plain && <label htmlFor={keyId} className="settings-note">{LINKING_TEXT.teamKey}</label>}
+      <div className="linking-key-line">
+        <TextInput
+          id={keyId}
+          aria-label={plain ? LINKING_ROW_WORDS.keyFor(name) : undefined}
+          value={draft}
+          maxLength={16}
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          disabled={locked}
+          onChange={(e) => setDraft(e.target.value.toUpperCase())}
+          onKeyDown={(e) => { if (e.key === 'Enter') saveKey(); }}
+        />
+        <Button variant="ghost" disabled={locked || needsWorkspace} onClick={saveKey}>{LINKING_TEXT.save}</Button>
       </div>
+      {holders.length > 1 && (
+        <div className="linking-workspace" data-linking-workspace="">
+          <label htmlFor={workspaceId} className="settings-note">{PICKER_WORDS.label}</label>
+          <Select id={workspaceId} value={chosen} disabled={locked} onChange={(e) => setChosen(e.target.value)}>
+            <option value="">{PICKER_WORDS.choose}</option>
+            {holders.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+          </Select>
+          {needsWorkspace && <p className="settings-note">{PICKER_WORDS.needed}</p>}
+        </div>
+      )}
+      {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
+      {callLink !== null && (
+        <TextLink href={callLink.href} onClick={inAppClick(callLink.href)}>{callLink.words}</TextLink>
+      )}
+      {candidates.length > 0 && (
+        <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>
+          <p className="settings-note">{LINKING_TEXT.candidates}</p>
+          {candidates.map((c) => (
+            <div key={candidateKeyOf(c)} className="linking-candidate" data-linking-candidate={c.key}>
+              <Button variant="ghost" disabled={locked} aria-label={candidateAriaLabel(c)}
+                onClick={() => tapCandidate(c)}>
+                {candidateLabel(c)}
+              </Button>
+              {candidateWorkspaceLine(c) !== null && <p className="settings-note">{candidateWorkspaceLine(c)}</p>}
+              <p className="settings-note">{candidateWhy(c)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  // Everything but the key: the visibility cell, the template cell and the hierarchy cell (less what a reason drew above).
+  const rest = (
+    <>
       <div className="linking-cell linking-visibility">
         <p className="settings-note linking-measured">{visibilityLine(linking.measured, now)}</p>
         <label htmlFor={overrideId} className="settings-note">{LINKING_TEXT.override}</label>
@@ -303,8 +445,69 @@ function LinkingRow({ name, linking, now, workspaces, onStored, refreshList, ans
         )}
         {pr !== null && <TextLink href={pr}>{LINKING_TEXT.templatePr}</TextLink>}
       </div>
-      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={locked} locked={inflight > 0 || landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} track={track} result={result} />}
-      <div className="linking-result"><ResultLine line={result.line} /></div>
+      {parts !== null && <HierarchyCell parts={parts} lifted={lifted} />}
+    </>
+  );
+  // The control each reason names: the card draws it under the reason; which reason names which is `linkingDecisions`'.
+  const control: Record<LinkingControl, ReactNode> = {
+    key: keyCell, owning: parts?.owning ?? null, map: parts?.map ?? null, owner: parts?.owner ?? null,
+  };
+  const moreButton = (
+    <Button variant="ghost" size="fit" className="linking-rest" data-linking-rest="" aria-expanded={more} aria-controls={restId}
+      aria-label={plain ? LINKING_ROW_WORDS.moreFor(name) : undefined} onClick={() => setMore(!more)}>
+      {plain ? LINKING_ROW_WORDS.moreShort : LINKING_ROW_WORDS.more}
+    </Button>
+  );
+  const said = <div className="linking-result"><ResultLine line={result.line} /></div>;
+  return (
+    <li ref={li} className="linking-row" data-linking-row={name} data-linking-kind={kind} hidden={hidden}>
+      {plain ? (
+        <>
+          <div className="linking-plain">
+            <p className="linking-name">{name}</p>
+            {keyCell}
+            {moreButton}
+          </div>
+          <Rest id={restId} shown={more}>{rest}</Rest>
+          {said}
+        </>
+      ) : (
+        <Fold open={open} onOpen={toggle} summary={(
+          <span className="linking-line">
+            <span className="linking-name">{name}</span>
+            <span className="settings-note linking-sum-team" data-linking-sum="team">{summary.team}</span>
+            {summary.owner !== null && <span className="settings-note linking-sum-owner" data-linking-sum="owner">{summary.owner}</span>}
+            {summary.state !== null && <span className="settings-note linking-sum-state" data-linking-sum="state">{summary.state}</span>}
+            {(waiting || summary.notes.length > 0) && (
+              <span className="linking-extra">
+                {waiting && <span className={cn(SETTINGS_AMBER_NOTE, 'linking-flag')} data-linking-flag="">{LINKING_ROW_WORDS.flag}</span>}
+                {summary.notes.map((n) => <span key={n} className="settings-note" data-linking-sum="note">{n}</span>)}
+              </span>
+            )}
+          </span>
+        )}>
+          {lifted.length === 0 ? <div className="linking-body">{keyCell}{rest}</div> : (
+            <>
+              <ul className="linking-decide">
+                {lifted.map((c) => {
+                  const reasons = decisions.filter((d) => d.control === c);
+                  if (reasons.length === 0 && control[c] === null) return null;
+                  return (
+                    <li key={c} className="linking-slot" data-linking-control={c}>
+                      {reasons.map((d) => <p key={d.kind} className={SETTINGS_AMBER_NOTE} data-linking-decision={d.kind}>{d.words}</p>)}
+                      {control[c]}
+                    </li>
+                  );
+                })}
+              </ul>
+              {moreButton}
+              <Rest id={restId} shown={more}>{!lifted.includes('key') && keyCell}{rest}</Rest>
+            </>
+          )}
+          {said}
+        </Fold>
+      )}
+      {parts?.confirm}
       <QuickConfirm
         open={asking}
         onClose={() => setAsking(false)}
@@ -344,11 +547,10 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
   return (
     <div className="linking-all" data-linking-all="">
       <label htmlFor={pickId} className="settings-note">{HIERARCHY_TEXT.allPick}</label>
-      <Select id={pickId} value={pick} disabled={busy} onChange={(e) => setPick(e.target.value)}>
-        <option value="">{HIERARCHY_TEXT.allNone}</option>
-        {answer.coordinators.map((c) => <option key={c.id} value={c.id}>{coordinatorWords(c)}</option>)}
-      </Select>
-      <Button variant="ghost" disabled={busy || pick === ''} onClick={() => setAsking(true)}>{HIERARCHY_TEXT.allAct}</Button>
+      {/* The act is drawn beside the select, so it follows it in the page too: Tab goes select, act, then the "show" control. */}
+      <CoordinatorSelect id={pickId} value={pick} disabled={busy} first={HIERARCHY_TEXT.allNone} coordinators={answer.coordinators}
+        unlisted={(id) => coordinatorWords({ id, live: false })} onPick={setPick}
+        between={<Button variant="ghost" className="linking-all-act" disabled={busy || pick === ''} onClick={() => setAsking(true)}>{HIERARCHY_TEXT.allAct}</Button>} />
       <ResultLine line={result.line} />
       <QuickConfirm open={asking} onClose={() => setAsking(false)} title={HIERARCHY_TEXT.allTitle}
         consequence={ownerForAllConsequence(pick)} confirmLabel={HIERARCHY_TEXT.allConfirm} onConfirm={apply} />
@@ -356,19 +558,17 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
   );
 }
 
-/** One read of the project list, and the rows the cards draw from it. */
-type Read = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; rows: ProjectRow[] };
-
 /** `workspaces` and `legacy` are the Settings frame's one read of `GET /api/linear/workspaces` (the Linear card's poll), never a
  *  read of the card's own: `workspaces` is `null` while it is unread or unreadable, so no picker (D-8808). The picker offers the
- *  file slots and the legacy key's workspace while it routes (`pickerWorkspacesOf`, review 2971 A1). */
-export function ProjectLinkingCard({ workspaces: slots, legacy = null }: {
-  workspaces: readonly LinearWorkspaceShown[] | null; legacy?: LinearLegacyRow | null;
+ *  file slots and the legacy key's workspace while it routes (`pickerWorkspacesOf`, review 2971 A1). `list` is the section's one
+ *  read of the project list (`useProjectList`), which the GitHub card beside this one draws from too. */
+export function ProjectLinkingCard({ workspaces: slots, legacy = null, list }: {
+  workspaces: readonly LinearWorkspaceShown[] | null; legacy?: LinearLegacyRow | null; list: ProjectList;
 }): ReactNode {
   const workspaces = useMemo(() => pickerWorkspacesOf(slots, legacy), [slots, legacy]);
-  const card = SETTINGS_CARDS.security.linking;
+  const card = SETTINGS_CARDS.integrations.linking;
   const now = useNow(30_000);
-  const [read, setRead] = useState<Read>({ kind: 'loading' });
+  const { read, stored, refresh: refreshList } = list;
   // The hierarchy answer (D-8184), four conditions apart: unread yet, an older server (the route is absent: 404, no hierarchy
   // controls and no note), a read that failed (said, with its fixed sentence) and the answer itself.
   // The note shows while a read that failed is newer than the last one that landed (`failedSeq > landed`): the last good answer
@@ -404,43 +604,50 @@ export function ProjectLinkingCard({ workspaces: slots, legacy = null }: {
   const track = useCallback((d: 1 | -1): void => setInflight((n) => n + d), []);
   const raise = useCallback((seq: number): void => setFloorState((f) => Math.max(f, seq)), []);
 
-  useEffect(() => {
-    let live = true;
-    loadProjects().then(
-      (r) => { if (live) setRead({ kind: 'read', rows: r.projects }); },
-      () => { if (live) setRead({ kind: 'failed' }); },
-    );
-    void reread();
-    return () => { live = false; };
-  }, [reread]);
-  const stored = useCallback((project: string, linking: ProjectLinkingWire): void => {
-    setRead((r) => r.kind !== 'read' ? r : { kind: 'read', rows: r.rows.map((p) => p.name === project ? { ...p, linking } : p) });
-  }, []);
-  // The project list read again after a write whose outcome is unknown: its linking cell may be stale. The newest read wins; a
-  // failed one leaves a list that cannot be trusted, so the card says so (D-8186 A1).
-  const listSeq = useRef(0);
-  const refreshList = useCallback(async (): Promise<void> => {
-    const mine = ++listSeq.current;
-    try {
-      const r = await loadProjects();
-      if (mine === listSeq.current) setRead({ kind: 'read', rows: r.projects });
-    } catch {
-      if (mine === listSeq.current) setRead({ kind: 'failed' });
-    }
-  }, []);
+  useEffect(() => { void reread(); }, [reread]);
   const answer = hier.kind === 'read' ? hier.answer : null;
+
+  // The group of unlinked projects: open or shut as the operator left it; until they touch it, as the first read of the
+  // list decided (`unlinkedGroupOpenAtFirst`), which is not asked again, so the group never shuts under a row being typed in.
+  const [groupOpen, setGroupOpen] = useState<boolean | null>(null);
+  const atFirst = useRef<boolean | null>(null);
+  const reveal = useCallback((): void => setGroupOpen(true), []);
+  // The projects whose row has waited for the operator since this page opened: `linkingList` keeps such a row with the
+  // rows that wait once it is settled, so it does not jump down the list from under the answer of the write that settled it.
+  const held = useRef(new Set<string>());
 
   let body: ReactNode;
   if (read.kind === 'loading') body = <p className="settings-note">{LINKING_TEXT.loading}</p>;
   else if (read.kind === 'failed') body = <p className="settings-note">{LINKING_TEXT.unreadable}</p>;
   else {
-    const shown = linkingRowsOf(read.rows);
+    const { listed, unlinked, counts } = linkingList(read.rows, workspaces, answer?.projects ?? null, held.current);
+    for (const r of listed) if (r.kind === 'decision') held.current.add(r.name);
+    if (atFirst.current === null) atFirst.current = unlinkedGroupOpenAtFirst(listed.length);
+    const shut = !(groupOpen ?? atFirst.current);
+    const rowOf = (r: LinkingListRow, hidden: boolean): ReactNode => (
+      <LinkingRow key={r.name} row={r} hidden={hidden} onReveal={reveal} now={now} workspaces={workspaces} onStored={stored} refreshList={refreshList} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />
+    );
+    // ONE array of keyed rows, the group's control among them: React matches a row by its key within one array, so a row
+    // that a write moves across the group keeps its state. Two arrays side by side would mount it anew.
+    const items = [
+      ...listed.map((r) => rowOf(r, false)),
+      ...(unlinked.length === 0 ? [] : [(
+        <li key=":group" className="linking-group" data-linking-group="">
+          <Button variant="ghost" size="fit" aria-expanded={!shut} onClick={() => setGroupOpen(shut)}>{unlinkedGroupWords(unlinked.length)}</Button>
+          {/* The unlinked rows' fields carry no label each: the group names the field once, while it is open. */}
+          {!shut && <p className="settings-note" data-linking-hint="">{LINKING_ROW_WORDS.unlinkedHint}</p>}
+        </li>
+      )]),
+      ...unlinked.map((r) => rowOf(r, shut)),
+    ];
+    const countsWords = linkingCountsWords(counts);
     body = read.rows.length === 0 ? <p className="settings-note">{LINKING_TEXT.none}</p>
-      : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
+      : items.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
-          <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} workspaces={workspaces} onStored={stored} refreshList={refreshList} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
-          </ul>
+          <>
+            {countsWords !== null && <p className="settings-note linking-counts" data-linking-counts="">{countsWords}</p>}
+            <ul className="linking-list">{items}</ul>
+          </>
         );
   }
   return (

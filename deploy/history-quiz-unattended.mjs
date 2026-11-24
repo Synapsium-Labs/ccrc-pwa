@@ -3,7 +3,7 @@
 // docs/superpowers/programs/overlord/quiz-unattended.md, section 1; the operator's ruling of 2026-11-22 that supersedes the
 // one W0-28 condition "the driver runs by your hand").
 //
-// An L4 runner, the one act of `ccd-quiz-weekly.service` (a systemd user timer, every 6 h): `node --no-warnings
+// An L4 runner, the one act of `ccd-quiz-weekly.service` (a systemd user timer on the wall clock, four slots a day, run 3508): `node --no-warnings
 // ~/ccrc/deploy/history-quiz-unattended.mjs`, no arguments. Each tick it advances the quiz by as many acts as it can, in
 // order: the setup, the sourced and frozen questions and the headless marker text (once, ever), then this ISO week's arms,
 // judge and report, then `ccrc quiz-record --confirm`. It spawns the single-arm driver (`history-quiz-single.mjs`) exactly
@@ -15,13 +15,24 @@
 // record verb share pass honestly (`in-session` when CLAUDECODE is set at all, `in-pane` when TMUX_PANE is). Nothing here
 // ever unsets either variable, and the children get a by-name environment (HOME, LANG, PATH) that carries neither.
 //
-// The account (the coordinator's ruling of 2026-11-21): chosen once, at setup, from the placement reading. The candidates are
-// the roster's accounts that are not hidden, whose `exec.kind` is upstream or generated and whose telemetry is neither
-// openrouter nor codex (never usage credits, never a Codex lane); the arm, writer and judge model stay the Opus id. Room is
-// the driver's own reading (history-replay.mjs's readLimitsRow and decideLimits at LIMITS_DEFAULTS): the candidate with the
-// lowest `seven` among those with room is tried first, the next on `account-refused`; with none, the tick waits (`no-room`,
-// never latched). Before every `arms` and `judge` the setup's account is re-read the same way. A week still running when a
-// new ISO week starts is closed `failed` (`week-ended`): the runner works the current week only.
+// The account. The setup's (the coordinator's ruling of 2026-11-21) is chosen once, at setup, from the placement reading. The
+// candidates are the roster's accounts that are not hidden, whose `exec.kind` is upstream or generated and whose telemetry is
+// neither openrouter nor codex (never usage credits, never a Codex lane), less any the operator's lane kill switch turns off;
+// the arm, writer and judge model stay the Opus id. Room is the driver's own reading (readLimitsRow, and decideLimits at
+// LIMITS_DEFAULTS, which judges a plan with no five-hour window on its weekly figure alone): the candidate with the lowest
+// `seven` among those with room is tried first, the next on `account-refused`; with none, the tick waits (`no-room`, never
+// latched). The setup is never re-made for an account: its sample, freeze and hashes stand.
+// Each WEEK's account is chosen again (run 3538, the coordinator's ruling 2 of 2026-11-23, revising 2026-11-21's "the
+// setup's account only", whose idle account's row went past the hour and waited for good): weekAccountChoiceOf decides it,
+// pure, before every `arms` and `judge`, and the runner passes it as `--account`. A week that has spawned anything stays on
+// the account its folder records (history-quiz-single.mjs writes that record, the one writer, before the week's first
+// spawn); one that has spawned nothing keeps the previous account when it has room, else takes the candidate with the
+// lowest `seven`; when admission refuses that one (`account-refused`, before any record), the next in the choice's order
+// is tried, as setup does, and with every one refused the tick waits `no-room` (fix round 1, F1); a stop ends the walk,
+// `interrupted` (fix round 2). The walk is written for `arms` and `judge` alike; only `arms` can meet an unrecorded week. The week's one
+// --budget is the week's, whatever the account. The status's account is the week's when
+// recorded. A week still running when a new ISO week starts is closed `failed` (`week-ended`): the runner works the current
+// week only.
 //
 // What it writes: only under `$HOME/.ccrc/quiz/` (mode 0700): the state file `unattended.json` (written whole, by a
 // rename), a lock, `journal.log`, the setup's --out at `setup.<n>` and one --out per ISO week at `weeks/<YYYY-Www>`. The ONE
@@ -45,6 +56,23 @@
 // its word, and the next ISO week starts fresh, so a week never spends more than one --budget. Recording is retried every
 // tick until it confirms (a resend answers its own row).
 //
+// A week closed on `pilot-failed` (quiz-pilot-checks ruling 5, keyed by stage B's B0): it is piloted again, in its own
+// directory, only when the pilot key measured now differs from the key of every pilot this week has run, and at most
+// PILOTS_MAX pilots in a week. A pilot's key is what can change its outcome, in four parts: the Claude Code build the driver
+// measures (its `--version` line, through the week's own launcher, measureClaudeVersion), the gate's code hash as the gate
+// computes it (codeShas), the same hash over the quiz's pilot files (pilotShasOf) and the skill source's sha (skillSourceOf);
+// the release tag is no longer the key, since every merge cuts a release. The first pilot's key is read from the driver's own
+// release pin in the week's directory, which records it. A pilot entry or pin with no key field at all was written before
+// B0: it is older, counts toward the cap and matches no key. A key field in any other form than all four parts is unmeasured
+// and keeps the week closed (stage B fix round 2, F1). repilotOf decides it, pure; the runner only reopens the week and runs `arms
+// --repilot`, the single-arm module's one door for it. The pilot is counted against its key and saved BEFORE the driver is
+// spawned (fix round 1, F1), so a kill at any later point leaves a row the next tick reads as spent on that key. The
+// permission (`repilot`, naming its key) is for one `arms` act: it is taken off the row and saved before that act's spawn,
+// and given back after it only when the act stopped resumably; at its next use it is passed only while the key measured then
+// is still its own (repilotPermitOf), so a re-pilot is never continued on another key (F2). The driver's own pin still refuses
+// a round under way on another release. The pilot spends on the week's own ledger, so it counts toward the week's one
+// --budget, and a pass carries on as a first pass would. Every other closed week stays closed.
+//
 // State (`ccrc-quiz-unattended-state`, v1) is `{ kind, v, setup, setup_refused, weeks, last }`; doctor reads `last` (the tick's
 // time, week, act, outcome, word, detail and whether it was posted). outcome: `ok` advanced or confirmed, `waiting` a stop resuming cures (or a run
 // already holding the lock), `refused` a word that needs attention, `failed` an internal error. Exit 0 for the first three
@@ -58,8 +86,9 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXIT, HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
-import { LIMITS_DEFAULTS, decideLimits, readLimitsRow } from './history-replay.mjs';
-import { JUDGED_FILE, OUT_MARKER, REPORT_FILE, SETUP_FILE, SUMMARY_FILE } from './history-quiz-single.mjs';
+import { LIMITS_DEFAULTS, TREE_ROOT, admitAccount, codeShas, decideLimits, measureClaudeVersion, readLimitsRow, readReleaseStamp, readRoster } from './history-replay.mjs';
+import { pilotKeyOf, pilotKeyValid, pilotShasOf, sameKey, skillSourceOf } from './history-quiz-pilot.mjs';
+import { JUDGED_FILE, OUT_MARKER, RELEASE_PIN_FILE, RELEASE_PIN_KIND, REPORT_FILE, SETUP_FILE, SUMMARY_FILE, weekAccountOf } from './history-quiz-single.mjs';
 
 const PREFIX = 'ccrc quiz-unattended';
 
@@ -79,6 +108,13 @@ export const ARM_MODEL = 'claude-opus-5-5';
 export const RESUMABLE_WORDS = Object.freeze(['interrupted', 'limits-threshold', 'limits-stale']);
 /** The newest weeks kept on disk (and in the state file). */
 export const KEEP_WEEKS = 4;
+/** The most pilots one week runs (quiz-pilot-checks ruling 5): the first and at most two more, each on a key none ran on. */
+export const PILOTS_MAX = 3;
+/** The driver's word for a pilot that did not pass: the one word a week is piloted again after. */
+export const PILOT_FAILED = 'pilot-failed';
+/** Why repilotOf keeps a closed week closed, one word each. */
+export const STAY_CLOSED = Object.freeze(['no-week', 'not-failed', 'not-the-pilot', 'pilots-unreadable', 'pilots-spent', 'failed-key-unmeasured',
+  'key-unmeasured', 'key-unchanged']);
 /** The acts of the once-only setup phase: a non-resumable refusal in one of them latches for its ISO week. */
 export const SETUP_ACTS = Object.freeze(['setup', 'source', 'freeze', 'marker', 'headless']);
 /** The acts, in order, and the `last.act` words (`none` and `done` are not acts the runner spawns). */
@@ -87,7 +123,7 @@ export const LAST_ACTS = Object.freeze([...ACTS, 'none']);
 export const OUTCOMES = Object.freeze(['ok', 'waiting', 'refused', 'failed']);
 /** This file's own words that can stand in `last.word` (beside the driver's refusal words, which pass through, and the record
  *  verb's, an open set: the first token of its last stderr line). */
-export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'account-disabled', 'record-path-missing', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
+export const OWN_WORDS = Object.freeze(['no-account-admitted', 'no-room', 'account-disabled', 'week-account-unreadable', 'record-path-missing', 'week-ended', 'marker-sha-mismatch', 'marker-unparseable',
   'headless-on-incomplete', 'headless-on-unreadable', 'headless-on-cross-device', 'history-store-absent', 'record-failed',
   'record-unconfirmed', 'record-sha-mismatch', 'driver-failed', 'spawn-failed', 'no-sha-line', 'internal-error']);
 /** The words that only ever reach stderr (a tick that prints one writes no `last`, and posts nothing). */
@@ -180,6 +216,45 @@ export function confirmedLineOf(stdout) {
     if (m !== null) found = { runId: Number(m[1]), sha12: m[2], baseline: m[3] !== undefined };
   }
   return found;
+}
+
+/** One pilot entry's key (stage B, B0): an entry that carries a `key` field is read by it, a pilot key (all four parts in form,
+ *  nothing else) or `unmeasured` in any other form; one that carries none and names a release was written before B0, so it is
+ *  `legacy`: it counts toward the cap and matches no key. Any other entry is `unmeasured`. Fix round 2, F1: a key field in any
+ *  other form is never `legacy`, reversing fix round 1's reading of a key lacking a part. Pure.
+ *  @param {Record<string, unknown>} p */
+export function pilotEntryKeyOf(p) {
+  if (Object.hasOwn(p, 'key')) return pilotKeyValid(p.key) ? { state: 'key', key: p.key } : { state: 'unmeasured' };
+  return typeof p.release === 'string' && p.release !== '' ? { state: 'legacy' } : { state: 'unmeasured' };
+}
+
+/** Whether this ISO week's row is piloted again (quiz-pilot-checks ruling 5, keyed by stage B's B0). `week` is the row,
+ *  `pilots` the pilots it has run so far, oldest first (each `{release, key}`, the key it was counted against; pilotEntryKeyOf
+ *  reads it), `key` the pilot key measured now (`{state: 'value', key}`, or unmeasured). Yes only for a week closed on
+ *  `pilot-failed`, with fewer than PILOTS_MAX pilots, every pilot's key measured or older than keys, a key measured now, and
+ *  that key none of theirs. Anything unreadable keeps the week closed: an unmeasured value never re-spends. The pilots are
+ *  judged before the key now, so a week that cannot be piloted again whatever the key needs no build measured. Pure.
+ *  @param {{ week: any, pilots: unknown, key: unknown }} o
+ *  @returns {{ repilot: true, pilot: number } | { repilot: false, why: string }} */
+export function repilotOf({ week, pilots, key }) {
+  const no = (why) => ({ repilot: false, why });
+  if (!plainObject(week)) return no('no-week');
+  if (week.state !== 'failed') return no('not-failed');
+  if (week.word !== PILOT_FAILED) return no('not-the-pilot');
+  if (!Array.isArray(pilots) || pilots.length === 0 || !pilots.every((p) => plainObject(p))) return no('pilots-unreadable');
+  if (pilots.length >= PILOTS_MAX) return no('pilots-spent');
+  const keys = pilots.map(pilotEntryKeyOf);
+  if (keys.some((k) => k.state === 'unmeasured')) return no('failed-key-unmeasured');
+  if (!plainObject(key) || key.state !== 'value' || !pilotKeyValid(key.key)) return no('key-unmeasured');
+  if (keys.some((k) => k.state === 'key' && sameKey(k.key, key.key))) return no('key-unchanged');
+  return { repilot: true, pilot: pilots.length + 1 };
+}
+
+/** Whether a re-pilot permission is passed to the act about to run (fix round 1, F2, keyed by B0): only while the key
+ *  measured now is the one the permission names. Any other answer drops it, and the act runs without `--repilot`. Pure.
+ *  @param {unknown} permit  the row's `repilot`, `{ release, key }` or absent  @param {unknown} key  the key measured now */
+export function repilotPermitOf(permit, key) {
+  return plainObject(permit) && pilotKeyValid(permit.key) && plainObject(key) && key.state === 'value' && sameKey(permit.key, key.key);
 }
 
 /** The week keys to keep (the newest KEEP_WEEKS of the ones named and the current one) and to drop. Pure.
@@ -294,7 +369,7 @@ async function driverStep(ctx, sub, flags, { wantSha = true } = {}) {
 }
 
 // ── the acts (L4) ────────────────────────────────────────────────────────────────────────────────────────────────────
-const flagsOf = (o) => Object.entries(o).flatMap(([k, v]) => [`--${k}`, String(v)]);
+const flagsOf = (o) => Object.entries(o).flatMap(([k, v]) => (v === true ? [`--${k}`] : [`--${k}`, String(v)]));
 
 /** The roster's eligible account ids, in roster order: not hidden, `exec.kind` upstream or generated, telemetry neither
  *  openrouter nor codex. Pure.  @param {unknown[]} accounts */
@@ -312,6 +387,35 @@ function laneDisabled(home, id) {
  *  @param {Array<{ id: string, room: boolean, seven?: number }>} readings  in roster order */
 export function roomOrderOf(readings) {
   return readings.map((r, i) => ({ ...r, i })).filter((r) => r.room).sort((x, y) => (x.seven - y.seven) || (x.i - y.i)).map((r) => r.id);
+}
+/** The account this ISO week's spend acts run on (run 3538, the coordinator's ruling 2 of 2026-11-23); the runner only acts
+ *  on the answer. `recorded` is the week's own record (history-quiz-single.mjs's weekAccountOf over the week's folder) with
+ *  that account's room and lane kill switch, or null when the week has spawned nothing. A week that has spawned anything
+ *  stays on its account, and waits while that account is switched off or has no room. A week that has spawned nothing keeps
+ *  `previous` (last week's account, else the setup's) when it is a candidate with room; otherwise it takes the candidate with
+ *  the lowest weekly figure among those with room, ties in roster order (roomOrderOf). `candidates` are exactly setup's (the
+ *  eligible accounts not switched off, in roster order), each with roomOf's reading. With none with room it waits `no-room`,
+ *  the detail naming each candidate's word by position, as setup's does.
+ *  `refused` (fix round 1, F1) maps each candidate that `arms`'s admission refused this tick to that refusal's detail, as
+ *  setup falls through on `account-refused`: an unspawned week's next answer skips them, in the same order, and when every
+ *  candidate with room was refused it waits `no-room`, each refused one named `account-refused <detail>` in its position. A
+ *  recorded week ignores it (a refusal of its own account closes it on its word). Pure.
+ *  @param {{ recorded: null | { id: string, disabled: boolean, room: boolean, word?: string, detail?: string },
+ *    previous: string, candidates: Array<{ id: string, room: boolean, seven?: number, word?: string }>,
+ *    refused?: Record<string, string> }} o
+ *  @returns {{ account: string, why: 'recorded' | 'previous' | 'lowest' } | { wait: 'no-room' | 'account-disabled', detail: string }} */
+export function weekAccountChoiceOf({ recorded, previous, candidates, refused = {} }) {
+  if (recorded !== null) {
+    if (recorded.disabled) return { wait: 'account-disabled', detail: 'the week\'s account is switched off by the operator\'s lane kill switch' };
+    if (!recorded.room) return { wait: 'no-room', detail: `the week's account: ${recorded.word} ${recorded.detail}` };
+    return { account: recorded.id, why: 'recorded' };
+  }
+  const wasRefused = (id) => Object.hasOwn(refused, id);
+  if (candidates.some((c) => c.id === previous && c.room && !wasRefused(c.id))) return { account: previous, why: 'previous' };
+  const order = roomOrderOf(candidates).filter((id) => !wasRefused(id));
+  if (order.length > 0) return { account: order[0], why: 'lowest' };
+  if (candidates.length === 0) return { wait: 'no-room', detail: 'the roster names no eligible account' };
+  return { wait: 'no-room', detail: candidates.map((c, i) => `${i + 1}: ${wasRefused(c.id) ? `account-refused ${refused[c.id]}` : c.word}`).join(', ') };
 }
 function candidatesOf(home) {
   let roster;
@@ -476,6 +580,47 @@ const weekPaths = (ctx, w) => {
 };
 const baseFlags = (ctx, p) => ({ out: p.out, setup: p.setup, 'setup-sha256': ctx.state.setup.setup_sha256, frozen: p.frozen, 'frozen-sha256': ctx.state.setup.frozen_sha256 });
 
+/** The inputs of the week's account for its spend acts (ruling 2), gathered once per act for weekAccountChoiceOf: the week's
+ *  own record, then, for a week that has spawned nothing, setup's candidates with roomOf's reading and the previous account. A
+ *  record it cannot read is refused `week-account-unreadable` and spends nothing (the week stays running). Resolves the
+ *  choice's input or {stop}. */
+function weekAccountInputsOf(ctx, w) {
+  const s = ctx.state.setup;
+  const rec = weekAccountOf(w.out, s.setup_sha256, s.account);
+  if (rec.state === 'unreadable') return { stop: { outcome: 'refused', word: 'week-account-unreadable', detail: oneLine(rec.detail), driver: false } };
+  const reading = (id) => ({ id, ...roomOf(ctx, id) });
+  const recorded = rec.state === 'recorded' ? { ...reading(rec.account), disabled: laneDisabled(ctx.home, rec.account) } : null;
+  let candidates = [];
+  if (recorded === null) {
+    const c = candidatesOf(ctx.home);
+    if (c.error !== undefined) return { stop: { outcome: 'refused', word: 'no-account-admitted', detail: c.error, driver: false } };
+    candidates = c.ids.map(reading);
+  }
+  return { recorded, previous: previousAccountOf(ctx), candidates };
+}
+/** The account the newest earlier week ran on, by its own record; the setup's when no earlier week recorded one. */
+function previousAccountOf(ctx) {
+  const s = ctx.state.setup;
+  for (const key of Object.keys(ctx.state.weeks).filter((k) => WEEK_KEY_RE.test(k) && k < ctx.weekKey).sort().reverse()) {
+    const w = ctx.state.weeks[key];
+    if (!plainObject(w) || typeof w.out !== 'string') continue;
+    const r = weekAccountOf(w.out, s.setup_sha256, s.account);
+    if (r.state === 'recorded') return r.account;
+  }
+  return s.account;
+}
+/** The status's account (ruling 5): this week's, when its folder records one; else the setup's. */
+function statusAccountOf(ctx) {
+  const s = ctx.state?.setup;
+  if (!plainObject(s)) return null;
+  const w = ctx.state.weeks?.[ctx.weekKey];
+  if (plainObject(w) && typeof w.out === 'string' && typeof s.setup_sha256 === 'string') {
+    const r = weekAccountOf(w.out, s.setup_sha256, s.account);
+    if (r.state === 'recorded') return r.account;
+  }
+  return s.account ?? null;
+}
+
 /** arms, judge and report on the week's directory. A word a resume cures leaves the week running; any other word closes it. */
 async function actWeek(ctx, act) {
   let w = ctx.state.weeks[ctx.weekKey];
@@ -486,21 +631,53 @@ async function actWeek(ctx, act) {
     ctx.state.weeks[ctx.weekKey] = w;
     ctx.save(null);   // the row stands before the driver runs, so a crash mid-arms resumes this directory
   }
-  if (act === 'arms' || act === 'judge') {   // the spend steps: the setup's account must still have room (report and record spend nothing)
-    if (laneDisabled(ctx.home, ctx.state.setup.account)) {
-      return { stop: { outcome: 'waiting', word: 'account-disabled', detail: 'the setup\'s account is switched off by the operator\'s lane kill switch', driver: false } };
-    }
-    const r = roomOf(ctx, ctx.state.setup.account);
-    if (!r.room) return noRoomStop(`the setup's account: ${r.word} ${r.detail}`);
-  }
+  const spend = act === 'arms' || act === 'judge';   // the spend steps run on the week's account (report and record spend nothing)
+  const inputs = spend ? weekAccountInputsOf(ctx, w) : null;
+  if (inputs?.stop !== undefined) return inputs;
+  const refused = {};   // fix round 1, F1: this act's admission refusals, which the choice walks past as setup does
+  const choose = () => (spend ? weekAccountChoiceOf({ ...inputs, refused }) : { account: null, why: null });
+  const waitOf = (d) => ({ stop: { outcome: 'waiting', word: d.wait, detail: oneLine(d.detail), driver: false } });
+  let d = choose();
+  if (d.wait !== undefined) return waitOf(d);
+  // F2: the permission is for one act. It leaves the row, durably, before the spawn; it is passed only on its own release.
+  const permit = act === 'arms' ? w.repilot : undefined;
+  if (permit !== undefined) { delete w.repilot; ctx.save(null); }
+  const repilot = permit !== undefined && repilotPermitOf(permit, await pilotKeyNow(ctx, w));
   const p = weekPaths(ctx, w);
   const arms = { 'arms-summary': p.summary, 'arms-summary-sha256': w.arms_sha256 };
-  const flags = act === 'arms' ? baseFlags(ctx, p)
-    : act === 'judge' ? { ...baseFlags(ctx, p), ...arms }
-      : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
-  const r = await driverStep(ctx, act, flagsOf(flags));
+  let r;
+  for (;;) {
+    // fix round 2 (review 3549 F2): a stop ends the walk before its next spawn; the week stays running, resumable
+    if (ctx.stopping) {
+      if (repilot) w.repilot = permit;
+      return { stop: { outcome: 'waiting', word: 'interrupted', detail: 'a stop signal arrived during the week\'s account walk', driver: false } };
+    }
+    const account = d.account;
+    const flags = act === 'arms' ? { ...baseFlags(ctx, p), account, ...(repilot ? { repilot: true } : {}) }
+      : act === 'judge' ? { ...baseFlags(ctx, p), ...arms, account }
+        : { ...baseFlags(ctx, p), ...arms, judged: p.judged, 'judged-sha256': w.judged_sha256 };
+    r = await driverStep(ctx, act, flagsOf(flags));
+    // An unspawned week's account refused at admission, before the driver wrote any record: the next candidate is tried, in
+    // the choice's order. Only an admitted account becomes the week's record (history-quiz-single.mjs writes it after
+    // admission, before any spawn), so a week whose folder records one never falls through. The walk covers judge too, but
+    // a judge never meets an unrecorded week today: its arms recorded the account, or ran on an older build that left the pin.
+    if (!spend || d.why === 'recorded' || r.stop?.word !== 'account-refused'
+      || weekAccountOf(w.out, ctx.state.setup.setup_sha256, ctx.state.setup.account).state !== 'none') break;
+    refused[account] = r.stop.detail;
+    d = choose();
+    if (d.wait !== undefined) {
+      if (repilot) w.repilot = permit;   // nothing spawned: the same pilot's permission stands, checked again at its next use
+      return waitOf(d);
+    }
+  }
   if (r.stop !== undefined) {
-    if (r.stop.driver && r.stop.outcome === 'refused') { w.state = 'failed'; w.word = r.stop.word; }
+    if (repilot && r.stop.outcome === 'waiting') w.repilot = permit;   // the same pilot, resumable: its next use is checked again
+    if (r.stop.driver && r.stop.outcome === 'refused') {
+      // the week's first pilot is counted when it closes, from the driver's pin; a re-pilot was counted before its spawn (F1)
+      if (act === 'arms' && r.stop.word === PILOT_FAILED && !Object.hasOwn(w, 'pilots')) w.pilots = [{ ...pinnedPilotOf(w.out), at_ms: ctx.now() }];
+      w.state = 'failed';
+      w.word = r.stop.word;
+    }
     return r;
   }
   w[act === 'arms' ? 'arms_sha256' : act === 'judge' ? 'judged_sha256' : 'report_sha256'] = r.sha;
@@ -525,6 +702,88 @@ async function actRecord(ctx) {
   w.run_id = c.runId;
   w.baseline = c.baseline;
   return { ok: true };
+}
+
+/** The week's first pilot as the driver pinned it in the week's directory (its own record of the release and the pilot key
+ *  the week's arms, and its pilot, ran on; B0): `{release, key}`, the key null when the pin's is no pilot key; `{release}`
+ *  alone for a pin written before B0, which names no key (a legacy pilot); `{release: null, key: null}` when the pin cannot be
+ *  read or is not the driver's. */
+function pinnedPilotOf(out) {
+  let p = null;
+  try { p = JSON.parse(readFileSync(path.join(out, RELEASE_PIN_FILE), 'utf8')); } catch { p = null; }
+  if (!(plainObject(p) && p.kind === RELEASE_PIN_KIND && p.v === 1 && typeof p.ccrc_release === 'string' && p.ccrc_release !== '')) return { release: null, key: null };
+  if (!Object.hasOwn(p, 'key')) return { release: p.ccrc_release };
+  return { release: p.ccrc_release, key: pilotKeyValid(p.key) ? p.key : null };
+}
+/** A week's pilots so far. A row that carries `pilots` is read as it stands, a damaged list included, which repilotOf then
+ *  refuses (fix round 1, A2). Only a row with no `pilots` key at all, an older row closed on the pilot word, stands for one
+ *  pilot read from the week's pin. */
+function pilotsOf(w) {
+  if (Object.hasOwn(w, 'pilots')) return w.pilots;
+  if (w.state === 'failed' && w.word === PILOT_FAILED) return [{ ...pinnedPilotOf(w.out), at_ms: null }];
+  return [];
+}
+/** The pilot key measured now for this tick's week (B0), measured at most once a tick: `ctx.measureKey` (the real measure,
+ *  measuredPilotKeyOf through the week's recorded account, or a test's stand-in). */
+async function pilotKeyNow(ctx, w) {
+  if (ctx.keyNow === undefined) ctx.keyNow = await ctx.measureKey(ctx, w);
+  return ctx.keyNow;
+}
+/** The real measure: the week's own account as its folder records it (a week with no record has nothing to pilot again). */
+function weekPilotKey(ctx, w) {
+  const s = ctx.state.setup;
+  const rec = weekAccountOf(w.out, s.setup_sha256, s.account);
+  if (rec.state !== 'recorded') return { state: 'unmeasured', why: `the week's account is ${rec.state}` };
+  return measuredPilotKeyOf({ home: ctx.home, out: w.out, account: rec.account, lang: ctx.env.LANG });
+}
+/** B0: the pilot key as the driver measures it, read now: the account admitted from the roster (admitAccount), the gate's
+ *  code shas (codeShas), the quiz's pilot files' shas (pilotShasOf) and the skill source's sha (skillSourceOf), from the
+ *  installed tree (fix round 1, F1), and its launcher's `--version` line (measureClaudeVersion, which spawns `--version` only,
+ *  spends nothing and writes nothing but the poisoned `gh` under `out`, as the driver's own measure does). Any failure is
+ *  `unmeasured` with its reason, never a throw, so a key that cannot be read keeps the week closed. `root` is the tree the pilot
+ *  files and the skill are read from (TREE_ROOT; a test's fixture tree).
+ *  @param {{ home: string, out: string, account: string, lang: string | undefined, root?: string }} o */
+export async function measuredPilotKeyOf({ home, out, account, lang, root = TREE_ROOT }) {
+  const no = (why) => ({ state: 'unmeasured', why });
+  let launch;
+  try {
+    const { json, roster } = readRoster(home);
+    launch = admitAccount(json, roster, account, home);
+  } catch (e) { return no(`account ${e?.word ?? e?.code ?? 'unreadable'}`); }
+  const code = codeShas();
+  if (code.state !== 'measured') return no(`code ${code.path} ${code.cause}`);
+  const pilot = pilotShasOf(root);
+  if (pilot.state !== 'measured') return no(`pilot code ${pilot.path} ${pilot.cause}`);
+  const skill = skillSourceOf(root);
+  if (skill.state !== 'value') return no(`skill ${skill.detail}`);
+  let v;
+  try { v = await measureClaudeVersion(launch, out, lang); } catch (e) { return no(`version ${e?.word ?? e?.code ?? 'error'}`); }
+  if (v.state !== 'value') return no(`version failed (code ${v.code}, signal ${v.signal})`);
+  const key = pilotKeyOf(v.version, code, pilot, skill.sha256);
+  return key === null ? no('key-malformed') : { state: 'value', key };
+}
+/** Ruling 5's act, keyed by B0: when repilotOf says so, this ISO week's row is reopened for `arms --repilot`, the pilot about
+ *  to run is counted against the key measured now (and the release, for the record), and the row is saved before anything is
+ *  spawned (fix round 1, F1). The key is measured only for a week whose pilots leave it the one question. */
+async function reopenForPilot(ctx) {
+  const w = ctx.state.weeks[ctx.weekKey];
+  if (!plainObject(w) || w.state !== 'failed') return;
+  const pilots = pilotsOf(w);
+  if (repilotOf({ week: w, pilots, key: null }).why !== 'key-unmeasured') return;
+  const key = await pilotKeyNow(ctx, w);
+  const d = repilotOf({ week: w, pilots, key });
+  if (!d.repilot) {
+    if (d.why === 'key-unmeasured') journalNote(ctx, `week ${ctx.weekKey} not piloted again: the pilot key is unmeasured (${oneLine(key?.why ?? '')})`);
+    return;
+  }
+  const release = readReleaseStamp(ctx.home);
+  const tag = release.state === 'value' ? release.tag : null;
+  w.pilots = [...pilots, { release: tag, key: key.key, at_ms: ctx.now() }];
+  w.state = 'running';
+  w.word = null;
+  w.repilot = { release: tag, key: key.key };
+  journalNote(ctx, `week ${ctx.weekKey} piloted again: pilot ${d.pilot} of ${PILOTS_MAX}, release ${tag}, after ${pilots.map((p) => p.release).join(' ')}; build ${oneLine(key.key.claude_code)}`);
+  ctx.save(null);
 }
 
 const ACT_FN = Object.freeze({ setup: actSetup, source: actSource, freeze: actFreeze, marker: actMarker, headless: actHeadless,
@@ -570,7 +829,7 @@ async function postStatus(ctx) {
   const last = ctx.state?.last;
   if (!plainObject(last)) return;
   const body = JSON.stringify({ week: last.week, act: last.act, outcome: last.outcome, word: last.word,
-    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: ctx.state.setup?.account ?? null, by: traceOf(ctx) });
+    detail: typeof last.detail === 'string' ? last.detail.slice(0, STATUS_DETAIL_MAX) : null, at: last.at_ms, account: statusAccountOf(ctx), by: traceOf(ctx) });
   let posted = false;
   try {
     const r = await runChild(ctx, ctx.client, ['quiz', 'status', '--json', '-'], { input: body, timeoutMs: POST_TIMEOUT_MS });
@@ -592,7 +851,7 @@ function early(err, word, detail) {
 /** One tick. The refusals come FIRST (the session, then the pane), then umask 077, then the lock, then the acts in order
  *  until one stops or the week is done; `last` is written after every act.
  *  @param {{HOME?: string, TMUX_PANE?: string, LANG?: string, PATH?: string, CLAUDECODE?: string}} env
- *  @param {{ driver?: string, verb?: string, node?: string, now?: () => number, isAlive?: (pid: number) => boolean, err?: (s: string) => void, beforeHeadlessWrite?: () => void, link?: (a: string, b: string) => void, client?: string }} [deps] */
+ *  @param {{ driver?: string, verb?: string, node?: string, now?: () => number, isAlive?: (pid: number) => boolean, err?: (s: string) => void, beforeHeadlessWrite?: () => void, link?: (a: string, b: string) => void, client?: string, pilotKey?: (ctx: object, w: object) => Promise<object> }} [deps] */
 export async function main(env, deps = {}) {
   const err = deps.err ?? ((s) => { process.stderr.write(s); });
   if (env.CLAUDECODE !== undefined) return early(err, 'in-session', 'CLAUDECODE is set; the weekly quiz is the timer\'s, never a session\'s');
@@ -607,6 +866,7 @@ export async function main(env, deps = {}) {
     node: deps.node ?? process.execPath, driver: deps.driver ?? path.join(tree, 'deploy', 'history-quiz-single.mjs'),
     verb: deps.verb ?? path.join(env.HOME, '.local', 'bin', 'ccrc'), save: null, beforeHeadlessWrite: deps.beforeHeadlessWrite, link: deps.link ?? linkSync,
     client: deps.client ?? path.join(env.HOME, '.local', 'bin', 'ccrc-api'),
+    measureKey: deps.pilotKey ?? weekPilotKey, keyNow: undefined,
   };
   const stateFile = path.join(root, STATE_FILE);
   const onSignal = () => { ctx.stopping = true; if (ctx.child !== null) ctx.child.kill('SIGTERM'); };
@@ -660,6 +920,7 @@ async function run(ctx) {
   for (const [key, w] of Object.entries(ctx.state.weeks)) {
     if (key !== ctx.weekKey && plainObject(w) && w.state === 'running') { w.state = 'failed'; w.word = 'week-ended'; }
   }
+  await reopenForPilot(ctx);
   for (;;) {
     const act = nextActOf(ctx.state, ctx.weekKey);
     const weekAct = ['arms', 'judge', 'report', 'record'].includes(act);

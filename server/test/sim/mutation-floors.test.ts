@@ -39,6 +39,7 @@ import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { OVERLORD_RESTORE_MUTANT_SETS } from './overlordRestoreSets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
 import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
 import { HOOK_REPORT_MUTANT_SETS } from './hookReportSets.js';
@@ -65,6 +66,7 @@ import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
 import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { WITNESS_MUTANT_SETS } from './witnessSets.js';
+import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -223,6 +225,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...OVERLORD_RESTORE_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
   ...ACT_KEY_MUTANT_SETS,
   ...HOOK_REPORT_MUTANT_SETS,
@@ -249,6 +252,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...APPROVAL_PARK_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
   ...WITNESS_MUTANT_SETS,
+  ...ISOLATION_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

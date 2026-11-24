@@ -42,7 +42,7 @@ import { projectOnTeam, measuredTeamRoutes, measuredProjectTeam, type TeamRoutes
 import { egress, uuidOf } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import {
-  applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOfRow, mapItemInput, migrationSettled, parseMapProposal,
+  applySteps, checkMap, closerRelation, countsOfMap, declareMail, expectOfOwned, finishedComment, hierarchyStateOfRow, mapItemInput, migrationSettled, parseMapProposal, resolveMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
   reportItemInput, returnMail, shedTaken, startVerdict, NO_TEAM_KEY, ticketKeyOf, ticketKindOf,
   snapshotHolds, migrationOfProject, type CloserRelation, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
@@ -284,7 +284,9 @@ export class LinearMigration {
       sameWorkspace: (p) => this.onTeam(p, team, open.workspaceId, open.routes) === true,
       upkeepKeys: new Set(plan.upkeepPlanOf(project).epics.flatMap((e) => e.tickets.map((t) => t.key))), heldIssues,
     };
-    const map: MapBody = { ...parsed.map, snapshot: Object.fromEntries(rows.map((r) => [r.linearId, snapshotOf(r)])) };
+    const resolved = resolveMapProposal(parsed.proposal, rows);
+    if (!resolved.ok) return resolved;
+    const map: MapBody = { ...resolved.map, snapshot: Object.fromEntries(rows.map((r) => [r.linearId, snapshotOf(r)])) };
     const checked = checkMap(map, rows, this.planFacts(runs.live), ctx);
     if (!checked.ok) return checked;
     const from = followUp === null ? ['proposing' as const] : ['applied' as const];

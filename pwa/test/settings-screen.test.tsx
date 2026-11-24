@@ -2430,22 +2430,22 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
 
   // Settings Task R2b1 (D-5503's order, D-5504): the one long page became five; its order is the index's, and
   // each page keeps today's order inside it.
-  it('the index lists Updates, Appearance, Notifications, Automation, Security, in that order', () => {
+  it('the index lists Updates, Appearance, Notifications, Automation, Security, Integrations, in that order', () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     renderSettings(null);
     const nav = screen.getByRole('navigation', { name: 'Settings sections' });
     const rows = Array.from(nav.querySelectorAll('a[data-section]')).map((a) => a.getAttribute('data-section'));
-    expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
+    expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security', 'integrations']);
   });
 
-  it('the index\'s two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here', () => {
+  it('the index\'s two diagnostic rows follow the six sections and open their pages on a click; a modified click opens nothing here', () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     navigate('/settings');
     render(<><SettingsDataProvider active><SettingsScreen /></SettingsDataProvider><CommandLayer openNewSession={vi.fn()} /></>);
     const nav = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(Array.from(nav.querySelectorAll('a[data-diagnostic]')).map((a) => a.getAttribute('href')))
       .toEqual(['/settings/reader-lab', '/settings/measure-highlighting']);
-    expect(within(nav).getAllByRole('link')).toHaveLength(7);
+    expect(within(nav).getAllByRole('link')).toHaveLength(8);
     for (const mod of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
       fireEvent.click(within(nav).getByRole('link', { name: /^Reader lab/ }), { [mod]: true });
       expect(location.pathname, mod).toBe('/settings');

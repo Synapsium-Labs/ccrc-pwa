@@ -161,7 +161,7 @@ export function observedAt(catalogue) {
  *  sighting is this catalogue's own observation (`observedAt`), it is not later than `nowMs` (a future time never
  *  qualifies), and the run from `since` to `seen` spans at least `RETIRE_GRACE_MS`. Every comparison is written as one
  *  that HOLDS, so a time that does not parse fails it. */
-function retireDue({ registry, catalogue, cls, missing, nowMs }) {
+export function retireDue({ registry, catalogue, cls, missing, nowMs }) {
   const t = observedAt(catalogue);
   return t !== null && isObj(missing) && missing.model === registry.classes[cls] && isAt(missing.since)
     && missing.seen === t && Date.parse(t) <= nowMs && Date.parse(t) - Date.parse(missing.since) >= RETIRE_GRACE_MS;
@@ -464,6 +464,8 @@ function checkPending(p) {
   if (p.cause !== undefined && !CANDIDATE_REASONS.includes(p.cause)) {
     bad('pending.cause', `is not one of ${CANDIDATE_REASONS.join(', ')}.`);
   }
+  // revert-ends-itself: the move ends the class's hold, so `reconcilePending` clears it with the move it records.
+  if (p.endsHold !== undefined && p.endsHold !== true) bad('pending.endsHold', 'is not true, or absent.');
 }
 
 /** What a file written from `value` would hold, and what its next reader would parse: `value`'s JSON round trip,
@@ -514,6 +516,11 @@ export function parseAdvance(input) {
       // An Anthropic lane's hold names the id it holds (model-class Anthropic arm, Task A2.3); absent on every other.
       if (x.hold.model !== undefined && !(typeof x.hold.model === 'string' && MODEL_ID_RE.test(x.hold.model))) {
         bad(`${f}.hold.model`, 'is not a model id.');
+      }
+      // The id a Revert moved the class away from (revert-ends-itself): the hold ends once something newer than it
+      // comes (`holdEnds`). Optional, so a hand hold and a hold an older build wrote still read; `holdFrom` derives it.
+      if (x.hold.from !== undefined && !(typeof x.hold.from === 'string' && MODEL_ID_RE.test(x.hold.from))) {
+        bad(`${f}.hold.from`, 'is not a model id.');
       }
     }
     if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
@@ -646,6 +653,9 @@ export function reconcilePending(adv, registry) {
     return { advance: next, recovered: true };
   }
   next.classes[p.class].previous = { model: p.from, effort: p.effortFrom };
+  // revert-ends-itself: an advance that ended the class's hold clears it in the write that records the move, a
+  // recovered one too, so a crash between the rename and the commit never leaves the hold on the moved class.
+  if (p.endsHold === true) next.classes[p.class].hold = null;
   const e = {
     at: p.at, how: 'advance', from: p.from, to: p.to, ok: true, canary: 'passed',
     ...(p.effortFrom !== p.effortTo ? { effort: { from: p.effortFrom, to: p.effortTo } } : {}),
@@ -662,6 +672,182 @@ export function heldBackOf(c, candidate) {
   const last = c.history[c.history.length - 1];
   return last !== undefined && candidate !== null && last.how === 'advance' && last.ok === false && last.to === candidate
     ? last : null;
+}
+
+// ── THE END OF A HOLD (programme model-class-advance, follow-up revert-ends-itself) ──────────────────────────────────
+// The owner's ruling: classes always advance, and a Revert holds its class only until a newer model appears. No hold
+// ends by a person's act any more; it ends when the evidence says so, and the writer that moves the class clears it in
+// the same write that records the move: the Codex arm's `advance-commit` (canary first, as for any move) and the
+// Anthropic arm's `aliases-refresh`. ONE decider for both arms (`holdEnds`), asked by those writers, by `advance-plan`
+// and by `advance-health`, which doctor reads; ONE reader of what a hold waits to be passed (`holdFrom`).
+
+/** `(evidenceAt, hold) => boolean`: whether a held class's id is UNOBSERVED against the hold standing now: a hold stands,
+ *  and the id rests on no evidence or on evidence older than the hold. Such an id says nothing about where the alias
+ *  went after the hold, so no reader names the class behind on it and no hold ends on it. The one rule: the aliases
+ *  resolver sets `unobserved` with it (`shared/model-aliases.mjs`, which re-exports it), and `holdEnds` asks it again of
+ *  the hold that stands at its read, since a `revert` writes a new hold without rewriting the aliases file. Here, beside
+ *  the decider, because `shared/model-aliases.mjs` imports this module and never the other way. */
+export function heldUnobserved(evidenceAt, hold) {
+  return hold !== undefined && hold !== null && (evidenceAt === null || evidenceAt < hold.at);
+}
+
+/** `(c, heldId, arm) => id | null`: the id a class's standing hold waits to be passed, or null. `c` is the class's
+ *  advance entry, `heldId` the id it is held at (a Codex lane's pin, an Anthropic lane's `hold.model`) and `arm` the
+ *  lane's kind (`'codex'`, the default, or `'alias'`). THE ONE READER of a hold's `from`, used by every caller:
+ *   1. the hold's own `from`, the id a Revert moved the class away from (the revert of either arm writes it, and the
+ *      hourly refresh stamps it on a revert hold that has none, `holdEnds`' `stamp`);
+ *   2. failing that, a HAND hold waits on the held id itself, so it ends at the next newer model;
+ *   3. failing that, a REVERT hold reads the class's history (call 469): on a Codex lane the newest successful `revert`
+ *      to the held id gives its `from`, ignoring same-id effort changes. On an Anthropic lane, which records no revert
+ *      entry, the newest successful move whose `from` is the held id gives its `to`, the model the Revert left;
+ *   4. failing that, null: unknown. The hourly refresh stamps the class's observed id when usable (`holdEnds`' `stamp`).
+ *      Null also with no hold. */
+export function holdFrom(c, heldId, arm = 'codex') {
+  const h = isObj(c) ? c.hold : null;
+  if (!isObj(h)) return null;
+  if (typeof h.from === 'string') return h.from;
+  if (h.by !== 'revert') return heldId ?? null;
+  const history = Array.isArray(c.history) ? c.history : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const e = history[i];
+    if (!isObj(e) || e.ok !== true) continue;
+    if (arm !== 'alias' && e.how === 'revert' && e.to === heldId) {
+      if (typeof e.from !== 'string') break;
+      if (e.from !== e.to) return e.from;
+    }
+    if (arm === 'alias' && e.how === 'advance' && e.from === heldId && typeof e.to === 'string') return e.to;
+  }
+  return null;
+}
+
+/**
+ * `(input) => {ends, why, from, stamp?}`: whether a class's standing hold ends NOW. Pure. `ends` false with `why` null
+ * when no hold stands, and `from` is `holdFrom`'s answer, what the hold waits to be passed. Two arms, one per lane kind:
+ *  - `{arm: 'codex', c, pin, choice, retired}`: `pin` the class's registry pin (the held id), `choice` its
+ *    `chooseCandidate` answer this hour (the advance step's own computation, so the move a hold's end takes is the move
+ *    an unheld class would take) and `retired` whether the retire grace has passed on the pin (`retireDue`; callers ask
+ *    `codexHoldEnd`). A blocked class, or one with no candidate, waits. Once the held pin has been missing past the grace
+ *    (`retired`, or `choice.reason === 'retired'`), the hold ends whatever the candidate's reason (`why: 'retired'`,
+ *    call 469), even onto the model the Revert left: it is then the only runnable choice besides an older one, and the
+ *    canary still guards it. Otherwise it ends when the candidate is a model of `from`'s family NEWER than `from` by
+ *    `compareVersions` (`why: 'newer'`; a hand hold on an EMPTY class, with nothing to pass, ends at its first candidate).
+ *  - `{arm: 'alias', c, row}`: `row` the class's row of the lane's aliases file (null: none). An alias id has no version
+ *    order, so it ends when the alias names an id other than `from` and other than the held id (`hold.model`), the row
+ *    is one a launch can use (an id, not `unlaunchable`, not `unobserved`), and its evidence came after the hold began
+ *    (`heldUnobserved`, asked of the hold standing now) (`why: 'alias-moved'`). This arm assumes, as the resolver does,
+ *    that an alias moves only on newer evidence: an alias that moved to an OLDER third id would end the hold on it.
+ * Apart from the Codex retirement exception, a REVERT hold whose `from` nothing derives waits. The answer carries
+ * `stamp`: the class's current id (the Codex candidate, or a launchable alias id distinct from the held id), or null
+ * with none. The hourly refresh records it as `from` without ending the hold on that pass, in its existing locked
+ * write (`refreshRecord`, `aliases-refresh`; call 469). Later, the hold can end on a model newer than that (Codex)
+ * or a third id seen after it (Anthropic).
+ */
+export function holdEnds(input) {
+  const c = isObj(input) ? input.c : null;
+  const hold = isObj(c) ? c.hold : null;
+  if (!isObj(hold)) return { ends: false, why: null, from: null };
+  if (input.arm === 'alias') {
+    const held = typeof hold.model === 'string' ? hold.model : null;
+    const from = holdFrom(c, held, 'alias');
+    const row = input.row;
+    const usable = isObj(row) && typeof row.id === 'string' && row.unlaunchable === null;
+    if (held !== null && from === null) {
+      return { ends: false, why: null, from, stamp: usable && row.id !== held ? row.id : null };
+    }
+    const ends = held !== null && usable && row.unobserved !== true && !heldUnobserved(row.evidenceAt ?? null, hold)
+      && row.id !== from && row.id !== held;
+    return { ends, why: ends ? 'alias-moved' : null, from };
+  }
+  const pin = input.pin ?? null;
+  const from = holdFrom(c, pin);
+  const choice = input.choice;
+  const unknown = from === null && hold.by === 'revert';
+  if (!isObj(choice) || choice.blocked !== null || typeof choice.candidate !== 'string') {
+    return { ends: false, why: null, from, ...(unknown ? { stamp: null } : {}) };
+  }
+  if (choice.reason === 'retired' || input.retired === true) return { ends: true, why: 'retired', from };
+  if (unknown) return { ends: false, why: null, from, stamp: choice.candidate };
+  if (from === null) return { ends: true, why: 'newer', from };
+  const was = parseModelId(from);
+  const next = parseModelId(choice.candidate);
+  const ends = was !== null && next !== null && was.family === next.family && compareVersions(next.version, was.version) > 0;
+  return { ends, why: ends ? 'newer' : null, from };
+}
+
+/** `({registry, catalogue, cls, c, choice, nowMs}) => HoldEnd`: `holdEnds`' Codex arm for one class, with its pin and
+ *  whether the retire grace has passed on it (`retireDue`, the grace an unheld class waits out) read from the class's own
+ *  files, so every Codex caller (`advance-plan`, `advance-commit`, `advance-health`, the refresh's stamp) asks alike. */
+export function codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs }) {
+  return holdEnds({ arm: 'codex', c, pin: registry.classes[cls] ?? null, choice,
+    retired: isObj(c) && retireDue({ registry, catalogue, cls, missing: c.missing, nowMs }) });
+}
+
+/** The longest a hold whose end has come may still stand before `advance-health` reports it (`heldBehind`'s `due`): one
+ *  hourly refresh plus half an hour of slack, the span `RETIRE_GAP_MS` already measures between two of the refresh's
+ *  sightings. The refresh that sees the end acts on it; a hold standing this long past that sighting is one the
+ *  refresh has not reached. Derived, never a second literal. */
+export const HOLD_END_WAIT_MS = RETIRE_GAP_MS;
+
+/** `(sinceAt, nowMs) => boolean`: whether a hold whose end came at `sinceAt` (the sighting that showed it) has stood past
+ *  `HOLD_END_WAIT_MS` by `nowMs`. A time that does not parse, or none, is never due. */
+export function holdEndDue(sinceAt, nowMs) {
+  return isAt(sinceAt) && Date.parse(sinceAt) + HOLD_END_WAIT_MS <= nowMs;
+}
+
+/** `(c, from, to, at) => Hold`: the hold a Codex `revert` writes, the act that set it last (D-5190, D-5206), naming what
+ *  the Revert moved the class away from (`from`) so it ends once a model newer than that comes. A re-run on a reverted
+ *  pin (D-5991) moves nothing, so it keeps what the hold it replaces waited for (`holdFrom`); an id equal to the held one
+ *  says nothing and is left out. */
+export function revertHold(c, from, to, at) {
+  const left = from !== to ? from : holdFrom(c, to);
+  return { at, by: 'revert', ...(left !== null && left !== to ? { from: left } : {}) };
+}
+
+/** `({registry, catalogue, cls, c, choice, to, nowMs}) => HoldEnd | null`: `advance-commit`'s question, asked under the
+ *  lane lock after the canary: null with no hold; else `codexHoldEnd`'s answer, which ends only on the very candidate
+ *  (`to`) the commit was planned on. */
+export function holdEndFor({ registry, catalogue, cls, c, choice, to, nowMs }) {
+  if (!isObj(c) || !isObj(c.hold)) return null;
+  const end = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs });
+  return end.ends && choice.candidate === to ? end : { ...end, ends: false, why: null };
+}
+
+/** `(end, pin, to) => {reason?}`: what the history entry of a move that ended a hold says about why (none without one). */
+export function holdEndEntry(end, pin, to) {
+  if (end === null || !end.ends) return {};
+  return { reason: end.why === 'retired' ? `the hold ended: ${pin ?? 'none'} left the catalogue past its grace`
+    : `the hold ended: ${to} is newer than ${end.from ?? 'none'}` };
+}
+
+/** `({registry, catalogue, cls, c, choice, nowMs}) => {waiting} | {behind}`: one held Codex class's row for
+ *  `advance-health` (revert-ends-itself): `holdsWaiting`'s while its hold does not end (`from`, what it waits to be
+ *  passed, null for a revert hold the next refresh stamps), else `heldBehind`'s, with the candidate and its `reason`,
+ *  `from`, `since` (the fresh catalogue's observation that shows the end, `observedAt`, null on a stale one) and `due`
+ *  (`holdEndDue`). */
+export function holdReading({ registry, catalogue, cls, c, choice, nowMs }) {
+  const pin = registry.classes[cls] ?? null;
+  const end = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs });
+  const hold = { at: c.hold.at, by: c.hold.by };
+  if (!end.ends) return { waiting: { class: cls, pin, hold, from: end.from } };
+  const since = observedAt(catalogue);
+  const reason = end.why === 'retired' ? 'retired' : choice.reason;
+  return { behind: { class: cls, pin, newer: choice.candidate, reason, hold, from: end.from, since,
+    due: holdEndDue(since, nowMs) } };
+}
+
+/** `(adv, cls, at, {alias}) => Advance`: the class's hold cleared, as the writer that moves it records the move (a copy;
+ *  the caller writes it in the write that records the move). An Anthropic lane's (`alias`) records the time as its
+ *  `releasedAt`, as a release does, so the sessions-behind reading counts its day from it, and drops any release
+ *  evidence (`releasedHold`): the move is recorded in this same write, so there is nothing left to settle. */
+export function endHold(adv, cls, at, { alias = false } = {}) {
+  const next = copy(adv);
+  const c = next.classes[cls];
+  c.hold = null;
+  if (alias) {
+    c.releasedAt = at;
+    delete c.releasedHold;
+  }
+  return next;
 }
 
 /** `(adv, fallbacks, at) => Advance`: each `effortFallbacks` row recorded on its class as `effortFallback`, `{at, model,
@@ -741,17 +927,28 @@ export function clearEffortFallback(adv, cls) {
 /** `(adv, {registry, catalogue, fallbacks, nowMs}) => {advance, changed}`: what the hourly refresh's `materialise`
  *  records on the lane's advance file after one probe (D-8838, D-8842), as one write: each class's run of sightings of
  *  a missing pin (`markMissing`), each effort fallback it just wrote (`recordEffortFallbacks`, at the sighting's own
- *  clock), and the deletion of every recorded fallback that no longer stands (`effortFallbackOf`). Pure. */
+ *  clock), the deletion of every recorded fallback that no longer stands (`effortFallbackOf`), and the `from` of each
+ *  revert hold that has none (`holdEnds`' `stamp`, revert-ends-itself, call 469), on a fresh catalogue only. Pure. */
 export function refreshRecord(adv, { registry, catalogue, fallbacks, nowMs }) {
   const m = markMissing(adv, registry, catalogue, nowMs);
   const next = recordEffortFallbacks(m.advance, fallbacks, isoSeconds(nowMs));
   let changed = m.changed || fallbacks.length > 0;
+  const fresh = observedAt(catalogue) !== null;
   for (const cls of CLASSES) {
     const c = next.classes[cls];
     if (c.effortFallback !== undefined && effortFallbackOf(c, registry, cls, catalogue) === null) {
       delete c.effortFallback;
       changed = true;
     }
+    // revert-ends-itself (call 469): a revert hold whose `from` nothing derives gets the class's current candidate
+    // stamped as its `from` here, in this refresh's one locked write, and does not end on this pass.
+    const pin = registry.classes[cls] ?? null;
+    if (!fresh || !isObj(c.hold) || c.hold.by !== 'revert' || holdFrom(c, pin) !== null) continue;
+    const choice = chooseCandidate({ registry, catalogue, cls, family: c.family, missing: c.missing, nowMs });
+    const stamp = codexHoldEnd({ registry, catalogue, cls, c, choice, nowMs }).stamp;
+    if (typeof stamp !== 'string') continue;
+    c.hold = { ...c.hold, from: stamp };
+    changed = true;
   }
   return { advance: changed ? next : adv, changed };
 }

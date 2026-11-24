@@ -46,6 +46,7 @@ import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, Accou
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
+import { DELEGATION_BACKFILL_REFUSALS, type DelegationBackfillRefusal } from './delegationBackfill.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
@@ -413,6 +414,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | LeaseDoorRefusal
   // The adoption switch's door (delegation broker wave 5 PR8b, D-8113): declared once, `delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS`.
   | DelegationAdoptRefusal
+  // The one-time pass's door (session helpers S2, D-8874): its one word, declared once, `delegationBackfill.ts#DELEGATION_BACKFILL_REFUSALS`.
+  | DelegationBackfillRefusal
   // The linking standard's words (D-8147): declared once, `linking.ts#LINKING_REFUSALS`, each with its status below.
   | LinkingRefusal
   // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
@@ -442,6 +445,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...LEASE_DOOR_REFUSALS,
   // The adoption switch's door (D-8113): three new words, CHOSEN, each with its status in `DELEGATION_ADOPT_REFUSALS`.
   ...DELEGATION_ADOPT_REFUSALS,
+  // The one-time pass's door (D-8874): one new word, CHOSEN, with its status in `DELEGATION_BACKFILL_REFUSALS`.
+  ...DELEGATION_BACKFILL_REFUSALS,
   // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an
   // override the grammar refuses), 404 for a project the box does not know, 409 for a request the project's state refuses
   // now (the repository is public, nothing is measured yet, the template is there, no key is set, a tracker id or a

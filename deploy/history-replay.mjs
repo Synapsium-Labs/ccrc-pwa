@@ -44,6 +44,8 @@ import { pairIndexOf } from '../ccd/history/cli.mjs';
 import { admitFile, ftsTextOfBlob, readRegPresence } from '../ccd/history/sweep.mjs';
 import { AMENDMENT_KINDS, ANSWER_PROTOCOL, ANSWER_PROTOCOL_SHA256, ANSWER_STATES, ASSIGNMENT_ARMS, EXACT_MODEL_ID_RE, FACT_KINDS, GATE_CODE_FILES, LABELLER, LABELS, OPEN_RECORD_V1, OPUS_MODEL_RE, PILOT_SUBSTREAM, QUESTION_OUTCOMES, RUBRICS, RUBRIC_IDS, RUBRIC_SHA256, SHA_MIN_PREFIXES, WRITER_INPUTS, WRITER_PROMPT, WRITER_PROMPT_SHA256, activeFamilies, admitFact, applyHandcheck, assembleReports, assignArms, assignmentSha256, buildWindows, changedFamilies, checkGateCode, classifyRun, cmpFrac, collapseWs, decideGate, expectedWindows, familyKey, frac, handcheckAgreement, handcheckSample, labelCorrect, parseAnswerField, parseLabelLine, parseQuestionLine, q18Power, questionOutcome, randInt, recordSha256, spendBudgetInForce, splitAtFirstExit8, substream, validateOpenRecord, windowTotals } from './history-gate.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
+import { decideLimits, parseLimitsRow } from './history-limits.mjs';
+export { decideLimits, parseLimitsRow };   // the limits reading's pure rules, moved out by run 3538; every importer keeps this path
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
 /** Every word the driver refuses with, in one frozen list. The first sixteen are W2-D59's, in its order (each owner
@@ -1264,14 +1266,20 @@ export function allowedToolSpellings(home) {
 }
 
 /** The argv of one spawn: the settings argv, the fixed flags, the model, then the tools by mode. Input is never
- *  an argument: it goes on stdin. Pure.
- *  @param {{mode: string, model: string, settingsMode: string, home: string}} spec
+ *  an argument: it goes on stdin. `settings`, when given (quiz pilot stage B, B3: a plugins-off map), is one settings value:
+ *  merged under the mode's own `--settings` value, which wins on a shared key, or passed as `--settings` after the mode's
+ *  flags when the mode has none. Absent, the argv is exactly the mode's. Pure.
+ *  @param {{mode: string, model: string, settingsMode: string, home: string, settings?: object}} spec
  *  @returns {string[]} */
-export function spawnArgv({ mode, model, settingsMode, home }) {
+export function spawnArgv({ mode, model, settingsMode, home, settings }) {
   if (!SPAWN_MODES.includes(mode)) throw new TypeError(`spawnArgv: mode ${JSON.stringify(mode)} is not one of ${SPAWN_MODES.join(', ')}`);
   if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`spawnArgv: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
   if (typeof model !== 'string' || !MODEL_RE.test(model)) throw new TypeError(`spawnArgv: model ${JSON.stringify(model)} is not a model id`);
-  const argv = [...SETTINGS_ARGV[settingsMode], '-p', '--no-session-persistence', '--strict-mcp-config',
+  if (settings !== undefined && !plainObject(settings)) throw new TypeError('spawnArgv: settings is a settings object when given');
+  const head = [...SETTINGS_ARGV[settingsMode]];
+  const at = head.indexOf('--settings');
+  if (settings !== undefined) at < 0 ? head.push('--settings', canonicalJson(settings)) : (head[at + 1] = canonicalJson({ ...settings, ...JSON.parse(head[at + 1]) }));
+  const argv = [...head, '-p', '--no-session-persistence', '--strict-mcp-config',
     '--output-format', 'stream-json', '--verbose', '--max-turns', String(MAX_TURNS), '--model', model];
   if (mode === 'arm' || mode === 'box') argv.push('--tools', 'Bash,Agent', '--allowedTools', ...allowedToolSpellings(home));
   else argv.push('--tools', '');
@@ -1830,13 +1838,14 @@ export async function launchRun(job, opts = {}) {
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
   const { streamPath, partPath, pidPath } = runPaths(out, name);
   const home = runHomeOf(launch);
-  const argv = spawnArgv({ mode, model, settingsMode, home });
+  const argv = spawnArgv({ mode, model, settingsMode, home, settings: job.settings });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
   if (path.dirname(name) !== '.') ensurePlainDir(out, path.dirname(name));   // D-5986: a run subdirectory is a real directory, never a link
   const cwd = makeRunCwd();
   const t0 = Date.now();
   let res;
   try {
+    if (job.stage !== undefined) job.stage.write(cwd);   // quiz pilot stage B, B1: files the run should find, removed with its cwd
     refuseIfStopping();
     res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs });
   } finally {
@@ -1868,6 +1877,7 @@ export async function launchRun(job, opts = {}) {
     // W2-5b1 Task 1 (Q7): both readings the charge took the larger of, beside it.
     usage_result_tokens: facts.resultUsage === null ? null : usageTokens(facts.resultUsage), usage_assistant_tokens: usageTokens(facts.assistantUsage),
     unknown_options: unknownOptions,
+    ...(job.settings === undefined ? {} : { settings: job.settings }), ...(job.stage === undefined ? {} : { staged_sha256: job.stage.sha256 }),
   };
   writePlain(out, `${name}.run.json`, canonicalJson(rec) + '\n');
   return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
@@ -1946,13 +1956,9 @@ export async function runBatch(jobs, opts = {}) {
 // ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2 "stops at a stated threshold", erratum E18) ──
 // Before each batch and before each spawn the driver reads ONE limits row, `$HOME/.cc-limits/<account id>.json`,
 // read-only: the one `~/.cc-limits` read in the spec (§5.2). lstat first, so a symlink, a directory or a FIFO is never
-// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row
-// is parsed by readLimits' rules (server/src/limits.ts), term for term: a lapsed resetAt is a FACT and writes 0; only
-// then does the age fallback infer a 0 for a value older than its own window. readLimits folds both into one
-// `*RolledOver` flag; the driver keeps the provenance beside it (`*Inferred`), because here the two answer differently:
-// a resetAt 0 is a measured reset and may admit a batch, an age-inferred 0 measured nothing and stops it as stale.
-// A parity case in history-replay.test.ts holds parseLimitsRow to readLimits over rolloverCases' bytes, so the two
-// spellings of these rules cannot drift (a .mjs operator script cannot import server/src/*.ts). The budget is the
+// opened; then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. The row's
+// pure rules, parseLimitsRow and decideLimits, live in deploy/history-limits.mjs (moved there by run 3538) and are
+// re-exported here; their header says how a row is read. The budget is the
 // cumulative spend ledger under --out (Task 4); a stop throws DriverRefusal (exit 2), and a re-run resumes, since
 // runBatch skips every finished job (Task 5). Before part 1 the values are LIMITS_DEFAULTS and a required --budget;
 // W2-5a and W2-5b pass part 1's or part 2's values through the same parameters.
@@ -1964,37 +1970,8 @@ export const LIMITS_DEFAULTS = Object.freeze({
   threshold_pct: 70, max_age_ms: 3_600_000, batch_max: BATCH_MAX, concurrency: CONCURRENCY_MAX,
 });
 
-const LIMITS_FIVE_WINDOW_S = 18000;     // readLimits' FIVE_WINDOW: a five sample older than its own 5h window has rolled over
-const LIMITS_SEVEN_WINDOW_S = 604800;   // readLimits' SEVEN_WINDOW, the same for seven
 const LIMITS_ROW_CAP = 65536;           // a limits row is about 150 bytes; a file past 64 KiB is not one, and is malformed
-const LIMITS_FUTURE_SKEW_MS = 60_000;   // a ts at most a minute ahead of the clock is skew; further ahead measured nothing
 const LIMITS_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;   // one path segment, never `..`-led or hidden
-const limitsNum = (v) => (typeof v === 'number' ? v : null);   // readLimits' numOrNull
-
-/** One limits row's text, by readLimits' rules, keeping the provenance it folds. Throws on non-JSON or a non-object. */
-export function parseLimitsRow(text, nowS) {
-  const raw = JSON.parse(text);
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('a limits row is one JSON object');
-  const ts = limitsNum(raw.ts);
-  const fiveResetAt = limitsNum(raw.fiveResetAt);
-  const sevenResetAt = limitsNum(raw.sevenResetAt);
-  let five = limitsNum(raw.five);
-  let seven = limitsNum(raw.seven);
-  // The FACT first: a lapsed resetAt comes straight from the API, so its 0 is a measured reset.
-  let fiveRolledOver = five !== null && fiveResetAt !== null && nowS >= fiveResetAt;
-  let sevenRolledOver = seven !== null && sevenResetAt !== null && nowS >= sevenResetAt;
-  if (fiveRolledOver) five = 0;
-  if (sevenRolledOver) seven = 0;
-  // Then the INFERENCE, which may not re-derive what the fact already said (readLimits' `!fiveRolledOver` guards).
-  // readLimits sets only *RolledOver here; the driver also says the 0 was inferred, because that 0 measured nothing.
-  let fiveInferred = false;
-  let sevenInferred = false;
-  if (ts !== null) {
-    if (!fiveRolledOver && five !== null && nowS - ts > LIMITS_FIVE_WINDOW_S) { five = 0; fiveRolledOver = true; fiveInferred = true; }
-    if (!sevenRolledOver && seven !== null && nowS - ts > LIMITS_SEVEN_WINDOW_S) { seven = 0; sevenRolledOver = true; sevenInferred = true; }
-  }
-  return { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver, fiveInferred, sevenInferred };
-}
 
 /** `$HOME/.cc-limits/<accountId>.json`, read-only, through readPlain (D-5986): lstat first (only a regular file is
  *  opened), then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. Every
@@ -2010,33 +1987,6 @@ export function readLimitsRow(home, accountId, nowS) {
     return { state: 'unreadable', code: read.code };
   }
   try { return { state: 'row', row: parseLimitsRow(read.bytes.toString('utf8'), nowS) }; } catch { return { state: 'malformed' }; }
-}
-
-/** The limits stop (W2-D55): null admits the batch; otherwise the word and detail it stops with. */
-export function decideLimits(read, { nowMs, thresholdPct, maxAgeMs }) {
-  const stale = (detail) => ({ word: 'limits-stale', detail });
-  switch (read.state) {
-    case 'absent': return stale('absent');
-    case 'not-regular': return stale('not-regular');
-    case 'unreadable': return stale(`unreadable ${read.code}`);
-    case 'malformed': return stale('malformed');
-    case 'row': break;
-    default: throw new TypeError(`not a limits read: ${JSON.stringify(read.state)}`);
-  }
-  const r = read.row;
-  if (r.five === null) return stale('five-null');
-  if (r.seven === null) return stale('seven-null');
-  if (!(r.five >= 0 && r.five <= 100) || !(r.seven >= 0 && r.seven <= 100)) return stale('percent-out-of-range');
-  if (r.fiveInferred || r.sevenInferred) return stale('inferred-by-age');
-  if (r.ts === null) return stale('ts-null');
-  const aheadMs = r.ts * 1000 - nowMs;
-  if (aheadMs > LIMITS_FUTURE_SKEW_MS) return stale(`ts-future ${aheadMs}`);
-  const ageMs = nowMs - r.ts * 1000;
-  if (ageMs > maxAgeMs) return stale(`old ${ageMs}`);
-  if (Math.max(r.five, r.seven) >= thresholdPct) {
-    return { word: 'limits-threshold', detail: `five ${r.five} seven ${r.seven} at or over ${thresholdPct}` };
-  }
-  return null;
 }
 
 /** The spend budget (W2-D55): the cumulative ledger at or over the budget stops. */
@@ -2090,8 +2040,9 @@ function refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, nowMs) {
 /** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from: the gate's
  *  own GATE_CODE_FILES, so the four paths are spelled once (W2-5a Task 1, closing decisions §7's double spelling). The
  *  driver's other ccd/history imports (store.mjs, derive.mjs, recall.mjs, cli.mjs) and the modules they load (sweep.mjs,
- *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not hashed: the release_tag comparison and the tree-moved
- *  preflight cover them (W2-D24, W2-D56). */
+ *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not in gate_code: within a round the release_tag comparison and
+ *  the tree-moved preflight cover them (W2-D24, W2-D56). Across rounds, the quiz's re-pilot decision no longer reads the
+ *  release (stage B, B0): its key hashes them as the quiz's pilot files instead (PILOT_CODE_FILES, history-quiz-pilot.mjs). */
 export const CODE_SHA_FILES = GATE_CODE_FILES;
 /** The tree this file was loaded from: the installed release on a node, the checkout in a test. */
 export const TREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -2103,11 +2054,11 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const VERSION_TIMEOUT_MS = 60_000;
 const VERSION_STDOUT_MAX = 65_536;
 
-/** The sha256 of each CODE_SHA_FILES member's bytes under `root`, or the first one that cannot be measured. An
- *  absent file is `absent`; any other read failure is `unreadable`. */
-export function codeShas(root = TREE_ROOT) {
+/** The sha256 of each CODE_SHA_FILES member's bytes under `root` (or of each of `list`, the quiz's pilot files: one
+ *  hasher), or the first one that cannot be measured. An absent file is `absent`; any other read failure is `unreadable`. */
+export function codeShas(root = TREE_ROOT, list = CODE_SHA_FILES) {
   const files = {};
-  for (const rel of CODE_SHA_FILES) {
+  for (const rel of list) {
     let bytes;
     try {
       bytes = readFileSync(path.join(root, rel));
@@ -2741,13 +2692,51 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
   return { left: sessionId === null || projectDir || transcripts.length > 0, transcripts, projectDir };
 }
 
+/** The most entries leftoverShapeOf walks in one call; past it the shape says `truncated`. */
+export const LEFTOVER_SHAPE_MAX_ENTRIES = 1000;
+/** The levels below each leftover root whose entries the shape names (quiz-pilot-checks ruling 3: two levels down; quiz pilot
+ *  stage B, B4: three, so a file inside the `subagents` folder is named). */
+export const LEFTOVER_SHAPE_NAMED_DEPTH = 3;
+/** The kind word of an lstat, for the shape: dir, file, link or other. */
+const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : st.isFile() ? 'file' : 'other');
+/** The shape of what a run left under `projects` (quiz-pilot-checks ruling 3), measured BEFORE anything removes it: each root
+ *  (a path relative to `projects`) and every entry up to LEFTOVER_SHAPE_NAMED_DEPTH levels below it, as `{path, kind, size}`
+ *  (the lstat size; a link is never followed); whether a directory named `subagents` stands anywhere in the walk; whether any
+ *  file named `*.jsonl` (a transcript) does; `files`, the path of every regular file the walk found at any depth (stage B,
+ *  B4's proof asks the sweep about each); and `links`, the path of every link it found at any depth (stage B fix round 1: B4's
+ *  own-folder condition fails on any). The walk goes past the named depth only to answer those four, and stops at
+ *  LEFTOVER_SHAPE_MAX_ENTRIES (`truncated`). Names and sizes only: no file is opened. A read failure is recorded as
+ *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
+ *  @param {string} projects  @param {readonly string[]} roots  */
+export function leftoverShapeOf(projects, roots) {
+  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false, files: [], links: [] };
+  let seen = 0;
+  const read = (fn) => { try { return fn(); } catch (e) { o.unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return null; } };
+  const walk = (rel, depth) => {
+    if (seen >= LEFTOVER_SHAPE_MAX_ENTRIES) { o.truncated = true; return; }
+    const st = read(() => lstatSync(path.join(projects, rel)));
+    if (st === null) return;
+    seen += 1;
+    o.subagents_dir ||= st.isDirectory() && path.basename(rel) === 'subagents';
+    o.transcript_file ||= st.isFile() && rel.endsWith('.jsonl');
+    if (st.isFile()) o.files.push(rel);
+    if (st.isSymbolicLink()) o.links.push(rel);
+    if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) o.entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
+    if (st.isDirectory()) for (const n of read(() => readdirSync(path.join(projects, rel)).sort()) ?? []) walk(`${rel}/${n}`, depth + 1);
+  };
+  for (const r of [...new Set(roots)].sort().filter((r, _i, all) => !all.some((x) => x !== r && r.startsWith(`${x}/`)))) walk(r, 0);
+  return o;
+}
+
 /** W2-5b2 Task 1: persistenceLeft as step 0b records it, `{left, transcripts, project_dir}`. An lstat or readdir failure
  *  under projects/ (an errno, which persistenceLeft throws so it never reads as clean) is answered as left, with the errno
  *  named as `unmeasured`: the run is recorded and fails closed after --out, never an exit 1 (D-6309's rule). So is a run
  *  whose stream gave no session id (`unmeasured: 'no-session-id'`) or one that is none (`'session-id-malformed'`: empty,
  *  holding a slash, or starting with a dot): that id is the spawned run's own data, so no transcript half was read and
  *  neither a clean `left: false` nor a `fail` for a leak that was never measured. Any other throw (a TypeError for a bad
- *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)).
+ *  argument of the driver's own) is a defect and stays one (F2, F3; W2-5b2 fix round 1 (review 981)). A measured `left`
+ *  run also carries `shape`, leftoverShapeOf's description of what it left (quiz-pilot-checks ruling 3); a clean run and an
+ *  unmeasured one carry none.
  *  @param {{ configDir: string, sessionId: string | null, cwd: string }} o */
 export function persistenceMeasured(o) {
   persistenceConfigDirOk(o.configDir);
@@ -2760,7 +2749,12 @@ export function persistenceMeasured(o) {
     if (e instanceof TypeError || typeof e?.code !== 'string') throw e;
     return { left: true, transcripts: [], project_dir: null, unmeasured: e.code };
   }
-  return { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  const measured = { left: l.left, transcripts: l.transcripts, project_dir: l.projectDir };
+  if (!l.left) return measured;
+  // quiz-pilot-checks ruling 3: what was left is described here, at the driver's one reading of it, before anything removes it
+  // (the driver removes nothing under projects/). The verdict above is not touched by it.
+  const roots = [...(l.projectDir ? [projectSlugOf(o.cwd)] : []), ...l.transcripts];
+  return { ...measured, shape: leftoverShapeOf(path.join(o.configDir, 'projects'), roots) };
 }
 
 /** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
@@ -7050,7 +7044,8 @@ export function armNodeOf(run, storeId) {
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
 export function armJob(ctx, q, arm, attempt, stdin, move = null) {
   const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
-    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang };
+    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang,
+    ...(ctx.settings === undefined ? {} : { settings: ctx.settings }), ...(ctx.stage === undefined ? {} : { stage: ctx.stage }) };   // quiz stage B, B1 and B3
   return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
 }
 /** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
@@ -7707,7 +7702,8 @@ export async function openJudge(o) {
       for (let i = 0; i < due.length; i += BATCH_MAX) {
         const batch = due.slice(i, i + BATCH_MAX);
         await preflightNow();   // W2-D56: before every judge batch
-        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang }));
+        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang,
+          ...(o.settings === undefined ? {} : { settings: o.settings }) }));   // quiz stage B, B3: the week's plugins-off map
         const done = await runBatch(runs, { gate, claim });
         done.forEach((d, k) => attempts.get(batch[k].id).push(judgeAttemptOf(d)));
       }
@@ -7868,10 +7864,12 @@ export function turnBoundCheckOf(tb) {
   const state = tb.held === true ? 'pass' : tb.held === false ? 'fail' : 'unmeasured';
   return { state, held: tb.held, turns: tb.turns, num_turns: tb.num_turns, subtype: tb.subtype };
 }
-/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it; one whose
- *  check could not be measured (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
+/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it, unless its row
+ *  carries a `proof` that passed (quiz pilot stage B, B4: the quiz's caller proves that what was left cannot reach the history
+ *  store; the gate's caller proves nothing, so its rows fail as before); one whose check could not be measured
+ *  (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
 export function persistenceCheckOf(runs) {
-  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left ? 'fail' : 'pass'))) };
+  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left && p.proof?.passed !== true ? 'fail' : 'pass'))) };
 }
 /** A taught spelling's run (W2-D58), from W2-4's probeFindingOf: admitted when the stream's result event carries
  *  permission_denials (result_seen), the call was made (ran) and no denial names it. A denial fails it; no result event,
@@ -7888,17 +7886,46 @@ export function denialCheckOf(f) {
 }
 const skillNamed = (s) => s === HISTORY_SKILL || (plainObject(s) && s.name === HISTORY_SKILL);
 const sameSet = (got, want) => got.length === want.length && [...got].sort().join('\n') === [...want].sort().join('\n');
+/** The tool names a build reports on the wire under another name than the one `--tools` grants, one row per name: the
+ *  reported name, then the granted name it stands for (quiz-pilot-checks ruling 1: Claude Code 2.1.330 reports the Agent tool
+ *  as `Task`). The table is applied to what an init event REPORTS, never to what the argv grants (armToolsOf), and a name not
+ *  in it is never aliased, so the set comparison stays exact. */
+export const WIRE_TOOL_ALIASES = Object.freeze({ Task: 'Agent' });
+/** A reported tool list in the granted vocabulary: each name the table holds becomes its granted name, every other name is
+ *  kept as it is; a repeat stays a repeat, so `Task` beside `Agent` is two Agents and never the set. Pure.
+ *  @param {readonly unknown[]} reported  @returns {unknown[]} */
+export function grantedToolNamesOf(reported) {
+  return reported.map((t) => (typeof t === 'string' && Object.hasOwn(WIRE_TOOL_ALIASES, t) ? WIRE_TOOL_ALIASES[t] : t));
+}
+/** A plugins entry's class (quiz-pilot-checks ruling 2): `build` only when the entry says by BOTH fields that it ships with
+ *  the build, its `source` a string of one name and one `@` before `builtin` (`x@builtin`, never `x@market@builtin`) and its
+ *  `path` the word `builtin`; any other entry, one with a field
+ *  missing or not a string, and an entry that is not an object, is `other`. Pure.  @param {unknown} entry */
+export function pluginClassOf(entry) {
+  return plainObject(entry) && typeof entry.source === 'string' && /^[^@]+@builtin$/.test(entry.source) && entry.path === 'builtin' ? 'build' : 'other';
+}
+/** What one run's plugins list loaded, as the result records it: the count of each class, and each refused (`other`) entry's
+ *  name and source, each the reported string or null when the entry carries no string there. null for a run with no init
+ *  event or no plugins list. Pure.  @param {StreamInit | null} init */
+export function pluginsLoadedOf(init) {
+  if (init === null || init.plugins === null) return null;
+  const str = (p, k) => (plainObject(p) && typeof p[k] === 'string' ? p[k] : null);
+  const refused = init.plugins.filter((p) => pluginClassOf(p) === 'other');
+  return { build: init.plugins.length - refused.length, other: refused.length, refused: refused.map((p) => ({ name: str(p, 'name'), source: str(p, 'source') })) };
+}
 /** W2-D57's "the arm's init event" and W2-D58's init assertions, one check each over every arm run's init event: tools
- *  exactly `want` (the arm argv's, armToolsOf), no MCP server, no plugin, the ccrc-history skill listed (a string, or an
- *  object with that name). A run with no init event, or a field that is not a list, leaves that check unmeasured on that
- *  run (foldStates). Pure.
+ *  exactly `want` (the arm argv's, armToolsOf) once the reported names, every one a string, pass through WIRE_TOOL_ALIASES, no MCP server, no
+ *  plugin but the build's own (pluginClassOf), the ccrc-history skill listed (a string, or an object with that name). A run
+ *  with no init event, or a field that is not a list, leaves that check unmeasured on that run (foldStates). The plugins
+ *  check also records, per run in `inits` order, what loaded (pluginsLoadedOf). Pure.
  *  @param {Array<StreamInit | null>} inits  @param {readonly string[]} want */
 export function initChecksOf(inits, want) {
   const over = (read) => ({ state: foldStates(inits.map((i) => (i === null ? 'unmeasured' : read(i)))) });
   return {
-    tools: over((i) => (i.tools === null ? 'unmeasured' : sameSet(i.tools, want) ? 'pass' : 'fail')),
+    tools: over((i) => (i.tools === null ? 'unmeasured' : i.tools.every((t) => typeof t === 'string') && sameSet(grantedToolNamesOf(i.tools), want) ? 'pass' : 'fail')),
     mcp: over((i) => (i.mcpServers === null ? 'unmeasured' : i.mcpServers.length === 0 ? 'pass' : 'fail')),
-    plugins: over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.length === 0 ? 'pass' : 'fail')),
+    plugins: { ...over((i) => (i.plugins === null ? 'unmeasured' : i.plugins.every((p) => pluginClassOf(p) === 'build') ? 'pass' : 'fail')),
+      loaded: inits.map(pluginsLoadedOf) },
     skill: over((i) => (i.skills === null ? 'unmeasured' : i.skills.some(skillNamed) ? 'pass' : 'fail')),
   };
 }

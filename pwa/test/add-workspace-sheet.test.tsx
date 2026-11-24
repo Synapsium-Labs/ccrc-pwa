@@ -361,8 +361,8 @@ describe('the Settings pointer', () => {
     expect(window.location.pathname).toBe(LINEAR_SETTINGS_PATH);
   });
 
-  it('points at the page the route table calls Security, which holds the Linear section', () => {
-    expect(LINEAR_SETTINGS_PATH).toBe('/settings/security');
-    expect(matchRoute(LINEAR_SETTINGS_PATH)?.route.id).toBe('settings-security');
+  it('points at the page the route table calls Integrations, which holds the Linear section', () => {
+    expect(LINEAR_SETTINGS_PATH).toBe('/settings/integrations');
+    expect(matchRoute(LINEAR_SETTINGS_PATH)?.route.id).toBe('settings-integrations');
   });
 });

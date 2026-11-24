@@ -22,14 +22,16 @@ export interface Route {
   readonly accepts?: (param: string) => boolean;
 }
 
-/** Settings' five sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
- *  list: the route entries below, the index rows and the section pages all read it. */
+/** Settings' six sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
+ *  list: the route entries below, the index rows and the section pages all read it. Integrations is the last
+ *  (D-8932): Linear, project linking and GitHub, which sat on Security. */
 export const SETTINGS_SECTIONS = [
   { id: 'updates', title: 'Updates' },
   { id: 'appearance', title: 'Appearance' },
   { id: 'notifications', title: 'Notifications' },
   { id: 'automation', title: 'Automation' },
   { id: 'security', title: 'Security' },
+  { id: 'integrations', title: 'Integrations' },
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
@@ -61,7 +63,7 @@ export const ROUTES: readonly Route[] = [
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
   { id: 'archive', pattern: /^\/archive\/?$/, title: 'Archive', top: true, path: '/archive' },
   { id: 'settings', pattern: /^\/settings\/?$/, title: 'Settings', top: true, path: '/settings' },
-  // The five section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
+  // The six section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
   // "Go to Settings › Updates" and the others (`command/commands.ts`).
   ...SETTINGS_SECTIONS.map((s): Route => ({
     id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,

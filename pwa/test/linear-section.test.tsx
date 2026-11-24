@@ -229,9 +229,10 @@ describe('the list, row by row (§10.2)', () => {
     }
   });
 
-  it('is on the Security page, a level-3 card beside the box token, read once by the frame', async () => {
+  it('is on the Integrations page, its first level-3 card, read once by the frame', async () => {
     install({ list: () => list({ workspaces: [WS_A] }) });
-    renderSettings('security');
+    renderSettings('integrations');
+    expect((await screen.findAllByRole('heading', { level: 3 }))[0]!.textContent).toBe('Linear');
     expect(await screen.findByRole('heading', { level: 3, name: 'Linear' })).toBeTruthy();
     await waitFor(() => expect(rows()).toHaveLength(1));
     expect(box.paths().filter((p) => p === 'GET /api/linear/workspaces')).toHaveLength(1);
@@ -241,7 +242,8 @@ describe('the list, row by row (§10.2)', () => {
 
   it('is on no other page', async () => {
     install();
-    for (const id of ['updates', 'appearance', 'notifications', 'automation'] as const) {
+    // Security held it until D-8932; it holds a pointer to Integrations now, and no Linear card.
+    for (const id of ['updates', 'appearance', 'notifications', 'automation', 'security'] as const) {
       renderSettings(id);
       expect(screen.queryByRole('heading', { name: 'Linear' }), id).toBeNull();
       cleanup();

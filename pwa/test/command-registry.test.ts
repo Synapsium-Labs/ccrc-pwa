@@ -77,7 +77,7 @@ describe('the base commands', () => {
   });
 
   it('the two Settings diagnostics keep their own routes and Go to commands, and are not sections (library 1.1 take-up, Task 9)', () => {
-    expect(SETTINGS_SECTIONS).toHaveLength(5);
+    expect(SETTINGS_SECTIONS).toHaveLength(6);
     for (const [id, path] of [['go-reader-lab', '/settings/reader-lab'], ['go-measure-highlighting', '/settings/measure-highlighting']] as const) {
       expect(GO_TO.find((g) => g.id === id)?.path, id).toBe(path);
       expect(matchRoute(path)?.route.id, path).toBe(id.slice(3));
@@ -135,6 +135,8 @@ describe("the ids are W2's door table's", () => {
       // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
       'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
       'go-settings-security',
+      // D-8932: the Integrations section, Settings' sixth; its door is its index row.
+      'go-settings-integrations',
       // Docs W5h-a Task 9: R19's measurement page, a page under Settings; its door is the palette's Go to.
       'go-measure-highlighting',
       // The reader lab plan, Task 10: the reader lab, a page under Settings beside R19's; its door is the palette's Go to.
@@ -244,7 +246,8 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
     // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
     // The Overlord face plan's Switch character is read without the same way; its place is pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character'
+    // D-8932 reads it without go-settings-integrations the same way; its own rank row and place are pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character' && id !== 'go-settings-integrations'
       // Overlord W1 home: Go to Overlord and Go home are read without the same way; their own rows are pinned in their case.
       && id !== 'go-overlord' && id !== 'go-home');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
@@ -257,9 +260,13 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
     expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
-    // W5h-a: the one command whose title holds "measure", placed right after Settings' five pages.
+    // D-8932: the one command whose title holds "integrations", Settings' sixth page, right after Security.
+    expect(rankCommands('integrations', baseCommands()).map((c) => c.id)).toEqual(['go-settings-integrations']);
+    expect(baseCommands().find((c) => c.id === 'go-settings-integrations')?.title).toBe('Go to Settings › Integrations');
+    expect(empty.indexOf('go-settings-integrations'), 'after Security').toBe(empty.indexOf('go-settings-security') + 1);
+    // W5h-a: the one command whose title holds "measure", placed right after Settings' six pages.
     expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
-    expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' five pages').toBe(empty.indexOf('go-settings-security') + 1);
+    expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' six pages').toBe(empty.indexOf('go-settings-integrations') + 1);
     // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
     expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
     expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);

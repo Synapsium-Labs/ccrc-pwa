@@ -3079,7 +3079,8 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
   });
 
-  // D-5814, widened by W2-5a Task 1: the import block is exactly the fourteen modules W2-5a's driver loads, every one
+  // D-5814, widened by W2-5a Task 1: the import block is exactly the modules W2-5a's driver loads (fourteen, and run 3538's
+  // deploy/history-limits.mjs, the fifteenth, which imports nothing), every one
   // added here once (R3). node:child_process brings in `spawn` only, and node:crypto and each ccd/history module beyond
   // lib.mjs bring in exactly the names the plan's tasks use (W2-D33, W2-D74). A later W2-5a task that adds a name to a
   // module's braces updates that module's entry here in the same commit. So no edit adds a second reader unseen: keptOf
@@ -3090,8 +3091,10 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
   // the gate's names are not pinned here, and W2-5b1 Task 1's own case holds the names that PR consumes from them.
   const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', 'node:crypto',
     '../ccd/history/lib.mjs', '../ccd/history/store.mjs', '../ccd/history/derive.mjs', '../ccd/history/recall.mjs',
-    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs'];
+    '../ccd/history/cli.mjs', '../ccd/history/sweep.mjs', './history-gate.mjs', '../shared/roster-json.mjs', './history-limits.mjs'];
   const EXACT_NAMES: Record<string, string> = {
+    // run 3538: the limits reading's pure rules, moved out whole; quiz-limits-reading.test.ts pins that module imports nothing
+    './history-limits.mjs': '{ decideLimits, parseLimitsRow }',
     'node:child_process': '{ spawn }',
     'node:crypto': '{ randomBytes }',
     '../ccd/history/store.mjs': '{ StoreError, openReader, readBounded, userVersion }',
@@ -3132,14 +3135,14 @@ describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_
       expect(importViolations(text), label).not.toEqual([]);
     }
   });
-  it('deploy/history-replay.mjs imports exactly its fourteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
+  it('deploy/history-replay.mjs imports exactly its fifteen modules, and node:child_process, node:crypto and each ccd/history module beyond lib.mjs bring in exactly their pinned names', () => {
     expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
   });
 });
 
 // ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2:2697, erratum E18) ─────────────────────
 // The driver reads one limits row, read-only, by readLimits' rules, and keeps the provenance readLimits folds: a 0 from
-// a lapsed resetAt is a measured reset, a 0 inferred from age measured nothing and stops as stale. The parity case holds
+// a lapsed resetAt is a measured end of its window, a 0 inferred from age measured nothing; both stop as stale (run 3538). The parity case holds
 // the driver's reading to readLimits' over rolloverCases' bytes, the fixture limits.test.ts and ccd-limits.test.ts share.
 // Fixture HOMEs only; the clock is a parameter.
 describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its provenance (W2-D55 parity)', () => {
@@ -3221,7 +3224,7 @@ describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its
     expect([theirs['edge-seven']!.sevenRolledOver, theirs['edge-seven']!.seven]).toEqual([true, 0]);
   });
 
-  it('only the age path sets *Inferred: a lapsed resetAt is a measured reset, an age-inferred 0 is not', () => {
+  it('only the age path sets *Inferred: a lapsed resetAt is a fact, an age-inferred 0 is not', () => {
     const inferred: Record<string, { fiveInferred: boolean; sevenInferred: boolean }> = {
       'no-reset-fields-old.json': { fiveInferred: true, sevenInferred: false },
     };
@@ -3379,10 +3382,12 @@ describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D
     expect(stopOf(b, { maxAge: 800_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
   });
 
-  it('a resetAt-fact 0 beside a fresh seven is a measured reset: admitted', () => {
+  // Run 3538 (the coordinator's answer of 2026-11-23, one room rule): a lapsed resetAt says the window ended, and nothing has
+  // read the window now running, so the row is unknown, as shared/limitRoom.ts reads it. This row was admitted before.
+  it('a resetAt-fact 0 beside a fresh seven: the window now running is unread, limits-stale rolled-over', () => {
     const b = t6Box('ccrc-replay-t6-fact-');
     t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 40, ts: NOW_S - 600, fiveResetAt: NOW_S - 60, sevenResetAt: NOW_S + 200_000 }));
-    expect(stopOf(b)).toBeNull();
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'rolled-over' });
   });
 
   it('older than max_age_ms: limits-stale old <age_ms>; exactly max_age_ms old still passes', () => {
@@ -4009,6 +4014,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
     mkdirSync(path.join(tree, 'deploy'));
     copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
     writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    symlinkSync(path.join(repo, 'deploy', 'history-limits.mjs'), path.join(tree, 'deploy', 'history-limits.mjs'));   // run 3538: the driver imports it
     if (opts.measure !== false) writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
     mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
     for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
@@ -5153,7 +5159,11 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
     expect(projects.length, 'CONTROL: the stub wrote one project dir').toBe(1);
     expect(got).toEqual({
       turn_bound: { held: false, turns: 13, num_turns: 13, subtype: 'success' },
-      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true },
+      // quiz-pilot-checks ruling 3: a measured leftover also carries its shape, names and sizes only.
+      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true, shape: {
+        entries: [{ path: projects[0], kind: 'dir', size: expect.any(Number) }, { path: `${projects[0]}/sess-left.jsonl`, kind: 'file', size: expect.any(Number) }],
+        // quiz pilot stage B, B4: the shape also lists every regular file it found; fix round 1: and every link (none here)
+        subagents_dir: false, transcript_file: true, truncated: false, files: [`${projects[0]}/sess-left.jsonl`], links: [] } },
     });
     expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
   });
@@ -9053,6 +9063,7 @@ r7describe('W2-5a Task 7: the record subcommands', () => {
       r7fs.mkdirSync(r7path.join(tree, r7path.dirname(rel)), { recursive: true });
       r7fs.copyFileSync(r7path.join(R7_REPO, rel), r7path.join(tree, rel));
     }
+    r7fs.symlinkSync(r7path.join(R7_REPO, 'deploy', 'history-limits.mjs'), r7path.join(tree, 'deploy', 'history-limits.mjs'));   // run 3538: the driver imports it
     for (const n of r7fs.readdirSync(r7path.join(R7_REPO, 'ccd', 'history'))) {
       if (!r7fs.existsSync(r7path.join(tree, 'ccd', 'history', n))) r7fs.symlinkSync(r7path.join(R7_REPO, 'ccd', 'history', n), r7path.join(tree, 'ccd', 'history', n));
     }
@@ -19081,10 +19092,13 @@ b2t1Describe('W2-5b2 Task 1: the step 0b checks and the pilot-failed word, pure 
     b2t1Expect(want, 'CONTROL: the arm argv grants exactly Bash and Agent').toEqual(['Agent', 'Bash']);
     const ok = { sessionId: 's', model: 'm', tools: ['Bash', 'Agent'], mcpServers: [], plugins: [], skills: ['ccrc-history'], slashCommands: [] };
     const all = (state: string): B2t1R => ({ tools: { state }, mcp: { state }, plugins: { state }, skill: { state } });
-    b2t1Expect(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want)).toEqual(all('pass'));
-    b2t1Expect(D21.initChecksOf([ok, null], want), 'a run with no init event').toEqual(all('unmeasured'));
-    b2t1Expect(D21.initChecksOf([], want), 'no run').toEqual(all('unmeasured'));
-    const one = (o: B2t1R): B2t1R => D21.initChecksOf([ok, { ...ok, ...o }], want);
+    // quiz-pilot-checks ruling 2: the plugins check also records what loaded (pluginsLoadedOf, pinned in
+    // quiz-pilot-checks block at the end of this file); these rows pin the states alone.
+    const states = (c: B2t1R): B2t1R => ({ ...c, plugins: { state: c.plugins.state } });
+    b2t1Expect(states(D21.initChecksOf([ok, { ...ok, skills: [{ name: 'ccrc-history', path: '/x' }] }], want))).toEqual(all('pass'));
+    b2t1Expect(states(D21.initChecksOf([ok, null], want)), 'a run with no init event').toEqual(all('unmeasured'));
+    b2t1Expect(states(D21.initChecksOf([], want)), 'no run').toEqual(all('unmeasured'));
+    const one = (o: B2t1R): B2t1R => states(D21.initChecksOf([ok, { ...ok, ...o }], want));
     b2t1Expect(one({ tools: ['Bash', 'Agent', 'Read'] }).tools).toEqual({ state: 'fail' });
     b2t1Expect(one({ tools: ['Bash'] }).tools).toEqual({ state: 'fail' });
     b2t1Expect(one({ tools: ['Bash', 'Bash'] }).tools, 'a repeat is not the set').toEqual({ state: 'fail' });
@@ -24668,4 +24682,313 @@ w27Describe.skipIf(process.platform === 'darwin')('W2-7 Task 4: an --out whose r
     w27Expect(r.refusal, r.stderr).toBeNull();
     w27Expect(existsSync(join(c.real, 'quiz', 'repilot-result.json')), 'the result was written').toBe(true);
   }, 300_000);
+});
+
+// ── quiz-pilot-checks (Overlord W1a, run 3514): step 0b's init and persistence checks on the build's measured shapes ──
+// Step 0b's init and persistence checks on the shapes the current Claude Code build reported (Overlord W1a; the task note
+// docs/superpowers/programs/overlord/quiz-pilot-checks.md). The checks live in deploy/history-replay.mjs and are shared by
+// two callers: the history gate's own pilot (`step0b --section pilot|quiz`) and the single-arm quiz's `arms`
+// (deploy/history-quiz-single.mjs). Both build their result from initChecksOf, persistenceMeasured and step0bVerdictOf, so a
+// pin here binds both.
+//
+// The first describe block is the CHARACTERIZATION of `main` before this round's change (d7c8b5866b): it was committed green
+// against that code first, then each intended change edited exactly the rows it names, in a commit of its own.
+//
+// ISOLATION: no driver subcommand runs and nothing is spawned. The one directory read is a mkTmp fixture config dir; no
+// fixture names a real account, host or path. The plugin entries copy the field NAMES the build reports (name, path, source,
+// version) with neutral values: five build entries and one marketplace entry, the marketplace named only by its class.
+import * as qpcDrv from '../../deploy/history-replay.mjs';
+type QpcR = Record<string, any>;
+const QPC_D = qpcDrv as unknown as QpcR;
+const QPC_WANT = QPC_D.armToolsOf(QPC_D.spawnArgv({ mode: 'arm', model: 'claude-opus-5-5', settingsMode: 'restricted', home: '/home/u' })) as string[];
+/** The five entries the build reports as its own: `source` ends in `@builtin`, `path` is the word `builtin`. */
+const QPC_BUILD_PLUGINS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'].map((n) => ({ name: n, path: 'builtin', source: `${n}@builtin` }));
+/** The one entry installed from a marketplace into the account's config folder (neutral values, the field names as reported). */
+const QPC_MARKET_PLUGIN = { name: 'market-one', path: '/fixture/config/plugins/cache/market-a/market-one/1.0.0', source: 'market-one@market-a', version: '1.0.0' };
+/** One arm run's init as readStreamJson reads it, in the measured shape: the Agent tool under its wire name, six plugins. */
+const QPC_MEASURED = { sessionId: 's', model: 'm', tools: ['Task', 'Bash'], mcpServers: [], plugins: [...QPC_BUILD_PLUGINS, QPC_MARKET_PLUGIN], skills: ['some-build-skill'], slashCommands: [] };
+const QPC_CLEAN = { ...QPC_MEASURED, tools: ['Bash', 'Agent'], plugins: [], skills: ['ccrc-history'] };
+
+/** A config dir whose projects/ holds what the Agent probe left: projects/<slug of cwd>/<session id>/ with no transcript. */
+function qpcLeftover(o: { subagents?: boolean; transcript?: boolean } = {}): { configDir: string; cwd: string; sessionId: string } {
+  const configDir = join(mkTmp('ccrc-step0b-left-'), '.claude');
+  const cwd = '/tmp/ccrc-history-replay-fixture';
+  const sessionId = '00000000-0000-4000-8000-0000000000c1';
+  const run = join(configDir, 'projects', QPC_D.projectSlugOf(cwd) as string, sessionId);
+  mkdirSync(run, { recursive: true });
+  if (o.subagents === true) {
+    mkdirSync(join(run, 'subagents'));
+    if (o.transcript === true) writeFileSync(join(run, 'subagents', 'agent-a1.jsonl'), '{"content-never-read":true}\n');
+  }
+  return { configDir, cwd, sessionId };
+}
+
+describe('characterization of main (d7c8b5866b), as the rulings changed it: step 0b on the measured shapes', () => {
+  it('the arm argv grants exactly Agent and Bash, by those names', () => {
+    expect(QPC_WANT).toEqual(['Agent', 'Bash']);
+  });
+
+  it('a clean init passes every init check', () => {
+    expect(QPC_D.initChecksOf([QPC_CLEAN], QPC_WANT)).toMatchObject({ tools: { state: 'pass' }, mcp: { state: 'pass' }, plugins: { state: 'pass' }, skill: { state: 'pass' } });
+  });
+
+  // Changed by ruling 1 (was: tools fail): the build's Task reads as Agent, so the reported set is the granted one.
+  // Changed by ruling 2 (plugins still fail, now on the marketplace entry alone).
+  it('the measured init: tools Task and Bash pass against Agent and Bash; the marketplace plugin fails; the history skill missing fails', () => {
+    const c = QPC_D.initChecksOf([QPC_MEASURED], QPC_WANT);
+    expect(c.tools.state).toBe('pass');
+    expect(c.mcp.state).toBe('pass');
+    expect(c.plugins.state).toBe('fail');
+    expect(c.skill.state).toBe('fail');
+  });
+
+  it('the Agent probe\'s leftover session folder fails persistence through the project folder and the session id', () => {
+    const l = qpcLeftover();
+    const got = QPC_D.persistenceMeasured(l);
+    expect([got.left, got.transcripts, got.project_dir]).toEqual([true, [`${QPC_D.projectSlugOf(l.cwd)}/${l.sessionId}`], true]);
+    expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+  });
+
+  it('the failure detail names the failed checks and, under restricted, the fallback re-run', () => {
+    const checks: QpcR = {
+      'turn-bound': { state: 'pass' }, persistence: { state: 'fail' }, ...QPC_D.initChecksOf([QPC_MEASURED], QPC_WANT),
+      ...Object.fromEntries(['spelling-1', 'spelling-2', 'spelling-3', 'deny-chain', 'deny-subst', 'deny-rg'].map((n) => [n, { state: 'pass' }])),
+    };
+    const v = QPC_D.step0bVerdictOf(checks);
+    // Changed by ruling 1 (was: failed persistence tools plugins skill).
+    expect(v).toEqual({ passed: false, failed: ['persistence', 'plugins', 'skill'], unmeasured: [] });
+    expect(QPC_D.step0bFailureDetail('restricted', checks, v)).toBe('step0b restricted: failed persistence plugins skill; unmeasured -; '
+      + 'the skill is not listed under restricted: re-run step0b with --settings-mode fallback (Q26)');
+  });
+});
+
+describe('ruling 1: the wire-name alias, one table row, on the reported side only', () => {
+  const one = (tools: unknown[], want: string[] = QPC_WANT): string => QPC_D.initChecksOf([{ ...QPC_CLEAN, tools }], want).tools.state;
+
+  it('the table is exactly one row: Task reads as Agent', () => {
+    expect(QPC_D.WIRE_TOOL_ALIASES).toEqual({ Task: 'Agent' });
+    expect(Object.isFrozen(QPC_D.WIRE_TOOL_ALIASES)).toBe(true);
+  });
+
+  it('Task reported passes against Agent granted; CONTROL: Agent reported still passes', () => {
+    expect(one(['Task', 'Bash'])).toBe('pass');
+    expect(one(['Bash', 'Agent'])).toBe('pass');
+  });
+
+  it('the comparison stays exact: a name not in the table is never aliased, a repeat is never the set', () => {
+    expect(one(['Task', 'Agent', 'Bash']), 'Task beside Agent is two Agents').toBe('fail');
+    expect(one(['Tasks', 'Bash']), 'a near name').toBe('fail');
+    expect(one(['task', 'Bash']), 'a case variant').toBe('fail');
+    expect(one(['Task', 'Bash', 'Read']), 'an extra tool').toBe('fail');
+    expect(one(['Task']), 'a missing tool').toBe('fail');
+  });
+
+  it('the alias is never applied to the granted side: a grant naming Task wants Task, and a reported Agent is not it', () => {
+    expect(one(['Agent', 'Bash'], ['Bash', 'Task'])).toBe('fail');
+    expect(one(['Task', 'Bash'], ['Bash', 'Task']), 'the reported Task reads as Agent, which the grant does not name').toBe('fail');
+    expect(QPC_D.armToolsOf(['--tools', 'Task,Bash']), 'armToolsOf reads the argv as written').toEqual(['Bash', 'Task']);
+  });
+
+  it('every reported entry must be a string: anything else fails, the alias never makes it pass (fix round 1, A1)', () => {
+    expect(one(['Task', ['Bash']]), 'a nested list beside the alias').toBe('fail');
+    expect(one([['Agent'], ['Bash']]), 'nested lists that join to the grant (passed on main)').toBe('fail');
+    expect(one(['Agent', 7]), 'a number').toBe('fail');
+    expect(one([{ name: 'Agent' }, 'Bash']), 'an object').toBe('fail');
+    expect(one(['Task', null]), 'null').toBe('fail');
+    expect(one(['Task', 'Bash']), 'CONTROL: strings pass').toBe('pass');
+  });
+
+  it('grantedToolNamesOf keeps every other value as it is, in order', () => {
+    expect(QPC_D.grantedToolNamesOf(['Bash', 'Task', 7, null, 'Agent'])).toEqual(['Bash', 'Agent', 7, null, 'Agent']);
+  });
+});
+
+describe('ruling 2: a plugins entry is the build\'s own only when both fields say so', () => {
+  const state = (plugins: unknown[]): string => QPC_D.initChecksOf([{ ...QPC_CLEAN, plugins }], QPC_WANT).plugins.state;
+
+  it('the five build entries pass; with the marketplace entry the check fails', () => {
+    expect(state(QPC_BUILD_PLUGINS)).toBe('pass');
+    expect(state([...QPC_BUILD_PLUGINS, QPC_MARKET_PLUGIN])).toBe('fail');
+    expect(state([]), 'CONTROL: none loaded passes').toBe('pass');
+  });
+
+  it('one field alone never admits an entry; a missing or non-string field fails as today', () => {
+    const rows: Array<[string, unknown]> = [
+      ['source @builtin, path elsewhere', { name: 'x', source: 'x@builtin', path: '/somewhere/x' }],
+      ['path builtin, source a marketplace', { name: 'x', source: 'x@market-a', path: 'builtin' }],
+      ['no path', { name: 'x', source: 'x@builtin' }],
+      ['no source', { name: 'x', path: 'builtin' }],
+      ['source not a string', { name: 'x', source: ['x@builtin'], path: 'builtin' }],
+      ['path not the word', { name: 'x', source: 'x@builtin', path: 'Builtin' }],
+      ['@builtin not at the end', { name: 'x', source: 'x@builtin-extra', path: 'builtin' }],
+      ['a second separator before the marker (fix round 1, A4)', { name: 'x', source: 'x@market-a@builtin', path: 'builtin' }],
+      ['no name before the marker', { name: 'x', source: '@builtin', path: 'builtin' }],
+      ['a bare string', 'x@builtin'],
+      ['null', null],
+    ];
+    for (const [why, entry] of rows) {
+      expect(QPC_D.pluginClassOf(entry), why).toBe('other');
+      expect(state([...QPC_BUILD_PLUGINS, entry]), why).toBe('fail');
+    }
+    expect(QPC_D.pluginClassOf(QPC_BUILD_PLUGINS[0]), 'CONTROL').toBe('build');
+  });
+
+  it('the result records each run\'s counts by class and each refused entry\'s name and source', () => {
+    const c = QPC_D.initChecksOf([QPC_MEASURED, null, { ...QPC_CLEAN, plugins: null }, QPC_CLEAN, { ...QPC_CLEAN, plugins: [{ path: 'builtin' }] }], QPC_WANT);
+    expect(c.plugins).toEqual({
+      state: 'fail',
+      loaded: [
+        { build: 5, other: 1, refused: [{ name: 'market-one', source: 'market-one@market-a' }] },
+        null,
+        null,
+        { build: 0, other: 0, refused: [] },
+        { build: 0, other: 1, refused: [{ name: null, source: null }] },
+      ],
+    });
+  });
+});
+
+describe('ruling 3: the leftover\'s shape is recorded, the verdict is unchanged', () => {
+  it('a bare session folder: its two levels named with sizes, no subagents folder, no transcript; still a fail', () => {
+    const l = qpcLeftover();
+    const got = QPC_D.persistenceMeasured(l);
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+    expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir']]);
+    expect(got.shape.entries.every((e: QpcR) => Number.isInteger(e.size))).toBe(true);
+    expect([got.shape.subagents_dir, got.shape.transcript_file, got.shape.truncated, got.shape.unmeasured]).toEqual([false, false, false, undefined]);
+  });
+
+  it('a subagents folder with a transcript three levels down: the folder named and, since stage B (B4), the transcript too; no content read', () => {
+    const l = qpcLeftover({ subagents: true, transcript: true });
+    const got = QPC_D.persistenceMeasured(l);
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    // Changed by stage B, B4 (was: the transcript three levels down found but not named): the shape names one level deeper.
+    expect(got.shape.entries.map((e: QpcR) => e.path)).toEqual([slug, `${slug}/${l.sessionId}`, `${slug}/${l.sessionId}/subagents`, `${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
+    expect(got.shape.files).toEqual([`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
+    expect([got.shape.subagents_dir, got.shape.transcript_file]).toEqual([true, true]);
+    expect(JSON.stringify(got.shape)).not.toContain('content-never-read');
+    expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+  });
+
+  it('a transcript named by the session id under another project folder is a root of its own, with its size', () => {
+    const configDir = join(mkTmp('ccrc-step0b-left2-'), '.claude');
+    mkdirSync(join(configDir, 'projects', '-other'), { recursive: true });
+    writeFileSync(join(configDir, 'projects', '-other', 'sess-b.jsonl'), 'abc');
+    const got = QPC_D.persistenceMeasured({ configDir, sessionId: 'sess-b', cwd: '/tmp/run-b' });
+    expect(got.shape.entries).toEqual([{ path: '-other/sess-b.jsonl', kind: 'file', size: 3 }]);
+    expect(got.shape.transcript_file).toBe(true);
+  });
+
+  it('a clean run carries no shape; an unmeasured run carries none', () => {
+    const configDir = join(mkTmp('ccrc-step0b-clean-'), '.claude');
+    mkdirSync(join(configDir, 'projects'), { recursive: true });
+    expect(QPC_D.persistenceMeasured({ configDir, sessionId: 's', cwd: '/tmp/run-a' })).toEqual({ left: false, transcripts: [], project_dir: false });
+    expect(QPC_D.persistenceMeasured({ configDir, sessionId: null, cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], project_dir: null, unmeasured: 'no-session-id' });
+  });
+
+  it.skipIf((process.getuid?.() ?? 1) === 0)('a read that fails inside the leftover is recorded unmeasured beside what was read, never a throw (fix round 1, A3)', () => {
+    const l = qpcLeftover({ subagents: true });
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const sub = join(l.configDir, 'projects', slug, l.sessionId, 'subagents');
+    chmodSync(sub, 0o000);
+    try {
+      const got = QPC_D.persistenceMeasured(l);
+      expect(got.left).toBe(true);
+      expect(got.shape.unmeasured).toBe('EACCES');
+      expect(got.shape.entries.map((e: QpcR) => e.path)).toEqual([slug, `${slug}/${l.sessionId}`, `${slug}/${l.sessionId}/subagents`]);
+      expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+  });
+
+  it('a link in the leftover is recorded as a link and never followed (fix round 1, A3)', () => {
+    const l = qpcLeftover();
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const elsewhere = mkTmp('ccrc-step0b-link-target-');
+    writeFileSync(join(elsewhere, 'agent-z.jsonl'), '');
+    mkdirSync(join(elsewhere, 'subagents'));
+    symlinkSync(elsewhere, join(l.configDir, 'projects', slug, l.sessionId, 'subagents'));
+    const got = QPC_D.persistenceMeasured(l);
+    expect(got.shape.entries.find((e: QpcR) => e.path === `${slug}/${l.sessionId}/subagents`)).toMatchObject({ kind: 'link' });
+    expect([got.shape.subagents_dir, got.shape.transcript_file], 'nothing behind the link is read').toEqual([false, false]);
+  });
+
+  it('the walk stops at its entry bound and says so', () => {
+    const configDir = join(mkTmp('ccrc-step0b-many-'), '.claude');
+    const dir = join(configDir, 'projects', '-many');
+    mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < QPC_D.LEFTOVER_SHAPE_MAX_ENTRIES + 5; i += 1) writeFileSync(join(dir, `f${i}`), '');
+    const shape = QPC_D.leftoverShapeOf(join(configDir, 'projects'), ['-many']);
+    expect(shape.truncated).toBe(true);
+    expect(shape.entries.length).toBe(QPC_D.LEFTOVER_SHAPE_MAX_ENTRIES);
+  });
+});
+
+// ── quiz pilot stage B (Overlord W1a, run 3561): characterization of main (e29f704d47) before any stage-B change ──
+// The task note is docs/superpowers/programs/overlord/quiz-pilot-stage-b.md. These pins were committed green against main's
+// code first; each later stage-B commit edits only the rows its ruling moves, and says which.
+// ISOLATION: nothing is spawned and no driver subcommand runs; the one directory read is a mkTmp fixture config dir.
+describe('stage B characterization of main (e29f704d47): the shared step 0b pieces before the change', () => {
+  const M = 'claude-opus-5-5';
+  const HOME = '/home/u';
+  const tail = ['-p', '--no-session-persistence', '--strict-mcp-config', '--output-format', 'stream-json', '--verbose', '--max-turns', '12', '--model', M];
+  const head: Record<string, string[]> = {
+    restricted: ['--restricted'],
+    fallback: ['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}'],
+  };
+  const tools: Record<string, string[]> = {
+    arm: ['--tools', 'Bash,Agent', '--allowedTools', ...(QPC_D.allowedToolSpellings(HOME) as string[])],
+    box: ['--tools', 'Bash,Agent', '--allowedTools', ...(QPC_D.allowedToolSpellings(HOME) as string[])],
+    writer: ['--tools', ''],
+    judge: ['--tools', ''],
+  };
+
+  it('spawnArgv, every mode under every settings mode, exactly', () => {
+    for (const mode of QPC_D.SPAWN_MODES as string[]) {
+      for (const sm of QPC_D.SETTINGS_MODES as string[]) {
+        expect(QPC_D.spawnArgv({ mode, model: M, settingsMode: sm, home: HOME }), `${mode} ${sm}`).toEqual([...head[sm]!, ...tail, ...tools[mode]!]);
+      }
+    }
+  });
+
+  it('persistenceCheckOf: clean passes, anything left fails, an unmeasured run leaves it unmeasured, a fail beats an unmeasured', () => {
+    const clean = { left: false, transcripts: [], project_dir: false };
+    const left = { left: true, transcripts: ['-p/s'], project_dir: true, shape: { entries: [], subagents_dir: false, transcript_file: false, truncated: false } };
+    const unm = { left: true, transcripts: [], project_dir: null, unmeasured: 'no-session-id' };
+    expect(QPC_D.persistenceCheckOf([clean, clean])).toEqual({ state: 'pass' });
+    expect(QPC_D.persistenceCheckOf([clean, left])).toEqual({ state: 'fail' });
+    expect(QPC_D.persistenceCheckOf([clean, unm])).toEqual({ state: 'unmeasured' });
+    expect(QPC_D.persistenceCheckOf([unm, left])).toEqual({ state: 'fail' });
+    expect(QPC_D.persistenceCheckOf([])).toEqual({ state: 'unmeasured' });
+  });
+
+  it('the Agent probe\'s leftover with a subagent transcript: the shape names three levels below the project folder (B4; was two) and lists its files', () => {
+    const l = qpcLeftover({ subagents: true, transcript: true });
+    const got = QPC_D.persistenceMeasured(l);
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    // Changed by stage B, B4 (was: depth 2, no files key, the subagent file not named): one level deeper, and every file listed.
+    expect(QPC_D.LEFTOVER_SHAPE_NAMED_DEPTH).toBe(3);
+    // Changed by stage B fix round 1 (was: no links key): every link the walk finds is listed too.
+    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'files', 'links', 'subagents_dir', 'transcript_file', 'truncated']);
+    expect(got.shape.links).toEqual([]);
+    expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir'], [`${slug}/${l.sessionId}/subagents`, 'dir'],
+      [`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`, 'file']]);
+    // The gate's caller proves nothing, so its rows fail as before: no proof, no pass.
+    expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+  });
+
+  it('stage B fix round 1: the shape lists every link the walk finds, at the root and past the named depth, and never follows one', () => {
+    const l = qpcLeftover({ subagents: true, transcript: true });
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const projects = join(l.configDir, 'projects');
+    const deep = join(projects, slug, l.sessionId, 'subagents', 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+    symlinkSync('/nonexistent-target', join(deep, 'far.jsonl'));   // depth 6: past the named depth, still listed
+    symlinkSync(join(projects, slug), join(projects, `${slug}-alias`));   // a root of its own, at depth 0
+    const shape = QPC_D.leftoverShapeOf(projects, [slug, `${slug}-alias`]) as QpcR;
+    expect(shape.links).toEqual([`${slug}/${l.sessionId}/subagents/a/b/far.jsonl`, `${slug}-alias`]);
+    expect(shape.files, 'a link is never a regular file, and the alias is never entered').toEqual([`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
+  });
 });

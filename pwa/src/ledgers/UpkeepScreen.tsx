@@ -17,7 +17,7 @@ type UpkeepRead =
   | { readonly kind: 'failed'; readonly text: string }
   | { readonly kind: 'ok'; readonly epic: EpicView | null; readonly notClosed: readonly UpkeepClose[] };
 
-const SETTINGS_PATH: string = ROUTES.find((r) => r.id === 'settings-security')?.path ?? '/settings';
+const SETTINGS_PATH: string = ROUTES.find((r) => r.id === 'settings-integrations')?.path ?? '/settings';
 
 function useUpkeepRead(project: string): UpkeepRead {
   const [read, setRead] = useState<{ project: string; read: UpkeepRead }>({ project, read: { kind: 'reading' } });

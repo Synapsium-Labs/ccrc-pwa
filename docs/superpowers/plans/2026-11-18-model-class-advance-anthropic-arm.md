@@ -1215,6 +1215,18 @@ built from the lanes that hold a class registry, so it never sees an Anthropic l
 A2.5's. A test reds when an Anthropic move never reaches the push. Cost if wrong: the push decision and the `lanes`
 answer carry one more lane kind.
 
+Corrected 2026-11-23 (wave 10, from #3221's D-8927). The paragraph above, and Task A2.4's line per `moved` entry, describe
+the first build: one push per lane. What shipped is one push per class move: the refresh sends one line per (class, from,
+to) over every Anthropic lane that made it, after the loop has run them all, naming the lanes in roster order
+(`lane-a, lane-b: <class> <from> → <to>`). Each lane's advance record stays its own. An older server box reads a line that
+names several lanes as no model line, so that move gets its banner and one log line but no phone push until the server
+box is updated. Two limits stand, recorded rather than built. The server's over-cap log detail still reads "the line is
+longer than the push cap of 300 characters; a failure line with long model ids is refused this way by design, and the
+banner carries it", which names only a failure line, although a moved line naming many lanes can pass the cap too and is
+refused the phone push the same way; the line is not split. And a grouped push skipped because the box has no strong
+deadline substrate writes no log line (`_models_aliases_push` returns before it would), where one skipped for the
+deadline logs it.
+
 ### D-8818 — the Anthropic arm is its own module, `deploy/models-anthropic.mjs`
 
 Where: wave A2 (Tasks A2.3 to A2.5; the plan's file lists name `deploy/models-op.mjs`). Ruled by the programme's
@@ -1505,3 +1517,69 @@ The orphan is chosen against the alias's current id. So it is not carried when t
 the held id and its own saved level applies. It is not carried when the alias's id is unlaunchable (`-`) either. A
 record level and `SPAWN_EFFORT` still win as before. Cost if wrong: a held class's session runs at the held id's own
 saved level, never the orphan's.
+
+The programme coordinator issued the following Wave A4 entries on 2026-11-22.
+
+### D-8921 — A4 labels do not narrow the effort picker
+
+Where: Task A4.2 (`no-effort-picker-narrowing`). The wire still carries effort levels and `takesNoEffort`, but the
+pickers keep their existing effort rules, Auto row and Ultracode placement. The settings audit ruled this a
+label and family-word readback change only, so the new wire facts do not change the choices offered.
+
+### D-8922 — Anthropic class cards do not offer Hold or Release
+
+Where: Task A4.3, `pwa/src/accounts/modelsSheetWords.ts#classActs` (`no-hold-release-controls`). By the settings
+ruling, the console displays any existing hold but does not offer either control on an Anthropic lane. Codex
+controls are unchanged. D-8930 separately rules on Revert.
+
+### D-8923 — the existing Models sheet owns the cards
+
+Where: Task A4.3 (`models-sheet-file`). The plan names `AccountSheet.tsx`, which is the sheet shell. The class
+cards and words belong in `ModelsSheet.tsx` and `modelsSheetWords.ts`; `AccountsScreen.tsx` offers the existing
+Models act on Anthropic lanes as well as Codex lanes. No second sheet is needed.
+
+### D-8924 — family-word readback is for roster Anthropic lanes only
+
+Where: Task A4.2, `pwa/src/lib/models.ts#modelOptions` (`registry-lane-readback`). The roster's Anthropic telemetry,
+not the picker list name, selects family-word readback. External and OpenRouter registry lanes can use that
+same list, so gating on the list would change their existing ID readback.
+
+### D-8925 — the PWA keeps the optional held model ID
+
+Where: Tasks A4.1 and A4.3, `pwa/src/lib/models.ts#asHold` (`pwa-hold-model-reader`). The reader retains an
+optional `hold.model` instead of discarding it. The card needs the held ID to distinguish it from the alias's
+current ID; a response without it still reads as before.
+
+### D-8926 — the Models sheet uses a browser fixture for layout coverage
+
+Where: Task A4.3 (`no-a11y-file`). No `pwa/test/a11y-*` file exists as named in the task. The fixture browser test
+opens the real sheet at phone, laptop and wide widths and checks horizontal containment. Component tests
+pin the controls and the held-card copy. The browser test does not prove vertical reach.
+
+### D-8927 — the moved push grammar admits a list of lanes
+
+Where: Task A4.1 and review 2886 F15 (`push-line-multi-lane`). `shared/models.mjs` and `shared/models.d.mts` are
+outside the wave's file list but own the push grammar. A move groups by class, old ID and new ID, naming all
+its affected lanes in one notification while history stays per lane. The push decision validates every lane
+against the roster; the parser keeps the single-lane form unchanged and still admits only one lane on a failure
+line.
+
+### D-8928 — Anthropic label projection lives in the arm module
+
+Where: Task A4.1 (`labels-in-arm-module`). `describe` calls `deploy/models-anthropic.mjs#anthropicLabels` instead
+of projecting rows inline. The Anthropic arm already owns aliases, and another sizeable block in the op would
+pass its 3,000-line size limit.
+
+### D-8929 — a held class does not inherit an alias's build requirement
+
+Where: Task A4.1, `deploy/models-anthropic.mjs#anthropicLabels` (`held-drops-unlaunchable`). A class under hold
+uses the held ID and only a catalogue row with that same ID. It does not inherit `unlaunchable` from the alias:
+that describes the alias's build need, not whether the ID the hold selects can launch.
+
+### D-8930 — Anthropic Revert waits for a hold that ends on newer evidence
+
+Where: Task A4.3, `pwa/src/accounts/modelsSheetWords.ts#classActs` (`revert-withheld-anthropic`). The coordinator
+ruled after review 3378 that the Anthropic sheet withholds Revert too. Revert would write a hold that the refresh
+skips and the sheet cannot release. Existing holds remain visible, as does the previous-supervisor warning.
+The `revert-holds-until-newer` follow-up brings Revert to both lane kinds with a hold that ends when a newer
+model appears. Codex controls and the shell verbs are unchanged.

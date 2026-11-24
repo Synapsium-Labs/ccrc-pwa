@@ -306,7 +306,12 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     const r = await rig({ linear: 'shared' });
     s.recordLinkingReading('project-a', MEASURED);
     expect(s.recordTeamSuggestion('project-a', { by: 'lane-c', key: 'AAA', workspaceId: null, workspaceName: null, teamName: 'Team A', why: 'the branches say so', at: 1 })).toBe('written');
-    refused(await confirm(r, { team: 'AAA', workspace: null }), 'team-ambiguous');
+    const ambiguous = await confirm(r, { team: 'AAA', workspace: null });
+    refused(ambiguous, 'team-ambiguous');
+    // Review 3482 F1, F6: the detail lists the holders by id and URL key, and never tells the caller to resend one of them as
+    // `workspace`, which this door would answer `team-unknown` (the candidate stored with none is named by null only).
+    expect(ambiguous.json().detail).toBe(
+      `more than one connected Linear workspace holds the key, and the candidate names none of them: ${WS_A} (ws-a), ${WS_B} (ws-b)`);
     unlinked();
     // The same key named with its workspace is a pair the store holds: it links.
     s.recordTeamCandidates('project-a', [ALPHA]);

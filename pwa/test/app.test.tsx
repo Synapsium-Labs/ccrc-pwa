@@ -427,9 +427,9 @@ describe('ROUTES and the ladder, both ways', () => {
     '/programmes/prog-a/epics/%zz', '/projects/project-a/upkeep', '/projects/project-a/upkeep/', '/projects/project-a', '/projects/a/b/upkeep',
     // A slug the owner refuses and a malformed escape are no route (carry C, D-7951; review 1388 F1 and F3): the fleet.
     '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz',
-    // Settings' five pages and the catch-all (D-5504).
+    // Settings' six pages and the catch-all (D-5504).
     '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
-    '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
+    '/settings/security', '/settings/integrations', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
     // The reader lab (the reader lab plan, Task 10).
     '/settings/reader-lab',
     // One run's page (the runs rebuild, D-8072): a canonical number, its slash form, and the addresses that are no run page.

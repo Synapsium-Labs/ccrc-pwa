@@ -1,4 +1,4 @@
-// Settings' index (settings spec §3.2, D-5503): five rows, one per section, then two diagnostic doors (Reader lab,
+// Settings' index (settings spec §3.2, D-5503): six rows, one per section, then two diagnostic doors (Reader lab,
 // Measure highlighting). Every row has its icon, its name and its purpose line (the phone index) and is a link to
 // `/settings/<id>`; only a section has a measured status line (`sectionStatus.ts`), and a diagnostic has none.
 //
@@ -28,6 +28,7 @@ export const SECTION_ICON: Readonly<Record<SettingsSectionId, IconName>> = {
   notifications: 'bell',
   automation: 'bot',
   security: 'shield',
+  integrations: 'network',
 };
 
 /** A status line's ink, from the measured token pairs on the page's ground. */
@@ -57,7 +58,7 @@ type SettingsIndexRowProps = {
 );
 
 /** One row of the index: a section (with its measured status) or a diagnostic page under Settings (no status, no
- *  `data-section`, so the five ordinary sections stay exactly countable). */
+ *  `data-section`, so the six ordinary sections stay exactly countable). */
 function SettingsIndexRow(p: SettingsIndexRowProps): ReactNode {
   const door = commandDoor(p.commandId);
   return (

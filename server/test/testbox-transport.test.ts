@@ -7,7 +7,8 @@
 //
 // Fixtures only: every repository is a local fixture under a fixture HOME (`project-a`), the mirror is a local bare
 // clone set up as spec §2.1 says, pushes go to its path (or, for the forced command, through a fixed GIT_SSH driver
-// that runs the forced command in place of sshd, host `testbox.invalid`). Nothing here contacts a box or a remote.
+// that runs the forced command through the real git-shell as sshd would, host `testbox.invalid`). Nothing here contacts
+// a box or a remote.
 //
 // The snapshot rows run on Linux and macOS (the snapshot runs on the fleet host); the hook, forced command and
 // checkout rows run on Linux only (they run on the box).
@@ -16,10 +17,11 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { gitShell, gitShellRequired, pushForced } from './testboxBoxFixture.js';
 import { TESTBOX_FALLBACK, TESTBOX_REF_MAP, parseRepoRow } from '../../shared/testbox.js';
 
 removeTmpFixturesEachTest();
@@ -704,12 +706,38 @@ describe('the push reads the pin (D-8166, M17)', () => {
 });
 
 /** A fixed GIT_SSH driver standing in for sshd and authorized_keys' forced command: git calls it as
- *  `<driver> <host> <command>` (GIT_SSH_VARIANT=simple); it runs the forced command with SSH_ORIGINAL_COMMAND set to
- *  the command git asked for. Paths reach it through the environment, never through a built command line. */
+ *  `<driver> <host> <command>` (GIT_SSH_VARIANT=simple); as sshd does, it sets SSH_ORIGINAL_COMMAND to the command git
+ *  asked for, HOME to the push user's home and runs the forced command through the push user's login shell, the real
+ *  git-shell: `git-shell -c "<command=>"` (D-8956), the command the installer writes (pushForced, which the box package
+ *  suite pins against the installer's own authorized_keys line). Paths reach it through the environment, never through a built
+ *  command line. */
 // TB3_FOREIGN=1: the forced command runs as a user who does not own the mirror (spec §2.1's push user).
 const SSH_DRIVER = '#!/bin/sh\n[ "$1" = testbox.invalid ] || exit 255\nSSH_ORIGINAL_COMMAND=$2\nexport SSH_ORIGINAL_COMMAND\n'
   + 'if [ -n "$TB3_FOREIGN" ]; then GIT_TEST_ASSUME_DIFFERENT_OWNER=1; export GIT_TEST_ASSUME_DIFFERENT_OWNER; fi\n'
-  + 'exec bash "$TB3_PUSH_COMMAND" "$TB3_REPOS"\n';
+  + 'HOME=$TB3_PUSH_HOME\nexport HOME\nexec "$TB3_GIT_SHELL" -c "$TB3_FORCED"\n';
+
+/** The real git-shell (git's exec path); null, with a notice, where this host has none. */
+const GIT_SHELL = gitShell('testbox-transport');
+
+it.runIf(gitShellRequired())('git-shell stands beside git on CI\'s Linux, so the pushes through it are not skipped (D-8956)', () => {
+  expect(GIT_SHELL).not.toBeNull();
+});
+
+/** The push user's home as phase 5 makes it: git-shell-commands/push-command, a link to the forced command. */
+function pushHome(w: World): string {
+  const home = path.join(w.root, 'push-home');
+  mkdirSync(path.join(home, 'git-shell-commands'), { recursive: true });
+  if (!existsSync(path.join(home, 'git-shell-commands', 'push-command'))) symlinkSync(PUSH_COMMAND, path.join(home, 'git-shell-commands', 'push-command'));
+  return home;
+}
+
+/** The driver's environment for a push to the fixture mirror over the forced command. */
+function sshEnv(w: World, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const driver = path.join(w.root, 'ssh-driver');
+  writeFileSync(driver, SSH_DRIVER);
+  chmodSync(driver, 0o755);
+  return { GIT_SSH: driver, GIT_SSH_VARIANT: 'simple', TB3_GIT_SHELL: GIT_SHELL!, TB3_PUSH_HOME: pushHome(w), TB3_FORCED: pushForced(w.table), ...extra };
+}
 
 describe.skipIf(!LINUX)('the forced command (spec §2.1 "The push user")', () => {
   const forced = (w: World, cmd: string | undefined, marker: string): Ran => {
@@ -724,25 +752,19 @@ describe.skipIf(!LINUX)('the forced command (spec §2.1 "The push user")', () =>
     expect(r.ok && r.value.mirrorPath).toBe(w.mirror);
   }, T);
 
-  it('a snapshot pushed over the forced command lands its refs (git-receive-pack \'<listed mirror>\')', () => {
+  it.skipIf(!GIT_SHELL)('a snapshot pushed over the forced command, through git-shell as sshd runs it, lands its refs (git-receive-pack \'<listed mirror>\', D-8956)', () => {
     const w = world();
     dirtySession(w);
-    const driver = path.join(w.root, 'ssh-driver');
-    writeFileSync(driver, SSH_DRIVER);
-    chmodSync(driver, 0o755);
-    const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: { GIT_SSH: driver, GIT_SSH_VARIANT: 'simple', TB3_PUSH_COMMAND: PUSH_COMMAND, TB3_REPOS: w.table } }));
+    const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: sshEnv(w) }));
     expect(scratchRefs(w, w.mirror).split('\n').filter(Boolean)).toHaveLength(3);
     expect(f.refs).toEqual(['head', 'base', 'snap']);
   }, T);
 
-  it('a mirror the push user does not own (the service owns it): the push still lands', () => {
+  it.skipIf(!GIT_SHELL)('a mirror the push user does not own (the service owns it): the push still lands', () => {
     const w = world();
     dirtySession(w);
     expectForeign(w, w.mirror);
-    const driver = path.join(w.root, 'ssh-driver');
-    writeFileSync(driver, SSH_DRIVER);
-    chmodSync(driver, 0o755);
-    const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: { GIT_SSH: driver, GIT_SSH_VARIANT: 'simple', TB3_PUSH_COMMAND: PUSH_COMMAND, TB3_REPOS: w.table, TB3_FOREIGN: '1' } }));
+    const f = frameOf(snap(w, { base: 'ssh://testbox.invalid', env: sshEnv(w, { TB3_FOREIGN: '1' }) }));
     expect(scratchRefs(w, w.mirror).split('\n').filter(Boolean)).toHaveLength(3);
     expect(f.refs).toEqual(['head', 'base', 'snap']);
   }, T);

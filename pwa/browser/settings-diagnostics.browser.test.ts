@@ -2,7 +2,7 @@
 // build, at 390 and 1280 in both skins (the library 1.1 take-up plan, Task 9 Step 4; fix round 1, A6).
 // `test/settings-frame.test.tsx` holds the rows' order, hrefs and clicks in jsdom; this file holds what only an engine can
 // say: in either skin each door draws the shared row's skeleton (its icon, its name, its purpose line, its chevron), is at
-// least one tap tall and whole inside the index, carries no status line and no current mark, follows the five section
+// least one tap tall and whole inside the index, carries no status line and no current mark, follows the six section
 // rows, and nothing on the page scrolls sideways.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. Run: `( cd pwa && CCRC_CHROME=<a Chrome or
@@ -100,8 +100,8 @@ describe("Settings' index: the two diagnostic doors in both skins (Task 9 Step 4
           };
         });
         console.log(`T9-FIGURES settings-diagnostics ${named(view)} ${JSON.stringify(m.doors.map((d) => ({ id: d.id, h: d.box.height, icons: d.icons })))}`);
-        expect(m.order.slice(-2), 'the two doors follow the five section rows').toEqual(DIAGNOSTICS.map((d) => `diagnostic:${d}`));
-        expect(m.order.filter((o) => !o.startsWith('diagnostic:')), 'five section rows before them').toHaveLength(5);
+        expect(m.order.slice(-2), 'the two doors follow the six section rows').toEqual(DIAGNOSTICS.map((d) => `diagnostic:${d}`));
+        expect(m.order.filter((o) => !o.startsWith('diagnostic:')), 'six section rows before them').toHaveLength(6);
         expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
         for (const d of m.doors) {
           const id = d.id as typeof DIAGNOSTICS[number];

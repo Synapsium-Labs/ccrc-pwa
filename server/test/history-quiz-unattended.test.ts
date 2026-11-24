@@ -8,13 +8,14 @@
 // `ccrc` or anything against the live HOME or the live history store, and no fixture names a real account, host or path.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as unMod from '../../deploy/history-quiz-unattended.mjs';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
+import * as qpMod from '../../deploy/history-quiz-pilot.mjs';
 import { quizWeek } from '../src/continuity/quiz.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -22,6 +23,7 @@ type R = Record<string, any>;
 const U = unMod as unknown as R;
 const QS = qsMod as unknown as R;
 const D = drvMod as unknown as R;
+const QP = qpMod as unknown as R;
 
 removeTmpFixturesEachTest();
 
@@ -68,6 +70,14 @@ for (const k of keys) {
 }
 fs.writeFileSync(path.join(home, 'counters.json'), JSON.stringify(counters));
 step = step ?? {};
+// a driver still at work when a stop arrives (fix round 2, F2): it says it started, survives the runner's SIGTERM as the real
+// one's admission does (its stop handler changes no exit code), and then answers the step as planned
+if (step.hold === true) {
+  process.on('SIGTERM', () => { fs.writeFileSync(path.join(home, 'term.seen'), ''); });
+  fs.writeFileSync(path.join(home, 'held'), '');
+  const until = Date.now() + 20000;
+  while (!fs.existsSync(path.join(home, 'term.seen')) && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+}
 const made = () => {
   if (out === null) return;
   fs.mkdirSync(out, { recursive: true, mode: 0o700 });
@@ -75,6 +85,21 @@ const made = () => {
   if (!fs.existsSync(m)) fs.writeFileSync(m, '');
 };
 if (step.mkdir === true) made();
+// the week's account record (run 3538), as the real arms writes it before its first spawn, through the real composer; a
+// step that stands for a refusal before the real one's --out exists says noRecord
+if (sub === 'arms' && flag('account') !== null && step.noRecord !== true) {
+  made();
+  const rec = path.join(out, 'quiz', 'week-account.json');
+  if (!fs.existsSync(rec)) {
+    const qs = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../../deploy/history-quiz-single.mjs', import.meta.url))).href)});
+    fs.mkdirSync(path.dirname(rec), { recursive: true });
+    fs.writeFileSync(rec, qs.weekAccountText(flag('setup-sha256'), flag('account')));
+  }
+}
+// files the step writes as the real driver would (its release pin), then a stand-in for a hard kill after the driver's write:
+// the quiz root turns read-only, so the runner's save after the act fails
+for (const [f, text] of step.writes ?? []) fs.writeFileSync(f, text);
+if (step.chmodRoot === true) fs.chmodSync(path.join(home, '.ccrc', 'quiz'), 0o500);
 if (step.exit !== undefined && step.exit !== 0) { process.stderr.write(step.stderr ?? ''); process.exitCode = step.exit; }
 else {
   made();
@@ -122,6 +147,25 @@ if (step.exit !== undefined && step.exit !== 0) process.exitCode = step.exit;
 process.stdout.write(step.stdout ?? '{"ok":true}\\n');
 `;
 const acct = (id: string, extra: R = {}): R => ({ id, exec: { kind: 'upstream' }, telemetry: 'anthropic', ...extra });
+/** Stage B, B0: the gate's code shas every fixture key carries, unless a case says otherwise. */
+const FIX_CODE: Record<string, string> = { 'deploy/history-gate.mjs': 'a'.repeat(64), 'deploy/history-replay.mjs': 'b'.repeat(64) };
+/** Stage B fix round 1, F1: the quiz's pilot files' shas and the skill's sha every fixture key carries, unless a case says otherwise. */
+const FIX_PILOT: Record<string, string> = { 'deploy/history-quiz-single.mjs': 'd'.repeat(64), 'ccd/history/sweep.mjs': 'e'.repeat(64) };
+const FIX_SKILL = '9'.repeat(64);
+/** A pilot key: the build's --version line, the gate's code shas, the pilot files' shas and the skill's sha. */
+const KEY = (build: string, code: Record<string, string> = FIX_CODE, pilot: Record<string, string> = FIX_PILOT, skill: string = FIX_SKILL): R =>
+  ({ claude_code: build, code_shas: code, pilot_shas: pilot, skill_sha256: skill });
+/** The box's stand-in for the runner's key measure (the real one spawns the week's launcher): the build in `fixture-build`, the
+ *  code shas in `fixture-code`, the pilot files' in `fixture-pilot` (both JSON) and the skill's sha in `fixture-skill`, each when
+ *  present; with no `fixture-build`, the key is unmeasured. */
+const fixtureKey = (home: string) => async (): Promise<R> => {
+  if (!existsSync(join(home, 'fixture-build'))) return { state: 'unmeasured', why: 'fixture: no build' };
+  const opt = (f: string): string | null => (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8') : null);
+  const code = opt('fixture-code');
+  const pilot = opt('fixture-pilot');
+  return { state: 'value', key: KEY(opt('fixture-build')!, code === null ? FIX_CODE : JSON.parse(code) as Record<string, string>,
+    pilot === null ? FIX_PILOT : JSON.parse(pilot) as Record<string, string>, opt('fixture-skill') ?? FIX_SKILL) };
+};
 
 interface Box {
   home: string; root: string; history: string; driver: string; verb: string; client: string;
@@ -178,7 +222,7 @@ function mkBox(o: { accounts?: R[] | null; history?: boolean; limits?: Record<st
       }
       const env: R = { HOME: home, LANG: 'fixture.UTF-8', PATH: `${process.execPath.replace(/\/[^/]*$/, '')}:${process.env.PATH ?? ''}`, ...t.env };
       for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
-      const code = await U.main(env, { driver, verb, client, now: () => t.now ?? NOW, err: (s: string) => { err += s; }, ...t.deps }) as number;
+      const code = await U.main(env, { driver, verb, client, now: () => t.now ?? NOW, err: (s: string) => { err += s; }, pilotKey: fixtureKey(home), ...t.deps }) as number;
       return { code, err };
     },
   };
@@ -264,8 +308,8 @@ describe('a first run from nothing to confirmed', () => {
       ['freeze', '--out', S, '--setup', join(S, 'setup.json'), '--setup-sha256', shaSetup, '--sourced', join(S, 'quiz', 'sourced.json'), '--sourced-sha256', shaSourced],
       ['marker', '--frozen', join(S, 'quiz', 'frozen.json'), '--frozen-sha256', shaFrozen],
       ['marker', '--frozen', join(S, 'quiz', 'frozen.json'), '--frozen-sha256', shaFrozen],
-      ['arms', ...base],
-      ['judge', ...base, ...armsSummary],
+      ['arms', ...base, '--account', 'acct-c'],
+      ['judge', ...base, ...armsSummary, '--account', 'acct-c'],
       ['report', ...base, ...armsSummary, '--judged', join(W, 'quiz', 'judged.json'), '--judged-sha256', shaJudged],
     ]);
     expect(b.calls('driver').every((c) => c.execArgv.includes('--no-warnings'))).toBe(true);
@@ -447,7 +491,7 @@ describe('the account: eligibility, room and the weekly re-check', () => {
     return { b, account: (b.state() as R).setup.account as string };
   };
   for (const act of ['arms', 'judge']) {
-    it(`before ${act}: no room for the setup's account waits (no-room), spawns nothing, the week stays running`, async () => {
+    it(`before ${act}: no room for the week's account waits (no-room), spawns nothing, the week stays running and on its account`, async () => {
       const { b, account } = await stopAt(act);
       const n = b.calls().length;
       b.setLimits(account, { five: 10, seven: 90 });
@@ -1186,7 +1230,7 @@ describe('the operator\'s per-account lane kill switch (F5)', () => {
     expect((b.state() as R).setup.account).toBe('acct-b');
   });
   for (const act of ['arms', 'judge']) {
-    it(`before ${act}: the setup's account switched off waits account-disabled (not no-room), spawns nothing, and resumes when it is back on`, async () => {
+    it(`before ${act}: the week's account switched off waits account-disabled (not no-room), spawns nothing, and resumes when it is back on`, async () => {
       const b = mkBox();
       b.plan({ [act]: [REFUSE('interrupted')] });
       await b.tick();
@@ -1260,5 +1304,826 @@ describe('--state-verdict: the runner\'s own reading of its state file, for doct
   it('it runs where a tick refuses: with CLAUDECODE and TMUX_PANE set', () => {
     const b = mkBox();
     expect(verdict(b.home, { CLAUDECODE: '1', TMUX_PANE: '%1' })).toEqual({ out: 'absent\n', code: 0, err: '' });
+  });
+});
+
+// ── quiz-pilot-checks ruling 5: a week closed on the pilot word is piloted again on a newer release, at most three a week ──
+describe('repilotOf: the pure decision, as a table (keyed by stage B\'s B0)', () => {
+  const failed = { state: 'failed', word: 'pilot-failed' };
+  const k = (b: string, code?: Record<string, string>, pilot?: Record<string, string>, skill?: string): R => ({ state: 'value', key: KEY(b, code, pilot, skill) });
+  const at = (b: string, code?: Record<string, string>): R => ({ release: 'v1', key: KEY(b, code) });
+  const OTHER_CODE = { ...FIX_CODE, 'deploy/history-replay.mjs': 'c'.repeat(64) };
+  const rows: Array<[string, R, unknown, unknown, R]> = [
+    ['a new build after one failed pilot', failed, [at('b1')], k('b2'), { repilot: true, pilot: 2 }],
+    ['a new build after two failed pilots: the third', failed, [at('b1'), at('b2')], k('b3'), { repilot: true, pilot: 3 }],
+    ['three failed pilots: no fourth', failed, [at('b1'), at('b2'), at('b3')], k('b4'), { repilot: false, why: 'pilots-spent' }],
+    ['the same key: no second pilot on it', failed, [at('b1')], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['back to an earlier failed key', failed, [at('b1'), at('b2')], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['the same build, the gate\'s code changed: a new key', failed, [at('b1')], k('b1', OTHER_CODE), { repilot: true, pilot: 2 }],
+    // fix round 1, F1: each new part of the key, changed alone, is a new key
+    ['the same build and gate code, a pilot file changed: a new key', failed, [at('b1')], k('b1', FIX_CODE, { ...FIX_PILOT, 'ccd/history/sweep.mjs': 'f'.repeat(64) }), { repilot: true, pilot: 2 }],
+    ['the same build, gate code and pilot files, the skill changed: a new key', failed, [at('b1')], k('b1', FIX_CODE, FIX_PILOT, '8'.repeat(64)), { repilot: true, pilot: 2 }],
+    // fix round 2, F1 (reversing fix round 1's reading): only an entry with no key field is older; a key field in any other form
+    // than all four parts is unmeasured, and the week stays closed
+    ['an entry whose key has two of the parts is unmeasured, never older', failed, [{ release: 'v1', key: { claude_code: 'b1', code_shas: FIX_CODE } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is an empty object is unmeasured', failed, [{ release: 'v1', key: {} }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is the build alone is unmeasured', failed, [{ release: 'v1', key: { claude_code: 'b1' } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is the gate\'s code alone is unmeasured', failed, [{ release: 'v1', key: { code_shas: FIX_CODE } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is the pilot files alone is unmeasured', failed, [{ release: 'v1', key: { pilot_shas: FIX_PILOT } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is the skill alone is unmeasured', failed, [{ release: 'v1', key: { skill_sha256: FIX_SKILL } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is no object is unmeasured', failed, [{ release: 'v1', key: 'b1' }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['three entries, two with a key in another form: the cap answers before any key is read', failed, [{ release: 'v1', key: { claude_code: 'b1' } }, { release: 'v1', key: {} }, at('b3')], k('b4'), { repilot: false, why: 'pilots-spent' }],
+    ['another release on the same key is the same key (B0: the release is no longer the key)', failed, [{ release: 'v1.0.1', key: KEY('b1') }], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['an entry written before B0 (a release, no key) counts and matches no key', failed, [{ release: 'v1.0.1' }], k('b1'), { repilot: true, pilot: 2 }],
+    ['two entries written before B0 and a keyed one: the cap counts them all', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, at('b1')], k('b2'), { repilot: false, why: 'pilots-spent' }],
+    ['an older entry whose release could not be read is unmeasured', failed, [{ release: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key could not be read', failed, [{ release: 'v1', key: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is damaged', failed, [{ release: 'v1', key: { claude_code: 'b1' } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key has a part in a wrong form', failed, [{ release: 'v1', key: { ...KEY('b1'), code_shas: { f: 'not-hex' } } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key has a field that is no part', failed, [{ release: 'v1', key: { ...KEY('b1'), extra: 1 } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['no row', null as unknown as R, [], k('b2'), { repilot: false, why: 'no-week' }],
+    ['a running week', { state: 'running', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
+    ['a confirmed week', { state: 'confirmed', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
+    ['closed on another word', { state: 'failed', word: 'out-refused' }, [at('b1')], k('b2'), { repilot: false, why: 'not-the-pilot' }],
+    ['closed week-ended', { state: 'failed', word: 'week-ended' }, [at('b1')], k('b2'), { repilot: false, why: 'not-the-pilot' }],
+    ['no failed pilot recorded', failed, [], k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['pilots not a list', failed, at('b1'), k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['a pilot entry that is no object', failed, ['b1'], k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['the key now unmeasured', failed, [at('b1')], { state: 'unmeasured', why: 'fixture' }, { repilot: false, why: 'key-unmeasured' }],
+    ['the key now no answer at all', failed, [at('b1')], null, { repilot: false, why: 'key-unmeasured' }],
+    ['the key now damaged', failed, [at('b1')], { state: 'value', key: { claude_code: '', code_shas: FIX_CODE } }, { repilot: false, why: 'key-unmeasured' }],
+  ];
+  for (const [name, week, pilots, key, want] of rows) {
+    it(name, () => { expect(U.repilotOf({ week, pilots, key })).toEqual(want); });
+  }
+  it('every reason word is a STAY_CLOSED word, and the cap is three', () => {
+    expect(U.PILOTS_MAX).toBe(3);
+    for (const [, week, pilots, key] of rows) {
+      const d = U.repilotOf({ week, pilots, key }) as R;
+      if (d.repilot === false) expect(U.STAY_CLOSED, d.why as string).toContain(d.why);
+    }
+  });
+  it('the pilots are judged before the key now: a week that cannot be piloted again whatever the key never needs one', () => {
+    expect(U.repilotOf({ week: failed, pilots: [at('b1'), at('b2'), at('b3')], key: null })).toEqual({ repilot: false, why: 'pilots-spent' });
+    expect(U.repilotOf({ week: failed, pilots: [{ release: null }], key: null })).toEqual({ repilot: false, why: 'failed-key-unmeasured' });
+    expect(U.repilotOf({ week: failed, pilots: [at('b1')], key: null }), 'CONTROL: only then is the key the question').toEqual({ repilot: false, why: 'key-unmeasured' });
+  });
+});
+
+describe('the runner acts on repilotOf: it reopens the week and runs arms --repilot in the same directory', () => {
+  // Stage B, B0: the cases below were written for ruling 5's release key. Each "release" step now moves the release AND the
+  // build with it (a new release that brings a new build), so every case keeps pinning what it pinned; the cases after this
+  // block move the two apart.
+  const BUILD = (tag: string): string => `${tag} (Claude Code)`;
+  const setRelease = (b: Box, tag: string): void => {
+    writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
+    writeFileSync(join(b.home, 'fixture-build'), BUILD(tag));
+  };
+  /** The driver's release pin, composed by the single-arm module's own releasePinText (so the runner's reader is held to the
+   *  module's bytes, fix round 1 F3), written into a week's directory as that module does before its pilot. */
+  const pinText = (tag: string, round: number): string => QS.releasePinText('f'.repeat(64), tag, round, KEY(BUILD(tag))) as string;
+  const pin = (b: Box, tag: string, text?: string): void => {
+    const dir = join(b.root, 'weeks', WEEK, 'quiz');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'arms-release.json'), text ?? pinText(tag, 0));
+  };
+  const armsCalls = (b: Box): R[] => b.calls('driver').filter((c) => c.argv[0] === 'arms');
+  const HOUR = 3600_000;
+  /** A box whose first pilot fails on release `tag` (the driver pins it, then refuses pilot-failed). */
+  async function failedOn(tag: string, more: R[] = []): Promise<Box> {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed', 'step0b restricted: failed plugins; unmeasured -'), ...more] });
+    setRelease(b, tag);
+    pin(b, tag);   // the fake driver writes no pin: this stands for the one the real driver writes before its pilot runs
+    await b.tick();
+    return b;
+  }
+
+  it('the first failure records one failed pilot; on the same release the week stays closed and nothing spawns', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    pin(b, 'v1.0.1');
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1' }] });
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length).toBe(1);
+    expect((b.state() as R).last).toMatchObject({ act: 'done', outcome: 'refused', word: 'pilot-failed' });
+  });
+
+  it('a newer release reopens it: arms --repilot on the same directory, and a pass carries the week to confirmed', async () => {
+    const b = await failedOn('v1.0.1');
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    const arms = armsCalls(b);
+    expect(arms.length).toBe(2);
+    expect(arms[0]!.argv).not.toContain('--repilot');
+    expect(arms[1]!.argv).toContain('--repilot');
+    // fix round 2 (review 3528, F2): the exact argument list: the first pilot's, then the bare flag and nothing after it
+    expect(arms[1]!.argv, 'the re-pilot passes the bare flag, never a value').toEqual([...arms[0]!.argv, '--repilot']);
+    expect(arms[1]!.argv[arms[1]!.argv.indexOf('--out') + 1], 'the same week directory, so the same ledger and --budget').toBe(join(b.root, 'weeks', WEEK));
+    const w = (b.state() as R).weeks[WEEK];
+    expect(w).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2', at_ms: NOW + HOUR }] });
+    expect(w.repilot, 'the permission was for one act').toBeUndefined();
+    expect(subs(b).filter((s) => s === 'judge').length).toBe(1);
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/week \S+ piloted again: pilot 2 of 3, release v1\.0\.2, after v1\.0\.1; build v1\.0\.2 \(Claude Code\)/);
+    expect(w.pilots[1].key, 'B0: the row records the key it was decided on').toEqual(KEY(BUILD('v1.0.2')));
+  });
+
+  it('at most three pilots in a week: a fourth release opens no fourth pilot', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('pilot-failed'), REFUSE('pilot-failed')]);
+    for (const [i, t] of ['v1.0.2', 'v1.0.3'].entries()) {
+      setRelease(b, t);
+      pin(b, t);   // arms --repilot re-pins the week to the release it measures, then its pilot fails
+      await b.tick({ now: NOW + (i + 1) * HOUR });
+    }
+    expect(armsCalls(b).length).toBe(3);
+    expect((b.state() as R).weeks[WEEK].pilots.map((p: R) => p.release)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.3']);
+    setRelease(b, 'v1.0.4');
+    await b.tick({ now: NOW + 4 * HOUR });
+    expect(armsCalls(b).length, 'no fourth pilot').toBe(3);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+  });
+
+  it('a second pilot is never run on a release that already failed this week', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('pilot-failed')]);
+    setRelease(b, 'v1.0.2');
+    pin(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect((b.state() as R).weeks[WEEK].pilots.map((p: R) => p.release)).toEqual(['v1.0.1', 'v1.0.2']);
+    setRelease(b, 'v1.0.1');   // rolled back to the first failed release
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length).toBe(2);
+  });
+
+  it('a week closed on any other word stays closed on a newer release', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('out-refused')] });
+    setRelease(b, 'v1.0.1');
+    pin(b, 'v1.0.1');
+    await b.tick();
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length).toBe(1);
+    expect((b.state() as R).weeks[WEEK].pilots, 'no pilot is recorded for another word').toBeUndefined();
+  });
+
+  it('a row closed on the pilot word before ruling 5 (no pilots recorded) is read as one failed pilot on its pin', async () => {
+    const b = await failedOn('v1.0.1');
+    const st = b.state() as R;
+    delete st.weeks[WEEK].pilots;
+    writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+    setRelease(b, 'v1.0.1');
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length, 'same release as its pin: closed').toBe(1);
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length).toBe(2);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1', at_ms: null }, { release: 'v1.0.2' }] });
+  });
+
+  it('an unreadable pin keeps the week closed: an unmeasured key never re-spends', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    await b.tick();
+    // B0: was [{ release: null, at_ms: NOW }]; the entry now names the key it could not read
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, key: null, at_ms: NOW }]);
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length).toBe(1);
+  });
+
+  // fix round 1, F1: the pilot is counted before the spawn, so a kill after the driver's write cannot hide it.
+  /** One tick whose driver writes its evidence and then the runner dies before its save after the act (the quiz root turns
+   *  read-only, so that save fails). The quiz root is given back and the stale lock removed, as a restart would find them. */
+  async function killedTick(b: Box, now: number): Promise<void> {
+    const r = await b.tick({ now });
+    expect(r.code, 'fixture: the save after the act failed').toBe(1);
+    // review 3533, F6: exit 1 alone is also a driver failure's; these two tell the kill apart (the root really turned
+    // read-only, and no row the failed save would have written landed)
+    expect(statSync(b.root).mode & 0o777, 'fixture: the stub turned the quiz root read-only').toBe(0o500);
+    chmodSync(b.root, 0o700);
+    expect((b.state() as R).last?.word, 'fixture: the save after the act never landed').not.toBe('driver-failed');
+    try { unlinkSync(join(b.root, 'unattended.lock')); } catch { /* released */ }
+  }
+  for (const legacy of [false, true]) {
+    it.skipIf(process.getuid?.() === 0)(`a kill between the driver's write and the save: no second pilot on that release, and the count is right (${legacy ? 'a row closed before this change' : 'a new-style row'})`, async () => {
+      const b = await failedOn('v1.0.1');
+      const rePin = [join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), pinText('v1.0.2', 1)];
+      // the queue's first answer was the first pilot's (already given); then the killed re-pilot, then the driver's own refusal
+      b.plan({ arms: [REFUSE('pilot-failed'), { ...REFUSE('pilot-failed'), chmodRoot: true, writes: [rePin] }, REFUSE('pilot-failed')] });
+      if (legacy) {
+        const st = b.state() as R;
+        delete st.weeks[WEEK].pilots;
+        writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+      }
+      setRelease(b, 'v1.0.2');
+      await killedTick(b, NOW + HOUR);   // the stub driver re-pins the week to v1.0.2, as the real one does, then the runner dies
+      expect(JSON.parse(readFileSync(rePin[0]!, 'utf8')).ccrc_release, 'fixture: the pin moved during the act').toBe('v1.0.2');
+      const onDisk = (b.state() as R).weeks[WEEK];
+      expect(onDisk, 'saved before the spawn: the pilot on v1.0.2 is counted, the permission already gone')
+        .toMatchObject({ state: 'running', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(onDisk.repilot).toBeUndefined();
+      // the next tick on the same release: the arms run without --repilot, so the driver's failed result closes the week
+      await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+      const arms = armsCalls(b);
+      expect(arms.length).toBe(3);
+      expect(arms[2]!.argv, 'no second pilot on v1.0.2').not.toContain('--repilot');
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'and it stays closed on v1.0.2').toBe(3);
+      setRelease(b, 'v1.0.3');
+      await b.tick({ now: NOW + 4 * HOUR });
+      expect(armsCalls(b)[3]!.argv, 'a newer release is the third pilot').toContain('--repilot');
+      expect((b.state() as R).weeks[WEEK].pilots.map((p: R) => p.release)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.3']);
+    });
+  }
+
+  // fix round 2 (review 3528, F1, a known limit): the two windows after the permission's save, pinned as they stand today. The
+  // stub driver answers each later act as the real single-arm module does at that point; the pin on disk says which point.
+  const pinOnDisk = (b: Box): R => JSON.parse(readFileSync(join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), 'utf8')) as R;
+  // review 3533, F4: the second variant is a driver FAILURE (an exit that is not a refusal); a refusal that is not resumable is
+  // the case after this loop, and closes the week on its own word at once.
+  for (const how of ['a kill', 'a driver failure']) {
+    it.skipIf(how === 'a kill' && process.getuid?.() === 0)(`${how} after the permission's save, before the driver moved the pin: the week closes release-moved with the counted pilot unrun, and no later release reopens it`, async () => {
+      const b = await failedOn('v1.0.1');
+      const dies = how === 'a kill' ? { exit: 1, stderr: 'killed\n', chmodRoot: true } : { exit: 1, stderr: 'ccrc history-quiz-single: internal error: fixture\n' };
+      // the real driver, with the pin still on v1.0.1 and v1.0.2 installed, refuses release-moved before step 0b (pinArmsRelease)
+      b.plan({ arms: [REFUSE('pilot-failed'), dies, REFUSE('release-moved', 'this week\'s arms ran on v1.0.1, this node now runs v1.0.2')] });
+      setRelease(b, 'v1.0.2');
+      if (how === 'a kill') await killedTick(b, NOW + HOUR);
+      else expect((await b.tick({ now: NOW + HOUR })).code, 'fixture: driver-failed').toBe(1);
+      const saved = (b.state() as R).weeks[WEEK];
+      expect(saved).toMatchObject({ state: 'running', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(saved.repilot, 'the permission left the row before the spawn').toBeUndefined();
+      expect(pinOnDisk(b).ccrc_release, 'the driver never moved the pin').toBe('v1.0.1');
+      await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+      const arms = armsCalls(b);
+      expect(arms.map((c) => c.argv.includes('--repilot'))).toEqual([false, true, false]);
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'release-moved', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      setRelease(b, 'v1.0.3');
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'a week closed release-moved is not reopened').toBe(3);
+    });
+  }
+
+  it('a refusal that is not resumable after the permission\'s save closes the week at once on its own word, the counted pilot unrun', async () => {
+    const b = await failedOn('v1.0.1');
+    b.plan({ arms: [REFUSE('pilot-failed'), REFUSE('version-unmeasured', 'fixture: --version failed')] });
+    setRelease(b, 'v1.0.2');
+    const r = await b.tick({ now: NOW + HOUR });
+    expect(r.code, 'a refusal is no failure').toBe(0);
+    const w = (b.state() as R).weeks[WEEK];
+    expect(w).toMatchObject({ state: 'failed', word: 'version-unmeasured', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+    expect(w.repilot, 'the permission is not given back after a refusal that is not resumable').toBeUndefined();
+    expect(pinOnDisk(b).ccrc_release, 'the driver never moved the pin').toBe('v1.0.1');
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+    setRelease(b, 'v1.0.3');
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length, 'a week closed on another word than the pilot\'s stays closed').toBe(2);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a kill after the driver wrote the new pin, before its result: the week closes pilot-failed, and a later release is refused with the round\'s own word', async () => {
+    const b = await failedOn('v1.0.1');
+    const pinPath = join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json');
+    b.plan({ arms: [
+      REFUSE('pilot-failed'),
+      { exit: 1, stderr: 'killed\n', chmodRoot: true, writes: [[pinPath, pinText('v1.0.2', 1)]] },
+      // the real driver on v1.0.2 without --repilot: the pin matches, the round 0 result failed, so pilot-failed
+      REFUSE('pilot-failed'),
+      // the real driver on v1.0.3 with --repilot: round 1 is under way on v1.0.2, so repilot-release-moved
+      REFUSE('repilot-release-moved', 'step 0b round 1 is under way on v1.0.2, this node now runs v1.0.3: one pilot never spans two releases'),
+    ] });
+    setRelease(b, 'v1.0.2');
+    await killedTick(b, NOW + HOUR);
+    expect(pinOnDisk(b)).toMatchObject({ ccrc_release: 'v1.0.2', round: 1 });
+    await b.tick({ now: NOW + 2 * HOUR, deps: { isAlive: () => false } });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+    setRelease(b, 'v1.0.3');
+    await b.tick({ now: NOW + 3 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true, false, true]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'repilot-release-moved',
+      pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, { release: 'v1.0.3' }] });
+    setRelease(b, 'v1.0.4');
+    await b.tick({ now: NOW + 4 * HOUR });
+    expect(armsCalls(b).length, 'nothing reopens it').toBe(4);
+  });
+
+  // fix round 1, F2: the permission is for one pilot on one release; a resumable stop gives it back for that release only.
+  it('a re-pilot that stopped resumably is resumed on its own release with --repilot', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'running', repilot: { release: 'v1.0.2' } });
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true, true]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+  });
+
+  for (const [why, tag] of [['forward to a newer release', 'v1.0.3'], ['back to the release that already failed', 'v1.0.1']] as Array<[string, string]>) {
+    it(`a re-pilot that stopped resumably, then the release moved ${why}: never continued on the flag, nothing counted`, async () => {
+      const b = await failedOn('v1.0.1', [REFUSE('interrupted'), REFUSE('release-moved')]);
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      setRelease(b, tag);
+      await b.tick({ now: NOW + 2 * HOUR });
+      const arms = armsCalls(b);
+      expect(arms.length).toBe(3);
+      expect(arms[2]!.argv, 'the permission named v1.0.2, so it is not passed').not.toContain('--repilot');
+      const w = (b.state() as R).weeks[WEEK];
+      expect(w).toMatchObject({ state: 'failed', word: 'release-moved', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2' }] });
+      expect(w.repilot).toBeUndefined();
+      await b.tick({ now: NOW + 3 * HOUR });
+      expect(armsCalls(b).length, 'a week closed on another word stays closed').toBe(3);
+    });
+  }
+
+  it('repilotPermitOf: the permission passes only on its own measured key (B0; was: its own release)', () => {
+    const k = (b: string): R => ({ state: 'value', key: KEY(b) });
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, k('b1'))).toBe(true);
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, k('b2'))).toBe(false);
+    expect(U.repilotPermitOf({ release: 'v2', key: KEY('b1') }, k('b1')), 'the release is no longer the key').toBe(true);
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, { state: 'unmeasured', why: 'x' })).toBe(false);
+    expect(U.repilotPermitOf(undefined, k('b1'))).toBe(false);
+    expect(U.repilotPermitOf(true, k('b1')), 'the round-1 boolean form').toBe(false);
+    expect(U.repilotPermitOf({ release: 'v1' }, k('b1')), 'a permission written before B0 names no key: dropped').toBe(false);
+    expect(U.repilotPermitOf({ release: 'v1', key: { claude_code: 'b1' } }, k('b1')), 'a damaged key').toBe(false);
+  });
+
+  // fix round 1, A2: only a row with no pilot list at all is an older row.
+  // [] is back among them (review 3533, F7): read as an older row, an empty list would re-pilot; the others are none a list.
+  for (const damaged of [{}, null, 'x', 5, true, { release: 'v1.0.1' }, []]) {
+    it(`a pilot-failed row whose pilot list is damaged (${JSON.stringify(damaged)}) stays closed on a newer release`, async () => {
+      const b = await failedOn('v1.0.1');
+      const st = b.state() as R;
+      st.weeks[WEEK].pilots = damaged;
+      writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).length).toBe(1);
+      expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+    });
+  }
+
+  // fix round 1, A3: the pin reader takes only the module's own pin.
+  for (const [why, text] of [
+    ['another kind', JSON.stringify({ kind: 'not-the-pin', v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })],
+    ['another version', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 2, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })],
+    ['a release that is no string', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 101, round: 0 })],
+    ['an empty release', JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: '', round: 0 })],
+    ['no JSON', '{'],
+  ] as Array<[string, string]>) {
+    it(`a pin with ${why} is read as no release: the first pilot is counted unmeasured and the week stays closed`, async () => {
+      const b = mkBox();
+      b.plan({ arms: [REFUSE('pilot-failed')] });
+      setRelease(b, 'v1.0.1');
+      pin(b, 'v1.0.1', text);
+      await b.tick();
+      expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, key: null, at_ms: NOW }]);   // B0: was { release: null, at_ms }
+      setRelease(b, 'v1.0.2');
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).length).toBe(1);
+    });
+  }
+
+  it('only the current ISO week is piloted again; a past week stays as it was', async () => {
+    const b = await failedOn('v1.0.1');
+    setRelease(b, 'v1.0.2');
+    await b.tick({ now: NEXT_NOW });
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+    expect(armsCalls(b).map((c) => c.argv[c.argv.indexOf('--out') + 1])).toEqual([join(b.root, 'weeks', WEEK), join(b.root, 'weeks', NEXT_WEEK)]);
+  });
+
+  // ── stage B, B0: the key decides, never the release alone ──
+  const setBuildOnly = (b: Box, build: string): void => writeFileSync(join(b.home, 'fixture-build'), build);
+  const setReleaseOnly = (b: Box, tag: string): void => writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
+
+  it('B0: an unrelated release on the same build and code pilots nothing again, however many releases land', async () => {
+    const b = await failedOn('v1.0.1');
+    for (const [i, t] of ['v1.0.2', 'v1.0.3', 'v1.0.4'].entries()) {
+      setReleaseOnly(b, t);
+      await b.tick({ now: NOW + (i + 1) * HOUR });
+    }
+    expect(armsCalls(b).length, 'no second pilot on the key that already failed').toBe(1);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1', key: KEY(BUILD('v1.0.1')) }] });
+    expect((b.state() as R).weeks[WEEK].pilots.length).toBe(1);
+  });
+
+  it('B0: a new build on the same release is piloted again; the row and the permission name the new key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setBuildOnly(b, '9.9.9 (Claude Code)');
+    await b.tick({ now: NOW + HOUR });
+    const arms = armsCalls(b);
+    expect(arms.map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+    const w = (b.state() as R).weeks[WEEK];
+    expect(w.pilots).toEqual([{ release: 'v1.0.1', key: KEY(BUILD('v1.0.1')), at_ms: NOW }, { release: 'v1.0.1', key: KEY('9.9.9 (Claude Code)'), at_ms: NOW + HOUR }]);
+    expect(w.repilot, 'given back after the resumable stop, naming its key').toEqual({ release: 'v1.0.1', key: KEY('9.9.9 (Claude Code)') });
+  });
+
+  it('B0: the gate\'s code moved on the same build is a new key: piloted again', async () => {
+    const b = await failedOn('v1.0.1');
+    writeFileSync(join(b.home, 'fixture-code'), JSON.stringify({ ...FIX_CODE, 'deploy/history-replay.mjs': 'c'.repeat(64) }));
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+  });
+
+  // fix round 1, F1: a pilot file or the skill moved alone, on the same build and gate code, is a new key
+  for (const [what, file, text] of [
+    ['a pilot file', 'fixture-pilot', JSON.stringify({ ...FIX_PILOT, 'ccd/history/sweep.mjs': 'f'.repeat(64) })],
+    ['the skill', 'fixture-skill', '8'.repeat(64)],
+  ] as Array<[string, string, string]>) {
+    it(`B0, fix round 1: ${what} moved on the same build and gate code is a new key: piloted again, the row naming it`, async () => {
+      const b = await failedOn('v1.0.1');
+      writeFileSync(join(b.home, file), text);
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+      const pilots = (b.state() as R).weeks[WEEK].pilots as R[];
+      expect(pilots.length).toBe(2);
+      expect(U.pilotEntryKeyOf(pilots[1]!), 'the second pilot is counted against the moved key').toEqual({ state: 'key', key: (await fixtureKey(b.home)()).key });
+    });
+  }
+
+  // fix round 2, A1: the real measure's two new unmeasured arms, each journalled with its own reason
+  for (const [what, root, why] of [
+    ['pilot files it cannot read', () => mkTmp('quiz-key-empty-'), () => `pilot code ${(QP.PILOT_CODE_FILES as string[])[0]} absent`],
+    ['a skill it cannot read', pilotOnlyRoot, () => `skill ${QP.HISTORY_SKILL_SOURCE as string}/SKILL.md is absent`],
+  ] as Array<[string, () => string, () => string]>) {
+    it(`B0, fix round 2: ${what} keeps the week closed, spawns nothing, and the journal names that reason`, async () => {
+      const b = await failedOn('v1.0.1');
+      const kh = keyHome({ launcher: false });
+      const r = root();
+      await b.tick({ now: NOW + HOUR, deps: { pilotKey: async () => U.measuredPilotKeyOf({ home: kh.home, out: kh.out, account: 'up-a', lang: undefined, root: r }) } });
+      expect(armsCalls(b).length).toBe(1);
+      expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toContain(`not piloted again: the pilot key is unmeasured (${why()})`);
+    });
+  }
+
+  it('B0: a key that cannot be measured keeps the week closed, spawns nothing, and the journal says why', async () => {
+    const b = await failedOn('v1.0.1');
+    unlinkSync(join(b.home, 'fixture-build'));
+    setReleaseOnly(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length).toBe(1);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/not piloted again: the pilot key is unmeasured \(fixture: no build\)/);
+  });
+
+  it('B0: a week whose pilots are spent never measures a key', async () => {
+    const b = await failedOn('v1.0.1');
+    const st = b.state() as R;
+    st.weeks[WEEK].pilots = [{ release: 'v1.0.0' }, { release: 'v1.0.1' }, { release: 'v1.0.1', key: KEY(BUILD('v1.0.1')) }];
+    writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+    let asked = 0;
+    await b.tick({ now: NOW + HOUR, deps: { pilotKey: async () => { asked += 1; return { state: 'value', key: KEY('9.9.9 (Claude Code)') }; } } });
+    expect(asked).toBe(0);
+    expect(armsCalls(b).length).toBe(1);
+  });
+
+  it('B0: entries written before B0 (a release, no key) count toward the cap and match no key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('pilot-failed')]);
+    const st = b.state() as R;
+    st.weeks[WEEK].pilots = [{ release: 'v1.0.1', at_ms: NOW }];   // as ruling 5's runner wrote it
+    writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the older entry matches no key: one more pilot').toEqual([false, true]);
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', at_ms: NOW }, { release: 'v1.0.1', key: KEY(BUILD('v1.0.1')), at_ms: NOW + HOUR }]);
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length, 'never twice on one key').toBe(2);
+  });
+
+  it('B0: a pin written before B0 (a release, no key) labels the first pilot as an older entry: it counts, and matches no key', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    pin(b, 'v1.0.1', `${JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })}\n`);
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', at_ms: NOW }]);
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the same build pilots once more: the older entry names no key').toEqual([false, true]);
+  });
+
+  it('B0, fix round 2: a pin whose key has only some of the parts is unmeasured, not older: the week stays closed and spawns nothing', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    const partial = { claude_code: BUILD('v1.0.1'), code_shas: FIX_CODE };
+    pin(b, 'v1.0.1', `${JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0, key: partial })}\n`);
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', key: null, at_ms: NOW }]);
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'no second pilot: the first pilot\'s key is unmeasured').toEqual([false]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+  });
+
+  it('B0: a re-pilot that stopped resumably is continued after a release moved on the same key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setBuildOnly(b, '9.9.9 (Claude Code)');
+    await b.tick({ now: NOW + HOUR });
+    setReleaseOnly(b, 'v1.0.2');
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the permission names the key, which has not moved').toEqual([false, true, true]);
+  });
+});
+
+// ── stage B, B0: the runner's real key measure, through the driver's own readers on a fixture HOME ──
+/** A fixture HOME with one upstream account whose launcher prints `version` for --version (or exits `code`). */
+function keyHome(o: { version?: string; code?: number; launcher?: boolean } = {}): { home: string; out: string } {
+  const home = mkTmp('quiz-key-');
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude',
+    exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' }] }));
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  if (o.launcher !== false) {
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(o.version ?? '2.9.1 (Claude Code)')}\nexit ${o.code ?? 0}\n`, { mode: 0o700 });
+  }
+  const out = join(home, 'week');
+  mkdirSync(out, { recursive: true, mode: 0o700 });
+  return { home, out };
+}
+
+/** A fixture tree holding the pilot files (copied from the repository) and no skill. */
+function pilotOnlyRoot(): string {
+  const root = mkTmp('quiz-key-root-');
+  for (const f of QP.PILOT_CODE_FILES as string[]) {
+    mkdirSync(dirname(join(root, f)), { recursive: true });
+    copyFileSync(join(D.TREE_ROOT as string, f), join(root, f));
+  }
+  return root;
+}
+describe('measuredPilotKeyOf: the pilot key as the driver measures it (stage B, B0)', () => {
+
+  it('the key is the launcher\'s --version line, the gate\'s code shas, the pilot files\' shas and the skill\'s sha, exactly as measured', async () => {
+    const { home, out } = keyHome();
+    const got = await U.measuredPilotKeyOf({ home, out, account: 'up-a', lang: undefined }) as R;
+    expect(got).toEqual({ state: 'value', key: { claude_code: '2.9.1 (Claude Code)', code_shas: (D.codeShas() as R).files,
+      pilot_shas: (QP.pilotShasOf() as R).files, skill_sha256: (QP.skillSourceOf(D.TREE_ROOT) as R).sha256 } });
+    expect(Object.keys(got.key.pilot_shas).sort(), 'every pilot file, each hashed').toEqual([...QP.PILOT_CODE_FILES as string[]].sort());
+  });
+
+  it('fix round 2, A1: pilot files it cannot read, and then a skill it cannot read, are each unmeasured with their own reason, before any spawn', async () => {
+    const { home, out } = keyHome({ launcher: false });
+    expect(await U.measuredPilotKeyOf({ home, out, account: 'up-a', lang: undefined, root: mkTmp('quiz-key-empty-') }))
+      .toEqual({ state: 'unmeasured', why: `pilot code ${(QP.PILOT_CODE_FILES as string[])[0]} absent` });
+    expect(await U.measuredPilotKeyOf({ home, out, account: 'up-a', lang: undefined, root: pilotOnlyRoot() }))
+      .toEqual({ state: 'unmeasured', why: `skill ${QP.HISTORY_SKILL_SOURCE as string}/SKILL.md is absent` });
+  });
+
+  it('an account the roster does not admit, a launcher that fails and one that is missing are unmeasured, never a throw', async () => {
+    const a = keyHome();
+    expect(await U.measuredPilotKeyOf({ home: a.home, out: a.out, account: 'nobody', lang: undefined })).toMatchObject({ state: 'unmeasured', why: 'account account-refused' });
+    const f = keyHome({ code: 3 });
+    expect(await U.measuredPilotKeyOf({ home: f.home, out: f.out, account: 'up-a', lang: undefined })).toMatchObject({ state: 'unmeasured', why: expect.stringMatching(/^version failed/) });
+    const m = keyHome({ launcher: false });
+    expect(await U.measuredPilotKeyOf({ home: m.home, out: m.out, account: 'up-a', lang: undefined })).toMatchObject({ state: 'unmeasured' });
+  });
+
+  it('a tick with no stand-in measures through the driver\'s own roster reader: a roster it cannot admit keeps the week closed', async () => {
+    const b = mkBox();
+    const pinPath = join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json');
+    b.plan({ arms: [{ ...REFUSE('pilot-failed'), writes: [[pinPath, QS.releasePinText('f'.repeat(64), 'v1.0.1', 0, KEY('b1')) as string]] }] });
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1', key: KEY('b1') }] });
+    // the box's fixture roster is not one the driver's roster reader admits, so the real measure answers unmeasured
+    await b.tick({ now: NOW + 3600_000, deps: { pilotKey: undefined } });
+    expect(b.calls('driver').filter((c) => c.argv[0] === 'arms').length).toBe(1);
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/not piloted again: the pilot key is unmeasured \(account roster-invalid\)/);
+  });
+});
+
+// ── run 3538: the week's account (the coordinator's rulings 2, 3 and 5 of 2026-11-23) ───────────────────────────────────
+describe('weekAccountChoiceOf: the pure choice of a week\'s account, as a table', () => {
+  const rec = (id: string, o: R = {}): R => ({ id, disabled: false, room: true, ...o });
+  const cand = (id: string, seven: number | null, word = 'limits-stale'): R => (seven === null ? { id, room: false, word } : { id, room: true, seven });
+  const rows: Array<[string, R, R]> = [
+    ['a recorded week stays on its account, though another has a lower weekly figure',
+      { recorded: rec('lane-b'), previous: 'lane-c', candidates: [cand('lane-c', 1)] }, { account: 'lane-b', why: 'recorded' }],
+    ['a recorded week whose account has no room waits, never moves',
+      { recorded: rec('lane-b', { room: false, word: 'limits-stale', detail: 'old 3601000' }), previous: 'lane-c', candidates: [cand('lane-c', 1)] },
+      { wait: 'no-room', detail: 'the week\'s account: limits-stale old 3601000' }],
+    ['a recorded week whose account is switched off waits account-disabled, room or not',
+      { recorded: rec('lane-b', { disabled: true }), previous: 'lane-b', candidates: [cand('lane-c', 1)] },
+      { wait: 'account-disabled', detail: 'the week\'s account is switched off by the operator\'s lane kill switch' }],
+    ['an unspawned week keeps the previous account when it has room, though another is lower',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-c', 1), cand('lane-b', 40)] }, { account: 'lane-b', why: 'previous' }],
+    ['an unspawned week does not keep a previous account without room: the lowest with room',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', null), cand('lane-c', 30), cand('lane-d', 20)] }, { account: 'lane-d', why: 'lowest' }],
+    ['ties go in roster order',
+      { recorded: null, previous: 'lane-x', candidates: [cand('lane-c', 20), cand('lane-d', 20)] }, { account: 'lane-c', why: 'lowest' }],
+    ['a previous account that is no candidate (switched off, or no longer eligible) is not kept',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-c', 30)] }, { account: 'lane-c', why: 'lowest' }],
+    ['no candidate with room: no-room, each candidate\'s word by position, no account named',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', null, 'limits-stale'), cand('lane-c', null, 'limits-threshold')] },
+      { wait: 'no-room', detail: '1: limits-stale, 2: limits-threshold' }],
+    ['no candidate at all: no-room',
+      { recorded: null, previous: 'lane-b', candidates: [] }, { wait: 'no-room', detail: 'the roster names no eligible account' }],
+    // fix round 1 (review 3545 F1): admission's refusals this tick, walked past in the same order, as setup does
+    ['a refused previous account is walked past to the lowest with room',
+      { recorded: null, previous: 'lane-b', candidates: [cand('lane-b', 40), cand('lane-c', 30), cand('lane-d', 20)], refused: { 'lane-b': 'secrets-absent' } },
+      { account: 'lane-d', why: 'lowest' }],
+    ['a refused lowest is walked past to the next lowest',
+      { recorded: null, previous: 'lane-x', candidates: [cand('lane-c', 30), cand('lane-d', 20)], refused: { 'lane-d': 'secrets-absent' } },
+      { account: 'lane-c', why: 'lowest' }],
+    ['every candidate with room refused: no-room, each candidate named by position, a refused one by its refusal',
+      { recorded: null, previous: 'lane-c', candidates: [cand('lane-b', null), cand('lane-c', 30), cand('lane-d', 20)],
+        refused: { 'lane-c': 'secrets-absent', 'lane-d': 'upstream-config-dir' } },
+      { wait: 'no-room', detail: '1: limits-stale, 2: account-refused secrets-absent, 3: account-refused upstream-config-dir' }],
+    ['a recorded week stays on its account whatever was refused (its own refusal closes it on its word)',
+      { recorded: rec('lane-b'), previous: 'lane-b', candidates: [], refused: { 'lane-b': 'secrets-absent' } }, { account: 'lane-b', why: 'recorded' }],
+  ];
+  it.each(rows)('%s', (_name, input, want) => {
+    expect(U.weekAccountChoiceOf(input)).toEqual(want);
+  });
+  it('over every row, its answer for an unspawned week is never an account without room, a refused one, or a non-candidate', () => {
+    for (const [, input] of rows) {
+      const got = U.weekAccountChoiceOf(input) as R;
+      if (got.account === undefined || input.recorded !== null) continue;
+      const c = (input.candidates as R[]).find((x) => x.id === got.account);
+      expect(c?.room, JSON.stringify(input)).toBe(true);
+      expect(Object.keys((input.refused ?? {}) as R), JSON.stringify(input)).not.toContain(got.account);
+    }
+  });
+});
+
+describe('the runner runs each week on the week\'s account (run 3538)', () => {
+  const W = (b: Box, key = WEEK): string => join(b.root, 'weeks', key);
+  const recordOf = (b: Box, key = WEEK): R | null => {
+    const f = join(W(b, key), 'quiz', 'week-account.json');
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) as R : null;
+  };
+  const accountArg = (c: R): string | null => { const i = (c.argv as string[]).indexOf('--account'); return i < 0 ? null : c.argv[i + 1] as string; };
+  const spends = (b: Box): R[] => b.calls('driver').filter((c) => c.argv[0] === 'arms' || c.argv[0] === 'judge');
+
+  it('the field case: the setup\'s account went idle (no fresh row), so a new week runs on another account with room', async () => {
+    const b = mkBox();
+    await b.tick();
+    expect((b.state() as R).setup.account, 'CONTROL: setup took acct-b (a tie, roster order)').toBe('acct-b');
+    expect(recordOf(b)?.account, 'the first week recorded the setup\'s account').toBe('acct-b');
+    b.setLimits('acct-b', null);   // no row a status line refreshed: no room
+    await b.tick({ now: NEXT_NOW });
+    const next = spends(b).filter((c) => (c.argv as string[]).includes(W(b, NEXT_WEEK)));
+    expect(next.map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-c'], ['judge', 'acct-c']]);
+    expect((b.state() as R).weeks[NEXT_WEEK].state).toBe('confirmed');
+    expect(recordOf(b, NEXT_WEEK)?.account).toBe('acct-c');
+    expect((b.state() as R).setup.account, 'the setup is never re-made').toBe('acct-b');
+    expect(subs(b).filter((s) => s === 'setup').length).toBe(1);
+  });
+
+  it('a new week keeps last week\'s account while it has room, though another has a lower weekly figure', async () => {
+    const b = mkBox();
+    b.setLimits('acct-b', null);
+    await b.tick();   // setup on acct-c, the only one with room; week one on acct-c
+    expect((b.state() as R).setup.account).toBe('acct-c');
+    b.setLimits('acct-b', { five: 10, seven: 1 });
+    b.setLimits('acct-c', { five: 10, seven: 40 });
+    await b.tick({ now: NEXT_NOW });
+    expect(spends(b).slice(-2).map(accountArg)).toEqual(['acct-c', 'acct-c']);
+  });
+
+  it('a week that has spawned stays on its account and waits, though another has room', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('interrupted')] });
+    await b.tick();
+    expect(recordOf(b)?.account).toBe('acct-b');
+    const n = b.calls().length;
+    b.setLimits('acct-b', { five: 10, seven: 95 });
+    await b.tick({ now: NOW + 3600_000 });
+    expect(b.calls().length, 'nothing spawned on acct-c').toBe(n);
+    expect((b.state() as R).last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'no-room' });
+  });
+
+  it('the kill switch: a switched-off previous account is not kept, and every candidate off is no-room with no spawn', async () => {
+    const b = mkBox();
+    await b.tick();
+    mkdirSync(join(b.home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(b.home, '.cc-sessions', 'acct-b-disabled'), '');
+    await b.tick({ now: NEXT_NOW });
+    expect(spends(b).slice(-2).map(accountArg), 'acct-b has room but is switched off').toEqual(['acct-c', 'acct-c']);
+    writeFileSync(join(b.home, '.cc-sessions', 'acct-c-disabled'), '');
+    const n = b.calls().length;
+    const third = NEXT_NOW + 7 * DAY;
+    await b.tick({ now: third });
+    expect(b.calls().length).toBe(n);
+    expect((b.state() as R).last).toMatchObject({ week: U.weekKeyOf(third), act: 'arms', outcome: 'waiting', word: 'no-room', detail: 'the roster names no eligible account' });
+  });
+
+  it('a week an older build ran (its release pin, no record) reads as the setup\'s account', async () => {
+    const b = mkBox();
+    b.plan({ arms: [{ ...REFUSE('interrupted'), noRecord: true, mkdir: true }] });
+    await b.tick();
+    mkdirSync(join(W(b), 'quiz'), { recursive: true });
+    writeFileSync(join(W(b), 'quiz', 'arms-release.json'), QS.releasePinText((b.state() as R).setup.setup_sha256, 'v1.0.1', 0, KEY('b1')) as string);
+    b.setLimits('acct-b', { five: 10, seven: 50 });
+    b.setLimits('acct-c', { five: 10, seven: 1 });
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).slice(-2).map(accountArg)).toEqual(['acct-b', 'acct-b']);
+  });
+
+  it('an unreadable record refuses week-account-unreadable, spends nothing, and the week stays running', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('interrupted')] });
+    await b.tick();
+    writeFileSync(join(W(b), 'quiz', 'week-account.json'), '{"kind":"not this"}\n');
+    const n = b.calls().length;
+    await b.tick({ now: NOW + 3600_000 });
+    expect(b.calls().length).toBe(n);
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'refused', word: 'week-account-unreadable' });
+    expect(st.weeks[WEEK].state).toBe('running');
+    expect(U.OWN_WORDS).toContain('week-account-unreadable');
+  });
+
+  it('the status posts the week\'s account when its folder records one, else the setup\'s', async () => {
+    const b = mkBox();
+    await b.tick();
+    const body = (): R => JSON.parse(b.calls('client').at(-1)!.stdin as string) as R;
+    expect(body().account).toBe('acct-b');
+    b.setLimits('acct-b', null);
+    await b.tick({ now: NEXT_NOW });
+    expect(body().account, 'the new week ran on acct-c').toBe('acct-c');
+  });
+
+  // fix round 1 (review 3545 F1): an unspawned week whose pick admission refuses tries the next, as setup does
+  const three = (): Box => mkBox({ accounts: [acct('acct-b'), acct('acct-c'), acct('acct-d')],
+    limits: { 'acct-b': { five: 10, seven: 10 }, 'acct-c': { five: 10, seven: 20 }, 'acct-d': { five: 10, seven: 30 } } });
+  const refusedAtAdmission = (detail: string): R => ({ ...REFUSE('account-refused', detail), noRecord: true });
+
+  it('an unspawned week\'s pick refused at admission: the next in the choice\'s order runs the week and is its record', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [refusedAtAdmission('secrets-absent')] });
+    await b.tick();
+    expect((b.state() as R).setup.account, 'CONTROL: the setup took the lowest, acct-b').toBe('acct-b');
+    expect(spends(b).map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-b'], ['arms', 'acct-c'], ['judge', 'acct-c']]);
+    expect(recordOf(b)?.account).toBe('acct-c');
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed' });
+    expect(subs(b).filter((s) => s === 'setup').length, 'the setup is never re-made').toBe(1);
+  });
+
+  it('every candidate refused at admission: the week waits no-room naming each, stays running, and the next tick tries again', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [refusedAtAdmission('secrets-absent')], 'arms@acct-c': [refusedAtAdmission('provider-other')],
+      'arms@acct-d': [refusedAtAdmission('upstream-config-dir')] });
+    await b.tick();
+    const st = b.state() as R;
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'no-room',
+      detail: '1: account-refused secrets-absent, 2: account-refused provider-other, 3: account-refused upstream-config-dir' });
+    expect(st.weeks[WEEK]).toMatchObject({ state: 'running' });
+    expect(recordOf(b)).toBeNull();
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-c', 'acct-d']);
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).slice(3).map((c) => [c.argv[0], accountArg(c)])).toEqual([['arms', 'acct-b'], ['judge', 'acct-b']]);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed' });
+  });
+
+  it('a recorded week whose account is later refused closes on its word, as before: nothing is tried on another', async () => {
+    const b = three();
+    b.plan({ arms: [REFUSE('interrupted'), REFUSE('account-refused', 'secrets-absent')] });
+    await b.tick();
+    expect(recordOf(b)?.account).toBe('acct-b');
+    await b.tick({ now: NOW + 3600_000 });
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-b']);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
+  });
+
+  // Today's arms never answers account-refused once it has recorded the account (every emitter is admission, before --out),
+  // so the fake stands for a driver that would: the runner's own re-read of the record is the guard this case pins.
+  it('an account-refused that comes when the week\'s folder already records the account closes the week, never falls through', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [REFUSE('account-refused', 'fixture detail')] });   // the fake records the account, then refuses
+    await b.tick();
+    expect(spends(b).map(accountArg)).toEqual(['acct-b']);
+    expect(recordOf(b)?.account).toBe('acct-b');
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'account-refused' });
+  });
+
+  // fix round 2 (review 3549 F2): the walk stops when the runner has been told to stop
+  it('a stop arriving while the first candidate\'s driver refuses at admission: no second spawn, the week still running, interrupted', async () => {
+    const b = three();
+    b.plan({ 'arms@acct-b': [{ ...refusedAtAdmission('secrets-absent'), hold: true }] });
+    // the runner's own stop handler, called directly: no signal is sent to this test process
+    const before = new Set(process.listeners('SIGTERM'));
+    const ticking = b.tick();
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(join(b.home, 'held')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    expect(existsSync(join(b.home, 'held')), 'fixture: the first candidate\'s driver started').toBe(true);
+    const added = process.listeners('SIGTERM').filter((l) => !before.has(l));
+    expect(added, 'fixture: the runner listens for SIGTERM').toHaveLength(1);
+    (added[0] as (s: string) => void)('SIGTERM');
+    await ticking;
+    expect(existsSync(join(b.home, 'term.seen')), 'fixture: the stop reached the refusing driver').toBe(true);
+    expect(spends(b).map(accountArg), 'no second candidate spawned').toEqual(['acct-b']);
+    const st = b.state() as R;
+    expect(st.weeks[WEEK]).toMatchObject({ state: 'running' });
+    expect(st.last).toMatchObject({ act: 'arms', outcome: 'waiting', word: 'interrupted' });
+    expect(recordOf(b)).toBeNull();
+  }, 60_000);
+
+  it('ruling 1 on the runner\'s own reading: an account whose row is marked with no five-hour window has room on its weekly figure', async () => {
+    const b = mkBox();
+    b.setLimits('acct-b', { five: null, seven: 10, fiveWindowMinutes: 0 });
+    b.setLimits('acct-c', { five: null, seven: 10 });   // no marker: five-null, still no room
+    await b.tick();
+    expect((b.state() as R).setup.account).toBe('acct-b');
+    expect(spends(b).map(accountArg)).toEqual(['acct-b', 'acct-b']);
   });
 });
