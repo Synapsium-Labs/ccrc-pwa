@@ -4347,8 +4347,8 @@ export function registerCoordRoutes(
   app.post('/api/ledger/deviations', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
-    return reply.code(410).send({ ok: false, error: 'retired',
-      detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' });
+    return refuseRoute(reply, 'retired',
+      { detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' });
   });
 
   /**

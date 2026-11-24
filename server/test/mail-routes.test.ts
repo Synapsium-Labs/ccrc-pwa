@@ -709,6 +709,9 @@ describe('the rejection table is total, in both directions', () => {
       'not-failed',
       // D-8289 — the same record's `notSent` CHECK vocabulary: why a capture try sent nothing. A row fact, not a refusal.
       ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP),
+      // The retired deviation allocator's fail-shut answer (`coord/ledger.ts`, `coord/store.ts`): no route sends it since
+      // the allocator's POST answers 410 `retired` (self-assigned numbers, PR 1); PR 2 deletes the code and this row.
+      'not-seeded',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog

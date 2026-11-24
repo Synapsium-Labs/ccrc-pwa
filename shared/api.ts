@@ -6886,15 +6886,14 @@ export function isRunRefuseCode(v: unknown): v is RunRefuseCode {
  *   not-owner       — release: the claim is live and not yours; heldBy names who
  *   claim-terminal  — release/break: the row already ended; state rides along.
  *                     Lapse-don't-delete (D12) is why this arm exists at all
- *   not-seeded      — the allocator refuses before sweepLedgerFloor has scanned
- *                     the project (D13: fail shut, never mint from a guess)
  *
  * Producers land across wave 7 (Tasks 18-20); `claims-envelope.test.ts` pins
- * the producer direction once all seven exist.
+ * the producer direction. A seventh, `not-seeded` (the deviation allocator's
+ * fail-shut refusal, D13), left with the allocator.
  */
 export const CLAIM_REFUSE_CODES = [
   'unknown-session', 'claim-conflict', 'bad-path', 'unknown-claim', 'not-owner',
-  'claim-terminal', 'not-seeded',
+  'claim-terminal',
 ] as const;
 export type ClaimRefuseCode = (typeof CLAIM_REFUSE_CODES)[number];
 export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
