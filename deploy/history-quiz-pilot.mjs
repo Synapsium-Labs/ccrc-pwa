@@ -2,9 +2,10 @@
 // docs/superpowers/programs/overlord/quiz-pilot-stage-b.md). The pure rules the single-arm module
 // (history-quiz-single.mjs) and the unattended runner (history-quiz-unattended.mjs) share about a pilot, kept out of the
 // replay driver (history-replay.mjs), which sits at its growth cap:
-//   - B0, a pilot's key: what can change a pilot's outcome, the Claude Code build the driver measures (its `--version` line)
-//     and the gate's code hash as the gate computes it (codeShas over CODE_SHA_FILES). The runner pilots a week again only on
-//     a key no pilot of that week has run on; the release tag is no longer the key.
+//   - B0, a pilot's key: what can change a pilot's outcome, the Claude Code build the driver measures (its `--version` line),
+//     the gate's code hash as the gate computes it (codeShas over CODE_SHA_FILES), the same hash over the quiz's pilot files
+//     (PILOT_CODE_FILES: every other module the quiz and the gate load, fix round 1) and the staged skill's sha. The runner
+//     pilots a week again only on a key no pilot of that week has run on; the release tag is no longer the key.
 //   - B1, the skill: the shipped history skill's files, read from the installed tree and pinned by their sha, staged into a
 //     treatment-arm run's own working folder as a project skill (`.claude/skills/ccrc-history/`), which the driver removes
 //     with that folder. A source missing or changed since it was pinned refuses with a word of its own.
@@ -17,35 +18,67 @@
 //     project folder, no main transcript exists, the walk of it is complete, and the sweep's own ingest decision answers, for
 //     every regular file found, that the store cannot read it.
 //
-// L1 rules with two small adapters beside them (B1's source read and staging write, B4's known-id read), each named. It imports
-// nothing from the single-arm module, and from the replay driver only pure readers, so no import cycles back.
+// L1 rules with three small adapters beside them (B0's pilot-file hash, B1's source read and staging write, B4's known-id read),
+// each named. It imports nothing from the single-arm module, and from the replay driver only pure readers and its one code
+// hasher (codeShas), so no import cycles back.
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalJson, decideAgentIngest, sha256Hex } from '../ccd/history/lib.mjs';
 import { knownUuids } from '../ccd/history/sweep.mjs';
-import { pluginClassOf, projectSlugOf } from './history-replay.mjs';
+import { TREE_ROOT, codeShas, pluginClassOf, projectSlugOf } from './history-replay.mjs';
 
 const plainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const HEX64 = /^[0-9a-f]{64}$/;
 
 // ── B0: a pilot's key ────────────────────────────────────────────────────────────────────────────────────────────────
-/** Whether `k` is a pilot key: `claude_code`, a non-empty `--version` line, and `code_shas`, a non-empty map of file path to a
- *  sha256 hex (codeShas' `files`). Anything else is no key, so a damaged record never matches one. Pure.
- *  @param {unknown} k  @returns {boolean} */
-export function pilotKeyValid(k) {
-  if (!plainObject(k) || Object.keys(k).sort().join(',') !== 'claude_code,code_shas') return false;
-  if (typeof k.claude_code !== 'string' || k.claude_code === '' || !plainObject(k.code_shas)) return false;
-  const files = Object.entries(k.code_shas);
-  return files.length > 0 && files.every(([f, s]) => f !== '' && typeof s === 'string' && HEX64.test(s));
+/** The quiz's pilot files (fix round 1, F1): every tracked module that the three quiz modules, the sweep module and the history
+ *  library load by a static import, followed through the gate's own files too, that the gate's list (GATE_CODE_FILES) does not
+ *  name; sorted. Their bytes can change a pilot's outcome, so the key hashes them, the way the gate hashes its own (codeShas);
+ *  the gate's list and its code sha keep their meaning. A test walks the closure and goes red when it and the two lists differ. */
+export const PILOT_CODE_FILES = Object.freeze([
+  'ccd/compact-card.mjs', 'ccd/history/card.mjs', 'ccd/history/census.mjs', 'ccd/history/cli.mjs', 'ccd/history/derive.mjs',
+  'ccd/history/fts-structure.mjs', 'ccd/history/read-context.mjs', 'ccd/history/recall.mjs', 'ccd/history/steer.mjs',
+  'ccd/history/store.mjs', 'ccd/history/sweep.mjs', 'deploy/history-limits.mjs', 'deploy/history-quiz-pilot.mjs',
+  'deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs', 'shared/base-url.mjs', 'shared/redact.mjs',
+  'shared/roster-json.mjs', 'shared/workflow-ids.mjs',
+]);
+/** The sha256 of each pilot file under `root`, codeShas' answer over PILOT_CODE_FILES. An adapter (L3).  @param {string} [root] */
+export function pilotShasOf(root = TREE_ROOT) {
+  return codeShas(root, PILOT_CODE_FILES);
 }
-/** A pilot's key from what the driver measures: the build's `--version` line and codeShas' answer. null when either is not
- *  measured, so an unmeasured key is never a key. Pure.
- *  @param {unknown} version  @param {unknown} code  codeShas' answer, `{ state: 'measured', files }` or not
- *  @returns {{ claude_code: string, code_shas: Record<string, string> } | null} */
-export function pilotKeyOf(version, code) {
-  if (!plainObject(code) || code.state !== 'measured') return null;
-  const k = { claude_code: version, code_shas: code.files };
-  return pilotKeyValid(k) ? { claude_code: version, code_shas: { ...code.files } } : null;
+/** A non-empty map of file path to a sha256 hex (codeShas' `files`). Pure. */
+const shaMap = (m) => plainObject(m) && Object.keys(m).length > 0 && Object.entries(m).every(([f, s]) => f !== '' && typeof s === 'string' && HEX64.test(s));
+/** A pilot key's four parts and the form each takes: the build's `--version` line, the gate's code shas, the pilot files' shas
+ *  and the staged skill's sha. */
+const KEY_PARTS = Object.freeze({
+  claude_code: (v) => typeof v === 'string' && v !== '',
+  code_shas: shaMap,
+  pilot_shas: shaMap,
+  skill_sha256: (v) => typeof v === 'string' && HEX64.test(v),
+});
+/** Whether every own field of `k` is a key part in its form; `all` asks for all four. Pure. */
+const keyPartsOk = (k, all) => plainObject(k) && Object.entries(k).every(([p, v]) => Object.hasOwn(KEY_PARTS, p) && KEY_PARTS[p](v))
+  && (!all || Object.keys(KEY_PARTS).every((p) => Object.hasOwn(k, p)));
+/** Whether `k` is a pilot key: all four parts, each in its form, and nothing else. Anything else is no key, so a damaged record
+ *  never matches one. Pure.  @param {unknown} k  @returns {boolean} */
+export function pilotKeyValid(k) {
+  return keyPartsOk(k, true);
+}
+/** Whether `k` is a key lacking a part (fix round 1, F1): every field it has is a part in its form, and not all four are there,
+ *  as a key written before a part joined it is. Such a key counts toward the cap and matches no key; a key in no form at all is
+ *  unmeasured. Pure.  @param {unknown} k  @returns {boolean} */
+export function pilotKeyOlder(k) {
+  return keyPartsOk(k, false) && !keyPartsOk(k, true);
+}
+/** A pilot's key from what is measured: the build's `--version` line, codeShas' answer for the gate's files and for the pilot
+ *  files, and the skill source's sha. null when any part is not measured, so an unmeasured key is never a key. Pure.
+ *  @param {unknown} version  @param {unknown} code  @param {unknown} pilot  codeShas' answers, `{ state: 'measured', files }` or not
+ *  @param {unknown} skill  the skill's sha256 (skillSourceOf's `sha256`)
+ *  @returns {{ claude_code: string, code_shas: Record<string, string>, pilot_shas: Record<string, string>, skill_sha256: string } | null} */
+export function pilotKeyOf(version, code, pilot, skill) {
+  if (!plainObject(code) || code.state !== 'measured' || !plainObject(pilot) || pilot.state !== 'measured') return null;
+  const k = { claude_code: version, code_shas: { ...code.files }, pilot_shas: { ...pilot.files }, skill_sha256: skill };
+  return pilotKeyValid(k) ? k : null;
 }
 /** Two keys are one key when their canonical bytes are equal. Pure.  @param {unknown} a  @param {unknown} b */
 export function sameKey(a, b) {
@@ -117,6 +150,14 @@ export function fallbackProbeDueOf(settingsMode, verdict) {
 export function fallbackSkillOf(state) {
   return state === 'pass' ? 'listed' : state === 'fail' ? 'not-listed' : 'unmeasured';
 }
+/** The fallback probe's reading when the probe itself failed (fix round 1, F2: the probe decides nothing, so its failure decides
+ *  nothing either): `unmeasured`, with the word of the refusal or stop it ended on (`probe-threw` for a throw that carries
+ *  none) and its detail. Pure.  @param {string} run  the probe's run name  @param {unknown} e  what the probe threw */
+export function fallbackUnmeasuredOf(run, e) {
+  const word = typeof e?.word === 'string' ? e.word : 'probe-threw';
+  const detail = typeof e?.detail === 'string' ? e.detail : String(e?.message ?? e);
+  return { run, skill: 'unmeasured', word, detail };
+}
 
 // ── B3: the plugins-off map ──────────────────────────────────────────────────────────────────────────────────────────
 /** A plugin source the map may switch off: a plain name, one `@`, a plain marketplace name. */
@@ -153,8 +194,8 @@ export function pluginsCheckWithMapOf(base, map) {
 }
 
 // ── B4: the persistence proof ────────────────────────────────────────────────────────────────────────────────────────
-/** The sweep's own known ids (knownUuids over the store's read handle and the registry under `home`), or null when they cannot
- *  be read: an unmeasured set proves nothing. An adapter (L3).  @param {object} db  @param {string} home */
+/** The sweep's own known ids (knownUuids over the store's read handle and the registry under `home`), or null when the store's
+ *  read throws; an unreadable registry reads as the sweep itself reads it. An adapter (L3).  @param {object} db  @param {string} home */
 export function knownIdsOf(db, home) {
   try { return knownUuids(db, home); } catch { return null; }
 }
@@ -167,7 +208,8 @@ function storeCouldRead(rel, slug, known) {
   const ask = (form, preInstall) => decideAgentIngest({ historyOff: false, pause: null, admitted: true, parentKnown: known.has(parts[1]), form, armed: true, preInstall });
   return ask('tick', false) || ask('import', true);
 }
-/** A persistence row with B4's proof added: a measured `left` row gets `proof`, each of its four conditions recorded, and
+/** A persistence row with B4's proof added: a measured `left` row gets `proof`, each of its four conditions recorded (the first,
+ *  own_folder, also false on any link the walk found: the shape's `links`, absent on a shape from before fix round 1), and
  *  `passed` only when all hold (a leftover holding no regular file needs the first three alone); a clean row and an unmeasured
  *  one come back as they are. `known` is knownIdsOf's answer. Pure.
  *  @param {object} row  persistenceMeasured's  @param {{ cwd: string, sessionId: string | null, known: Set<string> | null }} o */
@@ -175,7 +217,9 @@ export function persistenceProofOf(row, { cwd, sessionId, known }) {
   if (row.unmeasured !== undefined || row.left !== true || !plainObject(row.shape)) return row;
   const slug = projectSlugOf(cwd);
   const files = Array.isArray(row.shape.files) ? row.shape.files : [];
-  const ownFolder = row.project_dir === true && row.transcripts.every((t) => t === slug || t.startsWith(`${slug}/`));
+  // fix round 1: any link among what the run left fails this condition, whatever it points at
+  const ownFolder = row.project_dir === true && row.transcripts.every((t) => t === slug || t.startsWith(`${slug}/`))
+    && Array.isArray(row.shape.links) && row.shape.links.length === 0;
   const noMain = !files.some((f) => f.split('/').length === 2 && f.endsWith('.jsonl')) && !row.transcripts.some((t) => path.basename(t) === `${sessionId}.jsonl`);
   const walkComplete = row.shape.truncated === false && row.shape.unmeasured === undefined && Array.isArray(row.shape.files);
   const readable = files.length === 0 || known === null ? [] : files.filter((f) => storeCouldRead(f, slug, known));

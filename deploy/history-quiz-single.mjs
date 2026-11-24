@@ -46,8 +46,8 @@
 // round that stopped before its result was written is resumed only on the release it was pinned to, else it refuses
 // `repilot-release-moved`. When to ask for it is the unattended runner's decision, never this file's: passed by hand, the
 // flag is a permission and decides nothing (no cap, no same-key rule). Both write sites of the pin record the pilot key the
-// act measured (stage B, B0: the build's --version line and the gate's code shas), which the runner reads as the key of the
-// week's first pilot.
+// act measured (stage B, B0 and its fix round 1: the build's --version line, the gate's code shas, the quiz's pilot files'
+// shas and the skill's sha), which the runner reads as the key of the week's first pilot.
 //
 // The pilot, stage B (the note quiz-pilot-stage-b.md; the rules are history-quiz-pilot.mjs's). `arms` pins the shipped
 // history skill's source before --out, and every treatment-arm run, step 0b's probes and the week's questions, finds it
@@ -104,7 +104,7 @@ import { DriverRefusal, LIMITS_DEFAULTS, OUT_JSON_CAP, QUIZ_META_FILE, SETTINGS_
   settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spendLinesOf, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
   step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
   TREE_ROOT, warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
-import { SKILL_WORDS, fallbackProbeDueOf, fallbackSkillOf, knownIdsOf, persistenceProofOf, pilotKeyOf, pilotKeyValid, pluginsCheckWithMapOf, pluginsOffOf,
+import { SKILL_WORDS, fallbackProbeDueOf, fallbackSkillOf, fallbackUnmeasuredOf, knownIdsOf, persistenceProofOf, pilotKeyOf, pilotKeyValid, pilotShasOf, pluginsCheckWithMapOf, pluginsOffOf,
   pluginsOffSettingsOf, skillSourceOf, stageSkillInto } from './history-quiz-pilot.mjs';
 
 const PREFIX = 'ccrc history-quiz-single';
@@ -605,8 +605,8 @@ function pinArmsRelease(out, setupSha256, release, key) {
  *  pinArmsRelease writes it at the week's first `arms` and verifies it at every later one, and repilotPrepare replaces it on
  *  purpose after a failed pilot, for the round it starts. `round` is the step 0b round the pin was written for (0 at the
  *  first start); a pin written before it existed reads as round 0. `key` is the pilot key the pin was written on (stage B,
- *  B0: the build and the gate's code shas this act measured, pilotKeyOf), which the runner reads as the key of the week's
- *  first pilot; a pin written before it existed has none. Pure.
+ *  B0 and fix round 1: the build, the gate's code shas, the pilot files' shas and the skill's sha this act measured,
+ *  pilotKeyOf), which the runner reads as the key of the week's first pilot; a pin written before it existed has none. Pure.
  *  @param {string} setupSha256  @param {string} release  @param {number} round  @param {object} key  @returns {string} */
 export function releasePinText(setupSha256, release, round, key) {
   if (!Number.isSafeInteger(round) || round < 0) throw new TypeError(`releasePinText: round ${String(round)}`);
@@ -800,13 +800,21 @@ async function step0bRound(c, rel, round) {
   const verdict = step0bVerdictOf(checks);
   let skillFallback = null;
   if (fallbackProbeDueOf(settingsMode, verdict)) {
-    // B2: one more probe under the fallback mode, recorded only; the verdict above is restricted's and stays so
-    const card = await step0bCardOf(c.cardCtx);
-    const pre = await spawnPre();
-    const job = armRun(probes[0], card, 'fallback', nameOf('skill-probe', 'fallback'));
-    const [o] = await runBatch([job], { gate, claim, concurrency: 1 });
-    batches.push({ claude_code_version: pre.version, runs: [job.name] });
-    skillFallback = { run: job.name, skill: fallbackSkillOf(initChecksOf([o.facts.init], want).skill.state), persistence: rowOf(o), record: step0bRunOf('arm', o) };
+    // B2: one more probe under the fallback mode, recorded only; the verdict above is restricted's and stays so. Fix round 1,
+    // F2: the probe decides nothing, so its failure decides nothing either. Any refusal or throw inside it, a stop included, is
+    // recorded as the fallback reading unmeasured with its word, and the act goes on to write the result and end on the pilot
+    // word below, as it would have without the probe; nothing spawns after the catch.
+    const name = nameOf('skill-probe', 'fallback');
+    try {
+      const card = await step0bCardOf(c.cardCtx);
+      const pre = await spawnPre();
+      const job = armRun(probes[0], card, 'fallback', name);
+      const [o] = await runBatch([job], { gate, claim, concurrency: 1 });
+      batches.push({ claude_code_version: pre.version, runs: [job.name] });
+      skillFallback = { run: job.name, skill: fallbackSkillOf(initChecksOf([o.facts.init], want).skill.state), persistence: rowOf(o), record: step0bRunOf('arm', o) };
+    } catch (e) {
+      skillFallback = fallbackUnmeasuredOf(name, e);
+    }
   }
   const agent = outcomes[probes.findIndex((p) => p.expect === 'subagent')];
   const output = {
@@ -910,6 +918,8 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
     await step0bCardOf(cardCtx);   // W2-D78 (iii) and the card, before --out
     refuseSyntheticPresent(transcript);
     const skill = pinSkill(deps.skillRoot ?? TREE_ROOT);   // stage B, B1: the source pinned before --out, refused before any write
+    const pilotCode = pilotShasOf();   // stage B fix round 1, F1: the quiz's pilot files, a part of the pin's key
+    if (pilotCode.state !== 'measured') refuse('code-unmeasured', `pilot file ${pilotCode.path} is ${pilotCode.cause}`);
     const out = openOut(flags.out);
     if (lstatOrNull(out, SETUP_FILE) !== null && shaOfPlain(out, SETUP_FILE) === setup.sha256) {
       refuse('out-refused', `--out holds this setup's ${SETUP_FILE}: a week runs in a fresh --out of its own, never the setup's`);
@@ -920,7 +930,8 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       const startedMs = Date.now();
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: s.budget, limits: s.limits });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
-      const key = pilotKeyOf(expected.claude_code_version, { state: 'measured', files: expected.code_shas });   // stage B, B0: the pin records it
+      // stage B, B0 and fix round 1: the pin records the key, the build, the gate's code, the pilot files and the skill
+      const key = pilotKeyOf(expected.claude_code_version, { state: 'measured', files: expected.code_shas }, pilotCode, skill.sha256);
       if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp, key });
       pinArmsRelease(out, setup.sha256, expected.release_stamp, key);
       const armed = armedWordsOf(home, ids);
@@ -988,18 +999,19 @@ function reportStop(ctx, run, questions, e) {
 }
 
 // ── judge ───────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** The arms summary as `judge` and `report` take it: this setup's and this frozen list's, finished with no stop and every
- *  question settled, and the one this --out holds (so the answer records read beside it are its own). */
-/** B3: the week's plugins-off map for the judge, read from the step 0b result the arms summary names, by its sha. */
+/** B3: the week's plugins-off map for the judge, read from the step 0b result the arms summary names: its path is this mode's
+ *  result, its bytes hash to the sha the summary names, and it is a step 0b result (fix round 1: each check held by a case). */
 function judgeSettingsOf(out, ref, mode) {
   if (!plainObject(ref) || ref.rel !== step0bRel(mode) || typeof ref.sha256 !== 'string') refuse('input-invalid', 'arms-summary names no step 0b result of this mode');
   const read = readPlain(path.join(out, ref.rel), OUT_JSON_CAP);
   if (read.state !== 'bytes' || sha256Hex(read.bytes) !== ref.sha256) refuse('input-invalid', `${ref.rel} is not the step 0b result the arms summary names`);
   let r = null;
   try { r = JSON.parse(read.bytes.toString('utf8')); } catch { r = null; }
-  if (!plainObject(r)) refuse('input-invalid', `${ref.rel} is not a step 0b result`);
+  if (!plainObject(r) || r.kind !== STEP0B_KIND) refuse('input-invalid', `${ref.rel} is not a step 0b result`);
   return weekSettingsOf(r, ref.rel);
 }
+/** The arms summary as `judge` and `report` take it: this setup's and this frozen list's, finished with no stop and every
+ *  question settled, and the one this --out holds (so the answer records read beside it are its own). */
 function loadSummary(flags, out, setupSha256, frozenSha256) {
   const r = loadOwn(flags, 'arms-summary', SUMMARY_KIND, setupSha256);
   const v = r.value;

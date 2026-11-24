@@ -5162,8 +5162,8 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
       // quiz-pilot-checks ruling 3: a measured leftover also carries its shape, names and sizes only.
       persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true, shape: {
         entries: [{ path: projects[0], kind: 'dir', size: expect.any(Number) }, { path: `${projects[0]}/sess-left.jsonl`, kind: 'file', size: expect.any(Number) }],
-        // quiz pilot stage B, B4: the shape also lists every regular file it found
-        subagents_dir: false, transcript_file: true, truncated: false, files: [`${projects[0]}/sess-left.jsonl`] } },
+        // quiz pilot stage B, B4: the shape also lists every regular file it found; fix round 1: and every link (none here)
+        subagents_dir: false, transcript_file: true, truncated: false, files: [`${projects[0]}/sess-left.jsonl`], links: [] } },
     });
     expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
   });
@@ -24970,10 +24970,25 @@ describe('stage B characterization of main (e29f704d47): the shared step 0b piec
     const slug = QPC_D.projectSlugOf(l.cwd) as string;
     // Changed by stage B, B4 (was: depth 2, no files key, the subagent file not named): one level deeper, and every file listed.
     expect(QPC_D.LEFTOVER_SHAPE_NAMED_DEPTH).toBe(3);
-    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'files', 'subagents_dir', 'transcript_file', 'truncated']);
+    // Changed by stage B fix round 1 (was: no links key): every link the walk finds is listed too.
+    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'files', 'links', 'subagents_dir', 'transcript_file', 'truncated']);
+    expect(got.shape.links).toEqual([]);
     expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir'], [`${slug}/${l.sessionId}/subagents`, 'dir'],
       [`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`, 'file']]);
     // The gate's caller proves nothing, so its rows fail as before: no proof, no pass.
     expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
+  });
+
+  it('stage B fix round 1: the shape lists every link the walk finds, at the root and past the named depth, and never follows one', () => {
+    const l = qpcLeftover({ subagents: true, transcript: true });
+    const slug = QPC_D.projectSlugOf(l.cwd) as string;
+    const projects = join(l.configDir, 'projects');
+    const deep = join(projects, slug, l.sessionId, 'subagents', 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+    symlinkSync('/nonexistent-target', join(deep, 'far.jsonl'));   // depth 6: past the named depth, still listed
+    symlinkSync(join(projects, slug), join(projects, `${slug}-alias`));   // a root of its own, at depth 0
+    const shape = QPC_D.leftoverShapeOf(projects, [slug, `${slug}-alias`]) as QpcR;
+    expect(shape.links).toEqual([`${slug}/${l.sessionId}/subagents/a/b/far.jsonl`, `${slug}-alias`]);
+    expect(shape.files, 'a link is never a regular file, and the alias is never entered').toEqual([`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
   });
 });

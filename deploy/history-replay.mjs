@@ -2040,8 +2040,9 @@ function refuseOnLimits(home, accountId, { thresholdPct, maxAgeMs }, nowMs) {
 /** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from: the gate's
  *  own GATE_CODE_FILES, so the four paths are spelled once (W2-5a Task 1, closing decisions §7's double spelling). The
  *  driver's other ccd/history imports (store.mjs, derive.mjs, recall.mjs, cli.mjs) and the modules they load (sweep.mjs,
- *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not hashed: the release_tag comparison and the tree-moved
- *  preflight cover them (W2-D24, W2-D56). */
+ *  card.mjs, ccd/compact-card.mjs, shared/base-url.mjs) are not in gate_code: within a round the release_tag comparison and
+ *  the tree-moved preflight cover them (W2-D24, W2-D56). Across rounds, the quiz's re-pilot decision no longer reads the
+ *  release (stage B, B0): its key hashes them as the quiz's pilot files instead (PILOT_CODE_FILES, history-quiz-pilot.mjs). */
 export const CODE_SHA_FILES = GATE_CODE_FILES;
 /** The tree this file was loaded from: the installed release on a node, the checkout in a test. */
 export const TREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -2053,11 +2054,11 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const VERSION_TIMEOUT_MS = 60_000;
 const VERSION_STDOUT_MAX = 65_536;
 
-/** The sha256 of each CODE_SHA_FILES member's bytes under `root`, or the first one that cannot be measured. An
- *  absent file is `absent`; any other read failure is `unreadable`. */
-export function codeShas(root = TREE_ROOT) {
+/** The sha256 of each CODE_SHA_FILES member's bytes under `root` (or of each of `list`, the quiz's pilot files: one
+ *  hasher), or the first one that cannot be measured. An absent file is `absent`; any other read failure is `unreadable`. */
+export function codeShas(root = TREE_ROOT, list = CODE_SHA_FILES) {
   const files = {};
-  for (const rel of CODE_SHA_FILES) {
+  for (const rel of list) {
     let bytes;
     try {
       bytes = readFileSync(path.join(root, rel));
@@ -2701,13 +2702,14 @@ const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'l
 /** The shape of what a run left under `projects` (quiz-pilot-checks ruling 3), measured BEFORE anything removes it: each root
  *  (a path relative to `projects`) and every entry up to LEFTOVER_SHAPE_NAMED_DEPTH levels below it, as `{path, kind, size}`
  *  (the lstat size; a link is never followed); whether a directory named `subagents` stands anywhere in the walk; whether any
- *  file named `*.jsonl` (a transcript) does; and `files`, the path of every regular file the walk found at any depth (stage B,
- *  B4's proof asks the sweep about each). The walk goes past the named depth only to answer those three, and stops at
+ *  file named `*.jsonl` (a transcript) does; `files`, the path of every regular file the walk found at any depth (stage B,
+ *  B4's proof asks the sweep about each); and `links`, the path of every link it found at any depth (stage B fix round 1: B4's
+ *  own-folder condition fails on any). The walk goes past the named depth only to answer those four, and stops at
  *  LEFTOVER_SHAPE_MAX_ENTRIES (`truncated`). Names and sizes only: no file is opened. A read failure is recorded as
  *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
  *  @param {string} projects  @param {readonly string[]} roots  */
 export function leftoverShapeOf(projects, roots) {
-  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false, files: [] };
+  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false, files: [], links: [] };
   let seen = 0;
   const read = (fn) => { try { return fn(); } catch (e) { o.unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return null; } };
   const walk = (rel, depth) => {
@@ -2718,6 +2720,7 @@ export function leftoverShapeOf(projects, roots) {
     o.subagents_dir ||= st.isDirectory() && path.basename(rel) === 'subagents';
     o.transcript_file ||= st.isFile() && rel.endsWith('.jsonl');
     if (st.isFile()) o.files.push(rel);
+    if (st.isSymbolicLink()) o.links.push(rel);
     if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) o.entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
     if (st.isDirectory()) for (const n of read(() => readdirSync(path.join(projects, rel)).sort()) ?? []) walk(`${rel}/${n}`, depth + 1);
   };

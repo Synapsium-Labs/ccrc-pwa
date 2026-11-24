@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as unMod from '../../deploy/history-quiz-unattended.mjs';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
+import * as qpMod from '../../deploy/history-quiz-pilot.mjs';
 import { quizWeek } from '../src/continuity/quiz.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -22,6 +23,7 @@ type R = Record<string, any>;
 const U = unMod as unknown as R;
 const QS = qsMod as unknown as R;
 const D = drvMod as unknown as R;
+const QP = qpMod as unknown as R;
 
 removeTmpFixturesEachTest();
 
@@ -147,14 +149,22 @@ process.stdout.write(step.stdout ?? '{"ok":true}\\n');
 const acct = (id: string, extra: R = {}): R => ({ id, exec: { kind: 'upstream' }, telemetry: 'anthropic', ...extra });
 /** Stage B, B0: the gate's code shas every fixture key carries, unless a case says otherwise. */
 const FIX_CODE: Record<string, string> = { 'deploy/history-gate.mjs': 'a'.repeat(64), 'deploy/history-replay.mjs': 'b'.repeat(64) };
-/** A pilot key: the build's --version line and the gate's code shas. */
-const KEY = (build: string, code: Record<string, string> = FIX_CODE): R => ({ claude_code: build, code_shas: code });
-/** The box's stand-in for the runner's key measure (the real one spawns the week's launcher): the build in `fixture-build` and the
- *  code shas in `fixture-code` (JSON) when present; with no `fixture-build`, the key is unmeasured. */
+/** Stage B fix round 1, F1: the quiz's pilot files' shas and the skill's sha every fixture key carries, unless a case says otherwise. */
+const FIX_PILOT: Record<string, string> = { 'deploy/history-quiz-single.mjs': 'd'.repeat(64), 'ccd/history/sweep.mjs': 'e'.repeat(64) };
+const FIX_SKILL = '9'.repeat(64);
+/** A pilot key: the build's --version line, the gate's code shas, the pilot files' shas and the skill's sha. */
+const KEY = (build: string, code: Record<string, string> = FIX_CODE, pilot: Record<string, string> = FIX_PILOT, skill: string = FIX_SKILL): R =>
+  ({ claude_code: build, code_shas: code, pilot_shas: pilot, skill_sha256: skill });
+/** The box's stand-in for the runner's key measure (the real one spawns the week's launcher): the build in `fixture-build`, the
+ *  code shas in `fixture-code`, the pilot files' in `fixture-pilot` (both JSON) and the skill's sha in `fixture-skill`, each when
+ *  present; with no `fixture-build`, the key is unmeasured. */
 const fixtureKey = (home: string) => async (): Promise<R> => {
   if (!existsSync(join(home, 'fixture-build'))) return { state: 'unmeasured', why: 'fixture: no build' };
-  const code = existsSync(join(home, 'fixture-code')) ? JSON.parse(readFileSync(join(home, 'fixture-code'), 'utf8')) as Record<string, string> : FIX_CODE;
-  return { state: 'value', key: KEY(readFileSync(join(home, 'fixture-build'), 'utf8'), code) };
+  const opt = (f: string): string | null => (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8') : null);
+  const code = opt('fixture-code');
+  const pilot = opt('fixture-pilot');
+  return { state: 'value', key: KEY(opt('fixture-build')!, code === null ? FIX_CODE : JSON.parse(code) as Record<string, string>,
+    pilot === null ? FIX_PILOT : JSON.parse(pilot) as Record<string, string>, opt('fixture-skill') ?? FIX_SKILL) };
 };
 
 interface Box {
@@ -1300,7 +1310,7 @@ describe('--state-verdict: the runner\'s own reading of its state file, for doct
 // ── quiz-pilot-checks ruling 5: a week closed on the pilot word is piloted again on a newer release, at most three a week ──
 describe('repilotOf: the pure decision, as a table (keyed by stage B\'s B0)', () => {
   const failed = { state: 'failed', word: 'pilot-failed' };
-  const k = (b: string, code?: Record<string, string>): R => ({ state: 'value', key: KEY(b, code) });
+  const k = (b: string, code?: Record<string, string>, pilot?: Record<string, string>, skill?: string): R => ({ state: 'value', key: KEY(b, code, pilot, skill) });
   const at = (b: string, code?: Record<string, string>): R => ({ release: 'v1', key: KEY(b, code) });
   const OTHER_CODE = { ...FIX_CODE, 'deploy/history-replay.mjs': 'c'.repeat(64) };
   const rows: Array<[string, R, unknown, unknown, R]> = [
@@ -1310,12 +1320,19 @@ describe('repilotOf: the pure decision, as a table (keyed by stage B\'s B0)', ()
     ['the same key: no second pilot on it', failed, [at('b1')], k('b1'), { repilot: false, why: 'key-unchanged' }],
     ['back to an earlier failed key', failed, [at('b1'), at('b2')], k('b1'), { repilot: false, why: 'key-unchanged' }],
     ['the same build, the gate\'s code changed: a new key', failed, [at('b1')], k('b1', OTHER_CODE), { repilot: true, pilot: 2 }],
+    // fix round 1, F1: each new part of the key, changed alone, is a new key
+    ['the same build and gate code, a pilot file changed: a new key', failed, [at('b1')], k('b1', FIX_CODE, { ...FIX_PILOT, 'ccd/history/sweep.mjs': 'f'.repeat(64) }), { repilot: true, pilot: 2 }],
+    ['the same build, gate code and pilot files, the skill changed: a new key', failed, [at('b1')], k('b1', FIX_CODE, FIX_PILOT, '8'.repeat(64)), { repilot: true, pilot: 2 }],
+    ['an entry whose key lacks a part (written before it joined the key) counts and matches no key', failed, [{ release: 'v1', key: { claude_code: 'b1', code_shas: FIX_CODE } }], k('b1'), { repilot: true, pilot: 2 }],
+    ['two entries lacking a part and a keyed one: the cap counts them all', failed, [{ release: 'v1', key: { claude_code: 'b1', code_shas: FIX_CODE } }, { release: 'v1', key: { claude_code: 'b2' } }, at('b3')], k('b4'), { repilot: false, why: 'pilots-spent' }],
     ['another release on the same key is the same key (B0: the release is no longer the key)', failed, [{ release: 'v1.0.1', key: KEY('b1') }], k('b1'), { repilot: false, why: 'key-unchanged' }],
     ['an entry written before B0 (a release, no key) counts and matches no key', failed, [{ release: 'v1.0.1' }], k('b1'), { repilot: true, pilot: 2 }],
     ['two entries written before B0 and a keyed one: the cap counts them all', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, at('b1')], k('b2'), { repilot: false, why: 'pilots-spent' }],
     ['an older entry whose release could not be read is unmeasured', failed, [{ release: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
     ['an entry whose key could not be read', failed, [{ release: 'v1', key: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
-    ['an entry whose key is damaged', failed, [{ release: 'v1', key: { claude_code: 'b1' } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    // Changed by fix round 1 (was: { claude_code: 'b1' }, which now reads as a key lacking parts): a part in no form is damage
+    ['an entry whose key is damaged', failed, [{ release: 'v1', key: { claude_code: 'b1', code_shas: { f: 'not-hex' } } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key has a field that is no part', failed, [{ release: 'v1', key: { ...KEY('b1'), extra: 1 } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
     ['no row', null as unknown as R, [], k('b2'), { repilot: false, why: 'no-week' }],
     ['a running week', { state: 'running', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
     ['a confirmed week', { state: 'confirmed', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
@@ -1703,6 +1720,22 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
   });
 
+  // fix round 1, F1: a pilot file or the skill moved alone, on the same build and gate code, is a new key
+  for (const [what, file, text] of [
+    ['a pilot file', 'fixture-pilot', JSON.stringify({ ...FIX_PILOT, 'ccd/history/sweep.mjs': 'f'.repeat(64) })],
+    ['the skill', 'fixture-skill', '8'.repeat(64)],
+  ] as Array<[string, string, string]>) {
+    it(`B0, fix round 1: ${what} moved on the same build and gate code is a new key: piloted again, the row naming it`, async () => {
+      const b = await failedOn('v1.0.1');
+      writeFileSync(join(b.home, file), text);
+      await b.tick({ now: NOW + HOUR });
+      expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+      const pilots = (b.state() as R).weeks[WEEK].pilots as R[];
+      expect(pilots.length).toBe(2);
+      expect(U.pilotEntryKeyOf(pilots[1]!), 'the second pilot is counted against the moved key').toEqual({ state: 'key', key: (await fixtureKey(b.home)()).key });
+    });
+  }
+
   it('B0: a key that cannot be measured keeps the week closed, spawns nothing, and the journal says why', async () => {
     const b = await failedOn('v1.0.1');
     unlinkSync(join(b.home, 'fixture-build'));
@@ -1747,6 +1780,18 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the same build pilots once more: the older entry names no key').toEqual([false, true]);
   });
 
+  it('B0, fix round 1: a pin whose key lacks a part (written before it joined the key) is an older pilot too: it counts, and matches no key', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    const older = { claude_code: BUILD('v1.0.1'), code_shas: FIX_CODE };
+    pin(b, 'v1.0.1', `${JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0, key: older })}\n`);
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', at_ms: NOW }]);
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the same build pilots once more: the older key matches no key').toEqual([false, true]);
+  });
+
   it('B0: a re-pilot that stopped resumably is continued after a release moved on the same key', async () => {
     const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
     setBuildOnly(b, '9.9.9 (Claude Code)');
@@ -1774,10 +1819,12 @@ describe('measuredPilotKeyOf: the pilot key as the driver measures it (stage B, 
     return { home, out };
   }
 
-  it('the key is the launcher\'s --version line and the gate\'s code shas, exactly as codeShas answers them', async () => {
+  it('the key is the launcher\'s --version line, the gate\'s code shas, the pilot files\' shas and the skill\'s sha, exactly as measured', async () => {
     const { home, out } = keyHome();
     const got = await U.measuredPilotKeyOf({ home, out, account: 'up-a', lang: undefined }) as R;
-    expect(got).toEqual({ state: 'value', key: { claude_code: '2.9.1 (Claude Code)', code_shas: (D.codeShas() as R).files } });
+    expect(got).toEqual({ state: 'value', key: { claude_code: '2.9.1 (Claude Code)', code_shas: (D.codeShas() as R).files,
+      pilot_shas: (QP.pilotShasOf() as R).files, skill_sha256: (QP.skillSourceOf(D.TREE_ROOT) as R).sha256 } });
+    expect(Object.keys(got.key.pilot_shas).sort(), 'every pilot file, each hashed').toEqual([...QP.PILOT_CODE_FILES as string[]].sort());
   });
 
   it('an account the roster does not admit, a launcher that fails and one that is missing are unmeasured, never a throw', async () => {

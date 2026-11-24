@@ -9,7 +9,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname as pathDirname, join, relative as pathRelative, resolve as pathResolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
@@ -116,7 +117,9 @@ function stream(o: { text?: string; skills?: string[]; calls?: Array<{ command?:
 }
 const keyOf = (mode: string, stdin: string): string => L.sha256Hex(`${mode}\n${stdin}`) as string;
 /** Stage B, B0: the pilot key an act on this checkout measures with the stub's build: its --version line and the gate's code shas. */
-const QK = (build = '2.9.1 (Claude Code)'): R => ({ claude_code: build, code_shas: (D.codeShas() as R).files });
+// stage B fix round 1, F1: the key's four parts, the pilot files and the skill (FAKE stages the repository's own) beside the build and the gate's code
+const QK = (build = '2.9.1 (Claude Code)'): R => ({ claude_code: build, code_shas: (D.codeShas() as R).files, pilot_shas: (QP.pilotShasOf() as R).files,
+  skill_sha256: (QP.skillSourceOf(REPO) as R).sha256 });
 function put(home: string, mode: string, stdin: string, ext: string, text: string): void {
   mkdirSync(join(home, STUB_DIR), { recursive: true });
   writeFileSync(join(home, STUB_DIR, `${keyOf(mode, stdin)}${ext}`), text);
@@ -1072,8 +1075,10 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
   });
 
   it('the composer refuses a key that is no pilot key (stage B, B0)', () => {
-    const bad: unknown[] = [undefined, null, {}, { claude_code: '' , code_shas: QK().code_shas }, { claude_code: 'b', code_shas: {} },
-      { claude_code: 'b', code_shas: { f: 'not-hex' } }, { ...QK(), extra: 1 }];
+    const bad: unknown[] = [undefined, null, {}, { ...QK(), claude_code: '' }, { ...QK(), code_shas: {} },
+      { ...QK(), code_shas: { f: 'not-hex' } }, { ...QK(), pilot_shas: {} }, { ...QK(), skill_sha256: 'not-hex' }, { ...QK(), extra: 1 },
+      // fix round 1: a key lacking a part is no key to pin
+      { claude_code: 'b', code_shas: QK().code_shas }];
     for (const k of bad) expect(() => QS.releasePinText('a'.repeat(64), 'v1', 0, k), JSON.stringify(k)).toThrow(TypeError);
     expect(JSON.parse(QS.releasePinText('a'.repeat(64), 'v1', 0, QK()) as string).key, 'CONTROL').toEqual(QK());
   });
@@ -1572,6 +1577,80 @@ describe('stage B, B1: the shipped history skill is staged into every treatment-
   });
 });
 
+describe('stage B fix round 1, F1: the key\'s two code lists are the whole static closure of the quiz, the sweep and the library', () => {
+  /** The five seeds the ruling names: the three quiz modules, the sweep module and the history library. */
+  const SEEDS = ['deploy/history-quiz-pilot.mjs', 'deploy/history-quiz-single.mjs', 'deploy/history-quiz-unattended.mjs', 'ccd/history/sweep.mjs', 'ccd/history/lib.mjs'];
+  /** A static import or re-export with a relative specifier (`import ... from`, `export ... from`, a bare `import '...'`). */
+  const STATIC_RE = /^\s*(?:import|export)\s[^'"]*?from\s*['"](\.[^'"]+)['"]|^\s*import\s*['"](\.[^'"]+)['"]/gm;
+  /** The tree files `seeds` load by static import, followed transitively, by repository-relative path. */
+  function closureOf(seeds: string[]): Set<string> {
+    const seen = new Set<string>();
+    const queue = [...seeds];
+    while (queue.length > 0) {
+      const f = queue.shift()!;
+      if (seen.has(f)) continue;
+      seen.add(f);
+      for (const m of readFileSync(join(REPO, f), 'utf8').matchAll(STATIC_RE)) {
+        queue.push(pathRelative(REPO, pathResolve(pathDirname(join(REPO, f)), (m[1] ?? m[2])!)));
+      }
+    }
+    return seen;
+  }
+
+  it('every file the seeds and the gate\'s own files load is in exactly one of the two lists, and every listed file is loaded', () => {
+    const gate = G.GATE_CODE_FILES as string[];
+    const pilot = QP.PILOT_CODE_FILES as string[];
+    // the gate's files are walked too (what its driver loads is a pilot file); its Python script is spawned, never imported
+    const loaded = new Set([...closureOf([...SEEDS, ...gate.filter((f) => f.endsWith('.mjs'))]), ...gate.filter((f) => !f.endsWith('.mjs'))]);
+    const listed = new Set([...gate, ...pilot]);
+    expect([...loaded].filter((f) => !listed.has(f)).sort(), 'loaded, and in neither list').toEqual([]);
+    expect([...listed].filter((f) => !loaded.has(f)).sort(), 'listed, and no longer loaded').toEqual([]);
+    expect(pilot.filter((f) => gate.includes(f)), 'the gate\'s files are not repeated').toEqual([]);
+    expect(pilot, 'one list, in sorted order').toEqual([...pilot].sort());
+    expect(Object.isFrozen(pilot)).toBe(true);
+  });
+
+  it('CONTROL: the walk sees through re-exports and multi-line imports, and finds the files the ruling named', () => {
+    const c = closureOf(SEEDS);
+    for (const f of ['ccd/history/store.mjs', 'shared/redact.mjs', 'ccd/compact-card.mjs', 'deploy/history-replay.mjs']) expect(c.has(f), f).toBe(true);
+    expect(c.size, 'the seeds alone reach the driver and what it loads').toBeGreaterThan(SEEDS.length + 10);
+  });
+
+  it('pilotShasOf hashes every pilot file the way the gate hashes its own (one hasher)', () => {
+    const got = QP.pilotShasOf() as R;
+    expect(got.state).toBe('measured');
+    expect(got).toEqual(D.codeShas(REPO, QP.PILOT_CODE_FILES));
+    for (const f of QP.PILOT_CODE_FILES as string[]) expect(got.files[f], f).toBe(L.sha256Hex(readFileSync(join(REPO, f))));
+    const root = mkTmp('ccrc-qs-pilot-');
+    expect(QP.pilotShasOf(root), 'a missing file is unmeasured, naming it').toEqual({ state: 'unmeasured', path: (QP.PILOT_CODE_FILES as string[])[0], cause: 'absent' });
+  });
+});
+
+describe('stage B fix round 1, F3: the skill source\'s size cap', () => {
+  /** A fixture tree whose skill files are `skillBytes` and a short licence. */
+  function skillTree(skillBytes: number): string {
+    const root = mkTmp('ccrc-qs-skill-');
+    const dir = join(root, QP.HISTORY_SKILL_SOURCE as string);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), Buffer.alloc(skillBytes, 0x61));
+    for (const n of (QP.HISTORY_SKILL_FILES as string[]).filter((x) => x !== 'SKILL.md')) writeFileSync(join(dir, n), 'licence\n');
+    return root;
+  }
+  const CAP = 1_048_576;
+
+  it('a file over the cap is unmeasured, with its own detail; one at the cap is read', () => {
+    expect(QP.skillSourceOf(skillTree(CAP + 1))).toEqual({ state: 'unmeasured', detail: `${QP.HISTORY_SKILL_SOURCE as string}/SKILL.md is over ${CAP} bytes` });
+    expect((QP.skillSourceOf(skillTree(CAP)) as R).state, 'CONTROL: at the cap').toBe('value');
+  });
+
+  it('the week refuses skill-source-unmeasured on it before anything spawns', async () => {
+    const w = await week();
+    const r = await run(w.home, w.argv(), { ...FAKE, skillRoot: skillTree(CAP + 1) });
+    expect(r.refusal).toMatchObject({ word: 'skill-source-unmeasured', detail: expect.stringMatching(/is over 1048576 bytes$/) });
+    expect(runs(w.home)).toEqual([]);
+  });
+});
+
 describe('stage B, B3: a plugins-off map from the pilot\'s first run, passed to every later run and to the week\'s arms and judge', () => {
   it('pluginsOffOf: each observed entry that is not the build\'s own and has a plain source is switched off; nothing else', () => {
     expect(QP.pluginsOffOf(sbInit([...SB_BUILD, SB_MARKET]))).toEqual({ observed: true, off: { 'market-one@market-a': false }, refused: [] });
@@ -1690,6 +1769,49 @@ describe('stage B, B3: a plugins-off map from the pilot\'s first run, passed to 
     expect(runs(w.home).length).toBe(n);
   });
 
+  // fix round 1, F3: the judge refuses a map that differs from the result the arms ran under, by each of its three checks
+  describe('the judge takes only the step 0b result the arms ran under', () => {
+    const OTHER = { 'market-two@market-b': false };
+    const resRel = (w: R): string => `quiz/step0b/${w.mode as string}.json`;
+    const sumPath = (w: R): string => join(w.out, 'quiz', 'arms-summary.json');
+    /** The week's step 0b result with another valid map in it, as text. */
+    const otherMapText = (w: R): string => { const r = json(join(w.out, resRel(w))); r.plugins_off = { ...r.plugins_off, off: OTHER }; return `${L.canonicalJson(r) as string}\n`; };
+    /** The arms summary rewritten to name `rel` at its bytes' sha. */
+    const pointSummaryAt = (w: R, rel: string): void => {
+      const v = json(sumPath(w));
+      v.step0b = { rel, sha256: shaOfFile(join(w.out, rel)) };
+      writeFileSync(sumPath(w), `${L.canonicalJson(v) as string}\n`);
+    };
+    async function armsDone() {
+      const w = await mapWeek([...SB_BUILD, SB_MARKET], SB_BUILD);
+      expect((await run(w.home, w.argv(), FAKE)).refusal, 'fixture: the arms finished').toBeNull();
+      return w;
+    }
+    const cases: Array<[string, (w: R) => void, RegExp]> = [
+      ['its bytes changed (another map), the summary unchanged: the sha check', (w) => writeFileSync(join(w.out, resRel(w)), otherMapText(w)),
+        /is not the step 0b result the arms summary names$/],
+      ['the summary names another file (a kept failed result holding another map): the path check', (w) => {
+        const rel = QS.step0bFailedRel(w.mode, 0) as string;
+        writeFileSync(join(w.out, rel), otherMapText(w));
+        pointSummaryAt(w, rel);
+      }, /^arms-summary names no step 0b result of this mode$/],
+      ['the file the summary names is no step 0b result (no kind), though it holds a map: the kind check', (w) => {
+        writeFileSync(join(w.out, resRel(w)), `${L.canonicalJson({ plugins_off: { observed: true, off: OTHER, refused: [] } }) as string}\n`);
+        pointSummaryAt(w, resRel(w));
+      }, /is not a step 0b result$/],
+    ];
+    for (const [why, edit, detail] of cases) {
+      it(`${why}: refused input-invalid, and no judge run spawns`, async () => {
+        const w = await armsDone();
+        edit(w);
+        const n = runs(w.home).length;
+        const r = await run(w.home, judgeOf(w), FAKE);
+        expect(r.refusal).toMatchObject({ word: 'input-invalid', detail: expect.stringMatching(detail) });
+        expect(runs(w.home).length).toBe(n);
+      });
+    }
+  });
+
   it('spawnArgv: the map is merged under the fallback mode\'s own value, which wins, and passed after --restricted; absent, the argv is the mode\'s', () => {
     const a = (sm: string, settings?: R): string[] => D.spawnArgv({ mode: 'arm', model: ARM_MODEL, settingsMode: sm, home: '/home/u', ...(settings === undefined ? {} : { settings }) }) as string[];
     expect(a('restricted', { enabledPlugins: { 'a@b': false } }).slice(0, 3)).toEqual(['--restricted', '--settings', '{"enabledPlugins":{"a@b":false}}']);
@@ -1706,7 +1828,7 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
   const SID = '00000000-0000-4000-8000-0000000000c1';
   /** persistenceMeasured's row for the Agent probe's measured leftover, with `files` under it and `over` on its shape. */
   const left = (files: string[], over: R = {}, transcripts: string[] = [`${SLUG(CWD)}/${SID}`]): R => ({ left: true, transcripts, project_dir: true,
-    shape: { entries: [], subagents_dir: true, transcript_file: files.some((f) => f.endsWith('.jsonl')), truncated: false, files, ...over } });
+    shape: { entries: [], subagents_dir: true, transcript_file: files.some((f) => f.endsWith('.jsonl')), truncated: false, files, links: [], ...over } });
   const sub = `${SLUG(CWD)}/${SID}/subagents/agent-a1.jsonl`;
   const proof = (row: R, known: Set<string> | null = new Set()): R => QP.persistenceProofOf(row, { cwd: CWD, sessionId: SID, known }) as R;
 
@@ -1726,6 +1848,10 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
     const cases: Array<[string, R, Set<string> | null, string]> = [
       ['something left outside the run\'s own project folder', left([sub], {}, [`${SLUG(CWD)}/${SID}`, `-elsewhere/${SID}`]), new Set(), 'own_folder'],
       ['no project folder of its own at all', { ...left([sub]), project_dir: false }, new Set(), 'own_folder'],
+      // fix round 1: any link among what the run left fails this condition, whatever it points at
+      ['a link among what the run left', left([sub], { links: [`${SLUG(CWD)}/${SID}/subagents/far.jsonl`] }), new Set(), 'own_folder'],
+      ['a link that is the project folder itself', left([sub], { links: [SLUG(CWD)] }), new Set(), 'own_folder'],
+      ['a shape that lists no links (written before fix round 1)', left([sub], { links: undefined }), new Set(), 'own_folder'],
       ['a main transcript in the project folder', left([sub, `${SLUG(CWD)}/${SID}.jsonl`], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
       // the one row where this condition alone decides: the main transcript is no regular file (a link), and no regular file is left
       ['a main transcript that is a link, beside no regular file', left([], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
@@ -1743,6 +1869,21 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
     const u = proof(left([sub]), null);
     expect(u.proof.store_cannot_read, 'known ids that could not be read prove nothing').toBe('unmeasured');
     expect(D.persistenceCheckOf([u])).toEqual({ state: 'fail' });
+  });
+
+  it('knownIdsOf: the store\'s read throwing (a fixture store with no epochs table) reads null, so the proof is unmeasured and never a pass', () => {
+    const home = mkTmp('ccrc-qs-known-');
+    const db = new DatabaseSync(':memory:');
+    try {
+      expect(QP.knownIdsOf(db, home), 'the owner\'s read throws: unmeasured').toBeNull();
+      const p = proof(left([sub]), QP.knownIdsOf(db, home) as Set<string> | null);
+      expect(p.proof).toMatchObject({ store_cannot_read: 'unmeasured', passed: false });
+      expect(D.persistenceCheckOf([p])).toEqual({ state: 'fail' });
+      db.exec('CREATE TABLE epochs (cc_session_uuid TEXT, confirmed_ms INTEGER)');
+      expect(QP.knownIdsOf(db, home), 'CONTROL: a store it can read, and no registry, is an empty set').toEqual(new Set());
+    } finally {
+      db.close();
+    }
   });
 
   it('a clean row and an unmeasured one come back unchanged, with no proof', () => {
@@ -1816,6 +1957,51 @@ describe('stage B, B2: when the skill alone fails under restricted, one probe un
       expect(fbRuns[0]!.staged, 'the fallback probe finds the skill staged too').toEqual(skillFileShas(REPO));
     });
   }
+
+  // fix round 1, F2: the probe decides nothing, so its failure decides nothing either
+  /** FAKE, with a payloads stand-in that runs `then` once every restricted run of the round has been made (the box run and each
+   *  arm probe): the next card asked is the fallback probe's, so its failure lands inside the probe. `then` answers a reading to
+   *  hand back, or null to answer as FAKE does. */
+  const afterRestricted = (home: string, then: () => R | null): R => {
+    const restricted = 1 + probeIns(home).length;
+    const base = FAKE.payloads as (...a: unknown[]) => R;
+    return { ...FAKE, payloads: (...a: unknown[]): R => (runs(home).length >= restricted ? then() : null) ?? base(...a) };
+  };
+  /** A later pilot on a new key (a new build) runs the week again as round 1, and passes. */
+  async function pilotsAgainOnNewKey(w: R): Promise<void> {
+    plantStep0b(w.home, w.mode);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const r = await run(w.home, w.argv(['--repilot']), FAKE);
+    expect(r.refusal, 'piloted again on the new key').toBeNull();
+    expect(step0bResult(w)).toMatchObject({ round: 1, passed: true });
+    expect(json(join(w.out, QS.RELEASE_PIN_FILE as string))).toMatchObject({ round: 1, key: QK('2.9.2 (Claude Code)') });
+  }
+  const FB_RUN = /^quiz\/step0b\/fallback\.v[^/]+\.r0\/skill-probe$/;
+
+  it('the probe refusing on a word that is not resumable: recorded unmeasured with that word, the result on disk, pilot-failed; a new key pilots it again', async () => {
+    const w = await noSkillWeek();
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => ({ state: 'gone', why: 'fixture-gone' })));
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/^step0b restricted: failed skill; unmeasured -/) });
+    const res = step0bResult(w);
+    expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'], unmeasured: [], settings_mode: 'restricted' });
+    expect(res.skill_fallback).toEqual({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'quiz-unanswerable', detail: expect.stringMatching(/ payload fixture-gone$/) });
+    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted')), 'nothing spawned under the fallback mode').toEqual([]);
+    await pilotsAgainOnNewKey(w);
+  });
+
+  it('a stop landing inside the probe (the limits row past its threshold): recorded unmeasured, nothing spawned after it, pilot-failed; a new key pilots it again', async () => {
+    const w = await noSkillWeek();
+    const lim = join(w.home, '.cc-limits', 'up-a.json');
+    const row = readFileSync(lim);
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => { writeFileSync(lim, JSON.stringify({ ...JSON.parse(row.toString('utf8')), five: 99 })); return null; }));
+    expect(r.refusal, 'the act ends on the pilot word, not on the stop').toMatchObject({ word: 'pilot-failed' });
+    const res = step0bResult(w);
+    expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'] });
+    expect(res.skill_fallback).toMatchObject({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'limits-threshold' });
+    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted')), 'nothing spawned after the stop').toEqual([]);
+    writeFileSync(lim, row);
+    await pilotsAgainOnNewKey(w);
+  });
 
   it('not due when another check fails too: no run under the fallback mode, and the result records none', async () => {
     const w0 = await week();
