@@ -169,19 +169,22 @@ The task ids are kept, so every row and test above stays traceable.
 - **Two rows the programme's definition of done needs** (review 3626; the gap is older than this amendment, and wave XR closes it):
   - `reader mode: a new mount made while reader mode is on paints its first frame with the reader's chrome hidden`. Browser, a same-document remount at 412 by 915 and at 1280 by 800, sampled on every animation frame from the new frame's first paint. `setReading`'s replay at ready is not a paint guarantee, so where it fails, XR keeps the new mount under the reading ground until its `ready` has applied the turn. That stays inside the existing container, with nothing widened.
   - `reader mode: leaving after a same-document remount sends off to the new mount, never to the destroyed one`. jsdom, through the mount's real path. Mutation row X6.78.
+- **A Docs page in its own tab** (the coordinator's addendum to fix round 1, 2026-11-24): a Docs page can open in a browser tab of its own at desk width, with no console around the reader and no history entry before it. Browser row, XR1.3's: `reader place: on a Docs page that is the first history entry in its own tab, entering reader mode, then Exit, and again Back, each leave reader mode and stay on the document, and no entry before the page is consumed`, at 1280 by 800, checking `history.length` and the URL after each. Mutation row X6.79.
 - **Mutation rows built in XR:** every row whose task is XR1.1, XR1.2, XR1.3, XR1.5, XR2.1 or XR2.2, less those moved below. Of XR1.4's rows: X6.24, X6.36, X6.43, X6.49, X6.53, X6.64 and X6.67, and X6.25 with its test reworded as above. X6.20's red test is renamed with XR1.3's row: `reader place: a Back during a same-document remount still exits`.
 - **Never built, their mechanism never ships:** X6.21, X6.35, X6.54, X6.55, X6.56, X6.66, X6.68, X6.69 and X6.73.
 - **Moved to P5.1 (D-8975):** X6.22, X6.23, X6.59, X6.60, X6.70.
-- **New:** X6.76, X6.77 and X6.78 (below).
+- **New:** X6.76, X6.77, X6.78 and X6.79 (below).
 - **Files:** XR1's row and XR2's row of the waves table, less `pwa/package.json` and its lock, `reader-pin.test.ts`, `reader-assets.test.ts` and `frame-cost.browser.test.ts` (wave C pinned the release and took the BASE), and with `pwa/test/reader-mode-overlay.test.tsx` and `pwa/test/w7-storage-keys.test.ts` (XR2.2).
 - **Depends on:** wave PH merged, and so wave C.
 - **Overlap:** none with PR #3138. With the live claims measured on 2026-11-24, one file: `ui/src/index.ts` (XR1.2's four exports), held by a desktop-polish fix round. XR claims it at dispatch and asks the holder by mail if it is still held.
+- **Overlap, the Docs tab view:** the tab view of the row above belongs to the Desktop polish programme. It does not edit the Docs head or the reader frame, and wave XR absorbs it from main.
 
 | Row | Task | Mutation | Red test |
 |---|---|---|---|
 | X6.76 | XR1.4 | A mount made while reader mode is on is not sent `setReading` | mount plan: a mount made while reader mode is on is sent setReading with the turn before its ready |
 | X6.77 | XR1.2 | The leading focus guard sends focus to the last ccrc control even when none is drawn | focus: with the overlay hidden, Shift+Tab out of the frame's first control returns focus to the frame (browser) |
 | X6.78 | XR1.4 | Leaving sends `off` to the mount reader mode was entered on, not to the current one | reader mode: leaving after a same-document remount sends off to the new mount, never to the destroyed one |
+| X6.79 | XR1.3 | `stepBelowReaderPlace` steps one entry further than the reader place (`n` plus 1) | reader place: on a Docs page that is the first history entry in its own tab, entering reader mode, then Exit, and again Back, each leave reader mode and stay on the document, and no entry before the page is consumed (browser) |
 
 #### The rest of X2, after XR
 
