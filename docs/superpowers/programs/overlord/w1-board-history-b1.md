@@ -96,13 +96,21 @@ scan did not know `no-agent` and the other causes), `overlord-gate` (the door ta
 `overlord-other-lanes-census` (a write door with no class); and on `fleetio-contract` (the member list), a held file. The
 four are fixed here; the member list went to its holder as a packet.
 
+## Method lesson
+
+A new door, word or port member is read by more censuses than the plan's Step 5 names. The first run found five such files
+that this branch had not run locally. Before the fix push, every server test file that reads source text and names a door
+table, an exemption, a FleetIO member, a refusal status, a kebab word scan, a route table or a mutation set was run, each
+on its own: 332 files, listed in the wave-done. Next time, run that set before the first push, not after the first run.
+
 ## Files held by others
 
 - `server/src/auth/gate.ts`, `server/test/auth-gate.test.ts` and `server/test/rings/fastify-l4.data.ts` (another
   programme's worker) and `README.md` (another programme's landing work): a packet each, a unified diff against main
   `125a388691b05ba80bc074f827b56aa66b123158`, every line forced by a census; applied only on a yes. The gate packet's yes
   is applied; the README yes is held for the final merge (the coordinator's ruling); `server/test/fleetio-contract.test.ts`
-  (the landing work's) went as a third packet after the first run. The drafts were made
+  (the landing work's) went as a third packet after the first run. The coordinator then ruled both held yeses applied
+  in the fix push (README, packet 34466; the contract file, packet 34544), each still re-derived in the final merge. The drafts were made
   in the work tree to measure them, then restored to main's text before the packets went.
 - Overlord peers' files carry my hunks with a one-line notice: `overlordDoors.ts`, `server.ts`, `CLAUDE.md`, the
   box-token census and the doors census (Authority B); `overlordInboxRoutes.ts` (three exports) and
