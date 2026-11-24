@@ -80,8 +80,10 @@ function ShellCommands(): ReactNode {
 function ConsoleLink(): ReactNode {
   const link = useTabLink();
   return (
-    <a {...link(CONSOLE_PATH)} className={cn(TEXT_LINK, 'shell-tab-console')}>
-      Console<span className="sr-only">{NEW_TAB_WORDS}</span><span aria-hidden="true">{' ↗'}</span>
+    // The name is spelled whole (it starts with the word shown, so a voice user saying what they see reaches it): a
+    // visually hidden span would put a space before its comma in Chrome's name ("Console , opens…").
+    <a {...link(CONSOLE_PATH)} aria-label={'Console' + NEW_TAB_WORDS} className={cn(TEXT_LINK, 'shell-tab-console')}>
+      Console<span aria-hidden="true">{' ↗'}</span>
     </a>
   );
 }

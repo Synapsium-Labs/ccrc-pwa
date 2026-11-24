@@ -6,7 +6,7 @@
 // Mutation table (each guard, and the case that goes red without it):
 //   `!desk` in `opensNewTab` ......................... "below the desk width nothing opens a new tab"
 //   `!== docsTab` (crossing, not "is a document") .... "in a Docs tab a document link stays in the tab, a console link opens a new one"
-//   the `'/'`/`'//'` refusal in `isDocsHref` ......... "an address that is not an in-app path is never a document link"
+//   the `'/'`/`'//'` refusal in `opensNewTab` ........ "an address that is not an in-app path is never a document link"
 //   `pathOf` (search and fragment cut) ............... "a Docs address with a search or a fragment is still a Docs address"
 //   `followLink`'s `window.open` arm ................. "followLink at a desk opens one new tab for a document and leaves this tab where it is"
 //   `followLink`'s tab kind from its own path ........ "followLink in a Docs tab opens the console in a new tab, and moves within the tab to another document"
@@ -61,6 +61,8 @@ describe('the Docs tab rule (opensNewTab)', () => {
     for (const href of ['https://example.com/docs/x', '//example.com/docs/x', '#docs', 'docs/superpowers/specs/x.md', '']) {
       expect(isDocsHref(href), href).toBe(false);
       expect(opensNewTab(href, true, false), href).toBe(false);
+      // In a Docs tab too: an outside link is not a console page, so the rule leaves it to its own owner.
+      expect(opensNewTab(href, true, true), `${href} from a Docs tab`).toBe(false);
     }
   });
 

@@ -29,9 +29,9 @@ function pathOf(href: string): string {
 }
 
 /** Whether `href`, an in-app address (a path, with an optional `?search` and `#fragment`), is a page of the Docs route.
- *  Anything that is not a path from the root (an outside URL, a protocol-relative one, a fragment alone) is not. */
+ *  Anything that is not a path from the root (an outside URL, a protocol-relative one, a fragment alone) is not: the
+ *  route's own pattern refuses it. */
 export function isDocsHref(href: string): boolean {
-  if (!href.startsWith('/') || href.startsWith('//')) return false;
   return matchRoute(pathOf(href))?.route.id === 'docs';
 }
 
