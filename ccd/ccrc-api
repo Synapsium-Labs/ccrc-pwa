@@ -1268,7 +1268,7 @@ main() {
     append_body_field 'clientKey' "$mail_key" 'the mail body is not a JSON object; clientKey cannot be added'
   fi
 
-  # A BODY THIS CLIENT FILLS: a run's claimant sends its own identity
+  # THE FIRST BODY THIS CLIENT FILLS: a run's claimant sends its own identity
   # (D-5298; coordinator-first routing, spec §6.4). `POST /api/runs` is where a
   # coordinator becomes a child's parent, and the server checks the claimant with
   # `requireAttribution` against `claimedByUuid`. The coordinator skill's body
@@ -1280,13 +1280,36 @@ main() {
   # `claimedBy` and `sessionId` alone, and the reclaim door that does change them
   # is one of the four that never have a row here (above).
   #
-  # SAME RULES AS THE `byId` FILL, for the same reasons: a body that already
-  # names `claimedByUuid` is left alone (the route re-measures it, so the caller
-  # who spoke owns the answer, and it needs no pane); a blank one is refused; a
-  # body with no derivable identity is refused and nothing is sent; a bodyless
-  # call is untouched. The textual test's limits stated for `byId` hold here
-  # too. Freshness, not identity: every `.uuid` is readable by the one UNIX user
-  # these sessions share, so this stops a confused session, not a hostile one.
+  # NEVER AN OVERRIDE. A body that already names `claimedByUuid` is left alone
+  # (the route re-measures it, so the caller who spoke owns the answer, and it
+  # needs no pane). The test is TEXTUAL, over a whitespace-stripped COPY (so
+  # `"claimedByUuid" : ""` reads the same as `"claimedByUuid":""`), and it errs
+  # toward not touching the body, the safe direction, since duplicate keys
+  # resolve last-wins and a splice would silently change precedence. A blank one
+  # is REFUSED rather than passed through: that is exactly what a derivation that
+  # failed on the caller's side produces. A body with no derivable identity is
+  # refused and nothing is sent; a bodyless call is untouched.
+  #
+  # THE TEXTUAL TEST'S LIMITS, STATED RATHER THAN HIDDEN (measured 2026-09-03
+  # against a loopback server, on the retired allocator's `byId` fill, which used
+  # this same test). A substring is not a JSON key. A NESTED key
+  # (`{"meta":{"<key>":"x"}}`) and a WHITESPACE-PADDED one (`{"<key> ":"x"}`) both
+  # read as "the caller has spoken", so the fill is SILENTLY suppressed and a body
+  # with no top-level key goes on the wire. A `\u`-ESCAPED key reads the other
+  # way, as absent: the splice fires and the wire body last-wins-parses to the
+  # caller's blank, which is the blank refusal bypassed. None of the three is a
+  # forgery door: the caller already owns the body it hands us, and identity here
+  # is attribution, so the cost is an unattributed or blank field for that body
+  # only. Where the escaping runs the other way the test holds: an escaped
+  # `\"<key>\":` inside a string fills normally (the backslashes survive the strip
+  # and break the substring), and the same text UNESCAPED is an invalid body that
+  # trips the blank refusal loudly.
+  #
+  # THE SPLICE IS SAFE BECAUSE OF SAFE_RE. The derived id and uuid admit no quote
+  # and no backslash, so neither can escape the JSON string it lands in. Every
+  # later fill points here for these three rules. Freshness, not identity: every
+  # `.uuid` is readable by the one UNIX user these sessions share, so this stops a
+  # confused session, not a hostile one.
   if [[ "$key" == 'runs.open' && -n "$body" ]]; then
     local ob="${body//[[:space:]]/}"
     case "$ob" in
@@ -1302,17 +1325,17 @@ main() {
     esac
   fi
 
-  # THE FOURTH BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
-  # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `byId` fill's rule: a body that
-  # names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
-  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's substring match, over a whitespace-stripped
-  # copy, but a match here REFUSES where the `byId` fill's suppresses its fill: a nested or a whitespace-padded `byId` or
+  # THE THIRD BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
+  # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `runs.open` fill's rule: a body
+  # that names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
+  # the route stores `madeBy` from this pair. The textual test is the `runs.open` fill's substring match, over a whitespace-stripped
+  # copy, but a match here REFUSES where the `runs.open` fill's suppresses its fill: a nested or a whitespace-padded `byId` or
   # `byUuid` key matches and is refused, and only a `\u`-escaped spelling passes, which the appended pair outranks at the
   # server's parse.
   # A bodyless call is refused (`no-body`), a body that is not a JSON object is refused, and a pane with no identity is refused;
   # nothing is sent in any of the three. The pair is appended LAST, byId then byUuid, as the note doors' is (review 2039 F7,
   # review 3245 A2): the server's JSON parse keeps the later of two duplicate keys, so a spelling of `byId` the textual test
-  # misses never outranks the pane's. The append is safe for the reason the `byId` fill's splice is: SAFE_RE admits no quote.
+  # misses never outranks the pane's. The append is safe for the reason the `runs.open` fill's splice is: SAFE_RE admits no quote.
   if [[ "$key" == 'calls.record' ]]; then
     [[ -n "$body" ]] || refuse 'no-body' 'the call record needs a body on --json'
     local cb="${body//[[:space:]]/}"
@@ -1432,7 +1455,7 @@ main() {
   # Every Linear row (D-7669, #1444) carries the pane's identity, GETs and POSTs alike, and it rides the QUERY, after
   # the declared keys, the way `approvals show` builds `fromId`/`fromUuid`. THIS BLOCK NEVER READS OR EDITS THE BODY:
   # no splice and no textual test, so a POST's body goes on the wire byte for byte as the caller gave it. That is the
-  # opposite of the `byId` fill above, on purpose: here the caller may not choose whom a write is attributed to through
+  # opposite of the `runs.open` fill above, on purpose: here the caller may not choose whom a write is attributed to through
   # this client. `byId` and `byUuid` are not declared query keys, so `--byId` is `unknown-query`, and no declared key's
   # value can add one, because SAFE_RE refuses `&` and `=`. A body that names either (however it spells the key) is the
   # server's to refuse, after parsing, as `bad-field`; the server reads identity from the query only. A pane with no
@@ -1469,7 +1492,7 @@ main() {
     query="parent=$DERIVED_ID&fromUuid=$DERIVED_UUID&state=held"
   fi
 
-  # THE THIRD BODY FILL: the question door family's `kind` (D-7322), on the four claimant rows, whose template is the
+  # THE SECOND BODY FILL: the question door family's `kind` (D-7322), on the four claimant rows, whose template is the
   # family's and their only door: the old doors were retired (D-7324), so nothing falls back. The kind is the ROW's,
   # read from the template's `ask-` or `approval-` prefix, never from the caller; `$claimant` holds it, and is empty on
   # every other row.
@@ -1484,7 +1507,7 @@ main() {
   # holds two spaces), whether it lists the other words or none (a server older than the caps answer is recorded as
   # none). A 404 is never read as "no family": `unknown-ask` and `unknown-approval` are 404s too.
   #
-  # The `byId` fill's rules hold for the splice: a body that already names `"kind":` (the same textual test over a
+  # The `runs.open` fill's rules hold for the splice: a body that already names `"kind":` (the same textual test over a
   # whitespace-stripped copy, with the same stated limits) is left alone, so a contrary kind reaches the server and is
   # answered there; a bodyless call is sent as the kind alone, which both doors refuse alike; a body that is not a JSON
   # object is refused here and nothing is sent.

@@ -10275,7 +10275,6 @@ export const CLAIM_PATH_MAX_BYTES = 512;
  *  and is NEVER reclaimed (D13). */
 export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
 
-
 /** How far above the screen the drawer's history read starts. Stated ONCE,
  *  here, and echoed back to the client in the response — the PWA never names a
  *  number of its own, so there is nothing for the two sides to disagree about.

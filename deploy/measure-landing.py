@@ -11,7 +11,7 @@ READ-ONLY, and run by hand on the fleet box. It reads, and never writes, four th
   * the ccrc server, through `~/.local/bin/ccrc-api`'s two list verbs (both GET).
     `_api` is the ONE place this file runs that client, and it refuses any verb
     but `runs list` and `mail list` before the client runs (the client also
-    carries POST rows — close, send, allocate — and none may be reached from here).
+    carries POST rows — close, send — and none may be reached from here).
 It writes only under --out (default ./landing-measure/): a cache of what it read,
 and one JSON report per subcommand, whose summary it also prints.
 
@@ -771,7 +771,7 @@ API_READS = {('runs', 'list'): 'runs', ('mail', 'list'): 'mail'}
 
 def _api(*args):
     """The ONE door to the ccrc server: `~/.local/bin/ccrc-api`, whose table also
-    carries POST rows (runs close, mail send, ledger allocate). Only the two list
+    carries POST rows (runs close, mail send). Only the two list
     verbs pass; anything else is refused before the client runs."""
     if tuple(args[:2]) not in API_READS:
         raise SystemExit(f'measure-landing: refused a ccrc-api verb that is not a list read: {" ".join(args[:2])!r}')
