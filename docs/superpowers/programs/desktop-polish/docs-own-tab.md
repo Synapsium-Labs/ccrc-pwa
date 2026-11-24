@@ -19,8 +19,13 @@ says whether it was **measured** (read on the tree, in a browser or in a test ru
 | A place's door in a desk bar: `PlaceDoor`, the "Go to" command door, or, where the rule opens a new tab (the Docs place), an anchor wearing the door's own classes (`DOOR`, `DOOR_GLYPH`) | `pwa/src/skins/DoorLink.tsx`, used by Refined's `AppBar` and Instrument's `TopBar` | Measured: `docs-tab-links.test.tsx` |
 
 No server, wire or shared change; no new route (a document's address is what it was); `DocsScreen.tsx` is untouched, and
-`DocsHead.tsx` changes by one hunk only, the reader's Back taking `useFollowLink` (fix round 1, F1), made on the reader's
-owner's yes through the coordinator (measured: `git diff origin/HEAD --stat`).
+`DocsHead.tsx` changes by one hunk only, the reader's Back taking `useFollowLink` (fix round 1, F1): the `navigate` import
+swapped for the hook's, and the Back button's handler calling it, 3 lines out and 3 in. The reader's owner (the Docs reader
+coordinator) said yes to that exact diff, read against main `6c7f126d428de2f346f8d69188e24d46da833d4c`, through the
+coordinator on 2026-11-24; the edit is that diff applied unchanged, main had not moved under the file, and the button is
+kept at the index. Its tests sit together in `docs-own-tab.test.tsx`: the index in a Docs tab at a desk opens the console in
+a new tab, and three cases pin the rest as on main (a leaf's Back moves up within the tab; the console on a phone and a
+narrow Docs tab move to the fleet in place).
 
 ## 2. Every link source, converted or left
 

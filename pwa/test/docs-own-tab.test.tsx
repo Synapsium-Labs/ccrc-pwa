@@ -373,4 +373,38 @@ describe('the reader’s Back at the Docs index', () => {
     expect(sockets).toEqual([]);
     expect([...mounted]).toEqual([]);
   });
+
+  // Unchanged by it, each as on main: Back below the index moves up within the tab; in the console on a phone, and in a
+  // narrow Docs tab, Back at the index moves to the fleet in place.
+  it('in a Docs tab at a desk, Back from a leaf moves up within the tab and opens nothing', async () => {
+    stubWidth(true);
+    await mount(DOC);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(open).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/docs/project-a/specs');
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+  });
+
+  it('in the console on a phone, Back at the index moves to the fleet in place', async () => {
+    stubWidth(false);
+    await mount('/fleet');
+    await act(async () => { navigate('/docs'); await new Promise((r) => setTimeout(r, 30)); });
+    expect(shell()).not.toHaveAttribute('data-tab');
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(open).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/fleet');
+  });
+
+  it('in a narrow Docs tab, Back at the index moves to the fleet in place, as a phone does', async () => {
+    stubWidth(false);
+    await mount('/docs');
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(open).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/fleet');
+    expect(shell()).not.toHaveAttribute('data-tab');
+  });
 });
