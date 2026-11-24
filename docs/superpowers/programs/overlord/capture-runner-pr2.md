@@ -57,8 +57,8 @@ records what the ledger should learn; the coordinator folds it into the ledger o
 - **capture-memory-limit-not-allowed.** The test service's unit (`deploy/testbox/systemd/ccrc-testbox.service`) has no
   `MemoryMax=` and no `Delegate=`, so a capture that runs as its child cannot get a memory limit of its own. The spec's Later
   list already holds the capture in a unit of its own; the limit goes there.
-- **migration-slot.** The rebuild takes 123 after #3209 (main at `861e10287c` held 122; it was 122 on the earlier base at
-  `a540d15153`, which held 121). It preserves
+- **migration-slot.** The rebuild takes 124 after #3275 (main at `c7f7e84bca` held 123; it was 123 at `861e10287c`, and 122
+  on the earlier base at `a540d15153`). It preserves
   #3170's `fails INTEGER NOT NULL DEFAULT 0` in the new table and copies the existing values. A migration test covers
   nonzero counters on both a queued retry and a failed build.
 
@@ -98,6 +98,14 @@ fixture already dropping `claude_builds`; and the slot statement above.
   `861e10287c` (its hunk applied two lines lower, with its context unchanged), and neither was the architecture packet's (the
   C2 row and its neighbours were unchanged). The DB test's input blob matched. The schema packet's comment named `7e41029d65`
   as the base holding 122; it names `861e10287c` now. No line of either packet was otherwise wrong.
+
+## The second merge of main (fix round 1)
+
+Before fix round 1 was pushed, #3275 landed the coordinator advisor's migration in slot 123, and the branch conflicted with
+`main` at `c7f7e84bca` in four files. One more ordinary merge resolved it the same way: `main`'s 123 unchanged, Capture's
+rebuild appended as 124 (only its slot heading, table suffix and base comment changed again); the DB test keeps both entries
+and reads 124 at the head; the run-close-switch commentary names 124 and seventy-one entries replayed (54 through 124); and
+the designated-class test takes `main`'s side, which had made the same change to read the schema version constant.
 
 ## Fix round 1: the copy's box step hardened
 

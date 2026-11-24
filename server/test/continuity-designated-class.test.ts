@@ -67,6 +67,7 @@ describe('continuity_generations.designatedClass', () => {
 
     const db = openCoordDb(file);
     try {
+      // the head version, whatever migration follows 122 (`coord-db.test.ts` pins the number itself)
       expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });
       expect(db.prepare('SELECT role, model, designatedClass FROM continuity_generations').all())
         .toEqual([{ role: 'overlord', model: 'claude-opus-5-5', designatedClass: null }]);

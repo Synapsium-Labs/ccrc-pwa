@@ -4350,6 +4350,62 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 123: user_version 122 -> 123 ──────────────────────────────────────────
+  // The coordinator advisor (plan `2026-11-23-coordinator-advisor.md`, D-8967, D-8970, D-8971). `advisor_settings` is the
+  // Settings row "Coordinator advisor": ONE ROW, `CHECK (id = 1)`, the `plain_memory_settings` idiom. `choice` (an
+  // `AdvisorChoice`), `cap` and `scope` (an `AdvisorScope` as JSON) are read back through `coordinatorAdvisorOf`'s
+  // narrowings, never cast, so NO CHECK on them: a word a newer build writes reads as unknown, and the lane writes nothing
+  // from it. Its one writer is `CoordStore.setCoordinatorAdvisor` (`POST /api/coord/coordinator-advisor`), its one reader
+  // `CoordStore.coordinatorAdvisorSettings`. `advisor_calls` holds one row per advisor call a coordinator's transcript
+  // carried, keyed by the session and the call's own id, so a duplicate streamed line or a transcript a swap carried
+  // counts once; `day` is the UTC day of the line's timestamp, and the four token columns are the `advisor_message`
+  // usage of the call's message (NULL until a line carries it). `advisor_reads` is the forward reader's place in each
+  // coordinator's transcript and what it saw since the spawn it last read for, and `droppedDay` the UTC day of a drop,
+  // which outlives a new spawn. ONE writer of both: the count lane
+  // (`advisorStore.ts#recordAdvisorRead`). Rows older than 14 days are pruned by it.
+  // THREE NEW TABLES: an older build opening a file at `user_version 123` takes rule 3 (it warns, reads as-is, migrates
+  // nothing) and never names them.
+  // RE-MEASURE the slot before merge (it must print 122 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE advisor_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    choice TEXT NOT NULL,
+    cap INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO advisor_settings (id, choice, cap, scope, updatedAt) VALUES (1, 'off', 12, '{"kind":"all"}', 0);
+  CREATE TABLE advisor_calls (
+    sessionId TEXT NOT NULL,
+    callId TEXT NOT NULL,
+    day TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    model TEXT,
+    inputTokens INTEGER,
+    outputTokens INTEGER,
+    cacheReadTokens INTEGER,
+    cacheWriteTokens INTEGER,
+    PRIMARY KEY (sessionId, callId)
+  );
+  CREATE INDEX advisor_calls_by_day ON advisor_calls (sessionId, day);
+  CREATE TABLE advisor_reads (
+    sessionId TEXT PRIMARY KEY,
+    file TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    spawnAt INTEGER NOT NULL,
+    requests INTEGER NOT NULL,
+    lastMessageId TEXT,
+    available TEXT,
+    availableAt INTEGER,
+    lastCallAt INTEGER,
+    unreadable INTEGER NOT NULL,
+    droppedDay TEXT,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 124: user_version 123 -> 124 ──────────────────────────────────────────
   // The capture's not-sent words widen (capture runner spec docs/superpowers/specs/2026-11-22-build-capture-runner-design.md
   // §2.2, §2.5 Table 6; the coordinator's ruling on PR 1's fix round 1): `claude_builds.notSent` keeps its CHECK, now over
   // `shared/claudeBuildTrust.ts#BUILD_CAPTURE_NOT_SENT_MAP`'s nine words, so the box's `build-absent` and `path-refused`, a frame
@@ -4359,12 +4415,12 @@ export const MIGRATIONS: readonly string[] = [
   // renamed. No index, trigger, view or foreign key names `claude_builds`. An older build opening a file at this entry's
   // version takes rule 3 (it warns, reads as-is and migrates nothing): it reads a word it does not know as no reason
   // (`claudeBuildsStore.ts#claudeBuildRecords`), and every word it writes is still allowed. The rebuild preserves the failed
-  // verdict counter from migration 119. The slot is the next free one by position on `main` (861e10287c holds 122).
-  // RE-MEASURE the slot before merge (it must print 122, the count before this entry):
+  // verdict counter from migration 119. The slot is the next free one by position on `main` (c7f7e84bca holds 123).
+  // RE-MEASURE the slot before merge (it must print 123, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
-  CREATE TABLE claude_builds_123 (
+  CREATE TABLE claude_builds_124 (
     build         TEXT    PRIMARY KEY,
     source        TEXT    NOT NULL CHECK (source IN ('rig', 'fleet')),
     capture       TEXT    NOT NULL CHECK (capture IN ('queued', 'pass', 'fail')),
@@ -4378,10 +4434,10 @@ export const MIGRATIONS: readonly string[] = [
     output        TEXT,
     fails         INTEGER NOT NULL DEFAULT 0
   );
-  INSERT INTO claude_builds_123 (build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails)
+  INSERT INTO claude_builds_124 (build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails)
     SELECT build, source, capture, cwd, seenAt, attempts, lastAttemptAt, notSent, verdictAt, output, fails FROM claude_builds;
   DROP TABLE claude_builds;
-  ALTER TABLE claude_builds_123 RENAME TO claude_builds;
+  ALTER TABLE claude_builds_124 RENAME TO claude_builds;
   `,
 ];
 
