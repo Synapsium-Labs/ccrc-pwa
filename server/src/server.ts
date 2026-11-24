@@ -303,7 +303,7 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
-  // The programmes on a flow (Flows wave 3a): each programme's title, which its coordinator wrote.
+  // The programmes on a flow (Flows wave 3a): each programme's title and (wave 3b) newest outcome, which its coordinator wrote.
   '/api/flows/:id/programmes',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
