@@ -502,8 +502,9 @@ describe('each cap alone cuts a page at a record start', () => {
 });
 
 describe('a long synthetic transcript, paged to its start', () => {
-  it('yields every record once, in order, with no overlap against the backlog (and is measured)', async () => {
-    // About 6 MiB: varied record sizes, multi-event records, blank lines, multibyte text, a few records longer than a read.
+  it('yields every record once, in order, with no overlap against the backlog, in a pinned number of pages', async () => {
+    // 9.0 MiB, 7,663 events: varied record sizes, multi-event records, blank lines, multibyte text, and seven records of
+    // 300 KiB (every 997th), each longer than a read.
     const lines: string[] = [];
     for (let i = 0; i < 6000; i += 1) {
       if (i % 997 === 0) lines.push(userLine(`L${i}`, 'w'.repeat(300 * 1024)));
@@ -537,6 +538,8 @@ describe('a long synthetic transcript, paged to its start', () => {
     expect([...older, ...backlog.events]).toEqual(expected);
     expect(older.length + backlog.events.length).toBe(expected.length);
     expect(gaps).toBe(0);
+    expect(expected.length).toBe(7663);
+    expect(pages.length).toBe(120);
     console.warn(`older-page measure: ${(data.length / 1048576).toFixed(1)} MiB, ${expected.length} events, ${pages.length} pages to the start in ${ms.toFixed(0)} ms (in-memory reads), largest page ${largest} bytes of events`);
   });
 });
