@@ -58,7 +58,7 @@ import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
 import {
-  boundOpenRun, coordinatorOf, isDispatchPending, isRunClosed, programmeWave, runCard, runHomeProject, runSentence, workerOf,
+  boundOpenRun, claimedRunsOf, coordinatorOf, isDispatchPending, programmeWave, runCard, runHomeProject, runSentence, workerOf,
   type BoundSession, type ChildRunContext,
 } from './runWords';
 import { hibernatedSince } from './hibernated';
@@ -75,22 +75,22 @@ export function parentIdOf(s: BoundSession, runs: readonly RunSummary[]): string
 
 /** Wave 173: a coordinator's worker rows, over the WHOLE fleet, by the bracket's own edges (`nestFleet`'s rules 1 and 5,
  *  `latestPerSession`'s binding): each open run it claims whose bound worker (`workerOf`) the fleet carries, once per
- *  worker, and each dispatch in flight whose session the fleet does not carry yet, as a spawn. Fleet-wide, not one card's,
+ *  worker, and each dispatch in flight with no bound worker on the fleet yet, as a spawn. Fleet-wide, not one card's,
  *  so the row and the session header read the same workers wherever a worker renders (a worker drawn on another card
  *  still keeps its coordinator waiting). Pure. */
 export function workersOf(id: string, sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] {
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
   const out: FleetRow[] = [];
   const seen = new Set<string>();
-  for (const r of runs) {
-    if (r.claimedBy !== id || isRunClosed(r)) continue;
-    const listed = r.sessionId !== null && byId.has(r.sessionId);
-    if (!listed) {
+  // Through the named readers only (`claimedRunsOf`, `workerOf`), never an inline match on a run's raw ids (C7d, D-7182,
+  // D-8049): a run whose bound worker the fleet carries is that worker, and a dispatch in flight with none is a spawn.
+  for (const r of claimedRunsOf(runs, id)) {
+    const w = workerOf(r, byId);
+    if (w === null) {
       if (isDispatchPending(r)) out.push({ kind: 'pending', depth: 1, run: r });
       continue;
     }
-    const w = workerOf(r, byId);
-    if (w === null || w.id === id || seen.has(w.id)) continue;
+    if (w.id === id || seen.has(w.id)) continue;
     seen.add(w.id);
     out.push({ kind: 'session', depth: 1, session: w });
   }

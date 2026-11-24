@@ -47,6 +47,12 @@ worker two open runs bind (its open run and its newest) is one row, a session wh
 is no worker (`workerOf`, #746), and a dispatch whose session row already exists is that session, never a spawn as well.
 Each guard was deleted in turn and the suite went red (§8).
 
+`workersOf` reads a run's ids only through the named readers, `claimedRunsOf` (the claimant side) and `workerOf` (a bound
+worker the fleet carries). The first push compared `claimedBy` inline and added an eighth membership check on a run's raw
+id. The PWA ring census (`server/test/rings/pwa-one-owner.test.ts`) and the W7 census (`census-w7/pwa.test.ts`) refused
+both on the fast run, and the fix round removed them. A dispatch in flight is a spawn when `workerOf` finds no bound worker
+for it.
+
 ## 2. The words
 
 `WAITING_ON_WORKERS` and `WAITING_ON_WORKERS_TITLE` are defined once, in `sessionFacts.ts`. The bare `waiting` is
