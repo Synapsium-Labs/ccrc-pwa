@@ -30,6 +30,20 @@ claim below is labelled **measured** (a command was run and its result seen), **
   is unchanged; a long extension is clipped by the badge's existing `overflow: hidden`, and the strip below shows the
   full name.
 
+## Co-edit by ruling
+
+`shared/api.ts` was claimed by the chat-paging worker (claim 6852, run 3609) when this wave began, so the claim for it
+could not be taken. I sent the holder the clip block's unified diff against `main` 01dce5c853 before touching the file
+(mail 33733), and asked the coordinator (mail 33758). The coordinator ruled on 2026-11-24 (mail 33763), both runs being
+its own: edit only the clip block, from `StagedClip` to `CLIP_PATH_RE`, with no line outside it, no reformatting, no
+import reordering and no moved declarations; show that nothing reads the two removed list exports; the holder's
+objection, if any arrives before the push, wins inside its own block; whichever pull request lands second absorbs
+`main` once by its own merge probe. The edit is exactly the packet. **Measured** (`git grep` on `origin/main` at
+01dce5c853): `CLIP_DOC_EXTS` and `CLIP_EXTS` were read only by `pwa/src/session/useAttachImage.ts`, `server/test/clip.test.ts`,
+`pwa/test/attach.test.tsx` and `pwa/test/compose.test.ts`, all converted here, and named in comments in
+`server/src/clip.ts`, `ui/src/components/attach-tray.tsx` (both rewritten) and `server/src/server.ts` (a comment only, left
+for the follow-up). None of the holder's fifteen claimed paths reads either.
+
 Not changed, as the brief asked: `server/src/server.ts` (held by another programme) and `pwa/src/session/Composer.tsx`
 (held by the paste-chips worker). The change reaches both through the shared definition and `useAttachImage.ts`. No
 conversion, no new route, credential or agent verb, no change to where files are stored, and no change to the text
