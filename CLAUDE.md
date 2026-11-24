@@ -120,7 +120,6 @@ real values: `deploy/reference-fleet.md` (gitignored).
   **`delegation-adopt` is forbidden to every session too** (D-8112): it is the SERVER's act on the delegation lane's adoption switch only (`ccd delegation-adopt --state on|off`, the one writer of `$REG/delegation-adopt`), composed by `POST /api/coord/delegation-adopt`, the operator's session-gated door, behind the installed direct entry, past its refusal rule (D-8113), which refuses `on` without a signed-in operator — never a session's verb, coordinators and workers included, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`keep-awake` is forbidden to every session too** (Overlord W1 ccd arms): it is the SERVER's act on one session's two sleep markers (`ccd keep-awake --session <id> --state on|off`, the one writer of `$REG/<id>.no-hibernate` and `$REG/<id>.no-roll` in the tree), composed by the designation's doors, behind the installed direct entry. It removes only markers holding its own stamp, and it stops no session — never a session's verb, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
   **`limit-watchdog` and `limit-wait` are no session's verbs either** (D-8123): `ccd limit-watchdog` is the fleet limit watchdog's one pass, run once a minute by `ccd-limit-watchdog.timer` (its own timer, never a supervisor tick), and `ccd limit-wait <id>` records the operator's "Wait until reset" choice behind the session-gated route beside the swap route. Neither is run by hand against the live host from a shell or a test, and neither ever sends a key: the rescue ends the session and resumes it on another account, and the rate-limit menu ("What do you want to do?") is never typed into, because an Enter or a digit there can pick "Switch to usage credits" (`ccd-limit-no-keys.test.ts` cuts the function bodies out of `ccd/ccd` and refuses a key sender in any of them).
-  **`ws-add` is no dispatched child's verb** (D-8978): a workspace a worker makes itself belongs to no run, so the console lists it under "Not in a programme" and its coordinator never sees it. A child that needs another tree asks its coordinator. The child deny file (`childDenyRules`, `shared/api.ts`) and the hook's `CCD_WSADD_RE` refuse it, as an accident guard (D-8979). It is no SAFETY verb: the operator, a top-level session and the server's dispatch, an agent exec that no hook sees, still run it.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -570,8 +569,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
   files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
   `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
-  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a top-level session that runs it itself.
   `keep-awake` acts on one session's sleep markers, not on coordination state, so the rule does not cover it either.
+- **A dispatched child never runs `ccd ws-add`, in any form** (D-8978). This is a child-only rule, not a SAFETY verb:
+  the operator, a top-level session and the server's dispatch (an agent exec through `CcdArgv`, which no hook sees)
+  still run it. A workspace a worker makes itself belongs to no run, so the console lists it under "Not in a
+  programme" and its coordinator never sees it; a child that needs another tree asks its coordinator. The child deny
+  file (`childDenyRules`, `shared/api.ts`) and the hook's `CCD_WSADD_RE` refuse it, as an accident guard (D-8979),
+  and they cannot tell a fixture `HOME` from the live one, so a child's `HOME=<fixture> ./ccd/ccd ws-add` is refused
+  too: a worker exercises `ws-add` through the test harness (`makeCcdHarness`), whose calls no hook sees.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),

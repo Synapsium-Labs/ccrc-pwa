@@ -10,6 +10,7 @@
   "echo ok; ccd ws-add project-a",
   "echo ok\nccd ws-add project-a",
   "HOME=/tmp/x ccd ws-add project-a",
+  "HOME=/tmp/fixture-home ./ccd/ccd ws-add project-a",
   "env ccd ws-add project-a",
   "env FOO=1 ccd ws-add project-a",
   "command ccd ws-add project-a",

@@ -33,7 +33,7 @@ Two options were put forward:
 | Layer | Where | What |
 |---|---|---|
 | The deny list | `shared/api.ts#childDenyRules`, `CHILD_SCOPE_DENY_CCD_VERBS` | A second verb list, child-only, holding `ws-add`. `childDenyRules` emits `Bash(ccd ws-add:*)` after the SAFETY verbs. `FORBIDDEN_CCD_VERBS` and the classifier are untouched, because `ws-add` is not a SAFETY verb: the operator, a top-level session and the server still run it. |
-| The deny file | `ccd/install-session-hooks.sh#_child_deny_json` | The bash twin's loop gains the same list, so `~/.cc-sessions/child-deny.settings.json` names the rule. `install-session-hooks.test.ts` holds the file equal to `CHILD_DENY_RULES` by iteration. The digest history (`child-deny.digests`) already handles a child spawned under the older file. |
+| The deny file | `ccd/install-session-hooks.sh#_child_deny_json` | The bash twin's loop gains the same list, so `~/.cc-sessions/child-deny.settings.json` names the rule. `install-session-hooks.test.ts` holds the file equal to `CHILD_DENY_RULES` by iteration. Adding the rule changes the file's sha256, and that costs something at rollout: a child spawned before it keeps the older digest until it respawns, so `server/src/coord/approvalDenyFloor.ts#denyStandingOf` reads it as `history`, its approvals are routed and held as `denyCurrent` false, and `approvalAllowRefusal` answers `deny-not-current` to every coordinator allow for that child (a coordinator may still deny or hand over). Every child running at rollout pays it once, until its next spawn. |
 | The hook | `ccd/session-hook.sh`, `CCD_WSADD_RE` and THE CHILD'S WORKSPACE DENY | `CCD_WSADD_RE` is the worker merge deny's head grammar, cut where `CCD_DOOR_RE` is (D-8124's precedent). It is asked of the merge arm's stripped text, so quoted text, comments and heredocs that name `ccd ws-add` pass. The strip wakes for `ws-add` only in a child (`wchild`). The question is asked only when the merge questions set no deny. |
 
 **Why the merge arm's strip and not the child arm's `fmatch`.** The child's forbidden-verb arm reads the command as bash
@@ -51,7 +51,7 @@ session with no marker (top-level, or held but unmarked) passes every spelling.
 ## Tests
 
 - `server/test/session-hook-ws-add-deny.test.ts` runs the real hook in a fixture HOME and iterates
-  `server/test/fixtures/ws-add-deny/must-deny.json` (24 spellings, the server's argv included) and `must-allow.json` (17
+  `server/test/fixtures/ws-add-deny/must-deny.json` (25 spellings, the server's argv and a fixture-`HOME` path-spelled run included) and `must-allow.json` (17
   mentions and other verbs). It also covers: a dangling marker link, sessions with no marker, the merge deny kept, the
   listed passes, `CCD_WSADD_RE` derived from `GH_MERGE_RE`'s head, the deny file rule, and the prefilter's budget.
 - `server/test/ccd-spawn-child-settings.test.ts`: the rule list gains `Bash(ccd ws-add:*)`, and `FORBIDDEN_CCD_VERBS`
@@ -87,4 +87,4 @@ session with no marker (top-level, or held but unmarked) passes every spelling.
   question, never the hold, so a held session without a marker (a top-level session that a coordinator bound to a later
   wave by `sessionId`) is not asked. A worker can still make a tree with plain `git worktree add`, which no registry row
   names; that is out of this change's scope. Identity on the box is attribution, so a session determined to make a
-  workspace can still do it. The measured case was an accident, and the guard is sized for that.
+  workspace can still do it. The measured case was an accident, and the guard is sized for that. It also refuses what it should not: the hook cannot tell a fixture `HOME` from the live one, so a child's `HOME=<fixture> ./ccd/ccd ws-add …` is refused too (pinned in `must-deny.json`). A ccrc worker exercises `ws-add` through the test harness (`makeCcdHarness`, `server/test/ccdWsHelpers.ts`), which spawns `ccd` from inside vitest, so the hook sees only the test command and never refuses it. Adding the rule also changes the child deny file's digest, so each child running at rollout has its coordinator allows refused `deny-not-current` until it respawns (the deny file row above).
