@@ -49,6 +49,8 @@ import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
 import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
+import { useHostAppearance } from '../lib/appearance';
+import { appearanceStamp } from '../lib/appearanceStamp';
 import { DocsAssetContext } from './DocImage';
 import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
@@ -186,6 +188,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
   const assets = useContext(DocsAssetContext);
   const prefs = readerPrefsOf(useThemeChoice(), THEMES).theme;
+  const stamp = useHostAppearance();
   const link = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: new WeakMap() }), [p.link]);
   const [state, dispatch] = useReducer(
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
@@ -199,19 +202,40 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
   /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
   const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, prefs, barSlot });
+  const live = useRef({ props: p, link, assets, prefs, stamp, barSlot });
   useEffect(() => {
-    live.current = { props: p, link, assets, prefs, barSlot };
+    live.current = { props: p, link, assets, prefs, stamp, barSlot };
   });
+  const followedStamp = useRef<string | null>(null);
 
   // A later change of the DERIVED theme reaches the frame as its `prefs` operation: no remount, so the reading position
   // survives, and a switch between two palettes of one mode sends nothing.
   useEffect(() => {
     const m = mountRef.current;
-    if (m === null || seededPrefs.current === prefs) return;
+    if (m === null || m.seed?.hosted || seededPrefs.current === prefs) return;
     seededPrefs.current = prefs;
-    m.setPrefs({ theme: prefs });
+    m.follow(prefs);
   }, [prefs]);
+
+  const appearanceFrame = useRef<number | null>(null);
+  const scheduleAppearance = (m: ReaderMount): void => {
+    if (appearanceFrame.current !== null) return;
+    appearanceFrame.current = requestAnimationFrame(() => {
+      appearanceFrame.current = null;
+      const current = appearanceStamp(document.documentElement);
+      if (mountRef.current !== m || followedStamp.current === current) return;
+      followedStamp.current = current;
+      m.follow(live.current.prefs);
+    });
+  };
+  useEffect(() => () => {
+    if (appearanceFrame.current !== null) cancelAnimationFrame(appearanceFrame.current);
+    appearanceFrame.current = null;
+  }, []);
+  useEffect(() => {
+    const m = mountRef.current;
+    if (m !== null && m.seed?.hosted && followedStamp.current !== stamp) scheduleAppearance(m);
+  }, [stamp]);
 
   useEffect(() => {
     if (overGate) return undefined;
@@ -271,9 +295,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           // frame opened at it lands the plain view there; that frame's `ready` spends it. `mount` is null before the mount
           // lands and after a fallback or the body's end, so a late link opens nothing.
           if (r.reopen && mount !== null && mount.openAt !== undefined) {
+            const currentMount = mount;
             reopened = r.id;
             cur.link.onFragment(r.id, location.pathname + location.search);
-            mount.openAt(decodedId(r.id));
+            if (mount !== currentMount) break;
+            currentMount.openAt?.(decodedId(r.id));
+            // openAt replaces the frame and its seed without replacing the handle. Reconcile even if the root's
+            // intermediate stamp never reaches React's observer, sharing any already queued appearance frame.
+            if (mount === currentMount && currentMount.seed?.hosted) {
+              followedStamp.current = currentMount.seed.stamp;
+              scheduleAppearance(currentMount);
+            }
           }
           break;
         case 'sheet':
@@ -407,6 +439,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),
         prefs: { theme: cur.prefs },
+        appearanceRoot: document.documentElement,
         onLink,
         onHash: replaceFragment,
         copy: onCopy,
@@ -451,10 +484,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           progress,
         });
       }
-      const latest = live.current.prefs;
-      if (latest !== seededPrefs.current) {
-        seededPrefs.current = latest;
-        m.setPrefs({ theme: latest });
+      const latest = live.current;
+      if (m.seed?.hosted) {
+        followedStamp.current = m.seed.stamp;
+        const current = appearanceStamp(document.documentElement);
+        if (current !== m.seed.stamp) {
+          followedStamp.current = current;
+          m.follow(latest.prefs);
+        }
+      } else if (latest.prefs !== seededPrefs.current) {
+        seededPrefs.current = latest.prefs;
+        m.follow(latest.prefs);
       }
     })();
 

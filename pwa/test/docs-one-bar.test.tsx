@@ -63,7 +63,7 @@ interface Rig {
 function rig(): Rig {
   const inputs: ReaderMountInput[] = [];
   const command = vi.fn();
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command, seed: { hosted: false }, follow: vi.fn() };
   const reader: ReaderDeps = {
     render: vi.fn(async () => RENDERED),
     mount: vi.fn(async (_el, input) => {

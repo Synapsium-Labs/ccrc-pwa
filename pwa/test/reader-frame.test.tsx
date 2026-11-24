@@ -102,9 +102,10 @@ interface Harness {
   readonly mountFn: ReturnType<typeof vi.fn<ReaderDeps['mount']>>;
   readonly imagesFn: ReturnType<typeof vi.fn<ReaderDeps['images']>>;
   readonly handle: {
-    destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>;
-    openAt: ReturnType<typeof vi.fn>;
-    seed: { hosted: false }; follow: ReturnType<typeof vi.fn>;
+    destroy: ReturnType<typeof vi.fn<ReaderMount['destroy']>>; setPrefs: ReturnType<typeof vi.fn<ReaderMount['setPrefs']>>;
+    command: ReturnType<typeof vi.fn<NonNullable<ReaderMount['command']>>>;
+    openAt: ReturnType<typeof vi.fn<NonNullable<ReaderMount['openAt']>>>;
+    seed: { hosted: false }; follow: ReturnType<typeof vi.fn<ReaderMount['follow']>>;
   };
   readonly inputs: ReaderMountInput[];
   readonly parser: ReturnType<typeof vi.fn<MarkdownParser>>;
@@ -197,6 +198,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearAuthLost();
+  delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.skin;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -314,6 +317,7 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(input.document.initialHash).toBe('part');
     expect(input.document.result.html).toBe('<p>x</p>');
     expect(input.prefs).toEqual({ theme: 'light' });
+    expect(input.appearanceRoot).toBe(document.documentElement);
     // The fragment is spent when the frame reports ready, not when the mount resolves (completion plan Task 13).
     await settled();
     expect(h.consumed).not.toHaveBeenCalled();
@@ -680,6 +684,202 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
   });
 });
 
+describe('host appearance following', () => {
+  it('catches up to a changed seed, but not to an equal seed after a held mount', async () => {
+    for (const equal of [false, true]) {
+      document.documentElement.dataset.theme = 'light';
+      const follow = vi.fn();
+      let land!: (m: ReaderMount) => void;
+      const h = harness({ mount: () => new Promise((resolve) => { land = resolve; }) });
+      render(frame(h));
+      await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+      await act(async () => { document.documentElement.dataset.theme = 'dark'; await Promise.resolve(); });
+      const stamp = `${document.documentElement.dataset.skin ?? ''}|dark`;
+      await act(async () => { land({ ...h.handle, seed: { hosted: true, stamp: equal ? stamp : 'old' }, follow }); await Promise.resolve(); });
+      await settled();
+      expect(follow).toHaveBeenCalledTimes(equal ? 0 : 1);
+      cleanup();
+    }
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('does not follow a seed read after a root change even before the observer updates React', async () => {
+    document.documentElement.dataset.theme = 'light';
+    const follow = vi.fn();
+    let land!: (m: ReaderMount) => void;
+    const h = harness({ mount: () => new Promise((resolve) => { land = resolve; }) });
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      document.documentElement.dataset.theme = 'dark';
+      land({ ...h.handle, seed: { hosted: true, stamp: '|dark' }, follow });
+      await Promise.resolve();
+    });
+    await settled();
+    expect(follow).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('follows the replacement seed when the root returns before a queued frame (batched: %s)', async (batched) => {
+    document.documentElement.dataset.theme = 'light';
+    let nextId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      const id = ++nextId;
+      frames.set(id, cb);
+      return id;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => { frames.delete(id); });
+    let visibleTheme = 'light';
+    let seed: ReaderMount['seed'] = { hosted: true, stamp: '|light' };
+    const h = harness();
+    const mount: ReaderMount = {
+      ...h.handle,
+      get seed() { return seed; },
+      openAt: vi.fn(() => {
+        visibleTheme = document.documentElement.dataset.theme ?? '';
+        seed = { hosted: true, stamp: `|${visibleTheme}` };
+      }),
+      follow: vi.fn(() => { visibleTheme = document.documentElement.dataset.theme ?? ''; }),
+    };
+    h.mountFn.mockImplementation(async (_el, input) => { h.inputs.push(input); return mount; });
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    if (batched) {
+      await act(async () => {
+        document.documentElement.dataset.theme = 'dark';
+        input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' });
+        expect(visibleTheme).toBe('dark');
+        document.documentElement.dataset.theme = 'light';
+        await Promise.resolve();
+      });
+    } else {
+      await act(async () => { document.documentElement.dataset.theme = 'dark'; await Promise.resolve(); });
+      expect(frames.size).toBe(1);
+      act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+      expect(visibleTheme).toBe('dark');
+      await act(async () => { document.documentElement.dataset.theme = 'light'; await Promise.resolve(); });
+    }
+    act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    });
+    expect(visibleTheme).toBe('light');
+    expect(mount.follow).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it.each(['openAt', 'onFragment'] as const)('a synchronous fallback from %s stops the reopen and appearance follow', async (source) => {
+    document.documentElement.dataset.theme = 'light';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const request = vi.spyOn(window, 'requestAnimationFrame');
+    const follow = vi.fn();
+    const openAt = vi.fn();
+    const h = harness();
+    h.mountFn.mockImplementation(async (_el, input) => {
+      h.inputs.push(input);
+      openAt.mockImplementation(() => { if (source === 'openAt') input.onFallback('timeout'); });
+      return { ...h.handle, seed: { hosted: true, stamp: '|light' }, follow, openAt };
+    });
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    if (source === 'onFragment') h.onFragment.mockImplementation(() => { input.onFallback('timeout'); });
+    request.mockClear();
+    expect(() => act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); })).not.toThrow();
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    expect(openAt).toHaveBeenCalledTimes(source === 'openAt' ? 1 : 0);
+    expect(h.handle.destroy).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(follow).not.toHaveBeenCalled();
+  });
+
+  it('coalesces separate root changes to the latest frame without remounting', async () => {
+    document.documentElement.dataset.theme = 'light';
+    const follow = vi.fn();
+    let nextId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      const id = ++nextId;
+      frames.set(id, cb);
+      return id;
+    });
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => { frames.delete(id); });
+    const h = harness({ mount: async () => ({ ...h.handle, seed: { hosted: true, stamp: `${document.documentElement.dataset.skin ?? ''}|light` }, follow }) });
+    const { unmount } = render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    for (const value of ['dark', 'nord', 'phosphor']) {
+      await act(async () => { document.documentElement.dataset.theme = value; await Promise.resolve(); });
+    }
+    expect(follow).not.toHaveBeenCalled();
+    expect(frames.size).toBe(1);
+    act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    });
+    expect(follow).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+    await act(async () => { document.documentElement.dataset.theme = 'light'; await Promise.resolve(); });
+    expect(frames.size).toBe(1);
+    const pendingId = [...frames.keys()][0];
+    unmount();
+    expect(cancel).toHaveBeenCalledWith(pendingId);
+    expect(frames.size).toBe(0);
+    expect(follow).toHaveBeenCalledTimes(1);
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('follows each applied change across frames and cancels a pending frame on unmount', async () => {
+    document.documentElement.dataset.theme = 'light';
+    const follow = vi.fn();
+    const h = harness({ mount: async () => ({ ...h.handle, seed: { hosted: true, stamp: '|light' }, follow }) });
+    const { unmount } = render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    await act(async () => { document.documentElement.dataset.theme = 'dark'; await Promise.resolve(); });
+    await waitFor(() => expect(follow).toHaveBeenCalledTimes(1));
+    await act(async () => { document.documentElement.dataset.theme = 'nord'; await Promise.resolve(); });
+    await waitFor(() => expect(follow).toHaveBeenCalledTimes(2));
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+    await act(async () => { document.documentElement.dataset.theme = 'light'; await Promise.resolve(); });
+    unmount();
+    await settled();
+    expect(follow).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('a mode-only choice change with unchanged stamp follows only when hosted is %s', async (hosted) => {
+    themeChoice.value = 'system';
+    delete document.documentElement.dataset.theme;
+    const follow = vi.fn();
+    const stamp = `${document.documentElement.dataset.skin ?? ''}|${document.documentElement.dataset.theme ?? ''}`;
+    const h = harness({ mount: async () => ({ ...h.handle, seed: hosted ? { hosted: true, stamp } : { hosted: false }, follow }) });
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    act(() => { chooseTheme('phosphor'); });
+    await settled();
+    expect(follow).toHaveBeenCalledTimes(hosted ? 0 : 1);
+    if (!hosted) expect(follow).toHaveBeenCalledWith('dark');
+  });
+
+  it('treats a missing seed as mode-only', async () => {
+    const follow = vi.fn();
+    const h = harness({ mount: async () => ({ destroy: vi.fn(), setPrefs: vi.fn(), follow }) as unknown as ReaderMount });
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    act(() => { chooseTheme('phosphor'); });
+    await waitFor(() => expect(follow).toHaveBeenCalledWith('dark'));
+  });
+});
+
 describe('the lifetime of a mount (spec 4.1)', () => {
   it('unmount aborts the render and destroys the mount', async () => {
     const h = harness();
@@ -731,14 +931,15 @@ describe('the lifetime of a mount (spec 4.1)', () => {
     expect(h.handle.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it('a theme change calls setPrefs once and never remounts', async () => {
+  it('a theme change calls follow once and never remounts', async () => {
     const h = harness();
     render(frame(h));
     await ready(h);
     await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
     act(() => { chooseTheme('phosphor'); });
-    await waitFor(() => expect(h.handle.setPrefs).toHaveBeenCalledTimes(1));
-    expect(h.handle.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
+    await waitFor(() => expect(h.handle.follow).toHaveBeenCalledTimes(1));
+    expect(h.handle.follow).toHaveBeenCalledWith('dark');
+    expect(h.handle.setPrefs).not.toHaveBeenCalledWith(expect.objectContaining({ theme: expect.anything() }));
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(h.handle.destroy).not.toHaveBeenCalled();
   });
@@ -753,10 +954,11 @@ describe('the lifetime of a mount (spec 4.1)', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     act(() => { chooseTheme('nord'); });
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-    expect(h.handle.setPrefs).not.toHaveBeenCalled();
+    expect(h.handle.follow).not.toHaveBeenCalled();
     act(() => { chooseTheme('system'); });
-    await waitFor(() => expect(h.handle.setPrefs).toHaveBeenCalledTimes(1));
-    expect(h.handle.setPrefs).toHaveBeenLastCalledWith({ theme: 'auto' });
+    await waitFor(() => expect(h.handle.follow).toHaveBeenCalledTimes(1));
+    expect(h.handle.follow).toHaveBeenLastCalledWith('auto');
+    expect(h.handle.setPrefs).not.toHaveBeenCalledWith(expect.objectContaining({ theme: expect.anything() }));
     expect(h.mountFn).toHaveBeenCalledTimes(1);
   });
 
@@ -767,10 +969,11 @@ describe('the lifetime of a mount (spec 4.1)', () => {
     render(frame(h));
     await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
     act(() => { chooseTheme('phosphor'); });
-    expect(h.handle.setPrefs).not.toHaveBeenCalled();
+    expect(h.handle.follow).not.toHaveBeenCalled();
     await act(async () => { resolveMount(h.handle as ReaderMount); await Promise.resolve(); });
-    expect(h.handle.setPrefs).toHaveBeenCalledTimes(1);
-    expect(h.handle.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
+    expect(h.handle.follow).toHaveBeenCalledTimes(1);
+    expect(h.handle.follow).toHaveBeenCalledWith('dark');
+    expect(h.handle.setPrefs).not.toHaveBeenCalledWith(expect.objectContaining({ theme: expect.anything() }));
   });
 
   it('loaded draft images are counted once and taken back on unmount', async () => {
@@ -936,7 +1139,7 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
     const h = harness();
     h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
     h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 });
-    const late = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+    const late = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), seed: { hosted: false }, follow: vi.fn() };
     let land!: () => void;
     h.mountFn.mockImplementationOnce((_el, input) => new Promise((resolve) => {
       h.inputs.push(input);
