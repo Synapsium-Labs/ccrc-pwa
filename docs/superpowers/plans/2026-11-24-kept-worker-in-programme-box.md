@@ -41,15 +41,15 @@ the programme's box, so the box and the kept row can never disagree within one f
 **The decider (D-8981).** `pwa/src/fleet/runWords.ts#keptRunOf` (L1, beside the run binding's named readers) answers a
 `KeptRun` (`id`, `program`, `wave`, `coordinatorId`) when all of these hold:
 
-- the session is a dispatched child whose marker names that run (`runBelongsTo(childMarkOf(…))`);
+- the session is a dispatched child whose marker names that run or an earlier one (the minting run: a later wave resumes the workspace and keeps its marker);
 - the session's newest bound run has closed;
 - no open run binds the session;
 - the wire names the run's programme;
 - the run's claimant still draws a box of that programme (`runWords.ts#boxRunsOf`, the box's own rule).
 
 Otherwise it answers `null`. The worker side is the server's incarnation binding plus the child marker: a main checkout,
-a manual workspace and an unreadable marker are never kept, and neither is a recycled name whose marker names another
-run. `boxRunsOf` (its claimed open runs, less one it claims for itself) moved from `programmeBoxes.ts` to `runWords.ts`,
+a manual workspace and an unreadable marker are never kept, and neither is a recycled name, whose marker names a later
+run (the server's binding drops the older run for it already, and the decider refuses it too). `boxRunsOf` (its claimed open runs, less one it claims for itself) moved from `programmeBoxes.ts` to `runWords.ts`,
 so the box and the decider read one rule. The coordinator side is the run's claimant column, which the reclaim door moves with
 every run of the programme (`UPDATE runs SET claimedBy … WHERE program = ?`), so a succession re-parents a kept worker
 too.
@@ -122,3 +122,7 @@ coordinator as `coordinatorId`, so `nestFleet`'s membership test reads a decided
   `runWords.ts` for the box and the decider, and rule 6 makes a coordinator a parent only for a kept worker it places.
 - **D-8982 (2026-11-24)**: kept-worker-label-run-closed. Such a worker's label read "run not on the board". It now reads
   `<programme> · wave N · run closed`, and the title names the run and the coordinator.
+
+  After the second review: the marker names the MINTING run, which a resumed wave does not rewrite, so the decider
+  accepts a marker naming the closed run or an earlier one; requiring the exact run dropped every resumed worker. The
+  `shared/runBelongs.ts#runBelongsTo` note that said a resumed wave carries a later run's id is corrected.

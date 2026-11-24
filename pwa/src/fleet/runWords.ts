@@ -442,9 +442,9 @@ export interface KeptRun {
   readonly coordinatorId: string;
 }
 
-/** THE KEPT WORKER (D-8981), one decider: non-null when the session is a dispatched child whose marker names that very
- *  run (`runBelongsTo(childMarkOf(…))`: a main checkout, a manual workspace and an unreadable marker are never kept, and
- *  neither is a recycled name whose marker names another run), the session's NEWEST bound run (`sessionRunOf`, the
+/** THE KEPT WORKER (D-8981), one decider: non-null when the session is a dispatched child whose marker names that run or
+ *  an earlier one (the minting run; a resumed wave keeps its marker): a main checkout, a manual workspace and an
+ *  unreadable marker are never kept, and neither is a recycled name, whose marker names a later run, the session's NEWEST bound run (`sessionRunOf`, the
  *  server's incarnation binding) has closed, no open run binds it, the wire names that run's programme (D-8980; an older
  *  server does not, and the row stays where it was), and the run's claimant still draws a box of that programme
  *  (`boxRunsOf`, the box's own rule).
@@ -460,7 +460,11 @@ export function keptRunOf<R extends { readonly program: string; readonly claimed
   if (sessionRunOf(session, 'open') !== null) return null;
   const last = sessionRunOf(session);
   if (last === null || !isRunClosed(last) || last.claimedBy === null || last.program === undefined) return null;
-  if (!runBelongsTo(childMarkOf(session), last.id)) return null;
+  // The marker names the run that MINTED the workspace (`ws-add --child`, its one writer), and a later wave resumes the same
+  // workspace without rewriting it (`childBind.ts#childBindGate`), so the closed run may be the minting run or a later one.
+  // A marker naming a LATER run than the closed one is a recycled name's new incarnation: not kept.
+  const mark = childMarkOf(session);
+  if (mark.kind !== 'child' || mark.runId > last.id) return null;
   const { program, claimedBy } = last;
   const active = boxRunsOf(runs, claimedBy).some((r) => r.program === program);
   return active ? { id: last.id, program, wave: last.wave ?? null, coordinatorId: claimedBy } : null;
@@ -1008,7 +1012,7 @@ export function childReclaimDoneRefreshDue(
 }
 
 export { childMarkOf, type ChildMarkRead } from '../../../shared/runBelongs';
-import { childMarkOf, runBelongsTo } from '../../../shared/runBelongs';
+import { childMarkOf } from '../../../shared/runBelongs';
 
 export interface ChildOfRunLabel {
   readonly text: string;

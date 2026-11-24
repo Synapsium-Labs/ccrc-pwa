@@ -79,10 +79,19 @@ describe('keptRunOf: the closed run a programme still keeps (D-8981)', () => {
     expect(keptRunOf(blurred!, [live])).toBeNull();
   });
 
-  it('a child whose marker names another run than the closed one (a recycled name): not kept', () => {
-    const [recycled] = withProgrammeBinding([worker('w-done', 9)], [closed, live]);
-    expect(recycled!.run).toMatchObject({ id: 10, state: 'done' });
+  it('a child whose marker names a LATER run than the closed one (a recycled name): not kept', () => {
+    // The server's incarnation binding already drops the older run for this name, so the row arrives unbound
+    const [recycled] = withProgrammeBinding([worker('w-done', 11)], [closed, live]);
     expect(keptRunOf(recycled!, [live])).toBeNull();
+    // and the decider refuses it on its own too, given a binding that still names the older run.
+    const stale = { ...recycled!, run: { id: 10, state: 'done' as const, claimedBy: 'coord', program: 'port-api', wave: 1 } };
+    expect(keptRunOf(stale, [live])).toBeNull();
+  });
+
+  it('a child resumed for a later wave (its marker names the earlier minting run): kept', () => {
+    const [resumed] = withProgrammeBinding([worker('w-done', 9)], [closed, live]);
+    expect(resumed!.run).toMatchObject({ id: 10, state: 'done' });
+    expect(keptRunOf(resumed!, [live])).toMatchObject({ id: 10, program: 'port-api', coordinatorId: 'coord' });
   });
 });
 
