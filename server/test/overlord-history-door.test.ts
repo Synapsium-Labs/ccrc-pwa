@@ -54,7 +54,7 @@ const issuer = (): PrivacyIssuer => {
   return { kind: 'ready', issue: (high) => { last = Math.max(high ?? 0, last) + 1; return { ok: true, id: last }; } };
 };
 
-const SCOPE = ROWS.outcome === 'rows' ? ROWS.scope : null;
+const SCOPE = ROWS.scope;
 const answer = (a: OverlordHistoryAnswer): OverlordHistoryAsked => ({ kind: 'answer', answer: a });
 
 // ── the deciders: their cases are written once, in `sim/overlordHistoryDoorSets.ts`, and the mutation floors run them too ──

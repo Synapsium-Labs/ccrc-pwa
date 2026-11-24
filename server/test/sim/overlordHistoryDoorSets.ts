@@ -44,7 +44,7 @@ export function historyAgentForCases(m: HistoryDoorModule): Record<string, Suite
 }
 
 const SCOPE = { kind: 'overlord', id: 'all', project: null, families: [], families_total: 0, transcripts: 0 } as const;
-export const HISTORY_ROWS: OverlordHistoryAnswer = {
+export const HISTORY_ROWS: Extract<OverlordHistoryAnswer, { outcome: 'rows' }> = {
   outcome: 'rows', exit: 0, items: [{ trust: 'untrusted', text: 'TEXT-MARKER in project-a' }], shown: 1, total: 1, scope: SCOPE,
 };
 const answer = (a: OverlordHistoryAnswer): HistoryReadOutcome => ({ kind: 'answer', answer: a });
