@@ -234,8 +234,8 @@ export function settleEvidenceStands(before: SettleEvidence, after: SettleEviden
   return JSON.stringify(before.newest) === JSON.stringify(after.newest) && JSON.stringify(before.designation) === JSON.stringify(after.designation);
 }
 
-/** The facts the skew notice reads: the designated or pending Overlord body, whether it runs, whether its route carries
- *  `profiledigest`, the build agreement and both builds, and the pairs already noticed. */
+/** The facts the skew notice reads: the designated Overlord body (never a pending attempt), whether it runs, whether its
+ *  route carries `profiledigest`, the build agreement and both builds, and the pairs already noticed. */
 export interface SkewFacts {
   readonly sessionId: string | null;
   readonly running: boolean | 'unmeasured';

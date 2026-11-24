@@ -491,7 +491,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
         expect(warned('the drain fell over')).toBe(true);
       });
 
-      it('negative controls: a held report, a stale start, another session and an unreadable designation never reach the write or the drain', async () => {
+      it('negative controls: another session\'s stored report, a start id the session never had and an unreadable designation never reach the write or the drain', async () => {
         await failing();
         let wrote = 0;
         const counting = portOf({ failPending: () => { wrote += 1; return { ok: false }; } });

@@ -79,8 +79,10 @@ export interface SandboxSettlePort {
   goLive(sessionId: string, generation: string, at: number): { readonly ok: boolean; readonly detail?: string };
   /** The pending attempt ends `overlord-sandbox-unmet`, its stop owed; `changed` is false when it was no longer pending. */
   failPending(sessionId: string, at: number): { readonly ok: boolean; readonly changed?: boolean };
-  /** Stops the failed body (the designation's one drain): never throws. `unrecorded` when no row owes the stop (the failure
-   *  could not be recorded), so the drain logs it as the residual it is and never claims a stop debt (review 3346 F1). */
+  /** Stops the failed body (the designation's one drain). `unrecorded` when no row owes the stop (the failure could not be
+   *  recorded), so the drain logs it as the residual it is and never claims a stop debt (review 3346 F1). It can throw when
+   *  the stop-done write after the stop fails (a busy database): the settle then answers `threw`, and the body is already
+   *  stopped by then (review 3366 F8). */
   drain(sessionId: string, unrecorded: boolean): Promise<void>;
   /** The session's registry project, measured or not (`registry.ts#measuredProjectOf`). */
   workspaceOf(sessionId: string): Promise<WorkspaceFact>;
@@ -1163,7 +1165,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
 /** The settle step's acts (Task 9), on the serialiser: read the designation, the newest start with its report and the carry,
  *  and the workspace; ask `sandboxVerdict` and `sandboxSettle`; then `go-live` calls the designation's `live` writer, and
  *  `fail-pending` records `overlord-sandbox-unmet` with its stop owed and drains it (the profile digest cleared, then the
- *  stop). An unreadable read acts on nothing. A refusal or a failed stop is logged; the owed stop stays on the row. Every
+ *  stop). An unreadable read acts on nothing. A refused go-live is logged and the attempt stays pending. After a recorded
+ *  failure, a failed stop is logged and the stop stays owed on the row. When the record itself is refused or throws, the body
+ *  is stopped through the drain as unrecorded: no row owes that stop, and a failed stop there is logged as a residual
+ *  (review 3366 F11). Every
  *  check runs again inside the serialiser on each call, so a call for a report that is no longer the newest start's, for a
  *  start with no stored report, or for another session or generation, acts on nothing. It is the one settle path: the loads
  *  door calls it after its answer, and designation B's deadline sweep is to re-run it from the stored report (ruled in fix
@@ -1208,8 +1213,8 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   if (act.kind === 'fail-pending') {
     console.warn(`ccrc-server: the sandbox check failed for ${act.sessionId} (${act.properties.map((p) => `${p.property}: ${p.detail}`).join('; ')}); stopping it`);
     // The attempt's identity is the one `sandboxSettle` measured (the pending session, its generation, the newest start). A
-    // record that is refused or throws still stops that body, as the designate door does, through the drain as unrecorded
-    // (review 3346 F1); `changed: false` alone (no longer pending) stops nothing.
+    // record that is refused, and one that throws, each still stop that body through the drain as unrecorded: no stop owed,
+    // and the record is not retried (review 3346 F1, review 3366 F7). `changed: false` alone (no longer pending) stops nothing.
     let f: ReturnType<SandboxSettlePort['failPending']>;
     try {
       f = port.failPending(act.sessionId, wall());
