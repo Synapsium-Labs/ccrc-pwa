@@ -140,7 +140,8 @@ describe('a Docs tab at a desk, in a real Chrome', () => {
         expect(f.primary).toBe(0);
         expect(f.tabBar).toBe(1);
         expect(f.detailLeft).toBe(0);
-        expect(Math.abs(f.detailWidth - f.viewport)).toBeLessThanOrEqual(1);
+        expect(f.detailWidth).toBe(1280);
+        expect(f.viewport).toBe(1280);
         // The Docs screen sits in the pane with no column beside it: its left edge is the page's (fix round 1, A6).
         expect(f.screenLeft).toBe(0);
         expect(f.scrollX).toBe(0);
@@ -179,7 +180,7 @@ describe('a Docs tab at a desk, in a real Chrome', () => {
         // What the note states (fix round 1, A6): a 2px solid ring, and the tap floor, 44px.
         expect(back!.outlineStyle).toBe('solid');
         expect(back!.outlineWidth).toBe('2px');
-        expect(back!.height).toBeGreaterThanOrEqual(44);
+        expect(back!.height).toBe(44);
         const named = app.page.getByRole('link', { name: 'Console, opens in a new tab', exact: true });
         expect(await named.count()).toBe(1);
       } finally {
@@ -246,7 +247,7 @@ describe('a Docs tab below the desk width, in a real Chrome', () => {
         expect(f.phoneBar).toBe(0);
         expect(f.backHref).toBe('/');
         expect(f.backTarget).toBeNull();
-        expect(f.backHeight).toBeGreaterThanOrEqual(44);
+        expect(f.backHeight).toBe(44);
         expect(f.screen).toBe(1);
         expect(f.sockets).toBe(0);
         expect(f.scrollX).toBe(0);
@@ -274,13 +275,21 @@ describe('a Docs page reached inside the console on a phone, in a real Chrome, u
           docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
           back: [...document.querySelectorAll('a')].filter((a) => (a.textContent ?? '').startsWith('Console')).length,
           screen: document.querySelectorAll('.shell-detail .docs-screen').length,
+          drawn: (() => {
+            const r = document.querySelector('.shell-detail .docs-screen')?.getBoundingClientRect();
+            return r === undefined ? null : { width: r.width, height: r.height };
+          })(),
           sockets: (window as unknown as { __sockets: number }).__sockets,
           scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           title: document.title,
         }));
         console.log(`DOT-FIGURE ${skin} 390 in-app ${JSON.stringify(f)}`);
-        // The console's fleet stream: the counter the Docs tab cases read as 0 counts here.
-        expect(f.sockets).toBeGreaterThan(0);
+        // The console's one fleet stream: the counter the Docs tab cases read as 0 counts here.
+        expect(f.sockets).toBe(1);
+        // The reader is drawn, not only mounted: a box the width of the phone.
+        expect(f.drawn).not.toBeNull();
+        expect(f.drawn!.width).toBe(390);
+        expect(f.drawn!.height).toBeGreaterThan(0);
         expect(f.tabBar).toBe(0);
         expect(f.docsTab).toBeNull();
         expect(f.back).toBe(0);
@@ -288,6 +297,51 @@ describe('a Docs page reached inside the console on a phone, in a real Chrome, u
         expect(f.scrollX).toBe(0);
         expect(f.title).toBe('ccrc');
         expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 180_000);
+  }
+});
+
+// A TAB OPENED FROM THE CONSOLE (fix round 2, R4): the console marks its own tab in the tab's store, and a new tab opened
+// from it, by a plain new-tab anchor (the bar's Docs place) or by a command (the palette's "Go to Docs", `useFollowLink`),
+// has no opener and gets no copy of that mark, so it starts as a Docs tab.
+describe('a tab opened from the console, in a real Chrome', () => {
+  for (const how of ['the bar’s Docs place', 'the palette’s Go to Docs'] as const) {
+    it(`by ${how}: a Docs tab, with no copy of the console's mark`, async () => {
+      const app = await openAt(DESK, REFINED, '/fleet');
+      try {
+        await app.page.waitForFunction(() => document.querySelector('.app-shell') !== null, null, { timeout: 90_000, polling: 100 });
+        await app.page.waitForTimeout(300);
+        const mark = await app.page.evaluate(() => sessionStorage.getItem('ccrc-tab'));
+        const opened = app.ctx.waitForEvent('page', { timeout: 30_000 });
+        if (how === 'the bar’s Docs place') {
+          await app.page.click('nav[aria-label="Primary"] a[href="/docs"]');
+        } else {
+          await app.page.keyboard.press('Control+k');
+          await app.page.waitForTimeout(300);
+          await app.page.keyboard.type('Go to Docs');
+          await app.page.waitForTimeout(300);
+          await app.page.keyboard.press('Enter');
+        }
+        const tab = await opened;
+        await tab.waitForLoadState('load');
+        await tab.waitForFunction(() => document.querySelector('.app-shell') !== null, null, { timeout: 90_000, polling: 100 });
+        const f = await tab.evaluate(() => ({
+          path: location.pathname,
+          docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
+          mark: sessionStorage.getItem('ccrc-tab'),
+          opener: window.opener === null,
+        }));
+        const here = await app.page.evaluate(() => ({ path: location.pathname, docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null }));
+        console.log(`DOT-FIGURE opened ${how} ${JSON.stringify({ mark, f, here })}`);
+        expect(mark, 'the console marked its own tab').toBe('console');
+        expect(f.path).toBe('/docs');
+        expect(f.docsTab).toBe('docs');
+        expect(f.mark, 'the new tab starts with no mark').toBeNull();
+        expect(f.opener).toBe(true);
+        expect(here).toEqual({ path: '/fleet', docsTab: null });
       } finally {
         await app.ctx.close();
       }

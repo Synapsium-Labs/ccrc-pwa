@@ -9,18 +9,20 @@ says whether it was **measured** (read on the tree, in a browser or in a test ru
 
 | Piece | Where | Basis |
 |---|---|---|
-| The one rule for a click, `opensNewTab(href, desk, docsTab)`: at a desk, an in-app link that crosses between the console and the Docs reader opens a new browser tab; a link within its kind of tab moves in the tab; below the desk width nothing opens a tab. The one definition of a Docs tab, `isDocsTab(path, desk, docsOnly)`: a Docs page at a desk, and below it a Docs page in a tab that has shown only Docs pages since it loaded (`docsOnly`, kept by the fold `keepsDocsOnly`). With them `isDocsHref`, `CONSOLE_ROOT` and `NEW_TAB_WORDS` | `pwa/src/lib/docTab.ts` (L1, pure; it imports the route table and nothing of the Docs context) | Measured: `docs-tab-rule.test.ts` |
+| The one rule for a click, `opensNewTab(href, desk, docsTab)`: at a desk, an in-app link that crosses between the console and the Docs reader opens a new browser tab; a link within its kind of tab moves in the tab; below the desk width nothing opens a tab. The one definition of a Docs tab, `isDocsTab(path, docsSoFar)`, from the tab's history alone, never its width: a tab is a Docs tab while it shows a Docs page and has shown only Docs pages (fix round 2, R2). With them `isDocsHref`, `CONSOLE_ROOT` and `NEW_TAB_WORDS` | `pwa/src/lib/docTab.ts` (L1, pure; it imports the route table and nothing of the Docs context) | Measured: `docs-tab-rule.test.ts` |
 | A Docs tab's title, `docsTabTitle` | `pwa/src/docs/docsTabTitle.ts` (L1, pure, with the reader's words) | Measured: `docs-tab-rule.test.ts` |
 | An anchor's props by the rule: `useTabLink()` answers `href => props`, a new-tab anchor (`target="_blank"`, `rel="noopener noreferrer"`, the design system's own `rel` for a link that leaves, no click handler, so the browser opens one tab per click) or the in-app click (`inAppClick`) as before. A move by the rule for a control that is not an anchor: `useFollowLink()` answers `href => void`, a new tab (`window.open(href, '_blank', 'noopener,noreferrer')`) where the rule says so, else `navigate(href)`. `DocsTabContext` carries the tab's kind from `App` to both. `navigate` and the router are unchanged | `pwa/src/lib/useTabLink.ts` (L4) | Measured: `docs-tab-links.test.tsx`, `docs-tab-rule.test.ts` |
 | The link back, `ConsoleLink`: an anchor wearing the ghost button (`GHOST_ANCHOR`, the repo's standalone-anchor pattern, which carries the tap floor), to `CONSOLE_ROOT` by `useTabLink`; named "Console, opens in a new tab" where it opens one, "Console" where it moves in place. The tab bar draws it, and so does the failed-render fallback in a Docs tab ("Back to the console") | `pwa/src/components/ConsoleLink.tsx`, `pwa/src/components/RenderBoundary.tsx` | Measured: `docs-own-tab.test.tsx`, `docs-tab-links.test.tsx`, the browser leg |
 | A notification tap never takes a Docs tab: the push worker brings up a window that is not on a Docs address, and opens a new one when every window is | `pwa/public/push-sw.js` (`onDocs`, the route table's Docs pattern copied, held to it by its test) | Measured: `push-sw.test.ts` |
 | The frame's reader-alone mode: `ShellFrame`'s `alone` draws the skip link, a `<header class="shell-tab-bar">` holding the given node, and the same keyed `<main id="content">`, with no part of the skin set (no bar, accounts strip, banners, fleet column, inspector, status bar or phone navigation) and no skin frame class; `data-tab="docs"` selects a one-column desk grid | `pwa/src/skins/frame.tsx`, `pwa/src/styles/shell.css` (its last block) | Measured: `docs-own-tab.test.tsx`, `docs-own-tab.browser.test.ts` |
-| The Docs tab in `App`: it keeps `docsOnly` (state that only falls, adjusted while rendering), and `isDocsTab(path, useDesk(), docsOnly)` picks a second tree with the sign-in and block screens and the frame in its `alone` mode, the link back in its bar, the reader in the detail; the fleet stream (closed when a console becomes a Docs tab), the Overlord poll and the session-screen preload are gated off; the title effect | `pwa/src/app.tsx` | Measured: the same two suites |
+| The Docs tab in `App`: it keeps `docsSoFar` (state that only falls, adjusted while rendering), starting from what the tab was before this load, and `isDocsTab(path, docsSoFar)` picks a second tree with the sign-in and block screens and the frame in its `alone` mode, the link back in its bar, the reader in the detail; the fleet stream, the Overlord poll and the session-screen preload are gated off; the title effect. A console marks its tab (`markConsoleTab`) | `pwa/src/app.tsx` | Measured: the same two suites |
 | A place's door in a desk bar: `PlaceDoor`, the "Go to" command door, or, where the rule opens a new tab (the Docs place), an anchor wearing the door's own classes (`DOOR`, `DOOR_GLYPH`) | `pwa/src/skins/DoorLink.tsx`, used by Refined's `AppBar` and Instrument's `TopBar` | Measured: `docs-tab-links.test.tsx` |
+| What a tab has been, across a reload: "this tab has been the console", kept in the tab's own store (`tabStorage`, the tab's session storage, added to the one storage port) and read once when the app starts (`wasConsoleTab`); every read and write is guarded, and with no store or one that refuses the first page decides (fix round 2, R4) | `pwa/src/lib/tabMark.ts`, `pwa/src/lib/storage.ts` | Measured: `docs-own-tab.test.tsx`; that a new tab gets no copy, in Chrome |
 
 No server, wire or shared change; no new route (a document's address is what it was); `DocsScreen.tsx` is untouched, and
-`DocsHead.tsx` changes by one hunk only, the reader's Back taking `useFollowLink` (fix round 1, F1): the `navigate` import
-swapped for the hook's, and the Back button's handler calling it, 3 lines out and 3 in. The reader's owner (the Docs reader
+`DocsHead.tsx` changes by the agreed Back change only, the reader's Back taking `useFollowLink` (fix round 1, F1): two git
+hunks against main, the `navigate` import swapped for the hook's, and the Back button taking the hook and its handler calling
+it, 3 lines in and 2 out. The reader's owner (the Docs reader
 coordinator) said yes to that exact diff, read against main `6c7f126d428de2f346f8d69188e24d46da833d4c`, through the
 coordinator on 2026-11-24; the edit is that diff applied unchanged, main had not moved under the file, and the button is
 kept at the index. Its tests sit together in `docs-own-tab.test.tsx`: the index in a Docs tab at a desk opens the console in
@@ -66,19 +68,20 @@ those links opened a tab before this wave too (measured: `text-link.tsx`); only 
   hidden span put a space before the comma in Chrome's computed name (measured, in the browser leg). It stands alone, so it
   is the ghost-button anchor, not the inline `TextLink` (review 3644 A3). Slug `link-back-new-tab-at-root`.
 - **The width rule** (brief item 5): the shell's own desk test, `DESK_QUERY` (`(min-width: 900px)`), defined once in
-  `ui/src/lib/use-media-query.ts` and re-exported by `pwa/src/lib/useMediaQuery.ts`, read with `useDesk()` by `App`,
-  `useTabLink` and `useFollowLink`. No second breakpoint. Whether a click opens a tab is asked live. What a Docs tab is
-  follows the coordinator's ruling on review 3644 L1 (the operator reads documents in half-width windows beside a
-  session): a Docs page at a desk always, and below it while the tab has shown only Docs pages since it loaded. So
-  resizing a Docs tab never flips it, never remounts the reader and never opens a fleet stream; a Docs address loaded first
-  at a phone width draws the reader alone, its link back moving in place; in-app navigation to Docs at a phone width is the
-  console's Docs screen, as before. A console widened while it shows a Docs page becomes a Docs tab: the reader mounts
-  again in the Docs tab's tree and the fleet stream closes (`disconnect()`); narrowed again, it is the console, which
-  connects again. Slug `docs-tab-width-is-live` (amended by the ruling).
+  `ui/src/lib/use-media-query.ts` and re-exported by `pwa/src/lib/useMediaQuery.ts`, read with `useDesk()` by `useTabLink`
+  and `useFollowLink`. No second breakpoint. It decides only whether a click opens a tab, asked live. What a tab is takes no
+  width at all (the coordinator's ruling on review 3666, R2 and R4, which replaces round 1's "a Docs page at a desk
+  always"): a tab is a Docs tab while it shows a Docs page and has shown only Docs pages, and that history survives a reload
+  of the tab. So a document opened in a tab of its own stays a Docs tab however its window is resized, with the same reader
+  and no fleet stream; a Docs address loaded first draws the reader alone at any width; a console that moves to a document,
+  at any width, shows it inside the console as on main, and stays the console when widened or narrowed, with one mount of
+  the reader and its stream open; and a console that reloads on a Docs address, the release's reload on a tap included,
+  is still the console. Slug `docs-tab-width-is-live` (as the second ruling amends it: the kind is history, the click is
+  width).
 - **`navigate` is unchanged; `useFollowLink` is new.** Putting the rule inside `navigate` would also have changed every
   test and caller that uses `navigate` to set the address at a desk, and the reader's own moves; a separate door for the
   controls that are not anchors keeps the change where the links are. The first round's `followLink` in the router read
-  the tab's kind from the address; with the kind now partly history (`docsOnly`), it became a hook beside `useTabLink`
+  the tab's kind from the address; with the kind now history (`docsSoFar`), it became a hook beside `useTabLink`
   that reads the same context, and the router is back to its base. Slug `follow-link-beside-navigate`.
 - **The title**: `<file name> · <project> · Docs · ccrc`; a directory or section by its own name, a project by its name,
   the index and a refused address as `Docs · ccrc`. The ref is not in the title. Slug `docs-tab-title-names-the-file`.
@@ -105,30 +108,38 @@ The main column came from an uncommitted copy and was measured once. This branch
 
 ## 5. The reader's terms
 
-Kept, each measured by `git diff origin/HEAD --stat`: `DocsHead.tsx` and `DocsScreen.tsx` untouched; the link back is in
-the frame's tab bar; no `popstate` listener added (the router's `useLocation` listener is the existing one); the frame's
-sandbox, the frame policy, the library bridge, export, share and the server's Docs routes untouched. A Docs tab's first
-history entry is the document, so the reader's Back behaves as it does on a pasted address today (inferred: no history
-code changed).
+Kept, each measured by `git diff` against main `6c7f126d428de2f346f8d69188e24d46da833d4c`: `DocsScreen.tsx` untouched;
+`DocsHead.tsx` changed by the agreed Back change and nothing else, two git hunks, 3 lines in and 2 out (the `navigate`
+import swapped for `useFollowLink`'s; the Back button taking the hook and its handler calling it), on the reader's owner's
+yes to that exact diff; the link back in the frame's tab bar, outside the reader's head; no `popstate` listener added (the
+router's `useLocation` listener is the existing one); the frame's sandbox, the frame policy, the library bridge, export,
+share and the server's Docs routes untouched. What Back does now: at the Docs index in a Docs tab at a desk it opens the
+console in a new tab and the tab stays a Docs tab; below the index it moves up within the tab, as before; in the console,
+and in a Docs tab below the desk width, Back at the index moves to the fleet in place, as before (all four measured in
+`docs-own-tab.test.tsx`). A Docs tab's first history entry is the document.
 
 ## 6. Real Chrome (the browser leg, `pwa/browser/docs-own-tab.browser.test.ts`)
 
-Measured, and asserted, at 1280 x 800, Refined and Instrument alike: no `.shell-nav`, no `.shell-accounts`, no Primary
-navigation; the detail pane's left edge at 0 and its width 1280 (the viewport); the Docs screen's left edge 0; sideways
-scroll 0; title `<file> · demo · Docs · ccrc`. From the skip link, Tab reaches the link back, `:focus-visible`, a 2 px solid
-outline, 44 px tall, named "Console, opens in a new tab", `href="/"`, `target="_blank"`. Resized to 640 and back to 1280,
-in both skins: still a Docs tab, the same reader element, no phone bar or nav column, no socket opened, sideways scroll 0,
-the title kept. A Docs address loaded first at 390 x 844, in both skins: a Docs tab, the tab bar, no phone bar, the link
-back 44 px tall with `href="/"` and no target, named "Console", no socket, sideways scroll 0, the document's title. In-app
-navigation from the fleet to the same address at 390 x 844, in both skins: no tab bar, no link back, the Docs screen inside
-the console, one fleet socket (so the counter the Docs tab cases read as 0 counts), sideways scroll 0, title `ccrc`.
+Measured, and asserted as stated, at 1280 x 800, Refined and Instrument alike: no `.shell-nav`, no `.shell-accounts`, no
+Primary navigation; the detail pane's left edge 0 and its width 1280, the viewport's; the Docs screen's left edge 0;
+sideways scroll 0; title `<file> · demo · Docs · ccrc`. From the skip link, Tab reaches the link back, `:focus-visible`, a
+2 px solid outline, 44 px tall, named "Console, opens in a new tab", `href="/"`, `target="_blank"`. Resized to 640 and back
+to 1280, in both skins: still a Docs tab, the same reader element, no phone bar or nav column, no socket opened, sideways
+scroll 0, the title kept. A Docs address loaded first at 390 x 844, in both skins: a Docs tab, the tab bar, no phone bar,
+the link back 44 px tall with `href="/"` and no target, named "Console", no socket, sideways scroll 0, the document's
+title. In-app navigation from the fleet to the same address at 390 x 844, in both skins: no tab bar, no link back, the
+Docs screen inside the console drawn 390 px wide, exactly one fleet socket (so the counter the Docs tab cases read as 0
+counts), sideways scroll 0, title `ccrc`. A tab opened from the console at 1280, by the bar's Docs place (a plain new-tab
+anchor) and by the palette's "Go to Docs" (`useFollowLink`): the console had marked its own tab; the new tab is a Docs tab
+at `/docs`, with no opener and no copy of the mark, and the console stays at `/fleet`.
 
 ## 7. Guards and their mutants
 
 Each mutant measured red by this wave (a scratch driver that edits one committed file, runs the suite, restores it):
 the Docs tab branch in `App`, the frame's no-parts and no-frame-class, the gated fleet connect, Overlord start and session
 preload, the title effect and its restore, the sign-in and block screens in the branch, the context's `true`, the rule's
-desk test, its crossing test, its path cut, its in-app refusal, `followLink`'s new tab and its tab kind; on the callers'
+desk test, its crossing test, its path cut, its in-app refusal, the router's `followLink`, as it stood then (since
+replaced by `useFollowLink`), opening its new tab and reading its tab kind; on the callers'
 side, `useTabLink` never opening a tab, `PlaceDoor` always a button, the command layer and the fallback moving in-app, and
 the sheet row and the menu item not closing what they sit in (all red in `docs-tab-links.test.tsx`). One survivor, a
 refusal in `isDocsHref` that the route's pattern already made, was removed rather than kept as dead code.
@@ -136,15 +147,20 @@ refusal in `isDocsHref` that the route's pattern already made, was removed rathe
 Fix round 1, twelve more, each killed: `isDocsTab`'s `desk ||`, its `docsOnly` arm and its `isDocsHref` test;
 `keepsDocsOnly`'s fold; `App`'s fall of `docsOnly`; the `disconnect()` when a tab becomes a Docs tab; the push worker's
 `onDocs` skip; the full `rel`; `useFollowLink`'s tab kind; the link back's name only where it opens a tab; the fallback's
-Docs tab arm; the menu item's command opening the tab.
+Docs tab arm; the menu item's command opening the tab. (Round 1's width arm, its fold and its `disconnect()` were removed
+by round 2.)
+
+Fix round 2, eight more, each killed: `isDocsTab`'s history test; `App` reading the mark at its start, writing it for a
+console, and its fall; putting a width arm back into `App`'s answer; the mark's value; a flag on the push worker's copied
+pattern; and, in Chrome, keeping the mark in the device's storage instead of the tab's (the two opened-tab cases red).
 
 ## 8. The first full run, and what it found
 
 The first full run of the pwa suite after the build was red: 5 of 610 files, each a guard the change tripped, none a
 load flake. Fixed in the same push:
 
-- `design-system-boundary` and `ui-package-boundary`: the link back wore `TEXT_LINK` without `<TextLink>`; it is a
-  `TextLink` now.
+- `design-system-boundary` and `ui-package-boundary`: the link back wore `TEXT_LINK` without `<TextLink>`; it became a
+  `TextLink` then, and is the standalone ghost-button anchor (`ConsoleLink`) since fix round 1 (review 3644 A3).
 - `hook-class-collision`: `ins-door` (the Docs door's anchor beside `<Door>`) and `menu-item` (the Docs item's anchor beside
   `<ListRow>`) are each one role drawn by two elements; both are registered in its `ONE_ROLE` table with the reason.
 - `session-flows`: every menu item must run its registry command on a click; the Docs item had stopped doing so, and now
@@ -176,8 +192,16 @@ floor counted only buttons and now counts the Docs link too (57 of 57 green afte
   plain click on a same-scope `target="_blank"` link in a standalone window was not tried.
 - **Titles begin with the file's date** for specs and plans, whose names start `YYYY-MM-DD-`; two tabs on the same document
   at different refs carry the same title.
-- **A phone console that reloads on a Docs page** (a release's reload, or the person's own) loads that page first, so it
-  starts over as a Docs tab (inferred from the definition, not measured).
+- **A Docs tab below the desk width moves in place** (review 3666 R3): there the link back, the reader's Back at the index
+  and the failed-render link move the tab to the console, because the width cannot tell a half-width window from a phone;
+  the tab is the console from then on.
+- **The push worker judges a window by its address** (R5): a phone console showing a document in the app is passed over,
+  and a tap opens a new window where main moved that console to the session. Unmeasured in an installed phone app.
+- **A Docs address typed or pasted into a tab that has been the console** shows the document inside the console, since
+  the tab's mark says it has been the console.
+- **The mark is the tab's session storage.** Chrome gives a tab opened with no opener no copy of it (measured); a browser
+  that copied it would open a console's Docs link as the console. "Duplicate tab" copies it, so a duplicated console stays
+  the console (inferred).
 - **The push worker's Docs pattern** is a copy of the route table's, because the worker is plain JS outside the bundle;
   `push-sw.test.ts` fails when the two differ.
 - **A4** (review 3644): the actions sheet's Docs row closes the sheet on every click, a modified one included (a ctrl-click
