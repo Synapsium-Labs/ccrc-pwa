@@ -41,13 +41,16 @@ the programme's box, so the box and the kept row can never disagree within one f
 **The decider (D-8981).** `pwa/src/fleet/runWords.ts#keptRunOf` (L1, beside the run binding's named readers) answers a
 `KeptRun` (`id`, `program`, `wave`, `coordinatorId`) when all of these hold:
 
+- the session is a dispatched child whose marker names that run (`runBelongsTo(childMarkOf(…))`);
 - the session's newest bound run has closed;
 - no open run binds the session;
 - the wire names the run's programme;
-- the run's claimant still claims open work of that programme.
+- the run's claimant still draws a box of that programme (`runWords.ts#boxRunsOf`, the box's own rule).
 
-Otherwise it answers `null`. The worker side is the server's incarnation binding, so a recycled workspace name is never
-kept for the occupant before it. The coordinator side is the run's claimant column, which the reclaim door moves with
+Otherwise it answers `null`. The worker side is the server's incarnation binding plus the child marker: a main checkout,
+a manual workspace and an unreadable marker are never kept, and neither is a recycled name whose marker names another
+run. `boxRunsOf` (its claimed open runs, less one it claims for itself) moved from `programmeBoxes.ts` to `runWords.ts`,
+so the box and the decider read one rule. The coordinator side is the run's claimant column, which the reclaim door moves with
 every run of the programme (`UPDATE runs SET claimedBy … WHERE program = ?`), so a succession re-parents a kept worker
 too.
 
@@ -56,7 +59,9 @@ too.
 - `pwa/src/fleet/nestFleet.ts#nestFleet` gains rule 6, with an optional `kept` map. The default is today's tree. Under
   rule 6, a kept worker brackets under its coordinator when the coordinator is on this card's list, after the working
   children and before a spawn. Rule 4 holds: the coordinator counts as a parent, and a kept worker that is a parent
-  stays at the top level. Every row of a kept session carries its `kept` answer (`FleetRow.kept`), so nothing decides
+  stays at the top level. Only an edge whose kept worker is placed makes its coordinator a parent: a kept worker that
+  is a parent, a working child of an open edge, or the head of another kept edge draws no edge, so its coordinator keeps
+  its own place. Every row of a kept session carries its `kept` answer (`FleetRow.kept`), so nothing decides
   it again.
 - The box therefore lists the kept worker among its children. The rollup folds it like any other worker, and the footer
   counts it. `programmeBoxes.ts#rowClaimant` and `#rowProgramme` read a row's run, else its `kept` answer. With them,
@@ -89,11 +94,14 @@ coordinator as `coordinatorId`, so `nestFleet`'s membership test reads a decided
   open run, `assembleFleet` sends them, and `reviveFleetSession` keeps a readable pair, drops a malformed one and keeps
   the run. The older exact-shape cases now include the two fields. Measured red before the change: 3 of the new cases.
 - `pwa/test/kept-worker.test.ts`: the decider (kept, programme done, another programme, another coordinator, an open
-  run, newer-closed-older-open, an older server, an ownerless run); rule 6 (nested after the working children, under a
+  run, newer-closed-older-open, an older server, an ownerless run, a session that is no child, a child whose marker names
+  another run); rule 6 (nested after the working children, under a
   coordinator whose open work is all on another card, elsewhere with its hue, lone when the programme is done, rule 4
-  both ways, no map gives today's tree); the label. Red before the change, as a missing export. Each guard was also
+  both ways, a kept worker that is a parent leaving its coordinator under its own, a kept worker under a kept worker, a
+  kept worker an open edge places, no map gives today's tree); the label. Red before the change, as a missing export. Each guard was also
   measured red by mutation: no `kept` handed to the tree (4 cases), no activity check (2), the old claimant reader in
-  the boxes (1), no kept arm in the label (1), the coordinator not made a parent (1), and no open-run check (1).
+  the boxes (1), no kept arm in the label (1), the coordinator not made a parent (1), and no open-run check (1). The review round's guards too: no child-marker
+  check (2), no parent check on a kept edge (2), no open-edge check (1), and no kept-head check (1).
 - `pwa/test/programme-box-card.test.tsx`: the card draws the kept worker in the box's tray, in the programme's hue,
   labelled `port-api · wave 1 · run closed`. Red with the tree's `kept` argument removed.
 - `pwa/test/runBindingFixture.ts#withProgrammeBinding` is opt-in. The suites that characterise today's tree keep their
@@ -109,6 +117,8 @@ coordinator as `coordinatorId`, so `nestFleet`'s membership test reads a decided
   open work fell to "Not in a programme". `keptRunOf` decides that the programme still keeps it (its run's claimant
   claims open work of that programme), `nestFleet`'s rule 6 brackets it under that coordinator, and `rowClaimant` files
   it under "Workers of programmes elsewhere" when the coordinator is on another card. A done or abandoned programme
-  keeps no one.
+  keeps no one. After review: only a dispatched child whose marker names the closed run is kept (a main checkout, a
+  manual workspace or a recycled name is not), the claimant's activity is `boxRunsOf`, now exported once from
+  `runWords.ts` for the box and the decider, and rule 6 makes a coordinator a parent only for a kept worker it places.
 - **D-8982 (2026-11-24)**: kept-worker-label-run-closed. Such a worker's label read "run not on the board". It now reads
   `<programme> · wave N · run closed`, and the title names the run and the coordinator.

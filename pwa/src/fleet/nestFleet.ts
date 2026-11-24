@@ -133,7 +133,7 @@ const attentionFirst =
  *     decided once per fleet by the caller and handed in as `kept`) brackets under that coordinator when the coordinator
  *     is on this list, after the working children and before a spawn: the programme's past, kept beside its present.
  *     Rule 4 holds for it as for any edge (its coordinator is a parent; a kept worker that is a parent stays at top
- *     level), and rule 3 too (a coordinator not on this list leaves it at depth 0). Every row of a kept session carries
+ *     level, and then makes no parent of its coordinator, which keeps its own place), and rule 3 too (a coordinator not on this list leaves it at depth 0). Every row of a kept session carries
  *     its `kept` answer, so the box and the label read the decision instead of making it again. With no `kept` (the
  *     default) the tree is rules 1 to 5, exactly.
  *
@@ -173,11 +173,19 @@ export function nestFleet(
   const parents = new Set<string>();
   for (const r of settled) parents.add(r.claimedBy!);
   for (const r of pending) if (onList(r.claimedBy)) parents.add(r.claimedBy!);
-  // Rule 6's edges: a kept session whose coordinator is on this list, never under itself.
-  const keptUnder = sessions.flatMap((s) => {
+  // Rule 6's edges: a kept session whose coordinator is on this list, never under itself. Only an edge whose kept worker
+  // WILL be placed makes its coordinator a parent, or a coordinator whose one kept worker stays at the top level would
+  // leave its own parent for nothing. So an edge is drawn only when its worker is no parent by rules 1 and 5, is not
+  // already a working child by rule 1, and heads no kept edge of its own (a kept worker under a kept worker stays one
+  // level deep, rule 4).
+  const openChildren = new Set(settled.flatMap((r) => (parents.has(r.sessionId!) ? [] : [r.sessionId!])));
+  const keptEdges = sessions.flatMap((s) => {
     const k = kept.get(s.id);
-    return k !== undefined && k.coordinatorId !== s.id && onList(k.coordinatorId) ? [[s, k.coordinatorId] as const] : [];
+    return k !== undefined && k.coordinatorId !== s.id && onList(k.coordinatorId) && !parents.has(s.id)
+      && !openChildren.has(s.id) ? [[s, k.coordinatorId] as const] : [];
   });
+  const keptHeads = new Set(keptEdges.map(([, parent]) => parent));
+  const keptUnder = keptEdges.filter(([s]) => !keptHeads.has(s.id));
   for (const [, parent] of keptUnder) parents.add(parent);
   const row = (s: FleetSession, depth: RowDepth): FleetRow => {
     const k = kept.get(s.id);
@@ -202,9 +210,9 @@ export function nestFleet(
     under(r.claimedBy!, row(byId.get(child)!, 1));
   }
 
-  // Rule 6, after every working child: a kept worker its run's open edge did not already place.
+  // Rule 6, after every working child: every drawn kept edge places its worker (the edges were chosen so it can).
   for (const [s, parent] of keptUnder) {
-    if (parents.has(s.id) || placed.has(s.id)) continue;
+    if (placed.has(s.id)) continue;
     placed.add(s.id);
     under(parent, row(s, 1));
   }

@@ -28,7 +28,7 @@ import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
 import { operatorAsk, summaryParts, type RolledRow } from './rollup';
-import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle, runLastMove, type KeptRun } from './runWords';
+import { RUN_WORD, boundOpenRun, boxRunsOf, programWave, programmeTitle, runLastMove, type KeptRun } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
 export type ProgHue = (typeof PROG_HUES)[number];
@@ -169,12 +169,6 @@ export function programmeBoxes(
   const boxes = drafts.map(({ slug, title, ...d }) => ({ ...d, lead: { slug, title, hue: hueOf(slug) } }));
   return { boxes, elsewhere, lone, hues };
 }
-
-/** The runs that make a session a box: its claimed runs through the one coordinator-side reader (`claimedRunsOf`,
- *  D-7182), less a run it claims for itself, which is no box. The runs here are the open runs frame's, so its open
- *  filter keeps every one of them. Written once for `programmeBoxes` and `nextStallBoundary`. */
-const boxRunsOf = (runs: readonly RunSummary[], id: string): RunSummary[] =>
-  claimedRunsOf(runs, id).filter((r) => r.claimedBy !== r.sessionId);
 
 /** A box's last move: the newest over its runs. Written once for `programmeBoxes` and `nextStallBoundary`. */
 const boxLastMove = (runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null): number | null =>

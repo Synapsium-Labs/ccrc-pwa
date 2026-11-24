@@ -411,6 +411,16 @@ export function claimedRunsOf<R extends { readonly claimedBy: string | null; rea
   return runs.filter((r) => r.claimedBy === sessionId && !isRunClosed(r));
 }
 
+/** The runs that make a session a programme box: its claimed runs through the one coordinator-side reader
+ *  (`claimedRunsOf`), less a run it claims for itself, which is no box. Written once for `programmeBoxes`,
+ *  `nextStallBoundary` and `keptRunOf` (D-8981), so "this coordinator still holds the programme's open work" and "this
+ *  coordinator draws a box" are one rule. */
+export function boxRunsOf<R extends { readonly claimedBy: string | null; readonly sessionId: string | null; readonly state: RunState }>(
+  runs: readonly R[], sessionId: string,
+): R[] {
+  return claimedRunsOf(runs, sessionId).filter((r) => r.claimedBy !== r.sessionId);
+}
+
 /** THE SESSION'S PROGRAMME, one reader (desktop-polish PL11, D-7986): the programme of its OPEN bound run (a worker), else of
  *  the first open run it claims (a coordinator), else `null`, a session in no programme. Read off the fleet row's binding and the
  *  runs the store holds, never a field of its own: the Waiting on you list files a session's question under it
@@ -432,11 +442,12 @@ export interface KeptRun {
   readonly coordinatorId: string;
 }
 
-/** THE KEPT WORKER (D-8981), one decider: non-null when the session's NEWEST bound run (`sessionRunOf`, the server's
- *  incarnation binding, so a recycled workspace name is never kept for an occupant before it) has closed, no open run
- *  binds it, the wire names that run's programme (D-8980; an older server does not, and the row stays where it was), and
- *  the run's claimant still claims an open run of that programme whose worker is not itself (`claimedRunsOf`, less a
- *  run a session claims for itself, which is no box: `programmeBoxes.ts#boxRunsOf`'s rule).
+/** THE KEPT WORKER (D-8981), one decider: non-null when the session is a dispatched child whose marker names that very
+ *  run (`runBelongsTo(childMarkOf(…))`: a main checkout, a manual workspace and an unreadable marker are never kept, and
+ *  neither is a recycled name whose marker names another run), the session's NEWEST bound run (`sessionRunOf`, the
+ *  server's incarnation binding) has closed, no open run binds it, the wire names that run's programme (D-8980; an older
+ *  server does not, and the row stays where it was), and the run's claimant still draws a box of that programme
+ *  (`boxRunsOf`, the box's own rule).
  *
  *  `runs` is the FLEET's open runs (the runs frame): "the programme is still active" means its coordinator holds open work
  *  of it, the same fact that draws the programme's box, so the box and the kept row never disagree within a frame.
@@ -444,13 +455,14 @@ export interface KeptRun {
  *  next wave's open never sets it back (`CoordStore#programmeLive`'s note), so it can read `done` while a wave is open.
  *  A programme left with no open run (done, abandoned) keeps no one, and its workers read as in no programme. */
 export function keptRunOf<R extends { readonly program: string; readonly claimedBy: string | null; readonly sessionId: string | null; readonly state: RunState }>(
-  session: BoundSession, runs: readonly R[],
+  session: BoundSession & { readonly child?: ChildMark }, runs: readonly R[],
 ): KeptRun | null {
   if (sessionRunOf(session, 'open') !== null) return null;
   const last = sessionRunOf(session);
   if (last === null || !isRunClosed(last) || last.claimedBy === null || last.program === undefined) return null;
+  if (!runBelongsTo(childMarkOf(session), last.id)) return null;
   const { program, claimedBy } = last;
-  const active = claimedRunsOf(runs, claimedBy).some((r) => r.program === program && r.claimedBy !== r.sessionId);
+  const active = boxRunsOf(runs, claimedBy).some((r) => r.program === program);
   return active ? { id: last.id, program, wave: last.wave ?? null, coordinatorId: claimedBy } : null;
 }
 
@@ -996,7 +1008,7 @@ export function childReclaimDoneRefreshDue(
 }
 
 export { childMarkOf, type ChildMarkRead } from '../../../shared/runBelongs';
-import { childMarkOf } from '../../../shared/runBelongs';
+import { childMarkOf, runBelongsTo } from '../../../shared/runBelongs';
 
 export interface ChildOfRunLabel {
   readonly text: string;

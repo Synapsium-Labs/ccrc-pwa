@@ -9,7 +9,7 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { childRunContext, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
 import { cardBoxes, rowClaimant, rowProgramme } from '../src/fleet/programmeBoxes';
-import { childOfRunLabel, keptRunOf } from '../src/fleet/runWords';
+import { childOfRunLabel, keptRunOf, type KeptRun } from '../src/fleet/runWords';
 import { run, sess } from './rollupFixture';
 import { withProgrammeBinding } from './runBindingFixture';
 
@@ -68,6 +68,22 @@ describe('keptRunOf: the closed run a programme still keeps (D-8981)', () => {
     const ownerless = { ...done!, run: { id: 10, state: 'done' as const, claimedBy: null, program: 'port-api', wave: 1 } };
     expect(keptRunOf(ownerless, [live])).toBeNull();
   });
+
+  it('a session that is no dispatched child (a main checkout, a manual workspace, an unreadable marker): not kept', () => {
+    const [main] = withProgrammeBinding([sess('w-done', 'project-c')], [closed, live]);
+    expect(main!.run).toMatchObject({ id: 10, state: 'done', program: 'port-api' });
+    expect(keptRunOf(main!, [live])).toBeNull();
+    const [manual] = withProgrammeBinding([sess('w-done', 'project-c', { role: 'coordinator' })], [closed, live]);
+    expect(keptRunOf(manual!, [live])).toBeNull();
+    const [blurred] = withProgrammeBinding([sess('w-done', 'project-c', { child: { kind: 'unreadable' } })], [closed, live]);
+    expect(keptRunOf(blurred!, [live])).toBeNull();
+  });
+
+  it('a child whose marker names another run than the closed one (a recycled name): not kept', () => {
+    const [recycled] = withProgrammeBinding([worker('w-done', 9)], [closed, live]);
+    expect(recycled!.run).toMatchObject({ id: 10, state: 'done' });
+    expect(keptRunOf(recycled!, [live])).toBeNull();
+  });
 });
 
 describe('the tree and the box keep the worker (D-8981)', () => {
@@ -125,6 +141,31 @@ describe('the tree and the box keep the worker (D-8981)', () => {
     const rows = card(f, 'project-c').g.rows.map((r) => `${idOf(r)}@${r.depth}`);
     expect([...rows].sort()).toEqual(['coord@0', 'top@0', 'w-done@1']);
     expect(rows[rows.indexOf('coord@0') + 1]).toBe('w-done@1');
+  });
+
+  it('a kept worker that is itself a parent makes no parent of its coordinator: the coordinator stays under its own', () => {
+    const top = sess('top', 'project-c', { role: 'coordinator' });
+    const above = run(20, 'top', 'coord', { program: 'billing' });
+    const far = run(11, 'coord', 'w-far', { wave: 2, project: 'project-b' });
+    const own = run(12, 'w-done', 'w-sub', { program: 'search' });
+    const f = fleet([top, coord, worker('w-done', 10), worker('w-sub', 12), worker('w-far', 11, 'project-b')],
+      [above, closed, far, own]);
+    const rows = card(f, 'project-c').g.rows.map((r) => `${idOf(r)}@${r.depth}`);
+    expect(rows).toEqual(['top@0', 'coord@1', 'w-done@0', 'w-sub@1']);
+  });
+
+  const keptBy = (coordinatorId: string, id: number): KeptRun => ({ id, program: 'port-api', wave: 1, coordinatorId });
+
+  it('a kept worker that heads a kept worker of its own stays at the top level, and no row is lost', () => {
+    const list = [sess('c', 'project-c'), sess('k1', 'project-c'), sess('k2', 'project-c')];
+    const kept = new Map([['k1', keptBy('c', 10)], ['k2', keptBy('k1', 11)]]);
+    expect(nestFleet(list, [], kept).map((r) => `${idOf(r)}@${r.depth}`)).toEqual(['c@0', 'k1@0', 'k2@1']);
+  });
+
+  it('a kept worker an open edge already places makes no parent of its coordinator', () => {
+    const list = [sess('t', 'project-c'), sess('c', 'project-c'), sess('k', 'project-c')];
+    const rows = nestFleet(list, [run(20, 't', 'k'), run(21, 't', 'c')], new Map([['k', keptBy('c', 10)]]));
+    expect(rows.map((r) => `${idOf(r)}@${r.depth}`).sort()).toEqual(['c@1', 'k@1', 't@0']);
   });
 
   it('nestFleet with no kept map is today\'s tree', () => {
