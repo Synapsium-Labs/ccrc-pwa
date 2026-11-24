@@ -17,7 +17,7 @@ import type { FleetSession } from '../../../shared/api';
 import { LIST_ROW, ListRow, Sheet, cn, toast } from '@ccrc/ui';
 import { api } from '../lib/api';
 import { RENEW_NOW_RECORDED_TEXT, RENEW_NOW_SHADOW_TEXT, renewNowText } from '../lib/refusalWords';
-import { commandDoor, doorMark } from '../command/door';
+import { commandDoor } from '../command/door';
 import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
 import { followLink } from '../lib/router';
@@ -53,8 +53,8 @@ export interface SessionFlowDoors {
  *
  *  `aria-hidden` on the hint is deliberate and was already: the label is the accessible name, and "/model" read
  *  aloud after it is noise. */
-function MenuItem({ entry, hint, onFollow }: { entry: SessionMenuEntry; hint?: ReactNode; onFollow: () => void }): ReactNode {
-  if (entry.docs !== undefined) return <DocsMenuItem entry={entry} docs={entry.docs} hint={hint} onFollow={onFollow} />;
+function MenuItem({ entry, hint }: { entry: SessionMenuEntry; hint?: ReactNode }): ReactNode {
+  if (entry.docs !== undefined) return <DocsMenuItem entry={entry} docs={entry.docs} hint={hint} />;
   return (
     <ListRow
       className={cn('menu-item', entry.danger === true && 'menu-item--danger')}
@@ -69,20 +69,26 @@ function MenuItem({ entry, hint, onFollow }: { entry: SessionMenuEntry; hint?: R
 }
 
 /** The Docs item (docs design 4.8): a link, not a button, so it is an anchor wearing the row, at the session's Docs address,
- *  with the Docs tab rule's props (`useTabLink`, desktop polish wave 174): at a desk it opens a Docs tab of its own, below one
- *  it moves within the app, and the browser's middle click and copy link work on it. Following it closes the menu. Marked as
- *  the `session-docs` door, whose command the palette runs through `followLink`, which asks the same rule. */
-function DocsMenuItem({ entry, docs, hint, onFollow }: {
-  entry: SessionMenuEntry; docs: NonNullable<SessionMenuEntry['docs']>; hint?: ReactNode; onFollow: () => void;
+ *  with the Docs tab rule's props (`useTabLink`, desktop polish wave 174), so the browser's middle click, copy link and context
+ *  menu work on it. A plain click runs its registry command, `session-docs`, as every item of this menu does (the palette runs
+ *  the same one): the menu closes and `followLink` asks the same rule, a Docs tab of its own at a desk and an in-app move
+ *  below one. A modified or middle click is the browser's. */
+function DocsMenuItem({ entry, docs, hint }: {
+  entry: SessionMenuEntry; docs: NonNullable<SessionMenuEntry['docs']>; hint?: ReactNode;
 }): ReactNode {
   const props = useTabLink()(docs.href);
+  const door = commandDoor(entry.id);
   return (
     <a
       {...props}
       className={cn(LIST_ROW, 'menu-item', 'docs-menu-item')}
       title={entry.title}
-      {...doorMark(entry.id)}
-      onClick={(e) => { onFollow(); props.onClick?.(e); }}
+      data-command={door['data-command']}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        e.preventDefault();
+        door.onClick();
+      }}
     >
       <span className="menu-label">{entry.label}</span>
       {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
@@ -205,7 +211,7 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
       {children}
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">
-          {entries.map((e) => <MenuItem key={e.id} entry={e} hint={hintOf(e)} onFollow={() => setMenuOpen(false)} />)}
+          {entries.map((e) => <MenuItem key={e.id} entry={e} hint={hintOf(e)} />)}
         </div>
       </Sheet>
       <PrSheet

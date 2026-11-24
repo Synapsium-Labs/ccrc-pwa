@@ -23,7 +23,7 @@ import { Splash } from './face/SplashScreen';
 import { AppBadge } from './face/AppBadge';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
-import { TEXT_LINK, ToastHost, cn, useDesk } from '@ccrc/ui';
+import { TextLink, ToastHost, useDesk } from '@ccrc/ui';
 import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
@@ -82,9 +82,9 @@ function ConsoleLink(): ReactNode {
   return (
     // The name is spelled whole (it starts with the word shown, so a voice user saying what they see reaches it): a
     // visually hidden span would put a space before its comma in Chrome's name ("Console , opens…").
-    <a {...link(CONSOLE_PATH)} aria-label={'Console' + NEW_TAB_WORDS} className={cn(TEXT_LINK, 'shell-tab-console')}>
+    <TextLink {...link(CONSOLE_PATH)} aria-label={'Console' + NEW_TAB_WORDS} className="shell-tab-console">
       Console<span aria-hidden="true">{' ↗'}</span>
-    </a>
+    </TextLink>
   );
 }
 

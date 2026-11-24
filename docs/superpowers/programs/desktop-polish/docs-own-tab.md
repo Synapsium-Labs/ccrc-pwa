@@ -31,7 +31,7 @@ reader) and every in-app move to a Docs path, at the base.
 | The Spec link on the programme header, a Waiting group and an item (`SpecLink`, `GoalsPanel.tsx`) | `useTabLink` | SpecLink cases |
 | A run page's "Open the spec" fact (`RunDetailScreen`'s `Facts`) | `useTabLink` | RunDetail case |
 | The session actions sheet's Docs row | an anchor wearing `GHOST_ANCHOR` (was a ghost `Button` that navigated), `useTabLink`, closes the sheet | actions sheet cases, and `session-docs-link.test.tsx` updated |
-| The session menu's Docs item (`sessionMenu.ts`'s entry, drawn by `SessionFlows`) | an anchor wearing `LIST_ROW` (was a `ListRow` button), `useTabLink`, closes the menu; its palette command ("Open this session's docs") runs `followLink` | menu cases, and `session-docs-link.test.tsx` updated |
+| The session menu's Docs item (`sessionMenu.ts`'s entry, drawn by `SessionFlows`) | an anchor wearing `LIST_ROW` (was a `ListRow` button) with `useTabLink`'s props, so middle click and copy link work; a plain click runs its registry command, `session-docs`, as every item of the menu does, which closes the menu and runs `followLink` (the palette's "Open this session's docs" runs the same one) | menu cases, and `session-docs-link.test.tsx` updated |
 | The top bar's Docs place, both skins | `PlaceDoor`: an anchor at a desk | PlaceDoor and the two App bar cases |
 | The command palette, the bar doors' commands and the global keys ("Go to Docs", `g` keys) | `CommandLayer`'s `navigate` is `followLink` | the palette case |
 | The detail fallback's "Back to the fleet" | `followLink`: in a Docs tab it opens the console in a new tab | ScreenFallback cases |
@@ -108,7 +108,23 @@ side, `useTabLink` never opening a tab, `PlaceDoor` always a button, the command
 the sheet row and the menu item not closing what they sit in (all red in `docs-tab-links.test.tsx`). One survivor, a
 refusal in `isDocsHref` that the route's pattern already made, was removed rather than kept as dead code.
 
-## 8. Unmeasured, and known limits
+## 8. The first full run, and what it found
+
+The first full run of the pwa suite after the build was red: 5 of 610 files, each a guard the change tripped, none a
+load flake. Fixed in the same push:
+
+- `design-system-boundary` and `ui-package-boundary`: the link back wore `TEXT_LINK` without `<TextLink>`; it is a
+  `TextLink` now.
+- `hook-class-collision`: `ins-door` (the Docs door's anchor beside `<Door>`) and `menu-item` (the Docs item's anchor beside
+  `<ListRow>`) are each one role drawn by two elements; both are registered in its `ONE_ROLE` table with the reason.
+- `session-flows`: every menu item must run its registry command on a click; the Docs item had stopped doing so, and now
+  does (above).
+- `fleet-characterization`: the desk picture's Docs door name is now "Docs, opens in a new tab", by intent.
+
+The browser bars (`refined-bar`, `instrument-bar`, `instrument-desk`, `phone-bar`) were run alone; `instrument-bar`'s touch
+floor counted only buttons and now counts the Docs link too (57 of 57 green after).
+
+## 9. Unmeasured, and known limits
 
 - **The block screen in a Docs tab**: it is mounted and draws when the fleet store says `blocked` (measured), but nothing in
   a Docs tab sets it, because the fleet protocol's `hello` arrives only on the fleet stream, which a Docs tab does not open.
