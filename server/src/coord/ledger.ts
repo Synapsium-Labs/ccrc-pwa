@@ -283,17 +283,35 @@ export interface CrossTreeCollision { readonly n: number; readonly files: readon
 export function definitionsIn(
   files: readonly { readonly path: string; readonly text: string }[],
 ): Definition[] {
-  const out: Definition[] = [];
+  return definitionLines(files).map(({ file, n }) => ({ file, n }));
+}
+
+/** `definitionsIn` with each definition's line kept, for the subject-aware rule. */
+function definitionLines(
+  files: readonly { readonly path: string; readonly text: string }[],
+): (Definition & { readonly line: string })[] {
+  const out: (Definition & { readonly line: string })[] = [];
   for (const f of files) {
     const lines = f.text.split('\n');
     const fenced = fencedLines(lines);
     for (let i = 0; i < lines.length; i++) {
       if (fenced !== null && fenced.has(i)) continue;
       const m = DEFINITION.exec(lines[i]!);
-      if (m) out.push({ file: f.path, n: Number(m[1]) });
+      if (m) out.push({ file: f.path, n: Number(m[1]), line: lines[i]! });
     }
   }
   return out;
+}
+
+/**
+ * The subject of a definition line: the text after its first em dash (or, with no em dash, after the
+ * number), whitespace collapsed and trailing punctuation trimmed. The one subject extractor: the
+ * self-assigned rule and the old subject scanner in `deviation-refs.test.ts` both read it.
+ */
+export function definitionSubject(line: string): string {
+  const dash = line.indexOf('\u2014');
+  const rest = dash >= 0 ? line.slice(dash + 1) : line.replace(/^.*?D-\d+(?:\*\*)?/, '');
+  return rest.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '').trimEnd();
 }
 
 /**
@@ -336,30 +354,28 @@ export const SELF_ASSIGNED_ERA = 10000;
 type Files = readonly { readonly path: string; readonly text: string }[];
 
 /**
- * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined twice: in two distinct paths across the
- * two trees, or twice in one path within one tree. The same path defining n once in each tree is
- * the branch and its base agreeing, not a collision. `files` lists a path once per defining line
- * (its larger count over the two trees), sorted. Pure, like `crossTreeCollisions`.
+ * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined with two different subjects. Identical
+ * subjects in any number of paths or lines are one deviation: a spec mirroring its plan, a plan
+ * repeating its own entry, a file renamed or moved on the branch. A path present in both trees is
+ * judged by the branch's copy, so rewording a merged entry, or fixing a collision the base carries,
+ * is not a collision; a base path the branch lacks (main moved on, or the branch renamed it) counts.
+ * Two branches adding one number to the SAME file are seen only on the merged tree (the queue).
+ * `files` lists each defining path once, sorted. Pure, like `crossTreeCollisions`.
  */
 export function selfAssignedCollisions(branch: Files, base: Files): CrossTreeCollision[] {
-  const byN = new Map<number, Map<string, number>>();
-  for (const tree of [branch, base]) {
-    const seen = new Map<number, Map<string, number>>();
-    for (const d of definitionsIn(tree)) {
-      if (d.n < SELF_ASSIGNED_ERA) continue;
-      const m = seen.get(d.n) ?? new Map<string, number>();
-      m.set(d.file, (m.get(d.file) ?? 0) + 1);
-      seen.set(d.n, m);
-    }
-    for (const [n, m] of seen) {
-      const all = byN.get(n) ?? new Map<string, number>();
-      for (const [file, c] of m) all.set(file, Math.max(all.get(file) ?? 0, c));
-      byN.set(n, all);
-    }
+  const onBranch = new Set(branch.map((f) => f.path));
+  const defs = definitionLines([...branch, ...base.filter((f) => !onBranch.has(f.path))]);
+  const byN = new Map<number, { subjects: Set<string>; files: Set<string> }>();
+  for (const d of defs) {
+    if (d.n < SELF_ASSIGNED_ERA) continue;
+    const e = byN.get(d.n) ?? { subjects: new Set<string>(), files: new Set<string>() };
+    e.subjects.add(definitionSubject(d.line));
+    e.files.add(d.file);
+    byN.set(d.n, e);
   }
   return [...byN.entries()]
-    .map(([n, m]) => ({ n, files: [...m].flatMap(([file, c]) => Array<string>(c).fill(file)).sort() }))
-    .filter((c) => c.files.length > 1)
+    .filter(([, e]) => e.subjects.size > 1)
+    .map(([n, e]) => ({ n, files: [...e.files].sort() }))
     .sort((a, b) => a.n - b.n);
 }
 

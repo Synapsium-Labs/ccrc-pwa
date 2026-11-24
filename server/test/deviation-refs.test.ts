@@ -13,9 +13,9 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { crossTreeCollisions, definitionsIn, selfAssignedCollisions,
+import { crossTreeCollisions, definitionsIn, definitionSubject, selfAssignedCollisions,
          LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
-import { readDefinitionFilesAt } from '../scripts/next-deviation.js';
+import { DEFINITION_DIRS, readDefinitionFilesAt } from '../scripts/next-deviation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -57,7 +57,7 @@ const entries = (): Entry[] => {
     if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
     for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
       const m = ENTRY.exec(line);
-      if (m) out.push({ file: f, n: Number(m[1]), subject: m[2]!.trim() });
+      if (m) out.push({ file: f, n: Number(m[1]), subject: definitionSubject(line) });
     }
   }
   return out;
@@ -222,10 +222,9 @@ function resolveLedgerBase(cwd: string): string | null {
 
 const LEDGER_BASE = resolveLedgerBase(ROOT);
 
-/** `docs/superpowers/plans/*.md` as a given REF holds them, without checking it
- *  out and without merging it. One `ls-tree` plus one `cat-file --batch` per
- *  tree (D-9068): one `cat-file` per plan was measured at ~0.4 s for 67 files,
- *  and at 9.3 s and 11.8 s for the two trees of 962 plans on 2026-11-25. */
+/** `docs/superpowers/plans/*.md` as a given REF holds them, keyed by basename, without checking it
+ *  out and without merging it: the helper's reader (one `ls-tree`, one `cat-file --batch` per tree, D-9068:
+ *  one `cat-file` per plan was measured at 9.3 s and 11.8 s for the two trees of 962 plans on 2026-11-25). */
 const plansCache = new Map<string, { path: string; text: string }[]>();
 /** What `plansAt` answered for the characterization's fixed commit, from the one-process-per-blob read (D-9068). */
 const PLANS_AT_FIXED_COUNT = 962;
@@ -247,38 +246,10 @@ const readPlansAt = (ref: string): { path: string; text: string }[] =>
 /** The `.md` plans of REF that `keep` admits, read as `plansAt` reads them. The filter is an argument so that the
  *  characterization case below can pass a frozen copy of the exclusion list, which `LEGACY_PER_PLAN_LEDGERS` is not:
  *  that list may only shrink, and a recorded hash must not move when it does (wave 1f fix round 1, R5). */
-const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] => {
-  const listing = execFileSync('git',
-    ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
-    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
-  const wanted: { sha: string; path: string }[] = [];
-  for (const line of listing.split('\n').filter(Boolean)) {
-    const sp = line.indexOf(' ');
-    const sha = line.slice(0, sp);
-    const file = line.slice(sp + 1).split('/').pop()!;
-    if (!file.endsWith('.md') || !keep(file)) continue;
-    wanted.push({ sha, path: file });
-  }
-  // D-9068: every blob of the tree through ONE `git cat-file --batch`, where a process per plan cost about ten
-  // seconds a tree at 962 plans under load. Each answer is `<sha> blob <size>\n<size bytes>\n`, in the order asked;
-  // each text is decoded from its own bytes, as the per-blob read decoded its whole stdout. The buffer is a
-  // gigabyte: one tree's plans weighed about 98 MB on 2026-11-25.
-  const batch = execFileSync('git', ['cat-file', '--batch'],
-    { cwd: ROOT, input: wanted.map((w) => `${w.sha}\n`).join(''), maxBuffer: 1 << 30 });
-  const out: { path: string; text: string }[] = [];
-  let at = 0;
-  for (const w of wanted) {
-    const eol = batch.indexOf(0x0a, at);
-    const head = batch.subarray(at, eol).toString('utf8').split(' ');
-    if (eol < 0 || head[0] !== w.sha || head[1] !== 'blob') {
-      throw new Error(`git cat-file --batch answered "${head.join(' ')}" for ${w.path} (${w.sha}) at ${ref}`);
-    }
-    const end = eol + 1 + Number(head[2]);
-    out.push({ path: w.path, text: batch.subarray(eol + 1, end).toString('utf8') });
-    at = end + 1;
-  }
-  return out;
-};
+const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] =>
+  readDefinitionFilesAt(ROOT, ref, ['docs/superpowers/plans/'])
+    .map((f) => ({ path: f.path.split('/').pop()!, text: f.text }))
+    .filter((f) => keep(f.path));
 
 describe('the cross-tree collision scan (F7 — before the merge, not after)', () => {
   // WHY THIS EXISTS, and why it is not the scan above with a wider net.
@@ -374,13 +345,22 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       `the base holds only ${definitionsIn(there).length} ledger entries`).toBeGreaterThanOrEqual(300);
   });
 
-  it('no self-assigned D-<n> is defined twice across this branch and its base', () => {
-    const hits = selfAssignedCollisions(readDefinitionFilesAt(ROOT, 'HEAD'),
-      readDefinitionFilesAt(ROOT, LEDGER_BASE!));
-    expect(hits.map((c) => `D-${c.n}: ${c.files.join(' / ')}`),
-      `measured against ${LEDGER_BASE}. A self-assigned number is defined twice. Take fresh numbers ` +
-      'with `cd server && npm run next-deviation -- <count>`, then renumber the entry and every ' +
-      'reference to it.').toEqual([]);
+  it('no self-assigned D-<n> is defined with two different subjects across this branch and its base', () => {
+    const head = readDefinitionFilesAt(ROOT, 'HEAD');
+    const base = readDefinitionFilesAt(ROOT, LEDGER_BASE!);
+    // Anti-vacuity: a reader that dropped a directory, or returned nothing, would pass the check below.
+    for (const [name, tree] of [['HEAD', head], [LEDGER_BASE!, base]] as const) {
+      for (const dir of DEFINITION_DIRS) {
+        const read = tree.filter((f) => f.path.startsWith(dir)).length;
+        expect(read, `${name}: read ${read} files under ${dir}`).toBeGreaterThanOrEqual(1);
+      }
+    }
+    const hits = selfAssignedCollisions(head, base);
+    expect(hits.map((c) => `D-${c.n} is defined with two different subjects in ${c.files.join(', ')}`),
+      `measured against ${LEDGER_BASE}. If they are the same deviation, make the lines identical (or cite it ` +
+      'instead of defining it); if not, renumber the newer one (yours, never one already on the base) with ' +
+      '`cd server && npm run next-deviation -- <count>`, after `git fetch <remote> main` (the project\'s remote: ' +
+      'origin, or upstream when origin is your fork).').toEqual([]);
   });
 
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {

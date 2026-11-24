@@ -27,7 +27,7 @@
 //      real plan" that stood here was false of at least four fixtures and was
 //      refuted by this file's own nesting paragraph (D-1432).
 import { describe, it, expect } from 'vitest';
-import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra, selfAssignedCollisions,
+import { crossTreeCollisions, definitionsIn, definitionSubject, LEDGER_ALLOCATOR_ERA, projectEra, selfAssignedCollisions,
          unallocatedDefinitions } from '../src/coord/ledger.js';
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
@@ -424,32 +424,64 @@ describe('unallocatedDefinitions — a number nobody asked for', () => {
 });
 
 describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
-  const def = (n: number): string => `### ${D(n)} \u2014 a subject\n`;
+  const def = (n: number, subject = 'a subject'): string => `### ${D(n)} \u2014 ${subject}\n`;
   const P = 'docs/superpowers/plans/a.md';
   const Q = 'docs/superpowers/specs/b.md';
 
-  it('two paths, one per tree, defining the same number collide', () => {
-    expect(selfAssignedCollisions([f(P, def(10007))], [f(Q, def(10007))]))
+  it('two paths, one per tree, defining the same number with different subjects collide', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing'))], [f(Q, def(10007, 'another'))]))
       .toEqual([{ n: 10007, files: [P, Q] }]);
   });
-  it('one path defining a number on two lines of one tree collides with itself', () => {
-    expect(selfAssignedCollisions([f(P, def(10007) + def(10007))], []))
-      .toEqual([{ n: 10007, files: [P, P] }]);
+  it('two files on the branch, same number, different subjects collide', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing')), f(Q, def(10007, 'another'))], []))
+      .toEqual([{ n: 10007, files: [P, Q] }]);
+  });
+  it('one path defining a number twice with different subjects collides with itself', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing') + def(10007, 'another'))], []))
+      .toEqual([{ n: 10007, files: [P] }]);
+  });
+  it('a file renamed on the branch (same subject, base path A, branch path B) is not a collision', () => {
+    expect(selfAssignedCollisions([f(Q, def(10007))], [f(P, def(10007))])).toEqual([]);
+  });
+  it('a spec and its plan mirroring one entry (same subject) are one deviation', () => {
+    expect(selfAssignedCollisions([f(P, def(10007)), f(Q, def(10007))], [])).toEqual([]);
+  });
+  it('one plan repeating its own entry verbatim is one deviation', () => {
+    expect(selfAssignedCollisions([f(P, def(10007) + def(10007))], [])).toEqual([]);
+  });
+  it('subjects compare with whitespace normalised and trailing punctuation trimmed', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'a  subject.')), f(Q, def(10007, 'a subject'))], [])).toEqual([]);
   });
   it('the same path defining once in each tree is not a collision', () => {
     expect(selfAssignedCollisions([f(P, def(10007))], [f(P, def(10007))])).toEqual([]);
   });
+  it('a path on both trees is judged by the branch: rewording a merged entry is not a collision', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'reworded'))], [f(P, def(10007, 'first wording'))])).toEqual([]);
+  });
+  it('a base-only collision the branch fixed no longer reds the branch that fixes it', () => {
+    expect(selfAssignedCollisions([f(P, def(10007, 'one')), f(Q, def(10008, 'two'))],
+      [f(P, def(10007, 'one')), f(Q, def(10007, 'two'))])).toEqual([]);
+  });
   it('task notes with the same basename in different programmes collide by full path', () => {
     const a = 'docs/superpowers/programs/x/task-1.md';
     const b = 'docs/superpowers/programs/y/task-1.md';
-    expect(selfAssignedCollisions([f(a, def(10009))], [f(b, def(10009))]))
+    expect(selfAssignedCollisions([f(a, def(10009, 'one'))], [f(b, def(10009, 'two'))]))
       .toEqual([{ n: 10009, files: [a, b] }]);
   });
   it('a definition quoted inside a fenced block elsewhere is not a second definition', () => {
-    const quoted = '```\n' + def(10011) + '```\n';
+    const quoted = '```\n' + def(10011, 'other') + '```\n';
     expect(selfAssignedCollisions([f(P, def(10011)), f(Q, quoted)], [])).toEqual([]);
   });
   it('numbers below the era are left to the old rule', () => {
-    expect(selfAssignedCollisions([f(P, def(8000) + def(8000)), f(Q, def(8000))], [])).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(8000, 'x') + def(8000, 'y')), f(Q, def(8000, 'z'))], [])).toEqual([]);
+  });
+});
+
+describe('definitionSubject: the one subject extractor', () => {
+  it('reads the text after the em dash, whitespace normalised, trailing punctuation trimmed', () => {
+    expect(definitionSubject(`- **${D(10001)}** \u2014  the   floor is gone.  `)).toBe('the floor is gone');
+  });
+  it('falls back to the text after the number when the line has no em dash', () => {
+    expect(definitionSubject(`- **${D(10001)}** (task 2): the floor is gone;`)).toBe('(task 2): the floor is gone');
   });
 });
