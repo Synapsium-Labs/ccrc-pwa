@@ -58,11 +58,13 @@
 //
 // A week closed on `pilot-failed` (quiz-pilot-checks ruling 5, keyed by stage B's B0): it is piloted again, in its own
 // directory, only when the pilot key measured now differs from the key of every pilot this week has run, and at most
-// PILOTS_MAX pilots in a week. A pilot's key is what can change its outcome: the Claude Code build the driver measures (its
-// `--version` line, through the week's own launcher, measureClaudeVersion) and the gate's code hash as the gate computes it
-// (codeShas); the release tag is no longer the key, since every merge cuts a release. The first pilot's key is read from the
-// driver's own release pin in the week's directory, which records it. A pilot entry written before B0 names a release and no
-// key: it counts toward the cap and matches no key. repilotOf decides it, pure; the runner only reopens the week and runs `arms
+// PILOTS_MAX pilots in a week. A pilot's key is what can change its outcome, in four parts: the Claude Code build the driver
+// measures (its `--version` line, through the week's own launcher, measureClaudeVersion), the gate's code hash as the gate
+// computes it (codeShas), the same hash over the quiz's pilot files (pilotShasOf) and the skill source's sha (skillSourceOf);
+// the release tag is no longer the key, since every merge cuts a release. The first pilot's key is read from the driver's own
+// release pin in the week's directory, which records it. A pilot entry or pin with no key field at all was written before
+// B0: it is older, counts toward the cap and matches no key. A key field in any other form than all four parts is unmeasured
+// and keeps the week closed (stage B fix round 2, F1). repilotOf decides it, pure; the runner only reopens the week and runs `arms
 // --repilot`, the single-arm module's one door for it. The pilot is counted against its key and saved BEFORE the driver is
 // spawned (fix round 1, F1), so a kill at any later point leaves a row the next tick reads as spent on that key. The
 // permission (`repilot`, naming its key) is for one `arms` act: it is taken off the row and saved before that act's spawn,
@@ -85,7 +87,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXIT, HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
 import { LIMITS_DEFAULTS, TREE_ROOT, admitAccount, codeShas, decideLimits, measureClaudeVersion, readLimitsRow, readReleaseStamp, readRoster } from './history-replay.mjs';
-import { pilotKeyOf, pilotKeyOlder, pilotKeyValid, pilotShasOf, sameKey, skillSourceOf } from './history-quiz-pilot.mjs';
+import { pilotKeyOf, pilotKeyValid, pilotShasOf, sameKey, skillSourceOf } from './history-quiz-pilot.mjs';
 import { JUDGED_FILE, OUT_MARKER, RELEASE_PIN_FILE, RELEASE_PIN_KIND, REPORT_FILE, SETUP_FILE, SUMMARY_FILE, weekAccountOf } from './history-quiz-single.mjs';
 
 const PREFIX = 'ccrc quiz-unattended';
@@ -216,12 +218,13 @@ export function confirmedLineOf(stdout) {
   return found;
 }
 
-/** One pilot entry's key (stage B, B0): an entry that carries a `key` field is read by it, a pilot key, `legacy` when the key
- *  lacks a part (pilotKeyOlder: written before that part joined the key, fix round 1), or `unmeasured`; one that carries none
- *  and names a release was written before B0, so it is `legacy` too. A legacy entry counts toward the cap and matches no key.
- *  Any other entry is `unmeasured`. Pure.  @param {Record<string, unknown>} p */
+/** One pilot entry's key (stage B, B0): an entry that carries a `key` field is read by it, a pilot key (all four parts in form,
+ *  nothing else) or `unmeasured` in any other form; one that carries none and names a release was written before B0, so it is
+ *  `legacy`: it counts toward the cap and matches no key. Any other entry is `unmeasured`. Fix round 2, F1: a key field in any
+ *  other form is never `legacy`, reversing fix round 1's reading of a key lacking a part. Pure.
+ *  @param {Record<string, unknown>} p */
 export function pilotEntryKeyOf(p) {
-  if (Object.hasOwn(p, 'key')) return pilotKeyValid(p.key) ? { state: 'key', key: p.key } : pilotKeyOlder(p.key) ? { state: 'legacy' } : { state: 'unmeasured' };
+  if (Object.hasOwn(p, 'key')) return pilotKeyValid(p.key) ? { state: 'key', key: p.key } : { state: 'unmeasured' };
   return typeof p.release === 'string' && p.release !== '' ? { state: 'legacy' } : { state: 'unmeasured' };
 }
 
@@ -703,13 +706,13 @@ async function actRecord(ctx) {
 
 /** The week's first pilot as the driver pinned it in the week's directory (its own record of the release and the pilot key
  *  the week's arms, and its pilot, ran on; B0): `{release, key}`, the key null when the pin's is no pilot key; `{release}`
- *  alone for a pin written before B0, which names no key, or whose key lacks a part (pilotKeyOlder; a legacy pilot either way);
- *  `{release: null, key: null}` when the pin cannot be read or is not the driver's. */
+ *  alone for a pin written before B0, which names no key (a legacy pilot); `{release: null, key: null}` when the pin cannot be
+ *  read or is not the driver's. */
 function pinnedPilotOf(out) {
   let p = null;
   try { p = JSON.parse(readFileSync(path.join(out, RELEASE_PIN_FILE), 'utf8')); } catch { p = null; }
   if (!(plainObject(p) && p.kind === RELEASE_PIN_KIND && p.v === 1 && typeof p.ccrc_release === 'string' && p.ccrc_release !== '')) return { release: null, key: null };
-  if (!Object.hasOwn(p, 'key') || pilotKeyOlder(p.key)) return { release: p.ccrc_release };
+  if (!Object.hasOwn(p, 'key')) return { release: p.ccrc_release };
   return { release: p.ccrc_release, key: pilotKeyValid(p.key) ? p.key : null };
 }
 /** A week's pilots so far. A row that carries `pilots` is read as it stands, a damaged list included, which repilotOf then
@@ -737,9 +740,10 @@ function weekPilotKey(ctx, w) {
  *  code shas (codeShas), the quiz's pilot files' shas (pilotShasOf) and the skill source's sha (skillSourceOf), from the
  *  installed tree (fix round 1, F1), and its launcher's `--version` line (measureClaudeVersion, which spawns `--version` only,
  *  spends nothing and writes nothing but the poisoned `gh` under `out`, as the driver's own measure does). Any failure is
- *  `unmeasured` with its reason, never a throw, so a key that cannot be read keeps the week closed.
- *  @param {{ home: string, out: string, account: string, lang: string | undefined }} o */
-export async function measuredPilotKeyOf({ home, out, account, lang }) {
+ *  `unmeasured` with its reason, never a throw, so a key that cannot be read keeps the week closed. `root` is the tree the pilot
+ *  files and the skill are read from (TREE_ROOT; a test's fixture tree).
+ *  @param {{ home: string, out: string, account: string, lang: string | undefined, root?: string }} o */
+export async function measuredPilotKeyOf({ home, out, account, lang, root = TREE_ROOT }) {
   const no = (why) => ({ state: 'unmeasured', why });
   let launch;
   try {
@@ -748,9 +752,9 @@ export async function measuredPilotKeyOf({ home, out, account, lang }) {
   } catch (e) { return no(`account ${e?.word ?? e?.code ?? 'unreadable'}`); }
   const code = codeShas();
   if (code.state !== 'measured') return no(`code ${code.path} ${code.cause}`);
-  const pilot = pilotShasOf();
+  const pilot = pilotShasOf(root);
   if (pilot.state !== 'measured') return no(`pilot code ${pilot.path} ${pilot.cause}`);
-  const skill = skillSourceOf(TREE_ROOT);
+  const skill = skillSourceOf(root);
   if (skill.state !== 'value') return no(`skill ${skill.detail}`);
   let v;
   try { v = await measureClaudeVersion(launch, out, lang); } catch (e) { return no(`version ${e?.word ?? e?.code ?? 'error'}`); }

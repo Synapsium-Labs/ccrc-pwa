@@ -918,7 +918,7 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
     await step0bCardOf(cardCtx);   // W2-D78 (iii) and the card, before --out
     refuseSyntheticPresent(transcript);
     const skill = pinSkill(deps.skillRoot ?? TREE_ROOT);   // stage B, B1: the source pinned before --out, refused before any write
-    const pilotCode = pilotShasOf();   // stage B fix round 1, F1: the quiz's pilot files, a part of the pin's key
+    const pilotCode = pilotShasOf(deps.pilotRoot ?? TREE_ROOT);   // stage B fix round 1, F1: the pilot files, a part of the pin's key; refused before --out
     if (pilotCode.state !== 'measured') refuse('code-unmeasured', `pilot file ${pilotCode.path} is ${pilotCode.cause}`);
     const out = openOut(flags.out);
     if (lstatOrNull(out, SETUP_FILE) !== null && shaOfPlain(out, SETUP_FILE) === setup.sha256) {

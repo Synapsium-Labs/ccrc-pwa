@@ -56,19 +56,13 @@ const KEY_PARTS = Object.freeze({
   pilot_shas: shaMap,
   skill_sha256: (v) => typeof v === 'string' && HEX64.test(v),
 });
-/** Whether every own field of `k` is a key part in its form; `all` asks for all four. Pure. */
-const keyPartsOk = (k, all) => plainObject(k) && Object.entries(k).every(([p, v]) => Object.hasOwn(KEY_PARTS, p) && KEY_PARTS[p](v))
-  && (!all || Object.keys(KEY_PARTS).every((p) => Object.hasOwn(k, p)));
 /** Whether `k` is a pilot key: all four parts, each in its form, and nothing else. Anything else is no key, so a damaged record
- *  never matches one. Pure.  @param {unknown} k  @returns {boolean} */
+ *  never matches one; a record whose key field is in any other form (an empty object, some of the parts, a part in a wrong
+ *  form, an extra field) is unmeasured to its reader, never an older key (fix round 2, F1: only a record with no key field at
+ *  all is older). Pure.  @param {unknown} k  @returns {boolean} */
 export function pilotKeyValid(k) {
-  return keyPartsOk(k, true);
-}
-/** Whether `k` is a key lacking a part (fix round 1, F1): every field it has is a part in its form, and not all four are there,
- *  as a key written before a part joined it is. Such a key counts toward the cap and matches no key; a key in no form at all is
- *  unmeasured. Pure.  @param {unknown} k  @returns {boolean} */
-export function pilotKeyOlder(k) {
-  return keyPartsOk(k, false) && !keyPartsOk(k, true);
+  return plainObject(k) && Object.entries(k).every(([p, v]) => Object.hasOwn(KEY_PARTS, p) && KEY_PARTS[p](v))
+    && Object.keys(KEY_PARTS).every((p) => Object.hasOwn(k, p));
 }
 /** A pilot's key from what is measured: the build's `--version` line, codeShas' answer for the gate's files and for the pilot
  *  files, and the skill source's sha. null when any part is not measured, so an unmeasured key is never a key. Pure.

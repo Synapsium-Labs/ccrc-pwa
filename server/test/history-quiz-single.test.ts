@@ -1651,6 +1651,16 @@ describe('stage B fix round 1, F3: the skill source\'s size cap', () => {
   });
 });
 
+describe('stage B fix round 2, F2: the arms act refuses pilot files it cannot read, before --out', () => {
+  it('a pilot file it cannot read: code-unmeasured naming it, the out folder never opened, nothing written and nothing spawned', async () => {
+    const w = await week();
+    const r = await run(w.home, w.argv(), { ...FAKE, pilotRoot: mkTmp('ccrc-qs-pilot-root-') });
+    expect(r.refusal).toEqual({ word: 'code-unmeasured', detail: `pilot file ${(QP.PILOT_CODE_FILES as string[])[0]} is absent` });
+    expect(existsSync(w.out), 'the out folder was never opened').toBe(false);
+    expect(runs(w.home)).toEqual([]);
+  });
+});
+
 describe('stage B, B3: a plugins-off map from the pilot\'s first run, passed to every later run and to the week\'s arms and judge', () => {
   it('pluginsOffOf: each observed entry that is not the build\'s own and has a plain source is switched off; nothing else', () => {
     expect(QP.pluginsOffOf(sbInit([...SB_BUILD, SB_MARKET]))).toEqual({ observed: true, off: { 'market-one@market-a': false }, refused: [] });
@@ -1853,8 +1863,9 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
       ['a link that is the project folder itself', left([sub], { links: [SLUG(CWD)] }), new Set(), 'own_folder'],
       ['a shape that lists no links (written before fix round 1)', left([sub], { links: undefined }), new Set(), 'own_folder'],
       ['a main transcript in the project folder', left([sub, `${SLUG(CWD)}/${SID}.jsonl`], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
-      // the one row where this condition alone decides: the main transcript is no regular file (a link), and no regular file is left
-      ['a main transcript that is a link, beside no regular file', left([], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
+      // the one row where this condition alone decides: the walk names a main transcript that is neither a regular file nor a link
+      // (a folder or a FIFO named <session>.jsonl: in transcripts, in neither files nor links), and no regular file is left
+      ['a main transcript that is neither a regular file nor a link, beside no regular file', left([], {}, [`${SLUG(CWD)}/${SID}`, `${SLUG(CWD)}/${SID}.jsonl`]), new Set(), 'no_main_transcript'],
       ['the walk cut at its bound', left([sub], { truncated: true }), new Set(), 'walk_complete'],
       ['the walk unmeasured', left([sub], { unmeasured: 'EACCES' }), new Set(), 'walk_complete'],
       ['the session is one the sweep knows', left([sub]), new Set([SID]), 'store_cannot_read'],
@@ -1869,6 +1880,15 @@ describe('stage B, B4: what a run left passes persistence only on its proof, eve
     const u = proof(left([sub]), null);
     expect(u.proof.store_cannot_read, 'known ids that could not be read prove nothing').toBe('unmeasured');
     expect(D.persistenceCheckOf([u])).toEqual({ state: 'fail' });
+  });
+
+  it('fix round 2, A6: a regular file named like a transcript, one folder deeper under a folder the sweep does not know, passes; under a known one it fails', () => {
+    const deeper = `${SLUG(CWD)}/other-folder/${SID}.jsonl`;
+    const p = proof(left([deeper]));
+    // the sweep's decision reads <slug>/<folder>/… as a file of session <folder>, read only when that session is known
+    expect(p.proof).toEqual({ own_folder: true, no_main_transcript: true, walk_complete: true, store_cannot_read: true, files: 1, readable: [], passed: true });
+    const k = proof(left([deeper]), new Set(['other-folder']));
+    expect(k.proof, 'CONTROL: the folder is a session the sweep knows').toMatchObject({ store_cannot_read: false, readable: [deeper], passed: false });
   });
 
   it('knownIdsOf: the store\'s read throwing (a fixture store with no epochs table) reads null, so the proof is unmeasured and never a pass', () => {
@@ -1985,7 +2005,7 @@ describe('stage B, B2: when the skill alone fails under restricted, one probe un
     const res = step0bResult(w);
     expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'], unmeasured: [], settings_mode: 'restricted' });
     expect(res.skill_fallback).toEqual({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'quiz-unanswerable', detail: expect.stringMatching(/ payload fixture-gone$/) });
-    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted')), 'nothing spawned under the fallback mode').toEqual([]);
+    expect(runs(w.home).length, 'nothing spawned in any mode after the restricted runs').toBe(1 + probeIns(w.home).length);
     await pilotsAgainOnNewKey(w);
   });
 
@@ -1998,9 +2018,17 @@ describe('stage B, B2: when the skill alone fails under restricted, one probe un
     const res = step0bResult(w);
     expect(res).toMatchObject({ round: 0, passed: false, failed: ['skill'] });
     expect(res.skill_fallback).toMatchObject({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'limits-threshold' });
-    expect(runs(w.home).filter((x) => !x.argv.includes('--restricted')), 'nothing spawned after the stop').toEqual([]);
+    expect(runs(w.home).length, 'nothing spawned in any mode after the stop').toBe(1 + probeIns(w.home).length);
     writeFileSync(lim, row);
     await pilotsAgainOnNewKey(w);
+  });
+
+  it('fix round 2: a probe that throws with no word is recorded as probe-threw with its message, and the act still ends on pilot-failed', async () => {
+    const w = await noSkillWeek();
+    const r = await run(w.home, w.argv(), afterRestricted(w.home, () => { throw new Error('fixture wordless throw'); }));
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed' });
+    expect(step0bResult(w).skill_fallback).toEqual({ run: expect.stringMatching(FB_RUN), skill: 'unmeasured', word: 'probe-threw', detail: 'fixture wordless throw' });
+    expect(runs(w.home).length, 'nothing spawned in any mode after it').toBe(1 + probeIns(w.home).length);
   });
 
   it('not due when another check fails too: no run under the fallback mode, and the result records none', async () => {
