@@ -98,6 +98,8 @@ function stream(o: { text?: string; skills?: string[]; calls?: Array<{ command?:
   return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
 }
 const keyOf = (mode: string, stdin: string): string => L.sha256Hex(`${mode}\n${stdin}`) as string;
+/** Stage B, B0: the pilot key an act on this checkout measures with the stub's build: its --version line and the gate's code shas. */
+const QK = (build = '2.9.1 (Claude Code)'): R => ({ claude_code: build, code_shas: (D.codeShas() as R).files });
 function put(home: string, mode: string, stdin: string, ext: string, text: string): void {
   mkdirSync(join(home, STUB_DIR), { recursive: true });
   writeFileSync(join(home, STUB_DIR, `${keyOf(mode, stdin)}${ext}`), text);
@@ -959,19 +961,20 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
   it('the pin each write site leaves is exactly the release pin\'s fields: the first start at round 0, a re-pilot at its round', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    expect(json(pinPath), 'the first start').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0 });
-    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, STAMP, 0));
+    // stage B, B0: each pin now records the pilot key it was written on
+    expect(json(pinPath), 'the first start').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: STAMP, round: 0, key: QK() });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, STAMP, 0, QK()));
     plantStep0b(w.home, w.mode);
     setRelease(w.home, 'v9.9.9');
     expect((await run(w.home, w.argv(['--repilot']), FAKE)).refusal).toBeNull();
-    expect(json(pinPath), 'the re-pilot\'s replacement').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: 'v9.9.9', round: 1 });
-    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, 'v9.9.9', 1));
+    expect(json(pinPath), 'the re-pilot\'s replacement').toEqual({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: w.s.sha, ccrc_release: 'v9.9.9', round: 1, key: QK() });
+    expect(readFileSync(pinPath, 'utf8')).toBe(QS.releasePinText(w.s.sha, 'v9.9.9', 1, QK()));
   });
 
   it('a pin that is not this setup\'s is never replaced: --repilot refuses out-refused (fix round 1, F3)', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    writeFileSync(pinPath, QS.releasePinText('0'.repeat(64), STAMP, 0) as string);
+    writeFileSync(pinPath, QS.releasePinText('0'.repeat(64), STAMP, 0, QK()) as string);
     const before = readFileSync(pinPath);
     setRelease(w.home, 'v9.9.9');
     const r = await run(w.home, w.argv(['--repilot']), FAKE);
@@ -1014,7 +1017,7 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
   it('a pin whose round is past the next one is refused out-refused, and nothing is replaced', async () => {
     const w = await failedWeek();
     const pinPath = join(w.out, QS.RELEASE_PIN_FILE as string);
-    writeFileSync(pinPath, QS.releasePinText(w.s.sha, STAMP, 2) as string);
+    writeFileSync(pinPath, QS.releasePinText(w.s.sha, STAMP, 2, QK()) as string);
     const pin = readFileSync(pinPath);
     setRelease(w.home, 'v9.9.9');
     const r = await run(w.home, w.argv(['--repilot']), FAKE);
@@ -1045,9 +1048,16 @@ describe('quiz-pilot-checks ruling 5: arms --repilot pilots a failed week again 
 
   it('the composer refuses a round that is not a non-negative integer', () => {
     for (const bad of [-1, 1.5, Number.NaN, '1', null, undefined]) {
-      expect(() => QS.releasePinText('a'.repeat(64), 'v1', bad), String(bad)).toThrow(TypeError);
+      expect(() => QS.releasePinText('a'.repeat(64), 'v1', bad, QK()), String(bad)).toThrow(TypeError);
     }
-    expect(QS.releasePinText('a'.repeat(64), 'v1', 0), 'CONTROL').toMatch(/"round":0/);
+    expect(QS.releasePinText('a'.repeat(64), 'v1', 0, QK()), 'CONTROL').toMatch(/"round":0/);
+  });
+
+  it('the composer refuses a key that is no pilot key (stage B, B0)', () => {
+    const bad: unknown[] = [undefined, null, {}, { claude_code: '' , code_shas: QK().code_shas }, { claude_code: 'b', code_shas: {} },
+      { claude_code: 'b', code_shas: { f: 'not-hex' } }, { ...QK(), extra: 1 }];
+    for (const k of bad) expect(() => QS.releasePinText('a'.repeat(64), 'v1', 0, k), JSON.stringify(k)).toThrow(TypeError);
+    expect(JSON.parse(QS.releasePinText('a'.repeat(64), 'v1', 0, QK()) as string).key, 'CONTROL').toEqual(QK());
   });
 
   // fix round 1, F2: a re-pilot round that stopped before its result was written resumes only on its own release.
@@ -1446,6 +1456,7 @@ describe('stage B characterization of main (e29f704d47): what a passing week spa
   it('the release pin\'s fields', async () => {
     const w = await week();
     expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
-    expect(Object.keys(json(join(w.out, 'quiz', 'arms-release.json'))).sort()).toEqual(['ccrc_release', 'kind', 'round', 'setup_sha256', 'v']);
+    // Changed by B0 (was: no key): the pin records the pilot key it was written on.
+    expect(Object.keys(json(join(w.out, 'quiz', 'arms-release.json'))).sort()).toEqual(['ccrc_release', 'key', 'kind', 'round', 'setup_sha256', 'v']);
   });
 });

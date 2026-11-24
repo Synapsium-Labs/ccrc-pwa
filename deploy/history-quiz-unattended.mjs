@@ -56,17 +56,20 @@
 // its word, and the next ISO week starts fresh, so a week never spends more than one --budget. Recording is retried every
 // tick until it confirms (a resend answers its own row).
 //
-// A week closed on `pilot-failed` (quiz-pilot-checks ruling 5): it is piloted again, in its own directory, only when the
-// installed tree's release (`$HOME/.ccrc/build.json`, the driver's readReleaseStamp) differs from the release of every pilot
-// this week has run (the first read from the driver's own release pin in the week's directory), and at most PILOTS_MAX pilots
-// in a week. repilotOf decides it, pure; the runner only reopens the week and runs `arms --repilot`, the single-arm module's
-// one door for it. The pilot is counted against its release and saved BEFORE the driver is spawned (fix round 1, F1), so a
-// kill at any later point leaves a row the next tick reads as spent on that release. The permission (`repilot`, naming its
-// release) is for one `arms` act: it is taken off the row and saved before that act's spawn, and given back after it only
-// when the act stopped resumably; at its next use it is passed only while the installed release is still its own
-// (repilotPermitOf), so a re-pilot is never continued on another release (F2): without it the driver's pin refuses. The
-// pilot spends on the week's own ledger, so it counts toward the week's one --budget, and a pass carries on as a first
-// pass would. Every other closed week stays closed.
+// A week closed on `pilot-failed` (quiz-pilot-checks ruling 5, keyed by stage B's B0): it is piloted again, in its own
+// directory, only when the pilot key measured now differs from the key of every pilot this week has run, and at most
+// PILOTS_MAX pilots in a week. A pilot's key is what can change its outcome: the Claude Code build the driver measures (its
+// `--version` line, through the week's own launcher, measureClaudeVersion) and the gate's code hash as the gate computes it
+// (codeShas); the release tag is no longer the key, since every merge cuts a release. The first pilot's key is read from the
+// driver's own release pin in the week's directory, which records it. A pilot entry written before B0 names a release and no
+// key: it counts toward the cap and matches no key. repilotOf decides it, pure; the runner only reopens the week and runs `arms
+// --repilot`, the single-arm module's one door for it. The pilot is counted against its key and saved BEFORE the driver is
+// spawned (fix round 1, F1), so a kill at any later point leaves a row the next tick reads as spent on that key. The
+// permission (`repilot`, naming its key) is for one `arms` act: it is taken off the row and saved before that act's spawn,
+// and given back after it only when the act stopped resumably; at its next use it is passed only while the key measured then
+// is still its own (repilotPermitOf), so a re-pilot is never continued on another key (F2). The driver's own pin still refuses
+// a round under way on another release. The pilot spends on the week's own ledger, so it counts toward the week's one
+// --budget, and a pass carries on as a first pass would. Every other closed week stays closed.
 //
 // State (`ccrc-quiz-unattended-state`, v1) is `{ kind, v, setup, setup_refused, weeks, last }`; doctor reads `last` (the tick's
 // time, week, act, outcome, word, detail and whether it was posted). outcome: `ok` advanced or confirmed, `waiting` a stop resuming cures (or a run
@@ -81,7 +84,8 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXIT, HEADLESS_LIST_MAX_BYTES, parseHeadlessList } from '../ccd/history/lib.mjs';
-import { LIMITS_DEFAULTS, decideLimits, readLimitsRow, readReleaseStamp } from './history-replay.mjs';
+import { LIMITS_DEFAULTS, admitAccount, codeShas, decideLimits, measureClaudeVersion, readLimitsRow, readReleaseStamp, readRoster } from './history-replay.mjs';
+import { pilotKeyOf, pilotKeyValid, sameKey } from './history-quiz-pilot.mjs';
 import { JUDGED_FILE, OUT_MARKER, RELEASE_PIN_FILE, RELEASE_PIN_KIND, REPORT_FILE, SETUP_FILE, SUMMARY_FILE, weekAccountOf } from './history-quiz-single.mjs';
 
 const PREFIX = 'ccrc quiz-unattended';
@@ -102,13 +106,13 @@ export const ARM_MODEL = 'claude-opus-5-5';
 export const RESUMABLE_WORDS = Object.freeze(['interrupted', 'limits-threshold', 'limits-stale']);
 /** The newest weeks kept on disk (and in the state file). */
 export const KEEP_WEEKS = 4;
-/** The most pilots one week runs (quiz-pilot-checks ruling 5): the first and at most two more, each on a newer release. */
+/** The most pilots one week runs (quiz-pilot-checks ruling 5): the first and at most two more, each on a key none ran on. */
 export const PILOTS_MAX = 3;
 /** The driver's word for a pilot that did not pass: the one word a week is piloted again after. */
 export const PILOT_FAILED = 'pilot-failed';
 /** Why repilotOf keeps a closed week closed, one word each. */
-export const STAY_CLOSED = Object.freeze(['no-week', 'not-failed', 'not-the-pilot', 'pilots-unreadable', 'pilots-spent', 'release-unmeasured',
-  'failed-release-unmeasured', 'release-unchanged']);
+export const STAY_CLOSED = Object.freeze(['no-week', 'not-failed', 'not-the-pilot', 'pilots-unreadable', 'pilots-spent', 'failed-key-unmeasured',
+  'key-unmeasured', 'key-unchanged']);
 /** The acts of the once-only setup phase: a non-resumable refusal in one of them latches for its ISO week. */
 export const SETUP_ACTS = Object.freeze(['setup', 'source', 'freeze', 'marker', 'headless']);
 /** The acts, in order, and the `last.act` words (`none` and `done` are not acts the runner spawns). */
@@ -212,31 +216,41 @@ export function confirmedLineOf(stdout) {
   return found;
 }
 
-/** Whether this ISO week's row is piloted again (quiz-pilot-checks ruling 5). `week` is the row, `pilots` the pilots it has
- *  run so far, oldest first (`{release}` each, the release it was counted against, or null when the first pilot's pin could
- *  not be read), `release` the installed tree's release now (readReleaseStamp's answer). Yes only for a week closed on
- *  `pilot-failed`, with fewer than PILOTS_MAX pilots, a release measured now, every pilot's release measured, and the release
- *  now none of them. Anything unreadable keeps the week closed: an unmeasured value never re-spends. Pure.
- *  @param {{ week: any, pilots: unknown, release: { state: string, tag?: string } }} o
+/** One pilot entry's key (stage B, B0): an entry that carries a `key` field is read by it, a pilot key or `unmeasured`; one
+ *  that carries none and names a release was written before B0, so it is `legacy`: it counts toward the cap and matches no
+ *  key. Any other entry is `unmeasured`. Pure.  @param {Record<string, unknown>} p */
+export function pilotEntryKeyOf(p) {
+  if (Object.hasOwn(p, 'key')) return pilotKeyValid(p.key) ? { state: 'key', key: p.key } : { state: 'unmeasured' };
+  return typeof p.release === 'string' && p.release !== '' ? { state: 'legacy' } : { state: 'unmeasured' };
+}
+
+/** Whether this ISO week's row is piloted again (quiz-pilot-checks ruling 5, keyed by stage B's B0). `week` is the row,
+ *  `pilots` the pilots it has run so far, oldest first (each `{release, key}`, the key it was counted against; pilotEntryKeyOf
+ *  reads it), `key` the pilot key measured now (`{state: 'value', key}`, or unmeasured). Yes only for a week closed on
+ *  `pilot-failed`, with fewer than PILOTS_MAX pilots, every pilot's key measured or older than keys, a key measured now, and
+ *  that key none of theirs. Anything unreadable keeps the week closed: an unmeasured value never re-spends. The pilots are
+ *  judged before the key now, so a week that cannot be piloted again whatever the key needs no build measured. Pure.
+ *  @param {{ week: any, pilots: unknown, key: unknown }} o
  *  @returns {{ repilot: true, pilot: number } | { repilot: false, why: string }} */
-export function repilotOf({ week, pilots, release }) {
+export function repilotOf({ week, pilots, key }) {
   const no = (why) => ({ repilot: false, why });
   if (!plainObject(week)) return no('no-week');
   if (week.state !== 'failed') return no('not-failed');
   if (week.word !== PILOT_FAILED) return no('not-the-pilot');
   if (!Array.isArray(pilots) || pilots.length === 0 || !pilots.every((p) => plainObject(p))) return no('pilots-unreadable');
   if (pilots.length >= PILOTS_MAX) return no('pilots-spent');
-  if (!plainObject(release) || release.state !== 'value' || typeof release.tag !== 'string' || release.tag === '') return no('release-unmeasured');
-  if (!pilots.every((p) => typeof p.release === 'string' && p.release !== '')) return no('failed-release-unmeasured');
-  if (pilots.some((p) => p.release === release.tag)) return no('release-unchanged');
+  const keys = pilots.map(pilotEntryKeyOf);
+  if (keys.some((k) => k.state === 'unmeasured')) return no('failed-key-unmeasured');
+  if (!plainObject(key) || key.state !== 'value' || !pilotKeyValid(key.key)) return no('key-unmeasured');
+  if (keys.some((k) => k.state === 'key' && sameKey(k.key, key.key))) return no('key-unchanged');
   return { repilot: true, pilot: pilots.length + 1 };
 }
 
-/** Whether a re-pilot permission is passed to the act about to run (fix round 1, F2): only while the installed release is
- *  measured and is the one the permission names. Any other answer drops it, and the act runs without `--repilot`. Pure.
- *  @param {unknown} permit  the row's `repilot`, `{ release }` or absent  @param {{ state: string, tag?: string }} release */
-export function repilotPermitOf(permit, release) {
-  return plainObject(permit) && typeof permit.release === 'string' && plainObject(release) && release.state === 'value' && release.tag === permit.release;
+/** Whether a re-pilot permission is passed to the act about to run (fix round 1, F2, keyed by B0): only while the key
+ *  measured now is the one the permission names. Any other answer drops it, and the act runs without `--repilot`. Pure.
+ *  @param {unknown} permit  the row's `repilot`, `{ release, key }` or absent  @param {unknown} key  the key measured now */
+export function repilotPermitOf(permit, key) {
+  return plainObject(permit) && pilotKeyValid(permit.key) && plainObject(key) && key.state === 'value' && sameKey(permit.key, key.key);
 }
 
 /** The week keys to keep (the newest KEEP_WEEKS of the ones named and the current one) and to drop. Pure.
@@ -624,7 +638,7 @@ async function actWeek(ctx, act) {
   // F2: the permission is for one act. It leaves the row, durably, before the spawn; it is passed only on its own release.
   const permit = act === 'arms' ? w.repilot : undefined;
   if (permit !== undefined) { delete w.repilot; ctx.save(null); }
-  const repilot = repilotPermitOf(permit, readReleaseStamp(ctx.home));
+  const repilot = permit !== undefined && repilotPermitOf(permit, await pilotKeyNow(ctx, w));
   const p = weekPaths(ctx, w);
   const arms = { 'arms-summary': p.summary, 'arms-summary-sha256': w.arms_sha256 };
   let r;
@@ -656,7 +670,7 @@ async function actWeek(ctx, act) {
     if (repilot && r.stop.outcome === 'waiting') w.repilot = permit;   // the same pilot, resumable: its next use is checked again
     if (r.stop.driver && r.stop.outcome === 'refused') {
       // the week's first pilot is counted when it closes, from the driver's pin; a re-pilot was counted before its spawn (F1)
-      if (act === 'arms' && r.stop.word === PILOT_FAILED && !Object.hasOwn(w, 'pilots')) w.pilots = [{ release: pinnedReleaseOf(w.out), at_ms: ctx.now() }];
+      if (act === 'arms' && r.stop.word === PILOT_FAILED && !Object.hasOwn(w, 'pilots')) w.pilots = [{ ...pinnedPilotOf(w.out), at_ms: ctx.now() }];
       w.state = 'failed';
       w.word = r.stop.word;
     }
@@ -686,35 +700,79 @@ async function actRecord(ctx) {
   return { ok: true };
 }
 
-/** The release the driver pinned in a week's directory (its own record of the release the week's arms, and its pilot, ran
- *  on), or null when the pin cannot be read or is not the driver's. */
-function pinnedReleaseOf(out) {
+/** The week's first pilot as the driver pinned it in the week's directory (its own record of the release and the pilot key
+ *  the week's arms, and its pilot, ran on; B0): `{release, key}`, the key null when the pin's is no pilot key; `{release}`
+ *  alone for a pin written before B0, which names no key (a legacy pilot); `{release: null, key: null}` when the pin cannot be
+ *  read or is not the driver's. */
+function pinnedPilotOf(out) {
   let p = null;
-  try { p = JSON.parse(readFileSync(path.join(out, RELEASE_PIN_FILE), 'utf8')); } catch { return null; }
-  return plainObject(p) && p.kind === RELEASE_PIN_KIND && p.v === 1 && typeof p.ccrc_release === 'string' && p.ccrc_release !== '' ? p.ccrc_release : null;
+  try { p = JSON.parse(readFileSync(path.join(out, RELEASE_PIN_FILE), 'utf8')); } catch { p = null; }
+  if (!(plainObject(p) && p.kind === RELEASE_PIN_KIND && p.v === 1 && typeof p.ccrc_release === 'string' && p.ccrc_release !== '')) return { release: null, key: null };
+  if (!Object.hasOwn(p, 'key')) return { release: p.ccrc_release };
+  return { release: p.ccrc_release, key: pilotKeyValid(p.key) ? p.key : null };
 }
 /** A week's pilots so far. A row that carries `pilots` is read as it stands, a damaged list included, which repilotOf then
  *  refuses (fix round 1, A2). Only a row with no `pilots` key at all, an older row closed on the pilot word, stands for one
- *  pilot whose release is the week's pin. */
+ *  pilot read from the week's pin. */
 function pilotsOf(w) {
   if (Object.hasOwn(w, 'pilots')) return w.pilots;
-  if (w.state === 'failed' && w.word === PILOT_FAILED) return [{ release: pinnedReleaseOf(w.out), at_ms: null }];
+  if (w.state === 'failed' && w.word === PILOT_FAILED) return [{ ...pinnedPilotOf(w.out), at_ms: null }];
   return [];
 }
-/** Ruling 5's act: when repilotOf says so, this ISO week's row is reopened for `arms --repilot`, the pilot about to run is
- *  counted against the release installed now, and the row is saved before anything is spawned (fix round 1, F1). */
-function reopenForPilot(ctx) {
+/** The pilot key measured now for this tick's week (B0), measured at most once a tick: `ctx.measureKey` (the real measure,
+ *  measuredPilotKeyOf through the week's recorded account, or a test's stand-in). */
+async function pilotKeyNow(ctx, w) {
+  if (ctx.keyNow === undefined) ctx.keyNow = await ctx.measureKey(ctx, w);
+  return ctx.keyNow;
+}
+/** The real measure: the week's own account as its folder records it (a week with no record has nothing to pilot again). */
+function weekPilotKey(ctx, w) {
+  const s = ctx.state.setup;
+  const rec = weekAccountOf(w.out, s.setup_sha256, s.account);
+  if (rec.state !== 'recorded') return { state: 'unmeasured', why: `the week's account is ${rec.state}` };
+  return measuredPilotKeyOf({ home: ctx.home, out: w.out, account: rec.account, lang: ctx.env.LANG });
+}
+/** B0: the pilot key as the driver measures it, read now: the account admitted from the roster (admitAccount), the gate's
+ *  code shas (codeShas) and its launcher's `--version` line (measureClaudeVersion, which spawns `--version` only, spends
+ *  nothing and writes nothing but the poisoned `gh` under `out`, as the driver's own measure does). Any failure is
+ *  `unmeasured` with its reason, never a throw, so a key that cannot be read keeps the week closed.
+ *  @param {{ home: string, out: string, account: string, lang: string | undefined }} o */
+export async function measuredPilotKeyOf({ home, out, account, lang }) {
+  const no = (why) => ({ state: 'unmeasured', why });
+  let launch;
+  try {
+    const { json, roster } = readRoster(home);
+    launch = admitAccount(json, roster, account, home);
+  } catch (e) { return no(`account ${e?.word ?? e?.code ?? 'unreadable'}`); }
+  const code = codeShas();
+  if (code.state !== 'measured') return no(`code ${code.path} ${code.cause}`);
+  let v;
+  try { v = await measureClaudeVersion(launch, out, lang); } catch (e) { return no(`version ${e?.word ?? e?.code ?? 'error'}`); }
+  if (v.state !== 'value') return no(`version failed (code ${v.code}, signal ${v.signal})`);
+  const key = pilotKeyOf(v.version, code);
+  return key === null ? no('key-malformed') : { state: 'value', key };
+}
+/** Ruling 5's act, keyed by B0: when repilotOf says so, this ISO week's row is reopened for `arms --repilot`, the pilot about
+ *  to run is counted against the key measured now (and the release, for the record), and the row is saved before anything is
+ *  spawned (fix round 1, F1). The key is measured only for a week whose pilots leave it the one question. */
+async function reopenForPilot(ctx) {
   const w = ctx.state.weeks[ctx.weekKey];
   if (!plainObject(w) || w.state !== 'failed') return;
   const pilots = pilotsOf(w);
+  if (repilotOf({ week: w, pilots, key: null }).why !== 'key-unmeasured') return;
+  const key = await pilotKeyNow(ctx, w);
+  const d = repilotOf({ week: w, pilots, key });
+  if (!d.repilot) {
+    if (d.why === 'key-unmeasured') journalNote(ctx, `week ${ctx.weekKey} not piloted again: the pilot key is unmeasured (${oneLine(key?.why ?? '')})`);
+    return;
+  }
   const release = readReleaseStamp(ctx.home);
-  const d = repilotOf({ week: w, pilots, release });
-  if (!d.repilot) return;
-  w.pilots = [...pilots, { release: release.tag, at_ms: ctx.now() }];
+  const tag = release.state === 'value' ? release.tag : null;
+  w.pilots = [...pilots, { release: tag, key: key.key, at_ms: ctx.now() }];
   w.state = 'running';
   w.word = null;
-  w.repilot = { release: release.tag };
-  journalNote(ctx, `week ${ctx.weekKey} piloted again: pilot ${d.pilot} of ${PILOTS_MAX}, release ${release.tag}, after ${pilots.map((p) => p.release).join(' ')}`);
+  w.repilot = { release: tag, key: key.key };
+  journalNote(ctx, `week ${ctx.weekKey} piloted again: pilot ${d.pilot} of ${PILOTS_MAX}, release ${tag}, after ${pilots.map((p) => p.release).join(' ')}; build ${oneLine(key.key.claude_code)}`);
   ctx.save(null);
 }
 
@@ -783,7 +841,7 @@ function early(err, word, detail) {
 /** One tick. The refusals come FIRST (the session, then the pane), then umask 077, then the lock, then the acts in order
  *  until one stops or the week is done; `last` is written after every act.
  *  @param {{HOME?: string, TMUX_PANE?: string, LANG?: string, PATH?: string, CLAUDECODE?: string}} env
- *  @param {{ driver?: string, verb?: string, node?: string, now?: () => number, isAlive?: (pid: number) => boolean, err?: (s: string) => void, beforeHeadlessWrite?: () => void, link?: (a: string, b: string) => void, client?: string }} [deps] */
+ *  @param {{ driver?: string, verb?: string, node?: string, now?: () => number, isAlive?: (pid: number) => boolean, err?: (s: string) => void, beforeHeadlessWrite?: () => void, link?: (a: string, b: string) => void, client?: string, pilotKey?: (ctx: object, w: object) => Promise<object> }} [deps] */
 export async function main(env, deps = {}) {
   const err = deps.err ?? ((s) => { process.stderr.write(s); });
   if (env.CLAUDECODE !== undefined) return early(err, 'in-session', 'CLAUDECODE is set; the weekly quiz is the timer\'s, never a session\'s');
@@ -798,6 +856,7 @@ export async function main(env, deps = {}) {
     node: deps.node ?? process.execPath, driver: deps.driver ?? path.join(tree, 'deploy', 'history-quiz-single.mjs'),
     verb: deps.verb ?? path.join(env.HOME, '.local', 'bin', 'ccrc'), save: null, beforeHeadlessWrite: deps.beforeHeadlessWrite, link: deps.link ?? linkSync,
     client: deps.client ?? path.join(env.HOME, '.local', 'bin', 'ccrc-api'),
+    measureKey: deps.pilotKey ?? weekPilotKey, keyNow: undefined,
   };
   const stateFile = path.join(root, STATE_FILE);
   const onSignal = () => { ctx.stopping = true; if (ctx.child !== null) ctx.child.kill('SIGTERM'); };
@@ -851,7 +910,7 @@ async function run(ctx) {
   for (const [key, w] of Object.entries(ctx.state.weeks)) {
     if (key !== ctx.weekKey && plainObject(w) && w.state === 'running') { w.state = 'failed'; w.word = 'week-ended'; }
   }
-  reopenForPilot(ctx);
+  await reopenForPilot(ctx);
   for (;;) {
     const act = nextActOf(ctx.state, ctx.weekKey);
     const weekAct = ['arms', 'judge', 'report', 'record'].includes(act);

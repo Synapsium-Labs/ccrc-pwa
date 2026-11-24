@@ -95,6 +95,7 @@ import { DriverRefusal, LIMITS_DEFAULTS, OUT_JSON_CAP, QUIZ_META_FILE, SETTINGS_
   settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spendLinesOf, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
   step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
   warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
+import { pilotKeyOf, pilotKeyValid } from './history-quiz-pilot.mjs';
 
 const PREFIX = 'ccrc history-quiz-single';
 
@@ -579,11 +580,11 @@ export async function markerCommand(flags) {
 
 // ── arms: step 0b's probes first, then the treatment arm ────────────────────────────────────────────────────────────
 /** One week's release pin: written by the first `arms` on this --out, and a later `arms` on another release refuses. */
-function pinArmsRelease(out, setupSha256, release) {
+function pinArmsRelease(out, setupSha256, release, key) {
   const pin = armsPinOf(out, setupSha256);
   if (pin.state === 'absent') {
     ensurePlainDir(out, SECTION);
-    writePlain(out, RELEASE_PIN_FILE, releasePinText(setupSha256, release, 0));
+    writePlain(out, RELEASE_PIN_FILE, releasePinText(setupSha256, release, 0, key));
     return;
   }
   const p = pin.value;
@@ -593,11 +594,14 @@ function pinArmsRelease(out, setupSha256, release) {
 /** The release pin's bytes, the one composer of them (fix round 1, F3). The pin has two write sites, for two acts:
  *  pinArmsRelease writes it at the week's first `arms` and verifies it at every later one, and repilotPrepare replaces it on
  *  purpose after a failed pilot, for the round it starts. `round` is the step 0b round the pin was written for (0 at the
- *  first start); a pin written before it existed reads as round 0. Pure.
- *  @param {string} setupSha256  @param {string} release  @param {number} round  @returns {string} */
-export function releasePinText(setupSha256, release, round) {
+ *  first start); a pin written before it existed reads as round 0. `key` is the pilot key the pin was written on (stage B,
+ *  B0: the build and the gate's code shas this act measured, pilotKeyOf), which the runner reads as the key of the week's
+ *  first pilot; a pin written before it existed has none. Pure.
+ *  @param {string} setupSha256  @param {string} release  @param {number} round  @param {object} key  @returns {string} */
+export function releasePinText(setupSha256, release, round, key) {
   if (!Number.isSafeInteger(round) || round < 0) throw new TypeError(`releasePinText: round ${String(round)}`);
-  return `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release, round })}\n`;
+  if (!pilotKeyValid(key)) throw new TypeError('releasePinText: the key is no pilot key');
+  return `${canonicalJson({ kind: RELEASE_PIN_KIND, v: 1, setup_sha256: setupSha256, ccrc_release: release, round, key })}\n`;
 }
 /** This --out's release pin: `absent`, or its parsed `value` when it is this setup's pin (its kind and setup sha); any other
  *  file refuses out-refused. Both write sites read the pin through it first, so neither replaces a pin that is not this run's. */
@@ -733,7 +737,7 @@ function repilotPrepare(c) {
   }
   ensurePlainDir(c.out, `${SECTION}/step0b`);
   writePlain(c.out, step0bFailedRel(c.settingsMode, roundOf(have.value)), have.bytes);
-  writePlain(c.out, RELEASE_PIN_FILE, releasePinText(c.setupSha256, c.release, next));
+  writePlain(c.out, RELEASE_PIN_FILE, releasePinText(c.setupSha256, c.release, next, c.key));
 }
 
 /** One step 0b round on this --out: the box batch and the arm batches, the checks, the result written whatever it shows. */
@@ -859,8 +863,9 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       const startedMs = Date.now();
       const gate = batchGate({ out, home, accountId: launch.accountId, budget: s.budget, limits: s.limits });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
-      if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp });
-      pinArmsRelease(out, setup.sha256, expected.release_stamp);
+      const key = pilotKeyOf(expected.claude_code_version, { state: 'measured', files: expected.code_shas });   // stage B, B0: the pin records it
+      if (flags.repilot === true) repilotPrepare({ out, setupSha256: setup.sha256, settingsMode: s.settings_mode, release: expected.release_stamp, key });
+      pinArmsRelease(out, setup.sha256, expected.release_stamp, key);
       const armed = armedWordsOf(home, ids);
       const ctx = {
         section: SECTION, home, out, rs, storeId, launch, gate, expected, allowCodeChange: false, deps, configDirs, model: s.arm_model,

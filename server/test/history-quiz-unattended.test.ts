@@ -145,6 +145,17 @@ if (step.exit !== undefined && step.exit !== 0) process.exitCode = step.exit;
 process.stdout.write(step.stdout ?? '{"ok":true}\\n');
 `;
 const acct = (id: string, extra: R = {}): R => ({ id, exec: { kind: 'upstream' }, telemetry: 'anthropic', ...extra });
+/** Stage B, B0: the gate's code shas every fixture key carries, unless a case says otherwise. */
+const FIX_CODE: Record<string, string> = { 'deploy/history-gate.mjs': 'a'.repeat(64), 'deploy/history-replay.mjs': 'b'.repeat(64) };
+/** A pilot key: the build's --version line and the gate's code shas. */
+const KEY = (build: string, code: Record<string, string> = FIX_CODE): R => ({ claude_code: build, code_shas: code });
+/** The box's stand-in for the runner's key measure (the real one spawns the week's launcher): the build in `fixture-build` and the
+ *  code shas in `fixture-code` (JSON) when present; with no `fixture-build`, the key is unmeasured. */
+const fixtureKey = (home: string) => async (): Promise<R> => {
+  if (!existsSync(join(home, 'fixture-build'))) return { state: 'unmeasured', why: 'fixture: no build' };
+  const code = existsSync(join(home, 'fixture-code')) ? JSON.parse(readFileSync(join(home, 'fixture-code'), 'utf8')) as Record<string, string> : FIX_CODE;
+  return { state: 'value', key: KEY(readFileSync(join(home, 'fixture-build'), 'utf8'), code) };
+};
 
 interface Box {
   home: string; root: string; history: string; driver: string; verb: string; client: string;
@@ -201,7 +212,7 @@ function mkBox(o: { accounts?: R[] | null; history?: boolean; limits?: Record<st
       }
       const env: R = { HOME: home, LANG: 'fixture.UTF-8', PATH: `${process.execPath.replace(/\/[^/]*$/, '')}:${process.env.PATH ?? ''}`, ...t.env };
       for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
-      const code = await U.main(env, { driver, verb, client, now: () => t.now ?? NOW, err: (s: string) => { err += s; }, ...t.deps }) as number;
+      const code = await U.main(env, { driver, verb, client, now: () => t.now ?? NOW, err: (s: string) => { err += s; }, pilotKey: fixtureKey(home), ...t.deps }) as number;
       return { code, err };
     },
   };
@@ -1287,48 +1298,69 @@ describe('--state-verdict: the runner\'s own reading of its state file, for doct
 });
 
 // ── quiz-pilot-checks ruling 5: a week closed on the pilot word is piloted again on a newer release, at most three a week ──
-describe('repilotOf: the pure decision, as a table', () => {
+describe('repilotOf: the pure decision, as a table (keyed by stage B\'s B0)', () => {
   const failed = { state: 'failed', word: 'pilot-failed' };
-  const tag = (t: string): R => ({ state: 'value', tag: t });
-  const rows: Array<[string, R, unknown, R, R]> = [
-    ['a newer release after one failed pilot', failed, [{ release: 'v1.0.1' }], tag('v1.0.2'), { repilot: true, pilot: 2 }],
-    ['a newer release after two failed pilots: the third', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }], tag('v1.0.3'), { repilot: true, pilot: 3 }],
-    ['three failed pilots: no fourth', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, { release: 'v1.0.3' }], tag('v1.0.4'), { repilot: false, why: 'pilots-spent' }],
-    ['the same release: no second pilot on it', failed, [{ release: 'v1.0.1' }], tag('v1.0.1'), { repilot: false, why: 'release-unchanged' }],
-    ['back to an earlier failed release', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }], tag('v1.0.1'), { repilot: false, why: 'release-unchanged' }],
-    ['no row', null as unknown as R, [], tag('v1.0.2'), { repilot: false, why: 'no-week' }],
-    ['a running week', { state: 'running', word: null }, [{ release: 'v1.0.1' }], tag('v1.0.2'), { repilot: false, why: 'not-failed' }],
-    ['a confirmed week', { state: 'confirmed', word: null }, [{ release: 'v1.0.1' }], tag('v1.0.2'), { repilot: false, why: 'not-failed' }],
-    ['closed on another word', { state: 'failed', word: 'out-refused' }, [{ release: 'v1.0.1' }], tag('v1.0.2'), { repilot: false, why: 'not-the-pilot' }],
-    ['closed week-ended', { state: 'failed', word: 'week-ended' }, [{ release: 'v1.0.1' }], tag('v1.0.2'), { repilot: false, why: 'not-the-pilot' }],
-    ['no failed pilot recorded', failed, [], tag('v1.0.2'), { repilot: false, why: 'pilots-unreadable' }],
-    ['pilots not a list', failed, { release: 'v1.0.1' }, tag('v1.0.2'), { repilot: false, why: 'pilots-unreadable' }],
-    ['a pilot entry that is no object', failed, ['v1.0.1'], tag('v1.0.2'), { repilot: false, why: 'pilots-unreadable' }],
-    ['the release now absent', failed, [{ release: 'v1.0.1' }], { state: 'absent' }, { repilot: false, why: 'release-unmeasured' }],
-    ['the release now untagged', failed, [{ release: 'v1.0.1' }], { state: 'untagged' }, { repilot: false, why: 'release-unmeasured' }],
-    ['the release now unreadable', failed, [{ release: 'v1.0.1' }], { state: 'unreadable', code: 'EACCES' }, { repilot: false, why: 'release-unmeasured' }],
-    ['a failed pilot whose release could not be read', failed, [{ release: null }], tag('v1.0.2'), { repilot: false, why: 'failed-release-unmeasured' }],
+  const k = (b: string, code?: Record<string, string>): R => ({ state: 'value', key: KEY(b, code) });
+  const at = (b: string, code?: Record<string, string>): R => ({ release: 'v1', key: KEY(b, code) });
+  const OTHER_CODE = { ...FIX_CODE, 'deploy/history-replay.mjs': 'c'.repeat(64) };
+  const rows: Array<[string, R, unknown, unknown, R]> = [
+    ['a new build after one failed pilot', failed, [at('b1')], k('b2'), { repilot: true, pilot: 2 }],
+    ['a new build after two failed pilots: the third', failed, [at('b1'), at('b2')], k('b3'), { repilot: true, pilot: 3 }],
+    ['three failed pilots: no fourth', failed, [at('b1'), at('b2'), at('b3')], k('b4'), { repilot: false, why: 'pilots-spent' }],
+    ['the same key: no second pilot on it', failed, [at('b1')], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['back to an earlier failed key', failed, [at('b1'), at('b2')], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['the same build, the gate\'s code changed: a new key', failed, [at('b1')], k('b1', OTHER_CODE), { repilot: true, pilot: 2 }],
+    ['another release on the same key is the same key (B0: the release is no longer the key)', failed, [{ release: 'v1.0.1', key: KEY('b1') }], k('b1'), { repilot: false, why: 'key-unchanged' }],
+    ['an entry written before B0 (a release, no key) counts and matches no key', failed, [{ release: 'v1.0.1' }], k('b1'), { repilot: true, pilot: 2 }],
+    ['two entries written before B0 and a keyed one: the cap counts them all', failed, [{ release: 'v1.0.1' }, { release: 'v1.0.2' }, at('b1')], k('b2'), { repilot: false, why: 'pilots-spent' }],
+    ['an older entry whose release could not be read is unmeasured', failed, [{ release: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key could not be read', failed, [{ release: 'v1', key: null }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['an entry whose key is damaged', failed, [{ release: 'v1', key: { claude_code: 'b1' } }], k('b2'), { repilot: false, why: 'failed-key-unmeasured' }],
+    ['no row', null as unknown as R, [], k('b2'), { repilot: false, why: 'no-week' }],
+    ['a running week', { state: 'running', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
+    ['a confirmed week', { state: 'confirmed', word: null }, [at('b1')], k('b2'), { repilot: false, why: 'not-failed' }],
+    ['closed on another word', { state: 'failed', word: 'out-refused' }, [at('b1')], k('b2'), { repilot: false, why: 'not-the-pilot' }],
+    ['closed week-ended', { state: 'failed', word: 'week-ended' }, [at('b1')], k('b2'), { repilot: false, why: 'not-the-pilot' }],
+    ['no failed pilot recorded', failed, [], k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['pilots not a list', failed, at('b1'), k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['a pilot entry that is no object', failed, ['b1'], k('b2'), { repilot: false, why: 'pilots-unreadable' }],
+    ['the key now unmeasured', failed, [at('b1')], { state: 'unmeasured', why: 'fixture' }, { repilot: false, why: 'key-unmeasured' }],
+    ['the key now no answer at all', failed, [at('b1')], null, { repilot: false, why: 'key-unmeasured' }],
+    ['the key now damaged', failed, [at('b1')], { state: 'value', key: { claude_code: '', code_shas: FIX_CODE } }, { repilot: false, why: 'key-unmeasured' }],
   ];
-  for (const [name, week, pilots, release, want] of rows) {
-    it(name, () => { expect(U.repilotOf({ week, pilots, release })).toEqual(want); });
+  for (const [name, week, pilots, key, want] of rows) {
+    it(name, () => { expect(U.repilotOf({ week, pilots, key })).toEqual(want); });
   }
   it('every reason word is a STAY_CLOSED word, and the cap is three', () => {
     expect(U.PILOTS_MAX).toBe(3);
-    for (const [, week, pilots, release] of rows) {
-      const d = U.repilotOf({ week, pilots, release }) as R;
+    for (const [, week, pilots, key] of rows) {
+      const d = U.repilotOf({ week, pilots, key }) as R;
       if (d.repilot === false) expect(U.STAY_CLOSED, d.why as string).toContain(d.why);
     }
+  });
+  it('the pilots are judged before the key now: a week that cannot be piloted again whatever the key never needs one', () => {
+    expect(U.repilotOf({ week: failed, pilots: [at('b1'), at('b2'), at('b3')], key: null })).toEqual({ repilot: false, why: 'pilots-spent' });
+    expect(U.repilotOf({ week: failed, pilots: [{ release: null }], key: null })).toEqual({ repilot: false, why: 'failed-key-unmeasured' });
+    expect(U.repilotOf({ week: failed, pilots: [at('b1')], key: null }), 'CONTROL: only then is the key the question').toEqual({ repilot: false, why: 'key-unmeasured' });
   });
 });
 
 describe('the runner acts on repilotOf: it reopens the week and runs arms --repilot in the same directory', () => {
-  const setRelease = (b: Box, tag: string): void => writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
+  // Stage B, B0: the cases below were written for ruling 5's release key. Each "release" step now moves the release AND the
+  // build with it (a new release that brings a new build), so every case keeps pinning what it pinned; the cases after this
+  // block move the two apart.
+  const BUILD = (tag: string): string => `${tag} (Claude Code)`;
+  const setRelease = (b: Box, tag: string): void => {
+    writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
+    writeFileSync(join(b.home, 'fixture-build'), BUILD(tag));
+  };
   /** The driver's release pin, composed by the single-arm module's own releasePinText (so the runner's reader is held to the
    *  module's bytes, fix round 1 F3), written into a week's directory as that module does before its pilot. */
+  const pinText = (tag: string, round: number): string => QS.releasePinText('f'.repeat(64), tag, round, KEY(BUILD(tag))) as string;
   const pin = (b: Box, tag: string, text?: string): void => {
     const dir = join(b.root, 'weeks', WEEK, 'quiz');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'arms-release.json'), text ?? (QS.releasePinText('f'.repeat(64), tag, 0) as string));
+    writeFileSync(join(dir, 'arms-release.json'), text ?? pinText(tag, 0));
   };
   const armsCalls = (b: Box): R[] => b.calls('driver').filter((c) => c.argv[0] === 'arms');
   const HOUR = 3600_000;
@@ -1369,7 +1401,8 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect(w).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1' }, { release: 'v1.0.2', at_ms: NOW + HOUR }] });
     expect(w.repilot, 'the permission was for one act').toBeUndefined();
     expect(subs(b).filter((s) => s === 'judge').length).toBe(1);
-    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/week \S+ piloted again: pilot 2 of 3, release v1\.0\.2, after v1\.0\.1/);
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/week \S+ piloted again: pilot 2 of 3, release v1\.0\.2, after v1\.0\.1; build v1\.0\.2 \(Claude Code\)/);
+    expect(w.pilots[1].key, 'B0: the row records the key it was decided on').toEqual(KEY(BUILD('v1.0.2')));
   });
 
   it('at most three pilots in a week: a fourth release opens no fourth pilot', async () => {
@@ -1424,12 +1457,13 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'confirmed', pilots: [{ release: 'v1.0.1', at_ms: null }, { release: 'v1.0.2' }] });
   });
 
-  it('an unreadable pin keeps the week closed: an unmeasured release never re-spends', async () => {
+  it('an unreadable pin keeps the week closed: an unmeasured key never re-spends', async () => {
     const b = mkBox();
     b.plan({ arms: [REFUSE('pilot-failed')] });
     setRelease(b, 'v1.0.1');
     await b.tick();
-    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, at_ms: NOW }]);
+    // B0: was [{ release: null, at_ms: NOW }]; the entry now names the key it could not read
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, key: null, at_ms: NOW }]);
     setRelease(b, 'v1.0.2');
     await b.tick({ now: NOW + HOUR });
     expect(armsCalls(b).length).toBe(1);
@@ -1451,7 +1485,7 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
   for (const legacy of [false, true]) {
     it.skipIf(process.getuid?.() === 0)(`a kill between the driver's write and the save: no second pilot on that release, and the count is right (${legacy ? 'a row closed before this change' : 'a new-style row'})`, async () => {
       const b = await failedOn('v1.0.1');
-      const rePin = [join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), QS.releasePinText('f'.repeat(64), 'v1.0.2', 1) as string];
+      const rePin = [join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json'), pinText('v1.0.2', 1)];
       // the queue's first answer was the first pilot's (already given); then the killed re-pilot, then the driver's own refusal
       b.plan({ arms: [REFUSE('pilot-failed'), { ...REFUSE('pilot-failed'), chmodRoot: true, writes: [rePin] }, REFUSE('pilot-failed')] });
       if (legacy) {
@@ -1530,7 +1564,7 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     const pinPath = join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json');
     b.plan({ arms: [
       REFUSE('pilot-failed'),
-      { exit: 1, stderr: 'killed\n', chmodRoot: true, writes: [[pinPath, QS.releasePinText('f'.repeat(64), 'v1.0.2', 1) as string]] },
+      { exit: 1, stderr: 'killed\n', chmodRoot: true, writes: [[pinPath, pinText('v1.0.2', 1)]] },
       // the real driver on v1.0.2 without --repilot: the pin matches, the round 0 result failed, so pilot-failed
       REFUSE('pilot-failed'),
       // the real driver on v1.0.3 with --repilot: round 1 is under way on v1.0.2, so repilot-release-moved
@@ -1580,14 +1614,16 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     });
   }
 
-  it('repilotPermitOf: the permission passes only on its own measured release', () => {
-    const tag = (t: string): R => ({ state: 'value', tag: t });
-    expect(U.repilotPermitOf({ release: 'v1' }, tag('v1'))).toBe(true);
-    expect(U.repilotPermitOf({ release: 'v1' }, tag('v2'))).toBe(false);
-    expect(U.repilotPermitOf({ release: 'v1' }, { state: 'absent' })).toBe(false);
-    expect(U.repilotPermitOf(undefined, tag('v1'))).toBe(false);
-    expect(U.repilotPermitOf(true, tag('v1')), 'the round-1 boolean form').toBe(false);
-    expect(U.repilotPermitOf({ release: 7 }, tag('7'))).toBe(false);
+  it('repilotPermitOf: the permission passes only on its own measured key (B0; was: its own release)', () => {
+    const k = (b: string): R => ({ state: 'value', key: KEY(b) });
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, k('b1'))).toBe(true);
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, k('b2'))).toBe(false);
+    expect(U.repilotPermitOf({ release: 'v2', key: KEY('b1') }, k('b1')), 'the release is no longer the key').toBe(true);
+    expect(U.repilotPermitOf({ release: 'v1', key: KEY('b1') }, { state: 'unmeasured', why: 'x' })).toBe(false);
+    expect(U.repilotPermitOf(undefined, k('b1'))).toBe(false);
+    expect(U.repilotPermitOf(true, k('b1')), 'the round-1 boolean form').toBe(false);
+    expect(U.repilotPermitOf({ release: 'v1' }, k('b1')), 'a permission written before B0 names no key: dropped').toBe(false);
+    expect(U.repilotPermitOf({ release: 'v1', key: { claude_code: 'b1' } }, k('b1')), 'a damaged key').toBe(false);
   });
 
   // fix round 1, A2: only a row with no pilot list at all is an older row.
@@ -1619,7 +1655,7 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
       setRelease(b, 'v1.0.1');
       pin(b, 'v1.0.1', text);
       await b.tick();
-      expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, at_ms: NOW }]);
+      expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: null, key: null, at_ms: NOW }]);   // B0: was { release: null, at_ms }
       setRelease(b, 'v1.0.2');
       await b.tick({ now: NOW + HOUR });
       expect(armsCalls(b).length).toBe(1);
@@ -1632,6 +1668,137 @@ describe('the runner acts on repilotOf: it reopens the week and runs arms --repi
     await b.tick({ now: NEXT_NOW });
     expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
     expect(armsCalls(b).map((c) => c.argv[c.argv.indexOf('--out') + 1])).toEqual([join(b.root, 'weeks', WEEK), join(b.root, 'weeks', NEXT_WEEK)]);
+  });
+
+  // ── stage B, B0: the key decides, never the release alone ──
+  const setBuildOnly = (b: Box, build: string): void => writeFileSync(join(b.home, 'fixture-build'), build);
+  const setReleaseOnly = (b: Box, tag: string): void => writeFileSync(join(b.home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', version: tag }));
+
+  it('B0: an unrelated release on the same build and code pilots nothing again, however many releases land', async () => {
+    const b = await failedOn('v1.0.1');
+    for (const [i, t] of ['v1.0.2', 'v1.0.3', 'v1.0.4'].entries()) {
+      setReleaseOnly(b, t);
+      await b.tick({ now: NOW + (i + 1) * HOUR });
+    }
+    expect(armsCalls(b).length, 'no second pilot on the key that already failed').toBe(1);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1', key: KEY(BUILD('v1.0.1')) }] });
+    expect((b.state() as R).weeks[WEEK].pilots.length).toBe(1);
+  });
+
+  it('B0: a new build on the same release is piloted again; the row and the permission name the new key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setBuildOnly(b, '9.9.9 (Claude Code)');
+    await b.tick({ now: NOW + HOUR });
+    const arms = armsCalls(b);
+    expect(arms.map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+    const w = (b.state() as R).weeks[WEEK];
+    expect(w.pilots).toEqual([{ release: 'v1.0.1', key: KEY(BUILD('v1.0.1')), at_ms: NOW }, { release: 'v1.0.1', key: KEY('9.9.9 (Claude Code)'), at_ms: NOW + HOUR }]);
+    expect(w.repilot, 'given back after the resumable stop, naming its key').toEqual({ release: 'v1.0.1', key: KEY('9.9.9 (Claude Code)') });
+  });
+
+  it('B0: the gate\'s code moved on the same build is a new key: piloted again', async () => {
+    const b = await failedOn('v1.0.1');
+    writeFileSync(join(b.home, 'fixture-code'), JSON.stringify({ ...FIX_CODE, 'deploy/history-replay.mjs': 'c'.repeat(64) }));
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot'))).toEqual([false, true]);
+  });
+
+  it('B0: a key that cannot be measured keeps the week closed, spawns nothing, and the journal says why', async () => {
+    const b = await failedOn('v1.0.1');
+    unlinkSync(join(b.home, 'fixture-build'));
+    setReleaseOnly(b, 'v1.0.2');
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).length).toBe(1);
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed' });
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/not piloted again: the pilot key is unmeasured \(fixture: no build\)/);
+  });
+
+  it('B0: a week whose pilots are spent never measures a key', async () => {
+    const b = await failedOn('v1.0.1');
+    const st = b.state() as R;
+    st.weeks[WEEK].pilots = [{ release: 'v1.0.0' }, { release: 'v1.0.1' }, { release: 'v1.0.1', key: KEY(BUILD('v1.0.1')) }];
+    writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+    let asked = 0;
+    await b.tick({ now: NOW + HOUR, deps: { pilotKey: async () => { asked += 1; return { state: 'value', key: KEY('9.9.9 (Claude Code)') }; } } });
+    expect(asked).toBe(0);
+    expect(armsCalls(b).length).toBe(1);
+  });
+
+  it('B0: entries written before B0 (a release, no key) count toward the cap and match no key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('pilot-failed')]);
+    const st = b.state() as R;
+    st.weeks[WEEK].pilots = [{ release: 'v1.0.1', at_ms: NOW }];   // as ruling 5's runner wrote it
+    writeFileSync(join(b.root, 'unattended.json'), JSON.stringify(st));
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the older entry matches no key: one more pilot').toEqual([false, true]);
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', at_ms: NOW }, { release: 'v1.0.1', key: KEY(BUILD('v1.0.1')), at_ms: NOW + HOUR }]);
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).length, 'never twice on one key').toBe(2);
+  });
+
+  it('B0: a pin written before B0 (a release, no key) labels the first pilot as an older entry: it counts, and matches no key', async () => {
+    const b = mkBox();
+    b.plan({ arms: [REFUSE('pilot-failed')] });
+    setRelease(b, 'v1.0.1');
+    pin(b, 'v1.0.1', `${JSON.stringify({ kind: QS.RELEASE_PIN_KIND, v: 1, setup_sha256: 'f'.repeat(64), ccrc_release: 'v1.0.1', round: 0 })}\n`);
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK].pilots).toEqual([{ release: 'v1.0.1', at_ms: NOW }]);
+    await b.tick({ now: NOW + HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the same build pilots once more: the older entry names no key').toEqual([false, true]);
+  });
+
+  it('B0: a re-pilot that stopped resumably is continued after a release moved on the same key', async () => {
+    const b = await failedOn('v1.0.1', [REFUSE('interrupted')]);
+    setBuildOnly(b, '9.9.9 (Claude Code)');
+    await b.tick({ now: NOW + HOUR });
+    setReleaseOnly(b, 'v1.0.2');
+    await b.tick({ now: NOW + 2 * HOUR });
+    expect(armsCalls(b).map((c) => c.argv.includes('--repilot')), 'the permission names the key, which has not moved').toEqual([false, true, true]);
+  });
+});
+
+// ── stage B, B0: the runner's real key measure, through the driver's own readers on a fixture HOME ──
+describe('measuredPilotKeyOf: the pilot key as the driver measures it (stage B, B0)', () => {
+  /** A fixture HOME with one upstream account whose launcher prints `version` for --version (or exits `code`). */
+  function keyHome(o: { version?: string; code?: number; launcher?: boolean } = {}): { home: string; out: string } {
+    const home = mkTmp('quiz-key-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' }] }));
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    if (o.launcher !== false) {
+      writeFileSync(join(home, '.local', 'bin', 'up-a'), `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(o.version ?? '2.9.1 (Claude Code)')}\nexit ${o.code ?? 0}\n`, { mode: 0o700 });
+    }
+    const out = join(home, 'week');
+    mkdirSync(out, { recursive: true, mode: 0o700 });
+    return { home, out };
+  }
+
+  it('the key is the launcher\'s --version line and the gate\'s code shas, exactly as codeShas answers them', async () => {
+    const { home, out } = keyHome();
+    const got = await U.measuredPilotKeyOf({ home, out, account: 'up-a', lang: undefined }) as R;
+    expect(got).toEqual({ state: 'value', key: { claude_code: '2.9.1 (Claude Code)', code_shas: (D.codeShas() as R).files } });
+  });
+
+  it('an account the roster does not admit, a launcher that fails and one that is missing are unmeasured, never a throw', async () => {
+    const a = keyHome();
+    expect(await U.measuredPilotKeyOf({ home: a.home, out: a.out, account: 'nobody', lang: undefined })).toMatchObject({ state: 'unmeasured', why: 'account account-refused' });
+    const f = keyHome({ code: 3 });
+    expect(await U.measuredPilotKeyOf({ home: f.home, out: f.out, account: 'up-a', lang: undefined })).toMatchObject({ state: 'unmeasured', why: expect.stringMatching(/^version failed/) });
+    const m = keyHome({ launcher: false });
+    expect(await U.measuredPilotKeyOf({ home: m.home, out: m.out, account: 'up-a', lang: undefined })).toMatchObject({ state: 'unmeasured' });
+  });
+
+  it('a tick with no stand-in measures through the driver\'s own roster reader: a roster it cannot admit keeps the week closed', async () => {
+    const b = mkBox();
+    const pinPath = join(b.root, 'weeks', WEEK, 'quiz', 'arms-release.json');
+    b.plan({ arms: [{ ...REFUSE('pilot-failed'), writes: [[pinPath, QS.releasePinText('f'.repeat(64), 'v1.0.1', 0, KEY('b1')) as string]] }] });
+    await b.tick();
+    expect((b.state() as R).weeks[WEEK]).toMatchObject({ state: 'failed', word: 'pilot-failed', pilots: [{ release: 'v1.0.1', key: KEY('b1') }] });
+    // the box's fixture roster is not one the driver's roster reader admits, so the real measure answers unmeasured
+    await b.tick({ now: NOW + 3600_000, deps: { pilotKey: undefined } });
+    expect(b.calls('driver').filter((c) => c.argv[0] === 'arms').length).toBe(1);
+    expect(readFileSync(join(b.root, 'journal.log'), 'utf8')).toMatch(/not piloted again: the pilot key is unmeasured \(account roster-invalid\)/);
   });
 });
 
@@ -1756,7 +1923,7 @@ describe('the runner runs each week on the week\'s account (run 3538)', () => {
     b.plan({ arms: [{ ...REFUSE('interrupted'), noRecord: true, mkdir: true }] });
     await b.tick();
     mkdirSync(join(W(b), 'quiz'), { recursive: true });
-    writeFileSync(join(W(b), 'quiz', 'arms-release.json'), QS.releasePinText((b.state() as R).setup.setup_sha256, 'v1.0.1', 0) as string);
+    writeFileSync(join(W(b), 'quiz', 'arms-release.json'), QS.releasePinText((b.state() as R).setup.setup_sha256, 'v1.0.1', 0, KEY('b1')) as string);
     b.setLimits('acct-b', { five: 10, seven: 50 });
     b.setLimits('acct-c', { five: 10, seven: 1 });
     await b.tick({ now: NOW + 3600_000 });
