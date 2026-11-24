@@ -13,6 +13,8 @@ import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from 
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
+import * as advisor from './advisorStore.js';
+import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvisor.js';
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
@@ -11722,6 +11724,14 @@ export class CoordStore {
   isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
   /** Whether the programme holds a `blocking` item in state `open`, waiting on the operator (a `checking` one is the coordinator's). */
   programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
+
+  // ── the coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8967, D-8970) ───────────────────────────────────
+  // The SQL lives in `advisorStore.ts`; one writer per table (see its header).
+  coordinatorAdvisorSettings(): advisor.CoordinatorAdvisorRead { return advisor.coordinatorAdvisorSettings(this.db); }
+  setCoordinatorAdvisor(s: CoordinatorAdvisorSetting, at: number): { before: advisor.CoordinatorAdvisorRead; after: advisor.CoordinatorAdvisorRead } { return advisor.setCoordinatorAdvisor(this.db, s, at); }
+  advisorReadState(sessionId: string): advisor.AdvisorReadState | null { return advisor.advisorReadState(this.db, sessionId); }
+  recordAdvisorRead(sessionId: string, state: advisor.AdvisorReadState, rows: readonly advisor.AdvisorCallRow[], now: number, oldestDay: string): void { advisor.recordAdvisorRead(this.db, sessionId, state, rows, now, oldestDay); }
+  advisorDayCounts(day: string): Map<string, advisor.AdvisorDay> { return advisor.advisorDayCounts(this.db, day); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).

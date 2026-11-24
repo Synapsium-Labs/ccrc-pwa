@@ -60,12 +60,12 @@ export interface FleetWatcherView {
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
-  | 'advanceObserved' | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
+  | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
   | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'approvalsUnfetchedLive' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
   | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'capMode' | 'caps' | 'capsCountedRuns' | 'capsUpdatedAt' | 'cardReadOfStart' | 'censusRowsIn' | 'censusRunSpans' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
-  | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
+  | 'coordPlacementStamps' | 'coordinatorAdvisorSettings' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteResponsesThrough' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'
   | 'deliveredUnacked'
@@ -86,7 +86,7 @@ export type WatcherCoordMember =
   | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openProbeRound' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'operatorMarks' | 'outstandingMailFor' | 'parkApprovalRow' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
   | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'

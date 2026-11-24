@@ -215,7 +215,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -424,6 +424,12 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'launchProfile', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the launch-profile lane failed',
     derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'the lane reads the usage sidecar\'s window, which changes no faster than that lane reads it, and a route it writes is applied only at the session\'s next launch' },
+  },
+  // The coordinator advisor's count lane (plan 2026-11-23-coordinator-advisor PR C, D-8971): one pass at a time, at the usage
+  // lane's cadence by reference. It reads advised coordinators' transcripts forward and records their calls; a thrown pass is caught here.
+  {
+    name: 'advisorCount', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the advisor count lane failed',
+    derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'a daily cap needs the count within minutes, and the launch-profile lane that reads it runs at this cadence' },
   },
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.

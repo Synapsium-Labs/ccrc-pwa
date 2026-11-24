@@ -66,6 +66,8 @@ const IMPORTS = [
   "import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+  // The coordinator advisor (D-8967): type-only, from `shared/coordinatorAdvisor.ts`, whose one import is a value of this file.
+  "import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';",
   // The cap in force (D-8920): type-only, from `shared/runCap.ts`, whose own imports are L0.
   "import type { CoordCapNow } from './runCap.js';",
   "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",

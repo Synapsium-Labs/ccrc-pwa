@@ -53,7 +53,7 @@ async function pass(answer: MeasuredStat | 'throw' | null, plant = false): Promi
   const w = new FleetWatcher({ ...base, cfg, coord, io } as never, new Bus(), 10_000);
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
-    await w.sweepLaunchProfile([{ id: ID, child: { kind: 'none' }, route: null } as never]);
+    await w.sweepLaunchProfile([{ id: ID, child: { kind: 'none' }, route: null, wrapper: 'lane-a', unmeasured: [] } as never]);
     const line = warn.mock.calls.flat().map(String).find((l) => l.startsWith('ccrc-server: launch-profile')) ?? '';
     return { asked, line, ccrcDir: cfg.ccrcDir };
   } finally {

@@ -268,6 +268,9 @@ export interface AutoRollInput {
   /** D-8955: this row's `entry-pending` episode as the roll's passes saw it (`entryPendingEpisodesOf`), or null when no
    *  read names it so. */
   readonly entryPending: EntryPendingEpisode | null;
+  /** The coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8970): the route's `advisor` differs from what the
+   *  running pane's spawn applied (`advisorStaleOf`, measured only), so a restart drops or adds it. The reason `advisor-stale`. */
+  readonly advisorStale?: boolean;
   /** `$REG/<id>.no-roll` and `$REG/<id>.no-hibernate`. Only `.no-roll` opts out of the roll (D-7458): the act,
    *  `ccd hibernate --roll`, refuses `.no-roll` and not `.no-hibernate`. `.no-hibernate` says only that hibernation
    *  will never take the session, so `hibernation-due` never holds it. */
@@ -285,7 +288,7 @@ export type AutoRollVerdict =
   /** `model`: present when the session is behind its class's model, the class and the target it is rolled for.
    *  `entryPending`: present when its entry identity stayed pending (D-8955). */
   | { readonly act: 'roll'; readonly idleMs: number; readonly model?: { readonly class: ModelClass; readonly from: string; readonly to: string };
-      readonly entryPending?: true }
+      readonly entryPending?: true; readonly advisor?: true }
   | { readonly act: 'measure' }
   /** Behind on nothing it has read, every other gate passed, and its lane's models not read yet: read them, then ask again. */
   | { readonly act: typeof READ_MODELS }
@@ -320,7 +323,8 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   const buildBehind = i.build.kind === 'behind' && i.build.reach !== null && i.rolledFor !== i.build.reach;
   const modelBehind = i.model.kind === 'behind' && i.rolledModelFor !== i.model.to;
   const pending = entryPendingStuck(i.entryPending, i.startedAt, i.now);
-  const behind = startedBeforeRelease(i.startedAt, i.release) || buildBehind || modelBehind || pending;
+  const advisorStale = i.advisorStale === true;
+  const behind = startedBeforeRelease(i.startedAt, i.release) || buildBehind || modelBehind || pending || advisorStale;
   // Behind on nothing read, but maybe on its model: every gate below holds it as current, never as a skip, since it may
   // not be behind at all; past them all, the lane's models are read.
   const maybe = !behind && i.model.kind === 'unread';
@@ -339,7 +343,7 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   }
   if (i.statusUpdatedAt === null || i.now - i.statusUpdatedAt < ROLL_COMPACT_QUIET_MS) return skip({ act: 'skip', reason: 'compacting' });
   if (maybe) return { act: READ_MODELS };
-  const why = pending ? { entryPending: true as const } : {};
+  const why = { ...(pending ? { entryPending: true as const } : {}), ...(advisorStale ? { advisor: true as const } : {}) };
   if (modelBehind && i.model.kind === 'behind') {
     return { act: 'roll', idleMs: gate.idleMs, model: { class: i.model.class, from: i.model.from, to: i.model.to }, ...why };
   }

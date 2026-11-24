@@ -475,6 +475,7 @@ _profile_workspace	C2
 _profile_launch_ok	C2
 _profile_refused	C2
 _profile_spawn_compose	C2
+_advisor_spawn_compose	C2
 _compact_text_to	C3
 _ws_tmproot_witness_file	C4
 _ws_tmproot_aside_path	C4
