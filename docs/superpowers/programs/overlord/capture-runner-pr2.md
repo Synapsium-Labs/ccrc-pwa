@@ -11,9 +11,10 @@ records what the ledger should learn; the coordinator folds it into the ledger o
   its own sourced file, `ccd/testbox-build-copy`. On the fleet host it reads the build in Claude Code's versions directory,
   never writing it: the file must exist, be a regular file and not a link, and be at most 1 GiB, and it is hashed. Its bytes
   stream over the lane in one box call, whose program stages them where only root can enter, hashes them, and hands them to
-  a writer that runs as the owner of `captures` (the test service's user), which places them read only at
+  a writer that runs as the test service's user (the owner of the installer-made `results`), which places them read only at
   `<box root>/captures/builds/<version>` (fix rounds 1 and 2, below). Each refusal is its own code (`build-not-on-fleet`, `build-not-regular`, `build-too-large`,
-  `build-hash-mismatch`, `build-store-refused`, `build-copy-failed`), and the stage is removed on every way out. The server's adapter, `server/src/testboxBuildCopy.ts`, runs that one sub through the one admin
+  `build-hash-mismatch`, `build-store-refused`, `build-copy-failed`), and the stage is removed on every exit its shell sees
+  (only a kill during the stream can leave it). The server's adapter, `server/src/testboxBuildCopy.ts`, runs that one sub through the one admin
   lane arm and maps it onto the lane's copy port.
 - **The copy rule, in L1.** `shared/claudeBuildTrust.ts#captureNextAct` names each act of a capture pass: send; copy only
   after a `build-absent` refusal, once a pass; send again; stop. `#captureTryOf` names what the pass records. The lane
@@ -109,7 +110,7 @@ the designated-class test takes `main`'s side, which had made the same change to
 
 ## Fix round 1: the copy's box step hardened
 
-(Fix round 2 below moves the writer's identity from the box root's owner to the owner of `captures`, and moves every check
+(Fix round 2 below moves the writer's identity from the box root's owner to the owner of `results`, and moves every check
 that needs no bytes before the stream. The rest of this section stands.)
 
 The coordinator's ruling (programme call 822) took the build copy's box side out of "as built" and set five properties. The
@@ -220,9 +221,46 @@ the managed-node design's driver runs it.
 | Guarantees | no write under the box root as root but the backfill of an absent `captures`; a box root that is not a real root-owned directory, a `results` that is not a real directory of a non-root owner and group, and a `captures` that is not a real directory of exactly that owner and group, are refused before any byte is read; the stage is a fresh 0700 directory in a parent that is root's or sticky and not under the box root; the hashed bytes are the handed-over bytes; no link or wrong kind in the store is followed or replaced |
 | Assumes | the box root's ancestors are not writable by the service user (the installer's path policy); root's temporary folder on the box is root's or sticky (refused otherwise); the box's `ls` prints owner and group as numbers with `-n`; util-linux's privilege drop takes the flags used; nothing but a kill ends the shell untrapped |
 
-**Tests, measured by mutation.** Every guard of the copy's box programs, the host's words, the adapter's log line and the
-installer's `captures` was removed in turn (applied in place, measured, restored byte for byte). The full table is in
-the section below.
+**Tests, measured by mutation (review F8, F9).** Every guard of the copy's box programs, the host's words, the adapter's
+log line and the installer's `captures` was removed in turn: applied in place, the build-copy cases (or the adapter's, or
+the installer's characterization) run, the file restored byte for byte. 46 mutants, all killed; every row below was
+**run**. The fixture box root is owned by the test's user, so an `ls` stand-in reads it as root's, and reads `results`,
+`captures` or the stage's parent as a case tells it; every hook records that it acted.
+
+| Guard removed | Killed by |
+|---|---|
+| the box root's link check; its kind check; its owner check | a box root that is a link; a box root that is a file; a box root owned by another user |
+| `results`: its link, absence and kind checks | a link at, no, a file at `results` |
+| the owner's non-digit arm; the empty-group arm | an owner that is not a number; an owner with no group (and an empty owner and group) |
+| the owner's uid 0 refusal; its gid 0 refusal | `results` owned by root's uid; by root's group |
+| `captures`: its link and kind checks | a link, a dangling link, a file at `captures` |
+| the backfill; its mode; its owner | captures absent is made 0750, owned as `results` is |
+| `captures` owned by exactly the identity | `captures` owned by another user than `results` |
+| the installer's `captures`, and its mode, against the copy | the layout pin (and, for the first, the installer's characterization) |
+| the trailing slash dropped from the box root | a stage parent under the box root given with a trailing slash |
+| the stage-under-root check | a stage parent under the box root |
+| the stage parent's link and kind check | a stage parent that is a link owned by root, or a file owned by root |
+| the stage parent's root-or-sticky check; its root arm | a parent neither root's nor sticky; a root-owned, not sticky parent is accepted |
+| the exit trap; the hangup and termination trap | a stream that fails after the stage is made; a termination during the stream |
+| the stage's removal before the hash | the stage is gone at the hash and at the hand-over; a change before removal is caught |
+| the hash gate | a hash that differs; a change to the staged file before removal |
+| the close of the first read; of the second | the writer is started holding neither read |
+| the change into the box root | the writer works in the box root |
+| the privilege drop; groups cleared; no inheritable capability; reset environment | the hand-over's exact flags, and every write under the root runs dropped |
+| the writer's link and kind checks at `captures/builds` and at the build's place | a link, a dangling link, a file at `captures/builds`; a link, a dangling link, a directory at the build's place |
+| the writer's removal of its temporary file on failure | the writer removes its temporary file when placing the build fails |
+| the build's mode 0555 | the install case's mode |
+| the host's word for exit 4; for exit 5; the box word's grammar | the host's refusal cases, each with the box's word in the log |
+| the adapter's log line; its code grammar | every typed refusal logs the code once; a code off the grammar logs `unreadable` |
+
+Two of review F8's points were rebuilt rather than tested. awk cannot print an empty owner beside a present group, so the
+empty-owner arm of the owner check was unreachable and is gone; an empty owner and group is caught by the empty-group arm,
+and pinned there. The planted-link and tamper hooks now act just before the stage's path is removed (root's own removal
+step), where a change can still reach the bytes, and each records that it acted.
+
+Limits of these tests (review F12), unchanged here: the P1 case records five stand-in tools, not every write; the macOS
+region pin counts one hit per pattern per line; and the box-program cases skip when run as root and need GNU `stat` and
+`sha256sum`. The installer's characterization runs at a file-creation mask of 022, as CI's checkout does.
 
 **What only a real box shows**, beyond fix round 1's list: that the box root is root's and `results` and `captures` the
 service user's on an installed box (the installer's run-root step makes them, and the characterization test pins the
