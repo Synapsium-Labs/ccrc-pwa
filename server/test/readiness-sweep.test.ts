@@ -16,7 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO, type MeasuredRead } from '../src/io.js';
-import { isSafeProjectSegment } from '../src/coord/ledgerseed.js';
+import { isSafeProjectSegment } from '../src/coord/lineageRead.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 

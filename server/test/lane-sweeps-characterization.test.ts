@@ -1,6 +1,6 @@
-// Characterization (D-5862; ARCH-68 #803; spec K11): the nine lanes outside coordination that `FleetWatcher.tick`
-// throttled on a wall-clock `last*` field and now throttles on the monotonic clock (OA-C4, ruled (a) on #803): the task, usage, PR, name, divergence, lifecycle, readiness and the two
-// ledger sweeps. Each is driven through its own entry (the method `tick` calls) on a fake wall clock, and what a lane
+// Characterization (D-5862; ARCH-68 #803; spec K11): the seven lanes outside coordination that `FleetWatcher.tick`
+// throttled on a wall-clock `last*` field and now throttles on the monotonic clock (OA-C4, ruled (a) on #803): the task, usage, PR, name, divergence, lifecycle and
+// readiness sweeps (the deviation allocator's two ledger sweeps retired with it). Each is driven through its own entry (the method `tick` calls) on a fake wall clock, and what a lane
 // did is read off an effect it cannot do without (a registry listing, a sidecar read, a token read, a mirror sweep, an
 // allocation read). Pinned per lane: the first call runs, a call inside the cadence skips, a wall clock stepped back
 // no longer holds the lane (after, it runs at its cadence) and stepped forward never runs it early; a second call while a pass that never settles is running does not start
@@ -89,14 +89,15 @@ const LANES: Lane[] = [
     return () => sweep.mock.calls.length;
   } },
   { key: 'readiness', cadenceMs: READINESS_SWEEP_MS, run: (r) => call(r, 'sweepReadiness'), watch: (r) => () => r.fileReads.length },
-  { key: 'ledgerFloor', cadenceMs: HOUR, run: (r) => call(r, 'sweepLedgerFloor', [REC]),
-    watch: (r) => () => r.otherListings.filter((p) => p.includes('demo')).length },
-  { key: 'ledgerReconcile', cadenceMs: 900_000, run: (r) => call(r, 'sweepLedgerReconcile'), watch: (r) => {
-    const open = vi.spyOn(r.coord, 'openAllocations');
-    return () => open.mock.calls.length;
-  } },
   { key: 'pr', cadenceMs: 120_000, run: (r) => call(r, 'sweepPr'), watch: (r) => () => r.registryListings.length },
 ];
+
+it('the retired allocator sweeps are gone from the watcher', () => {
+  const proto = FleetWatcher.prototype as unknown as Record<string, unknown>;
+  for (const m of ['sweepLedgerFloor', 'sweepLedgerReconcile', 'ledgerFloorPass', 'ledgerReconcilePass']) {
+    expect(proto[m], m).toBeUndefined();
+  }
+});
 
 describe.each(LANES)('the $key lane (monotonic clock)', (lane) => {
   it('runs on the first call, skips inside its cadence, runs once the cadence has elapsed', async () => {
@@ -136,7 +137,7 @@ describe.each(LANES)('the $key lane (monotonic clock)', (lane) => {
 
 const PASS: Record<string, string> = {
   tasks: 'tasksPass', usage: 'usagePass', names: 'namesPass', divergences: 'divergencesPass',
-  readiness: 'readinessPass', ledgerFloor: 'ledgerFloorPass', ledgerReconcile: 'ledgerReconcilePass', pr: 'prPass',
+  readiness: 'readinessPass', pr: 'prPass',
 };
 type Body = () => Promise<void>;
 /** Make the lane's body `impl` and return a counter of how many times a pass was started. */
@@ -192,31 +193,6 @@ describe('a lane that throws keeps its slot', () => {
     at(NOW + LC_SWEEP_MS);
     await expect(r.w.sweepLifecycle()).rejects.toThrow('journal unreadable');
     expect(calls).toBe(2);
-  });
-
-  it('ledger reconcile: a throw rejects the call, the slot is spent, and the next due call runs', async () => {
-    const r = rig();
-    const open = vi.spyOn(r.coord, 'openAllocations').mockImplementation(() => { throw new Error('db gone'); });
-    at(NOW);
-    await expect(r.w.sweepLedgerReconcile()).rejects.toThrow('db gone');
-    await r.w.sweepLedgerReconcile();
-    expect(open.mock.calls.length, 'a failed sweep did not consume its slot').toBe(1);
-    at(NOW + 900_000);
-    await expect(r.w.sweepLedgerReconcile()).rejects.toThrow('db gone');
-    expect(open.mock.calls.length).toBe(2);
-  });
-
-  it('ledger floor: the slot is spent even with no coordination database', async () => {
-    const home = mkTmp('ccrc-lane-sweeps-');
-    seedRoster(home);
-    const listed: string[] = [];
-    const io: FleetIO = { ...localIO, readdir: async (p: string) => { listed.push(p); return localIO.readdir(p); } };
-    const w = new FleetWatcher({ ...testDeps(home), monotonicMs, io } as never, new Bus(), 10_000);
-    at(NOW);
-    await w.sweepLedgerFloor([REC]);
-    at(NOW + HOUR);
-    await w.sweepLedgerFloor([REC]);
-    expect(listed).toEqual([]);   // no store: the body returns before it reads, on both calls
   });
 });
 

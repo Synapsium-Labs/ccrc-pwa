@@ -470,6 +470,12 @@ export const MIGRATIONS: readonly string[] = [
   // is prose, parsed by nothing; a reissue cost 394 rewritten D-ref lines
   // across 30 files under merge pressure (bb47c9e).
   //
+  // HISTORY NOW: the allocator, its log, its seed and its sweeps retired
+  // (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md).
+  // Nothing writes `ledger_alloc` or `ledger_floor` any more; the tables stay,
+  // and `GET /api/ledger` still reads them. This file's comments on how they
+  // were written describe the retired writer.
+  //
   // TASK 13 (part B, the allocator's store half) AMENDS THIS MIGRATION IN
   // PLACE: `ledger_alloc` gains `runId`/`landedAt`/`landedIn` and takes the
   // L0 row's own field names (`allocatedTo`/`allocatedAt` —

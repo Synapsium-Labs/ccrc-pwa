@@ -5661,10 +5661,10 @@ export const HOLD_REASON_MAX_CHARS = 127;
  * 512 mirrors `LC_REASON_MAX_BYTES` — the closest STRUCTURAL match in the tree:
  * a free-form `--reason` written verbatim and parsed nowhere, refuse-never-
  * truncate. SAME NUMBER, SEPARATE CONSTANT, and deliberately NOT an alias of
- * it, for `LEDGER_TITLE_MAX_BYTES`'s stated reason: tying two seams' caps
+ * it, for `CLAIM_INTENT_MAX_BYTES`'s stated reason: tying two seams' caps
  * together lets a change to one silently rewrite the other's refusal threshold.
- * `WORK_ITEM_TITLE_MAX`/`MAIL_SUBJECT_MAX_BYTES`/`LEDGER_TITLE_MAX_BYTES` are
- * three existing precedents that are all 200 and all deliberately separate.
+ * `WORK_ITEM_TITLE_MAX`/`MAIL_SUBJECT_MAX_BYTES` are existing precedents that
+ * are both 200 and deliberately separate.
  *
  * REFUSE, NEVER TRUNCATE: a shortened hold reason is a silently altered
  * operator statement, recorded as if the operator had written it.
@@ -9899,9 +9899,10 @@ export function compareGenerations(a: string, b: string): number {
  * who holds what, and what number is free" — synchronously, at the moment of
  * asking, not at merge (spec §0). Nothing here decides anything on its own:
  * `peerDeliverable()` (server/src/coord/peers.ts, L1) produces `PeerDeliverable`,
- * `decideClaim()` (claims.ts) produces the conflict set, `decideAllocation()`
- * (ledger.ts) produces the numbers, and the one compare-and-swap lives in
- * coord.db's synchronous `tx()` (D11). L0 owns only the words.
+ * `decideClaim()` (claims.ts) produces the conflict set (the deviation
+ * allocator's `decideAllocation()` retired; numbers are self-assigned), and
+ * the one compare-and-swap lives in coord.db's synchronous `tx()` (D11). L0
+ * owns only the words.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -10184,8 +10185,10 @@ export function isDeviationAllocState(v: unknown): v is DeviationAllocState {
 }
 
 /**
- * One allocated deviation number, as `GET /api/ledger` reports it. The row
- * is AUTHORITATIVE with a flat-file ground truth (D8): appended to
+ * One allocated deviation number, as `GET /api/ledger` reports it. Nothing
+ * writes these rows any more: the deviation allocator retired and numbers are
+ * self-assigned. What follows is how they were written. The row
+ * was AUTHORITATIVE with a flat-file ground truth (D8): appended to
  * `~/.ccrc/ledger-alloc.log` FIRST, committed SECOND, recovered as
  * `MAX(file, db)` — a number is skipped, never reissued. Gaps cost
  * nothing (the ledger is prose, parsed by nothing); a reissue cost 394
@@ -10267,28 +10270,11 @@ export const CLAIM_INTENT_MAX_BYTES = 512;
 export const CLAIM_PATHS_MAX = 32;
 export const CLAIM_PATH_MAX_BYTES = 512;
 
-/** `floor = max(D-<n> found in the docs scan) + this` (D13). NOT
- *  decoration: numbers allocated but not yet written into any plan are
- *  invisible to the scan, and re-issuing one IS the measured failure.
- *  Burning fifty integers costs nothing. */
-export const LEDGER_SEED_GAP = 50;
-
-/** An `'allocated'` row older than this and never landed is REPORTED stale
- *  (derived, never stored — see `DEVIATION_ALLOC_STATES`) and NEVER
- *  reclaimed (D13). */
+/** An `'allocated'` row older than this and never landed reads `stale` on
+ *  `GET /api/ledger` (derived, never stored — see `DEVIATION_ALLOC_STATES`)
+ *  and is NEVER reclaimed (D13). */
 export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
 
-/** `title`'s cap, BYTES — `MAIL_SUBJECT_MAX_BYTES`'s number and its
- *  char-vs-byte care, and a SEPARATE constant for `CLAIM_INTENT_MAX_BYTES`'s
- *  stated reason: tying two seams' caps together lets a change to one
- *  silently rewrite the other's refusal threshold. What earns a one-line
- *  title its own cap is the MULTIPLIER behind it: `LedgerLog.append` writes
- *  one line PER ALLOCATED NUMBER, each carrying the full title, into an
- *  append-only file nothing ever deletes from — so an uncapped title rides
- *  out up to `LEDGER_ALLOC_MAX` times per request (`coord/ledger.ts`).
- *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
- *  in the durable record. */
-export const LEDGER_TITLE_MAX_BYTES = 200;
 
 /** How far above the screen the drawer's history read starts. Stated ONCE,
  *  here, and echoed back to the client in the response — the PWA never names a

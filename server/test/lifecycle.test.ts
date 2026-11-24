@@ -60,7 +60,7 @@ async function makeApp(
      *  explicitly via `unswept: true` for a watcher that has not swept yet. */
     readiness?: FleetReadiness;
     unswept?: boolean;
-    /** F3: the `ledgerFloor` port the route reads per project. */
+    /** The coord stub the projects route reads (`accountPoolEdges`; its `ledgerFloor` is no longer read). */
     coord?: unknown;
     /** D-5240: a session the swap route's turn gate reads `idle` (`swappable`); tmux calls are then not recorded. */
     swapIdle?: boolean;

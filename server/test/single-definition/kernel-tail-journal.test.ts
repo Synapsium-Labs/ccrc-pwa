@@ -31,12 +31,12 @@ describe('the journal kernel: one epoch reader, one floor, one append-then-apply
     expect(appendThenApplyBreaks(), 'a kernel call outside tx(), or one whose write precedes its journal append').toEqual([]);
   });
 
-  it('the two store queries are not over nothing: store.ts parses, opens transactions and calls the kernel five times, one per named writer', () => {
+  it('the two store queries are not over nothing: store.ts parses, opens transactions and calls the kernel four times, one per named writer', () => {
     const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls;
     expect(calls.filter((c) => c.callee === 'tx').length).toBeGreaterThan(4);
-    expect(calls.filter((c) => c.name === 'appendThenApply').map((c) => c.line)).toHaveLength(5);
-    // the five containing methods, by name: a total alone would not say which writer a deleted or duplicated call was
-    expect(appendThenApplyOwners()).toEqual(['CoordStore.allocateDeviations', 'CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
+    expect(calls.filter((c) => c.name === 'appendThenApply').map((c) => c.line)).toHaveLength(4);
+    // the four containing methods, by name: a total alone would not say which writer a deleted or duplicated call was
+    expect(appendThenApplyOwners()).toEqual(['CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
       'CoordStore.writeLandingAuthority']);
   });
 

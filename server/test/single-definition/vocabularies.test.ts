@@ -1117,9 +1117,10 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
 
 // Build 9b fix round — the ledger's stale horizon. `LEDGER_STALE_MS` is an L0
 // constant ("The present tense's numbers", `shared/api.ts`: every one lives
-// THERE and nowhere else) with two readers that must agree: `coord/routes.ts`
+// THERE and nowhere else) with two readers that had to agree: `coord/routes.ts`
 // derives the wire `stale` per row from it, and `watch.ts`'s reconcile sweep
-// reports stale allocations against it. Wave 7 shipped `watch.ts` carrying a
+// reported stale allocations against it (retired with the deviation allocator,
+// so `routes.ts` is its one reader now). Wave 7 shipped `watch.ts` carrying a
 // private `const LEDGER_STALE_MS = 7 * 24 * 3_600_000` beside the import path
 // it already used for other L0 numbers — equal by arithmetic coincidence,
 // spelled differently, with nothing forcing agreement: `UNCHECKED_PR`'s exact
@@ -1135,10 +1136,10 @@ describe('one LEDGER_STALE_MS — the stale horizon has one home', () => {
     expect(holders).toEqual(['shared/api.ts']);
   });
 
-  it('is what both readers import, not re-derive', () => {
-    // Not merely "the copy is gone" — deleting either reader's staleness
-    // logic satisfies that. Each must still reach the shared constant.
-    for (const f of ['server/src/coord/routes.ts', 'server/src/watch.ts']) {
+  it('is what its reader imports, not re-derives', () => {
+    // Not merely "the copy is gone" — deleting the reader's staleness
+    // logic satisfies that. It must still reach the shared constant.
+    for (const f of ['server/src/coord/routes.ts']) {
       const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
       expect(src, f)
         .toMatch(/import\s*\{[^}]*\bLEDGER_STALE_MS\b[^}]*\}\s*from\s*'[^']*shared\/api\.js'/);

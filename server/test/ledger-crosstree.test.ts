@@ -27,8 +27,7 @@
 //      real plan" that stood here was false of at least four fixtures and was
 //      refuted by this file's own nesting paragraph (D-1432).
 import { describe, it, expect } from 'vitest';
-import { crossTreeCollisions, definitionsIn, definitionSubject, LEDGER_ALLOCATOR_ERA, projectEra, selfAssignedCollisions,
-         unallocatedDefinitions } from '../src/coord/ledger.js';
+import { crossTreeCollisions, definitionsIn, definitionSubject, LEDGER_ALLOCATOR_ERA, selfAssignedCollisions } from '../src/coord/ledger.js';
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
 
@@ -387,46 +386,6 @@ describe('crossTreeCollisions — one merge earlier', () => {
       [f('a.md', '- **D-900** — x\n- **D-800** — y')],
       [f('b.md', '- **D-900** — z\n- **D-800** — w')]);
     expect(hits.map((h) => h.n)).toEqual([800, 900]);
-  });
-});
-
-describe('unallocatedDefinitions — a number nobody asked for', () => {
-  const defs = (...pairs: [string, number][]) => pairs.map(([file, n]) => ({ file, n }));
-
-  it('names an allocator-era number defined with no allocation row', () => {
-    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([274, 1065])))
-      .toEqual([{ n: 1066, files: ['a.md'] }]);
-  });
-
-  it('says nothing about a number the allocator issued', () => {
-    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([274, 1066]))).toEqual([]);
-  });
-
-  it('derives the era PER PROJECT from its own first issued number', () => {
-    // The first version hardcoded 211 (this repo's first allocator-era number)
-    // plus a 211..224 bootstrap set, and the sweep applies this to EVERY project
-    // on the box — so the second project to adopt the allocator would have had
-    // most of its own hand-numbered history named as "never allocated". The
-    // allocator already knows each project's answer and it costs one MIN(n).
-    expect(projectEra(new Set([274, 300, 1066]))).toBe(274);
-    expect(projectEra(new Set())).toBeNull();
-    // Below the project's own era: hand-numbered before the allocator existed
-    // for it, so nobody could have asked.
-    expect(unallocatedDefinitions(defs(['a.md', 211], ['a.md', 273]), new Set([274]))).toEqual([]);
-    // At and above it: reportable.
-    expect(unallocatedDefinitions(defs(['a.md', 274], ['a.md', 275]), new Set([274])).map((o) => o.n))
-      .toEqual([275]);
-  });
-
-  it('reports nothing for a project the allocator has never issued for', () => {
-    // No era means no claim. Reporting every definition as an orphan because a
-    // project has not adopted the allocator would be a warning nobody can act on.
-    expect(unallocatedDefinitions(defs(['a.md', 900], ['a.md', 901]), new Set())).toEqual([]);
-  });
-
-  it('collects every file that defines the same unallocated number', () => {
-    expect(unallocatedDefinitions(defs(['b.md', 900], ['a.md', 900]), new Set([274])))
-      .toEqual([{ n: 900, files: ['a.md', 'b.md'] }]);
   });
 });
 

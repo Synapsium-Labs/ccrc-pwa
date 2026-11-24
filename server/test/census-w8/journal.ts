@@ -140,8 +140,8 @@ export function appendThenApplyBreaks(root: string = REPO): AppendThenApplyBreak
   return out;
 }
 
-/** The store methods that call `appendThenApply(`, sorted by name: the journal-first writers. Five in wave 5f
- *  (`allocateDeviations`, `setAccountPools`, `setIntent`, `setCollectLane`, `writeLandingAuthority`). Replay shares the
+/** The store methods that call `appendThenApply(`, sorted by name: the journal-first writers. Five in wave 5f;
+ *  four since the deviation allocator retired (`setAccountPools`, `setIntent`, `setCollectLane`, `writeLandingAuthority`). Replay shares the
  *  landing writer's private SQL apply family and never appends, so it is not one. A tree with no store answers none. */
 export function appendThenApplyOwners(root: string = REPO): string[] {
   const f = storeFacts(root);

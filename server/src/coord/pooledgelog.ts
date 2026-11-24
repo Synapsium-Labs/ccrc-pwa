@@ -31,7 +31,7 @@ import { maxJournalEpoch } from '../journalKernel.js';
  * describes.
  *
  * `~/.ccrc/pool-edges.log` on the SERVER box — beside `coord.db`, same stance as
- * `defaultLedgerLogPath`: local-box housekeeping, never proxied through FleetIO.
+ * the retired deviation allocator's `defaultLedgerLogPath`: local-box housekeeping, never proxied through FleetIO.
  * NDJSON, one line per EPOCH. Synchronous on purpose: `setAccountPools` calls
  * this INSIDE a `tx()`, and `DatabaseSync`'s no-async invariant is the whole
  * correctness argument.
@@ -93,7 +93,7 @@ export class PoolEdgeLog {
    * only if `coord.db` is also known current — the harder fact to establish
    * during exactly the incident this throw fires in.
    *
-   * Regex-only, unlike `ledgerlog.ts`'s two-arm JSON-parse-then-regex reader:
+   * Regex-only, unlike the retired `ledgerlog.ts`'s two-arm JSON-parse-then-regex reader:
    * `maxAllocated` parses first because it must attribute each line to the
    * right PROJECT, and only falls back to the regex for a line that fails to
    * parse. This file has no per-subject filter to get right on a well-formed

@@ -11,7 +11,7 @@ import {
   decideLineage, lineageQualifies, parseEnabled, parseLineage,
   type LineageInput, type LineageRead,
 } from '../src/coord/lineage.js';
-import { readLandingFacts } from '../src/coord/lineageRead.js';
+import { isSafeProjectSegment, readLandingFacts } from '../src/coord/lineageRead.js';
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -703,5 +703,14 @@ describe('lineageQualifies: the predicate the radar measures by', () => {
     ['the same project on a ws/ branch', 'proj-a', 'proj-a', 'ws/alpha', true],
   ] as const)('%s -> %s', (_name, recordProject, runProject, branch, want) => {
     expect(lineageQualifies(recordProject, runProject, branch)).toBe(want);
+  });
+});
+
+describe('isSafeProjectSegment (moved from the retired ledgerseed.ts, unchanged)', () => {
+  it('refuses a name that could walk out of its root, and passes a plain project name (D-1017)', () => {
+    for (const bad of ['..', '../etc', 'a/b', '.', '', 'a\0b', '-lead', ' readiness-probe']) {
+      expect(isSafeProjectSegment(bad), JSON.stringify(bad)).toBe(false);
+    }
+    for (const good of ['demo', 'ccrc-pwa', 'a.b_c-1']) expect(isSafeProjectSegment(good), good).toBe(true);
   });
 });

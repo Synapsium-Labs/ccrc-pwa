@@ -2,7 +2,7 @@
 // GROUND TRUTH — every epoch is appended to ~/.ccrc/pool-edges.log FIRST and
 // committed SECOND; recovery takes MAX(file, db), so an epoch is SKIPPED,
 // NEVER REISSUED. `pool-edges-store.test.ts` covers `PoolEdgeLog` through
-// `CoordStore.setAccountPools`; this file is `ledgerlog.test.ts`'s missing
+// `CoordStore.setAccountPools`; this file was the retired `ledgerlog.test.ts`'s missing
 // twin — `PoolEdgeLog` and `defaultPoolEdgeLogPath` on their own, unwired
 // from any store (F-minor, fix round 1: `defaultPoolEdgeLogPath` was asserted
 // nowhere while its `ledgerlog.ts` sibling is pinned).

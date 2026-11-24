@@ -1,14 +1,13 @@
 // The allocator's door is REMOVED (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md):
 // POST /api/ledger/deviations answers 404. GET /api/ledger (a read of history, and the box-token proof door of
-// ccrc-token-sync) is unchanged. The store's allocation is
-// ledger-race.test.ts's and ledger-store.test.ts's.
+// ccrc-token-sync) is unchanged. Nothing writes the two ledger tables any more (the allocator's store, log, seed
+// and sweeps are gone too), so the fixtures below plant rows the way an old build left them.
 import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { LEDGER_STALE_MS } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { LedgerLog } from '../src/coord/ledgerlog.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -17,9 +16,19 @@ const TOKEN = 'f'.repeat(64);
 const tok = { 'x-ccrc-mail-token': TOKEN };
 
 const openApp = async (over: Partial<Deps> = {}, home: string = mkTmp('ccrc-ledger-')) => {
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+  const coord = new CoordStore(db);
   const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord, ...over });
-  return { app, coord, home };
+  /** A floor row and allocated rows as the retired allocator left them. */
+  const plant = (project: string, floor: number, rows: { n: number; title: string; allocatedTo: string; at: number }[]) => {
+    db.prepare('INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?)')
+      .run(project, floor, 'seeded', Date.now());
+    for (const r of rows) {
+      db.prepare('INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+        "VALUES (?, ?, ?, ?, NULL, ?, 'allocated')").run(project, r.n, r.title, r.allocatedTo, r.at);
+    }
+  };
+  return { app, coord, home, plant };
 };
 
 const ledger = (app: FastifyInstance, qs: string, headers: Record<string, string> = tok) =>
@@ -31,10 +40,7 @@ describe('the ledger routes', () => {
 
   const seeded = async () => {
     const w = await openApp(); app = w.app;
-    w.coord.raiseLedgerFloor('demo', 261, 'seeded', Date.now());
-    w.coord.allocateDeviations({ project: 'demo', count: 2, title: 'block A',
-      allocatedTo: 'demo-coordinator', runId: null, now: Date.now() },
-      new LedgerLog(path.join(w.home, '.ccrc', 'ledger-alloc.log')));
+    w.plant('demo', 261, [261, 262].map((n) => ({ n, title: 'block A', allocatedTo: 'demo-coordinator', at: Date.now() })));
     return w;
   };
 
@@ -71,14 +77,10 @@ describe('the ledger routes', () => {
 
   it('derives stale per row from this read\'s clock — an allocation older than LEDGER_STALE_MS answers true', async () => {
     const w = await openApp(); app = w.app;
-    w.coord.raiseLedgerFloor('demo', 261, 'seeded', Date.now());
-    const log = new LedgerLog(path.join(w.home, '.ccrc', 'ledger-alloc.log'));
-    const old = w.coord.allocateDeviations({ project: 'demo', count: 1, title: 'gone cold',
-      allocatedTo: 'demo-coordinator', runId: null,
-      now: Date.now() - LEDGER_STALE_MS - 60_000 }, log);
-    const fresh = w.coord.allocateDeviations({ project: 'demo', count: 1, title: 'fresh block',
-      allocatedTo: '', runId: null, now: Date.now() }, log);
-    expect(old.ok && fresh.ok).toBe(true);
+    w.plant('demo', 261, [
+      { n: 261, title: 'gone cold', allocatedTo: 'demo-coordinator', at: Date.now() - LEDGER_STALE_MS - 60_000 },
+      { n: 262, title: 'fresh block', allocatedTo: '', at: Date.now() },
+    ]);
 
     const body = (await ledger(app, '?project=demo')).json() as
       { allocations: { n: number; stale: boolean }[] };

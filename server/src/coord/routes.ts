@@ -4344,11 +4344,10 @@ export function registerCoordRoutes(
    * a read with no attribution to check). Per-project, REQUIRED: `ledger_alloc`
    * is `PRIMARY KEY (project, n)` and a floor is meaningless across projects.
    * `floor: null` is "not seeded", a different fact from 0 — no overloaded
-   * value at the seam. On a seeded project the floor answered is the NEXT
-   * FREE number — the seeded floor walked past the issued rows, what the next
-   * POST would mint from this table (the file's half of MAX(file, db) only
-   * diverges after a crash between append and commit, and the next POST
-   * re-measures it regardless). `stale` is DERIVED here, per row, from
+   * value at the seam. On a seeded project the floor answered is the seeded
+   * floor walked past the issued rows. Nothing writes either table any more:
+   * the allocator retired, and this read of its history stays because
+   * `ccrc-token-sync` proves the box token here (D-10001). `stale` is DERIVED here, per row, from
    * `allocatedAt`, `state` and this read's clock (`LEDGER_STALE_MS`) — never
    * stored, `DEVIATION_ALLOC_STATES`'s own D4 argument — so a phone can see
    * it without owning a clock policy.

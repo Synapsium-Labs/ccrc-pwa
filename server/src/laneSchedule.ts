@@ -83,15 +83,9 @@ export const DIVERGENCE_SWEEP_MS = 60_000;
  *  `watch.ts` re-exports it for the suites that import it from there. */
 export const LC_SWEEP_MS = 5_000;
 
-/** D13's two ledger lanes. The floor scan reads every plan and spec of every registry-named project, so it runs
- *  hourly; reconcile reads only the plans of projects with open allocations, every 15 minutes, because `landed` is the
- *  signal a coordinator watches for. */
-export const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
-export const LEDGER_RECONCILE_SWEEP_MS = 900_000;
-
 /** F3's lane. Ten minutes: slower than the divergence census because the answer only changes when someone installs a
- *  skill or edits a token, and faster than the ledger floor's hour because an operator waiting to start a program is
- *  watching this one. EXPORTED so its own suite advances by the real constant; `watch.ts` re-exports it. */
+ *  skill or edits a token, and no slower, because an operator waiting to start a program is watching this one.
+ *  EXPORTED so its own suite advances by the real constant; `watch.ts` re-exports it. */
 export const READINESS_SWEEP_MS = 600_000;
 
 /** The PR lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour against a 5000/hr budget with ~4900 free,
@@ -212,7 +206,7 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
-  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
+  | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
@@ -281,9 +275,7 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'divergences', cadenceMs: DIVERGENCE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'lifecycle', cadenceMs: LC_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'readiness', cadenceMs: READINESS_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
-  { name: 'ledgerReconcile', cadenceMs: LEDGER_RECONCILE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'drift', cadenceMs: DRIFT_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
-  { name: 'ledgerFloor', cadenceMs: LEDGER_FLOOR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'claimRenew', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'claimLapse', cadenceMs: CLAIM_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   {

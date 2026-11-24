@@ -27,7 +27,7 @@ import {
   PEER_ETIQUETTE,
   DEVIATION_ALLOC_STATES, isDeviationAllocState,
   CLAIM_LEASE_MS, CLAIM_HARD_CAP_MS, CLAIM_INTENT_MAX_BYTES,
-  LEDGER_SEED_GAP, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES,
+  LEDGER_STALE_MS, CLAIM_REFUSE_CODES,
   PEER_MAIL_MAX_OUTSTANDING, PEER_MAIL_HOURLY,
   MAIL_REJECT_CODES,
 } from '../../shared/api.js';
@@ -131,13 +131,14 @@ describe('the numbers are the spec numbers, and the lease sits under the cap', (
     expect(CLAIM_INTENT_MAX_BYTES).toBe(512);
   });
 
-  it('ledger: a 50-number seed gap, staleness at 7 days, the title one subject line', () => {
-    expect(LEDGER_SEED_GAP).toBe(50);
+  it('ledger: staleness at 7 days (GET /api/ledger derives it); the retired allocator\'s seed gap, title cap and refusal are gone', async () => {
     expect(LEDGER_STALE_MS).toBe(7 * 24 * 60 * 60_000);
-    // The mail subject's number ON PURPOSE, but a separate constant: the log
-    // repeats the title once per allocated number, so this cap's real bound
-    // is title x LEDGER_ALLOC_MAX per request (fix round, cluster 2).
-    expect(LEDGER_TITLE_MAX_BYTES).toBe(200);
+    // Numbers are self-assigned (docs/superpowers/plans/2026-11-24-deviation-allocator-removal-pr2.md): nothing seeds
+    // a floor, takes a title or refuses `not-seeded` any more.
+    const api: Record<string, unknown> = await import('../../shared/api.js');
+    expect(api.LEDGER_SEED_GAP).toBeUndefined();
+    expect(api.LEDGER_TITLE_MAX_BYTES).toBeUndefined();
+    expect(CLAIM_REFUSE_CODES as readonly string[]).not.toContain('not-seeded');
   });
 
   it('peer mail: 3 outstanding per pair, 12 per sender-hour', () => {
