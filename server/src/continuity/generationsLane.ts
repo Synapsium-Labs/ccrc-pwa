@@ -103,7 +103,8 @@ import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
 import { designatedClassAtMint, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
-import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import type { AttemptAction, DesignationRead, SettleFact } from '../../../shared/overlord-designation.js';
+import { pendingDeadlineOf } from '../coord/overlordDesignation.js';
 import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import {
   actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
@@ -162,6 +163,7 @@ export interface GenerationsDeciders {
   readonly generationStep: typeof generationStep;
   readonly renewalFeed: typeof renewalFeed;
   readonly renewalPermit: typeof renewalPermit;
+  readonly pendingDeadlineOf: typeof pendingDeadlineOf;
 }
 
 export interface GenerationsDeps {
@@ -174,8 +176,8 @@ export interface GenerationsDeps {
   readonly log: (line: string) => void;
   /** The observed-time decider; `observeTime` unless a simulator hands a mutant of it to the same pass. */
   readonly observe?: typeof observeTime;
-  /** The deciders `renewalDue`, `softRenewalMay`, `generationStep`, `renewalFeed` and `renewalPermit`, unless a simulator hands a
-   *  mutant of one. */
+  /** The deciders `renewalDue`, `softRenewalMay`, `generationStep`, `renewalFeed`, `renewalPermit` and (designation B)
+   *  `pendingDeadlineOf`, unless a simulator hands a mutant of one. */
   readonly decide?: Partial<GenerationsDeciders>;
   /** The continuity row's gate (`laneArmGate`), unless a test or the simulator opens it to drive the live walk the renewal
    *  act will arm (review 2006 N1). Nothing in the server passes one, so a gated row is never live here. */
@@ -212,6 +214,9 @@ export interface GenerationsInput {
   /** The roster's organization label of an account (`AccountDef.org`), as the server holds it. Absent: no account is
    *  labelled, so every resume onto another account reads its organization as unknown (account organization §4). */
   readonly orgOf?: OrgOf;
+  /** The deadline sweep's facts (designation B): the designation and what a settle of its pending body would read, gathered by
+   *  the caller through the attempt port before this synchronous pass. Absent: no attempt is decided. */
+  readonly attempt?: { readonly read: DesignationRead; readonly settle: SettleFact };
 }
 
 /** An account's organization label, or null when it has none or is not rostered: unknown, never "same". */
@@ -261,6 +266,8 @@ export interface GenerationsResult {
   readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'designation' | 'card-reads' | 'probes' | 'marks' | 'renew-requests' | null;
   /** A mint that could not be written stopped the batch. */
   readonly stopped: boolean;
+  /** The deadline sweep's one action this pass (designation B), live only; in shadow it is in `recorded` and this is null. */
+  readonly attempt: AttemptAction | null;
 }
 
 const zeroSkips = (): Record<StartSkip, number> => Object.fromEntries(START_SKIPS.map((k) => [k, 0])) as Record<StartSkip, number>;
@@ -268,7 +275,7 @@ const zeroSkips = (): Record<StartSkip, number> => Object.fromEntries(START_SKIP
 /** One pass. Synchronous: it awaits nothing, so its writes are never interleaved with another caller's. */
 export function generationsPass(deps: GenerationsDeps, input: GenerationsInput): GenerationsResult {
   const { coord, clock } = deps;
-  const D: GenerationsDeciders = { renewalDue, softRenewalMay, generationStep, renewalFeed, renewalPermit, ...deps.decide };
+  const D: GenerationsDeciders = { renewalDue, softRenewalMay, generationStep, renewalFeed, renewalPermit, pendingDeadlineOf, ...deps.decide };
   const now = clock.wall();
   const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.gate ?? laneArmGate)(CONTINUITY_LANE)).live;
   const skipped = zeroSkips();
@@ -306,10 +313,23 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
     failures.push({ what, detail, stops });
   };
+  // THE PENDING DEADLINE (designation B, plan Task 7): one decision per pass, before any read below can stop the pass. Live, the
+  // action is the caller's to run through the renewal act's acting side (`runOverlordAttempt`); in shadow it is recorded, with
+  // the session it names, and nothing acts.
+  let attempt: AttemptAction | null = null;
+  if (input.attempt !== undefined) {
+    const a = D.pendingDeadlineOf(input.attempt.read, input.attempt.settle, now);
+    if (a.kind !== 'none' && live) attempt = a;
+    else if (a.kind !== 'none') {
+      const line = `ccrc-server: generations: shadow: the Overlord's attempt would ${a.kind} ${a.kind === 'drain' ? a.ids.join(',') : a.sessionId}`;
+      recorded.push(line);
+      deps.log(line);
+    }
+  }
   const result = (): GenerationsResult => {
     logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds, waits });
     return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, planned,
-      retract, recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
+      retract, recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped, attempt };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
