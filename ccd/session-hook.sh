@@ -4921,6 +4921,22 @@ fi
 # programme wave or the child marker is refused with wave 2's reason, byte for
 # byte), and the bypass reasons name the door as the way for a coordinator.
 #
+# THE CHILD'S WORKSPACE DENY (D-8978, D-8979). A session whose workspace carries the child marker never runs `ccd
+# ws-add`: a workspace a worker makes itself belongs to no run (no `--child`, and no run row names it), so the console
+# lists it as "Not in a programme" and its coordinator never sees it, a scope escape (measured once in 1215 creates on a
+# live fleet). It rides THIS arm's strip, so it reads what the merge question reads: CCD_WSADD_RE (the head grammar, cut
+# where CCD_DOOR_RE is) asked of the stripped text, so a commit message, a PR body, a grep pattern or a heredoc that
+# names `ccd ws-add` passes, as a merge mention does, and a `ccd ws-addx` is another word. The prefilter wakes the strip
+# for `ws-add` only in a child (`wchild`: the marker's existence, a dangling link included, never its contents), so no
+# other session forks for it. The marker asks it, never the hold: a held session without one is not asked. The server's
+# own dispatch (`ws-add --no-rc --child <run>`) is an agent exec through `CcdArgv`, never a session's tool call, so no
+# hook sees it; a top-level session, a coordinator and the operator are never asked. It is one of two layers: the deny
+# file's `Bash(ccd ws-add:*)` (`childDenyRules` in shared/api.ts, and the installer's loop) is the other, at Claude
+# Code's own matcher. AN ACCIDENT GUARD, NOT A WALL: it passes unparsed every form the merge head passes (the list
+# above: `bash -c "…"`, a quoted or variable command word, a quoted verb, `xargs`, `eval`, an unlisted or path-spelled
+# wrapper, a leading redirection), a command over MERGE_PARSE_CAP, a verb split so that `ws-add` is not in the payload
+# (`ws\-add`), a script file and another interpreter.
+#
 # THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
 # in every session, by the same single jq and with the same reason prefix. Once the
 # STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
@@ -5161,6 +5177,9 @@ GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
 # the wrapper prefix, so cutting there leaves the head alone and the door's own command word and verb follow it.
 CCD_DOOR_CUT=$'([^[:space:];&|()]*/)?gh('
 CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-admin-merge([[:space:];&|()<>]|$)'
+# CCD_WSADD_RE (D-8978): the same head grammar with `ccd ws-add`, cut at the same place as CCD_DOOR_RE, so the four never
+# drift. Asked of a child only, by THE CHILD'S WORKSPACE DENY below.
+CCD_WSADD_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+ws-add([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -5233,8 +5252,11 @@ def capped(f): (.tool_input.command // "") as $c
     then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
     else "=" + ($c | vflags) + "\u001f" + f end;
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
+wchild=""
+if [[ -n "$id" ]] && { [[ -e "$REG/$id.child" ]] || [[ -L "$REG/$id.child" ]]; }; then wchild=1; fi
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
-      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
+      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* \
+           || ( -n "$wchild" && "$payload" == *ws-add* ) ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
   mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
@@ -5313,6 +5335,12 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
     if [[ -n "$mreason" ]]; then
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
+  fi
+  # THE CHILD'S WORKSPACE DENY (D-8978), asked after the merge questions and only when they set no deny.
+  if [[ -n "$wchild" && -n "$mcmd" && "$pre_json" != *'"permissionDecision":"deny"'* && "$mcmd" =~ $CCD_WSADD_RE ]]; then
+    wreason="ccrc: this workspace carries the child marker — a dispatched child — and a child never creates a workspace (\`ccd ws-add\`): one it makes belongs to no run, so the console lists it as \"Not in a programme\" and your coordinator never sees it (D-8978)."
+    wreason+=" If your task needs another worktree or a second session, ask your coordinator; for scratch files use \`\$TMPDIR\`."
+    pre_json=$(_hook_deny_json "$wreason") || pre_json=""
   fi
 fi
 

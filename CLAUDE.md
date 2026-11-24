@@ -569,8 +569,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
   files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
   `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
-  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a top-level session that runs it itself.
   `keep-awake` acts on one session's sleep markers, not on coordination state, so the rule does not cover it either.
+- **A dispatched child never runs `ccd ws-add`, in any form** (D-8978). This is a child-only rule, not a SAFETY verb:
+  the operator, a top-level session and the server's dispatch (an agent exec through `CcdArgv`, which no hook sees)
+  still run it. A workspace a worker makes itself belongs to no run, so the console lists it under "Not in a
+  programme" and its coordinator never sees it; a child that needs another tree asks its coordinator. The child deny
+  file (`childDenyRules`, `shared/api.ts`) and the hook's `CCD_WSADD_RE` refuse it, as an accident guard (D-8979),
+  and they cannot tell a fixture `HOME` from the live one, so a child's `HOME=<fixture> ./ccd/ccd ws-add` is refused
+  too: a worker exercises `ws-add` through the test harness (`makeCcdHarness`), whose calls no hook sees.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
