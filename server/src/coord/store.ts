@@ -17,6 +17,8 @@ import * as advisor from './advisorStore.js';
 import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvisor.js';
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
+import * as lifecycle from './programmeLifecycleStore.js';
+import { isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -347,7 +349,9 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds' | 'owns-another-programme'; by: string }
+  // Programme lifecycle W1 (D-8983, D-8993): the programme's decision and its owner refuse the open.
+  | { refused: 'programme-paused' | 'programme-unknown' | 'programme-provisional' | 'not-your-programme'; by?: string }
   | { refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable'; by?: undefined }
   | HoldReasonRefusal;
 
@@ -363,7 +367,8 @@ class OpenRunHoldRefused extends Error {
 /** D-8181: thrown inside `openRun`'s transaction when the plan facts re-checked at the insert no longer hold, so the run
  *  insert rolls back with the programme row and the typed refusal is answered (the `OpenRunHoldRefused` idiom). */
 class OpenRunPlanRefused extends Error {
-  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable') { super(refused); }
+  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable' | 'owns-another-programme',
+    readonly by?: string) { super(refused); }
 }
 
 export type AdvanceResult =
@@ -804,7 +809,10 @@ function busyOf(s: UpdateState): BusyUpdateState | null {
 export type ReclaimProgramResult =
   | { ok: true; program: string; runIds: number[]; from: string }
   | { ok: false; kind: 'unknown-run' }
-  | { ok: false; kind: 'no-claimant' };
+  | { ok: false; kind: 'no-claimant' }
+  /** Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another live real programme, or claims an open run in a
+   *  programme other than this one that it does not own. `by` names it. Nothing was written. */
+  | { ok: false; kind: 'owns-another-programme'; by: string };
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
  *  `setWorkItemState`'s `WHERE` is BUILT from this list and `settleItems`'
@@ -2080,30 +2088,16 @@ export class CoordStore {
     /** D-8181: the plan ticket this work run attaches to, in the same transaction that inserts it (`attachTicketInTx`
      *  re-checks the plan facts). Absent: a review run, or a programme with no plan that does not require one. */
     ticket?: planStore.OpenRunTicket | null;
+    /** The attributed claimant's uuid (D-5298), null or absent for an unattributed open: the incarnation the binding names. */
+    claimedByUuid?: string | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
-        // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
-        // the original query read the absolute first row regardless of whether
-        // it was ever claimed): `reconstruct` inserts every rebuilt run with
-        // `claimedBy` bound to NULL — it has no way to know who will resume the
-        // program — so without this clause the lowest-id row of a reconstructed
-        // program pinned the guard at NULL forever and a second coordinator was
-        // never refused. Skipping the unclaimed rows finds the first row a real
-        // `openRun` actually claimed, which is the one the refusal must read.
-        const existing = this.db.prepare(
-          'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
-        ).get(input.program) as { claimedBy: string | null } | undefined;
-        // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
-        // coordinator is refused AT OPEN TIME, in words, rather than silently
-        // allowed to interleave dispatches with the first one's. What this refusal
-        // no longer means is "forever": `reclaimProgram` below rewrites the column
-        // this reads, for a claimant measured dead. The refusal is still the only
-        // answer to two LIVE coordinators — nothing arbitrates between them — and
-        // that is the non-goal spec:291-292 actually names.
-        if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
-          return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
-        }
+        // Programme lifecycle W1 (D-8985, D-8993; spec §5's dispatch and first-run rows, R11 rule 8): the programme's
+        // decision and its one coordinator decide the open, read from the binding, never from the runs' `claimedBy`. A
+        // run never changes who owns a programme, except the first run of a programme that does not exist yet.
+        const ownership = this.openRunOwnership(input.program, input.claimedBy, input.claimedByUuid ?? null);
+        if (ownership !== null) return ownership;
         // Idempotent retry (fix — review findings 19/32): a run already open,
         // `planned`, and claimed by the SAME coordinator for this exact
         // (program, wave, waveOf) is REUSED rather than duplicated. Without
@@ -2163,10 +2157,15 @@ export class CoordStore {
           }
         }
         const now = Date.now();
-        this.db.prepare(
-          'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(slug) DO NOTHING',
-        ).run(input.program, input.programmeTitle ?? programmeNameFromSlug(input.program), now, 'active', input.homeProject ?? null);
+        // The first run of a new programme (spec §5): minted through the one writer, its claimant bound, and the
+        // claimant's unfiled placeholder, if any, cleared first and filed into it, all in this transaction.
+        if (lifecycle.programmeRowOf(this.db, input.program) === null) {
+          const bound = lifecycle.startOwnedInTx(this.db, { slug: input.program,
+            title: input.programmeTitle ?? programmeNameFromSlug(input.program), homeProject: input.homeProject ?? null,
+            actor: { kind: 'coordinator', id: input.claimedBy }, why: 'first run opened',
+            session: input.claimedBy, uuid: input.claimedByUuid ?? null }, now);
+          if (!bound.ok) throw new OpenRunPlanRefused(bound.kind, bound.by);
+        }
         const insertRun = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2208,7 +2207,9 @@ export class CoordStore {
       });
     } catch (err) {
       if (err instanceof OpenRunHoldRefused) return err.refusal;
-      if (err instanceof OpenRunPlanRefused) return { refused: err.refused };
+      if (err instanceof OpenRunPlanRefused) {
+        return err.refused === 'owns-another-programme' ? { refused: err.refused, by: err.by ?? '' } : { refused: err.refused };
+      }
       throw err;
     }
   }
@@ -2414,7 +2415,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null, toUuid: string | null = null): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -2423,6 +2424,19 @@ export class CoordStore {
       // unclaimed run names no handover to make, and rewriting its siblings off a
       // row that never had a claimant is a reassignment nobody asked for.
       if (run.claimedBy === null) return { ok: false as const, kind: 'no-claimant' as const };
+      // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
+      // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
+      // placeholder does not count: it is withdrawn below, in this transaction. A conflict's party may be given a
+      // programme whose runs it holds (§13), which the `r.program != ?` clause admits.
+      if (to !== null) {
+        const owned = lifecycle.ownedLiveProgrammeOf(this.db, to, toUuid, run.program);
+        if (owned !== null) return { ok: false as const, kind: 'owns-another-programme' as const, by: owned };
+        const foreign = this.db.prepare(
+          `SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.program != ? ` +
+          `AND r.state NOT IN ${TERMINAL_RUN_STATES_SQL} AND (p.coordinator IS NULL OR p.coordinator != ?) ORDER BY r.id LIMIT 1`,
+        ).get(to, run.program, to) as { program: string } | undefined;
+        if (foreign !== undefined) return { ok: false as const, kind: 'owns-another-programme' as const, by: foreign.program };
+      }
       // Read before the write, and excluding rows ALREADY naming `to`: the
       // attribution rows record a CHANGE, so re-running the same reclaim writes
       // none rather than a second identical trail. `ORDER BY id` so `runIds` is
@@ -2483,6 +2497,20 @@ export class CoordStore {
       // reports on corpses the same rewrite just declared displaced. `to` is
       // never in this set: the `claimedBy != ?` selection above excludes it.
       const displaced = [...new Set(moved.map((m) => m.claimedBy))];
+      // Programme lifecycle W1 (D-8985): the binding moves with the claims, in this transaction, through its one writer.
+      // The heir's unfiled placeholder is withdrawn first (its binding cleared), so the partial unique index never fires.
+      const operator = { kind: 'operator' as const, id: 'operator' };
+      const why = to === null ? 'released by the operator' : `handed over from ${run.claimedBy}`;
+      if (to !== null) {
+        const own = lifecycle.programmeOf(this.db, to, toUuid);
+        if (own !== null && own.placeholder === 'unfiled' && own.slug !== run.program) {
+          lifecycle.fileInTx(this.db, own.slug, { kind: 'withdrawn' }, operator, `its coordinator was given ${run.program}`, at);
+        }
+      }
+      if (lifecycle.programmeRowOf(this.db, run.program) !== null) {
+        const bound = lifecycle.bindCoordinatorInTx(this.db, run.program, to === null ? null : { session: to, uuid: toUuid }, operator, why, at);
+        if (!bound.ok) throw new Error(`reclaimProgram: ${bound.kind} ${bound.by} passed the heir rung`);
+      }
       // A release cancels the displaced claimant's kickoffs too — the chair it was told to take is left — and repoints
       // no mail: there is no heir, so role-addressed reports stay on the displaced claimant's box (D-8199).
       if (displaced.length > 0) this.cancelKickoffsTo(displaced);
@@ -3428,12 +3456,8 @@ export class CoordStore {
       // D-8073 (spec §11.7): an operator or sweep close owes its claimant one word, written here so it cannot be lost to a
       // crash and deleted only by the transaction that queues the notice (`untoldPass`).
       if (input.causedBy === 'operator' || input.causedBy === 'sweep') this.writeUntold(input.runId, input.causedBy, input.detail ?? null);
-      // D-51's program-retirement check, run inside the SAME transaction:
-      // the run just closed already reads as terminal to this COUNT, because
-      // the write above is visible to a later read within one `tx()`.
-      if (this.programOpenRunCount(input.program) === 0) {
-        this.setProgramState(input.program, input.finalState === 'failed' ? 'abandoned' : 'done');
-      }
+      // Programme lifecycle W1 (D-8983): D-51's retirement at zero open runs is deleted. A finished last run leaves the
+      // programme stored `active`, which `lifecycleOf` shows as Idle; only a decision ends it (`decideInTx`).
       return finalAdv;
     });
   }
@@ -5544,40 +5568,45 @@ export class CoordStore {
     };
   }
 
-  /**
-   * The writer `programs.state` had none of, outside `openRun`'s hardcoded
-   * `'active'` at first open (fix, found in a later Task 3 review — D-26):
-   * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
-   * `reconstruct`) both only ever touched `title` in their conflict arm (D-8071: now neither writes it), so a
-   * program could never be retired. That silently disarmed
-   * `soleActiveCoordinator()` the moment a SECOND program existed — its
-   * "single active program" guard reads `ambiguous` (`active.length !== 1`)
-   * forever once a prior program's runs finish and nothing ever moves it out
-   * of `active`, which is this build's ordinary steady state, not an edge
-   * case. Mirrors `setWorkItemState`'s shape.
-   *
-   * *Who* calls this and *when* a program should retire was deliberately left
-   * to "whichever task closes the last run of a program" — Task 9's close
-   * route now does (deviation D-51, found in Task 9 review: this writer had
-   * ZERO callers in the tree Task 9 actually shipped, and this very
-   * docstring still said "not yet written" about the task that had, by then,
-   * been written for two commits). It checks `programOpenRunCount` below
-   * immediately after its own final `advance()` succeeds, and calls this
-   * with `'done'` or `'abandoned'` depending on how the closing run itself
-   * ended — see the close route's own comment for the policy and its stated
-   * limitation.
-   */
-  setProgramState(slug: string, state: ProgramState): void {
-    this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
+  /** Can the programme still take a run: its row is present and its decision has not ended it (programme lifecycle W1,
+   *  D-8983: `isEnded(state)`, the one end predicate; D-8558 read `planEnd` because D-51 wrote `done` over a live
+   *  programme, and D-51 is gone). A programme with no row cannot. The refused-close lane asks it before offering "Hand
+   *  to a coordinator". */
+  programmeLive(slug: string): boolean {
+    const r = lifecycle.programmeRowOf(this.db, slug);
+    return r !== null && !isEnded(r.state);
   }
 
-  /** D-8558: can the programme still take a run: its row is present and its plan is not closed (`planEnd` null), the one fact
-   *  that stops a run attaching (`attachTicketInTx`'s `plan-closed`). NOT `programs.state`: the close retires it whenever the
-   *  open-run count reaches 0 (D-51) and `openRun` never sets it back, so a programme whose next wave is open can still read
-   *  `done`. A programme with no row cannot. The refused-close lane asks it before offering "Hand to a coordinator". */
-  programmeLive(slug: string): boolean {
-    const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
-    return r !== undefined && r.planEnd === null;
+  /** The programme lifecycle's reads and the boot re-measure, delegates over `programmeLifecycleStore.ts`. */
+  programmeLifecycleRow(slug: string): lifecycle.ProgrammeLifecycleRow | null { return lifecycle.programmeRowOf(this.db, slug); }
+  programmeOf(session: string, uuid: string | null): { slug: string; placeholder: string | null } | null { return lifecycle.programmeOf(this.db, session, uuid); }
+  /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). */
+  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number): lifecycle.DecideResult { return tx(this.db, () => lifecycle.decideInTx(this.db, input, now)); }
+  remeasureProgrammesAtBoot(now: number): lifecycle.RemeasureReport { return tx(this.db, () => lifecycle.remeasureAtBootInTx(this.db, now)); }
+
+  /**
+   * `openRun`'s ownership rungs (spec §5's dispatch and first-run rows; R11 rules 3, 4, 6 and 8), inside its transaction.
+   * An existing programme takes a run only while it is real (`programme-provisional`), not ended (`plan-closed`, the
+   * existing code), not held (`programme-paused`), readable (`programme-unknown`), and only from its bound coordinator:
+   * another binding refuses `claimed-by-another` naming it, none refuses `not-your-programme` (a free programme is taken
+   * by a pick, a filing or a hand-over, never by a run). A new slug is opened only by a claimant that owns no live real
+   * programme and claims no open run in one it does not own (`owns-another-programme`, naming it), and that owns its
+   * unfiled placeholder or has never been joined (`not-your-programme`: "you own no programme now"). Null admits.
+   */
+  private openRunOwnership(program: string, claimedBy: string, uuid: string | null): OpenRunResult | null {
+    const row = lifecycle.programmeRowOf(this.db, program);
+    if (row !== null) {
+      if (row.placeholder !== null) return { refused: 'programme-provisional' };
+      if (isEnded(row.state)) return { refused: 'plan-closed' };
+      if (row.state === 'paused') return { refused: 'programme-paused' };
+      if (row.state !== 'active') return { refused: 'programme-unknown', by: row.state };
+      if (row.coordinator === null) return { refused: 'not-your-programme' };
+      const sameIncarnation = row.coordinatorUuid === null || uuid === null || row.coordinatorUuid === uuid;
+      if (row.coordinator !== claimedBy || !sameIncarnation) return { refused: 'claimed-by-another', by: row.coordinator };
+      return null;
+    }
+    const may = lifecycle.mayStartProgrammeInTx(this.db, claimedBy, uuid);
+    return may.ok ? null : { refused: may.kind, by: may.by };
   }
   // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
   collisionsSince(since: number): collisions.CollisionsRead { return collisions.collisionsSince(this.db, since); }
@@ -7327,13 +7356,15 @@ export class CoordStore {
    * rule for the same fact.
    */
   soleActiveCoordinator(): string | null {
-    const active = this.db.prepare("SELECT slug FROM programs WHERE state = 'active'")
-      .all() as { slug: string }[];
-    if (active.length !== 1) return null;   // no single active program: ambiguous or absent
-    const row = this.db.prepare(
-      'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
-    ).get(active[0]!.slug) as { claimedBy: string | null } | undefined;
-    return row?.claimedBy ?? null;
+    // Programme lifecycle W1 (D-8985; spec §9 "Mail"): the bound coordinator of the one programme that SHOWS Active
+    // (`lifecycleOf`: stored `active`, an open run, a run ever dispatched), and null when zero or several do. Wave N+1's
+    // `planned` run, opened before wave N closes, keeps the programme Active, so run-less mail still resolves.
+    const stored = this.db.prepare(
+      "SELECT slug, state, placeholder, coordinator FROM programs WHERE state = 'active' AND slug != ?",
+    ).all(LINEAR_SYNC_PROGRAMME) as { slug: string; state: string; placeholder: string | null; coordinator: string | null }[];
+    const active = stored.filter((p) => lifecycleOf(p.state, p.placeholder, lifecycle.runFactsOf(this.db, p.slug)) === 'active');
+    if (active.length !== 1) return null;   // no single active programme: ambiguous or absent
+    return active[0]!.coordinator;
   }
 
   /** One delivery row by id, for the ack route: it must know who a delivery
@@ -8586,11 +8617,10 @@ export class CoordStore {
   }): RunRow[] {
     return tx(this.db, () => {
       const now = Date.now();
-      this.db.prepare(
-        // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0).
-        'INSERT INTO programs (slug, title, createdAt, state, planRequired) VALUES (?, ?, ?, ?, 0) ' +
-        'ON CONFLICT(slug) DO NOTHING',
-      ).run(input.ledger.slug, input.ledger.title, now, 'active');
+      // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0). Minted through the
+      // lifecycle's one writer with no coordinator (spec §3: `reconstruct` has no claimant to bind).
+      lifecycle.mintInTx(this.db, { slug: input.ledger.slug, title: input.ledger.title, state: 'active', planRequired: 0,
+        actor: { kind: 'system', id: 'reconstruct' }, why: 'rebuilt from the ledger' }, now);
 
       const doneWaves = input.ledger.waves.filter((w) => w.handoffCommit !== null);
       const lastDoneWave = doneWaves.length > 0 ? doneWaves[doneWaves.length - 1] : null;
@@ -11883,10 +11913,13 @@ export class CoordStore {
    *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
    *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
    *  a coordinator with a row this box cannot represent is never told "not your programme". */
-  claimsProgramme(sessionId: string, program: string): boolean {
-    const open = this.bindingsOf(sessionId).claimant();
-    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
-    return open.siblings.some((r) => r.program === program);
+  claimsProgramme(sessionId: string, program: string, uuid: string | null = null): boolean {
+    // Programme lifecycle W1 (D-8985, D-8993): the binding, not the open runs, so an Idle programme keeps its owner. The
+    // caller's attributed uuid is compared as the attribution gate compares `claimedByUuid` (D-5298); a migration-seeded
+    // binding's null uuid, or an unattributed caller, compares the id alone. An ended programme has no binding.
+    const row = lifecycle.programmeRowOf(this.db, program);
+    if (row === null || row.coordinator !== sessionId) return false;
+    return row.coordinatorUuid === null || uuid === null || row.coordinatorUuid === uuid;
   }
 }
 

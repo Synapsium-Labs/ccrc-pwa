@@ -613,14 +613,10 @@ export function phaseRefVerdict(move: PlanPhaseRefMoveBody, stored: StoredPlan, 
 
 /** How a programme's plan ends (design §5.4): by the coordinator's explicit `plan close`, or derived. A wave gap or a failed
  *  last run is never an end. */
-export function programmeEnd(f: {
-  planEnd: PlanEndOutcome | null; programState: ProgramState; epics: readonly { state: EpicState }[]; openTickets: number;
-}): PlanEndOutcome | null {
-  if (f.planEnd !== null) return f.planEnd;
-  if (f.programState !== 'done') return null;
-  if (f.epics.length === 0) return null;
-  if (!f.epics.every((e) => e.state === 'done' || e.state === 'dropped')) return null;
-  return f.openTickets === 0 ? 'done' : null;
+export function programmeEnd(f: { programState: string }): PlanEndOutcome | null {
+  // Programme lifecycle W1 (D-8983): the decision, and nothing else. Done syncs as `done`, Abandoned as `abandoned` (never
+  // as completed), a live state as not ended, so a reopen syncs back. D-51's inference of `done` from settled epics is gone.
+  return f.programState === 'done' || f.programState === 'abandoned' ? f.programState : null;
 }
 
 /** THE one definition of a live epic for opening a run: any epic but a dropped one. A `done` epic that lists the wave still

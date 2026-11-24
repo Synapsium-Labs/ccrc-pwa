@@ -1755,7 +1755,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed, ticket: open.ticket });
+      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -2025,6 +2025,9 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another programme; nothing was re-pointed.
+      case 'owns-another-programme':
+        return refuseRun(reply, 'owns-another-programme', { by: r.by });
       // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read and
       // the heir's launch profile could not rule that out (502). `error` words; nothing was re-pointed or measured.
       case 'overlord-not-a-coordinator': case 'unmeasured':

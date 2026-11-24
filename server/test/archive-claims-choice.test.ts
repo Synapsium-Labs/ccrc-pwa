@@ -163,14 +163,17 @@ describe('archive — release', () => {
     expect(typeof b.coord.childReclaimCoordinatorClaims().get(COORDINATOR)).toBe('number');
   });
 
-  it('a new coordinator can open the next wave of a released programme', async () => {
+  // Programme lifecycle W1 (R11 rule 8, D-8993): a release leaves the programme with no coordinator, and a run never takes
+  // a free programme: the next coordinator is given it by a hand-over, a pick or a filing (W2, W4), then opens its wave.
+  it('a released programme is not taken by a run: the next coordinator is refused not-your-programme', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
     idle(b.home);
     coordinates(b.coord, 1);
     await archive(b.app, COORDINATOR, { runs: 'release' });
+    expect(b.coord.programmeLifecycleRow('lifecycle')?.coordinator).toBeNull();
     const next = b.coord.openRun({ program: 'lifecycle', title: 'T', project: 'demo', wave: 2, waveOf: 3, claimedBy: HEIR });
-    expect('id' in next).toBe(true);
+    expect(next).toMatchObject({ refused: 'not-your-programme' });
   });
 });
 
@@ -192,15 +195,20 @@ describe('archive — hand over', () => {
     expect(b.ccd()).toEqual([['ws-archive', '--session', COORDINATOR]]);
   });
 
-  it('moves every programme the session claims, one hand-over each', async () => {
+  // Programme lifecycle W1 (R11 rule 4, D-8993): one heir is given one programme. A session holding runs in two (a
+  // migration conflict, written here as an older build left it) hands the first over, and the second is refused
+  // `owns-another-programme`: each programme goes to its own coordinator.
+  it('hands the first programme the session claims to the heir and refuses the second: one programme per coordinator', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
     seed(b.home, HEIR);
     idle(b.home);
     const [a] = coordinates(b.coord, 1, 'alpha');
-    const [z] = coordinates(b.coord, 1, 'zeta');
-    expect((await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR })).statusCode).toBe(200);
-    expect([claimantOf(b.coord, a!), claimantOf(b.coord, z!)]).toEqual([HEIR, HEIR]);
+    const z = b.coord.openRun({ program: 'zeta', title: 'T', project: 'demo', wave: 1, waveOf: 3, claimedBy: 'other-opener' });
+    if (!('id' in z)) throw new Error('fixture openRun refused');
+    b.coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(COORDINATOR, z.id);
+    expect((await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR })).statusCode).not.toBe(200);
+    expect([claimantOf(b.coord, a!), claimantOf(b.coord, z.id)]).toEqual([HEIR, COORDINATOR]);
   });
 
   it.each([

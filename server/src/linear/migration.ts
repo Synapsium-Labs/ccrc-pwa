@@ -936,7 +936,7 @@ export class LinearMigration {
         // coordinator has since taken over (its first plan write after the map's, which makes `planBy` the coordinator's, D-8802,
         // review 2892 F1) is theirs, and is left as it is.
         if (slug === null || plan.planOf(slug).planBy !== MIGRATION_PLAN_BY) { plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
-        if (plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
+        if (!plan.programmeEnded(slug)) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now(), { kind: 'system', id: MIGRATION_PLAN_BY });
         if (row.linearId !== null) {
           const out = await this.deps.planSync.withFlight(slug ?? `migration:${row.linearId}`, () => this.deps.call({
             pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, op: 'initiativeUpdate', target: row.linearId,

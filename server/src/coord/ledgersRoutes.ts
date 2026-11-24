@@ -675,19 +675,18 @@ const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
  *  run whose close detail keeps the operator's own; the operator's words are not checked for the tracker here. */
 const OPERATOR_PLAN_ABANDONED_WHY = 'Ended by the operator with its last run; the reason is on that run\'s record.';
 
-/** D-8558: the operator ends a programme whose last run its act just closed, through the two writers a programme's end already
- *  has: `programs.state` (the close's own retirement, D-51, which an abandon left `abandoned`) and the plan's close (`closePlan`,
- *  the plan store's one writer), so no run opens under it again. The operator's reason stays on the run's close detail; an
- *  abandoned plan's why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. */
+/** D-8558, programme lifecycle W1 (D-8983): the operator ends a programme whose last run its act just closed, through the
+ *  lifecycle's one writer (`decideInTx`, reached by `CoordStore#decideProgramme`): the decision and its record together, the
+ *  binding released, so no run opens under it again. The operator's reason stays on the run's close detail; an abandoned
+ *  end's recorded why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. The plan port is no
+ *  longer needed for it: the end is the programme's own decision, not the plan's. */
 function endProgrammeByOperator(
-  coord: CoordStore, plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
+  coord: CoordStore, _plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
 ): boolean {
   if (coord.programOpenRunCount(program) !== 0) return false;
-  coord.setProgramState(program, outcome);
-  // Without the plan port (a test, a script) the plan routes answer `unavailable`, and there is no plan here to close either.
-  if (plan !== undefined && plan.planEndOf(program) === null) {
-    plan.closePlan(program, outcome, outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null, now);
-  }
+  coord.decideProgramme({ slug: program, to: outcome, edge: 'ended', actor: { kind: 'operator', id: 'operator' },
+    why: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : 'ended by the operator with its last run',
+    planEndWhy: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null }, now);
   return true;
 }
 

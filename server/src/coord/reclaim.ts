@@ -276,6 +276,9 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
   // the NEW claimant is a live worker of another run (spec §12)
   | { ok: false; kind: 'heir-is-a-worker'; by: string }
+  // Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another live real programme (or claims an open run in
+  // one it does not own), measured inside `reclaimProgram`'s transaction; `by` names it.
+  | { ok: false; kind: 'owns-another-programme'; by: string }
   // Overlord W1 other lanes (C48): the heir is the Overlord's body, or the designation could not be read and the heir's
   // launch profile could not rule that out. `error` words through `refuseRoute`, not `ReclaimRefuseCode`s.
   | { ok: false; kind: 'overlord-not-a-coordinator' | 'unmeasured'; detail: string }

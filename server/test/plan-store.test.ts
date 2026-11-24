@@ -96,7 +96,9 @@ describe('migration 59', () => {
   });
 
   it('one real active programme plus linear-sync: soleActiveCoordinator still answers its claimant', () => {
-    openWork();
+    const r = openWork();
+    // Programme lifecycle W1 (D-8984): Active needs a dispatched run; the reserved row is never a programme.
+    expect(store.advance(r.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(store.soleActiveCoordinator()).toBe('coord-a');
   });
 

@@ -28,7 +28,7 @@ export interface CharWorld { app: FastifyInstance; coord: CoordStore; plan: Plan
 export async function charWorld(others: readonly string[] = [], opts: { landing?: boolean } = {}): Promise<CharWorld> {
   const home = mkTmp('ccrc-plan-phases-');
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  for (const id of [CHAR_COORD, ...others]) {
+  for (const id of [CHAR_COORD, CHAR_COORD_B, ...others]) {
     for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'project-a', workdir: `/w/${id}`, uuid: `u-${id}`,
       started: '1', workspace: id, branch: `ws/${id}`, base: 'origin/main' })) {
       writeFileSync(path.join(home, '.cc-sessions', `${id}.${k}`), v);
@@ -41,8 +41,10 @@ export async function charWorld(others: readonly string[] = [], opts: { landing?
   return { app, coord, plan };
 }
 
-export const planVerb = (w: CharWorld, slug: string, sub: string, body: unknown) =>
-  w.app.inject({ method: 'POST', url: `/api/programmes/${slug}/plan${sub}?byId=${CHAR_COORD}&byUuid=u-${CHAR_COORD}`, headers, payload: body as never });
+/** Programme lifecycle W1 (R11, D-8993): one coordinator per programme, so prog-b has its own (`CHAR_COORD_B`). */
+export const CHAR_COORD_B = `${CHAR_COORD}-b`;
+export const planVerb = (w: CharWorld, slug: string, sub: string, body: unknown, by: string = CHAR_COORD) =>
+  w.app.inject({ method: 'POST', url: `/api/programmes/${slug}/plan${sub}?byId=${by}&byUuid=u-${by}`, headers, payload: body as never });
 export const openRun = (w: CharWorld, body: Record<string, unknown>) =>
   w.app.inject({ method: 'POST', url: '/api/runs', headers, payload: { claimedByUuid: `u-${CHAR_COORD}`, claimedBy: CHAR_COORD, ...body } });
 
@@ -84,7 +86,10 @@ export async function buildCharacterizationPlans(w: CharWorld): Promise<void> {
   if (!w.coord.advance(runId(a2), 'dispatched', 'test').ok) throw new Error('a2 dispatched');
   ok(await openRun(w, { ...base, program: 'prog-a', wave: 3 }), 'open a3');
   ok(await planVerb(w, 'prog-a', '/tickets/move', { ticket: 'w4-t4', drop: { why: 'not needed' } }), 'drop w4-t4');
-  const b1 = await openRun(w, { ...base, program: 'prog-b', wave: 1, waveOf: 2, ticket: 'only-t1' });
+  // prog-b's plan was put by CHAR_COORD, who owns prog-a, so it was minted with no coordinator; its own is bound here, as a
+  // hand-over (W2) would bind it, before its first run.
+  w.coord.db.prepare('UPDATE programs SET coordinator = ? WHERE slug = ?').run(CHAR_COORD_B, 'prog-b');
+  const b1 = await openRun(w, { ...base, program: 'prog-b', wave: 1, waveOf: 2, ticket: 'only-t1', claimedBy: CHAR_COORD_B, claimedByUuid: `u-${CHAR_COORD_B}` });
   ok(b1, 'open b1');
   for (const to of ['dispatched', 'failed'] as const) {
     if (!w.coord.advance(runId(b1), to, 'test').ok) throw new Error(`b1 ${to}`);

@@ -19,6 +19,8 @@ import {
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
 import { tx } from './tx.js';
+import * as lifecycle from './programmeLifecycleStore.js';
+import { isEnded } from '../../../shared/programmeLifecycle.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -350,10 +352,20 @@ function applyPlanChangesInTx(
   db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string; state?: 'paused' } | null,
 ): void {
   {
-    if (newRow !== null) {
-      db.prepare(
-        "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(slug) DO NOTHING",
-      ).run(program, newRow.title, now, newRow.state ?? 'active', newRow.home);
+    // Programme lifecycle W1 (D-8983, D-8985): a new row through the lifecycle's one writer. A backlog programme the Linear
+    // map proposes is minted `paused` by the system (a hold the operator or the Overlord resumes); a coordinator's put on a
+    // new slug starts a programme it owns when `mayStartProgrammeInTx` admits it (as the first run would), else unbound.
+    if (newRow !== null && lifecycle.programmeRowOf(db, program) === null) {
+      if (newRow.state === 'paused') {
+        lifecycle.mintInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, state: 'paused', planRequired: 1,
+          actor: { kind: 'system', id: by }, why: 'backlog' }, now);
+      } else if (lifecycle.mayStartProgrammeInTx(db, by, null).ok) {
+        lifecycle.startOwnedInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, planRequired: 1,
+          actor: { kind: 'coordinator', id: by }, why: 'plan put on a new programme', session: by, uuid: null }, now);
+      } else {
+        lifecycle.mintInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, state: 'active', planRequired: 1,
+          actor: { kind: 'coordinator', id: by }, why: 'plan put on a new programme' }, now);
+      }
     }
     const touched = new Set<number>();
     const touchEpic = (id: number | null): void => { if (id !== null) touched.add(id); };
@@ -470,12 +482,24 @@ export function writePhaseRef(db: DatabaseSync, w: PhaseRefWrite, now: number): 
   });
 }
 
-export function closePlan(db: DatabaseSync, program: string, outcome: PlanEndOutcome, why: string | null, now: number): void {
+/** Programme lifecycle W1 (D-8983): an end, through the lifecycle's one writer (`decideInTx`), never a write of its own:
+ *  the decision (`state`) and its record (`planEnd`, `planEndWhy`, `planEndAt`) together, the binding released, the sync
+ *  due. `actor` is who decided (the coordinator's plan close, the operator's end, the Linear put-back). */
+export function closePlan(
+  db: DatabaseSync, program: string, outcome: PlanEndOutcome, why: string | null, now: number,
+  actor: lifecycle.ProgrammeActor = { kind: 'system', id: 'unmeasured' },
+): void {
   tx(db, () => {
-    db.prepare('UPDATE programs SET planEnd = ?, planEndWhy = ?, planEndAt = ? WHERE slug = ? AND planEnd IS NULL')
-      .run(outcome, why, now, program);
-    markSyncDueInTx(db, program, now);
+    // The first end stands, as `closePlan`'s `planEnd IS NULL` guard made it: a second close of an ended programme writes nothing.
+    if (programmeEnded(db, program)) return;
+    lifecycle.decideInTx(db, { slug: program, to: outcome, edge: 'ended', actor, why: why ?? 'the plan was closed', planEndWhy: why }, now);
   });
+}
+
+/** The one end predicate over the stored decision (D-8983): `isEnded(state)`. A programme with no row has not ended. */
+export function programmeEnded(db: DatabaseSync, program: string): boolean {
+  const r = lifecycle.programmeRowOf(db, program);
+  return r !== null && isEnded(r.state);
 }
 
 /** THE writer of `plan ticket-done` (programme work map WM1, D-8727): an `open` ticket no run holds is set `done` with its
@@ -517,7 +541,7 @@ export function attachTicketInTx(
   const run = db.prepare('SELECT program, wave, ticketId FROM runs WHERE id = ?').get(runId) as { program: string; wave: number; ticketId: number | null } | undefined;
   if (run === undefined) return { ok: false, refused: 'wave-epic-mismatch' };
   if (run.ticketId !== null) return { ok: true };
-  if (planEndOf(db, run.program) !== null) return { ok: false, refused: 'plan-closed' };
+  if (programmeEnded(db, run.program)) return { ok: false, refused: 'plan-closed' };
   const epic = epicById(db, ticket.epicId);
   if (epic === null || epic.program !== run.program || !epicAdmitsRun(epic.state)) {
     return { ok: false, refused: 'wave-epic-mismatch' };
@@ -1361,7 +1385,7 @@ export function setAsideAdopted(db: DatabaseSync, a: { moveId: number; ticketId:
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
-  planOf, phasesOf, writePhaseRef, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
+  planOf, phasesOf, writePhaseRef, planEndOf, programmeEnded, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   doneFactsOf, ticketOfRun, markTicketDone,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,

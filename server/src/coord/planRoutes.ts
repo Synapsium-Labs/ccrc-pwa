@@ -487,7 +487,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator writes its plan' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     const home = storedHome ?? parsed.put.home;
     if (home === undefined) return { refuse: 'plan-bad-body', detail: 'the programme has no home project' };
     const texts: [string, string | undefined][] = [[home, parsed.put.title]];
@@ -550,7 +550,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const follow = ticket.kind === 'follow-up';
     const verdict = planCallerVerdict(caller, owner, follow ? 'follow-up' : 'programme', opts.runOfSession(caller), { program: slug, epicId: epic.id });
     if (!verdict.ok) return { refuse: verdict.word, detail: 'a worker files a follow-up into its own epic only' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     if (ticketOf(stored, ticket.key) !== undefined) return { refuse: 'plan-bad-body', detail: `ticket ${ticket.key} is already in the plan` };
     if (ticket.checkpoint !== undefined && !epic.checkpoints.some((c) => c.key === ticket.checkpoint)) {
       return { refuse: 'unknown-checkpoint', detail: `no checkpoint ${ticket.checkpoint} in epic ${epicKey}` };
@@ -580,7 +580,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator moves a ticket' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     const m = parsed.move;
     const found = ticketOf(stored, m.ticket);
     if (found === undefined) return { refuse: 'unknown-ticket', detail: `no ticket ${m.ticket}` };
@@ -625,7 +625,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator records a ticket done' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     const { ticket: key, evidence } = parsed.done;
     const found = ticketOf(stored, key);
     if (found === undefined) return { refuse: 'unknown-ticket', detail: `no ticket ${key}` };
@@ -664,7 +664,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator drops an epic' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     const epic = stored.epics.find((e) => e.key === parsed.drop.epic);
     if (epic === undefined) return { refuse: 'unknown-epic', detail: `no epic ${parsed.drop.epic}` };
     if (epic.state !== 'dropped') {
@@ -687,7 +687,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator changes its phases' };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
     const v = phaseRefVerdict(parsed.move, stored, plan.phasesOf(slug));
     if (!v.ok) return { refuse: v.word, detail: v.detail };
     if (v.write.kind !== 'none') plan.writePhaseRef(v.write, opts.now());
@@ -704,7 +704,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const verdict = ownerVerdict(caller, owner);
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator closes its plan' };
     if (!coord.programs().some((p) => p.slug === slug)) return { refuse: 'plan-bad-body', detail: `no programme ${slug}` };
-    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was already closed' };
+    if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has already ended' };
     if (coord.programOpenRunCount(slug) > 0) return { refuse: 'plan-runs-open', detail: 'a run of this programme is not finished' };
     const home = coord.programHome(slug);
     // (a plan with no epics and no tickets has no Linear target, so an empty list here checks nothing, by design)
@@ -713,7 +713,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const closeProjects = home === null ? [...new Set(plan.planOf(slug).epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))] : [home];
     const closeUnfit = textRefusal(coord, closeProjects.map((p) => [p, parsed.close.why] as const));
     if (closeUnfit !== null) return closeUnfit;
-    plan.closePlan(slug, parsed.close.outcome, parsed.close.why === undefined ? null : mask(parsed.close.why), opts.now());
+    plan.closePlan(slug, parsed.close.outcome, parsed.close.why === undefined ? null : mask(parsed.close.why), opts.now(),
+      { kind: 'coordinator', id: caller });
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
@@ -787,7 +788,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
         const slug = t.programme!;
         if (slug === LINEAR_SYNC_PROGRAMME) return { reserved: true };
         if (!coord.programs().some((p) => p.slug === slug)) return { refuse: 'plan-bad-body', detail: `no programme ${slug}` };
-        if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+        if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
         const coordinator = plan.planOwnerOf(slug);
         if (coordinator === null) return { refuse: 'plan-bad-body', detail: `the programme ${slug} has no coordinator` };
         if (coordinator === caller) {
@@ -899,7 +900,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
     const ok = (): { ok: true; plan: PlanView } => ({ ok: true, plan: viewOf(plan, coord, slug) });
     if ('epic' in t) {
-      if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+      if (plan.programmeEnded(slug)) return { refuse: 'plan-closed', detail: 'the programme has ended' };
       if (handed !== null) {
         const out = takeInto({ coord, plan, slug, row: handed, epic: t.epic, ...(t.checkpoint === undefined ? {} : { checkpoint: t.checkpoint }), routes });
         return 'refuse' in out ? out : ok();

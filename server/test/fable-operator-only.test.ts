@@ -45,7 +45,7 @@ async function rig() {
   };
   seed(home, CLAIMED_BY);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject);
+  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject, OPEN_BODY.claimedBy);
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, fleetState: FLEET });
   const box = { 'x-ccrc-mail-token': TOKEN };

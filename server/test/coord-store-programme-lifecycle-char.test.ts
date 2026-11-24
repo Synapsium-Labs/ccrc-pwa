@@ -37,26 +37,26 @@ describe('programme lifecycle characterization (main before the lifecycle build)
     expect(stateOf(s, 'programme-a')).toBe('active');
   });
 
-  it('closing the last run retires the programme to done (D-51)', () => {
+  it('closing the last run leaves the programme stored active (FLIPPED (task 5): D-51 retired it to done)', () => {
     const s = store();
     const id = open(s, 'programme-a', 'lane-a-one');
     closeDone(s, id, 'programme-a');
-    expect(stateOf(s, 'programme-a')).toBe('done');
+    expect(stateOf(s, 'programme-a')).toBe('active');
   });
 
-  it('a failed last run retires the programme to abandoned (D-51)', () => {
+  it('a failed last run leaves the programme stored active (FLIPPED (task 5): D-51 retired it to abandoned)', () => {
     const s = store();
     const id = open(s, 'programme-a', 'lane-a-one');
     abandon(s, id, 'programme-a');
-    expect(stateOf(s, 'programme-a')).toBe('abandoned');
+    expect(stateOf(s, 'programme-a')).toBe('active');
   });
 
-  it('programmeLive reads planEnd alone, not the state (D-8558)', () => {
+  it('programmeLive reads the decision: an ended state is not live (FLIPPED (task 6): it read planEnd alone)', () => {
     const s = store();
     open(s, 'programme-a', 'lane-a-one');
     expect(s.programmeLive('programme-a')).toBe(true);
     s.db.prepare("UPDATE programs SET state = 'done' WHERE slug = 'programme-a'").run();
-    expect(s.programmeLive('programme-a')).toBe(true);
+    expect(s.programmeLive('programme-a')).toBe(false);
     expect(s.programmeLive('programme-absent')).toBe(false);
   });
 
@@ -70,12 +70,12 @@ describe('programme lifecycle characterization (main before the lifecycle build)
     expect(s.soleActiveCoordinator()).toBeNull();
   });
 
-  it('claimsProgramme reads open runs: a closed last run loses it', () => {
+  it('claimsProgramme keeps an Idle programme\'s owner (FLIPPED (task 8): it read open runs, so a closed last run lost it)', () => {
     const s = store();
     const id = open(s, 'programme-a', 'lane-a-one');
     expect(s.claimsProgramme('lane-a-one', 'programme-a')).toBe(true);
     closeDone(s, id, 'programme-a');
-    expect(s.claimsProgramme('lane-a-one', 'programme-a')).toBe(false);
+    expect(s.claimsProgramme('lane-a-one', 'programme-a')).toBe(true);
     expect(s.claimsProgramme('lane-a-two', 'programme-a')).toBe(false);
   });
 
@@ -97,10 +97,10 @@ describe('programme lifecycle characterization (main before the lifecycle build)
     expect(claimedByOf(s, 'programme-a')).toEqual([null, null]);
   });
 
-  it('openRun admits one session as claimant in two programmes (the case R11 refuses)', () => {
+  it('openRun refuses one session a second programme (FLIPPED (task 7): main admitted it, the case R11 refuses)', () => {
     const s = store();
     open(s, 'programme-a', 'lane-a-one');
     const second = s.openRun({ program: 'programme-b', title: 'wave 1', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-one' });
-    expect(second).toMatchObject({ state: 'planned', program: 'programme-b' });
+    expect(second).toMatchObject({ refused: 'owns-another-programme', by: 'programme-a' });
   });
 });

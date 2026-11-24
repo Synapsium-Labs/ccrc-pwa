@@ -134,14 +134,10 @@ describe('states', () => {
     expect(epicIsDone([{ state: 'open' }], [])).toBe(false);
     expect(epicIsDone([{ state: 'met' }], [{ state: 'started' }])).toBe(false);
   });
-  it('programmeEnd: state done with a planned epic is live; abandoned with no planEnd is live; planEnd wins', () => {
-    const base = { planEnd: null, programState: 'done' as const, epics: [{ state: 'planned' as const }], openTickets: 0 };
-    expect(programmeEnd(base)).toBeNull();
-    expect(programmeEnd({ ...base, programState: 'abandoned', epics: [{ state: 'done' }] })).toBeNull();
-    expect(programmeEnd({ ...base, epics: [{ state: 'done' }, { state: 'dropped' }] })).toBe('done');
-    expect(programmeEnd({ ...base, epics: [] })).toBeNull();
-    expect(programmeEnd({ ...base, epics: [{ state: 'done' }], openTickets: 1 })).toBeNull();
-    expect(programmeEnd({ ...base, planEnd: 'abandoned' })).toBe('abandoned');
+  it('programmeEnd reads the decision alone (programme lifecycle W1, D-8983): Done is done, Abandoned never syncs as completed', () => {
+    expect(programmeEnd({ programState: 'done' })).toBe('done');
+    expect(programmeEnd({ programState: 'abandoned' })).toBe('abandoned');
+    for (const live of ['active', 'paused', 'unknown', 'archived']) expect(programmeEnd({ programState: live })).toBeNull();
   });
   it('ticketIsHeld: started, or open with a run (a planned run); a done ticket keeps its runId and is not held', () => {
     expect(ticketIsHeld({ state: 'started', runId: 1 })).toBe(true);

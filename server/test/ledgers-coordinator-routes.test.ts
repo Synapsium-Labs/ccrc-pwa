@@ -179,16 +179,16 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     expect(res.json()).toMatchObject({ error: 'not-your-programme' });
   });
 
-  it('an unrepresentable open run claimed by the caller answers 503 run-unreadable, never a bare 500 (review 1328 F3)', async () => {
+  // Programme lifecycle W1 (D-8985): ownership is the binding, one row read whole, so an unrepresentable run of the caller's
+  // no longer reaches the ownership check (review 1328 F3's 503 answered the run series `claimsProgramme` used to read).
+  it('an unrepresentable open run claimed by the caller changes no ownership answer: the raise lands (was 503, review 1328 F3)', async () => {
     const r = await rig();
     r.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
     const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable', detail: expect.stringMatching(/\S/) });
-    expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
-    expect(r.waiting()).toBe(0);
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 1 });
   });
 
   it('a blocking raise pushes once, tagged item-<id> (plan PL3)', async () => {
@@ -423,16 +423,14 @@ describe('the item routes act on the caller\'s own programme\'s items (plan PL3)
     expect(res.statusCode).toBe(400);
   });
 
-  it('an item route answers 503 run-unreadable when the caller\'s run series is unreadable', async () => {
+  it('an item route reads ownership from the binding, so an unreadable run series changes no answer (programme lifecycle W1; was 503)', async () => {
     const r = await rig();
     const id = await raise(r);
     r.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
     const res = await post(r, `/api/items/${id}/withdraw`, as());
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ error: 'run-unreadable' });
-    expect(stateOf(r, id)).toBe('open');
+    expect(res.statusCode).toBe(200);
   });
 
   it('confirm on an open item is refused not-open (409)', async () => {
