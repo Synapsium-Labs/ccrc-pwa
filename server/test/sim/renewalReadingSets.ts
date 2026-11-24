@@ -2,11 +2,11 @@
 // decider's cases are written ONCE here, as suite cases over a module: `continuity-renewal-readings.test.ts` runs them
 // against the real module, and `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
 // A later pull request of the plan adds its mappers' cases and sets here (PR C: the designation's readings, the class a mint
-// stamps, and the probes-failed-twice decider).
+// stamps, and the probes-failed-twice decider; PR B: `notLocalOf`).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS } from '../../../shared/continuity.js';
+import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS, type StartSource } from '../../../shared/continuity.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
 import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
@@ -354,7 +354,103 @@ const PROBES_FAILED_TWICE_SET: MutantSet<RenewalReadingsModule> = {
   suite: probesFailedTwiceCases,
 };
 
+// ---------------------------------------------------------------------------------------------------- notLocalOf (PR B)
+
+type NotLocalIn = Parameters<RenewalReadingsModule['notLocalOf']>[0];
+type TurnRead = NotLocalIn['turn'];
+const START_AT = AT - H;
+const startRead = (source: StartSource): NotLocalIn['start'] => ({ ok: true, row: {
+  id: 7, sessionId: SID, reportId: 'r-7', uuid: '11111111-2222-3333-4444-555555555555', source, model: 'claude-opus-5-5',
+  rowIncarnation: null, reportedAt: START_AT, receivedAt: START_AT,
+} });
+const KEY = { digest: 'a'.repeat(64), keyEpoch: 3 };
+const asked = (answer: Extract<NotLocalIn['ask'], { kind: 'asked' }>['answer']): NotLocalIn['ask'] => ({ kind: 'asked', answer });
+const FOUND = asked({ kind: 'found' });
+const ABSENT = asked({ kind: 'fallback', complete: true });
+const INCOMPLETE = asked({ kind: 'fallback', complete: false });
+const mark = (state: 'working' | 'done' | 'failed', stopAt: number | null): TurnRead => ({
+  ok: true, sessionId: SID, state, event: 'Stop', at: stopAt ?? START_AT, turnAt: null, stopAt, bg: 0, bgKinds: [], bgIds: [], err: null,
+  restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], crons: null, graceUntil: null,
+});
+/** No turn in this generation: the last stop was before its start. */
+const QUIET = mark('done', START_AT - 1);
+const TURNED = mark('done', START_AT + 60_000);
+const NL = (over: Partial<NotLocalIn> = {}): NotLocalIn =>
+  ({ ask: ABSENT, start: startRead('startup'), before: KEY, after: KEY, turn: QUIET, startReportedAt: START_AT, ...over });
+
+export function notLocalCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
+  return {
+    'the start unread, or no row for the start id, reads unmeasured, whatever the transcript says': () => {
+      expect(m.notLocalOf(NL({ start: { ok: false, detail: 'locked' }, ask: FOUND }))).toEqual(unmeasured('start unread: locked'));
+      expect(m.notLocalOf(NL({ start: { ok: true, row: null }, ask: ABSENT, turn: TURNED }))).toEqual(unmeasured('start row absent'));
+    },
+    'an ask that was never made reads unmeasured with its own reason': () => {
+      expect(m.notLocalOf(NL({ ask: { kind: 'unread', why: 'identity unmeasured' }, turn: TURNED }))).toEqual(unmeasured('identity unmeasured'));
+    },
+    'a carrier that could not be read on either side of the ask reads unmeasured `host unmeasured`': () => {
+      expect(m.notLocalOf(NL({ before: 'unmeasured', ask: FOUND }))).toEqual(unmeasured('host unmeasured'));
+      expect(m.notLocalOf(NL({ after: 'unmeasured', start: startRead('resume') }))).toEqual(unmeasured('host unmeasured'));
+    },
+    'a carrier that changed during the read, digest or key epoch, reads unmeasured': () => {
+      expect(m.notLocalOf(NL({ after: { ...KEY, digest: 'b'.repeat(64) }, start: startRead('resume') })))
+        .toEqual(unmeasured('host changed during the read'));
+      expect(m.notLocalOf(NL({ after: { ...KEY, keyEpoch: 4 }, start: startRead('resume') })))
+        .toEqual(unmeasured('host changed during the read'));
+    },
+    'a found transcript is local, for any source and after any turn': () => {
+      for (const source of ['startup', 'resume', 'compact', 'clear', 'other'] as const) {
+        expect(m.notLocalOf(NL({ ask: FOUND, start: startRead(source), turn: TURNED })), source).toEqual(measured(false));
+      }
+    },
+    'a search that could not look everywhere reads unmeasured, never not local, even after a turn': () => {
+      expect(m.notLocalOf(NL({ ask: INCOMPLETE, turn: TURNED }))).toEqual(unmeasured('transcript search incomplete'));
+      expect(m.notLocalOf(NL({ ask: INCOMPLETE, start: startRead('resume') }))).toEqual(unmeasured('transcript search incomplete'));
+    },
+    'a resumed or compacted conversation that is absent is not local at once, before any turn and with no marker': () => {
+      for (const source of ['resume', 'compact'] as const) {
+        expect(m.notLocalOf(NL({ start: startRead(source) })), source).toEqual(measured(true));
+        expect(m.notLocalOf(NL({ start: startRead(source), turn: { ok: false, reason: 'absent' } })), source).toEqual(measured(true));
+      }
+    },
+    'a fresh start that is absent reads its turn marker: unread is unmeasured with the reason': () => {
+      expect(m.notLocalOf(NL({ turn: { ok: false, reason: 'absent' } }))).toEqual(unmeasured('turn marker absent'));
+      expect(m.notLocalOf(NL({ start: startRead('clear'), turn: { ok: false, reason: 'malformed' } }))).toEqual(unmeasured('turn marker malformed'));
+    },
+    'a fresh start that is absent before any turn of its own is still local (nothing written yet)': () => {
+      for (const source of ['startup', 'clear', 'other', 'fork'] as const) {
+        expect(m.notLocalOf(NL({ start: startRead(source) })), source).toEqual(measured(false));
+        expect(m.notLocalOf(NL({ start: startRead(source), turn: mark('done', null) })), source).toEqual(measured(false));
+      }
+    },
+    'a fresh start that is absent after a turn of its own is not local; a turn running counts, and a stop at the start is after it': () => {
+      expect(m.notLocalOf(NL({ turn: TURNED }))).toEqual(measured(true));
+      expect(m.notLocalOf(NL({ turn: mark('working', null) }))).toEqual(measured(true));
+      expect(m.notLocalOf(NL({ turn: mark('failed', START_AT) }))).toEqual(measured(true));
+    },
+  };
+}
+
+const NOT_LOCAL_SET: MutantSet<RenewalReadingsModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'L1', old: "if (!a.complete) return unmeasured('transcript search incomplete');", new: "if (!a.complete) return { kind: 'measured', value: true };" },
+    { id: 'L2', old: "if (a.kind === 'found') return { kind: 'measured', value: false };", new: '' },
+    { id: 'L3', old: "  if (!i.turn.ok) return unmeasured(`turn marker ${i.turn.reason}`);\n", new: "  if (!i.turn.ok) return { kind: 'measured', value: true };\n" },
+    { id: 'L4', old: "i.start.row.source === 'resume' || i.start.row.source === 'compact'", new: 'false' },
+    { id: 'L5', old: "i.start.row.source === 'resume' || i.start.row.source === 'compact'", new: 'true' },
+    { id: 'L6', old: ' || i.before.keyEpoch !== i.after.keyEpoch', new: '' },
+    { id: 'L7', old: "if (i.before === 'unmeasured' || i.after === 'unmeasured') return unmeasured('host unmeasured');", new: "if (i.before === 'unmeasured' && i.after === 'unmeasured') return unmeasured('host unmeasured');" },
+    { id: 'L8', old: 'i.turn.stopAt >= i.startReportedAt', new: 'i.turn.stopAt > i.startReportedAt' },
+    { id: 'L9', old: "i.turn.state === 'working' || ", new: '' },
+    { id: 'L10', old: "  if (i.ask.kind === 'unread') return unmeasured(i.ask.why);\n", new: "  if (i.ask.kind === 'unread') return { kind: 'measured', value: false };\n" },
+    { id: 'L12', old: "value: i.turn.state === 'working' || (i.turn.stopAt !== null && i.turn.stopAt >= i.startReportedAt) }", new: 'value: true }' },
+    { id: 'L11', old: "  if (i.start.row === null) return unmeasured('start row absent');\n", new: '  if (i.start.row === null) return { kind: \'measured\', value: false };\n' },
+  ],
+  suite: notLocalCases,
+};
+
 export const RENEWAL_READING_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  'server/src/continuity/renewalReadings.ts#notLocalOf': NOT_LOCAL_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#fittedCeilingOf': FITTED_CEILING_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopInstantBefore': BACKSTOP_INSTANT_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopDueOf': BACKSTOP_DUE_SET as MutantSet<never>,

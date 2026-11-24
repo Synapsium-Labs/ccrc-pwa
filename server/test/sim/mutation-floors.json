@@ -244,6 +244,7 @@
   "server/src/continuity/renewalReadings.ts#classChangedOf": 1,
   "server/src/continuity/renewalReadings.ts#designatedClassAtMint": 1,
   "server/src/continuity/renewalReadings.ts#probesFailedTwiceOf": 1,
+  "server/src/continuity/renewalReadings.ts#notLocalOf": 1,
   "server/src/coord/overlordLadder.ts#effectiveRung": 1,
   "server/src/coord/overlordLadder.ts#highestHeldRung": 1,
   "server/src/coord/overlordLadder.ts#rungWordReading": 1,

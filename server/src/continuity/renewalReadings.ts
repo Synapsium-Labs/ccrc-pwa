@@ -9,11 +9,13 @@
 // PR A: `fittedCeilingOf` (the soft ceiling, from the probes' `fittedCeiling`) and the daily backstop
 // (`backstopInstantBefore`, `backstopDueOf`). PR C: the designation's two readings (`termRaisedOf`, `classChangedOf`), the
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
-// (`probesFailedTwiceOf`). The later pull requests of the plan add the other mappers here.
-import type { GenerationState } from '../../../shared/continuity.js';
+// (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session. The
+// later pull requests of the plan add the other mappers here.
+import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { TurnMarkRead } from '../coord/stall.js';
 import type { GenEvent } from './generationMachine.js';
 import { fittedCeiling, type SpotProbe } from './probes.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
@@ -158,4 +160,46 @@ export function probesFailedTwiceOf(i: {
 }): boolean {
   return i.role === 'overlord' && i.column === 'state' && i.from === 'probing' && i.event.kind === 'probes' && !i.event.passed
     && i.view.probeRounds >= 1 && i.next === 'degraded';
+}
+
+/** The isolation word's carrier for this reading (`IsolationReader.wakingHostKey`), declared by the consumer: compared in
+ *  memory, within one call of `notLocalOf`, and never stored, served or logged (isolation question 16). */
+export type Carrier = { readonly digest: string; readonly keyEpoch: number } | 'unmeasured';
+/** The part of the transcript resolver's answer (`TranscriptResolution`) this reading reads, declared by the consumer: the
+ *  resolver's answer satisfies it structurally, and this module imports nothing from `server/src/transcript/resolve.ts`. */
+export type TranscriptAnswer = { readonly kind: 'found' } | { readonly kind: 'fallback'; readonly complete: boolean };
+/** The resolver's answer, or why it was not asked (no registry row, an unmeasured identity, no config dir). */
+export type TranscriptAsk =
+  | { readonly kind: 'asked'; readonly answer: TranscriptAnswer }
+  | { readonly kind: 'unread'; readonly why: string };
+
+/** Table 3.3.11b "The conversation is not local" (hard; Overlord and coordinator, C50): the conversation of the generation's
+ *  own start is absent on the host that runs the session. First match (plan Task 4):
+ *  1. the start unread, or no row for the generation's `startId`: unmeasured (the uuid asked about is the start's);
+ *  2. the ask not made: unmeasured with its reason;
+ *  3. the carrier unmeasured on either side of the ask (`host unmeasured`), or changed between the two reads, digest or key
+ *     epoch (`host changed during the read`): unmeasured, so an answer from another host is never read as this one's;
+ *  4. found, at any rung: local (`false`). `foreign` is never asked, so a copy under another account is never "here";
+ *  5. a search that could not look everywhere (`complete: false`): unmeasured, never absence;
+ *  6. absent after a complete search, and the start `resume` or `compact`: not local (`true`) at once, since the conversation
+ *     existed before this start (fix round 1, F3);
+ *  7. absent and any other source, with the turn marker unread: unmeasured with the marker's reason;
+ *  8. absent and no turn in this generation (not `working`, and the last stop null or before the start): local, since a
+ *     fresh conversation writes nothing before its first turn (question 4);
+ *  9. absent after a turn of its own: not local. */
+export function notLocalOf(i: {
+  readonly ask: TranscriptAsk; readonly start: { readonly ok: true; readonly row: StartRow | null } | { readonly ok: false; readonly detail: string };
+  readonly before: Carrier; readonly after: Carrier; readonly turn: TurnMarkRead; readonly startReportedAt: number;
+}): Reading<boolean> {
+  if (!i.start.ok) return unmeasured(`start unread: ${i.start.detail}`);
+  if (i.start.row === null) return unmeasured('start row absent');
+  if (i.ask.kind === 'unread') return unmeasured(i.ask.why);
+  if (i.before === 'unmeasured' || i.after === 'unmeasured') return unmeasured('host unmeasured');
+  if (i.before.digest !== i.after.digest || i.before.keyEpoch !== i.after.keyEpoch) return unmeasured('host changed during the read');
+  const a = i.ask.answer;
+  if (a.kind === 'found') return { kind: 'measured', value: false };
+  if (!a.complete) return unmeasured('transcript search incomplete');
+  if (i.start.row.source === 'resume' || i.start.row.source === 'compact') return { kind: 'measured', value: true };
+  if (!i.turn.ok) return unmeasured(`turn marker ${i.turn.reason}`);
+  return { kind: 'measured', value: i.turn.state === 'working' || (i.turn.stopAt !== null && i.turn.stopAt >= i.startReportedAt) };
 }
