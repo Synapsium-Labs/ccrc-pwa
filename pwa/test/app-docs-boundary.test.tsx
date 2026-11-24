@@ -71,8 +71,11 @@ describe('a throwing DocsScreen keeps the shell (M4.B1, W5 half)', () => {
   });
 
   it('navigating away from Docs resets it too', { timeout: LAZY_CEILING_MS }, async () => {
-    navigate('/docs/demo?ref=ws/a');
+    // Reached inside the console, so the move away is the console's own boundary resetting, not a Docs tab's tree giving
+    // way to the console's (desktop polish wave 174, fix round 2 A1).
+    navigate('/fleet');
     render(<App />);
+    act(() => { navigate('/docs/demo?ref=ws/a'); });
     expect(screen.getByText(FALLBACK)).toBeInTheDocument();
     act(() => { navigate('/settings'); });
     expect(screen.queryByText(FALLBACK)).toBeNull();

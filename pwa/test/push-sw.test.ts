@@ -740,7 +740,10 @@ describe('push-sw: a tap and the Docs tabs', () => {
 
   it('the worker asks the route table’s own Docs pattern, copied: the two cannot drift apart', () => {
     const docs = ROUTES.find((r) => r.id === 'docs')!;
-    expect(SRC).toContain(`/${docs.pattern.source}/`);
+    // The whole literal, flags included, on the worker's own declaration line (fix round 2, A3).
+    const declared = /^const DOCS_PAGE = (.+);$/m.exec(SRC);
+    expect(declared, 'the worker declares DOCS_PAGE on a line of its own').not.toBeNull();
+    expect(declared![1]).toBe(String(docs.pattern));
   });
 
   it('a page whose path only starts with the letters (/docsearch) is not a Docs tab', async () => {
