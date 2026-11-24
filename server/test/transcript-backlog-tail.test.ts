@@ -98,8 +98,8 @@ const frames = (file: string, offset: number) => {
   return { out, stop: () => t.stop() };
 };
 
-describe('the offset an events frame reports (review 3643 A2, characterised)', () => {
-  it('a frame whose chunk ends inside a held line reports an offset that counts the held bytes', { timeout: 10_000 }, async () => {
+describe('the offset an events frame reports is the end of its last whole line (review 3643 A2)', () => {
+  it('a frame whose chunk ends inside a held line reports the end of the last whole line, not the held bytes', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     const u0 = userLine('u0', 'zero');
     writeFileSync(file, u0);
@@ -110,7 +110,38 @@ describe('the offset an events frame reports (review 3643 A2, characterised)', (
     const held = userLine('held', 'arrives in two parts');
     appendFileSync(file, u1 + held.slice(0, 30));
     await settle(1500);
-    expect(t.out).toEqual([{ uuids: ['u1'], offset: Buffer.byteLength(u0 + u1) + 30 }]);
+    expect(t.out).toEqual([{ uuids: ['u1'], offset: Buffer.byteLength(u0 + u1) }]);
+  });
+
+  /** A client that saw the first tailer's frame reconnects with that frame's offset; the line held across it lands after. */
+  const resumeAcross = async (heldPart: string, rest: string): Promise<string[]> => {
+    const file = tmpFile();
+    const u0 = userLine('u0', 'zero');
+    writeFileSync(file, u0);
+    const first = frames(file, Buffer.byteLength(u0));
+    tailers.push(first);
+    await settle();
+    appendFileSync(file, userLine('u1', 'one') + heldPart);
+    await settle(1500);
+    first.stop();
+    const presented = first.out.at(-1)!.offset;
+    const second = frames(file, presented);
+    tailers.push(second);
+    await settle();
+    appendFileSync(file, rest);
+    await settle(1500);
+    return [...first.out, ...second.out].flatMap((f) => f.uuids);
+  };
+
+  it('a complete-JSON line whose newline had not landed: a resume at the later frame\'s offset shows it once', { timeout: 15_000 }, async () => {
+    const held = userLine('held', 'complete but unterminated');
+    expect(await resumeAcross(held.trimEnd(), `\n${userLine('u2', 'two')}`)).toEqual(['u1', 'held', 'u2']);
+  });
+
+  it('a half-written line: a resume at the later frame\'s offset shows it once, whole', { timeout: 15_000 }, async () => {
+    const held = userLine('held', 'written in two parts');
+    const cut = Math.floor(held.length / 2);
+    expect(await resumeAcross(held.slice(0, cut), held.slice(cut))).toEqual(['u1', 'held']);
   });
 });
 

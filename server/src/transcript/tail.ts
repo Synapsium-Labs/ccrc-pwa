@@ -232,7 +232,9 @@ export class TranscriptTailer extends EventEmitter {
     const helpers = lines.flatMap(helperFactsOf);
     if (helpers.length > 0) this.emit('helpers', helpers);
     const events = lines.flatMap(parseTranscriptLine);
-    if (events.length > 0) this.emit('events', events, this.offset);
+    // The offset a client resumes at is the end of the last whole line, never inside the line held in the carry, so a
+    // resume delivers that line whole (review 3643 A2; the backlog's offset keeps the same rule, wave 171).
+    if (events.length > 0) this.emit('events', events, this.offset - this.carry.byteLength);
   }
 
   private onReset(_size: number): void {
