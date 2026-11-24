@@ -556,3 +556,38 @@
 .login-label {
   font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }
+
+/* ---- A Docs tab: the reader alone (desktop polish wave 174) -------------
+ * At a desk a document opens in a browser tab of its own (`lib/docTab.ts`), and the frame draws the reader alone
+ * (`ShellFrame`'s `alone`): the skip link, this bar with its one link back to the console, and the detail pane. No skin
+ * frame class is on the shell then, so the desk grid below is the whole of its layout: one column the full width, the bar's
+ * row, then the pane, which keeps the desk's own scroll region (`.shell-detail` above). Below 900 a Docs route is the
+ * console's, as before, so nothing here applies there. The bar's ground and edge are the desk header's own
+ * (`.shell-accounts`), so nothing here is a new contrast identity. */
+@media (min-width: 900px) {
+  .app-shell[data-tab='docs'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell[data-tab='docs'] > .shell-tab-bar {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    min-width: 0;
+    padding: var(--sp-1) var(--sp-4);
+    border-bottom: 1px solid var(--edge-subtle);
+    background: var(--bg-surface);
+  }
+  .app-shell[data-tab='docs'] > .shell-detail {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+/* The link back: a text link one tap tall, so a touch laptop reaches it as it reaches every other control. */
+.shell-tab-console {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+}

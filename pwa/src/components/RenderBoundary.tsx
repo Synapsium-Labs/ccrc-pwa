@@ -22,7 +22,7 @@ import { Component } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { ScreenLoadError } from '../lib/lazyScreen';
-import { navigate } from '../lib/router';
+import { followLink } from '../lib/router';
 import { FLEET_PATH } from '../lib/routes';
 import '../styles/shell.css';
 
@@ -100,7 +100,9 @@ export function ScreenFallback({ error, reload = () => location.reload() }: { er
           Reload
         </Button>
       )}
-      <Button variant="primary" onClick={() => navigate(FLEET_PATH)}>
+      {/* `followLink`: in a Docs tab the fleet opens in a new tab, never in this one (the Docs tab rule, desktop polish wave
+          174); in the console it is the in-app move it always was. */}
+      <Button variant="primary" onClick={() => followLink(FLEET_PATH)}>
         Back to the fleet
       </Button>
     </div>

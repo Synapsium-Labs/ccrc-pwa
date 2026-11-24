@@ -7,7 +7,7 @@ import {
   COMMAND_KEY, CommandPalette, KeyHint, RESET_LIST, Sheet, type CommandPaletteOption,
 } from '@ccrc/ui';
 import { useAuthLost } from '../lib/auth';
-import { navigate, useLocation } from '../lib/router';
+import { followLink, useLocation } from '../lib/router';
 import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
 import { setCharacter } from '../lib/character';
@@ -133,7 +133,9 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     path,
     sessions: ordered,
     runs,
-    navigate: (href) => navigate(href),
+    // A command's move follows the Docs tab rule (`followLink`, desktop polish wave 174): at a desk "Go to Docs", a bar's
+    // Docs door and "Open this session's docs" open a Docs tab of their own; every other move is in-app, as before.
+    navigate: (href) => followLink(href),
     setSkin,
     setTheme: (choice) => setTheme(choice),
     setCharacter,
