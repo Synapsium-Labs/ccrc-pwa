@@ -1266,14 +1266,20 @@ export function allowedToolSpellings(home) {
 }
 
 /** The argv of one spawn: the settings argv, the fixed flags, the model, then the tools by mode. Input is never
- *  an argument: it goes on stdin. Pure.
- *  @param {{mode: string, model: string, settingsMode: string, home: string}} spec
+ *  an argument: it goes on stdin. `settings`, when given (quiz pilot stage B, B3: a plugins-off map), is one settings value:
+ *  merged under the mode's own `--settings` value, which wins on a shared key, or passed as `--settings` after the mode's
+ *  flags when the mode has none. Absent, the argv is exactly the mode's. Pure.
+ *  @param {{mode: string, model: string, settingsMode: string, home: string, settings?: object}} spec
  *  @returns {string[]} */
-export function spawnArgv({ mode, model, settingsMode, home }) {
+export function spawnArgv({ mode, model, settingsMode, home, settings }) {
   if (!SPAWN_MODES.includes(mode)) throw new TypeError(`spawnArgv: mode ${JSON.stringify(mode)} is not one of ${SPAWN_MODES.join(', ')}`);
   if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`spawnArgv: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
   if (typeof model !== 'string' || !MODEL_RE.test(model)) throw new TypeError(`spawnArgv: model ${JSON.stringify(model)} is not a model id`);
-  const argv = [...SETTINGS_ARGV[settingsMode], '-p', '--no-session-persistence', '--strict-mcp-config',
+  if (settings !== undefined && !plainObject(settings)) throw new TypeError('spawnArgv: settings is a settings object when given');
+  const head = [...SETTINGS_ARGV[settingsMode]];
+  const at = head.indexOf('--settings');
+  if (settings !== undefined) at < 0 ? head.push('--settings', canonicalJson(settings)) : (head[at + 1] = canonicalJson({ ...settings, ...JSON.parse(head[at + 1]) }));
+  const argv = [...head, '-p', '--no-session-persistence', '--strict-mcp-config',
     '--output-format', 'stream-json', '--verbose', '--max-turns', String(MAX_TURNS), '--model', model];
   if (mode === 'arm' || mode === 'box') argv.push('--tools', 'Bash,Agent', '--allowedTools', ...allowedToolSpellings(home));
   else argv.push('--tools', '');
@@ -1832,13 +1838,14 @@ export async function launchRun(job, opts = {}) {
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
   const { streamPath, partPath, pidPath } = runPaths(out, name);
   const home = runHomeOf(launch);
-  const argv = spawnArgv({ mode, model, settingsMode, home });
+  const argv = spawnArgv({ mode, model, settingsMode, home, settings: job.settings });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
   if (path.dirname(name) !== '.') ensurePlainDir(out, path.dirname(name));   // D-5986: a run subdirectory is a real directory, never a link
   const cwd = makeRunCwd();
   const t0 = Date.now();
   let res;
   try {
+    if (job.stage !== undefined) job.stage.write(cwd);   // quiz pilot stage B, B1: files the run should find, removed with its cwd
     refuseIfStopping();
     res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs });
   } finally {
@@ -1870,6 +1877,7 @@ export async function launchRun(job, opts = {}) {
     // W2-5b1 Task 1 (Q7): both readings the charge took the larger of, beside it.
     usage_result_tokens: facts.resultUsage === null ? null : usageTokens(facts.resultUsage), usage_assistant_tokens: usageTokens(facts.assistantUsage),
     unknown_options: unknownOptions,
+    ...(job.settings === undefined ? {} : { settings: job.settings }), ...(job.stage === undefined ? {} : { staged_sha256: job.stage.sha256 }),
   };
   writePlain(out, `${name}.run.json`, canonicalJson(rec) + '\n');
   return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
@@ -2685,19 +2693,21 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
 
 /** The most entries leftoverShapeOf walks in one call; past it the shape says `truncated`. */
 export const LEFTOVER_SHAPE_MAX_ENTRIES = 1000;
-/** The levels below each leftover root whose entries the shape names (quiz-pilot-checks ruling 3: two levels down). */
-export const LEFTOVER_SHAPE_NAMED_DEPTH = 2;
+/** The levels below each leftover root whose entries the shape names (quiz-pilot-checks ruling 3: two levels down; quiz pilot
+ *  stage B, B4: three, so a file inside the `subagents` folder is named). */
+export const LEFTOVER_SHAPE_NAMED_DEPTH = 3;
 /** The kind word of an lstat, for the shape: dir, file, link or other. */
 const entryKindOf = (st) => (st.isDirectory() ? 'dir' : st.isSymbolicLink() ? 'link' : st.isFile() ? 'file' : 'other');
 /** The shape of what a run left under `projects` (quiz-pilot-checks ruling 3), measured BEFORE anything removes it: each root
  *  (a path relative to `projects`) and every entry up to LEFTOVER_SHAPE_NAMED_DEPTH levels below it, as `{path, kind, size}`
  *  (the lstat size; a link is never followed); whether a directory named `subagents` stands anywhere in the walk; whether any
- *  file named `*.jsonl` (a transcript) does. The walk goes past the named depth only to answer those two, and stops at
+ *  file named `*.jsonl` (a transcript) does; and `files`, the path of every regular file the walk found at any depth (stage B,
+ *  B4's proof asks the sweep about each). The walk goes past the named depth only to answer those three, and stops at
  *  LEFTOVER_SHAPE_MAX_ENTRIES (`truncated`). Names and sizes only: no file is opened. A read failure is recorded as
  *  `unmeasured` (its errno) beside what was read before it, never a throw: the verdict is decided elsewhere and stays as it is.
  *  @param {string} projects  @param {readonly string[]} roots  */
 export function leftoverShapeOf(projects, roots) {
-  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false };
+  const o = { entries: [], subagents_dir: false, transcript_file: false, truncated: false, files: [] };
   let seen = 0;
   const read = (fn) => { try { return fn(); } catch (e) { o.unmeasured ??= String(e?.code ?? 'EUNKNOWN'); return null; } };
   const walk = (rel, depth) => {
@@ -2707,6 +2717,7 @@ export function leftoverShapeOf(projects, roots) {
     seen += 1;
     o.subagents_dir ||= st.isDirectory() && path.basename(rel) === 'subagents';
     o.transcript_file ||= st.isFile() && rel.endsWith('.jsonl');
+    if (st.isFile()) o.files.push(rel);
     if (depth <= LEFTOVER_SHAPE_NAMED_DEPTH) o.entries.push({ path: rel, kind: entryKindOf(st), size: st.size });
     if (st.isDirectory()) for (const n of read(() => readdirSync(path.join(projects, rel)).sort()) ?? []) walk(`${rel}/${n}`, depth + 1);
   };
@@ -7030,7 +7041,8 @@ export function armNodeOf(run, storeId) {
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
 export function armJob(ctx, q, arm, attempt, stdin, move = null) {
   const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
-    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang };
+    recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang,
+    ...(ctx.settings === undefined ? {} : { settings: ctx.settings }), ...(ctx.stage === undefined ? {} : { stage: ctx.stage }) };   // quiz stage B, B1 and B3
   return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
 }
 /** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
@@ -7687,7 +7699,8 @@ export async function openJudge(o) {
       for (let i = 0; i < due.length; i += BATCH_MAX) {
         const batch = due.slice(i, i + BATCH_MAX);
         await preflightNow();   // W2-D56: before every judge batch
-        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang }));
+        const runs = batch.map((j) => ({ launch, mode: 'judge', model, settingsMode, stdin: judgeStdin(rubricId, j.input), out, name: `${dir}/${j.id}-${attempt}`, lang,
+          ...(o.settings === undefined ? {} : { settings: o.settings }) }));   // quiz stage B, B3: the week's plugins-off map
         const done = await runBatch(runs, { gate, claim });
         done.forEach((d, k) => attempts.get(batch[k].id).push(judgeAttemptOf(d)));
       }
@@ -7848,10 +7861,12 @@ export function turnBoundCheckOf(tb) {
   const state = tb.held === true ? 'pass' : tb.held === false ? 'fail' : 'unmeasured';
   return { state, held: tb.held, turns: tb.turns, num_turns: tb.num_turns, subtype: tb.subtype };
 }
-/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it; one whose
- *  check could not be measured (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
+/** W2-D57's persistence check over every step 0b run: one that left a transcript or a project dir fails it, unless its row
+ *  carries a `proof` that passed (quiz pilot stage B, B4: the quiz's caller proves that what was left cannot reach the history
+ *  store; the gate's caller proves nothing, so its rows fail as before); one whose check could not be measured
+ *  (persistenceMeasured's `unmeasured`) leaves it unmeasured. Pure. */
 export function persistenceCheckOf(runs) {
-  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left ? 'fail' : 'pass'))) };
+  return { state: foldStates(runs.map((p) => (p.unmeasured !== undefined ? 'unmeasured' : p.left && p.proof?.passed !== true ? 'fail' : 'pass'))) };
 }
 /** A taught spelling's run (W2-D58), from W2-4's probeFindingOf: admitted when the stream's result event carries
  *  permission_denials (result_seen), the call was made (ran) and no denial names it. A denial fails it; no result event,

@@ -5162,7 +5162,8 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
       // quiz-pilot-checks ruling 3: a measured leftover also carries its shape, names and sizes only.
       persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true, shape: {
         entries: [{ path: projects[0], kind: 'dir', size: expect.any(Number) }, { path: `${projects[0]}/sess-left.jsonl`, kind: 'file', size: expect.any(Number) }],
-        subagents_dir: false, transcript_file: true, truncated: false } },
+        // quiz pilot stage B, B4: the shape also lists every regular file it found
+        subagents_dir: false, transcript_file: true, truncated: false, files: [`${projects[0]}/sess-left.jsonl`] } },
     });
     expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
   });
@@ -24858,11 +24859,13 @@ describe('ruling 3: the leftover\'s shape is recorded, the verdict is unchanged'
     expect([got.shape.subagents_dir, got.shape.transcript_file, got.shape.truncated, got.shape.unmeasured]).toEqual([false, false, false, undefined]);
   });
 
-  it('a subagents folder with a transcript three levels down: the folder named, the transcript found but not named, no content read', () => {
+  it('a subagents folder with a transcript three levels down: the folder named and, since stage B (B4), the transcript too; no content read', () => {
     const l = qpcLeftover({ subagents: true, transcript: true });
     const got = QPC_D.persistenceMeasured(l);
     const slug = QPC_D.projectSlugOf(l.cwd) as string;
-    expect(got.shape.entries.map((e: QpcR) => e.path)).toEqual([slug, `${slug}/${l.sessionId}`, `${slug}/${l.sessionId}/subagents`]);
+    // Changed by stage B, B4 (was: the transcript three levels down found but not named): the shape names one level deeper.
+    expect(got.shape.entries.map((e: QpcR) => e.path)).toEqual([slug, `${slug}/${l.sessionId}`, `${slug}/${l.sessionId}/subagents`, `${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
+    expect(got.shape.files).toEqual([`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`]);
     expect([got.shape.subagents_dir, got.shape.transcript_file]).toEqual([true, true]);
     expect(JSON.stringify(got.shape)).not.toContain('content-never-read');
     expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
@@ -24961,13 +24964,16 @@ describe('stage B characterization of main (e29f704d47): the shared step 0b piec
     expect(QPC_D.persistenceCheckOf([])).toEqual({ state: 'unmeasured' });
   });
 
-  it('the Agent probe\'s leftover with a subagent transcript: today\'s shape names two levels below the project folder, and the file is not named', () => {
+  it('the Agent probe\'s leftover with a subagent transcript: the shape names three levels below the project folder (B4; was two) and lists its files', () => {
     const l = qpcLeftover({ subagents: true, transcript: true });
     const got = QPC_D.persistenceMeasured(l);
     const slug = QPC_D.projectSlugOf(l.cwd) as string;
-    expect(QPC_D.LEFTOVER_SHAPE_NAMED_DEPTH).toBe(2);
-    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'subagents_dir', 'transcript_file', 'truncated']);
-    expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir'], [`${slug}/${l.sessionId}/subagents`, 'dir']]);
+    // Changed by stage B, B4 (was: depth 2, no files key, the subagent file not named): one level deeper, and every file listed.
+    expect(QPC_D.LEFTOVER_SHAPE_NAMED_DEPTH).toBe(3);
+    expect(Object.keys(got.shape).sort()).toEqual(['entries', 'files', 'subagents_dir', 'transcript_file', 'truncated']);
+    expect(got.shape.entries.map((e: QpcR) => [e.path, e.kind])).toEqual([[slug, 'dir'], [`${slug}/${l.sessionId}`, 'dir'], [`${slug}/${l.sessionId}/subagents`, 'dir'],
+      [`${slug}/${l.sessionId}/subagents/agent-a1.jsonl`, 'file']]);
+    // The gate's caller proves nothing, so its rows fail as before: no proof, no pass.
     expect(QPC_D.persistenceCheckOf([got])).toEqual({ state: 'fail' });
   });
 });
