@@ -164,10 +164,11 @@ fi
 # page would; Docs W2 adds that budget and the test that holds the two equal.
 # Overridable for the gh knob's reason above.
 : "${CCRC_DOCTOR_DOCS_TIMEOUT:=20}"
-# The two `ccd caps` words the Docs screen's W5b features need (rich-docs spec A12): per-doc history and the vision and
-# promise sections. One literal, held equal to server/src/ccdargv.ts's DOCS_LOG_CAP and DOCS_SECTIONS_CAP by
-# server/test/docs-parity.test.ts.
-CCRC_DOCTOR_DOCS_CAPS='docs-log-v1 docs-sections-v2'
+# The four `ccd caps` words the Docs screen's features need: per-doc history and the vision and promise sections (W5b,
+# rich-docs spec A12), and reads of files above the show caps and of outside folders (native Docs parity X2 P1 and P2,
+# placed by P2.1 Step 0). One literal, held equal to server/src/ccdargv.ts's DOCS_LOG_CAP, DOCS_SECTIONS_CAP,
+# DOCS_RANGE_CAP and DOCS_FOLDERS_CAP by server/test/docs-parity.test.ts.
+CCRC_DOCTOR_DOCS_CAPS='docs-log-v1 docs-sections-v2 docs-range-v1 docs-folders-v1'
 
 # How long `playwright` watches one browser build (D-8047). A loader failure is
 # immediate and a healthy chromium exits inside a second, so this is only the time a
@@ -7150,7 +7151,7 @@ _check_docs() {
         _dr_ccd_lists "$tok" || missing="$missing $tok"
       done
       if [ -n "$missing" ]; then
-        _dr_warn docs "$line; this ccd does not list$missing, so Docs here has no per-doc history or no vision and promise sections" \
+        _dr_warn docs "$line; this ccd does not list$missing, so Docs here lacks per-doc history, the vision and promise sections, large-file reads or outside folders" \
           "ccrc update"
         return 2
       fi
