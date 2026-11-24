@@ -66,6 +66,7 @@ describe('readBacklog', () => {
     const size = statSync(file).size;
     const io: FleetIO = {
       ...localIO,
+      readFileFromMeasured: async () => ({ ok: false, reason: 'unreadable' }),
       readFileFromBytesMeasured: async () => ({ ok: false, reason: 'unreadable' }),
     };
     // HF1 (review 3067 F5): the tailer starts at the file's size, so the start scan's seam is there too: the scan
@@ -85,6 +86,7 @@ describe('readBacklog', () => {
     const size = statSync(file).size;
     const io: FleetIO = {
       ...localIO,
+      readFileFromMeasured: async () => ({ ok: false, reason: 'absent' }),
       readFileFromBytesMeasured: async () => ({ ok: false, reason: 'absent' }),
     };
     expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: true, measured: true });

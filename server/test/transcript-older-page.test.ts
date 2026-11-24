@@ -14,6 +14,7 @@ import type { PageCursor } from '../src/transcript/continuation.js';
 import type { ChatEvent } from '../../shared/api.js';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
+import { createIo } from '../src/remote/io.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -113,10 +114,55 @@ describe('the backlog binds older pages only to what it measured', () => {
     expect(b.older).toBeUndefined();
   });
 
-  it('no binding when two reads of the window carried different tokens', async () => {
+  it('reads of one window with different tokens are not one file: the window is read once more, and an agreeing re-read answers', async () => {
     const text = Array.from({ length: 400 }, (_, i) => userLine(`u${i}`, 'y'.repeat(1500))).join('');
-    const { io } = memIO(enc.encode(text), (n) => (n === 1 ? A : B));
-    expect((await readBacklog(io, 'f', 50)).older).toBeUndefined();
+    const { io, reads } = memIO(enc.encode(text), (n) => (n === 1 ? B : A));
+    const b = await readBacklog(io, 'f', 50);
+    expect(reads.length).toBe(6);
+    expect(reads.slice(3)).toEqual(reads.slice(0, 3));
+    expect(b.measured).toBe(true);
+    expect(b.events).toHaveLength(50);
+    expect(b.older?.ident).toBe(A);
+  });
+
+  it('different tokens on the window twice: the backlog is unmeasured, nothing of either read is shown, no binding', async () => {
+    const text = Array.from({ length: 400 }, (_, i) => userLine(`u${i}`, 'y'.repeat(1500))).join('');
+    const { io, reads } = memIO(enc.encode(text), (n) => (n % 2 === 1 ? A : B));
+    const b = await readBacklog(io, 'f', 50);
+    expect(reads.length).toBe(6);
+    expect(b).toEqual({ events: [], offset: Buffer.byteLength(text), missing: false, measured: false, scanEnd: Buffer.byteLength(text) });
+  });
+
+  it('the tailer offset of a twice-split window comes from a stat after the split, never from the first file\'s stat', async () => {
+    const text = Array.from({ length: 400 }, (_, i) => userLine(`u${i}`, 'y'.repeat(1500))).join('');
+    const now = enc.encode(text + userLine('later', 'the file as it stands after the split'));
+    let swap = (): void => {};
+    const m = memIO(enc.encode(text), (n) => { if (n === 6) swap(); return n % 2 === 1 ? A : B; });
+    swap = () => { m.state.data = now; };
+    const b = await readBacklog(m.io, 'f', 50);
+    expect(b).toEqual({ events: [], offset: now.length, missing: false, measured: false, scanEnd: now.length });
+  });
+
+  it('a window of four reads costs two sequential round trips, as main\'s one read did: the stat, then the reads together', async () => {
+    const text = Array.from({ length: 700 }, (_, i) => userLine(`u${i}`, 'y'.repeat(1500))).join('');
+    expect(Buffer.byteLength(text)).toBeGreaterThan(3 * 256 * 1024);
+    const { io: base, reads } = memIO(enc.encode(text));
+    /** Each call's depth is one more than the deepest call settled before it was issued; the backlog's cost is the deepest. */
+    let settled = 0;
+    let deepest = 0;
+    const deep = <T>(p: () => Promise<T>): Promise<T> => {
+      const depth = settled + 1;
+      return p().then((v) => { settled = Math.max(settled, depth); deepest = Math.max(deepest, depth); return v; });
+    };
+    const io: FleetIO = {
+      ...base,
+      statMeasured: (...a) => deep(() => base.statMeasured(...a)),
+      readFileFromBytesMeasured: (...a) => deep(() => base.readFileFromBytesMeasured(...a)),
+    };
+    const b = await readBacklog(io, 'f', 50);
+    expect(reads.length).toBe(4);
+    expect(b.older).toBeDefined();
+    expect(deepest).toBe(2);
   });
 
   it('no binding when the window lies wholly inside one record: no record start was read', async () => {
@@ -135,6 +181,71 @@ describe('the backlog binds older pages only to what it measured', () => {
     const locked = memIO(enc.encode(userLine('u1', 'one')));
     locked.state.unreadable = true;
     expect((await readBacklog(locked.io, 'f', 50)).older).toBeUndefined();
+  });
+});
+
+// Review 3643 F1: an agent from before the bounded byte read ignores `maxBytes` and answers decoded text only, which the
+// remote adapter's byte reader reads as `unreadable`. The backlog then reads as main does, and offers no paging.
+describe('an agent that answers decoded text only, through the real remote adapter', () => {
+  /** The remote adapter over a fake agent link: `stat` answers the file's size; `readFrom` answers `{data, size}` from the
+   *  byte offset, whatever `maxBytes` says, as an agent that predates the field does. `fail` makes every `readFrom` fail. */
+  const oldAgent = (text: string, fail?: 'unreadable' | 'absent' | 'gone-before-decoded') => {
+    const buf = Buffer.from(text);
+    const asks: Array<{ op: string; maxBytes?: unknown }> = [];
+    const request = async (req: { op: string; offset?: number; maxBytes?: unknown }): Promise<unknown> => {
+      asks.push({ op: req.op, ...(req.maxBytes !== undefined ? { maxBytes: req.maxBytes } : {}) });
+      if (req.op === 'stat') return { mtimeMs: 1, size: buf.length };
+      if (req.op !== 'readFrom') throw new Error(`unexpected op ${req.op}`);
+      if (fail === 'absent') return { data: null, absent: true };
+      if (fail === 'gone-before-decoded' && req.maxBytes === undefined) return { data: null, absent: true };
+      if (fail === 'unreadable') return { data: null };
+      return { data: buf.subarray(req.offset ?? 0).toString('utf8'), size: buf.length };
+    };
+    return { io: createIo({ state: { agentOps: [] }, request } as never), asks };
+  };
+  /** Main's backlog over decoded text, for comparison: the last `n` events of the whole lines after the partial head. */
+  const mainBacklog = (text: string, n: number): ChatEvent[] => {
+    const buf = Buffer.from(text);
+    const start = Math.max(0, buf.length - 4 * 256 * 1024);
+    let t = buf.subarray(start).toString('utf8');
+    if (start > 0) t = t.slice(t.indexOf('\n') + 1);
+    return t.split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine).slice(-n);
+  };
+
+  it('shows the chat main shows, measured, at the file\'s size, with no binding', async () => {
+    const text = Array.from({ length: 900 }, (_, i) => userLine(`u${i}`, 'y'.repeat(1500))).join('');
+    expect(Buffer.byteLength(text)).toBeGreaterThan(1024 * 1024);
+    const { io, asks } = oldAgent(text);
+    const b = await readBacklog(io, 'f', 50);
+    expect(b.events).toEqual(mainBacklog(text, 50));
+    expect(b).toMatchObject({ offset: Buffer.byteLength(text), missing: false, measured: true, scanEnd: Buffer.byteLength(text) - 4 * 256 * 1024 });
+    expect(b.older).toBeUndefined();
+    expect(asks.filter((a) => a.op === 'readFrom' && a.maxBytes === undefined)).toHaveLength(1);
+  });
+
+  it('a small file too: the same events main shows', async () => {
+    const text = userLine('u1', 'one') + userLine('u2', 'two');
+    const b = await readBacklog(oldAgent(text).io, 'f', 50);
+    expect(uuidsOf(b.events)).toEqual(['u1', 'u2']);
+    expect(b).toMatchObject({ offset: Buffer.byteLength(text), measured: true, missing: false });
+    expect(b.older).toBeUndefined();
+  });
+
+  it('a file that is really unreadable stays unreadable, not folded into the fallback; a proven absence stays absent', async () => {
+    const text = userLine('u1', 'one');
+    expect(await readBacklog(oldAgent(text, 'unreadable').io, 'f', 50)).toEqual({
+      events: [], offset: Buffer.byteLength(text), missing: false, measured: false, scanEnd: Buffer.byteLength(text),
+    });
+    const gone = oldAgent(text, 'absent');
+    expect(await readBacklog(gone.io, 'f', 50)).toEqual({ events: [], offset: Buffer.byteLength(text), missing: true, measured: true });
+    expect(gone.asks.filter((a) => a.op === 'readFrom' && a.maxBytes === undefined)).toEqual([]);
+  });
+
+  it('a file unlinked between the byte reads and main\'s read is a proven absence', async () => {
+    const text = userLine('u1', 'one');
+    expect(await readBacklog(oldAgent(text, 'gone-before-decoded').io, 'f', 50)).toEqual({
+      events: [], offset: Buffer.byteLength(text), missing: true, measured: true,
+    });
   });
 });
 

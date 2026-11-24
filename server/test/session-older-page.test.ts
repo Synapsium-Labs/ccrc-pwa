@@ -166,6 +166,27 @@ describe('the backlog offers older pages only when paging can be offered', () =>
     expect(restWithout).toEqual(rest);
   });
 
+  it('reads of one window under two tokens, twice (review 3643 F2): the client is sent an unmeasured backlog, never a splice', async () => {
+    const home = mkTmp('ccrc-older-stream-');
+    seedRoster(home);
+    const transcript = transcriptOf(2200);
+    expect(Buffer.byteLength(transcript)).toBeGreaterThan(256 * 1024);
+    const { fileA } = seed(home, transcript);
+    const split = identIO();
+    let n = 0;
+    split.tokens.of = () => ((n += 1) % 2 === 1 ? TOKEN_A : TOKEN_B);
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(depsFor(home, split.io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    streams.push(stream);
+    await stream.start();
+    const [b] = backlogs(frames);
+    const size = Buffer.byteLength(transcript);
+    expect(b).toEqual({
+      type: 'backlog', uuid: UUID_A, events: [], offset: size, file: fileA, missing: false, fileMeasured: false,
+      foreignAccount: null, searchComplete: true,
+    });
+  });
+
   it('a client that never asks gets nothing else: no `older-page` frame is ever sent unasked', async () => {
     const s = await open(transcriptOf(120));
     appendFileSync(s.fileA, userLine('later', 'appended'));
