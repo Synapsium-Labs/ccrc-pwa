@@ -116,8 +116,8 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     // `child-omitted:no-child-argv-cap` row a fresh spawn journals on a box
     // with no `child-argv-v1` (`fleetState: undefined` is no evidence, so
     // `capSupported` refuses — child-workspace reclamation wave 1), plus the `route-defaulted` row (D-6794) and the
-    // `route-omitted` row the same missing evidence earns it.
-    expect(coord.runEvents(opened.id).length).toBe(5);
+    // `route-omitted` row the same missing evidence earns it, plus the flow brief shadow (Flows wave 2).
+    expect(coord.runEvents(opened.id).length).toBe(6);
   });
 });
 

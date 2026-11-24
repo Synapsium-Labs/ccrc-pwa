@@ -102,7 +102,7 @@ describe('the store: three states per group, default shadow', () => {
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
     // as 54 (100, the replay quiz run's state and counts, goes with continuity_quiz_runs), so the reopen replays
-    // all seventy (54 through 123).
+    // all seventy-one (54 through 124).
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamCallId; ALTER TABLE project_linking DROP COLUMN teamSuggestions; ALTER TABLE project_linking DROP COLUMN teamWorkspace; ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;
@@ -121,6 +121,7 @@ describe('the store: three states per group, default shadow', () => {
     fresh.exec('ALTER TABLE runs DROP COLUMN admissionWaitSince; ALTER TABLE runs DROP COLUMN lastRefusedAt; ALTER TABLE runs DROP COLUMN admissionWokenAt;');
     fresh.exec('DROP TABLE continuity_witness_checks; DROP TABLE continuity_hook_reports;');
     fresh.exec('DROP TABLE overlord_fence_refusals;');
+    fresh.exec('DROP TABLE flow_settings; ALTER TABLE programs DROP COLUMN flowId; ALTER TABLE programs DROP COLUMN flowVersion;');
     fresh.exec('DROP TABLE flow_versions; DROP TABLE flows;');
     fresh.exec('DROP INDEX mail_client_key_once; ALTER TABLE mail DROP COLUMN clientKey; ALTER TABLE mail DROP COLUMN inReplyTo;');
     fresh.exec('DROP TABLE continuity_act_keys;');

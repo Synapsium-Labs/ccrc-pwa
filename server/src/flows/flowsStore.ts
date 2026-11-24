@@ -16,10 +16,10 @@ export interface FlowRecord extends FlowSummary { draft: FlowParse; versions: Fl
 
 export type FlowsRead<T> = { ok: true; value: T } | { ok: false; detail: string };
 
-interface FlowRowSql { id: number; title: string; sourceTemplate: string | null; sourceVersion: number | null; updatedAt: number; latest: number | null }
+interface FlowRowSql { id: number; title: string; sourceTemplate: string | null; sourceVersion: number | null; updatedAt: number; latest: number | null; pinnedBy: number }
 
 const summary = (r: FlowRowSql): FlowSummary => ({
-  id: r.id, title: r.title, updatedAt: r.updatedAt, latestVersion: r.latest,
+  id: r.id, title: r.title, updatedAt: r.updatedAt, latestVersion: r.latest, pinnedBy: r.pinnedBy,
   source: r.sourceTemplate !== null && r.sourceVersion !== null ? { template: r.sourceTemplate, version: r.sourceVersion } : null,
 });
 
@@ -32,7 +32,8 @@ function guard<T>(fn: () => T): FlowsRead<T> {
 }
 
 const SELECT = `SELECT f.id, f.title, f.sourceTemplate, f.sourceVersion, f.updatedAt,
-  (SELECT MAX(version) FROM flow_versions v WHERE v.flowId = f.id) AS latest FROM flows f`;
+  (SELECT MAX(version) FROM flow_versions v WHERE v.flowId = f.id) AS latest,
+  (SELECT COUNT(*) FROM programs p WHERE p.flowId = f.id) AS pinnedBy FROM flows f`;
 
 export function listFlows(db: DatabaseSync): FlowsRead<FlowSummary[]> {
   return guard(() => (db.prepare(`${SELECT} ORDER BY f.updatedAt DESC, f.id DESC`).all() as unknown as FlowRowSql[]).map(summary));
@@ -85,10 +86,49 @@ export function publishFlow(db: DatabaseSync, id: number, doc: FlowDoc, now: num
   });
 }
 
-/** Removes a flow and its versions. Wave 2 adds the refusal while a programme pins it. */
-export function deleteFlow(db: DatabaseSync, id: number): { changed: boolean } {
+/** Removes a flow and its versions, refused while any programme pins it (spec §7). Deleting the default clears it. */
+export function deleteFlow(db: DatabaseSync, id: number): { changed: boolean } | { refused: 'pinned'; by: number } {
   return tx(db, () => {
+    const by = flowPinnedBy(db, id);
+    if (by > 0) return { refused: 'pinned', by } as const;
+    db.prepare('UPDATE flow_settings SET defaultFlowId = NULL WHERE defaultFlowId = ?').run(id);
     db.prepare('DELETE FROM flow_versions WHERE flowId = ?').run(id);
     return { changed: Number(db.prepare('DELETE FROM flows WHERE id = ?').run(id).changes) > 0 };
   });
+}
+
+// ── Wave 2: the default flow and the programme's flow pin ────────────────────
+
+export type FlowPin = { flowId: number; version: number };
+
+/** The flow new programmes pin, or null for none. */
+export function readDefaultFlow(db: DatabaseSync): number | null {
+  const row = db.prepare('SELECT defaultFlowId FROM flow_settings WHERE id = 1').get() as { defaultFlowId: number | null } | undefined;
+  return row?.defaultFlowId ?? null;
+}
+
+/** Names the default (null clears it). Only a flow with a published version can be one: a programme pins a version. */
+export function setDefaultFlow(db: DatabaseSync, id: number | null): { ok: true } | { ok: false; refused: 'not-found' | 'unpublished' } {
+  return tx(db, () => {
+    if (id !== null) {
+      const row = db.prepare('SELECT (SELECT MAX(version) FROM flow_versions WHERE flowId = f.id) AS latest FROM flows f WHERE f.id = ?')
+        .get(id) as { latest: number | null } | undefined;
+      if (!row) return { ok: false, refused: 'not-found' } as const;
+      if (row.latest === null) return { ok: false, refused: 'unpublished' } as const;
+    }
+    db.prepare('UPDATE flow_settings SET defaultFlowId = ? WHERE id = 1').run(id);
+    return { ok: true } as const;
+  });
+}
+
+/** How many programmes pin the flow. */
+export function flowPinnedBy(db: DatabaseSync, id: number): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM programs WHERE flowId = ?').get(id) as { n: number }).n;
+}
+
+/** The flow a programme pinned, or null for none (or no such programme). */
+export function readProgrammeFlowPin(db: DatabaseSync, slug: string): FlowPin | null {
+  const row = db.prepare('SELECT flowId, flowVersion FROM programs WHERE slug = ?').get(slug) as
+    { flowId: number | null; flowVersion: number | null } | undefined;
+  return row && row.flowId !== null && row.flowVersion !== null ? { flowId: row.flowId, version: row.flowVersion } : null;
 }

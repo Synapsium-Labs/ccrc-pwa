@@ -20,6 +20,7 @@ import {
 } from './rundefs.js';
 import { queueSystemMail } from './rundefsTx.js';
 import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
+import { flowBriefShadow } from '../flows/briefShadow.js';
 import {
   SPAWN_NOT_RECORDED, armEventDetail, routeForBrowserCap,
   type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
@@ -990,6 +991,8 @@ export async function dispatchRun(
     deps.io, bound.wrapper === null ? undefined : deps.configDir(bound.wrapper),
     skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `${SKILL_PREFLIGHT_EVENT}${skillState}`);
+  // Flows wave 2: the brief the programme's pinned flow would have composed, beside the one sent — measured, never sent.
+  coord.recordRunEvent(id, 'coordinator', flowBriefShadowOf(coord, run, body));
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
   // injected directly, and (deviation D-47) queued ONLY when the worker's
@@ -1091,4 +1094,22 @@ export async function bindRunInPlace(
   const adv = coord.bindInPlace(id, claimant, target.plan.branch, target.plan.intentKeys, Date.now());
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
   return { ok: true, id, sessionId: claimant, branch: target.plan.branch };
+}
+
+/** The shadow's reads, for `flowBriefShadow` (L1): the programme's pin and the pinned version. A read that throws is
+ *  `unreadable`, never a thrown dispatch: the brief has already been decided and the shadow only records. */
+function flowBriefShadowOf(coord: CoordStore, run: { id: number; program: string; kind: string }, body: string): string {
+  const kind = run.kind === 'review' ? 'review' : 'work';
+  const prefix = kickoffPrefixFor(kind);
+  const todayBytes = new TextEncoder().encode(body).length;
+  const vars = { 'run.id': String(run.id), 'programme.slug': run.program };
+  let pin: { flowId: number; version: number } | null = null;
+  try {
+    pin = coord.readProgrammeFlowPin(run.program);
+    const read = pin === null ? null : coord.readFlowVersion(pin.flowId, pin.version);
+    const doc = read === null ? null : read.ok && read.value !== null ? read.value.doc : null;
+    return flowBriefShadow({ pin, doc, kind, vars, prefix, todayBytes });
+  } catch {
+    return pin === null ? 'flow-brief:unreadable programme' : `flow-brief:unreadable ${pin.flowId}@${pin.version}`;
+  }
 }
