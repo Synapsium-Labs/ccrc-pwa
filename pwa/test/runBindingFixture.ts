@@ -77,3 +77,17 @@ export function withBindingFrames<T extends { setState: (patch: never, replace?:
   };
   return store;
 }
+
+/** `withRunBinding`, plus the bound run's programme and wave on `run` and `openRun`, which the current server sends too
+ *  since D-8980 (`SessionRun.program`, `.wave`). Opt-in, so the suites that characterise today's tree over the binding's
+ *  three columns keep their captured input; a case about a closed run's programme (a kept worker, D-8981) binds with it. */
+export function withProgrammeBinding<S extends FleetSession>(
+  sessions: readonly S[], runs: readonly (BindingRunFacts & { readonly program: string; readonly wave: number })[],
+): S[] {
+  const named = (b: SessionRun | null | undefined): SessionRun | null => {
+    if (b === null || b === undefined) return null;
+    const r = runs.find((x) => x.id === b.id);
+    return r === undefined ? b : { ...b, program: r.program, wave: r.wave };
+  };
+  return withRunBinding(sessions, runs).map((s) => ({ ...s, run: named(s.run), openRun: named(s.openRun) }));
+}

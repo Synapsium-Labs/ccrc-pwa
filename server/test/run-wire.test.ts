@@ -45,7 +45,8 @@ describe('sessionRunRead: the two named queries over one incarnation', () => {
     const s = mkCoord();
     const { fresh } = recycled(s);
     expect(sessionRunRead(s, 'demo-w', inc)).toEqual({
-      ok: true, run: { id: fresh, state: 'planned', claimedBy: 'coord-live' }, openRun: { id: fresh, state: 'planned', claimedBy: 'coord-live' },
+      ok: true, run: { id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 },
+      openRun: { id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 },
     });
     // The id-string rule (a coordinator, a manual workspace) still sees both, newest first.
     const every = sessionRunRead(s, 'demo-w', unbornIncarnation('demo-w', 'not-a-child'));
@@ -59,7 +60,8 @@ describe('sessionRunRead: the two named queries over one incarnation', () => {
     s.setSession(later, 'demo-w');
     finish(s, later);
     expect(sessionRunRead(s, 'demo-w', inc)).toEqual({
-      ok: true, run: { id: later, state: 'done', claimedBy: 'coord-live' }, openRun: { id: fresh, state: 'planned', claimedBy: 'coord-live' },
+      ok: true, run: { id: later, state: 'done', claimedBy: 'coord-live', program: 'prog-later', wave: 1 },
+      openRun: { id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 },
     });
   });
 
@@ -187,8 +189,8 @@ describe('assembleFleet carries run and openRun', () => {
     seedSession(home, 'demo-main');
     const fleet = await assemble(home, coord);
     const row = fleet.find((s) => s.id === 'demo-w')!;
-    expect(row.run).toEqual({ id: fresh, state: 'planned', claimedBy: 'coord-live' });
-    expect(row.openRun).toEqual({ id: fresh, state: 'planned', claimedBy: 'coord-live' });
+    expect(row.run).toEqual({ id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 });
+    expect(row.openRun).toEqual({ id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 });
     // A session no run names answers null, and the key is present: the server always sends it.
     const main = fleet.find((s) => s.id === 'demo-main')!;
     expect(main).toHaveProperty('run', null);
@@ -202,7 +204,7 @@ describe('assembleFleet carries run and openRun', () => {
     const a = open(coord, 'prog-a', 'coord-1');
     coord.setSession(a, 'demo-main');
     seedSession(home, 'demo-main');
-    expect((await assemble(home, coord)).find((s) => s.id === 'demo-main')!.run).toEqual({ id: a, state: 'planned', claimedBy: 'coord-1' });
+    expect((await assemble(home, coord)).find((s) => s.id === 'demo-main')!.run).toEqual({ id: a, state: 'planned', claimedBy: 'coord-1', program: 'prog-a', wave: 1 });
     expect((await assemble(home)).find((s) => s.id === 'demo-main')).toMatchObject({ run: null, openRun: null });
   });
 
@@ -248,6 +250,56 @@ describe('reviveFleetSession carries run and openRun', () => {
       const revived = reviveFleetSession({ ...o, run: bad });
       expect(revived, JSON.stringify(bad)).not.toBeNull();
       expect(revived!.run).toBeNull();
+    }
+  });
+});
+
+// D-8980: the binding carries its run's programme and wave, so the console can keep a worker whose run has closed in its
+// programme's box while that programme still has open work. Red first: before this change `SessionRun` was the run's id,
+// state and claimant only, and a closed run's programme was unknown to the card (the runs frame is open runs only).
+describe('SessionRun names its run\'s programme and wave (D-8980)', () => {
+  const openWave = (s: CoordStore, program: string, wave: number, claimedBy: string): number =>
+    (s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy }) as { id: number }).id;
+
+  it('the newest bound run, closed, still names its programme and wave; the open run names its own', () => {
+    const s = mkCoord();
+    const { fresh } = recycled(s);
+    const later = openWave(s, 'prog-later', 4, 'coord-live');
+    s.setSession(later, 'demo-w');
+    finish(s, later);
+    expect(sessionRunRead(s, 'demo-w', inc)).toEqual({
+      ok: true,
+      run: { id: later, state: 'done', claimedBy: 'coord-live', program: 'prog-later', wave: 4 },
+      openRun: { id: fresh, state: 'planned', claimedBy: 'coord-live', program: 'prog-new', wave: 1 },
+    });
+  });
+
+  it('assembleFleet sends them on the row', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    const coord = mkCoord();
+    const a = openWave(coord, 'prog-a', 3, 'coord-1');
+    coord.setSession(a, 'demo-main');
+    finish(coord, a);
+    seedSession(home, 'demo-main');
+    const row = (await assemble(home, coord)).find((s) => s.id === 'demo-main')!;
+    expect(row.run).toEqual({ id: a, state: 'done', claimedBy: 'coord-1', program: 'prog-a', wave: 3 });
+    expect(row.openRun).toBeNull();
+  });
+
+  it('reviveFleetSession keeps both; a malformed one is dropped and the run kept; an older snapshot has neither', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-main');
+    const o = JSON.parse(JSON.stringify((await assemble(home)).find((s) => s.id === 'demo-main')!)) as Record<string, unknown>;
+    const run = { id: 7, state: 'done', claimedBy: 'coord-1', program: 'prog-a', wave: 2 };
+    expect(reviveFleetSession({ ...o, run })!.run).toEqual(run);
+    expect(reviveFleetSession({ ...o, run: { id: 7, state: 'done', claimedBy: 'coord-1' } })!.run).toEqual({ id: 7, state: 'done', claimedBy: 'coord-1' });
+    for (const bad of [{ program: 3 }, { program: '' }, { wave: 0 }, { wave: '2' }, { wave: 1.5 }]) {
+      const revived = reviveFleetSession({ ...o, run: { ...run, ...bad } })!.run!;
+      expect(revived, JSON.stringify(bad)).toMatchObject({ id: 7, state: 'done', claimedBy: 'coord-1' });
+      const key = Object.keys(bad)[0] as 'program' | 'wave';
+      expect(revived, JSON.stringify(bad)).not.toHaveProperty(key);
     }
   });
 });
