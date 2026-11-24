@@ -302,6 +302,6 @@ export interface Deps {
 export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
   coord?: WatcherCoordPort;
   /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store; the inbox wake
-   *  reads its unsettled facts, text-free. */
-  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts'>;
+   *  reads its unsettled facts, text-free; the renewal readings count the messages since a start (`turns`). */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts' | 'messagesSince'>;
 };
