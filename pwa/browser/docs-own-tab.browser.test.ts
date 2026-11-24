@@ -5,8 +5,11 @@
 //   - the tab bar's one link back is reached by the keyboard right after the skip link, shows a visible focus ring, and
 //     is named "Console, opens in a new tab"; it opens the console in a new tab (`target="_blank"`, href `/`);
 //   - the tab's title names the document.
-// At 390 x 844, a phone, a Docs route is the console's Docs screen, as before: no tab bar, no link back, nothing scrolling
-// sideways. Every case prints its figures on a `DOT-FIGURE` line.
+// Below the desk width (fix round 1, L1): a tab whose first page was a Docs address stays a Docs tab, so a Docs tab
+// resized from 1280 to 640 and back keeps the same reader, opens no fleet socket and scrolls nothing sideways, and a Docs
+// address loaded first at 390 x 844 draws the reader alone with a link back that moves in place. A phone that moves to Docs
+// inside the console keeps the console's Docs screen, as before: no tab bar, no link back. Every case prints its figures on
+// a `DOT-FIGURE` line.
 //
 // No server, no ccd: `/api/docs` answers one leaf from fixtures, as docs-compact-head.browser.test.ts's sessions do.
 //
@@ -69,14 +72,36 @@ async function answerDocs(app: OpenedApp): Promise<void> {
   });
 }
 
-/** The leaf open at `view` in `skin`, once the Docs screen has drawn its leaf (the reader up, or its plain fallback). */
-async function openLeaf(view: { width: number; height: number }, skin: string): Promise<OpenedApp> {
+const LEAF = `/docs/${PROJECT}/${SECTION}/${NAME}`;
+
+/** Wait for the Docs screen to draw its leaf (the reader up, or its plain fallback). */
+async function leafDrawn(app: OpenedApp): Promise<void> {
+  await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe, .doc-plain') !== null, null,
+    { timeout: 90_000, polling: 100 });
+}
+
+/** The app open at `view` in `skin`, with every fleet socket the page opens counted on `window.__sockets`, loaded at
+ *  `first`. */
+async function openAt(view: { width: number; height: number }, skin: string, first: string): Promise<OpenedApp> {
   const app = await openApp(browser!, { width: view.width, skin, theme: 'light' }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize(view);
   await answerDocs(app);
-  await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
-  await app.page.waitForFunction(() => document.querySelector('.docs-reader iframe, .doc-plain') !== null, null,
-    { timeout: 90_000, polling: 100 });
+  await app.ctx.addInitScript(() => {
+    const Real = window.WebSocket;
+    const w = window as unknown as { __sockets: number; WebSocket: typeof WebSocket };
+    w.__sockets = 0;
+    w.WebSocket = class extends Real {
+      constructor(url: string | URL, protocols?: string | string[]) { super(url, protocols); w.__sockets += 1; }
+    };
+  });
+  await app.page.goto(`${server!.origin}${first}`, { waitUntil: 'load' });
+  return app;
+}
+
+/** The leaf loaded first at `view` in `skin`, once the Docs screen has drawn it. */
+async function openLeaf(view: { width: number; height: number }, skin: string): Promise<OpenedApp> {
+  const app = await openAt(view, skin, LEAF);
+  await leafDrawn(app);
   return app;
 }
 
@@ -116,8 +141,8 @@ describe('a Docs tab at a desk, in a real Chrome', () => {
         expect(f.tabBar).toBe(1);
         expect(f.detailLeft).toBe(0);
         expect(Math.abs(f.detailWidth - f.viewport)).toBeLessThanOrEqual(1);
-        // The Docs screen sits in the pane with no column beside it: its left edge is within the pane's own padding.
-        expect(f.screenLeft).toBeLessThan(64);
+        // The Docs screen sits in the pane with no column beside it: its left edge is the page's (fix round 1, A6).
+        expect(f.screenLeft).toBe(0);
         expect(f.scrollX).toBe(0);
         expect(f.title).toBe(`${NAME} · ${PROJECT} · Docs · ccrc`);
         expect(app.errors).toEqual([]);
@@ -151,9 +176,10 @@ describe('a Docs tab at a desk, in a real Chrome', () => {
         expect(back!.href).toBe('/');
         expect(back!.target).toBe('_blank');
         expect(back!.focusVisible).toBe(true);
-        expect(back!.outlineStyle).not.toBe('none');
-        expect(Number.parseFloat(back!.outlineWidth)).toBeGreaterThan(0);
-        expect(back!.height).toBeGreaterThanOrEqual(24);
+        // What the note states (fix round 1, A6): a 2px solid ring, and the tap floor, 44px.
+        expect(back!.outlineStyle).toBe('solid');
+        expect(back!.outlineWidth).toBe('2px');
+        expect(back!.height).toBeGreaterThanOrEqual(44);
         const named = app.page.getByRole('link', { name: 'Console, opens in a new tab', exact: true });
         expect(await named.count()).toBe(1);
       } finally {
@@ -163,20 +189,98 @@ describe('a Docs tab at a desk, in a real Chrome', () => {
   }
 });
 
-describe('a Docs route on a phone, in a real Chrome, unchanged', () => {
+describe('a Docs tab below the desk width, in a real Chrome', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
-    it(`${skin} at 390: the console's Docs screen, with no tab bar, no link back and nothing scrolling sideways`, async () => {
+    it(`${skin}: resized from 1280 to 640 and back, it stays a Docs tab with the same reader and opens no fleet socket`, async () => {
+      const app = await openLeaf(DESK, skin);
+      try {
+        await app.page.evaluate(() => { (window as unknown as { __reader: Element | null }).__reader = document.querySelector('.docs-screen'); });
+        for (const view of [{ width: 640, height: 800 }, DESK]) {
+          await app.page.setViewportSize(view);
+          await app.page.waitForTimeout(300);
+          const f = await app.page.evaluate(() => ({
+            docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
+            sameReader: document.querySelector('.docs-screen') === (window as unknown as { __reader: Element | null }).__reader,
+            phoneBar: document.querySelectorAll('.shell-phone-nav').length,
+            nav: document.querySelectorAll('.shell-nav').length,
+            sockets: (window as unknown as { __sockets: number }).__sockets,
+            scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            title: document.title,
+          }));
+          console.log(`DOT-FIGURE ${skin} resize ${view.width} ${JSON.stringify(f)}`);
+          expect(f.docsTab).toBe('docs');
+          expect(f.sameReader).toBe(true);
+          expect(f.phoneBar).toBe(0);
+          expect(f.nav).toBe(0);
+          expect(f.sockets).toBe(0);
+          expect(f.scrollX).toBe(0);
+          expect(f.title).toBe(`${NAME} · ${PROJECT} · Docs · ccrc`);
+        }
+        expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 180_000);
+
+    it(`${skin} at 390: a Docs address loaded first draws the reader alone, its link back moving in place`, async () => {
       const app = await openLeaf(PHONE, skin);
       try {
+        const f = await app.page.evaluate(() => {
+          const bar = document.querySelector('header.shell-tab-bar');
+          const back = bar?.querySelector('a') ?? null;
+          return {
+            docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
+            tabBar: bar === null ? 0 : 1,
+            phoneBar: document.querySelectorAll('.shell-phone-nav').length,
+            backHref: back?.getAttribute('href') ?? null, backTarget: back?.getAttribute('target') ?? null,
+            backHeight: back?.getBoundingClientRect().height ?? 0,
+            screen: document.querySelectorAll('.shell-detail .docs-screen').length,
+            sockets: (window as unknown as { __sockets: number }).__sockets,
+            scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            title: document.title,
+          };
+        });
+        console.log(`DOT-FIGURE ${skin} 390 first ${JSON.stringify(f)}`);
+        expect(f.docsTab).toBe('docs');
+        expect(f.tabBar).toBe(1);
+        expect(f.phoneBar).toBe(0);
+        expect(f.backHref).toBe('/');
+        expect(f.backTarget).toBeNull();
+        expect(f.backHeight).toBeGreaterThanOrEqual(44);
+        expect(f.screen).toBe(1);
+        expect(f.sockets).toBe(0);
+        expect(f.scrollX).toBe(0);
+        expect(f.title).toBe(`${NAME} · ${PROJECT} · Docs · ccrc`);
+        expect(await app.page.getByRole('link', { name: 'Console', exact: true }).count()).toBe(1);
+        expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 180_000);
+  }
+});
+
+describe('a Docs page reached inside the console on a phone, in a real Chrome, unchanged', () => {
+  for (const skin of [REFINED, INSTRUMENT]) {
+    it(`${skin} at 390: the console's Docs screen, with no tab bar, no link back and nothing scrolling sideways`, async () => {
+      const app = await openAt(PHONE, skin, '/fleet');
+      try {
+        await app.page.waitForFunction(() => document.querySelector('.app-shell') !== null, null, { timeout: 90_000, polling: 100 });
+        // An in-app move, as `navigate` makes one: a push, then the router's own notice.
+        await app.page.evaluate((to) => { history.pushState(null, '', to); dispatchEvent(new PopStateEvent('popstate')); }, LEAF);
+        await leafDrawn(app);
         const f = await app.page.evaluate(() => ({
           tabBar: document.querySelectorAll('header.shell-tab-bar').length,
           docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
           back: [...document.querySelectorAll('a')].filter((a) => (a.textContent ?? '').startsWith('Console')).length,
           screen: document.querySelectorAll('.shell-detail .docs-screen').length,
+          sockets: (window as unknown as { __sockets: number }).__sockets,
           scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           title: document.title,
         }));
-        console.log(`DOT-FIGURE ${skin} 390 ${JSON.stringify(f)}`);
+        console.log(`DOT-FIGURE ${skin} 390 in-app ${JSON.stringify(f)}`);
+        // The console's fleet stream: the counter the Docs tab cases read as 0 counts here.
+        expect(f.sockets).toBeGreaterThan(0);
         expect(f.tabBar).toBe(0);
         expect(f.docsTab).toBeNull();
         expect(f.back).toBe(0);
