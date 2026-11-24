@@ -24,7 +24,8 @@ import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
 import type { CoordinatorPresence } from './presence';
 import { SessionMeta } from './SessionMeta';
-import { cardFacts, sessionFacts } from './sessionFacts';
+import { cardFacts, sessionFacts, WAITING_ON_WORKERS } from './sessionFacts';
+import { workersBusyOf } from './fleetTree';
 import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
@@ -138,7 +139,11 @@ function SessionLineView({
   // the task tally, the subagent disclosure and the waiting question's summary are header facts now
   // (`SessionDetails`), each still one tap away.
   const busy = session.status === 'busy';
-  const tick = useNow(30_000, busy && now === undefined);
+  // Wave 173: what this coordinator's workers say, clock-free (`workersBusyOf`, the header's own reader): a primitive, so a
+  // frame that changes no answer re-renders no row. A number is a wait on a spawn alone, which only a clock can call in
+  // flight or stalled (`workersWaitAt`), so the row ticks while it holds one, as it does while busy.
+  const workersBusy = useFleetStore((st) => workersBusyOf(session, st.sessions, st.runs));
+  const tick = useNow(30_000, (busy || typeof workersBusy === 'number') && now === undefined);
   const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
   const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
   const facts = sessionFacts({
@@ -146,6 +151,7 @@ function SessionLineView({
     workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
     claudeLatest: claudeLatest === undefined ? storeLatest : claudeLatest,
     claudeLaneLatest: claudeLaneLatest === undefined ? storeLaneLatest : claudeLaneLatest,
+    workersBusy,
   });
   const glance = cardFacts(facts);
   const label = glance.name.text;
@@ -169,7 +175,7 @@ function SessionLineView({
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={facts.state}>
       <span className="sess-lamp" data-status={session.bucket}>
-        <StatusDot status={session.bucket} asleep={asleep} />
+        <StatusDot status={session.bucket} asleep={asleep} {...(facts.waitingOnWorkers ? { waitingLabel: WAITING_ON_WORKERS } : {})} />
       </span>
 
       {/* The two-line block. A plain <div>, NOT the row's button: it holds real controls of its own (the label button
