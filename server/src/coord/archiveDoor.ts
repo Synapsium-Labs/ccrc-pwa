@@ -255,6 +255,12 @@ export interface ArchiveCoordPort {
    *  `abandonRefusal`); `null` when it can move it. */
   abandonRefusal(runId: number): Extract<CloseOutcome, { ok: false }> | null;
   abandon(runId: number): Promise<CloseOutcome>;
+  /** Programme lifecycle W1 (W1 review, A2; spec §5's archive-end row): the live real programme the session is bound to, or
+   *  null. With `programme:'end'` it is ended with the programmes of the runs the door abandoned. */
+  boundProgramme(sessionId: string): string | null;
+  /** End one programme Abandoned, "archived with programme end", through the lifecycle's one writer (`decideInTx`): an
+   *  explicit decision now that D-51 is gone. A programme already ended keeps its first recorded end. */
+  endProgramme(slug: string): void;
   /** D-8199: move the claims on `claimed` as chosen (`reclaim.ts#moveClaims`), inside the same serialiser. */
   moveClaims(choice: ClaimsChoice, claimed: readonly OpenSibling[]): Promise<ClaimsMoveOutcome>;
 }
@@ -369,6 +375,13 @@ export async function decideArchive(
     }
     ended.push(run);
   }
+  // Programme lifecycle W1 (W1 review, A2): D-51 no longer ends a programme at its last close, so `programme:'end'` ends it
+  // here, by decision, once every run it held is abandoned: the programmes of those runs and the one the session is bound
+  // to (an Idle programme it owns with no open run). Without `programme:'end'` nothing claimed reaches this line.
+  if (port !== null && flags.programmeEnd) {
+    const bound = port.boundProgramme(id);
+    for (const slug of new Set([...claimed.map((r) => r.program), ...(bound === null ? [] : [bound])])) port.endProgramme(slug);
+  }
   return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended, moved: null };
 }
 
@@ -377,7 +390,9 @@ export async function decideArchive(
 async function moveOrRefuse(
   port: Pick<ArchiveCoordPort, 'moveClaims'> | null, choice: ClaimsChoice, claimed: readonly OpenSibling[],
 ): Promise<{ ok: true; moved: ClaimsMoved | null } | Refused> {
-  if (port === null || claimed.length === 0) return { ok: true, moved: null };
+  // Programme lifecycle W1 (W1 review): asked even with no open run claimed, because the programme the session is bound to
+  // moves with the choice too (an Open or Idle programme); `moveClaims` answers what it moved.
+  if (port === null) return { ok: true, moved: null };
   let out: ClaimsMoveOutcome;
   try { out = await port.moveClaims(choice, claimed); } catch (e) {
     out = { ok: false, moved: [], notMoved: claimed, refusal: { kind: 'threw', detail: thrown(e) } };
@@ -385,6 +400,7 @@ async function moveOrRefuse(
   if (!out.ok) {
     return refuseEdge(ARCHIVE_REFUSALS.claimsNotMoved, { moved: out.moved, notMoved: out.notMoved, refusal: out.refusal });
   }
+  if (out.moved.length === 0 && out.bound === undefined) return { ok: true, moved: null };
   return { ok: true, moved: { to: choice.kind === 'handover' ? choice.heir : null, runs: out.moved } };
 }
 

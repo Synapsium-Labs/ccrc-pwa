@@ -74,7 +74,9 @@ const runId = (r: { json: () => unknown }): number => (r.json() as { id: number 
  *  (its auto ticket), a dropped ticket, and on the one-epic plan a failed run. */
 export async function buildCharacterizationPlans(w: CharWorld): Promise<void> {
   ok(await planVerb(w, 'prog-a', '', SIX), 'put six');
-  ok(await planVerb(w, 'prog-b', '', ONE), 'put one');
+  // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so prog-b's plan is put by its own coordinator,
+  // which the put on a new slug binds, as its first run would.
+  ok(await planVerb(w, 'prog-b', '', ONE, CHAR_COORD_B), 'put one');
   const base = { title: 'a wave', project: 'project-a', waveOf: 6, homeProject: 'project-a' };
   const a1 = await openRun(w, { ...base, program: 'prog-a', wave: 1, ticket: 'w0-t1' });
   ok(a1, 'open a1');
@@ -86,9 +88,6 @@ export async function buildCharacterizationPlans(w: CharWorld): Promise<void> {
   if (!w.coord.advance(runId(a2), 'dispatched', 'test').ok) throw new Error('a2 dispatched');
   ok(await openRun(w, { ...base, program: 'prog-a', wave: 3 }), 'open a3');
   ok(await planVerb(w, 'prog-a', '/tickets/move', { ticket: 'w4-t4', drop: { why: 'not needed' } }), 'drop w4-t4');
-  // prog-b's plan was put by CHAR_COORD, who owns prog-a, so it was minted with no coordinator; its own is bound here, as a
-  // hand-over (W2) would bind it, before its first run.
-  w.coord.db.prepare('UPDATE programs SET coordinator = ? WHERE slug = ?').run(CHAR_COORD_B, 'prog-b');
   const b1 = await openRun(w, { ...base, program: 'prog-b', wave: 1, waveOf: 2, ticket: 'only-t1', claimedBy: CHAR_COORD_B, claimedByUuid: `u-${CHAR_COORD_B}` });
   ok(b1, 'open b1');
   for (const to of ['dispatched', 'failed'] as const) {

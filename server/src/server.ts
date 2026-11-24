@@ -184,6 +184,7 @@ import {
 } from './coord/archiveDoor.js';
 import { measureClaimant, moveClaims } from './coord/reclaim.js';
 import { overlordBodyOf } from './coord/overlordDesignation.js';
+import { OPERATOR_UNMEASURED } from './coord/programmeLifecycleStore.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -4383,6 +4384,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...claimsPort(coord, id),
         abandonRefusal,
         abandon,
+        boundProgramme: (sid) => { const own = coord.programmeOf(sid, null); return own !== null && own.placeholder === null ? own.slug : null; },
+        endProgramme: (slug) => { coord.decideProgramme({ slug, to: 'abandoned', edge: 'ended', actor: OPERATOR_UNMEASURED,
+          why: 'archived with programme end' }, Date.now()); },
       }, id, flags, measure));
     if (!plan.ok) return replyArchiveRefused(reply, id, plan);
     return actArchive(reply, plan, flags, archiveArgv, {

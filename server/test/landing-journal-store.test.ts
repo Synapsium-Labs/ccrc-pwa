@@ -91,8 +91,10 @@ const restore = (f: Fx, snap: string, replay = true): Fx => {
   return boot(f.home, undefined, replay);
 };
 
+/** The waves of coord-a's one programme (programme lifecycle W1, R11: one coordinator owns one programme). */
+let journalWave = 0;
 const openRun = (f: Fx, project: string = P, wave = 1): number => {
-  const o = f.store.openRun({ program: `prog-${project}-${wave}`, title: 't', project, wave, waveOf: 9, claimedBy: 'coord-a' });
+  const o = f.store.openRun({ program: 'prog-coord-a', title: 't', project, wave: ++journalWave, waveOf: null, claimedBy: 'coord-a' });   // one programme per coordinator (R11)
   if (!('id' in o)) throw new Error('fixture openRun refused');
   f.store.setSession(o.id, `${project}-ws${wave}`);
   for (const to of ['dispatched', 'working', 'awaiting-review'] as const) {

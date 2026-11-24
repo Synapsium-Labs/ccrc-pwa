@@ -271,12 +271,23 @@ describe('runs and tickets', () => {
     expect(tx(db, () => attachTicketInTx(db, r, named, 20))).toEqual({ ok: false, refused: 'plan-closed' });
   });
 
-  it('planOwnerOf prefers the newest claimant, then planBy', () => {
+  // Programme lifecycle W1 (D-8985, D-8993; W1 review C3): the plan's owner is the programme's binding, so a coordinator
+  // released from a live programme no longer writes its plan; an ended or never-bound programme keeps `main`'s rule (the
+  // newest claimant, then planBy), so the Linear sync still tells whoever ran it.
+  it('planOwnerOf: the binding; none for a released live programme; the newest claimant, then planBy, for an ended or never-bound one', () => {
     declare();
-    expect(planOwnerOf(db, 'prog-a')).toBe('coord-a');   // planBy
-    store.openRun({ program: 'prog-a', title: 'w', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a' });
-    db.prepare("UPDATE runs SET claimedBy = 'coord-b' WHERE program = 'prog-a'").run();
-    expect(planOwnerOf(db, 'prog-a')).toBe('coord-b');
+    expect(planOwnerOf(db, 'prog-a')).toBe('coord-a');   // the putter started it, so it is bound
+    db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind) VALUES ('prog-a', 1, 2, 'project-a', 'done', 'coord-b', 5, 'work')").run();
+    expect(planOwnerOf(db, 'prog-a')).toBe('coord-a');   // the binding, never a run's claimant
+    expect(store.reclaimProgramme('prog-a', 'coord-a', null, 20, null)).toMatchObject({ ok: true });
+    expect(planOwnerOf(db, 'prog-a')).toBeNull();        // released: owned by nobody, its putter included
+    store.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'w' }, 30);
+    expect(planOwnerOf(db, 'prog-a')).toBe('coord-a');   // ended: the release cleared every claim, so planBy
+    // A programme nobody was ever bound to (as the migration leaves a conflict): the newest claimant, then planBy.
+    db.prepare("INSERT INTO programs (slug, title, createdAt, state, homeProject, planBy) VALUES ('prog-l', 'L', 1, 'active', 'project-a', 'coord-z')").run();
+    expect(planOwnerOf(db, 'prog-l')).toBe('coord-z');
+    db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind) VALUES ('prog-l', 1, 2, 'project-a', 'planned', 'coord-y', 5, 'work')").run();
+    expect(planOwnerOf(db, 'prog-l')).toBe('coord-y');
   });
 });
 

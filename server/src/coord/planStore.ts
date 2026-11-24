@@ -20,6 +20,8 @@ import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsD
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
 import { tx } from './tx.js';
 import * as lifecycle from './programmeLifecycleStore.js';
+import { markSyncDueInTx } from './programmeLifecycleStore.js';
+export { markSyncDueInTx } from './programmeLifecycleStore.js';
 import { isEnded } from '../../../shared/programmeLifecycle.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -133,18 +135,8 @@ export const ADOPTED_FINGERPRINT = 'adopted';
 
 // ── The queue ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`, except that a row deferred for a FAILURE keeps
- *  its own (A7/A12: a plan write, a run transition or an attach never pulls a backoff back to now). Opens no transaction.
- *
- *  The row's `attempts` column (migration 59, read nowhere before) is the failure mark: `deferSync` counts a failure
- *  deferral there and sets it to 0 for an ordinary one; `clearSyncDue` deletes the row. No migration (D-8673). */
-export function markSyncDueInTx(db: DatabaseSync, program: string, at: number): void {
-  if (program === LINEAR_SYNC_PROGRAMME) return;
-  db.prepare(
-    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET '
-    + 'dueAt = CASE WHEN attempts > 0 THEN dueAt ELSE MIN(dueAt, excluded.dueAt) END',
-  ).run(program, at);
-}
+// `markSyncDueInTx` lives in `programmeLifecycleStore.ts` (programme lifecycle W1 review, A7): the lifecycle's one writer
+// marks a sync due too, and importing it from here made the two adapters import each other.
 export function markSyncDue(db: DatabaseSync, program: string, at: number): void { markSyncDueInTx(db, program, at); }
 export function dueSyncs(db: DatabaseSync, now: number): string[] {
   return (db.prepare('SELECT program FROM plan_sync_due WHERE dueAt <= ? ORDER BY dueAt, program').all(now) as Raw[])
@@ -204,8 +196,16 @@ export function planEndOf(db: DatabaseSync, program: string): { outcome: PlanEnd
   return { outcome: r.planEnd as PlanEndOutcome, why: (r.planEndWhy as string | null) ?? null, at: (r.planEndAt as number | null) ?? 0 };
 }
 
-/** The `claimedBy` of the programme's newest claimed run, else the session that first declared its plan. */
+/** Programme lifecycle W1 (D-8985, D-8993; W1 review C3): the programme's bound coordinator, its one owner. A live
+ *  programme that has been bound and is not now (released, handed over by its binding alone) has no plan owner, so a
+ *  released coordinator never keeps writing its plan. An ended programme (its binding released by the end) and one never
+ *  bound (one the migration could not seed, a conflict, a Linear backlog row) keep `main`'s rule, so the Linear sync still
+ *  tells whoever ran it: the `claimedBy` of its newest claimed run, else the session that first declared its plan (every
+ *  plan door refuses an ended programme `plan-closed` on its own). */
 export function planOwnerOf(db: DatabaseSync, program: string): string | null {
+  const row = lifecycle.programmeRowOf(db, program);
+  if (row?.coordinator != null) return row.coordinator;
+  if (row !== null && !isEnded(row.state) && lifecycle.everBoundInTx(db, program)) return null;
   const run = db.prepare('SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id DESC LIMIT 1')
     .get(program) as Raw | undefined;
   if (run !== undefined) return run.claimedBy as string;
@@ -342,29 +342,35 @@ export function updateTicket(db: DatabaseSync, id: number, patch: TicketPatch, n
 }
 
 export function applyPlanChanges(
-  db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string } | null,
+  db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number,
+  newRow: { home: string; title: string; byUuid?: string | null } | null,
 ): void {
   tx(db, () => applyPlanChangesInTx(db, program, changes, by, now, newRow));
 }
 /** `applyPlanChanges` inside the caller's transaction. A new row is `active` unless `newRow.state` says `paused` (a backlog
  *  programme a migration map proposes, D-8186). */
 function applyPlanChangesInTx(
-  db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string; state?: 'paused' } | null,
+  db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number,
+  newRow: { home: string; title: string; state?: 'paused'; byUuid?: string | null } | null,
 ): void {
   {
-    // Programme lifecycle W1 (D-8983, D-8985): a new row through the lifecycle's one writer. A backlog programme the Linear
-    // map proposes is minted `paused` by the system (a hold the operator or the Overlord resumes); a coordinator's put on a
-    // new slug starts a programme it owns when `mayStartProgrammeInTx` admits it (as the first run would), else unbound.
+    // Programme lifecycle W1 (D-8983, D-8985, D-8993): a new row through the lifecycle's one writer. A backlog programme the
+    // Linear map proposes is minted `paused` by the system (a hold the operator or the Overlord resumes). A coordinator's put
+    // on a new slug is the same start as its first run (R11 rule 3, amended in the W1 review): the putter owns it, bound with
+    // its attributed uuid, and the route has refused it (`owns-another-programme`, `not-your-programme`) when
+    // `mayStartProgrammeInTx` would not admit it. Asked again here, inside the transaction: a put raced past the route's read
+    // throws, rolling the put back, and never mints a programme nobody may run.
     if (newRow !== null && lifecycle.programmeRowOf(db, program) === null) {
       if (newRow.state === 'paused') {
         lifecycle.mintInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, state: 'paused', planRequired: 1,
           actor: { kind: 'system', id: by }, why: 'backlog' }, now);
-      } else if (lifecycle.mayStartProgrammeInTx(db, by, null).ok) {
-        lifecycle.startOwnedInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, planRequired: 1,
-          actor: { kind: 'coordinator', id: by }, why: 'plan put on a new programme', session: by, uuid: null }, now);
       } else {
-        lifecycle.mintInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, state: 'active', planRequired: 1,
-          actor: { kind: 'coordinator', id: by }, why: 'plan put on a new programme' }, now);
+        const uuid = newRow.byUuid ?? null;
+        const may = lifecycle.mayStartProgrammeInTx(db, by, uuid);
+        if (!may.ok) throw new Error(`plan put: ${may.kind} (${may.by})`);
+        const bound = lifecycle.startOwnedInTx(db, { slug: program, title: newRow.title, homeProject: newRow.home, planRequired: 1,
+          actor: { kind: 'coordinator', id: by }, why: 'plan put on a new programme', session: by, uuid }, now);
+        if (!bound.ok) throw new Error(`plan put: ${bound.kind} (${bound.by})`);
       }
     }
     const touched = new Set<number>();
@@ -490,10 +496,23 @@ export function closePlan(
   actor: lifecycle.ProgrammeActor = { kind: 'system', id: 'unmeasured' },
 ): void {
   tx(db, () => {
-    // The first end stands, as `closePlan`'s `planEnd IS NULL` guard made it: a second close of an ended programme writes nothing.
-    if (programmeEnded(db, program)) return;
+    // The first recorded end stands: `decideInTx` holds that rule (`already-ended`, W1 review A6), so a second close of an
+    // ended programme writes nothing, and an equal one writes nothing either.
     lifecycle.decideInTx(db, { slug: program, to: outcome, edge: 'ended', actor, why: why ?? 'the plan was closed', planEndWhy: why }, now);
   });
+}
+
+/** A live programme that has been bound and is not now (released, or handed over by its binding alone): its plan has no
+ *  owner NOW, which is not the "no owner yet" of a programme nobody has started (`planOwnerOf`'s null), so the plan doors
+ *  refuse every writer rather than admitting any (programme lifecycle W1 review, C3). */
+export function planOwnerless(db: DatabaseSync, program: string): boolean {
+  const row = lifecycle.programmeRowOf(db, program);
+  return row !== null && row.coordinator === null && !isEnded(row.state) && lifecycle.everBoundInTx(db, program);
+}
+
+/** May `session` start a programme it would own (the plan put on a new slug asks before it writes; R11 rules 3, 4, 6)? */
+export function mayStartProgramme(db: DatabaseSync, session: string, uuid: string | null): ReturnType<typeof lifecycle.mayStartProgrammeInTx> {
+  return lifecycle.mayStartProgrammeInTx(db, session, uuid);
 }
 
 /** The one end predicate over the stored decision (D-8983): `isEnded(state)`. A programme with no row has not ended. */
@@ -1385,7 +1404,7 @@ export function setAsideAdopted(db: DatabaseSync, a: { moveId: number; ticketId:
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
-  planOf, phasesOf, writePhaseRef, planEndOf, programmeEnded, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
+  planOf, phasesOf, writePhaseRef, planEndOf, programmeEnded, mayStartProgramme, planOwnerOf, planOwnerless, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   doneFactsOf, ticketOfRun, markTicketDone,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,

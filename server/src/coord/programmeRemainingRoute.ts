@@ -55,8 +55,8 @@ export function registerProgrammeRemainingRoute(app: FastifyInstance, deps: Prog
     if (!parsed.ok) return bad(reply, parsed.detail);
     if (!(await deps.requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
     try {
-      if (!coord.claimsProgramme(byId, slug)) {
-        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${byId} holds no open run of programme ${slug}` });
+      if (!coord.claimsProgramme(byId, slug, byUuid)) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${byId} is not the coordinator of programme ${slug}` });
       }
     } catch (err) {
       return refuseRoute(reply, 'run-unreadable', { detail: errText(err) });

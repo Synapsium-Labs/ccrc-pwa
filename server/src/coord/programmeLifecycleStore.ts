@@ -13,21 +13,42 @@ import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type RunState } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import {
-  isEnded, type ProgrammeActorKind, type ProgrammeEventEdge, type ProgrammeMigrationRule, type ProgrammeStoredState,
+  endRecorded, isEnded, PROGRAMME_ENDED_STATES, type ProgrammeActorKind, type ProgrammeEventEdge, type ProgrammeMigrationRule,
+  type ProgrammeStoredState,
 } from '../../../shared/programmeLifecycle.js';
-import { markSyncDueInTx } from './planStore.js';
 
 const TERMINAL_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** The end set as SQL, built from `PROGRAMME_ENDED_STATES` (the one spelling), as `TERMINAL_SQL` is from its list. */
+const ENDED_SQL = `('${PROGRAMME_ENDED_STATES.join("','")}')`;
 /** The run states whose `run_events` row witnesses that a run was ever dispatched (spec §3: `dispatched` reads
  *  `run_events`, not `runs.dispatchedAt`, because a resumed dispatch leaves that column null). */
 const DISPATCH_WITNESS_STATES: readonly RunState[] = ['dispatched', 'working'];
 const DISPATCH_WITNESS_SQL = `('${DISPATCH_WITNESS_STATES.join("','")}')`;
+
+// The plan sync's due marker lives here, not in `planStore.ts` (programme lifecycle W1 review, A7): the end's record marks
+// the sync due, and importing it from the plan store made the two adapters import each other. `planStore.ts` re-exports it.
+/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`, except that a row deferred for a FAILURE keeps
+ *  its own (A7/A12: a plan write, a run transition or an attach never pulls a backoff back to now). Opens no transaction.
+ *
+ *  The row's `attempts` column (migration 59, read nowhere before) is the failure mark: `deferSync` counts a failure
+ *  deferral there and sets it to 0 for an ordinary one; `clearSyncDue` deletes the row. No migration (D-8673). */
+export function markSyncDueInTx(db: DatabaseSync, program: string, at: number): void {
+  if (program === LINEAR_SYNC_PROGRAMME) return;
+  db.prepare(
+    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET '
+    + 'dueAt = CASE WHEN attempts > 0 THEN dueAt ELSE MIN(dueAt, excluded.dueAt) END',
+  ).run(program, at);
+}
 
 /** Who acted: the kind and the id (a session id, the signed-in device, or `unmeasured`). Never null. */
 export interface ProgrammeActor {
   readonly kind: ProgrammeActorKind;
   readonly id: string;
 }
+
+/** The operator acting through a door that does not carry the signed-in device (the archive and stop doors, the item act):
+ *  the actor is the operator, its id unmeasured (spec §5's "the signed-in device, or `unmeasured`"). */
+export const OPERATOR_UNMEASURED: ProgrammeActor = { kind: 'operator', id: 'unmeasured' };
 
 /** A programme row's lifecycle columns, raw. `state` is a string: an out-of-vocabulary value is kept, never folded. */
 export interface ProgrammeLifecycleRow {
@@ -72,14 +93,23 @@ export function appendEventInTx(db: DatabaseSync, e: ProgrammeEventInput, at: nu
 export type DecideEdge = Extract<ProgrammeEventEdge, 'ended' | 'reopened' | 'pause' | 'resume' | 'repaired' | 'migrated'>;
 
 /** Every caller holds a row it read (a door's 404 comes first), so an absent programme throws, rolling the transaction
- *  back, rather than minting a refusal word no door answers. */
-export type DecideResult = { readonly ok: true; readonly changed: boolean; readonly from: string; readonly released: string | null };
+ *  back, rather than minting a refusal word no door answers. `already-ended`: the first recorded end stands (`state` names
+ *  it), and nothing was written. */
+export type DecideResult =
+  | { readonly ok: true; readonly changed: boolean; readonly from: string; readonly released: string | null }
+  | { readonly ok: false; readonly kind: 'already-ended'; readonly state: string };
 
 /**
  * THE writer of the stored decision (D-8983). `to` equal to the stored state writes nothing (what makes a re-run safe). An
  * ended `to` writes the end's record with it (`planEnd` equal to the state, `planEndWhy`, `planEndAt`) and releases the
  * binding in the same transaction, naming the released coordinator in the event (R11 rule 6); a live `to` clears the
  * record. The plan's sync is marked due whenever the record changes, as `closePlan` did.
+ *
+ * THE FIRST RECORDED END STANDS (W1 review, A6): a row whose end is recorded (`endRecorded`: ended, with `planEnd` equal
+ * to it) refuses a different ended target (`already-ended`), so no door can rewrite a Done as Abandoned or back; only a
+ * reopen (a live target) moves it, and the boot re-measure's `migrated` edge, which follows the record an older build
+ * wrote. A D-51 end the migration kept (`planEnd` null, spec §13 step 4) is not a recorded decision: the operator's first
+ * decision records either outcome.
  */
 export function decideInTx(
   db: DatabaseSync,
@@ -96,6 +126,9 @@ export function decideInTx(
   const ended = isEnded(input.to);
   if (row.state === input.to && (ended ? row.planEnd === input.to : row.planEnd === null)) {
     return { ok: true, changed: false, from: row.state, released: null };
+  }
+  if (ended && row.state !== input.to && endRecorded(row.state, row.planEnd) && input.edge !== 'migrated') {
+    return { ok: false, kind: 'already-ended', state: row.state };
   }
   if (ended && row.planEnd === input.to) {
     // The record already says this end (a plan close an older build wrote): the decision follows it, the record is kept.
@@ -161,7 +194,7 @@ export function mintInTx(db: DatabaseSync, input: MintInput, now: number): MintR
     detail: input.placeholder === undefined ? null : { placeholder: input.placeholder },
   }, now);
   if (input.coordinator != null) {
-    const bound = bindCoordinatorInTx(db, input.slug, input.coordinator, input.actor, input.why, now);
+    const bound = liveBind(bindCoordinatorInTx(db, input.slug, input.coordinator, input.actor, input.why, now), input.slug);
     if (!bound.ok) return bound;
   }
   return { ok: true, minted: true };
@@ -169,7 +202,10 @@ export function mintInTx(db: DatabaseSync, input: MintInput, now: number): MintR
 
 export type BindResult =
   | { readonly ok: true; readonly changed: boolean }
-  | { readonly ok: false; readonly kind: 'owns-another-programme'; readonly by: string };
+  | { readonly ok: false; readonly kind: 'owns-another-programme'; readonly by: string }
+  /** R11 rule 1 (W1 review, C4): an ended programme, or a filed or withdrawn placeholder, is owned by nobody, so it is
+   *  never bound. `by` names the programme. Nothing was written. */
+  | { readonly ok: false; readonly kind: 'programme-ended'; readonly by: string };
 
 /** The live real programme (not ended, not a placeholder) this incarnation owns other than `except`, or null. A null
  *  uuid on either side matches by the session id alone (a migration-seeded binding, an unattributed caller). */
@@ -178,7 +214,7 @@ export function ownedLiveProgrammeOf(
 ): string | null {
   const r = db.prepare(
     "SELECT slug FROM programs WHERE coordinator = ? AND (coordinatorUuid IS NULL OR ? IS NULL OR coordinatorUuid = ?) " +
-    "AND state NOT IN ('done', 'abandoned') AND placeholder IS NULL AND slug != ? ORDER BY slug LIMIT 1",
+    `AND state NOT IN ${ENDED_SQL} AND placeholder IS NULL AND slug != ? ORDER BY slug LIMIT 1`,
   ).get(session, uuid, uuid, except ?? '') as { slug: string } | undefined;
   return r?.slug ?? null;
 }
@@ -197,6 +233,9 @@ export function bindCoordinatorInTx(
   const row = programmeRowOf(db, slug);
   if (row === null) throw new Error(`bindCoordinatorInTx: no programme ${slug}`);
   if (to !== null) {
+    if (isEnded(row.state) || (row.placeholder !== null && row.placeholder !== 'unfiled')) {
+      return { ok: false, kind: 'programme-ended', by: slug };
+    }
     const owned = ownedLiveProgrammeOf(db, to.session, to.uuid, slug);
     if (owned !== null) return { ok: false, kind: 'owns-another-programme', by: owned };
   }
@@ -219,7 +258,7 @@ export function programmeOf(
 ): { readonly slug: string; readonly placeholder: string | null } | null {
   const r = db.prepare(
     "SELECT slug, placeholder FROM programs WHERE coordinator = ? AND (coordinatorUuid IS NULL OR ? IS NULL OR coordinatorUuid = ?) " +
-    "AND state NOT IN ('done', 'abandoned') ORDER BY (placeholder IS NOT NULL), slug LIMIT 1",
+    `AND state NOT IN ${ENDED_SQL} ORDER BY (placeholder IS NOT NULL), slug LIMIT 1`,
   ).get(session, uuid, uuid) as { slug: string; placeholder: string | null } | undefined;
   return r ?? null;
 }
@@ -250,19 +289,34 @@ export function mayStartProgrammeInTx(
   return joined === undefined ? { ok: true } : { ok: false, kind: 'not-your-programme', by: 'you own no programme now' };
 }
 
+/** Has the programme ever been bound (a `coordinator` event naming an incoming session)? A binding seeded by the migration
+ *  writes one too. The plan owner reads it, so a released programme is owned by nobody, never by its old putter. */
+export function everBoundInTx(db: DatabaseSync, slug: string): boolean {
+  return db.prepare("SELECT 1 AS x FROM programme_events WHERE program = ? AND edge = 'coordinator' AND session IS NOT NULL LIMIT 1")
+    .get(slug) !== undefined;
+}
+
 /** Start a new programme owned by `session` in the caller's transaction (the first run, a plan put on a new slug): mint
  *  it, file the session's unfiled placeholder into it (its binding cleared first), then bind the session. The caller has
  *  asked `mayStartProgrammeInTx`. */
 export function startOwnedInTx(
   db: DatabaseSync, input: Omit<MintInput, 'coordinator' | 'state'> & { readonly session: string; readonly uuid: string | null },
   now: number,
-): BindResult {
+): { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly kind: 'owns-another-programme'; readonly by: string } {
   mintInTx(db, { ...input, state: 'active' }, now);
   const own = programmeOf(db, input.session, input.uuid);
   if (own !== null && own.placeholder === 'unfiled' && own.slug !== input.slug) {
     fileInTx(db, own.slug, { kind: 'filed', into: input.slug }, input.actor, `new objective filed from ${own.slug}`, now);
   }
-  return bindCoordinatorInTx(db, input.slug, { session: input.session, uuid: input.uuid }, input.actor, input.why, now);
+  return liveBind(bindCoordinatorInTx(db, input.slug, { session: input.session, uuid: input.uuid }, input.actor, input.why, now), input.slug);
+}
+
+/** A bind onto a row the caller has just minted live: `programme-ended` there is impossible, so it throws (rolling the
+ *  transaction back) rather than reaching a door as a word it never answers. */
+function liveBind(b: BindResult, slug: string):
+  { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly kind: 'owns-another-programme'; readonly by: string } {
+  if (!b.ok && b.kind === 'programme-ended') throw new Error(`bindCoordinatorInTx: ${slug} was minted ended`);
+  return b;
 }
 
 /** File an unfiled placeholder into `into`, or withdraw it: its binding is cleared FIRST (so the session can be bound to
@@ -352,7 +406,7 @@ export function remeasureAtBootInTx(db: DatabaseSync, now: number): RemeasureRep
   }
   // An ended row's binding is released (an older build never moved it; a rollback's end left it standing).
   for (const r of db.prepare(
-    "SELECT slug FROM programs WHERE coordinator IS NOT NULL AND state IN ('done', 'abandoned') ORDER BY slug",
+    `SELECT slug FROM programs WHERE coordinator IS NOT NULL AND state IN ${ENDED_SQL} ORDER BY slug`,
   ).all() as { slug: string }[]) {
     bindCoordinatorInTx(db, r.slug, null, SYSTEM, REMEASURE_WHY, now);
     released++;
@@ -375,6 +429,12 @@ export function remeasureAtBootInTx(db: DatabaseSync, now: number): RemeasureRep
     if (row.coordinator === s) continue;
     if ((bySession.get(s) ?? []).length !== 1) continue;
     if (ownedLiveProgrammeOf(db, s, null, program) !== null) continue;
+    // The partial unique index covers placeholders too (W1 review, A5): the session's unfiled placeholder is withdrawn
+    // first, as every heir's is, so the bind below never meets the index mid-transaction.
+    const own = programmeOf(db, s, null);
+    if (own !== null && own.placeholder === 'unfiled') {
+      fileInTx(db, own.slug, { kind: 'withdrawn' }, SYSTEM, `its coordinator holds the open runs of ${program}; ${REMEASURE_WHY}`, now);
+    }
     const b = bindCoordinatorInTx(db, program, { session: s, uuid: null }, SYSTEM, REMEASURE_WHY, now);
     if (b.ok && b.changed) bound++;
   }

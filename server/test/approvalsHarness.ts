@@ -163,8 +163,10 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     run(claimedBy, sessionId, o = {}) {
       const project = o.project ?? 'project-a';
       runSeq += 1;
+      // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's runs are the waves of its one
+      // programme, never the first runs of several.
       const r = coord.openRun({
-        program: o.program ?? `prog-${runSeq}`, title: 'Prog', project, wave: 1, waveOf: null,
+        program: o.program ?? `prog-${claimedBy ?? 'nobody-yet'}`, title: 'Prog', project, wave: runSeq, waveOf: null,
         claimedBy: claimedBy ?? 'nobody-yet', coordProject: o.coordProject === undefined ? project : o.coordProject as string,
       }) as { id?: number };
       if (typeof r.id !== 'number') throw new Error(`fixture: the run open was refused (${JSON.stringify(r)})`);

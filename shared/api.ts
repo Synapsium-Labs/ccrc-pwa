@@ -24,7 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
-import { PROGRAMME_RUN_REFUSAL_MAP, type ProgrammeRunRefuseCode } from './programmeLifecycle.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeRunRefuseCode, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -5443,8 +5443,8 @@ export function isWorkItemState(v: unknown): v is WorkItemState {
  *  enum column, and this was one of the two it did not actually give one to.
  *  Closed here, on the READ side, rather than reproduced on the wire —
  *  `CoordStore.programs()` reads through `isProgramState`, never a cast. */
-export type ProgramState = 'active' | 'paused' | 'done' | 'abandoned' | 'unknown';
-const PROGRAM_STATES: readonly ProgramState[] = ['active', 'paused', 'done', 'abandoned', 'unknown'];
+export type ProgramState = ProgrammeStoredState;   // spelled once, in `shared/programmeLifecycle.ts` (W1 review, A7)
+const PROGRAM_STATES: readonly ProgramState[] = PROGRAMME_STORED_STATES;
 export function isProgramState(v: unknown): v is ProgramState {
   return typeof v === 'string' && (PROGRAM_STATES as readonly string[]).includes(v);
 }

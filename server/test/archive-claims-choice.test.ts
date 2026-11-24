@@ -195,10 +195,11 @@ describe('archive — hand over', () => {
     expect(b.ccd()).toEqual([['ws-archive', '--session', COORDINATOR]]);
   });
 
-  // Programme lifecycle W1 (R11 rule 4, D-8993): one heir is given one programme. A session holding runs in two (a
-  // migration conflict, written here as an older build left it) hands the first over, and the second is refused
-  // `owns-another-programme`: each programme goes to its own coordinator.
-  it('hands the first programme the session claims to the heir and refuses the second: one programme per coordinator', async () => {
+  // Programme lifecycle W1 (R11 rule 4, D-8993; W1 review C6 and A4): one heir is given one programme, asked BEFORE the
+  // first move. A session holding runs in two (a migration conflict, written here as an older build left it) is refused
+  // `owns-another-programme` and nothing moves; a release moves both. On the builder's first cut the first programme moved
+  // and the second was refused, leaving the claims split (red with the up-front rung deleted from `moveClaims`).
+  it('a session holding runs in two programmes is refused before anything moves; a release moves both', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
     seed(b.home, HEIR);
@@ -207,8 +208,27 @@ describe('archive — hand over', () => {
     const z = b.coord.openRun({ program: 'zeta', title: 'T', project: 'demo', wave: 1, waveOf: 3, claimedBy: 'other-opener' });
     if (!('id' in z)) throw new Error('fixture openRun refused');
     b.coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(COORDINATOR, z.id);
-    expect((await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR })).statusCode).not.toBe(200);
-    expect([claimantOf(b.coord, a!), claimantOf(b.coord, z.id)]).toEqual([HEIR, COORDINATOR]);
+    const res = await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'claims-not-moved', moved: [], refusal: { kind: 'owns-another-programme', by: 'zeta' } });
+    expect([claimantOf(b.coord, a!), claimantOf(b.coord, z.id)]).toEqual([COORDINATOR, COORDINATOR]);
+    expect(b.coord.programmeLifecycleRow('alpha')?.coordinator).toBe(COORDINATOR);
+    expect((await archive(b.app, COORDINATOR, { runs: 'release' })).statusCode).toBe(200);
+    expect([claimantOf(b.coord, a!), claimantOf(b.coord, z.id)]).toEqual([null, null]);
+    expect(b.coord.programmeLifecycleRow('alpha')?.coordinator).toBeNull();
+  });
+
+  it('an heir that owns another programme is refused before anything moves', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    seed(b.home, HEIR);
+    idle(b.home);
+    const [a] = coordinates(b.coord, 1, 'alpha');
+    const other = b.coord.openRun({ program: 'beta', title: 'T', project: 'demo', wave: 1, waveOf: 3, claimedBy: HEIR });
+    expect('id' in other).toBe(true);
+    const res = await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR });
+    expect(res.json()).toMatchObject({ error: 'claims-not-moved', refusal: { kind: 'owns-another-programme', by: 'beta' } });
+    expect(claimantOf(b.coord, a!)).toBe(COORDINATOR);
   });
 
   it.each([
@@ -363,5 +383,69 @@ describe('the swap path is untouched', () => {
     expect(claimantOf(b.coord, r1!)).toBe(COORDINATOR);
     expect(events(b.coord, r1!)).toEqual([]);
     expect(b.ccd().map((c) => c[0])).toEqual(['swap']);
+  });
+});
+
+// Programme lifecycle W1 (D-8985; W1 review S2): an Idle programme's coordinator claims no open run, so `claimed` is empty,
+// yet it is still bound. A claims choice moves the binding (and its finished claims) too, so an archived session never
+// keeps owning a programme the operator chose to release or hand over. Red with `moveOrRefuse`'s empty-claims shortcut back.
+describe('archive — the coordinator of an Idle programme', () => {
+  const idleProgramme = (coord: CoordStore): number => {
+    const [id] = coordinates(coord, 1, 'quiet');
+    expect(coord.advance(id!, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(coord.closeRun({ runId: id!, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: 'quiet', viaClosing: true }))
+      .toMatchObject({ ok: true });
+    expect(coord.programmeLifecycleRow('quiet')).toMatchObject({ state: 'active', coordinator: COORDINATOR });
+    return id!;
+  };
+
+  it('release clears its binding and its finished claims', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    idle(b.home);
+    const id = idleProgramme(b.coord);
+    expect((await archive(b.app, COORDINATOR, { runs: 'release' })).statusCode).toBe(200);
+    expect(b.coord.programmeLifecycleRow('quiet')?.coordinator).toBeNull();
+    expect(claimantOf(b.coord, id)).toBeNull();
+    expect(b.coord.claimsProgramme(COORDINATOR, 'quiet', null)).toBe(false);
+  });
+
+  it('a hand-over binds the heir with its measured uuid, and the event names the operator and the archive', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    seed(b.home, HEIR);
+    idle(b.home);
+    const id = idleProgramme(b.coord);
+    expect((await archive(b.app, COORDINATOR, { runs: 'handover', heir: HEIR })).statusCode).toBe(200);
+    expect(b.coord.programmeLifecycleRow('quiet')).toMatchObject({ coordinator: HEIR, coordinatorUuid: `u-${HEIR}` });
+    expect(claimantOf(b.coord, id)).toBe(HEIR);
+    const ev = b.coord.db.prepare("SELECT actorKind, actor, why, session, sessionUuid FROM programme_events WHERE program = 'quiet' AND edge = 'coordinator' ORDER BY id DESC LIMIT 1").get();
+    expect(ev).toMatchObject({ actorKind: 'operator', actor: 'unmeasured', session: HEIR, sessionUuid: `u-${HEIR}` });
+    expect((ev as { why: string }).why).toContain('archived or stopped');
+  });
+
+  it('archived with no choice keeps its binding: a coordinator that exits keeps it (R7)', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    idle(b.home);
+    idleProgramme(b.coord);
+    expect((await archive(b.app, COORDINATOR)).statusCode).toBe(200);
+    expect(b.coord.programmeLifecycleRow('quiet')?.coordinator).toBe(COORDINATOR);
+  });
+});
+
+// Programme lifecycle W1 (W1 review A2; spec §5's archive-end row): D-51 no longer ends a programme at its last close, so
+// `programme:'end'` ends it by decision after abandoning its runs: Abandoned, its binding released, the event's why
+// "archived with programme end". Red with the door's end step deleted: the programme stays stored `active`.
+describe('archive — programme end is a decision', () => {
+  it('abandons the open runs, then ends the programme Abandoned and releases its coordinator', async () => {
+    const b = await box();
+    seed(b.home, COORDINATOR);
+    idle(b.home);
+    coordinates(b.coord, 2, 'ending');
+    expect((await archive(b.app, COORDINATOR, { programme: 'end', interrupt: true })).statusCode).toBe(200);
+    expect(b.coord.programmeLifecycleRow('ending')).toMatchObject({ state: 'abandoned', planEnd: 'abandoned', coordinator: null });
+    const ev = b.coord.db.prepare("SELECT why, actorKind FROM programme_events WHERE program = 'ending' AND edge = 'ended'").get();
+    expect(ev).toEqual({ why: 'archived with programme end', actorKind: 'operator' });
   });
 });

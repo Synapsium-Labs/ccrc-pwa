@@ -73,10 +73,10 @@ describe('programme lifecycle characterization (main before the lifecycle build)
   it('claimsProgramme keeps an Idle programme\'s owner (FLIPPED (task 8): it read open runs, so a closed last run lost it)', () => {
     const s = store();
     const id = open(s, 'programme-a', 'lane-a-one');
-    expect(s.claimsProgramme('lane-a-one', 'programme-a')).toBe(true);
+    expect(s.claimsProgramme('lane-a-one', 'programme-a', null)).toBe(true);
     closeDone(s, id, 'programme-a');
-    expect(s.claimsProgramme('lane-a-one', 'programme-a')).toBe(true);
-    expect(s.claimsProgramme('lane-a-two', 'programme-a')).toBe(false);
+    expect(s.claimsProgramme('lane-a-one', 'programme-a', null)).toBe(true);
+    expect(s.claimsProgramme('lane-a-two', 'programme-a', null)).toBe(false);
   });
 
   it('reclaimProgram moves claimedBy on every claimed run of the programme, finished ones included (D-8199)', () => {

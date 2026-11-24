@@ -6,8 +6,8 @@
 // `coordinatorLineOf` derives "Led by", "No coordinator" or "Coordinator unmeasured" from the stored binding and one
 // registry reading, never folding doubt into absence.
 
-/** The stored decision's vocabulary, spelled here so this file imports nothing (`ProgramState` in `shared/api.ts` names
- *  the same five words; `programme-lifecycle.test.ts` pins that they agree). */
+/** The stored decision's vocabulary, spelled ONCE, here: `shared/api.ts`'s `ProgramState` and its `isProgramState` list
+ *  derive from it (this file imports nothing, so `api.ts` imports it, never the other way). */
 export const PROGRAMME_STORED_STATES = ['active', 'paused', 'done', 'abandoned', 'unknown'] as const;
 export type ProgrammeStoredState = (typeof PROGRAMME_STORED_STATES)[number];
 
@@ -35,6 +35,17 @@ export interface ProgrammeRunFacts {
 /** The one end predicate (D-8983): `done` or `abandoned`. Any other stored value, out-of-vocabulary included, is not ended. */
 export function isEnded(stored: string): boolean {
   return (PROGRAMME_ENDED_STATES as readonly string[]).includes(stored);
+}
+
+/**
+ * Is the end RECORDED: ended, with the end's record (`planEnd`) saying the same outcome? Every end `decideInTx` writes is
+ * one. A D-51 end the migration kept (spec §13 step 4, `auto-retire-kept`: `done` or `abandoned` with `planEnd` null) is
+ * not: it is kept until the operator decides, so it ends nothing outside this database (W1 review, C1 and C5): the timer
+ * lane cancels no timer for it and the Linear sync closes nothing for it, because neither act is undone by a reopen.
+ * Every gate inside ccrc still reads `isEnded`.
+ */
+export function endRecorded(stored: string, planEnd: string | null): boolean {
+  return isEnded(stored) && planEnd === stored;
 }
 
 /** Spec §3's truth table, row by row. A filed or withdrawn placeholder has no shown lifecycle (null). */
@@ -109,3 +120,10 @@ export const PROGRAMME_RUN_REFUSAL_MAP: Readonly<Record<ProgrammeRunRefuseCode, 
   'programme-paused': true, 'programme-unknown': true, 'programme-provisional': true,
   'owns-another-programme': true, 'not-your-programme': true,
 };
+
+/** The lifecycle store's own refusal words (W1 review), each a typed result its caller answers or rolls back on, never sent
+ *  as a door's word in W1: the first recorded end stands (`already-ended`, `decideInTx`); an ended programme or a filed or
+ *  withdrawn placeholder is never bound (`programme-ended`, `bindCoordinatorInTx`); a programme-keyed move names no row
+ *  (`unknown-programme`, `CoordStore#reclaimProgramme`). */
+export const PROGRAMME_STORE_REFUSALS = ['already-ended', 'programme-ended', 'unknown-programme'] as const;
+export type ProgrammeStoreRefusal = (typeof PROGRAMME_STORE_REFUSALS)[number];

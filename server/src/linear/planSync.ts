@@ -584,7 +584,10 @@ export class PlanSync {
     const bindings = plan.bindingsOf(slug);
     const planEnd = upkeep ? null : plan.planEndOf(slug);
     const tickets = stored.epics.flatMap((e) => e.tickets);
-    const outcome = prog === null ? null : programmeEnd({ programState: prog.row.state });
+    const outcome = prog === null ? null : programmeEnd({
+      programState: prog.row.state, planEnd: planEnd?.outcome ?? null, epics: stored.epics,
+      openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
+    });
     const slots = slotsOf(store);
     const routes = measuredTeamRoutes(store);
     const listed = routes?.slots ?? [];

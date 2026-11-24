@@ -50,14 +50,52 @@ describe('the programme lifecycle has one writer (D-8983)', () => {
     expect(w.rows).toEqual([WRITER, EXEMPT]);
   });
 
-  it('bindCoordinatorInTx is called from a closed list', () => {
-    const callers = new Set<string>();
-    for (const f of SOURCES) {
-      const src = readFileSync(f, 'utf8');
-      if (/\bbindCoordinatorInTx\(/.test(src)) callers.add(rel(f));
-    }
-    // The lifecycle store's own callers (`mintInTx`, `fileInTx`, `decideInTx`'s end release, the boot re-measure,
-    // `startOwnedInTx`) and `CoordStore#reclaimProgram`, the one mover between sessions.
-    expect([...callers].sort()).toEqual(['server/src/coord/programmeLifecycleStore.ts', 'server/src/coord/store.ts']);
+  // W1 review (S4): the closed list is of FUNCTIONS, not files, so a new call anywhere in `store.ts` (or a second path in
+  // the lifecycle store itself) is named. A call's function is the nearest declaration above it: a top-level `function`,
+  // or a class member at two spaces' indent.
+  it('CONTROL: a planted call is attributed to its enclosing function', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'lifecycle-census-'));
+    try {
+      const f = path.join(d, 'planted.ts');
+      writeFileSync(f, 'export function bindCoordinatorInTx() {}\nclass C {\n  sneaky(): void {\n    lifecycle.bindCoordinatorInTx(db, s, null);\n  }\n}\n');
+      expect(bindCallers([f]).map((c) => c.split('#')[1])).toEqual(['sneaky']);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('bindCoordinatorInTx is called from a closed list of functions', () => {
+    // The lifecycle store's own writers (`mintInTx`, `startOwnedInTx`, `fileInTx`, `decideInTx`'s end release, the boot
+    // re-measure) and `CoordStore#reclaimProgrammeInTx`, the one mover between sessions (spec §3, plan W1 item 8). The
+    // registry lane's uuid stamp and seeded-binding release join it in W4.
+    expect(bindCallers(SOURCES)).toEqual([
+      'server/src/coord/programmeLifecycleStore.ts#decideInTx',
+      'server/src/coord/programmeLifecycleStore.ts#fileInTx',
+      'server/src/coord/programmeLifecycleStore.ts#mintInTx',
+      'server/src/coord/programmeLifecycleStore.ts#remeasureAtBootInTx',
+      'server/src/coord/programmeLifecycleStore.ts#startOwnedInTx',
+      'server/src/coord/store.ts#reclaimProgrammeInTx',
+    ]);
   });
 });
+
+/** Every `file#function` whose body calls `bindCoordinatorInTx(`, sorted; the definition itself and comment lines are not
+ *  calls. A function is a top-level `function` declaration; in a file that declares a class, also a member at two spaces'
+ *  indent (a statement in a top-level function's body sits at the same indent, so the member pattern is a class file's only). */
+function bindCallers(files: readonly string[]): string[] {
+  const out = new Set<string>();
+  const FN = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/;
+  const MEMBER = /^ {2}(?:(?:private|public|protected|static|async)\s+)*(?!(?:if|for|while|switch|return|catch|await|const|let|throw)\b)(\w+)\s*(?:<[^>]*>)?\(/;
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8');
+    const classFile = /^(?:export\s+)?class\s/m.test(src);
+    let fn = '(top level)';
+    for (const line of src.split('\n')) {
+      const d = FN.exec(line) ?? (classFile ? MEMBER.exec(line) : null);
+      if (d !== null) fn = d[1]!;
+      const t = line.trimStart();
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
+      if (/\bfunction\s+bindCoordinatorInTx\b/.test(line)) continue;
+      if (/\bbindCoordinatorInTx\(/.test(line)) out.add(`${rel(f)}#${fn}`);
+    }
+  }
+  return [...out].sort();
+}

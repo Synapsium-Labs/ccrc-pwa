@@ -35,8 +35,10 @@ const pin = (pr = 7, head = HEAD): LandingAdvance => ({ kind: 'pin', head, pr, m
 const step = (c: CoordStore, id: number, to: Parameters<CoordStore['advance']>[1]): void => {
   if (!c.advance(id, to, 'test').ok) throw new Error(`fixture advance to ${to} refused`);
 };
+/** The waves of coord-a's one programme (programme lifecycle W1, R11: one coordinator owns one programme). */
+let landWave = 0;
 const atReview = (c: CoordStore, project = P, wave = 1): number => {
-  const o = c.openRun({ program: `prog-${project}-${wave}`, title: 't', project, wave, waveOf: 9, claimedBy: 'coord-a' });
+  const o = c.openRun({ program: 'prog-coord-a', title: 't', project, wave: ++landWave, waveOf: null, claimedBy: 'coord-a' });   // one programme per coordinator (R11)
   if (!('id' in o)) throw new Error('fixture openRun refused');
   c.setSession(o.id, `${project}-ws${wave}`);
   for (const to of ['dispatched', 'working', 'awaiting-review'] as const) step(c, o.id, to);

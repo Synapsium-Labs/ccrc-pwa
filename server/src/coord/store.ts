@@ -18,7 +18,7 @@ import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvis
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import * as lifecycle from './programmeLifecycleStore.js';
-import { isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
+import { endRecorded, isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -813,6 +813,14 @@ export type ReclaimProgramResult =
   /** Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another live real programme, or claims an open run in a
    *  programme other than this one that it does not own. `by` names it. Nothing was written. */
   | { ok: false; kind: 'owns-another-programme'; by: string };
+
+/** The move's attribution (programme lifecycle W1 review, S8): who moved the binding, recorded on its `coordinator` event,
+ *  and the heir's measured uuid, the incarnation the binding names (D-8985). Absent: `system`/`unmeasured`, a null uuid. */
+export interface ReclaimMoveOpts {
+  readonly toUuid?: string | null;
+  readonly actor?: lifecycle.ProgrammeActor;
+  readonly why?: string;
+}
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
  *  `setWorkItemState`'s `WHERE` is BUILT from this list and `settleItems`'
@@ -2415,7 +2423,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null, toUuid: string | null = null): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null, opts: ReclaimMoveOpts = {}): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -2424,6 +2432,37 @@ export class CoordStore {
       // unclaimed run names no handover to make, and rewriting its siblings off a
       // row that never had a claimant is a reassignment nobody asked for.
       if (run.claimedBy === null) return { ok: false as const, kind: 'no-claimant' as const };
+      return this.reclaimProgrammeInTx(run.program, run.claimedBy, to, at, coordProject, opts);
+    });
+  }
+
+  /**
+   * Programme lifecycle W1 (spec §3, D-8985; W1 review): the same move keyed on the programme, for the programme `from` is
+   * bound to when it claims no open run there (an Idle programme's coordinator archived or stopped with a claims choice):
+   * every claimed run of the programme, finished ones included, and the binding, or the binding alone when no run is
+   * claimed. `unknown-programme` when there is no such row; `no-claimant` when `from` is not its bound coordinator, so a
+   * stale caller never moves a programme somebody else now owns.
+   */
+  reclaimProgramme(slug: string, from: string, to: string | null, at: number, coordProject: string | null,
+    opts: ReclaimMoveOpts = {}): ReclaimProgramResult | { ok: false; kind: 'unknown-programme' } {
+    return tx(this.db, () => {
+      const row = lifecycle.programmeRowOf(this.db, slug);
+      if (row === null) return { ok: false as const, kind: 'unknown-programme' as const };
+      if (row.coordinator !== from) return { ok: false as const, kind: 'no-claimant' as const };
+      return this.reclaimProgrammeInTx(slug, from, to, at, coordProject, opts);
+    });
+  }
+
+  /** The move's body, inside the caller's transaction: `program`'s claims and binding go from `from` to `to` (null: released). */
+  private reclaimProgrammeInTx(
+    program: string, from: string, to: string | null, at: number, coordProject: string | null, opts: ReclaimMoveOpts,
+  ): ReclaimProgramResult {
+    const run = { program, claimedBy: from };
+    // Re-naming the programme's current coordinator never changes its incarnation (D-1136's identity path, W1 review S3): a
+    // new incarnation under a reused id that names itself the heir is handed nothing; the binding keeps its own uuid.
+    const current = lifecycle.programmeRowOf(this.db, program);
+    const toUuid = to !== null && current !== null && current.coordinator === to ? current.coordinatorUuid : opts.toUuid ?? null;
+    {
       // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
       // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
       // placeholder does not count: it is withdrawn below, in this transaction. A conflict's party may be given a
@@ -2499,16 +2538,20 @@ export class CoordStore {
       const displaced = [...new Set(moved.map((m) => m.claimedBy))];
       // Programme lifecycle W1 (D-8985): the binding moves with the claims, in this transaction, through its one writer.
       // The heir's unfiled placeholder is withdrawn first (its binding cleared), so the partial unique index never fires.
-      const operator = { kind: 'operator' as const, id: 'operator' };
-      const why = to === null ? 'released by the operator' : `handed over from ${run.claimedBy}`;
-      if (to !== null) {
-        const own = lifecycle.programmeOf(this.db, to, toUuid);
-        if (own !== null && own.placeholder === 'unfiled' && own.slug !== run.program) {
-          lifecycle.fileInTx(this.db, own.slug, { kind: 'withdrawn' }, operator, `its coordinator was given ${run.program}`, at);
+      // The actor is the caller's (W1 review, S8): the reclaim door, the archive or stop door, never assumed.
+      const actor = opts.actor ?? { kind: 'system' as const, id: 'unmeasured' };
+      const why = opts.why ?? (to === null ? `released from ${run.claimedBy}` : `handed over from ${run.claimedBy}`);
+      const prow = current;
+      // An ended programme is owned by nobody (R11 rule 1; W1 review, C4): its claims still move, so its open runs can be
+      // closed, but no binding is written onto it.
+      if (prow !== null && (to === null || !isEnded(prow.state))) {
+        if (to !== null) {
+          const own = lifecycle.programmeOf(this.db, to, toUuid);
+          if (own !== null && own.placeholder === 'unfiled' && own.slug !== run.program) {
+            lifecycle.fileInTx(this.db, own.slug, { kind: 'withdrawn' }, actor, `its coordinator was given ${run.program}`, at);
+          }
         }
-      }
-      if (lifecycle.programmeRowOf(this.db, run.program) !== null) {
-        const bound = lifecycle.bindCoordinatorInTx(this.db, run.program, to === null ? null : { session: to, uuid: toUuid }, operator, why, at);
+        const bound = lifecycle.bindCoordinatorInTx(this.db, run.program, to === null ? null : { session: to, uuid: toUuid }, actor, why, at);
         if (!bound.ok) throw new Error(`reclaimProgram: ${bound.kind} ${bound.by} passed the heir rung`);
       }
       // A release cancels the displaced claimant's kickoffs too — the chair it was told to take is left — and repoints
@@ -2529,7 +2572,7 @@ export class CoordStore {
         ok: true as const, program: run.program,
         runIds: moved.map((m) => m.id), from: run.claimedBy,
       };
-    });
+    }
   }
 
   /**
@@ -5575,6 +5618,15 @@ export class CoordStore {
   programmeLive(slug: string): boolean {
     const r = lifecycle.programmeRowOf(this.db, slug);
     return r !== null && !isEnded(r.state);
+  }
+
+  /** Has the programme's end been DECIDED (programme lifecycle W1 review, C1): no row, or an end `decideInTx` recorded
+   *  (`endRecorded`). A D-51 end the migration kept (spec §13 step 4, `planEnd` null) is not, until the operator decides,
+   *  so the timers lane, whose cancel no reopen undoes, cancels nothing for it, as on `main`. Every gate reads
+   *  `programmeLive`. */
+  programmeEndDecided(slug: string): boolean {
+    const r = lifecycle.programmeRowOf(this.db, slug);
+    return r === null || endRecorded(r.state, r.planEnd);
   }
 
   /** The programme lifecycle's reads and the boot re-measure, delegates over `programmeLifecycleStore.ts`. */
@@ -11913,7 +11965,7 @@ export class CoordStore {
    *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
    *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
    *  a coordinator with a row this box cannot represent is never told "not your programme". */
-  claimsProgramme(sessionId: string, program: string, uuid: string | null = null): boolean {
+  claimsProgramme(sessionId: string, program: string, uuid: string | null): boolean {
     // Programme lifecycle W1 (D-8985, D-8993): the binding, not the open runs, so an Idle programme keeps its owner. The
     // caller's attributed uuid is compared as the attribution gate compares `claimedByUuid` (D-5298); a migration-seeded
     // binding's null uuid, or an unattributed caller, compares the id alone. An ended programme has no binding.

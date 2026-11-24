@@ -77,11 +77,12 @@ const probedHarness = async () => {
 
 let n = 0;
 /** A run opened, dispatched onto `sessionId` and closed `done`, with `closedAt`
- *  pinned so the generation fence can be placed around it. A program per run,
- *  because closing a program's last run retires it. */
+ *  pinned so the generation fence can be placed around it. The next wave of
+ *  COORD's one programme (programme lifecycle W1: one coordinator owns one
+ *  programme, and a last close no longer retires it). */
 const closedRun = (coord: CoordStore, sessionId: string, closedAt = T_CLOSE): number => {
-  const program = `w5-route-${++n}`;
-  const r = coord.openRun({ program, title: 'W5', project: 'ccrc-pwa', wave: 1, waveOf: 1, claimedBy: COORD }) as { id: number };
+  const program = 'w5-route';
+  const r = coord.openRun({ program, title: 'W5', project: 'ccrc-pwa', wave: ++n, waveOf: null, claimedBy: COORD }) as { id: number };
   const slug = sessionId.slice('ccrc-pwa-'.length);
   coord.dispatchRun({ runId: r.id, sessionId, workspace: slug, branch: `ws/${slug}`, resumed: false, clearedAt: null, items: [] });
   expect(coord.closeRun({ runId: r.id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null,
@@ -90,8 +91,8 @@ const closedRun = (coord: CoordStore, sessionId: string, closedAt = T_CLOSE): nu
   return r.id;
 };
 const openRunOn = (coord: CoordStore, sessionId: string): number => {
-  const program = `w5-route-${++n}`;
-  const r = coord.openRun({ program, title: 'W5', project: 'ccrc-pwa', wave: 1, waveOf: 1, claimedBy: COORD }) as { id: number };
+  const program = 'w5-route';
+  const r = coord.openRun({ program, title: 'W5', project: 'ccrc-pwa', wave: ++n, waveOf: null, claimedBy: COORD }) as { id: number };
   const slug = sessionId.slice('ccrc-pwa-'.length);
   coord.dispatchRun({ runId: r.id, sessionId, workspace: slug, branch: `ws/${slug}`, resumed: false, clearedAt: null, items: [] });
   return r.id;

@@ -183,10 +183,13 @@ export function planViewOf(
 
 // ── Registration ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** The owner a released live programme's plan has (`ownerOfPlan`): empty, so it equals no registry id. */
+const NO_OWNER_NOW = '';
+
 /** A door's refusal: a plan word, or `unreachable`, the Linear read's existing 503 (a stored inbound row's issue could not be re-read). */
-type Refused = { refuse: PlanRefusal | 'unreachable'; detail: string };
+type Refused = { refuse: PlanRefusal | 'unreachable' | 'not-your-programme' | 'owns-another-programme'; detail: string };
 type Work = ((c: {
-  coord: CoordStore; plan: PlanStorePort; slug: string; caller: string; body: unknown; stored: StoredPlan; owner: string | null;
+  coord: CoordStore; plan: PlanStorePort; slug: string; caller: string; callerUuid: string; body: unknown; stored: StoredPlan; owner: string | null;
   ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null; rechecks: ReadonlyMap<string, InboundRecheck>;
 }) => Promise<Refused | { ok: true; plan: PlanView }>) & { candidates?: TakeCandidates };
 
@@ -306,7 +309,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     }
   };
 
-  const refuse = (reply: FastifyReply, word: Refused['refuse'], detail: string): FastifyReply => refuseRoute(reply, word, { detail });
+  // Programme lifecycle W1 (R11 rule 4): `owns-another-programme` is the open route's own word, answered as it answers it.
+  const refuse = (reply: FastifyReply, word: Refused['refuse'], detail: string): FastifyReply =>
+    word === 'owns-another-programme' ? refuseRun(reply, word, { detail }) : refuseRoute(reply, word, { detail });
 
   /** D-8181 (design §4.3): the public-text check on every text a plan verb is about to store, each judged by its own
    *  project's linking mode and team key (a project with no reading is `unknown`, which is public). Runs before the write, so
@@ -331,7 +336,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** The identity pair from the QUERY, the stores' availability and the registry's attribution: the caller, or the reply that
    *  refused (every box-token door's first three checks, in this order). */
   const callerOf = async (req: FastifyRequest, reply: FastifyReply):
-  Promise<{ ok: true; id: string; coord: CoordStore; plan: PlanStorePort } | { ok: false; reply: FastifyReply }> => {
+  Promise<{ ok: true; id: string; uuid: string; coord: CoordStore; plan: PlanStorePort } | { ok: false; reply: FastifyReply }> => {
     const q = (typeof req.query === 'object' && req.query !== null ? req.query : {}) as Record<string, unknown>;
     const id = q['byId'];
     if (typeof id !== 'string' || !IDENTITY_RE.test(id)) return { ok: false, reply: refuseRoute(reply, 'bad-request', { detail: 'byId' }) };
@@ -341,7 +346,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (coord === undefined || plan === undefined) return { ok: false, reply: refuseRoute(reply, 'unavailable') };
     const attributed = await opts.attribute(id, uuid);
     if (!attributed.ok) return { ok: false, reply: refuseRoute(reply, attributed.error, { detail: attributed.detail }) };
-    return { ok: true, id, coord, plan };
+    return { ok: true, id, uuid, coord, plan };
   };
 
   /** The by-id re-read of each row a door may act on (`inboundRetirable` rows only), keyed by the row's issue id. A reader that is absent
@@ -408,7 +413,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     try {
       return await opts.serial(async () => {
         const stored = plan.planOf(slug);
-        const out = await work({ coord, plan, slug, caller: id, body: req.body, stored, owner: plan.planOwnerOf(slug), ws, routes, rechecks });
+        const out = await work({ coord, plan, slug, caller: id, callerUuid: who.uuid, body: req.body, stored, owner: ownerOfPlan(plan, slug), ws, routes, rechecks });
         return 'refuse' in out ? refuse(reply, out.refuse, out.detail) : out;
       });
     } catch (err) {
@@ -446,6 +451,11 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** The verdict of a programme verb (the owner's alone) or a follow-up (a worker's, into its own run's epic). */
   const ownerVerdict = (caller: string, owner: string | null) =>
     planCallerVerdict(caller, owner, 'programme', opts.runOfSession(caller));
+  /** The plan's owner for the doors (programme lifecycle W1 review, C3): the binding (`planOwnerOf`), or, for a live
+   *  programme released from its coordinator, `NO_OWNER_NOW`, a value no caller id equals, so every writer is refused
+   *  `not-plan-owner` until a hand-over binds one; null still means no owner yet, a programme nobody has started. */
+  const ownerOfPlan = (plan: PlanStorePort, slug: string): string | null =>
+    plan.planOwnerOf(slug) ?? (plan.planOwnerless(slug) ? NO_OWNER_NOW : null);
 
   /** The rows `plan triage` may re-read before the mutex: only the team's Linear owner causes a read, any other caller is refused by
    *  the work with no Linear call. */
@@ -460,7 +470,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   const takeCandidates: TakeCandidates = ({ coord, plan, slug, caller, body, ws, routes }) => {
     // only the programme's coordinator may cause a read: any other caller is refused by the work with no Linear call
     const parsed = parsePlanTake(body);
-    if (!parsed.ok || !ownerVerdict(caller, plan.planOwnerOf(slug)).ok) return [];
+    if (!parsed.ok || !ownerVerdict(caller, ownerOfPlan(plan, slug)).ok) return [];
     const { row } = takeRowOf(coord, plan, slug, parsed.take.issue, ws);
     if (row === null || (!('epic' in parsed.take) && teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf(), row.workspaceId, routes).kind === 'unmeasured')) return [];
     return [row];
@@ -480,8 +490,19 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan')),
-  }, door('planDeclare', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planDeclare', async ({ coord, plan, slug, caller, callerUuid, body, stored, owner, ws }) => {
     const exists = coord.programs().some((p) => p.slug === slug);
+    // Programme lifecycle W1 (R11 rules 3, 4 and 6; W1 review S4/C3): a put on a slug that does not exist yet starts a
+    // programme the putter owns, exactly as its first run would, so it is refused exactly as that run is: a putter that owns
+    // another live programme, or claims an open run in one it does not own, and one left owning nothing. Never a programme
+    // minted with nobody bound.
+    if (!exists) {
+      const may = plan.mayStartProgramme(caller, callerUuid);
+      if (!may.ok) {
+        return { refuse: may.kind, detail: may.kind === 'owns-another-programme'
+          ? `${caller} owns programme ${may.by}, and one coordinator owns one programme` : `${caller} owns no programme now` };
+      }
+    }
     const storedHome = exists ? coord.programHome(slug) : null;
     const parsed = parsePlanPut(body, { doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, home: { stored: exists ? storedHome : null } });
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
@@ -510,7 +531,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!d.ok) return { refuse: d.word, detail: d.detail };
     const ph = diffPhases(stored, plan.phasesOf(slug), put);
     if (!ph.ok) return { refuse: ph.word, detail: ph.detail };
-    const newRow = exists ? null : { home, title: put.title ?? programmeNameFromSlug(slug) };
+    const newRow = exists ? null : { home, title: put.title ?? programmeNameFromSlug(slug), byUuid: callerUuid };
     plan.applyPlanChanges(slug, ph.changes === undefined ? d.changes : { ...d.changes, phases: ph.changes }, caller, opts.now(), newRow);
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));

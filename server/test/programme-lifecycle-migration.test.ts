@@ -1,10 +1,11 @@
 // Programme lifecycle W1, task 3: migration 125 (spec §13), from the previous version's fixture. Neutral slugs only.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { MIGRATIONS } from '../src/coord/schema.js';
-import { openCoordDb } from '../src/coord/db.js';
+import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
 import { PROGRAMME_STORED_STATES, PROGRAMME_EVENT_EDGES, PROGRAMME_ACTOR_KINDS, PROGRAMME_MIGRATION_RULES } from '../../shared/programmeLifecycle.js';
@@ -135,5 +136,29 @@ describe('migration 125: the programme lifecycle', () => {
     const literals = [...sql.replace(/''/g, '').matchAll(/'([^']*)'/g)].map((m) => m[1]!);
     const slugLike = literals.filter((l) => /^[a-z0-9][a-z0-9-]*$/.test(l) && !words.has(l));
     expect(slugLike).toEqual([]);
+  });
+
+  // W1 review (S7): the rollback rule (`sqliteFile.ts` rule 3). A test cannot run an older db.ts, so it puts THIS build
+  // where an older one stands: the file one version past COORD_SCHEMA_VERSION, as this migration's file is one past a build
+  // from before it. It is read as-is with the one warning line, never refused and never migrated, and its lifecycle rows
+  // read through; the boot re-measure over it writes nothing it did not need.
+  it('a database one version newer is read as-is with the warning, never refused', () => {
+    const file = path.join(mkTmp('ccrc-lifecycle-rollback-'), '.ccrc', 'coord.db');
+    const first = openCoordDb(file);
+    first.prepare("INSERT INTO programs (slug, title, createdAt, state, coordinator) VALUES ('programme-a', 'A', 1, 'active', 'lane-a-one')").run();
+    first.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`);
+    first.close();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const db = openCoordDb(file);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/reading it as-is and migrating nothing/);
+      expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION + 1 });
+      const store = new CoordStore(db);
+      expect(store.programmeLifecycleRow('programme-a')).toMatchObject({ state: 'active', coordinator: 'lane-a-one' });
+      expect(store.claimsProgramme('lane-a-one', 'programme-a', null)).toBe(true);
+      db.close();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

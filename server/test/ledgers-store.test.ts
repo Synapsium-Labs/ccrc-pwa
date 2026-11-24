@@ -345,24 +345,24 @@ describe('the programme and its coordinator (plan PL2)', () => {
     const r2 = openRunFor(s, 'prog-a', 'lane-a', 2);
     s.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run('lane-old', r1);
     setRunState(s, r1, 'done');
-    expect(s.claimsProgramme('lane-old', 'prog-a')).toBe(false);
-    expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
-    expect(s.claimsProgramme('lane-a', 'prog-b')).toBe(false);
+    expect(s.claimsProgramme('lane-old', 'prog-a', null)).toBe(false);
+    expect(s.claimsProgramme('lane-a', 'prog-a', null)).toBe(true);
+    expect(s.claimsProgramme('lane-a', 'prog-b', null)).toBe(false);
     setRunState(s, r2, 'planned');
-    expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
-    expect(s.claimsProgramme('', 'prog-a')).toBe(false);
+    expect(s.claimsProgramme('lane-a', 'prog-a', null)).toBe(true);
+    expect(s.claimsProgramme('', 'prog-a', null)).toBe(false);
   });
 
   it('claimsProgramme reads the binding, not the run series: an unrepresentable run changes no answer (programme lifecycle W1, D-8985)', () => {
     // It answered by the open runs and threw on an unreadable series (D-2545); the binding is one row, read whole.
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a', 1);
-    expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
+    expect(s.claimsProgramme('lane-a', 'prog-a', null)).toBe(true);
     s.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', NOW);
-    expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
-    expect(s.claimsProgramme('lane-z', 'prog-a')).toBe(false);
+    expect(s.claimsProgramme('lane-a', 'prog-a', null)).toBe(true);
+    expect(s.claimsProgramme('lane-z', 'prog-a', null)).toBe(false);
   });
 });
 

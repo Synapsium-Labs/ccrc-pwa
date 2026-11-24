@@ -152,11 +152,17 @@ if (!landingReplay.ok) {
   process.exit(1);
 }
 // Programme lifecycle W1 (spec §15, D-8983): the boot re-measure, before any door opens, so an end or a claim an older build
-// wrote after a rollback is recorded and put through the migration's rules. A second boot writes nothing.
-{ const rm = coord.remeasureProgrammesAtBoot(time.clock.wall());
+// wrote after a rollback is recorded and put through the migration's rules. A second boot writes nothing. It is a
+// re-measurement, not a migration (W1 review, A5): its transaction rolls back whole on a throw, and the server starts on
+// the rows as they are, saying so, rather than refusing every boot until a rollback.
+try {
+  const rm = coord.remeasureProgrammesAtBoot(time.clock.wall());
   if (rm.started + rm.states + rm.released + rm.bound > 0) {
     console.warn(`ccrc-server: programme lifecycle re-measure: ${rm.started} started, ${rm.states} states, ${rm.released} released, ${rm.bound} bound`);
-  } }
+  }
+} catch (err) {
+  console.warn(`ccrc-server: programme lifecycle re-measure failed and wrote nothing (${err instanceof Error ? err.message : String(err)}); the rows are served as they are`);
+}
 // The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
 // its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
 // the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.

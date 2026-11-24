@@ -2,6 +2,7 @@
 // decider the plan store needs (`epicIsDone`); Task 2.3 adds the rest of this file.
 import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { endRecorded, isEnded } from '../../../shared/programmeLifecycle.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
   type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanEpicBody, type PlanPhaseBody,
@@ -613,10 +614,20 @@ export function phaseRefVerdict(move: PlanPhaseRefMoveBody, stored: StoredPlan, 
 
 /** How a programme's plan ends (design §5.4): by the coordinator's explicit `plan close`, or derived. A wave gap or a failed
  *  last run is never an end. */
-export function programmeEnd(f: { programState: string }): PlanEndOutcome | null {
-  // Programme lifecycle W1 (D-8983): the decision, and nothing else. Done syncs as `done`, Abandoned as `abandoned` (never
-  // as completed), a live state as not ended, so a reopen syncs back. D-51's inference of `done` from settled epics is gone.
-  return f.programState === 'done' || f.programState === 'abandoned' ? f.programState : null;
+export function programmeEnd(f: {
+  programState: string; planEnd: PlanEndOutcome | null; epics: readonly { state: EpicState }[]; openTickets: number;
+}): PlanEndOutcome | null {
+  // Programme lifecycle W1 (D-8983): a RECORDED decision syncs as itself: Done as `done`, Abandoned as `abandoned` (never as
+  // completed), a live state as not ended, so a reopen syncs back.
+  if (endRecorded(f.programState, f.planEnd)) return f.programState as PlanEndOutcome;
+  if (!isEnded(f.programState)) return null;
+  // W1 review (C5): a D-51 end the migration kept for the operator's decision (spec §13 step 4, `planEnd` null) syncs
+  // exactly as on `main`, never closing in Linear what nobody decided: `abandoned` never, `done` only when every epic is
+  // settled and no ticket is open. A recorded end with a different `planEnd` (an older build's mismatch) is the boot
+  // re-measure's to repair, and syncs as not ended until it is.
+  if (f.planEnd !== null || f.programState !== 'done' || f.epics.length === 0) return null;
+  if (!f.epics.every((e) => e.state === 'done' || e.state === 'dropped')) return null;
+  return f.openTickets === 0 ? 'done' : null;
 }
 
 /** THE one definition of a live epic for opening a run: any epic but a dropped one. A `done` epic that lists the wave still
