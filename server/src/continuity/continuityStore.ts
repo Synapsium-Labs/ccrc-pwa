@@ -144,6 +144,22 @@ export function startsSince(db: DatabaseSync, sinceId: number, limit = -1): Star
   }
 }
 
+/** One recorded start, or why it could not be read: `row: null` is no row with that id (renewal readings PR B). */
+export type StartRead = { ok: true; row: StartRow | null } | { ok: false; detail: string };
+
+/** The start with this id, by primary key: the read `notLocal` takes of a generation's own start, which never goes through
+ *  `startsOf`'s newest-N window, where later `/clear` or compact starts would push it out (review 2183, F16). */
+export function startById(db: DatabaseSync, id: number): StartRead {
+  try {
+    const row = stmt(db,
+      'SELECT id, sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt FROM continuity_starts WHERE id = ?',
+    ).get(id) as unknown as (Omit<StartRow, 'source'> & { source: string }) | undefined;
+    return { ok: true, row: row === undefined ? null : { ...row, source: startSourceOf(row.source) } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /** One session's recorded starts, newest first in its own order (`reportedAt`, then id), at most `limit` of them: the
  *  read a coordinator's first generation is minted from (review 2003 F2). A failed read answers ok: false. */
 export function startsOf(db: DatabaseSync, sessionId: string, limit: number): StartsRead {
