@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { answerRegionOf, applyAnswerRegion, renderAnswerRegion } from './answerRegion';
 import { answerRequest, askCommandOf } from '../src/session/answerLifecycle';
 import { RECEIPT_WORKER_VERSION, parseReceiptBody } from '../../shared/responses';
+import { ROUTES } from '../src/lib/routes';
 
 const SW_PATH = path.join(__dirname, '..', 'public', 'push-sw.js');
 const SRC = readFileSync(SW_PATH, 'utf8');
@@ -696,5 +697,58 @@ describe('push-sw: shown and opened receipts (C67)', () => {
     const self = load();
     await click(self, 'ask:k:0', { sessionId: 'cc-a' });
     expect(shown.at(-1)!.opts.data).toEqual({ sessionId: 'cc-a' });
+  });
+});
+
+// A TAP NEVER TAKES OVER A DOCS TAB (desktop polish wave 174, fix round 1 L2): a Docs tab draws the reader alone, so a tap
+// that navigated it would turn a document the operator is reading into the console. The worker brings up a window that is
+// not on a Docs address, and opens a new one when every window is.
+describe('push-sw: a tap and the Docs tabs', () => {
+  interface Win { url: string; focused: number; went: string[]; focus(): Promise<Win>; navigate(u: string): Promise<Win> }
+  function win(url: string): Win {
+    return {
+      url: `https://ccrc.example${url}`, focused: 0, went: [],
+      async focus() { this.focused += 1; return this; },
+      async navigate(u: string) { this.went.push(u); return this; },
+    };
+  }
+  function withWindows(self: FakeSelf, wins: Win[]): void {
+    self.clients.matchAll = async () => wins;
+  }
+
+  it('with a Docs tab and a console tab open, it brings up the console tab and leaves the Docs tab alone', async () => {
+    const self = load();
+    const docs = win('/docs/project-a/specs/x.md');
+    const consoleTab = win('/fleet');
+    withWindows(self, [docs, consoleTab]);
+    await click(self, '', { sessionId: 'cc-a' });
+    expect(docs.went).toEqual([]);
+    expect(docs.focused).toBe(0);
+    expect(consoleTab.went).toEqual(['/s/cc-a']);
+    expect(consoleTab.focused).toBe(1);
+    expect(opened).toEqual([]);
+  });
+
+  it('with only Docs tabs open (the index too), it opens a new window and moves none of them', async () => {
+    const self = load();
+    const wins = [win('/docs'), win('/docs/project-a?ref=b'), win('/docs/')];
+    withWindows(self, wins);
+    await click(self, '', { sessionId: 'cc-a' });
+    expect(wins.map((w) => [w.went, w.focused])).toEqual([[[], 0], [[], 0], [[], 0]]);
+    expect(opened).toEqual(['/s/cc-a']);
+  });
+
+  it('the worker asks the route table’s own Docs pattern, copied: the two cannot drift apart', () => {
+    const docs = ROUTES.find((r) => r.id === 'docs')!;
+    expect(SRC).toContain(`/${docs.pattern.source}/`);
+  });
+
+  it('a page whose path only starts with the letters (/docsearch) is not a Docs tab', async () => {
+    const self = load();
+    const other = win('/docsearch');
+    withWindows(self, [other]);
+    await click(self, '', { sessionId: 'cc-a' });
+    expect(other.went).toEqual(['/s/cc-a']);
+    expect(opened).toEqual([]);
   });
 });

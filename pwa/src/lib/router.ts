@@ -2,8 +2,7 @@
 // app.tsx so screens can navigate without importing the shell (no cycles).
 import { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { DESK_QUERY, prefersReducedMotion } from '@ccrc/ui';
-import { isDocsTab, opensNewTab } from './docTab';
+import { prefersReducedMotion } from '@ccrc/ui';
 import { reloadOnMove } from './swupdate';
 
 /** document.startViewTransition, where the platform has it. */
@@ -51,25 +50,6 @@ export function navigate(href: string, opts?: { replace?: boolean; from?: string
   // components, and the literal census found the copy that used to sit here.
   if (vt && !prefersReducedMotion()) vt(go);
   else go();
-}
-
-/** The shell's desk test (`DESK_QUERY`, the one breakpoint), asked now: false where the platform has no `matchMedia`. */
-function deskNow(): boolean {
-  return typeof matchMedia === 'function' && matchMedia(DESK_QUERY).matches;
-}
-
-/** Follow an in-app link from a control that is not an anchor (a command the palette, a bar door or a key runs, a menu
- *  command, a fallback's button), by the Docs tab rule (`opensNewTab`, `lib/docTab.ts`; desktop polish wave 174): where
- *  the rule opens a new tab, at a desk from the console to a document or from a Docs tab to a console page, one new tab
- *  opens and this one stays where it is; otherwise it is `navigate(href)`. The rule is asked with the shell's desk test as
- *  it stands now, and with this tab's kind read from its own path. An anchor asks the same rule through `useTabLink`. */
-export function followLink(href: string): void {
-  const desk = deskNow();
-  if (opensNewTab(href, desk, isDocsTab(location.pathname, desk))) {
-    window.open(href, '_blank', 'noopener');
-    return;
-  }
-  navigate(href);
 }
 
 /** Where the app is. `path` is `location.pathname`; `search` is
