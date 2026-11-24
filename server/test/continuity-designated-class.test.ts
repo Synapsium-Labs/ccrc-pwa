@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
-import { MIGRATIONS } from '../src/coord/schema.js';
+import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { MintInput } from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -67,7 +67,7 @@ describe('continuity_generations.designatedClass', () => {
 
     const db = openCoordDb(file);
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 122 });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });
       expect(db.prepare('SELECT role, model, designatedClass FROM continuity_generations').all())
         .toEqual([{ role: 'overlord', model: 'claude-opus-5-5', designatedClass: null }]);
       expect(db.prepare('SELECT capMode, maxConcurrentWorkers, updatedAt FROM coordinator_state WHERE id = 1').get())

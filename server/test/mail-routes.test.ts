@@ -55,7 +55,7 @@ import {
 } from '../../shared/programmeFacts.js';
 import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
-import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_NOT_SENT_MAP, BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import { CAP_BOUNDS } from '../../shared/runCap.js';
 import { HOST_UNMEASURED_WHYS } from '../../shared/pressure.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
@@ -698,9 +698,8 @@ describe('the rejection table is total, in both directions', () => {
       // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
       'unknown-build',
       'not-failed',
-      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
-      'no-test-box',
-      'no-runner',
+      // D-8289 — the same record's `notSent` CHECK vocabulary: why a capture try sent nothing. A row fact, not a refusal.
+      ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP),
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog

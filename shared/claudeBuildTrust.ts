@@ -22,10 +22,28 @@ export const CLAUDE_BUILD_CAPTURES: readonly ClaudeBuildCapture[] = Object.keys(
 export type ClaudeBuildSource = 'rig' | 'fleet';
 export const CLAUDE_BUILD_SOURCE_MAP: Record<ClaudeBuildSource, true> = { rig: true, fleet: true };
 
-/** Why the queue's last try at a build sent no job. `no-test-box`: no box answers. `no-runner`: the box has no capture
- *  runner. A job that went out and got no answer is not one of these: it was sent, and counts as an attempt. */
-export type BuildCaptureNotSent = 'no-test-box' | 'no-runner';
-export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = { 'no-test-box': true, 'no-runner': true };
+/** Why the queue's last try at a build sent no job, each its own word (capture runner spec 2026-11-22 §2.2, §2.5 Table 6).
+ *  `no-test-box`: no box answers. `no-runner`: the box has no capture runner. `build-absent`: the box holds no checked copy of
+ *  the build, and the copy that follows it (below) did not change that. `path-refused`: the box's write guard refused a path
+ *  the capture would write. `not-started`: the frame never left the server (the agent link was down). `busy`: the fleet agent
+ *  is waiting on another capture. The copy's own three: `copy-refused` (the fleet's copy is not one ccrc sends: absent, not a
+ *  regular file, or over the size cap), `copy-failed` (it did not arrive intact, or the lane failed on the way) and
+ *  `no-admin-lane` (no admin lane is connected to carry it). A job that went out and got no answer is not one of these: it
+ *  was sent, and counts as an attempt. */
+export type BuildCaptureNotSent =
+  | 'no-test-box' | 'no-runner' | 'build-absent' | 'path-refused' | 'not-started' | 'busy'
+  | BuildCopyFailure;
+
+/** Why the copy of a build to the test box did not place it (spec §2.2): the not-sent words a failed copy leaves. */
+export type BuildCopyFailure = 'copy-refused' | 'copy-failed' | 'no-admin-lane';
+const BUILD_COPY_FAILURE_MAP: Record<BuildCopyFailure, true> = {
+  'copy-refused': true, 'copy-failed': true, 'no-admin-lane': true,
+};
+
+export const BUILD_CAPTURE_NOT_SENT_MAP: Record<BuildCaptureNotSent, true> = {
+  'no-test-box': true, 'no-runner': true, 'build-absent': true, 'path-refused': true, 'not-started': true, busy: true,
+  ...BUILD_COPY_FAILURE_MAP,
+};
 
 /** What the queue's try at a build did: a job went out (`sent`, answered or not), or none could (why). */
 export type BuildCaptureTry = 'sent' | BuildCaptureNotSent;
@@ -160,8 +178,37 @@ export function givenUpToTell(r: ClaudeBuildRecord, versions: readonly (string |
   return captureGivenUp(r) && versions.includes(r.build);
 }
 
+// ── one pass's acts (spec §2.2, D7) ─────────────────────────────────────────────────────────────────────────────
+
+/** What one act of a capture pass came to: a capture that went out (`sent`, answered or not), one that did not (its
+ *  not-sent word), or the copy (`copied`, or the copy's word). */
+export type CapturePassStep = 'sent' | BuildCaptureNotSent | 'copied';
+
+/** The lane's next act in a pass: send the capture, copy the build over the admin lane, or stop and record the pass. */
+export type CaptureNextAct = 'send' | 'copy' | 'stop';
+const CAPTURE_NEXT_ACT_MAP: Record<CaptureNextAct, true> = { send: true, copy: true, stop: true };
+export const CAPTURE_NEXT_ACTS = Object.keys(CAPTURE_NEXT_ACT_MAP) as CaptureNextAct[];
+
+/** THE COPY RULE, decided here and carried out by the lane (`server/src/buildCaptureLane.ts`): send the capture first; copy
+ *  only after the box refused it `build-absent`, once a pass, then send it again. Any other answer stops the pass. So a build
+ *  the box already holds is never copied, and a pass makes at most two sends and one copy, whatever the answers. */
+export function captureNextAct(steps: readonly CapturePassStep[]): CaptureNextAct {
+  const last = steps[steps.length - 1];
+  if (last === undefined || last === 'copied') return 'send';
+  const copied = steps.some((s) => s === 'copied' || has(BUILD_COPY_FAILURE_MAP, s));
+  return last === 'build-absent' && !copied ? 'copy' : 'stop';
+}
+
+/** What a stopped pass records as its try: its last act, a send's answer or the copy's failure. The rule always sends first
+ *  and sends again after a copy that placed the build, so a pass never ends empty or on `copied`; were it to, nothing went
+ *  out, and it reads as `not-started`. */
+export function captureTryOf(steps: readonly CapturePassStep[]): BuildCaptureTry {
+  const last = steps[steps.length - 1];
+  return last === undefined || last === 'copied' ? 'not-started' : last;
+}
+
 /** Why the queue cannot capture anything right now, read from the record alone: the queued build it tried last sent
- *  nothing, for want of a box or of a runner. Null when no queued build was tried, or the last try sent a job. The console
+ *  nothing, and why (its not-sent word). Null when no queued build was tried, or the last try sent a job. The console
  *  says it, so the operator is never left waiting on a capture that cannot happen. */
 export function captureBlockedBy(records: readonly ClaudeBuildRecord[]): BuildCaptureNotSent | null {
   let last: ClaudeBuildRecord | null = null;

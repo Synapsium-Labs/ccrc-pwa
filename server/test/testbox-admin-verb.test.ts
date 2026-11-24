@@ -604,6 +604,7 @@ describe('the state file, the lock, the detach and the unit (D-8166, T7)', () =>
     const argv: Record<string, string[]> = {
       key: [`--address=${ADDR}`], pin: [`--fingerprint=${FP}`], connect: ['--set=CCRC_TESTBOX_RUNS=3', `--repo=${rowArg(ROW)}`],
       'settings-fleet': ['--set=CCRC_TESTBOX_POLL=45s'], 'settings-box': ['--set=CCRC_TESTBOX_WORKERS=4'],
+      'build-copy': ['--version=2.1.330'],
     };
     for (const s of subs) {
       const r = sh(h, SRC('darwin') + '_tba_run_"$1"() { echo ran >"$HOME/ran"; }; sub="$1"; shift; _tba_main "$sub" "$@"; echo "rc=$?"', [VERB, s, ...(argv[s] ?? [])]);

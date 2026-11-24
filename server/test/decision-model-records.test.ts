@@ -1,9 +1,9 @@
 // Overlord W2, the decision-model records and day counts (plan
 // docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model.md, Task 4), over a real `coord.db` in a fixture home.
 import path from 'node:path';
-import type { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import {
   decisionAskStore, decisionRecordOf, decisionUsage, recordDecision, releaseDecisionReservations, reserveDecisionCalls,
@@ -148,32 +148,38 @@ describe('decisionAskStore: the store as the one caller uses it; no method throw
 
 describe('the migration', () => {
   it('a database one version back gains the two tables and keeps every row of every older table', () => {
-    // This entry's slot, found by its DDL and never hard-coded: a later migration moves it off the end, and whichever of the
-    // branches holding one slot lands second renumbers without editing this case. Every later entry is undone first, newest
-    // first: its indexes on older tables, the columns it added, then its own tables (their indexes go with them), so the
-    // database is truly one version back. A later entry this case cannot undo (any other ALTER) reds here by name.
+    // Find the slot by its DDL. Build the fixture from the historical prefix so a later table rebuild does not
+    // have to be reversed just to obtain the actual predecessor schema.
     const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE decision_records')) + 1;
-    const after = MIGRATIONS.slice(SLOT);
-    const later = after.flatMap((m) => [...m.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)].map((x) => x[1]!));
-    for (const m of after) expect(m.replace(/ALTER TABLE \w+ ADD COLUMN/g, ''), 'a later migration this case cannot undo').not.toMatch(/ALTER TABLE/);
-    const undo = [...after].reverse().flatMap((m) => [
-      ...[...m.matchAll(/CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+) ON (\w+)/g)].filter((x) => !later.includes(x[2]!)).map((x) => `DROP INDEX ${x[1]};`),
-      ...[...m.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)].map((x) => `ALTER TABLE ${x[1]} DROP COLUMN ${x[2]};`),
-      ...[...m.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)].map((x) => `DROP TABLE ${x[1]};`),
-    ]).join(' ');
-    db.prepare('INSERT INTO response_boots (epoch, bootedAt, buildSha) VALUES (1, 2, NULL)').run();
+    expect(SLOT, 'no migration creates decision_records').toBeGreaterThan(1);
+    const armSettings = (d: DatabaseSync) => d.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all();
+    const currentSettings = armSettings(db);
+    db.close();
+    const predecessor = path.join(path.dirname(file), 'coord-before-decision.db');
+    const raw = new DatabaseSync(predecessor);
+    tx(raw, () => {
+      for (const migration of MIGRATIONS.slice(0, SLOT - 1)) raw.exec(migration);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1};`);
+    });
+    expect(raw.prepare('PRAGMA user_version').get()).toEqual({ user_version: SLOT - 1 });
+    raw.prepare('INSERT INTO response_boots (epoch, bootedAt, buildSha) VALUES (1, 2, NULL)').run();
     const tables = (d: DatabaseSync): string[] => (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as
       { name: string }[]).map((t) => t.name);
-    const older = tables(db).filter((t) => !t.startsWith('decision_') && !later.includes(t));
+    const older = tables(raw);
+    expect(older).not.toContain('decision_records');
+    expect(older).not.toContain('decision_days');
     const counts = (d: DatabaseSync) => Object.fromEntries(older.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
-    const before = counts(db);
+    const before = counts(raw);
     expect(before['response_boots']).toBe(1);
-    db.exec(`${undo} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${SLOT - 1};`);
-    db.close();
-    const again = openCoordDb(file);
+    const oldSettings = armSettings(raw);
+    raw.close();
+    const again = openCoordDb(predecessor);
     expect(again.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });
     expect(tables(again)).toEqual(expect.arrayContaining(['decision_records', 'decision_days']));
-    expect(counts(again)).toEqual(before);
+    // Later entries intentionally seed lane rows. Require both the exact current rows and every historical row.
+    expect(armSettings(again)).toEqual(currentSettings);
+    expect(currentSettings).toEqual(expect.arrayContaining(oldSettings));
+    expect(counts(again)).toEqual({ ...before, lane_arm_settings: currentSettings.length });
     again.close();
   });
 });
