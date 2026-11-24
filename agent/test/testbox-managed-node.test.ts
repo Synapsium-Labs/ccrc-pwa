@@ -134,7 +134,7 @@ function fixture(): Fx {
   writeFileSync(path.join(repos, 'project-a.json'), `${JSON.stringify({ ...ROW, mirrorPath: path.join(dir, 'mirrors', 'project-a.git') })}\n`);
   const cfg: TestboxConfig = {
     runs: 1, sessionRuns: 1, workers: 1, runTmpdir: '/tmp', root: path.join(dir, 'box'), repos,
-    fetchEveryMs: 60_000, retentionMs: 3_600_000, reportMaxBytes: 1024, toolsDir: tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
+    fetchEveryMs: 60_000, retentionMs: 3_600_000, registryKeepMs: 86_400_000, reportMaxBytes: 1024, toolsDir: tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
     serviceUser: 'ccrc-tb-svc', listen: { host: '127.0.0.1', port: 0 }, tokenFile: path.join(dir, 'no-token'), unitMaxMs: 60_000,
     lines: LINES as unknown as TestboxConfig['lines'],
   };

@@ -142,7 +142,7 @@ describe('the desk ends a capture that waited too long with no verdict and a wor
 describe('the takeover waits for captures as for runs (review 3226 F8: service.ts#idle)', () => {
   const SETTINGS: ServiceSettings = {
     root: '/srv/testbox', workers: 2, runTmpdir: '/tmp', toolsDir: '/srv/testbox/tools', envForward: [], runUserPrefix: 'ccrc-tb-',
-    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000,
+    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 86_400_000,
   };
   const service = (captures: CaptureDesk): TestboxService => new TestboxService({
     settings: SETTINGS, rows: [], sys: {} as SystemManager, probe: async () => ({ ok: true }), mirror: {} as MirrorOps,

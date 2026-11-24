@@ -10,8 +10,13 @@
 //   match its packument's `dist.integrity` (or, for a version that has none, `dist.shasum`); a mismatch, or a version
 //   the packument does not list, is not cached and answers 502.
 // It never accepts a write: there is no publish, no login and no dist-tag route.
+//
+// D-9007 (plan docs/superpowers/plans/2026-11-24-testbox-retention.md): a cached file's mtime is when it was last
+// served: a fetch writes it, and an answer from the cache marks it. The service's retention lists the cache
+// (`cachedFiles`) and deletes what `runs.ts#registryPlan` names (`dropCached`). Every write here and the prune are
+// synchronous and run in the service's one process, so a prune never falls between a check and a read or a write.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 
@@ -103,6 +108,47 @@ export function distFor(packument: unknown, file: string): Dist | null {
 
 const safeName = (name: string): string => encodeURIComponent(name);
 
+/** `<CCRC_TESTBOX_ROOT>/registry`: the proxy's cache. */
+export const registryCacheDir = (root: string): string => path.join(root, 'registry');
+
+/** The cache's two directories: `packuments/<name>.json` and `tarballs/<name>/<file>`. */
+const PACKUMENTS = 'packuments';
+const TARBALLS = 'tarballs';
+
+/** D-9007: an answer from the cache marks its file served. A mark that fails changes nothing about the answer. */
+function served(file: string): void {
+  const t = new Date();
+  try { utimesSync(file, t, t); } catch { /* the answer stands; the file is only pruned sooner */ }
+}
+
+const listDir = (dir: string): string[] => { try { return readdirSync(dir); } catch { return []; } };
+
+/** D-9007: every file in the cache with its last-served time (its mtime), a crashed write's temporary file included. */
+export function cachedFiles(cacheDir: string): { readonly file: string; readonly at: number }[] {
+  const out: { file: string; at: number }[] = [];
+  const add = (file: string): void => {
+    try { const st = statSync(file); if (st.isFile()) out.push({ file, at: st.mtimeMs }); } catch { /* gone */ }
+  };
+  for (const n of listDir(path.join(cacheDir, PACKUMENTS))) add(path.join(cacheDir, PACKUMENTS, n));
+  for (const pkg of listDir(path.join(cacheDir, TARBALLS))) {
+    for (const n of listDir(path.join(cacheDir, TARBALLS, pkg))) add(path.join(cacheDir, TARBALLS, pkg, n));
+  }
+  return out;
+}
+
+/** D-9007: the named files deleted (each one inside the cache), then every tarball directory they left empty. */
+export function dropCached(cacheDir: string, files: readonly string[]): void {
+  const root = path.resolve(cacheDir);
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const abs = path.resolve(f);
+    if (!abs.startsWith(`${root}${path.sep}`)) continue;
+    rmSync(abs, { force: true });
+    if (path.dirname(path.dirname(abs)) === path.join(root, TARBALLS)) dirs.add(path.dirname(abs));
+  }
+  for (const d of dirs) { try { rmdirSync(d); } catch { /* not empty, or gone */ } }
+}
+
 /** Written whole: a temporary file renamed over the target. */
 function keep(file: string, bytes: Uint8Array): void {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o755 });
@@ -115,8 +161,8 @@ export class Registry {
   private readonly fetch: typeof fetch;
   constructor(private readonly o: RegistryOpts) { this.fetch = o.fetch ?? globalThis.fetch; }
 
-  private packumentFile(name: string): string { return path.join(this.o.cacheDir, 'packuments', `${safeName(name)}.json`); }
-  private tarballFile(name: string, file: string): string { return path.join(this.o.cacheDir, 'tarballs', safeName(name), file); }
+  private packumentFile(name: string): string { return path.join(this.o.cacheDir, PACKUMENTS, `${safeName(name)}.json`); }
+  private tarballFile(name: string, file: string): string { return path.join(this.o.cacheDir, TARBALLS, safeName(name), file); }
 
   private async upstream(p: string): Promise<{ status: number; bytes: Uint8Array }> {
     const r = await this.fetch(`${this.o.upstream}/${p}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(this.o.timeoutMs), redirect: 'error' });
@@ -137,6 +183,7 @@ export class Registry {
     if (up !== null && up.status === 404) return { status: 404, body: null, json: null };
     if (!existsSync(file)) return { status: 502, body: null, json: null };
     const json: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    served(file);
     return { status: 200, body: this.rewrite(json, origin), json };
   }
 
@@ -149,7 +196,11 @@ export class Registry {
   /** The tarball: from the cache, or fetched and checked against its packument before it is kept. */
   async tarball(name: string, file: string, origin: string): Promise<{ status: number; body: Uint8Array | null }> {
     const cached = this.tarballFile(name, file);
-    if (existsSync(cached)) return { status: 200, body: readFileSync(cached) };
+    if (existsSync(cached)) {
+      const body = readFileSync(cached);
+      served(cached);
+      return { status: 200, body };
+    }
     const pk = await this.packument(name, origin);
     if (pk.status !== 200) return { status: pk.status === 404 ? 404 : 502, body: null };
     const dist = distFor(pk.json, file);

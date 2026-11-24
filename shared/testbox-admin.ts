@@ -18,7 +18,8 @@ import { parseRepoRow, type Read, type TestboxRepoRow } from './testbox.js';
 import { utf8Bytes, utf8Decode, utf8Encode } from './utf8.js';
 
 // ---------------------------------------------------------------------------------------------------------------
-// The keys: 16 on the fleet host, 31 on the box (spec M7, and D-8290's three live probe keys), each with its shape class.
+// The keys: 16 on the fleet host, 32 on the box (spec M7, D-8290's three live probe keys and D-9007's registry keep time),
+// each with its shape class.
 // ---------------------------------------------------------------------------------------------------------------
 
 /** The sixteen fleet-host test box keys, in `_tb_host_table`'s order (`ccd/testbox-knobs`). */
@@ -30,7 +31,7 @@ export const TESTBOX_HOST_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_TIMES',
 ]);
 
-/** The thirty-one test box keys, in `_tb_box_table`'s order (D-8290 adds the last three, the live probes'). */
+/** The thirty-two test box keys, in `_tb_box_table`'s order (D-8290 adds three, the live probes', and D-9007 the last). */
 export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_RUNS', 'CCRC_TESTBOX_WORKERS', 'CCRC_TESTBOX_RUN_TMPDIR', 'CCRC_TESTBOX_RUN_MEMORY_MAX',
   'CCRC_TESTBOX_RUN_SWAP_MAX', 'CCRC_TESTBOX_RUN_CPU_QUOTA', 'CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS',
@@ -39,7 +40,7 @@ export const TESTBOX_BOX_KEYS: readonly string[] = Object.freeze([
   'CCRC_TESTBOX_PUSH_USER', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX', 'CCRC_TESTBOX_REGISTRY_PROXY',
   'CCRC_TESTBOX_REGISTRY_UPSTREAM', 'CCRC_TESTBOX_TMPFS', 'CCRC_TESTBOX_LOG_TAIL', 'CCRC_TESTBOX_SESSION_RUNS',
   'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE', 'CCRC_TESTBOX_UNIT_MAX',
-  'CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY',
+  'CCRC_TESTBOX_PROBE_CONFIG_DIR', 'CCRC_TESTBOX_PROBE_SOCKET', 'CCRC_TESTBOX_PROBES_PER_DAY', 'CCRC_TESTBOX_REGISTRY_KEEP',
 ]);
 
 /** The four pairing keys: written only by Connect, Replace and Disconnect (spec §2.6, M7). */
@@ -85,6 +86,7 @@ export const TESTBOX_SHAPE_CLASS: Readonly<Record<string, TestboxShapeClass>> = 
   CCRC_TESTBOX_STATUS_DEADLINE: 'duration', CCRC_TESTBOX_RECONNECT_DEADLINE: 'duration', CCRC_TESTBOX_QUEUE_WAIT: 'duration',
   CCRC_TESTBOX_BUDGET: 'duration', CCRC_TESTBOX_POLL: 'duration', CCRC_TESTBOX_FETCH_EVERY: 'duration',
   CCRC_TESTBOX_RETENTION: 'duration', CCRC_TESTBOX_PRISTINE_KEEP: 'duration', CCRC_TESTBOX_UNIT_MAX: 'duration',
+  CCRC_TESTBOX_REGISTRY_KEEP: 'duration',
   CCRC_TESTBOX_PRISTINE_RETRY: 'durations',
   CCRC_TESTBOX_LOST_RUN: 'lostrun', CCRC_TESTBOX_FALLBACK_INSTALL: 'fallback', CCRC_TESTBOX_TMPFS: 'onoff',
   CCRC_TESTBOX_RUN_CPU_QUOTA: 'percent',
