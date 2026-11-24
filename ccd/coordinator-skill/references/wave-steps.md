@@ -142,12 +142,13 @@ not after.
    Once the close answers `ok`, read the
    report — findings are the reviewer's, rulings are yours (clause 10 for any
    deviation the report surfaces). Then ONE of two moves:
-   - **Send back:** first turn the PR back into a draft with `gh pr ready <pr>
-     --undo` (D-8997; on a PR already a draft it changes nothing), so a PR back
-     under review is never landable. Then `"$API" runs advance <work run id> --json -` with
+   - **Send back:** turn the PR back into a draft first, then `"$API" runs advance <work run id> --json -` with
      `{"to":"working","fingerprint":{…the wave-done fingerprint you verified…}}`
      (a retreat re-measures nothing; it may refuse `cap-concurrency` — retry on
-     the next wake — or `review-in-flight` — you skipped this step's close). Then
+     the next wake — or `review-in-flight` — you skipped this step's close). The
+     draft comes from `gh pr ready <pr> --undo`, before that advance (D-8997; on
+     a PR already a draft it changes nothing), so a PR back under review is
+     never landable. Then
      RE-BRIEF THE WORKER BY MAIL, never by `runs dispatch` — dispatch is
      `planned`'s door only, and a run at `working` has no edge back to
      `dispatched` (D-2824): `"$API" mail send --json -` with
