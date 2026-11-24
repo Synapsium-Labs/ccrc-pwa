@@ -49,7 +49,10 @@ async function world(over: { presence?: string; pending?: boolean } = {}) {
   // The feed's ring, so a raise archives its row in coord.db (`notice.ts`): the watcher's real record path.
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
-  const rows = [{ id: OV, child: { kind: 'none' }, route: { fields: { profile: 'overlord', profiledigest: D }, degraded: null, inert: [], unreadable: [] } }];
+  // A session record's shape as the watcher reads it: since the coordinator advisor (#3275) the lane's rows carry the
+  // wrapper, read through `unmeasured`.
+  const rows = [{ id: OV, child: { kind: 'none' }, route: { fields: { profile: 'overlord', profiledigest: D }, degraded: null, inert: [], unreadable: [] },
+    wrapper: 'lane-a', unmeasured: [] }];
   const watchers: FleetWatcher[] = [];
   const pass = async (w?: FleetWatcher): Promise<FleetWatcher> => {
     const x = w ?? new FleetWatcher({ ...base, cfg, coord, notifyLog } as never, new Bus(), 10_000);
