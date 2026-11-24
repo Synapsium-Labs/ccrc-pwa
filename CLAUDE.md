@@ -606,7 +606,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
   for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) and the remaining-work door
   `POST /api/coord/programmes/:slug/remaining` (Overlord W2; its handler is in `server/src/coord/programmeRemainingRoute.ts`,
-  a lane source of its own, checked the same way and in the EXEMPT table) all call
+  a lane source of its own, checked the same way and in the EXEMPT table) and the programme lifecycle's end proposal
+  `POST /api/programmes/:slug/end-proposal` (W2, D-8987: the bound coordinator proposes its programme's end with evidence;
+  registered in `server/src/coord/ledgersRoutes.ts`, attribution- then ownership-checked by the binding, and in the EXEMPT
+  table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The Overlord's inbox doors, `GET /api/overlord/inbox`,
@@ -616,7 +619,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
   body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
-  the open items cookieless through `ccrc-api`, the console with a session)
+  the open items cookieless through `ccrc-api`, the console with a session), the programme lifecycle's two reads
+  `GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme` (W2: a programme's story and a session's one
+  programme, the goals read's shape)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
@@ -663,7 +668,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
   and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
   which work while sign-in is dark and record `flag-off` then), and `POST /api/programmes/:slug/goals/ratify` (Overlord W1
-  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), consult no box token
+  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
+  programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
+  `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read

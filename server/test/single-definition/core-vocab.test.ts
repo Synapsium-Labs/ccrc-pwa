@@ -864,7 +864,10 @@ describe('Build 7 nouns', () => {
       'limitSamplesStore.ts',
       // The programme lifecycle (W1, D-8983): `programmeLifecycleStore.ts` is the decision's, the binding's and the events' one
       // writer, inside its caller's transaction; it names the handle by `import type`, and every function takes it as an argument.
-      'programmeLifecycleStore.ts']);
+      'programmeLifecycleStore.ts',
+      // Programme lifecycle W2: `programmeLifecycleActs.ts` composes the doors' acts (an item and its programme event, an end and
+      // its item) inside `CoordStore`'s transactions, through the two writers' in-transaction functions; `import type` alone.
+      'programmeLifecycleActs.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

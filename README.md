@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and six machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1513,6 +1513,8 @@ the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
 `POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
+the programme lifecycle's end proposal (`POST /api/programmes/:slug/end-proposal`, the bound coordinator's, attributed and owned)
+and its reads (`GET /api/programmes/:slug/history` and `GET /api/sessions/:id/programme`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,tickets/done,phases/refs,epics/drop,close,take}`, and the inbound triage `POST /api/teams/:team/plan/triage`),
 the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the door process's act-key claim (`POST /api/sessions/:id/act-key`), the hook's report door (`POST /api/sessions/:id/report`: the witness, readers and picked-up reports), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
@@ -1533,7 +1535,8 @@ history door (`POST /api/overlord/history`, a read whose search words ride the b
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id`, `/api/runs/:id/record`, `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`, and the
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`, `/api/testbox`, `/api/programmes/:slug/goals`, `/api/programmes/:slug/plan`,
+`/api/programmes/:slug/history`, `/api/sessions/:id/programme`, and the
 one POST of the kind, `/api/testbox/tools-sync`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), `POST /api/token/claim` (the box token's claim door, which

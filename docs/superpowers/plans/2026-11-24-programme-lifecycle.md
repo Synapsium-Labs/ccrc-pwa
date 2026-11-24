@@ -206,6 +206,37 @@ programme the operator wants Idle still reads Done is one deploy, not several.
    "Open wave N+1's run BEFORE closing wave N's" bullet: its reason changes from "the server retires the program" to
    "mail with no run id resolves only over a programme that shows Active, and the open `planned` run keeps it Active".
 
+### W2 notes (build, 2026-11-24)
+
+- **Where the code sits.** The decisions are `programmeEdgePolicy.ts` (L1: `edgeDecision`, the §14 table
+  `OPERATOR_DOOR_CREDENTIALS` with `doorCredential`, `endProposalDecision`, `endProposalItem`); the composite writes are
+  `programmeLifecycleActs.ts` (L3, inside `CoordStore`'s one-line delegates, through the two writers' in-transaction
+  functions); the handlers are `programmeLifecycleRoutes.ts` (L4), registered from `ledgersRoutes.ts` so the census reads
+  them where it reads every ledger door; the row fields are `programmeLifecycleView.ts` (L1). The vocabulary is
+  `shared/programmeLifecycle.ts` (`shared/api.ts` is at its cap: `ProgrammeRow` and `ProgrammesAnswer` extend its two
+  field interfaces on the lines they already had).
+- **Words.** The proposal door answers ownership with `not-your-programme` (403, the ledger doors' word), not a new 403
+  `not-coordinator`: that word is already the digest's 409, and a word has one status. `already-asked` and
+  `programme-ended` keep their tables' statuses; the new words and their statuses are `PROGRAMME_DOOR_REFUSALS`.
+- **An end over open runs** names `abandonRuns` and ends Abandoned; `outcome: 'done'` with `abandonRuns` is refused
+  `programme-runs-open`, never rewritten to Abandoned. The open runs are ended first, inside the abandon hold, after every
+  one is asked `abandonRefusal`, as the archive door does.
+- **The two reads** take the goals read's shape: a live session or the box token, with no ownership check on the token arm
+  (spec §11 says "the box token for the bound coordinator"). A history holds whys, never a value; its answer is masked
+  (`MASKED_GET_ROUTES`).
+- **The coordinator line** reads the registry row's uuid and archive mark; the carry reading (mid-swap, mid-roll) is not
+  reached from the server's one-row read yet, and a swap keeps the session id and uuid, so it reads `led`. W4's registry
+  lane owns that reading.
+- **The programmes read** lists every real programme that has not ended and is not a filed or withdrawn placeholder, even
+  with no run in its window (an Idle programme stays reachable, D-8992), and adds `coordinatorsWithoutProgramme`: sessions a
+  `coordinator` event named, owning nothing and claiming no open run, keyed by session id, listed while their registry row
+  is present and not archived.
+- **"You own no programme now"** is mailed by the state door's ends, the confirm, and the hand-over (to the displaced
+  session, with the hand-over sentence); the hand-over's two mails are queued after its move commits, the ends' inside the
+  end's transaction. The start naming a session and the hand-over tell the new coordinator it owns the programme.
+- **The start's absent coordinator** is `coordinator-required` (spec §5), lifted by W4's pick. The confirm's `{programme}`
+  body is optional and, when sent, must equal the proposal's outcome. The decline takes an optional `why`.
+
 ## W3: the backfill door (one PR, then the operator's act)
 
 1. `POST /api/programmes/decisions` (spec §13): preview by default, `apply:true` behind the step-up; posted from the

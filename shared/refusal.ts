@@ -46,6 +46,7 @@ import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, Accou
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
+import { PROGRAMME_DOOR_REFUSALS, type ProgrammeDoorRefusal } from './programmeLifecycle.js';
 import { DELEGATION_BACKFILL_REFUSALS, type DelegationBackfillRefusal } from './delegationBackfill.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
@@ -380,6 +381,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ReviewRoundsRefusal
   // The end-request route (D-8076): its three words of its own.
   | EndRequestRefusal
+  // The programme lifecycle's doors (W2): their words, each with its status in `PROGRAMME_DOOR_REFUSALS`.
+  | ProgrammeDoorRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
   // The replay quiz's record door: its one word of its own.
@@ -447,6 +450,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...DELEGATION_ADOPT_REFUSALS,
   // The one-time pass's door (D-8874): one new word, CHOSEN, with its status in `DELEGATION_BACKFILL_REFUSALS`.
   ...DELEGATION_BACKFILL_REFUSALS,
+  // The programme lifecycle's doors (W2): CHOSEN, each status declared once in `PROGRAMME_DOOR_REFUSALS`.
+  ...PROGRAMME_DOOR_REFUSALS,
   // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an
   // override the grammar refuses), 404 for a project the box does not know, 409 for a request the project's state refuses
   // now (the repository is public, nothing is measured yet, the template is there, no key is set, a tracker id or a

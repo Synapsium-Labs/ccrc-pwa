@@ -129,6 +129,13 @@ function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, act
   return id;
 }
 
+/** `raiseItem`'s checks and insert inside a transaction the CALLER holds (programme lifecycle W2: the end proposal raises its
+ *  item with its programme event in one transaction). */
+export function raiseItemCheckedInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc'): number {
+  checkRaise(input);
+  return raiseItemInTx(db, input, now, actor);
+}
+
 /** `raiseItem` and a mail in ONE transaction (the pattern of `tickWithMail`): `queue` gets the new id and inserts the system
  *  mail; a throw from it rolls the item back. `queue` must open no transaction of its own. */
 export function raiseItemWithMail<T>(
@@ -174,7 +181,7 @@ export function operatorWasShown(row: Pick<ItemRow, 'raisedAt' | 'heldUntil' | '
  *  writes the state, the timestamps and one event, or writes nothing and answers its word. THE ONLY WRITER of
  *  `operator_items.state`. `fields.answer` is kept on a tick; `fields.note` is kept on the row only for a return (the
  *  coordinator's note) and is recorded on the event for every act. */
-function moveItemInTx(
+export function moveItemInTx(
   db: DatabaseSync, id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null },
   now: number, ctx: { programmeHasOpenRun: boolean },
 ): ItemMoveResult {

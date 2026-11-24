@@ -180,7 +180,10 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
   // The answer marks (Overlord W1): the operator's two marks on a Waiting on you row; they work dark and record `flag-off`.
   '/api/answer-marks',
   // The ratify door (Overlord W1, portfolio B): the operator ratifies a goals version; it takes the account gate, so dark it refuses.
-  '/api/programmes/:slug/goals/ratify'];
+  '/api/programmes/:slug/goals/ratify',
+  // Programme lifecycle W2: the operator's start, state and hand-over doors; the start takes the account gate, the state door's
+  // pause works dark (`flag-off`) and its other edges and the hand-over take the step-up.
+  '/api/programmes', '/api/programmes/:slug/state', '/api/programmes/:slug/coordinator'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The
@@ -323,7 +326,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // /api/overlord/messages/:id/acknowledge, three box-token lanes in the inbox routes file: one hundred and two in all.
   'one hundred', 'one hundred and one', 'one hundred and two',
   // The Overlord's history door (W1, PR B1): POST /api/overlord/history, a box-token lane in the history routes file: one hundred and three in all.
-  'one hundred and three'];
+  'one hundred and three',
+  // Programme lifecycle W2: POST /api/programmes/:slug/end-proposal, a box-token lane, and the two session-or-token reads
+  // GET /api/programmes/:slug/history and GET /api/sessions/:id/programme, in the ledgers file: one hundred and six in all.
+  'one hundred and four', 'one hundred and five', 'one hundred and six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -464,11 +470,22 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // box token (design 2026-09-20 §12, decision 15).
     // …plus the Linear proxy's twelve since #1444 (plan task LK9), its own lane source, asserted on its own.
     expect(LINEAR_PROXY_LANES, 'the Linear proxy is not being read, or a route lost its token check').toHaveLength(13);
-    // …and the programme ledgers' eleven (plan PL3, D-8076's end-request and D-8126's goals read, a session-or-token lane), every one a lane, by name.
+    // …and the programme ledgers' fourteen (plan PL3, programme lifecycle W2, D-8076's end-request and D-8126's goals read, a session-or-token lane), every one a lane, by name.
     expect(LEDGER_LANES.slice().sort(), 'the ledgers file lost a box-token lane, or gained one with no census row').toEqual([
-      'GET /api/programmes/:slug/goals', 'GET /api/programmes/:slug/items', 'POST /api/items/:id/blocking', 'POST /api/items/:id/confirm',
-      'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/programmes/:slug/items',
-      'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
+      // Programme lifecycle W2: the coordinator's end proposal (a box-token lane) and the two session-or-token reads, the
+      // programme's history and a session's programme.
+      'GET /api/programmes/:slug/goals',
+      'GET /api/programmes/:slug/history',
+      'GET /api/programmes/:slug/items',
+      'GET /api/sessions/:id/programme',
+      'POST /api/items/:id/blocking',
+      'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return',
+      'POST /api/items/:id/withdraw',
+      'POST /api/programmes/:slug/end-proposal',
+      'POST /api/programmes/:slug/items',
+      'POST /api/programmes/:slug/modifications',
+      'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
     // …and the linking standard's three (D-8147 the session's read, D-8808 the coordinator's suggestion, D-8809 the Overlord's

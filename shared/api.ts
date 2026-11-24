@@ -24,7 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
-import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeRunRefuseCode, type ProgrammeStoredState } from './programmeLifecycle.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -7277,7 +7277,7 @@ export interface ProgrammeEnding {
 
 /** One programme of `GET /api/programmes` (D-8075, spec §11.6). `stuck` and `pendingClose` are absent before the stuck
  *  pass has run; `coordinatorGone` is absent when the server has no reading (A60). */
-export interface ProgrammeRow {
+export interface ProgrammeRow extends ProgrammeLifecycleFields {   // programme lifecycle W2: the lifecycle fields (spec §15)
   slug: string;
   title: string;
   currentWave: number | null;
@@ -7293,7 +7293,7 @@ export interface ProgrammeRow {
 }
 
 /** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
-export interface ProgrammesAnswer {
+export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };

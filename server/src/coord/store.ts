@@ -18,6 +18,7 @@ import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvis
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import * as lifecycle from './programmeLifecycleStore.js';
+import * as acts from './programmeLifecycleActs.js';
 import { endRecorded, isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -2206,6 +2207,8 @@ export class CoordStore {
           const attached = planStore.attachTicketInTx(this.db, id, input.ticket, now);
           if (!attached.ok) throw new OpenRunPlanRefused(attached.refused);
         }
+        // Programme lifecycle W2 (spec §8): a run opened withdraws the programme's open end proposal, in this transaction.
+        acts.settleEndProposalInTx(this.db, input.program, `run ${id} opened`, now);
         return {
           id,
           program: input.program,
@@ -2443,13 +2446,15 @@ export class CoordStore {
    * claimed. `unknown-programme` when there is no such row; `no-claimant` when `from` is not its bound coordinator, so a
    * stale caller never moves a programme somebody else now owns.
    */
-  reclaimProgramme(slug: string, from: string, to: string | null, at: number, coordProject: string | null,
+  reclaimProgramme(slug: string, from: string | null, to: string | null, at: number, coordProject: string | null,
     opts: ReclaimMoveOpts = {}): ReclaimProgramResult | { ok: false; kind: 'unknown-programme' } {
     return tx(this.db, () => {
       const row = lifecycle.programmeRowOf(this.db, slug);
       if (row === null) return { ok: false as const, kind: 'unknown-programme' as const };
+      // W2: the hand-over door passes the binding it read (null for none), so a stale door never moves a programme it
+      // did not see; rung 2 is otherwise skipped there (spec §3's ladder table).
       if (row.coordinator !== from) return { ok: false as const, kind: 'no-claimant' as const };
-      return this.reclaimProgrammeInTx(slug, from, to, at, coordProject, opts);
+      return this.reclaimProgrammeInTx(slug, from ?? '', to, at, coordProject, opts);
     });
   }
 
@@ -5613,7 +5618,27 @@ export class CoordStore {
   programmeLifecycleRow(slug: string): lifecycle.ProgrammeLifecycleRow | null { return lifecycle.programmeRowOf(this.db, slug); }
   programmeOf(session: string, uuid: string | null): { slug: string; placeholder: string | null } | null { return lifecycle.programmeOf(this.db, session, uuid); }
   /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). */
-  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number): lifecycle.DecideResult { return tx(this.db, () => lifecycle.decideInTx(this.db, input, now)); }
+  /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). `onReleased` (W2) runs
+   *  inside it with the coordinator an end released, so its mail is queued with the end or not at all. */
+  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number, onReleased?: (session: string) => void): lifecycle.DecideResult {
+    return tx(this.db, () => { const d = lifecycle.decideInTx(this.db, input, now); if (d.ok && d.released !== null) onReleased?.(d.released); return d; });
+  }
+  /** Programme lifecycle W2's acts and reads (`programmeLifecycleActs.ts`), each act in one transaction with its mail. */
+  startProgramme(input: Parameters<typeof acts.startNamedInTx>[1], now: number): ReturnType<typeof acts.startNamedInTx> { return tx(this.db, () => acts.startNamedInTx(this.db, input, now)); }
+  openEndProposalOf(slug: string): ItemRow | null { return acts.openEndProposalOf(this.db, slug); }
+  proposeProgrammeEnd(input: Parameters<typeof acts.proposeEndInTx>[1], now: number): number { return tx(this.db, () => acts.proposeEndInTx(this.db, input, now)); }
+  confirmProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, now: number, mail: (r: Extract<acts.ConfirmEndResult, { ok: true }>) => void): acts.ConfirmEndResult {
+    return tx(this.db, () => { const r = acts.confirmEndInTx(this.db, itemId, actor, now); if (r.ok) mail(r); return r; });
+  }
+  declineProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number, mail: (r: { slug: string; coordinator: string | null }) => void): ReturnType<typeof acts.declineEndInTx> {
+    return tx(this.db, () => { const r = acts.declineEndInTx(this.db, itemId, actor, why, now); if (r.ok) mail(r); return r; });
+  }
+  withdrawProgrammeEnd(item: ItemRow, by: string, now: number): boolean { return tx(this.db, () => acts.withdrawEndInTx(this.db, item, by, now)); }
+  settleProgrammeEndProposal(slug: string, why: string, now: number): boolean { return tx(this.db, () => acts.settleEndProposalInTx(this.db, slug, why, now)); }
+  programmeHistory(slug: string): ReturnType<typeof acts.historyOf> { return acts.historyOf(this.db, slug); }
+  programmeOpenRunIds(slug: string): number[] { return acts.openRunIdsOf(this.db, slug); }
+  programmeLifecycleRows(): ReturnType<typeof acts.lifecycleRowsOf> { return acts.lifecycleRowsOf(this.db); }
+  coordinatorsWithoutProgramme(): ReturnType<typeof acts.coordinatorsWithoutProgrammeOf> { return acts.coordinatorsWithoutProgrammeOf(this.db); }
   remeasureProgrammesAtBoot(now: number): lifecycle.RemeasureReport { return tx(this.db, () => lifecycle.remeasureAtBootInTx(this.db, now)); }
 
   // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
