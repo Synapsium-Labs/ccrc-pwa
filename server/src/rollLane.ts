@@ -1,4 +1,5 @@
 import type { Viewers } from './viewer.js';
+import { advisorStaleOf, utcDayOf } from './continuity/advisorPolicy.js';
 import type { SessionRecord } from './registry.js';
 import { ccdCan } from './ccdargv.js';
 import {
@@ -160,7 +161,7 @@ export type RollOutcome =
   /** `after` (D-7541): the target asked again on the serialiser once ccd answered, when it was no longer one (a
    *  coordination write landed while the call ran, which no longer waits on it): the word that says why. */
   | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string; readonly model?: RolledModel;
-      readonly entryPending?: true }
+      readonly entryPending?: true; readonly advisor?: true }
   /** The pane was still live after ccd's kill (`roll-kill-failed`, exit 6): nothing was rolled and no wake was tried,
    *  but the hibernated marker and the stopped unit the act wrote stand, so the line names the session to check. */
   | { readonly id: string; readonly kind: 'kill-failed'; readonly detail: string }
@@ -179,7 +180,7 @@ export type RollOutcome =
  *  a hold named by its words, and a row on the current release the hold `current`, which writes nothing. */
 type RolledModel = { readonly class: ModelClass; readonly from: string; readonly to: string };
 type RollAnswer =
-  | { readonly act: 'hibernate'; readonly idleMs: number; readonly model?: RolledModel; readonly entryPending?: true }
+  | { readonly act: 'hibernate'; readonly idleMs: number; readonly model?: RolledModel; readonly entryPending?: true; readonly advisor?: true }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: string };
 
@@ -187,7 +188,8 @@ const CURRENT = 'current';
 
 function answerOf(v: AutoRollVerdict): RollAnswer {
   if (v.act === 'roll') {
-    return { act: 'hibernate', idleMs: v.idleMs, ...(v.model === undefined ? {} : { model: v.model }), ...(v.entryPending ? { entryPending: true as const } : {}) };
+    return { act: 'hibernate', idleMs: v.idleMs, ...(v.model === undefined ? {} : { model: v.model }), ...(v.entryPending ? { entryPending: true as const } : {}),
+      ...(v.advisor ? { advisor: true as const } : {}) };
   }
   if (v.act === 'measure') return v;
   // Only the measured step reads a lane's models; anywhere else (the act's re-ask with no answer this pass) it is current.
@@ -271,6 +273,8 @@ function verdictOf(deps: RollSweepDeps, p: Pass, names: readonly string[], row: 
     build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
     model: modelFactOf(candidate, p.models.get(row.wrapper)), rolledModelFor: p.modelFor.get(row.id) ?? null,
     entryPending: p.entryPending.get(row.id) ?? null,
+    advisorStale: advisorStaleOf(row.route?.fields.advisor, row.route?.unreadable.includes('advisor') ?? false, row.advisorSpawn ?? null,
+      utcDayOf(now)),
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
     sleep: { row, overlord: overlord ?? null, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
@@ -362,7 +366,8 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       if (r.kind === 'hibernated') {
         if (r.woke === undefined || r.woke === true) {
           // The act's own verdict names the model target (asked again at the act); the pass's idle time stays the line's.
-          const m = { ...(r.verdict.model === undefined ? {} : { model: r.verdict.model }), ...(r.verdict.entryPending ? { entryPending: true as const } : {}) };
+          const m = { ...(r.verdict.model === undefined ? {} : { model: r.verdict.model }), ...(r.verdict.entryPending ? { entryPending: true as const } : {}),
+            ...(r.verdict.advisor ? { advisor: true as const } : {}) };
           return r.after === undefined ? { id, kind: 'rolled', idleMs: v.idleMs, ...m } : { id, kind: 'rolled', idleMs: v.idleMs, after: r.after, ...m };
         }
         return r.woke.restored ? { id, kind: 'woke-failed', detail: r.woke.failed } : { id, kind: 'woke-unrestored', detail: r.woke.failed };
@@ -465,7 +470,8 @@ export async function rollPass(
         : ` (behind its class's model: ${o.model.class} ran ${o.model.from}, its target is ${o.model.to})`;
       const pending = o.entryPending === true
         ? ' (its entry identity stayed pending, which holds cleanups that could share its tree; ccd\'s remedy is this stop and start; D-8955)' : '';
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`}${model}${pending} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
+      const advisor = o.advisor === true ? ' (advisor-stale: its route\'s coordinator advisor differs from what its spawn applied; plan 2026-11-23-coordinator-advisor)' : '';
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release${reach === null ? '' : ` (its lane's newest Claude Code build is ${reach})`}${model}${pending}${advisor} (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {

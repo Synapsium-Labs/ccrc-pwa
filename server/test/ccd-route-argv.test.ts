@@ -672,12 +672,12 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // question. The signature line moved with it (`seen=""`), which is why the
     // count is five rather than four plus one. SIX still, with the model-class arm's A3.3 lane (`ROUTE_ARGV_LANE`, the caller's chosen lane, which rides apart from the pairs and is argv-only because `cmd_route` reads its lane off the record: it rewrote the signature line and added no line); SIX since the Overlord W1's pool set: the refusal of `poolset` and
     // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer; the same
-    // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`.
+    // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`. So does `advisor` (the coordinator advisor, D-8967), whose one writer is the launch-profile lane.
     expect(only).toEqual([
       `local kv f v rc cls="" eff="" seen="" lane="\${ROUTE_ARGV_LANE-}" subj`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
-      `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
+      `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold || "$f" == advisor ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
       `_route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "`,
       `return 0`,
     ]);

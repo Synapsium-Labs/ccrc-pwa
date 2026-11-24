@@ -21,6 +21,7 @@ import {
 import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
 import type { LiveSpendReading } from '../../shared/portfolio.js';
 import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.js';
+import { anthropicLaneOf } from '../../shared/roster.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
@@ -190,6 +191,7 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { ADVISOR_COUNT_LANE_ROW, advisorCountPass } from './continuity/advisorLane.js';
 import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
@@ -2529,7 +2531,7 @@ export class FleetWatcher {
           readAfterHours: () => this.deps.io.readFile(`${this.deps.cfg.registryDir}/${HIBERNATE_AFTER_HOURS_FILE}`),
           // Typed-repick: an Anthropic lane's models, read only for a session past every other gate (rollLane.ts).
           laneModels: (lane) => readLaneModels(this.deps.io, lane),
-          anthropicLane: (lane) => this.deps.cfg.roster.byId.get(lane)?.telemetry === 'anthropic',
+          anthropicLane: (lane) => anthropicLaneOf(this.deps.cfg.roster, lane) === true,
           // D-8955: the holding rows the last coord frame carried (absent there: none), null before the first frame.
           heldBy: () => (this.coord === null ? null : this.coord.cleanupHeldBy ?? []),
           log: (line) => console.warn(line),
@@ -2911,6 +2913,7 @@ export class FleetWatcher {
       void this.sweepGenerations(records, listedAt).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the LAUNCH-PROFILE lane (Overlord §3.6 H1, W1a), in shadow until its row is live.
       void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepAdvisorCount(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
@@ -6332,8 +6335,29 @@ export class FleetWatcher {
             (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
           // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
           buildAgreement: () => inventoryBuildAgreement(coord),
+          anthropicLane: (lane) => anthropicLaneOf(cfg.roster, lane),
         },
-      }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
+        now: () => this.deps.time.clock.wall(),
+      }, records.map((r) => ({ id: r.id, child: r.child, route: r.route, wrapper: r.unmeasured.includes('wrapper') ? null : r.wrapper,
+        ...(r.advisorSpawn === undefined ? {} : { advisorSpawn: r.advisorSpawn }) })));
+    });
+  }
+
+  /** The coordinator advisor's count lane (plan 2026-11-23-coordinator-advisor PR C): advised coordinators' transcripts read
+   *  forward, their calls recorded. Rungs 1-5 of the resolver only (no other account's frozen copy). PUBLIC for a test. */
+  async sweepAdvisorCount(records: readonly SessionRecord[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane(ADVISOR_COUNT_LANE_ROW, async () => {
+      const r = await advisorCountPass({
+        coord, io: this.deps.io, now: () => this.deps.time.clock.wall(), log: (line) => console.warn(line),
+        transcriptOf: async (rec) => {
+          const cfgDir = configDirFor(this.deps.cfg, rec.wrapper);
+          if (!cfgDir || rec.uuid === '') return null;
+          return (await this.transcripts.resolve({ configDir: cfgDir, dir: rec.workdir, registryWorkdir: rec.workdir, uuid: rec.uuid })).path;
+        },
+      }, records);
+      if (r.failed > 0) console.warn(`ccrc-server: advisor count: ${r.failed} advised session(s) not read this pass`);
     });
   }
 

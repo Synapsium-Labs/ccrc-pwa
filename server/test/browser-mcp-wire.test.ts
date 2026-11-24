@@ -46,7 +46,7 @@ const record = async (io: FleetIO = localIO): Promise<SessionRecord> => {
 describe('the vocabulary (D-8121)', () => {
   it('`browser` is a writable routing field, after `compact`, and so a read field too', () => {
     expect(ROUTE_WRITABLE_FIELDS.indexOf('browser')).toBe(ROUTE_WRITABLE_FIELDS.indexOf('compact') + 1);
-    expect(ROUTE_WRITABLE_FIELDS.indexOf('browser'), 'the launch profile\'s three, the compaction piece\'s precompact (Overlord W1a) the pool set\'s two, the sandbox\'s profiledigest (W1) and the mid-turn mail hold\'s mailhold follow it').toBe(ROUTE_WRITABLE_FIELDS.length - 9);
+    expect(ROUTE_WRITABLE_FIELDS.indexOf('browser'), 'the launch profile\'s three, the compaction piece\'s precompact (Overlord W1a) the pool set\'s two, the sandbox\'s profiledigest (W1), the mid-turn mail hold\'s mailhold and the coordinator advisor follow it').toBe(ROUTE_WRITABLE_FIELDS.length - 10);
     expect(ROUTE_READ_FIELDS).toContain('browser');
     expect(parseRouteFields({ browser: 'on' })).toEqual({ ok: true, route: { browser: 'on' } });
   });
@@ -94,6 +94,27 @@ describe('the spawn\'s record reaches the fleet frame (D-8121)', () => {
     expect(s.browserMcp).toBe('on');
     expect(reviveFleetSession(JSON.parse(JSON.stringify(s)))?.browserMcp).toBe('on');
     expect(reviveFleetSession({ ...JSON.parse(JSON.stringify(s)), browserMcp: 'maybe' })?.browserMcp).toBeNull();
+  });
+});
+
+describe('the coordinator advisor\'s spawn record reaches the fleet frame too (D-8967), on the same substrate', () => {
+  it('a row with no record carries neither field; a record is carried and revived; a malformed readout is dropped', async () => {
+    const noopRun: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
+    const fleet = () => assembleFleet(localIO, cfg(), new Tmux(noopRun), liveStateReaderOver(localIO), 1784600000);
+    const bare = (await fleet()).find((x) => x.id === ID)!;
+    expect('advisorSpawn' in bare || 'advisor' in bare).toBe(false);
+    field('advisorspawn', 'fable 1784599000');
+    expect((await record()).advisorSpawn).toEqual({ kind: 'applied', model: 'fable', at: 1784599000 });
+    const s = (await fleet()).find((x) => x.id === ID)!;
+    expect(s.advisorSpawn).toEqual({ kind: 'applied', model: 'fable', at: 1784599000 });
+    const raw = JSON.parse(JSON.stringify(s)) as Record<string, unknown>;
+    expect(reviveFleetSession(raw)?.advisorSpawn).toEqual(s.advisorSpawn);
+    const advisor = { state: 'live', model: 'fable', today: 2, cap: 12, overrun: 0, tokens: null, applies: 'roll' };
+    expect(reviveFleetSession({ ...raw, advisor })?.advisor).toEqual(advisor);
+    expect(reviveFleetSession({ ...raw, advisor: { ...advisor, state: 'roll' } })?.advisor).toBeUndefined();
+    expect(reviveFleetSession({ ...raw, advisorSpawn: { kind: 'applied', model: 'sonnet', at: 1 } })?.advisorSpawn).toBeNull();
+    field('advisorspawn', 'garbage');
+    expect(isCleanRecord(await record())).toBe(false);
   });
 });
 
