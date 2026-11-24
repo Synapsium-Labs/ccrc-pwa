@@ -554,7 +554,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
       withRung('chat');
       mount(where);
       expect([...primary().children].map((c) => c.getAttribute('data-command')), where)
-        .toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+        .toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-archive', 'go-docs']);
       expect(currents(), where).toEqual(['go-fleet']);
       cleanup();
     }
@@ -567,7 +567,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     withRung('off');
     mount('/fleet');
     expect([...primary().children].map((c) => c.getAttribute('data-command')))
-      .toEqual(['go-home', 'go-overlord', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+      .toEqual(['go-home', 'go-overlord', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-archive', 'go-docs']);
     expect(currents()).toEqual(['go-home']);
     act(() => useOverlordStore.setState({ caps: { state: 'loading' }, designation: { state: 'loading' }, ladder: { state: 'loading' } }));
   });

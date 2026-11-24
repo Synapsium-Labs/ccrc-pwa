@@ -146,7 +146,7 @@ describe('the bar fits on one line with every badge at 99+', () => {
               };
             });
             console.log(`DESK-NAV-FIGURE ${viewName(view)}: bar ${m.figure.bar} px, doors ${m.figure.doors} px, command field ${m.figure.field} px`);
-            expect(m.doorCount, 'the wordmark door and six doors are measured').toBe(7);
+            expect(m.doorCount, 'the wordmark door and seven doors are measured (Flows the seventh)').toBe(8);
             for (const t of m.tops) expect(Math.abs(t - m.tops[0]!), `one line: tops ${m.tops.join(', ')}`).toBeLessThanOrEqual(1);
             expect(m.faceHeights, 'the face is in the bar').toHaveLength(1);
             for (const c of m.centres) expect(Math.abs(c - m.centres[0]!), `one line: centres ${m.centres.join(', ')}`).toBeLessThanOrEqual(1);
@@ -200,7 +200,7 @@ describe("the bar with the Overlord's and the Fleet's doors", () => {
             pageScroll: document.documentElement.scrollWidth - window.innerWidth,
           };
         });
-        expect(m.commands).toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+        expect(m.commands).toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-archive', 'go-docs']);
         expect(m.current, '/fleet marks exactly one door').toEqual(['go-fleet']);
         expect(m.line, 'the bar is one 44 px line').toBeLessThanOrEqual(44.5);
         expect(m.outside, 'every door, ⌘K, the bell, Settings and + inside the bar').toBe(0);
@@ -229,9 +229,9 @@ describe('the doors show words from 1280', () => {
             tips: doors.filter((d) => d.querySelector('.ins-door-tip') !== null).length,
           };
         });
-        expect(m.doors).toBe(6);
-        expect(m.words, 'doors showing their word').toBe(width >= 1280 ? 6 : 0);
-        expect(m.tips, 'doors with a tip').toBe(width >= 1280 ? 0 : 6);
+        expect(m.doors).toBe(7);
+        expect(m.words, 'doors showing their word').toBe(width >= 1280 ? 7 : 0);
+        expect(m.tips, 'doors with a tip').toBe(width >= 1280 ? 0 : 7);
       } finally {
         await ctx.close();
       }
@@ -421,8 +421,8 @@ describe('a touch screen keeps the floor', () => {
         });
         expect(m.coarse, 'the coarse pointer is emulated').toBe(true);
         expect(m.bell, 'the bell is in the bar').toBe(true);
-        // The wordmark door, six doors, the command field, the bell, Settings and +.
-        expect(m.count, 'controls measured').toBe(11);
+        // The wordmark door, seven doors (Flows the seventh), the command field, the bell, Settings and +.
+        expect(m.count, 'controls measured').toBe(12);
         expect(m.small).toEqual([]);
       } finally {
         await ctx.close();

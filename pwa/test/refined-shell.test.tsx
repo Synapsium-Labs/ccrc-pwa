@@ -175,7 +175,8 @@ describe('the app bar (W2 Task S4b)', () => {
   // Desktop-polish PL5a (D-7712): the Waiting on you tab counts open items plus the sessions' questions, never an item
   // being checked, and prints nothing before the waiting frame has landed.
   it("the Waiting on you tab's name says 'waiting on you' with the count of open items and questions, not checking", () => {
-    atWidth(900);
+    // 1280: below 1200 the six desk tabs (Flows the sixth) shed words, and the tab is "Waiting" (`REF_ROOMY_QUERY`).
+    atWidth(1280);
     render(<App />);
     const tab = (name: string) => within(primary()).getByRole('button', { name });
     act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));

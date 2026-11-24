@@ -8,7 +8,8 @@
 // seventeen lanes). This file holds the bar itself with its row: at 900, 930, 960, 1000 and 1280 in both palettes, the bar's
 // line is whole and holds no card, the row sits under it, every card is whole inside the row with its readings whole
 // inside it, and the page does not scroll sideways. Under a coarse pointer every door and every tab in the bar is at least 44 x 44,
-// the check counts what it measured (five tabs, four doors: the desk has no fleet tab since desktop-polish PL10, D-7952),
+// the check counts what it measured (six tabs, four doors: the desk has no fleet tab since desktop-polish PL10, D-7952, and
+// Flows is a desk place, flows design 2026-11-19 §9),
 // and every tab carries the tap floor as its minimum width.
 // 1000 is the first width with the full padding and gap (carry C, D-7951; review 1379 F1, F5 and F6).
 // The coarse pointer is a touch screen: headless Chrome ignores the DevTools protocol's pointer media feature
@@ -95,11 +96,12 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
         // cards' fit, so the stored choice is expanded; lanes-row.browser.test.ts holds the fold.
         await seedStripExpanded(ctx);
         await page.goto(server!.origin + '/fleet');
-        // The lanes and the three badges have landed once the lanes row's cards and the three counted tab names are in place.
+        // The lanes and the three badges have landed once the lanes row's cards and the three counted tabs are in place (below 1200
+        // the six tabs are crowded, and the Waiting tab is named by its short word, so it is found by its command).
         await page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 6
           && document.querySelector('.ref-bar [aria-label="Inbox, 12 waiting for you"]') !== null
           && document.querySelector('.ref-bar [aria-label="Runs, 12 needs you"]') !== null
-          && document.querySelector('.ref-bar [aria-label^="Waiting on you, "]')?.textContent?.endsWith('99+') === true, undefined, { timeout: 20_000 });
+          && document.querySelector('.ref-bar [data-command="go-waiting"]')?.textContent?.endsWith('99+') === true, undefined, { timeout: 20_000 });
         const faults = await page.evaluate(() => {
           const out: string[] = [];
           // The bar's line holds no card; the lanes row (T2c, D-6329) sits under it, in the header, one card per lane, each
@@ -134,7 +136,7 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
           const tabs = [...document.querySelectorAll<HTMLElement>('.ref-tabs > *')];
           // The selection's size first (review 1379 F1): a renamed class would otherwise measure nothing and pass.
           const out: string[] = [];
-          if (tabs.length !== 5) out.push(`${tabs.length} tabs measured, not 5 (no fleet tab at a desk, PL10)`);
+          if (tabs.length !== 6) out.push(`${tabs.length} tabs measured, not 6 (no fleet tab at a desk, PL10; Flows is a desk place)`);
           if (doors.length !== 4) out.push(`${doors.length} doors measured, not 4 (the bell, search, settings, new session)`);
           // The floor is the tab's own (review 1379 F5): its words and padding clear 44px today, the minimum width keeps it so.
           for (const t of tabs) {
@@ -207,7 +209,7 @@ describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
             waiting: document.querySelector('.ref-tabs [data-command="go-waiting"]')!.textContent,
           };
         });
-        expect(m.tabs).toEqual(['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs']);
+        expect(m.tabs).toEqual(['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-docs']);
         expect(m.current, '/fleet marks exactly one tab').toEqual(['go-fleet']);
         expect(m.cut, 'nothing in the bar is cut').toEqual([]);
         expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);

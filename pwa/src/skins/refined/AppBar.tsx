@@ -26,7 +26,8 @@ import { useDesignationState, useHome, useOverlordShown } from '../../stores/ove
 /** Below this width the bar is crowded once the Overlord's and the Fleet's tabs are drawn (Overlord W1 home, measured in
  *  refined-bar.browser.test.ts: at 900 the line ran 105 px past its frame and at 1100 1 px, New session cut). A crowded bar names each tab
  *  by its place's short word where it has one ("Waiting", the phone bar's word) and draws New session as its "+" alone,
- *  named "New session", as Instrument's is (slug `refined-crowded-bar-sheds-words`). Five tabs are never crowded. */
+ *  named "New session", as Instrument's is (slug `refined-crowded-bar-sheds-words`). Five tabs are never crowded; Flows, a desk
+ *  place (flows design 2026-11-19 §9), makes the desk six, which crowd too (measured: New session cut at 900 to 1000). */
 export const REF_ROOMY_QUERY = '(min-width: 1200px)';
 const ROOMY_TABS = 5;
 

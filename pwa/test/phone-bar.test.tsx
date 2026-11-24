@@ -351,8 +351,9 @@ describe("Instrument's desk doors read the one list", () => {
 
 // Review 3319 A5 and A7 (Overlord W1 home, plan question 14 and slug `refined-crowded-bar-sheds-words`): with the Overlord's
 // and the Fleet's tabs drawn, Refined's Fleet tab is current on `/fleet` and on a session, as Instrument's door is; below 1200 px
-// (`REF_ROOMY_QUERY`) the seven-tab bar names Waiting by its short word and draws New session as its "+" alone, and at 1200 and
-// above, or with five tabs, the full words come back. jsdom lays nothing out, so the widths are the media queries' answers.
+// (`REF_ROOMY_QUERY`) the eight-tab bar names Waiting by its short word and draws New session as its "+" alone, and at 1200 and
+// above the full words come back. The six tabs with no Overlord's door (Flows the sixth, flows design 2026-11-19 §9) shed them too:
+// more than five tabs cut New session below 1200 in the browser leg. jsdom lays nothing out, so the widths are the media queries' answers.
 describe("Refined's desk tabs with the Overlord's and the Fleet's", () => {
   beforeEach(() => { setSkin(REFINED); });
   afterEach(() => { setSkin(REFINED); });
@@ -372,7 +373,7 @@ describe("Refined's desk tabs with the Overlord's and the Fleet's", () => {
     }
   });
 
-  it('below 1200 px the seven tabs shed words (Waiting, a "+" New session); from 1200, or with five tabs, the full words', () => {
+  it('below 1200 px the eight tabs, and the six with no Overlord, shed words (Waiting, a "+" New session); from 1200 the full words', () => {
     const shown = (): { waiting: string; newText: string; newName: string | null } => {
       const fresh = document.querySelector<HTMLElement>('header .ref-bar-new')!;
       return {
@@ -381,12 +382,12 @@ describe("Refined's desk tabs with the Overlord's and the Fleet's", () => {
         newName: fresh.getAttribute('aria-label') ?? fresh.textContent,
       };
     };
-    for (const [width, words, crowded] of [[1100, ['overlord-v1'], true], [1199, ['overlord-v1'], true], [1200, ['overlord-v1'], false], [1100, [], false]] as const) {
+    for (const [width, words, crowded] of [[1100, ['overlord-v1'], true], [1199, ['overlord-v1'], true], [1200, ['overlord-v1'], false], [1100, [], true], [1200, [], false]] as const) {
       atWidth(width);
       withOverlord(words);
       mount('/fleet');
       const m = shown();
-      const label = `${width} ${words.length > 0 ? 'seven tabs' : 'five tabs'}`;
+      const label = `${width} ${words.length > 0 ? 'eight tabs' : 'six tabs'}`;
       expect(m.waiting.startsWith(crowded ? 'Waiting' : 'Waiting on you'), `${label}: ${m.waiting}`).toBe(true);
       expect(m.waiting.startsWith('Waiting on you'), `${label}: ${m.waiting}`).toBe(!crowded);
       expect(m.newText, label).toBe(crowded ? '+' : '+New session');
