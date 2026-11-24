@@ -1186,18 +1186,17 @@ describe('upload route id handling', () => {
     }
   });
 
-  // Absent by decision, not by oversight: a .docx is a ZIP container `Read`
-  // cannot open, so staging one would put a file in the prompt that reaches
-  // Claude as noise. Widening the list is only ever safe for a format the
-  // reader on the far end already understands.
-  it('refuses what the reader on the far end could not open', async () => {
+  // Any file attaches (2026-11-24): what this case refused as unreadable on
+  // the far end is stored now, and which formats a session can open is the
+  // session's business. `clip-any-file.test.ts` pins the shape gate whole.
+  it('stages a file of any format, under its own extension', async () => {
     const { app } = await makeApp([null]);
     for (const name of ['deck.pptx', 'book.xlsx', 'memo.docx', 'bundle.zip', 'run.sh', 'page.html']) {
       const res = await app.inject({
         method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name),
       });
-      expect(res.statusCode, name).toBe(415);
-      expect(res.json().error, name).toBe('unsupported-type');
+      expect(res.statusCode, name).toBe(200);
+      expect((res.json().clip as { name: string }).name.endsWith(name.slice(name.lastIndexOf('.'))), name).toBe(true);
     }
   });
 
@@ -1277,7 +1276,7 @@ describe('clip route', () => {
 
   it('refuses a name that is not a clip, and a traversing one', async () => {
     const { app } = await makeApp([null]);
-    for (const bad of ['..%2F..%2F.ssh%2Fid_rsa', 'notaclip.png', 'clip-x.exe']) {
+    for (const bad of ['..%2F..%2F.ssh%2Fid_rsa', 'notaclip.png', 'clip-x.ex~e', 'clip-x.PNG']) {
       const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${bad}` });
       expect(res.statusCode).toBe(400);
     }

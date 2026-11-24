@@ -8289,65 +8289,95 @@ export interface CoordCapsView {
 export interface StagedClip { path: string; name: string; bytes: number }
 
 /**
- * Every filename extension the clip store admits — ONE definition, because the
- * list is read in five places that must not drift: the upload gate, the
- * stored-name rule, the path regex, the picker's `accept`, and the renderer's
- * thumbnail-or-chip decision.
+ * What the clip store admits, and what it still tells apart — ONE definition,
+ * because it is read in five places that must not drift: the upload gate, the
+ * stored-name rule, the path regex, the composer's own naming, and the
+ * renderer's thumbnail-or-chip decision.
  *
- * The split is not cosmetic. An IMAGE is staged for what it LOOKS like, so the
- * composer may re-encode it (downscale, JPEG) on the way. A DOCUMENT is staged
- * for what READS it: the path is typed into the session and Claude Code opens
- * the file itself, so the bytes must arrive untouched — a canvas pass over a
- * PDF produces a picture of nothing.
+ * ANY FILE is admitted (the operator's goal of 2026-11-24): the gate is the
+ * SHAPE of the extension, never a list of formats. A list stopped where it did
+ * because a document was staged for what `Read` could open off its path; the
+ * session has a shell as well as `Read`, so which file types it can open is
+ * the session's business, not the store's. The store's business is that every
+ * name it writes is one this whole lane can store, find in a prompt and serve.
  *
- * That same reading is why the document half stops where it does. What is here
- * is what `Read` can open off a path: plain text in its various dresses, plus
- * PDF, which it reads natively. `.docx`/`.xlsx`/`.pptx` are deliberately ABSENT
- * — they are ZIP containers, so admitting one would stage a file that reaches
- * Claude as binary noise, and converting them is a fleet-box dependency this
- * tree does not have. Widening this list is safe only for a format `Read`
- * already understands.
+ * The SHAPE: the file's own extension (after its last dot), letters and digits
+ * only, 1 to `CLIP_EXT_MAX` characters. Stored lower-cased. A name with no
+ * extension of that shape is given a neutral one by the composer before it
+ * uploads (`pwa/src/session/useAttachImage.ts`), so the gate still refuses it
+ * from any other client.
+ *
+ * The one list that remains is the PICTURES. A picture is staged for what it
+ * LOOKS like, so the composer may re-encode it (downscale, JPEG) and the
+ * bubble draws it as a thumbnail. Every other file is staged for what READS it
+ * and arrives byte for byte; a canvas pass over a PDF produces a picture of
+ * nothing. What the clip route will serve INLINE is a separate allow-list on
+ * the server (`CLIP_MIME`, `server/src/clip.ts`): any other extension is
+ * served as an opaque download.
  */
 export const CLIP_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp'] as const;
-export const CLIP_DOC_EXTS =
-  ['md', 'txt', 'log', 'csv', 'tsv', 'json', 'yaml', 'yml', 'rtf', 'pdf'] as const;
-export const CLIP_EXTS: readonly string[] = [...CLIP_IMAGE_EXTS, ...CLIP_DOC_EXTS];
 
-/** The `png|jpg|…` alternation, for the two regexes that gate clip names and
- *  paths. Derived, so a new extension never needs a regex edited by hand. */
-export const CLIP_EXT_ALT = CLIP_EXTS.join('|');
+/** The longest extension the store keeps. 12 holds every common one
+ *  (`webmanifest` is 11); anything longer is treated as no extension. */
+export const CLIP_EXT_MAX = 12;
 
-/** The lowercase extension of a filename or path; '' when it has none. */
-function extOf(nameOrPath: string): string {
+/** The stored extension's pattern, for the regexes that gate clip names and
+ *  paths: lower-case letters and digits, 1 to `CLIP_EXT_MAX` of them. The name
+ *  is historical — it was the `png|jpg|…` alternation, and the upload gate in
+ *  server.ts still imports it under that name. Derived, so the shape is
+ *  stated once. */
+export const CLIP_EXT_ALT = `[a-z0-9]{1,${String(CLIP_EXT_MAX)}}`;
+
+/** The same shape for a name as an uploader wrote it: ASCII letters of either
+ *  case. Tested BEFORE lower-casing, because `toLowerCase` folds some non-ASCII
+ *  letters to ASCII (the Kelvin sign becomes `k`) and the server's
+ *  case-insensitive gate does not, so testing after would admit a name the
+ *  server refuses. */
+const CLIP_EXT_RAW_RE = new RegExp(`^[A-Za-z0-9]{1,${String(CLIP_EXT_MAX)}}$`);
+
+/** The extension a file would be stored under: its own, after its last dot,
+ *  lower-cased, when it has the admitted shape; '' when it has none. */
+export function clipExtOf(nameOrPath: string): string {
   const base = nameOrPath.slice(nameOrPath.lastIndexOf('/') + 1);
   const dot = base.lastIndexOf('.');
-  return dot < 0 ? '' : base.slice(dot + 1).toLowerCase();
+  if (dot < 0) return '';
+  const ext = base.slice(dot + 1);
+  return CLIP_EXT_RAW_RE.test(ext) ? ext.toLowerCase() : '';
 }
 
 /** True when a filename carries an extension the clip store admits. */
 export function hasClipExt(nameOrPath: string): boolean {
-  return CLIP_EXTS.includes(extOf(nameOrPath));
+  return clipExtOf(nameOrPath) !== '';
 }
 
 /**
- * True for a clip a renderer should draw as a picture rather than as a document
- * chip. Decided on the EXTENSION, never on a MIME type: the stored name is all
- * a bubble has — it is rebuilt from the prompt text, which carries no types —
- * and the extension in it is the real one `clipName` wrote.
+ * True for a clip a renderer should draw as a picture rather than as a
+ * document chip. Decided on the EXTENSION, never on a MIME type: the stored
+ * name is all a bubble has — it is rebuilt from the prompt text, which carries
+ * no types — and the extension in it is the real one `clipName` wrote.
  */
 export function isImageClip(nameOrPath: string): boolean {
-  return (CLIP_IMAGE_EXTS as readonly string[]).includes(extOf(nameOrPath));
+  return (CLIP_IMAGE_EXTS as readonly string[]).includes(clipExtOf(nameOrPath));
 }
+
+/** The limits that remain once any file is admitted: bytes per file and files
+ *  per message. The server enforces both (its upload and prompt routes); the
+ *  composer reads these to refuse early and to say which limit and the size. */
+export const CLIP_MAX_BYTES = 12 * 1024 * 1024;
+export const CLIP_MAX_PER_MESSAGE = 4;
 
 /**
  * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
  * Matched by SHAPE, never by touching the filesystem, so it works client-side.
+ * The closing look-ahead is what stops a longer run of letters being read as
+ * a path with half an extension: no stored name has one, so the text is not
+ * a clip path.
  * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
  * module-scope regex returns alternating true/false on successive `.test()` calls.
  * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
  */
 export const CLIP_PATH_RE =
-  new RegExp(`\\/[^\\s]*\\/\\.cc-clips\\/[^/\\s]+\\/clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})`);
+  new RegExp(`\\/[^\\s]*\\/\\.cc-clips\\/[^/\\s]+\\/clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})(?![A-Za-z0-9])`);
 
 /**
  * Attachment paths first, each on its own line, then the user's text. Paths

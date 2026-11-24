@@ -128,7 +128,10 @@ export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code]
  *  that imply what to do instead. */
 const UPLOAD_ERROR_TEXT: Record<string, string> = {
   'too-large': 'That file is too large — 12 MB is the limit.',
-  'unsupported-type': "Can't attach that — images, text, PDF and RTF only.",
+  // Any file is admitted (2026-11-24): the server refuses only a name with no
+  // extension of the admitted shape, which the composer never sends (it adds
+  // `.noext`), so this is another client's or an older build's refusal.
+  'unsupported-type': "Can't attach that — its name has no extension the server can store.",
   'bad-request': "That upload didn't arrive — try attaching it again.",
   'unknown-session': 'That session is not running.',
   'bad-session-id': 'That session is not running.',
