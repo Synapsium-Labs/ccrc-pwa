@@ -24,6 +24,15 @@ export async function loadReaderAssets(): Promise<FrameAssets> {
   return { guard: guard.default, bootstrap: bootstrap.default, enhance: enhance.default, css: css.default };
 }
 
+/** The design system's own faces, as base64 without their data-URL prefixes. */
+export async function loadReaderFonts(): Promise<{ readonly sans: string; readonly mono: string }> {
+  const [sans, mono] = await Promise.all([
+    import('@/fonts/Geist-Variable.woff2?inline'),
+    import('@/fonts/GeistMono-Variable.woff2?inline'),
+  ]);
+  return { sans: sans.default.slice(sans.default.indexOf(',') + 1), mono: mono.default.slice(mono.default.indexOf(',') + 1) };
+}
+
 /** The Mermaid script's text, for a document whose gate lets it in. Rejects when the chunk does not load. */
 export async function loadMermaidAsset(): Promise<string> {
   return (await import('@synapsium-labs/pinax-lib/assets/mermaid/mermaid.frame.js?raw')).default;

@@ -104,6 +104,7 @@ interface Harness {
   readonly handle: {
     destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>;
     openAt: ReturnType<typeof vi.fn>;
+    seed: { hosted: false }; follow: ReturnType<typeof vi.fn>;
   };
   readonly inputs: ReaderMountInput[];
   readonly parser: ReturnType<typeof vi.fn<MarkdownParser>>;
@@ -116,7 +117,7 @@ function harness(over: Partial<{
   outcome: ReaderRenderOutcome; mount: ReaderDeps['mount']; drafts: number;
 }> = {}): Harness {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), openAt: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), openAt: vi.fn(), seed: { hosted: false as const }, follow: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => over.outcome ?? RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(over.mount ?? (async (_el, input) => {
     inputs.push(input);
@@ -345,7 +346,7 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
   it('a fallback before the mount lands keeps the fragment for the plain view', async () => {
     const h = harness({ mount: async (_el, input) => {
       input.onFallback('timeout');
-      return { destroy: vi.fn(), setPrefs: vi.fn() } as ReaderMount;
+      return { destroy: vi.fn(), setPrefs: vi.fn(), seed: { hosted: false }, follow: vi.fn() } as ReaderMount;
     } });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     render(frame(h, { pending: 'part' }));
@@ -617,7 +618,7 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
   });
 
   it('a mount with no openAt takes a same-page link as an address rewrite alone', async () => {
-    const h = harness({ mount: async () => ({ destroy: vi.fn(), setPrefs: vi.fn() }) as ReaderMount });
+    const h = harness({ mount: async () => ({ destroy: vi.fn(), setPrefs: vi.fn(), seed: { hosted: false }, follow: vi.fn() }) as ReaderMount });
     render(frame(h));
     await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
     await settled();

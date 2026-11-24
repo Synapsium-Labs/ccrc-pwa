@@ -19,14 +19,15 @@
 //
 // `mountReader` remounts only for `openAt` (a link to this very page, spelled with its file name): the old frame is
 // destroyed and the same document is mounted again at the anchor, through the same mount function and adapters. The
-// library's `update` is never called (it keeps the first mount's adapters, `focus` among them), and a theme change is the
-// library's `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
+// library's `update` is never called (it keeps the first mount's adapters, `focus` among them). A hosted mount follows
+// appearance through `setAppearance`; a mode-only mount follows theme through `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
 // reads: `el.ownerDocument.activeElement` is a connected element outside `el`, other than the body and the document
 // element. It is read once per library mount, after the last await and in the same synchronous run as the mount call.
 // The watchdog, the draw mode, whether a storage port is handed over, whether the history is carried and whose bar the
 // frame has are
 // `policy.ts#readerMountPlan`'s, by the input's `profile` (none for the Docs reader, `lab-draw` for the reader lab's
 // timed mounts: the reader lab plan, refinement (k)), its `chrome`, and the recorded E17 reading.
+import * as frameLibrary from '@synapsium-labs/pinax-lib/frame';
 import {
   mermaidGate, type FrameAssets, type RenderInput,
 } from '@synapsium-labs/pinax-lib/frame';
@@ -37,10 +38,12 @@ import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, readerMountFocusFor, readerMountPlan,
+  READER_E17_MERMAID, isHostedMount, readerMountFocusFor, readerMountPlan,
   type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile,
 } from './policy';
-import { loadMermaidAsset, loadReaderAssets } from './assets';
+import { loadMermaidAsset, loadReaderAssets, loadReaderFonts } from './assets';
+import { readHostAppearance } from './hostAppearance';
+import { readerAppearanceSupported } from './appearance';
 import type { ReaderVersionSeed } from './history';
 
 /** The theme choice the frame takes. */
@@ -58,6 +61,7 @@ export interface ReaderMountInput {
    *  that rejection is the caller's fallback. */
   readonly title: string;
   readonly prefs: ReaderThemePref;
+  readonly appearanceRoot?: HTMLElement;
   readonly onLink: (l: ReaderLink) => void;
   readonly onHash: (id: string) => void;
   readonly copy: (text: string, hidden: readonly HiddenChar[]) => void;
@@ -89,11 +93,15 @@ export interface ReaderMountDeps {
   readonly store?: () => EnumerableStoragePort | null;
   readonly assets?: () => Promise<FrameAssets>;
   readonly mermaid?: () => Promise<string>;
+  readonly libraryContract?: () => number | 'none';
+  readonly fonts?: () => Promise<{ sans: string; mono: string }>;
   /** Tests only: the E17 reading to plan with; absent, the recorded one (`READER_E17_MERMAID`). */
   readonly e17?: ReaderE17Reading;
 }
 
 export interface ReaderMount {
+  readonly seed: { readonly hosted: true; readonly stamp: string } | { readonly hosted: false };
+  follow(theme: 'light' | 'dark' | 'auto'): void;
   /** Idempotent. */
   destroy(): void;
   /** The frame's `prefs` operation: applied in place, with no remount. */
@@ -118,7 +126,7 @@ function hostOwnsFocus(el: HTMLElement): boolean {
 }
 
 /** A mount that holds nothing (the assets did not load): both calls do nothing. */
-const INERT: ReaderMount = { destroy() {}, setPrefs() {} };
+const INERT: ReaderMount = { seed: { hosted: false }, follow() {}, destroy() {}, setPrefs() {} };
 
 /** The link the frame reported, copied field by field into ccrc's own shape. */
 function readerLinkOf(l: HostLink): ReaderLink {
@@ -153,13 +161,16 @@ function withSeed(d: RenderInput, v: ReaderVersionSeed): RenderInput {
 export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps: ReaderMountDeps = {}): Promise<ReaderMount> {
   let assets: FrameAssets;
   try {
-    assets = await (deps.assets ?? loadReaderAssets)();
+    const { fonts: _fonts, ...base } = await (deps.assets ?? loadReaderAssets)();
+    assets = base;
   } catch {
     input.onFallback('assets');
     return INERT;
   }
 
   const plan = readerMountPlan(input.profile, input.bytes, input.chrome ?? 'frame-bar', deps.e17 ?? READER_E17_MERMAID);
+  const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
+  const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
   const watchdogMs = plan.watchdogMs;
   const loadMermaid = deps.mermaid ?? loadMermaidAsset;
   let document: RenderInput = plan.history && input.version !== undefined
@@ -186,6 +197,12 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     }
   }
 
+  if (hosted) {
+    try {
+      assets = { ...assets, fonts: await (deps.fonts ?? loadReaderFonts)() };
+    } catch { /* The frame can mount without the host faces. */ }
+  }
+
   const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
   const historyChanges = plan.history ? input.changes : undefined;
   const historyOpen = plan.history ? input.openVersion : undefined;
@@ -194,13 +211,24 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   let theme = input.prefs.theme;
   // Everything one library mount is handed except the document; `focus` is read at the call, so each mount decides it
   // anew. Called synchronously, right after the last await (or at `openAt`), so the read is as fresh as the mount.
+  let seed: ReaderMount['seed'] = { hosted: false };
+  let lastDrop: string | null = null;
+  const readAppearance = (forMount = false) => {
+    const reading = readHostAppearance(input.appearanceRoot!);
+    const drop = reading.outcome.dropped;
+    const key = drop === null ? null : JSON.stringify([drop.why, drop.token]);
+    if (drop !== null && key !== lastDrop) console.warn(`ccrc-reader: ${drop.why} ${drop.token}`);
+    lastDrop = key;
+    if (forMount) seed = { hosted: true, stamp: reading.stamp };
+    return reading.outcome.value;
+  };
   const adaptersNow = (): HostAdapters => ({
     assets,
     watchdogMs,
     ...(port === null ? {} : { store: port }),
     storePrefix: READER_STORE_PREFIX,
     ...(input.docKey === null ? {} : { docKey: input.docKey }),
-    prefs: { theme },
+    ...(hosted ? { appearance: readAppearance(true) } : { prefs: { theme } }),
     mermaidDraw: plan.draw,
     ...(plan.draw === 'after-ready' ? { loadMermaid } : {}),
     ...(historyChanges === undefined ? {} : { changes: (sha: string) => historyChanges(sha) }),
@@ -225,6 +253,13 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   let frame = mountFrame(el, { document, adapters: adaptersNow() });
   let destroyed = false;
   return {
+    get seed() { return seed; },
+    follow(nextTheme) {
+      if (destroyed) return;
+      theme = nextTheme;
+      if (hosted) frame.setAppearance(readAppearance());
+      else frame.setPrefs({ theme: nextTheme });
+    },
     destroy() {
       if (destroyed) return;
       destroyed = true;

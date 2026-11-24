@@ -465,7 +465,11 @@ All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's numbers are def
   - It is a second edit in place of `docs-parity.test.ts`'s append-only M7.9 block, after W8a's, and its header says so.
   - Task 7 amends A21 and M8.18 in place, marked "(amended 2026-11-24; D-8995)".
 
-Run 3639's block: 8994 and 8995 are defined; 8996 is held.
+- **D-8996 (2026-11-24)**: checked-reader-mount-casts. Issued to run 3639 (wave C, wave 43). Task 4 Step 4 requires a clean PWA type check, but Task 4 Step 1 and Task 5's Files list defer all cast fakes to Task 5 on the premise that their casts bypass the check.
+  - Measured with the required `ReaderMount.seed` and `follow`: eight TS2352 errors from direct `as ReaderMount` casts in `reader-frame.test.tsx`, `docs-version.test.tsx` and `reader-history-adapter.test.tsx`. Unlike a cast through `unknown`, the direct assertions still require sufficient overlap.
+  - The affected fakes gain `seed` and `follow` with Task 4's interface, without changing any test's expectations. Both double-cast files and the late sign-in fake stay with Task 5, as does the component behavior. No cast is widened to hide a missing field.
+
+Run 3639's block (8994 to 8996) is defined.
 
 ## Results
 
@@ -1004,6 +1008,18 @@ The coordinator's word for the install is the brief of run 3639. The library's r
 
 The registry tarball's integrity need not equal this local pack's; the lock takes the registry's at the last commit.
 
+**Task 1 Step 2a, Git-object read ahead of publication (rc 0).** At `aacae4c56dcbf3d8da4069957a957eb530e2ac17`, `conformance/size/shares.json` holds exactly X1 and X2's rows below, and `conformance/size/growth.json` holds exactly `baseline` and `x1`. The first parent `aceb346ae09ac65b70b5587a5676f941056ca3a1` counts 4 528 020 characters (4 530 427 bytes), in entries of 3 643, 30 153, 198 215, 549 069 and 3 746 940 characters. Both genesis rows trace to the X1 landing by first-parent line history. Its own row is 4 558 002 on each measure, a rise of 29 982.
+
+At the 1.2.0 candidate, each design row equals its landing's manifest as read from its Git object. The cumulative deltas and the release's recorded ceilings are:
+
+| Design | Growth (total / largest frame, characters) | Share (total / largest frame, characters) |
+|---|---:|---:|
+| X1 | 29 982 / 29 982 | 32 768 / 32 768 |
+| X2 (four rows) | 721 478 / 13 423 | 1 166 336 / 72 704 |
+| X6 | 37 411 / 8 788 | 59 392 / 15 360 |
+
+The candidate's last row (`x6`, at `61c4bdfde06b99738e0df4a87cf0e8489c9cd4ec`) matches the installed `FRAME_MANIFEST`: 5 316 891 characters over all 13 entries and 4 580 213 in the largest frame (common entries plus the largest layout). Each counted file's character count, byte length and sha256 match the committed manifest and the installed `assets/assets.json` hashes. This is the local candidate check only; it does not verify a tag or registry publication.
+
 The installed `assets/assets.json` (manifest 1, package `@synapsium-labs/pinax-lib`, version 1.2.0, bridge protocol 1), every entry:
 
 | Asset | sha256 | CSP source |
@@ -1065,3 +1081,10 @@ Taken at `63ba659ed5` (Task 1's rename and its follow-up, below), on the built-a
 All 142 `PHH-FIGURE`, `L11-FIGURE`, `T10-FIGURES worst` and `FRAME-COST-READER` lines are kept with the wave's scratch and summarised here; Task 6 compares each against its own line. Hold condition 5 decides whether this BASE stands at the registry pin.
 
 **Task 1 follow-up (`63ba659ed5`).** The browser leg's first run at the rename commit failed to collect `reader-frame.browser.test.ts`: its fixture read the installed bootstrap's global list by the name 1.1.0's minifier gave it (`var O=[…]`), and 1.2.0's names it `M` (118 names; 117 in 1.1.0). The case's comment already says it reads the first array literal, so the code now matches any name. No assertion changed.
+
+#### Task 4: Bridge checks
+
+- Red: the new hosted-policy row failed before the function existed. A subsequent three-file run had eight failing and 149 passing rows, one failure a font-loader timeout. The four-file red run as a single command was not captured. The first full PWA type check of Task 4 exited 2 on the eight direct casts recorded in D-8996.
+- Green after the fix and re-review: the PWA type check exited 0. The bridge, policy, scan, alias, lab-run, frame, version, history-adapter and host-appearance files passed 512 of 512 through `ccrc test` (rc 0). The wrapper ran locally with the unsaved candidate.
+- Assertion-red and restored with hash checks: AP-M1, AP-M4, both AP-M22 holds, AP-M8, AP-M12 (including the lab row), AP-M14 and AP-M16. A compile-valid microtask yield immediately after the appearance read also reddened the timing assertion. AP-M21 has a matching planted-import control; the actual source mutation remains for Task 6.
+- Re-review found no production blocker. Follow-up for the whole-branch review: stripping fonts copies the base asset object, so a non-production `deps.assets` implementation that supplies asset fields through inherited or non-enumerable properties could lose them. The shipped loader supplies ordinary own fields.
