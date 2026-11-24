@@ -4,9 +4,10 @@
 // one ordering rule. An unreadable or malformed file is NEVER overwritten: the agent answers `unmeasured` until a person removes it.
 //
 // THE RESIDUAL: any process of the fleet's one user can write this file. A session's spawn denies an edit of it (an accident guard
-// only). A forged file can open a gap in message ids, the epoch and the restore generation, once and at most up to the witnessed
-// raise ceiling; it cannot exhaust a counter, deny issuance or Confirm through counter exhaustion, or lift trust in W1.
-// A rollback verdict can still fence toward safety.
+// only). A forged file can open a gap in message ids, the epoch and the restore generation, bounded by the witnessed raise
+// ceiling; it cannot exhaust a counter or lift trust in W1. A forged base above that ceiling still fences authority: Confirm
+// reports success and spends an epoch and a generation, but its follow-up restores the fence without replacing the file.
+// An operator must remove the held file to clear that witness. A console tuple can likewise fence again when presented after Confirm.
 import { closeSync, constants as fsConstants, fstatSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, writeSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';

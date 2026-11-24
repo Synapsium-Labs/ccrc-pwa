@@ -3,7 +3,6 @@
 // are fakes. The expected words are written out here, never read from the code the cases judge.
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { tx } from '../src/coord/tx.js';
@@ -13,7 +12,8 @@ import { OverlordAuthorityGuard, runOverlordAuthorityBoot } from '../src/coord/o
 import { OverlordAuthorityExchange, type ExchangeAnswer } from '../src/coord/overlordAuthorityExchange.js';
 import type { WitnessLink, WitnessLinkAnswer } from '../src/coord/overlordAuthorityWitnessLink.js';
 import { makeIsolationReader, type IsolationReader } from '../src/isolationFacts.js';
-import { ts } from './scan/parse.js';
+import { parseSource, ts } from './scan/parse.js';
+import { parsedFile } from './scan/symbols.js';
 import type { AgentHostRelation } from '../../shared/isolation.js';
 import { PRIVACY_HEAD_UNWIRED, type PrivacyHeadRead } from '../src/coord/privacyJournalHead.js';
 import { readReadyWitness, type ReadyWitness } from '../../shared/agent-protocol.js';
@@ -129,14 +129,18 @@ describe('an agent', () => {
   });
   it('reads the current Isolation link for agent holdings instead of returning a constant', async () => {
     // Pin the boot-only composition without starting index.ts against the host. Then exercise the exchange at that port.
-    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
-    const root = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
-    const exchange = root.statements.filter(ts.isVariableStatement).flatMap((s) => s.declarationList.declarations)
-      .find((d) => d.name.getText() === 'overlordAuthorityExchange')?.initializer;
+    const index = parsedFile('server/src/index.ts');
+    const bindings = index.bindings.filter((b) => b.name === 'overlordAuthorityExchange' && b.scopeStart === 0 && b.scopeEnd === index.text.length);
+    expect(bindings, 'one top-level authority exchange binding').toHaveLength(1);
+    const init = ts.createSourceFile('exchange-init.ts', bindings[0]!.init, ts.ScriptTarget.Latest, true).statements[0];
+    const exchange = init && ts.isExpressionStatement(init) ? init.expression : undefined;
     const deps = exchange && ts.isNewExpression(exchange) ? exchange.arguments?.[0] : undefined;
     const relation = deps && ts.isObjectLiteralExpression(deps) ? deps.properties.find((p) => p.name?.getText() === 'relationOf') : undefined;
-    expect(relation?.getText(), 'exchange must read Isolation from the current fleet state')
-      .toMatch(/\bisolation\.relationOf\(\s*isolation\.linkOf\(\s*fleetClient\.state\s*\)\s*\)/);
+    const calls = relation && ts.isPropertyAssignment(relation)
+      ? parseSource(relation.initializer.getText(), 'exchange-relation.ts').calls : [];
+    const read = calls.find((c) => c.callee === 'isolation.relationOf');
+    const link = calls.find((c) => c.callee === 'isolation.linkOf' && c.start === read?.argSpans[0]?.start && c.end === read.argSpans[0].end);
+    expect(link?.args, 'exchange must read Isolation from the current fleet state').toEqual([{ kind: 'other', text: 'fleetClient.state' }]);
 
     const state: Parameters<IsolationReader['linkOf']>[0] = {
       connected: true, hostReport: 'absent', peer: { locality: 'not-local', uid: 'unmeasured' }, readySerial: 1,
@@ -198,6 +202,22 @@ describe('an agent', () => {
     r.agent.held = { kind: 'nothing' }; // a new ready on a new connection is a new answer
     await r.ex.exchangeAgent();
     expect(r.ex.heldFor(2)).toBe('not-yet');
+  });
+  it('does not count a matching op answer when the current link no longer has off-volume proof', async () => {
+    const r = rig();
+    try {
+      r.append(WIDEN);
+      r.agent.held = { kind: 'nothing' }; // no ready tuple can decide the holding
+      r.agent.next = async (offer) => {
+        r.agent.host = 'unmeasured';
+        return answered({ ...offer, boot: OLD });
+      };
+      await r.ex.exchangeAgent();
+      expect(r.agent.sends).toHaveLength(1);
+      expect(r.guard.state()).toEqual({ kind: 'coherent' });
+      expect(r.ex.heldFor(1)).toBe('not-yet');
+      expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+    } finally { r.db.close(); }
   });
   it('discards an op reply from the connection that is no longer ready', async () => {
     const r = rig();
@@ -426,6 +446,26 @@ describe('witnessed counter raises', () => {
         }
       }
     } finally { db.close(); r.db.close(); }
+  });
+  it('reports Confirm success but fences again in its follow-up while the agent holds an above-ceiling base', async () => {
+    const r = rig();
+    try {
+      r.db.exec(find('ALTER TABLE overlord_designation ADD COLUMN actorKind'));
+      r.append(WIDEN);
+      r.agent.held = { kind: 'tuple', tuple: r.held({
+        base: above, epoch: above, terms: { authority: 0, privacy: 'absent', act: 'absent' }, highestIds: { restoreGeneration: above },
+      }) };
+      await r.ex.exchangeAgent();
+      expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+      const restore = new OverlordRestoreState({ db: r.db, journal: r.journal, guard: r.guard, witness: r.ex });
+      expect(restore.confirm(OPERATOR, 'op-confirm', 1_800_000_000_000)).toMatchObject({
+        ok: true, changed: true, epochAtConfirm: 2, restoreGeneration: 1,
+      });
+      await flush(); // Confirm's scheduled pass, with the same ready answer still held
+      expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+      expect(r.agent.sends).toHaveLength(0);
+      expect(r.ex.noWitnessSinceBoot()).toBe('standing');
+    } finally { r.db.close(); }
   });
 });
 

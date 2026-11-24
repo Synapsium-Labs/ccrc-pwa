@@ -8,7 +8,7 @@ import {
 import { RUNGS } from '../../shared/overlord-ladder.js';
 import type { AuthorityView } from '../src/coord/overlordAuthority.js';
 import {
-  authorityEpoch, currentWitnessTuple, narrowestTold, offVolumeHolders, offVolumeHeld, witnessVerdict,
+  authorityEpoch, currentWitnessTuple, narrowestTold, offVolumeHolders, offVolumeHeld, witnessVerdict, WITNESS_RAISE_CEILING,
   type WitnessSourceAnswer,
   type AuthorityEpoch, type HeldByWitness, type HostRelation, type ServerWitnessFacts, type WitnessHeld, type WitnessVerdict,
 } from '../src/coord/overlordAuthorityWitness.js';
@@ -57,6 +57,10 @@ function tuple(over: Partial<WitnessTuple> = {}): WitnessTuple {
 }
 const holds = (t: WitnessTuple): WitnessHeld => ({ kind: 'tuple', tuple: t });
 const NOTHING: WitnessHeld = { kind: 'nothing' };
+
+it('pins the maximum that a witness may contribute to each counter', () => {
+  expect(WITNESS_RAISE_CEILING).toBe(4_503_599_627_370_495);
+});
 
 describe('authorityEpoch', () => {
   it('with no Confirm the base is 0 and the terms are the two sequences', () => {

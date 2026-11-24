@@ -119,9 +119,9 @@ Confirm and the measured agent relation are not wired or verified by this local 
   or `unmeasured`, never affirmative `other-host` proof. A matching tuple with an unproved relation did not lift boot confidence,
   earn a holding receipt, or contribute `told` in the fixture with the real Isolation reader. No live agent evidence is claimed.
 - The ladder keeps both inputs and Renewal's `probes-failed-twice` latch. The approved three-file peer patch keeps the landed
-  gate and mutation pins and adds seven witness floors. The route census measured 298 declarations, 295 HTTP, 187 gated HTTP and
-  108 exempt HTTP. The schema matches the named main base byte for byte: the authority head is at `MIGRATIONS[80]` (`user_version`
-  80 → 81), with no new migration or change to `FLEET_PROTO = 1`.
+  gate and mutation pins and adds seven witness floors. The Sandbox integration's route census measured 305 declarations,
+  302 HTTP, 191 gated HTTP and 111 exempt HTTP. The schema matches the named main base byte for byte: the authority head is at
+  `MIGRATIONS[80]` (`user_version` 80 → 81), with no new migration or change to `FLEET_PROTO = 1`.
 - Private store A's `PrivacyJournalHead` remains wired in `index.ts` over its head and digest reads (plan question 11).
 
 | Wiring check | Stand-in or constant | Shipped wiring |
@@ -143,7 +143,7 @@ local test-project measurement gap, not the record of its exit 137.
 
 | Focused evidence | Measured in the fleet test lane |
 | --- | --- |
-| Restore and witness | Confirm route 11, restore 55, generation 10, exchange 31 (including the Isolation fixture), witness policy 51, witness route 9, witness link 5 |
+| Restore and witness | Confirm route 11, restore 55, generation 10, exchange 39 and witness policy 52 after round 3, witness route 9, witness link 5 |
 | Journal and ladder | Journal 42, guard 19, restore latch 11, ladder policy 68, read 10, actor 25, route 42, seams 11 |
 | Censuses and schema | Auth gate 383, Overlord doors 29, box token 69, coordination rings 20, privacy journal 3, coordination DB 155, migration slots 2, mutation floors 307 |
 | Fleet and carrier | Fleet identity 6, fleet state 73, remote connect 81, Isolation facts 35, agent witness 17, models ops 40, Overlord history ops 22, test-box ops 22 |
@@ -167,8 +167,12 @@ files; the other cases in those two files were not measured by these runs.
 
 ### Known limits
 
-A forged agent file can open a gap in message ids, the epoch and the restore generation, once and at most up to the witnessed
-raise ceiling; it cannot exhaust a counter, deny issuance or Confirm through counter exhaustion, or lift trust in W1. The normal
-rollback verdict can still fence. Once a server's counters stand above the ceiling (beyond a realistic lifetime without a forged
-raise), those above-ceiling witnessed maxima are not used. After a later rollback, protection against reuse rests on the verdict's
-fence and the database and journal highest values.
+A forged witness, whether from the agent or the console, can open gaps in message ids, the epoch and the restore generation up
+to the witnessed raise ceiling, but cannot exhaust a counter. A forged agent file cannot lift trust in W1. Witnessed maxima
+above the ceiling never raise the numbering bounds; protection after a rollback rests on the verdict's fence and the database
+and journal highest values.
+
+A forged base above the ceiling still fences authority. Confirm reports success and spends an epoch and a generation, but its
+follow-up compares the same held agent answer and restores the fence in that pass. The agent receives no replacement offer;
+the operator must remove the held witness file to clear that witness. A console tuple takes the same verdict path and fences
+again when presented after Confirm. Confirm does not discard it.
