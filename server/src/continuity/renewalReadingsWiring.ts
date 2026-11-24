@@ -32,8 +32,12 @@ import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.
 import type { Reading } from './renewalDue.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
-export type ReadingsCoord = Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch'>
-  & Partial<Pick<WatcherCoordPort, 'modelSwitchesOf' | 'readerEventsOf'>>;
+export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch'> {
+  /** PR E: door process B1's two reads, optional so that a store without them (a test, the simulator, an older wiring)
+   *  leaves `modelDrift` and `readersRunning` at the lane's `W1`. */
+  readonly modelSwitchesOf?: WatcherCoordPort['modelSwitchesOf'];
+  readonly readerEventsOf?: WatcherCoordPort['readerEventsOf'];
+}
 
 export interface ReadingsDeps {
   readonly time: { readonly clock: Pick<Clock, 'wall'>; readonly entropy: Pick<Entropy, 'hex'> };

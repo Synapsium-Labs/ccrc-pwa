@@ -25,9 +25,9 @@ const NO_SWITCHES = { ok: true as const, value: [] };
 const drift = (m: DoorModule, o: { startModel?: string | null; switches?: Parameters<DoorModule['modelDriftReadingOf']>[0]['switches']; usage?: SidecarRead }) =>
   m.modelDriftReadingOf({ startModel: o.startModel === undefined ? 'claude-opus-5-5' : o.startModel, startReportedAt: START,
     switches: o.switches ?? NO_SWITCHES, usage: o.usage ?? sidecar('opus') });
-const isUnmeasured = (r: { kind: string }, why: RegExp): void => {
+const isUnmeasured = (r: { readonly kind: string; readonly why?: string }, why: RegExp): void => {
   expect(r.kind).toBe('unmeasured');
-  expect((r as { why: string }).why).toMatch(why);
+  expect(r.why).toMatch(why);
 };
 
 // ------------------------------------------------------------------------------------------------- modelDriftInputOf
@@ -107,7 +107,7 @@ export function modelDriftReadingCases(m: DoorModule): Record<string, SuiteCase>
     'a fresh sidecar that names no class says nothing: unmeasured, without a usage word': () => {
       const r = drift(m, { usage: sidecar(null) });
       isUnmeasured(r, /no fresh sidecar class/);
-      expect((r as { why: string }).why).not.toMatch(/\(usage/);
+      expect(r.kind === 'unmeasured' ? r.why : '').not.toMatch(/\(usage/);
     },
   };
 }
