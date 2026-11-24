@@ -367,7 +367,7 @@ describe('the desk starts no capture while the box admits no work (gate G2)', ()
     const root = realpathSync(mkTmp('ccrc-capg2-'));
     mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
     writeFileSync(path.join(root, 'captures', 'builds', BUILD), 'bytes');
-    const cfg = { root, lines: new Map([['CCRC_TESTBOX_ROOT', { key: 'CCRC_TESTBOX_ROOT', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
+    const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
     const d = captureDeskFor(cfg, { admitting: () => false, home: root, tmuxBase: '/tmp', uid: 1000 });
     const sink = new Sink();
     d.submit(SUBMIT(1), sink);
@@ -430,7 +430,7 @@ describe('the builds store\'s prune (main.ts#pruneBuilds, wired to the desk)', (
 // Review 3226 F8: a service whose temporary directory is too long for the capture's tmux socket wires no runner.
 describe('the production desk wires its runner only where the capture\'s socket fits', () => {
   const cfgAt = (root: string): TestboxConfig =>
-    ({ root, lines: new Map([['CCRC_TESTBOX_ROOT', { key: 'CCRC_TESTBOX_ROOT', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig);
+    ({ root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig);
   const placed = (): string => {
     const root = realpathSync(mkTmp('ccrc-capwire-'));
     mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
@@ -470,7 +470,7 @@ describe('the composed desk prunes the builds store after a capture, and capture
     const dir = path.join(root, 'captures', 'builds');
     mkdirSync(dir, { recursive: true });
     for (const n of ['2.1.1', '2.1.2', '2.1.3', '2.1.4', '2.1.100']) writeFileSync(path.join(dir, n), 'x');
-    const cfg = { root, lines: new Map([['CCRC_TESTBOX_ROOT', { key: 'CCRC_TESTBOX_ROOT', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
+    const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
     const runner = new GatedRunner();
     const d = captureDeskWith(cfg, runner, '/tmp', { home: root });
     const sink = new Sink();

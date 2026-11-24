@@ -199,7 +199,7 @@ describe('gate G1: the composed desk and runner, the real launcher, on a virtual
     const root = realpathSync(mkTmp('ccrc-capg1-'));
     mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
     for (const b of o.builds) writeFileSync(path.join(root, 'captures', 'builds', b), 'bytes');
-    const cfg = { root, lines: new Map([['CCRC_TESTBOX_ROOT', { key: 'CCRC_TESTBOX_ROOT', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
+    const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
     const clock = { now: 1_000_000 };
     let cur: { recording: string; step: number; began: number; written: number } | null = null;
     const sleep = async (ms: number): Promise<void> => {
