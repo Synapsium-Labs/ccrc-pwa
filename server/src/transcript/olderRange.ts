@@ -10,7 +10,9 @@
 // THE WALKER IS THE SHARED ONE (`backread.ts#walkBack`), unchanged. This file wraps the port it hands the walker, to
 // refuse a read the walker would join wrongly: a range read that answers fewer bytes than it was asked for (the file no
 // longer reaches the cursor) would join non-adjacent bytes, so it is `invalid-boundary` here, never a short page or a
-// start.
+// start. A file that shrank BELOW a read's offset never gets that far: both adapters answer such a read `unreadable`
+// themselves, and that word passes through unchanged. So a file that changed under a page reads as `invalid-boundary` or
+// as `unreadable`, depending on where it was cut; neither is ever a page.
 //
 // THE CURSOR. `line-start`: `before` is the first byte of a record (the byte before it is a newline, or `before` is 0).
 // The page reads [.., before) and so never reads the record that starts at `before`; the observed byte before it must be
@@ -18,12 +20,16 @@
 // whose tail an earlier page already skipped. Its bytes are walked, never framed: the walker's carry holds them as
 // undecoded bytes, and once the newline that ends the record before it is found, the partial record is dropped and the
 // page goes on with the whole records before it. So no suffix of an oversized record, however valid it looks, is ever
-// answered as a record.
+// answered as a record. A file whose last bytes have no trailing newline: those bytes are not a record, and a `line-start`
+// cursor at the file's size refuses `invalid-boundary` (the byte before it is not a newline). A caller starts such a file
+// with `skip-record` at its size, which drops the unterminated tail and answers the whole records before it.
 //
 // THE CONTINUATION. `start`: the page reached offset 0 and framed every record down to it. `more`: a lower cursor (the
 // first byte of the oldest record answered; or, for a skip that has not found its delimiter, the lowest byte read; or the
-// first byte of the skipped record when the skip used part of the budget). `gap`: a record could not be framed within a
-// whole window read from a line start, so the page enters a skip; the caller marks exactly one gap for it. The next
+// first byte of the skipped record when the skip used part of the budget). `gap`: a page that read its whole window from a
+// line start framed no record, because the record ending at the cursor is AT LEAST as long as the window. A record exactly
+// one window long, its newline included, lands here too: every byte was read, but the page cannot prove the window's
+// lowest byte is a line start. The page enters a skip, and the caller marks exactly one gap for it. The next
 // cursor is always strictly lower than this one, so repeated pages progress even when a page answers no record.
 import type { FleetIO, ReadFailure } from '../io.js';
 import { walkBack } from '../backread.js';
@@ -60,8 +66,9 @@ const validCursor = (c: OlderRangeCursor): boolean =>
   (c.kind === 'line-start' || c.kind === 'skip-record') && within(c.before, 0, Number.MAX_SAFE_INTEGER);
 
 /** One page of complete records before `cursor`, oldest first. Failure contract: `absent` and `unreadable` are a read's own
- *  words; `invalid-boundary` is a cursor or limits out of bounds, a line-start cursor whose byte before is not a newline,
- *  or a range read that answered fewer bytes than asked. Any failure discards every record the page had framed. */
+ *  words (`unreadable` includes a read whose offset the file has shrunk below); `invalid-boundary` is a cursor or limits
+ *  out of bounds, a line-start cursor whose byte before is not a newline, or a range read that answered fewer bytes than
+ *  asked. Any failure discards every record the page had framed. */
 export async function readOlderRange(
   io: FleetIO, file: string, cursor: OlderRangeCursor, limits: OlderRangeLimits = OLDER_RANGE_LIMITS,
 ): Promise<OlderRangeRead> {
@@ -135,7 +142,7 @@ export async function readOlderRange(
   if (skipping) return answer({ kind: 'more', cursor: { kind: 'skip-record', before: lowest } });
   const oldest = newestFirst[newestFirst.length - 1];
   if (oldest !== undefined) return answer({ kind: 'more', cursor: { kind: 'line-start', before: oldest.start } });
-  // No record framed. From a line start with the whole window read, the record ending there is longer than a page: skip it.
+  // No record framed. From a line start with the whole window read, the record ending there is at least a window long: skip it.
   if (framedFrom === before) return answer({ kind: 'gap', cursor: { kind: 'skip-record', before: lowest } });
   // The skip used part of the window; the record before it starts fresh next page.
   return answer({ kind: 'more', cursor: { kind: 'line-start', before: framedFrom } });

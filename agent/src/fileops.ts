@@ -209,7 +209,10 @@ export async function readFromMeasured(
     const bytes = await readRange(fh, from, end);
     const data = bytes.toString('utf8');
     if (!bounded) return { ok: true, data, size };
-    return { ok: true, data, dataB64: bytes.toString('base64'), size, ...(ident !== undefined ? { ident } : {}) };
+    // The token names the handle's file only for the range it promised: a file that shrank after the open answers its short
+    // (or empty) bytes as it always has, but never with a token beside them.
+    const whole = bytes.length === end - from;
+    return { ok: true, data, dataB64: bytes.toString('base64'), size, ...(ident !== undefined && whole ? { ident } : {}) };
   } catch (e) {
     return { ok: false, reason: failureFor(e) };
   } finally {

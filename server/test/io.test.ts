@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  appendFileSync, chmodSync, linkSync, mkdirSync, renameSync, statSync, symlinkSync, truncateSync, writeFileSync, type BigIntStats,
+  appendFileSync, chmodSync, constants as fsConstants, linkSync, mkdirSync, renameSync, statSync, symlinkSync, truncateSync,
+  writeFileSync, type BigIntStats,
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -17,9 +18,11 @@ import { MAX_READ_B64_BYTES, readFromMeasured } from '../../agent/src/fileops.js
 const afterStat = vi.hoisted(() => ({ run: null as null | ((p: string) => void) }));
 // The byte-read identity's seam (run 3531), the same pattern: the real `open` is wrapped, never replaced. `afterOpen` acts on
 // the handle just opened, before anything reads it (a rename-over, controlled bigint stat facts, a short read), and `opens`
-// counts the opens of each path, so a test can prove an answer opened nothing. Disarmed, it is the real `open`.
+// counts the opens of each path, so a test can prove an answer opened nothing; `flags` keeps each path's last open flags.
+// Disarmed, it is the real `open`.
 const afterOpen = vi.hoisted(() => ({
   run: null as null | ((p: string, fh: import('node:fs/promises').FileHandle) => void), opens: new Map<string, number>(),
+  flags: new Map<string, unknown>(),
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -33,6 +36,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: (async (...a: Parameters<typeof actual.open>) => {
       const fh = await actual.open(...a);
       afterOpen.opens.set(String(a[0]), (afterOpen.opens.get(String(a[0])) ?? 0) + 1);
+      afterOpen.flags.set(String(a[0]), a[1]);
       afterOpen.run?.(String(a[0]), fh);
       return fh;
     }) as typeof actual.open,
@@ -250,8 +254,18 @@ describe('localIO.readFileFromBytesMeasured: one regular handle for bytes, size 
     expect(opens(file)).toBe(1);
   });
 
+  it('the bytes arm opens read-only and NONBLOCKING, so a FIFO raced in after the path stat cannot hang the open', async () => {
+    const { file } = fileWith('0123456789');
+    expect(sansIdent(await localIO.readFileFromBytesMeasured(file, 0, 4))).toEqual({ ok: true, bytes: u8('0123'), size: 10 });
+    const flags = afterOpen.flags.get(file);
+    expect(typeof flags).toBe('number');
+    expect((flags as number) & fsConstants.O_NONBLOCK).toBe(fsConstants.O_NONBLOCK);
+    expect((flags as number) & (fsConstants.O_WRONLY | fsConstants.O_RDWR)).toBe(0);
+  });
+
   it.each([
     ['birth time 0', { birth: 0n, change: 9n }],
+    ['birth time negative', { birth: -1n, change: 9n }],
     ['birth equal to change', { birth: 7n, change: 7n }],
     ['birth after change', { birth: 9n, change: 5n }],
     ['inode 0', { birth: 5n, change: 9n, ino: 0n }],

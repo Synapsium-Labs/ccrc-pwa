@@ -33,6 +33,25 @@ const memIO = (data: Uint8Array, fault?: Fault): FleetIO & { reads: Array<[numbe
   };
 };
 
+/** `memIO` whose file is cut to `to` bytes right after read number `after` (1-based) answers, so a LATER read of the same
+ *  page sees the shorter file, under the same contract (an offset past the size is `unreadable`). */
+const shrinkingIO = (data: Uint8Array, after: number, to: number): FleetIO & { reads: Array<[number, number]> } => {
+  const reads: Array<[number, number]> = [];
+  let now = data;
+  return {
+    ...localIO,
+    reads,
+    readFileFromBytesMeasured: async (_p, offset, maxBytes) => {
+      reads.push([offset, maxBytes]);
+      const r = offset > now.length
+        ? { ok: false as const, reason: 'unreadable' as const }
+        : { ok: true as const, bytes: now.slice(offset, offset + maxBytes), size: now.length };
+      if (reads.length === after) now = data.slice(0, to);
+      return r;
+    },
+  };
+};
+
 const lim = (chunkBytes: number, chunks = 4, records = 50): OlderRangeLimits => ({ chunkBytes, chunks, records });
 const lineStart = (before: number): OlderRangeCursor => ({ kind: 'line-start', before });
 const text = (r: OlderRecord): string => dec.decode(r.bytes);
@@ -47,8 +66,15 @@ const okRead = (r: OlderRangeRead): Extract<OlderRangeRead, { ok: true }> => {
 async function pageAll(data: Uint8Array, limits: OlderRangeLimits, maxPages = 500): Promise<{
   items: Array<OlderRecord | { gap: number }>; pages: number;
 }> {
+  return pageAllFrom(data, lineStart(data.length), limits, maxPages);
+}
+
+/** `pageAll` from a given first cursor. */
+async function pageAllFrom(data: Uint8Array, first: OlderRangeCursor, limits: OlderRangeLimits, maxPages = 500): Promise<{
+  items: Array<OlderRecord | { gap: number }>; pages: number;
+}> {
   const items: Array<OlderRecord | { gap: number }> = [];
-  let cursor = lineStart(data.length);
+  let cursor = first;
   for (let page = 1; page <= maxPages; page += 1) {
     const io = memIO(data);
     const r = okRead(await readOlderRange(io, 'f', cursor, limits));
@@ -163,7 +189,8 @@ describe('readOlderRange: complete records', () => {
     expect(OLDER_RANGE_LIMITS.chunkBytes * OLDER_RANGE_LIMITS.chunks).toBe(1024 * 1024);
   });
 
-  it('under the production caps a page answers at most 50 records and reads at most 1 MiB', async () => {
+  // The byte half of the caps is pinned by the constant above and by the refusal rows; this fixture is far below 1 MiB.
+  it('under the production caps a page stops at 50 records', async () => {
     const data = enc.encode(Array.from({ length: 120 }, (_, i) => `{"n":${i}}\n`).join(''));
     const io = memIO(data);
     const r = okRead(await readOlderRange(io, 'f', lineStart(data.length)));
@@ -197,6 +224,30 @@ describe('readOlderRange: refusals', () => {
   it('a short range read (the file no longer reaches the cursor) refuses invalid-boundary, never start', async () => {
     const data = enc.encode('aa\nbb\n');
     expect(await readOlderRange(memIO(data), 'f', lineStart(8), lim(4))).toEqual({ ok: false, reason: 'invalid-boundary' });
+  });
+
+  it('a LATER read shortened after an earlier read succeeded refuses invalid-boundary and discards the framed records', async () => {
+    // 'aa\nbb\ncc\ndd\n', windows of 3 from the end: read 1 [9,12) frames 'dd'; then the file is cut to 7 bytes, so read 2
+    // [6,9) answers one byte where three were asked.
+    const io = shrinkingIO(enc.encode('aa\nbb\ncc\ndd\n'), 1, 7);
+    expect(await readOlderRange(io, 'f', lineStart(12), lim(3, 4))).toEqual({ ok: false, reason: 'invalid-boundary' });
+    expect(io.reads).toEqual([[9, 3], [6, 3]]);
+  });
+
+  it('a file shrunk BELOW a later read\'s offset answers the adapter\'s own unreadable, and discards the framed records', async () => {
+    const io = shrinkingIO(enc.encode('aa\nbb\ncc\ndd\n'), 1, 5);
+    expect(await readOlderRange(io, 'f', lineStart(12), lim(3, 4))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(io.reads).toEqual([[9, 3], [6, 3]]);
+  });
+
+  it('a file with no trailing newline: line-start at its size refuses, skip-record at its size answers the records before', async () => {
+    const data = enc.encode('aa\nbb\nunterminated');
+    expect(await readOlderRange(memIO(data), 'f', lineStart(data.length), lim(64))).toEqual({ ok: false, reason: 'invalid-boundary' });
+    for (const limits of [lim(64), lim(4, 4)]) {
+      const { items } = await pageAllFrom(data, { kind: 'skip-record', before: data.length }, limits);
+      expect(records(items).map(text)).toEqual(['aa', 'bb']);
+      for (const r of records(items)) expect(text(r)).not.toContain('unterminated');
+    }
   });
 
   it('a later absent or unreadable read discards the records an earlier read framed', async () => {
@@ -299,6 +350,16 @@ describe('readOlderRange: bounded skip of an oversized record', () => {
     expect(await readOlderRange(io, 'f', { kind: 'skip-record', before: 0 }, lim(4)))
       .toEqual({ ok: true, records: [], continuation: { kind: 'start' } });
     expect(io.reads).toHaveLength(0);
+  });
+
+  it('a record exactly one window long (newline included) is reported as a gap, though every byte was read', async () => {
+    // 'a\nbbb\n': the record 'bbb\n' is 4 bytes, the window two reads of 2. The page cannot prove byte 2 starts a line.
+    const data = enc.encode('a\nbbb\n');
+    const r = okRead(await readOlderRange(memIO(data), 'f', lineStart(6), lim(2, 2)));
+    expect(r).toEqual({ ok: true, records: [], continuation: { kind: 'gap', cursor: { kind: 'skip-record', before: 2 } } });
+    // One byte shorter than the window, the same record is framed.
+    const fits = okRead(await readOlderRange(memIO(enc.encode('a\nbb\n')), 'f', lineStart(5), lim(2, 2)));
+    expect(fits.records.map(text)).toEqual(['bb']);
   });
 
   it('a record that fits a fresh window after a skip used part of the budget is read next page, not skipped', async () => {

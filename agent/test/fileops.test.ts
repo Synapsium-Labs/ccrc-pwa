@@ -853,6 +853,7 @@ describe('readFromMeasured: the bounded read\'s identity comes from its own hand
 
   it.each([
     ['birth time 0 (none recorded)', { birth: 0n, change: 9n }],
+    ['birth time negative', { birth: -1n, change: 9n }],
     ['birth equal to change (a ctime fallback, or untouched since creation)', { birth: 7n, change: 7n }],
     ['birth after change', { birth: 9n, change: 5n }],
     ['inode 0', { birth: 5n, change: 9n, ino: 0n }],
@@ -864,6 +865,27 @@ describe('readFromMeasured: the bounded read\'s identity comes from its own hand
     const r = await readFromMeasured(file, 3, 4);
     expect(r).toEqual({ ok: true, data: '3456', dataB64: Buffer.from('3456').toString('base64'), size: 10 });
     expect(r).not.toHaveProperty('ident');
+  });
+
+  it('a file that shrinks after the open answers its short or empty bytes as before, but never with a token', async () => {
+    // The shrink runs inside the identity's own bigint stat: after `openRegular` measured the size, before the range read.
+    for (const [cutTo, data] of [[5, '34'], [3, '']] as const) {
+      const { file } = fileWith('0123456789');
+      const want = realpathSync(file);
+      hooks.afterOpen = (p, fh) => {
+        if (p !== file && p !== want) return;
+        withFacts(fh, { birth: 5n, change: 9n });
+        const facts = fh.stat.bind(fh) as (o?: { bigint?: boolean }) => Promise<unknown>;
+        fh.stat = (async (o?: { bigint?: boolean }) => {
+          const st = await facts(o);
+          if (o?.bigint === true) truncateSync(file, cutTo);
+          return st;
+        }) as FileHandle['stat'];
+      };
+      const r = await readFromMeasured(file, 3, 4);
+      expect(r, `cut to ${cutTo}`).toEqual({ ok: true, data, dataB64: Buffer.from(data).toString('base64'), size: 10 });
+      expect(r).not.toHaveProperty('ident');
+    }
   });
 
   it('EOF and an unbounded read carry no token, with usable facts', async () => {
@@ -922,6 +944,7 @@ describe('readIdentOf: answers only on usable facts', () => {
     ['not a regular file', { regular: false }],
     ['inode 0', { ino: 0n }],
     ['birth 0', { birth: 0n }],
+    ['birth negative', { birth: -1n }],
     ['birth equal to change', { birth: 9n, change: 9n }],
     ['birth after change', { birth: 10n, change: 9n }],
   ] as const)('%s: undefined', (_label, f) => {
