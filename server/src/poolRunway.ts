@@ -78,6 +78,7 @@ export function windowCrossing(line: number, samples: readonly WindowSample[], w
   const rate = (newest.pct - oldest.pct) / (newest.ts - oldest.ts);
   if (rate <= 0) return { kind: 'not-before-reset', resetS: newest.resetAt };
   const atS = newest.ts + (line - newest.pct) / rate;
+  if (atS <= nowS) return { kind: 'unmeasured', why: 'stale' };
   return atS >= newest.resetAt ? { kind: 'not-before-reset', resetS: newest.resetAt } : { kind: 'at', atS };
 }
 
@@ -120,10 +121,9 @@ export function poolCrossing(line: number, accounts: readonly AccountSamples[], 
 type AccountReset = { kind: 'exhausted'; atS: number } | { kind: 'clear' }
   | { kind: 'unknown'; why: Extract<EarliestReset, { kind: 'unmeasured' }>['why'] };
 
-/** One account's headroom (ruled, F2): exhausted when a window's newest sample, its window not reset (`sampleRolled`), is
- *  at or past the ceiling, at any age, regaining at the latest reset among its exhausted windows (each in the future, so a
- *  past reset is never offered as capacity to come); clear when every window's newest sample is fresh, not reset and under
- *  the ceiling; otherwise unknown: no sample (`no-sample`), a window that has reset (`rolled`), or a stale sample. */
+/** One account's headroom: unknown if any window is missing, rolled or stale under the ceiling. Otherwise, a window at
+ *  or past the ceiling proves exhaustion at any age until its reset; if every exhausted window has a reset time, the
+ *  account regains at the latest of them. With every window known and under the ceiling the account is clear. */
 function accountReset(a: AccountSamples, nowS: number): AccountReset {
   const windows: [readonly WindowSample[], RunwayWindow][] = a.five === 'no-window' ? [[a.seven, 'seven']] : [[a.five, 'five'], [a.seven, 'seven']];
   const exhausted: (number | null)[] = [];
@@ -135,11 +135,12 @@ function accountReset(a: AccountSamples, nowS: number): AccountReset {
     if (newest.pct >= SEVEN_DAY_CEILING_PCT) { exhausted.push(newest.resetAt); continue; }
     if (nowS - newest.ts > LOAD_FRESH_S) unknown ??= 'stale';
   }
+  if (unknown !== null) return { kind: 'unknown', why: unknown };
   if (exhausted.length > 0) {
     if (exhausted.includes(null)) return { kind: 'unknown', why: 'no-reset' };
     return { kind: 'exhausted', atS: Math.max(...(exhausted as number[])) };
   }
-  return unknown === null ? { kind: 'clear' } : { kind: 'unknown', why: unknown };
+  return { kind: 'clear' };
 }
 
 /** The earliest reset at which an exhausted account of the pool regains headroom: `unmeasured` with the first unknown

@@ -31,7 +31,9 @@ against `main` at `b33a9ae137`. The coordinator mints the numbers; each departur
   reset decides first), and a past reset is never offered as capacity to come. `EarliestReset`'s `unmeasured` gains the word
   `rolled`, so a missing sample (`no-sample`) and a window that reset stay apart, as the crossings already kept them. The
   one-window rule is unchanged: a lane with no five-hour window is its weekly window alone, and a five-hour window that
-  reset beside a weekly one still past leaves that `at` standing.
+  reset beside a weekly one still past leaves that `at` standing. `windowCrossing` takes a window name (`'five'` or
+  `'seven'`), not the plan's `fitS: number`: it needs the window's full width for rollover and derives its fit span from
+  the same name (review 3382 F8).
 - **`the-first-reset-ends-the-proof`** (review 3330 F2). **Plan correction:** the plan's account rule says
   "`not-before-reset` only when every window it has says so (the later reset)". A window's `not-before-reset` proves nothing
   past its own reset, so an account whose windows all prove it is bounded by the FIRST reset (a flat five-hour window
@@ -41,14 +43,21 @@ against `main` at `b33a9ae137`. The coordinator mints the numbers; each departur
   account's reset, the soonest such), so the account's first reset is what reaches the pool.
 - **`ts-mutants-ride-mutant-sets`.** The plan says mutants are built with `mutation-run.py`. That helper runs Python modules
   only, so the TypeScript deciders' mutants are `MUTANT_SETS` entries (`server/test/sim/accountLoadSets.ts`), which
-  `mutate.ts` builds in a temp directory it removes: the runway set (20 mutants, R1 to R21 less R4) and the load set (18, A1
-  to A18, A14 to A18 being the 95% reading's mappings in `loadLineReading`), all killed at their floors. Two candidate mutants
-  are equivalent and are not listed (one sample spans 0 s, so `current.length < 2` alone changes nothing; a 0 rate projects
-  to Infinity, past every reset). Guards outside a pure decider (the store, the sampler, the lane, the ladder input and the
-  route) have focused tests, and their mutations are named below under "Hand mutations", each reproducible.
+  `mutate.ts` builds in a temp directory it removes: the runway set has 26 mutants and the load set has 18 (A14 to A18
+  cover the 95% reading's mappings in `loadLineReading`), all killed at their floors. Removing only `current.length < 2`
+  is equivalent because the minimum-span check still rejects a single sample's zero span; the reverse is not equivalent
+  (R26). A flat rate on its own projects to Infinity, but the guard also rejects falling rates, so removing that whole
+  guard is not equivalent (R27). Guards outside a pure decider have focused tests and reproducible hand mutations below.
 - **`an-unmeasured-window-voids-a-future-crossing`.** The plan's account rule says "the earlier window's `at`". A window that
   could not be projected might cross sooner than the other's future `at`, so a future `at` beside an unmeasured window reads
-  `unmeasured`; an `at` already past stands. This is the plan's own "under needs proof" rule applied to a projection.
+  `unmeasured`; only an observed `at` at or before now stands. This is the plan's "under needs proof" rule applied to a
+  projection.
+- **`a-projection-is-never-past`** (review 3382 F1). **Plan correction:** a sample at or above the line proves a crossing
+  at its own time. If the newest sample is still under the line, a projection at or before now is `unmeasured: stale`,
+  not proof that the line was crossed. A projection can only give an `at` strictly after now and before the reset.
+- **`an-unknown-window-withholds-regain`** (review 3382 F4). **Plan correction:** one exhausted window cannot establish
+  an account's regain time if any other window is missing, rolled or stale. The account is unknown with that window's
+  reason. With all windows known, capacity returns after the latest reset among the exhausted windows as before.
 - **`one-window-proves-past`.** A load line reads `past` from the larger of a candidate's read, unrolled windows even when the
   other window is unread, because one known window bounds `max(five, seven)` from below. "Under" still needs `measured()`
   (both windows) on a fresh reading. This keeps F1 true for an account at the ceiling whose five-hour figure is unread.
@@ -65,6 +74,9 @@ against `main` at `b33a9ae137`. The coordinator mints the numbers; each departur
 - **`sampler-store-is-its-own-port`.** Task 5 names `WatcherCoordMember` for the sampler's two store members. The store reaches
   the watcher as its own optional deps port, `deps.limitSamples` (the forecast lane's shape), so `coord/ports.ts` and the store
   port census do not move.
+- **`sample-selection-stays-in-the-lane`.** `limitSampleRows` selects the rostered Anthropic accounts with a reading time
+  in `limitSampler.ts`, the L4 lane file where Task 6 places it. This bends decide-in-L1: the pure row selection remains
+  beside the delivery pass this round (review 3382 F10).
 - **`departures-in-the-programme-note`** (review 3330 F8). The plan names
   `docs/superpowers/plans/2026-11-14-overlord-w1/w1-serviceability/departures.md` as the departures' home. A new file nested
   under `plans/` never takes the review judge's layout, and the ledger guard's layout arm (`.github/ci/ledger-guard.mjs`,
@@ -97,6 +109,36 @@ the file unchanged. Every one turned its file red on a failed assertion or the s
 | H14 | `poolRunwayRoute.ts` | the 501 arm dropped | `pool-runway-route` |
 | H15 | `poolRunwayRoute.ts` | the `samples` step label dropped | `pool-runway-route` |
 
+## Fix round 2 (review 3382)
+
+The runway suite went red in five assertions on the previous code, then passed all 41 cases with the crossing and regain
+fixes. The idle projection fixture (70 to 80 over an hour, newest reading 40 minutes old, no weekly sample) reads
+`unmeasured: stale` at window, account and pool. An exact-now observation stands; an exact-now projection is stale; a
+projection one second later is still valid at window level. The regain cases pin stale, missing and rolled peer windows,
+a fresh peer window, and a sample exactly at the freshness bound.
+
+The runway and load floors passed their baselines and killed all 44 set mutants. H16–H21 were run one at a time in a
+scratch copy of the fix round, with the named focused test red on the mutation and green after an exact restore.
+
+| Id | Finding | Mutation | Red on mutation → green on restore |
+|---|---|---|---|
+| R22 | F1 | Drop the projected `atS <= nowS` refusal | Idle projection is reported as `at` → `stale` |
+| R23 | F1 | Change `atS <= nowS` to `atS < nowS` | An exact-now projection is reported as `at` → `stale` |
+| R24 | F4 | Consider unknown only when no window is exhausted | Regain offered with a stale peer → `unmeasured` |
+| R25 | F6 | Change regain freshness `>` to `>=` | At the freshness bound: `unmeasured` → `none-exhausted` |
+| R26 | F7 | Drop the minimum-span clause, keep the sample-count clause | A rising pair 899 seconds apart projects → `thin` |
+| R27 | F7 | Drop the non-positive-rate guard | A falling rate reports `stale` → `not-before-reset` |
+| H16 | F2 | Drop `/ 1000` from `watch.ts#sweepLimitSamples` | Prune receives a millisecond-scale bound → a seconds bound |
+| H17 | F3 | Replace the server's ladder `accountFacts` closure with `() => null` | The composed ladder reads `unmeasured` → `standing` for 96%; at 94% it reads `lifted` |
+| H18 | F5 | Register the runway with `coord: undefined` | The composed runway answers 501 → 200 with the stored sample's regain time |
+| H19 | F11 | Drop the `if (store)` guard on the sampler pass | An absent store warns of a lane failure → no sampler warning |
+| H20 | F11 | In the lane runner, permanently throttle `limitSamples` after a failure | The next beat inserts zero batches → one batch and one prune |
+| H21 | F11 | Keep six days instead of 30 | The retention bound falls below the seven-day read → covers the read |
+
+The window-name signature (F8) and the lane's row selection (F10) are noted above. F9 (remaining mutant-floor gaps)
+and F12 (future-dated observations under clock skew, and the live ladder cap with stale or absent limits) are carries,
+not behavior changes in this round.
+
 ## Review 3330, finding by finding
 
 - F1 and F2: the two plan corrections above, with fixture rows for an idle account's stale row, the exact reset, one window,
@@ -119,8 +161,8 @@ the file unchanged. Every one turned its file red on a failed assertion or the s
 - The 95% row's notice is `none`. An unmeasured line caps at `chat` by the ladder's rule (F3), and nobody designated lifts it.
 - Behaviour at merge: the sampler writes rows every five minutes, at most one per Anthropic account per reading; nothing reads
   them but the runway read; the 95% row reads `lifted` until an Overlord exists.
-- Migration 121: `main` holds 120 migrations at the fix round (measured at `ead8b95fd6`), so 121 stays this PR's. Open PR
-  #3209 also takes 121: whoever lands second absorbs `main`, renumbers and re-pins.
+- Migration 121 was provisional in the first fix round. Main subsequently used it for `coordinator_state.capMode`; the
+  serviceability migration and its pins must move to the next slot on the coordinator's named landing base.
 - Load-sensitive suites, measured rather than labelled: the three `coord-db` cases review 3330 saw time out (the delegation
   tables' "a failure at ANY statement", portfolio B's and the programme phases' "reaches a database ALREADY at the version
   before it") time out the same way at the merge base `b33a9ae137` (about 170 s, 28 s and 25 s there, 173 s, 26 s and 24 s on

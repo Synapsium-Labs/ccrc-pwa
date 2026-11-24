@@ -24,15 +24,24 @@ function runwayCases(m: RunwayModule): Record<string, SuiteCase> {
   return {
     'a sample at the line is at it': () => { expect(m.windowCrossing(85, [w(60, 85)], 'five', NOW)).toEqual({ kind: 'at', atS: NOW - 60 }); },
     'a fresh sample is within LOAD_FRESH_S, inclusive': () => {
-      expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S), 'five', NOW).kind).toBe('at');
+      expect(m.windowCrossing(85, rising(70, LOAD_FRESH_S), 'five', NOW)).toEqual({ kind: 'at', atS: NOW + 1_800 });
       expect(m.windowCrossing(85, rising(80, LOAD_FRESH_S + 1), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
     },
     'a sample outside the fit span is not fitted': () => {
       expect(m.windowCrossing(85, [w(60 + 7_201, 10), w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' });
     },
-    'one sample is thin': () => { expect(m.windowCrossing(85, [w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' }); },
-    'a flat rate does not cross before the reset': () => {
+    'one sample or two less than 900s apart are thin': () => {
+      expect(m.windowCrossing(85, [w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' });
+      expect(m.windowCrossing(85, [w(959, 70), w(60, 80)], 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'thin' });
+    },
+    'a flat or falling rate does not cross before the reset': () => {
       expect(m.windowCrossing(85, [w(3_660, 80), w(60, 80)], 'five', NOW)).toEqual({ kind: 'not-before-reset', resetS: RESET });
+      expect(m.windowCrossing(85, [w(3_660, 82), w(60, 80)], 'five', NOW)).toEqual({ kind: 'not-before-reset', resetS: RESET });
+    },
+    'a projected crossing must be in the future': () => {
+      expect(m.windowCrossing(85, rising(80, 2_400), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+      expect(m.windowCrossing(85, rising(80, 1_800), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+      expect(m.windowCrossing(85, rising(80, 1_799), 'five', NOW)).toEqual({ kind: 'at', atS: NOW + 1 });
     },
     'a projection landing on the reset does not cross': () => {
       expect(m.windowCrossing(85, rising(80, 60, NOW - 60 + 1_800), 'five', NOW)).toEqual({ kind: 'not-before-reset', resetS: NOW - 60 + 1_800 });
@@ -50,8 +59,13 @@ function runwayCases(m: RunwayModule): Record<string, SuiteCase> {
       expect(m.earliestReset([acct([w(60, 99, { resetAt: RESET + 900 })]), acct([w(60, 98, { resetAt: RESET + 300 })])], NOW))
         .toEqual({ kind: 'at', atS: RESET + 300 });
     },
-    'none exhausted under the ceiling': () => {
+    'none exhausted under the ceiling, including at the freshness bound': () => {
       expect(m.earliestReset([acct([w(60, 97.9)])], NOW)).toEqual({ kind: 'none-exhausted' });
+      expect(m.earliestReset([acct([w(LOAD_FRESH_S, 97)])], NOW)).toEqual({ kind: 'none-exhausted' });
+    },
+    'an exhausted window with a stale peer window cannot prove regain': () => {
+      expect(m.earliestReset([acct([w(10_800, 97)], [w(60, 99)])], NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+      expect(m.earliestReset([acct([w(60, 97)], [w(60, 99)])], NOW)).toEqual({ kind: 'at', atS: RESET });
     },
     'a stale account under the ceiling holds the pool unmeasured': () => {
       expect(m.earliestReset([acct([w(60, 99)]), acct([w(LOAD_FRESH_S + 1, 50)])], NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
@@ -90,8 +104,7 @@ const RUNWAY_SET: MutantSet<RunwayModule> = {
   mutants: [
     { id: 'R1 past only above the line', old: 'if (newest.pct >= line) return', new: 'if (newest.pct > line) return' },
     { id: 'R2 freshness exclusive', old: "if (nowS - newest.ts > LOAD_FRESH_S) return { kind: 'unmeasured', why: 'stale' };", new: "if (nowS - newest.ts >= LOAD_FRESH_S) return { kind: 'unmeasured', why: 'stale' };" },
-    // `current.length < 2` alone and `rate <= 0` alone are equivalent mutants (one sample spans 0 s; a 0 rate projects to
-    // Infinity, past every reset), so neither is listed.
+    // Removing only `current.length < 2` (while keeping the minimum-span check) is equivalent: one sample spans zero.
     { id: 'R3 the fit span ignored', old: ' && newest.ts - s.ts <= fitS', new: '' },
     { id: 'R5 the reset itself crosses', old: 'return atS >= newest.resetAt ?', new: 'return atS > newest.resetAt ?' },
     { id: 'R6 an unmeasured window ignored', old: 'const past = ats.filter((t) => t <= nowS);', new: 'const past = ats;' },
@@ -110,6 +123,12 @@ const RUNWAY_SET: MutantSet<RunwayModule> = {
     { id: 'R19 an at exactly now is future', old: 'ats.filter((t) => t <= nowS)', new: 'ats.filter((t) => t < nowS)' },
     { id: 'R20 an undecidable pool under null', old: "case 'malformed': case 'unreadable': case 'stale': return [];", new: "case 'malformed': case 'unreadable': case 'stale': return [null];" },
     { id: 'R21 a reset window read as no sample', old: "unknown ??= 'rolled';", new: "unknown ??= 'no-sample';" },
+    { id: 'R22 past projections stand', old: "if (atS <= nowS) return { kind: 'unmeasured', why: 'stale' };", new: '' },
+    { id: 'R23 a projection exactly now stands', old: 'if (atS <= nowS)', new: 'if (atS < nowS)' },
+    { id: 'R24 exhausted wins over an unknown window', old: 'if (unknown !== null) return', new: 'if (unknown !== null && exhausted.length === 0) return' },
+    { id: 'R25 regain freshness exclusive', old: "if (nowS - newest.ts > LOAD_FRESH_S) unknown ??= 'stale';", new: "if (nowS - newest.ts >= LOAD_FRESH_S) unknown ??= 'stale';" },
+    { id: 'R26 minimum fit span ignored', old: ' || newest.ts - oldest.ts < RUNWAY_MIN_SPAN_S', new: '' },
+    { id: 'R27 a falling rate is fitted', old: "if (rate <= 0) return { kind: 'not-before-reset', resetS: newest.resetAt };", new: '' },
   ],
   suite: runwayCases,
 };

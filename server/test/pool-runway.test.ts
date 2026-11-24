@@ -31,7 +31,20 @@ describe('windowCrossing: the rules in the plan\'s order', () => {
   });
   it('a stale newest sample under the line is stale', () => {
     expect(windowCrossing(85, rising(80, LOAD_FRESH_S + 1), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
-    expect(windowCrossing(85, rising(80, LOAD_FRESH_S), 'five', NOW).kind).not.toBe('unmeasured');
+    expect(windowCrossing(85, rising(70, LOAD_FRESH_S), 'five', NOW)).toEqual({ kind: 'at', atS: NOW + 1_800 });
+  });
+  it('a projection at now is stale; one second after now still projects', () => {
+    expect(windowCrossing(85, rising(80, 1_800), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+    expect(windowCrossing(85, rising(80, 1_799), 'five', NOW)).toEqual({ kind: 'at', atS: NOW + 1 });
+  });
+  it('an idle account cannot prove a projected past crossing at window, account or pool level', () => {
+    // 70 to 80 in an hour, newest 40 minutes old. The fit would put 85 ten minutes ago, but no sample saw it.
+    const five = rising(80, 2_400);
+    const idle = acct([], five);
+    const stale = { kind: 'unmeasured', why: 'stale' };
+    expect(windowCrossing(85, five, 'five', NOW)).toEqual(stale);
+    expect(accountCrossing(85, idle, NOW)).toEqual(stale);
+    expect(poolCrossing(85, [idle], NOW)).toEqual(stale);
   });
   it('no reset time is no-reset', () => {
     expect(windowCrossing(85, rising(80, 60, null), 'five', NOW)).toEqual({ kind: 'unmeasured', why: 'no-reset' });
@@ -84,11 +97,10 @@ describe('accountCrossing: an account crosses when its first window does', () =>
     expect(accountCrossing(85, acct(rising(80), []), NOW)).toEqual({ kind: 'unmeasured', why: 'no-sample' });
     expect(accountCrossing(85, acct([w(60, 90)], []), NOW)).toEqual({ kind: 'at', atS: NOW - 60 });
   });
-  it('an `at` exactly now is already past, so it stands beside an unmeasured window; a second later it is voided', () => {
-    expect(accountCrossing(85, acct([w(0, 90)], []), NOW)).toEqual({ kind: 'at', atS: NOW });
-    // 10% an hour from 80 at NOW-1800: 85 at exactly NOW; then the same a second later
-    expect(accountCrossing(85, acct([w(5_400, 70), w(1_800, 80)], []), NOW)).toEqual({ kind: 'at', atS: NOW });
-    expect(accountCrossing(85, acct([w(5_399, 70), w(1_799, 80)], []), NOW)).toEqual({ kind: 'unmeasured', why: 'no-sample' });
+  it('an observed crossing exactly now stands beside an unmeasured window; a projection does not', () => {
+    expect(accountCrossing(85, acct([], [w(0, 90)]), NOW)).toEqual({ kind: 'at', atS: NOW });
+    expect(accountCrossing(85, acct([], rising(80, 1_800)), NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
+    expect(accountCrossing(85, acct([], rising(80, 1_799)), NOW)).toEqual({ kind: 'unmeasured', why: 'no-sample' });
   });
   it('a lane with no five-hour window is its weekly window alone', () => {
     expect(accountCrossing(85, acct(rising(80), 'no-window'), NOW)).toEqual({ kind: 'at', atS: NOW - 60 + 1_800 });
@@ -158,7 +170,7 @@ describe('a window that has reset proves nothing, decided when the runway reads 
   });
   it('a past reset is never offered as capacity to come: an exhausted window that has reset is rolled, not `at` its reset', () => {
     expect(earliestReset([acct([w(LOAD_FRESH_S * 4, 99, { resetAt: NOW - 3_600 })])], NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
-    expect(earliestReset([acct([w(60, 99, { resetAt: RESET })], [w(60, 99, { resetAt: NOW - 1 })])], NOW)).toEqual({ kind: 'at', atS: RESET });
+    expect(earliestReset([acct([w(60, 99, { resetAt: RESET })], [w(60, 99, { resetAt: NOW - 1 })])], NOW)).toEqual({ kind: 'unmeasured', why: 'rolled' });
   });
 });
 
@@ -175,6 +187,17 @@ describe('earliestReset (ruled, F2)', () => {
   it('the ceiling is reached at 98, not before', () => {
     expect(earliestReset([acct([w(60, 97.9)])], NOW)).toEqual({ kind: 'none-exhausted' });
     expect(earliestReset([acct([w(60, 98)])], NOW)).toEqual({ kind: 'at', atS: RESET });
+  });
+  it('an exhausted window needs every other window known before offering a regain time', () => {
+    const exhausted = [w(60, 99, { resetAt: NOW + 7_200 })];
+    expect(earliestReset([acct([w(10_800, 97, { resetAt: NOW + 432_000 })], exhausted)], NOW))
+      .toEqual({ kind: 'unmeasured', why: 'stale' });
+    expect(earliestReset([acct([], exhausted)], NOW)).toEqual({ kind: 'unmeasured', why: 'no-sample' });
+    expect(earliestReset([acct([w(60, 97)], exhausted)], NOW)).toEqual({ kind: 'at', atS: NOW + 7_200 });
+  });
+  it('an under-ceiling reading exactly at the freshness bound is still known', () => {
+    expect(earliestReset([acct([w(LOAD_FRESH_S, 97)])], NOW)).toEqual({ kind: 'none-exhausted' });
+    expect(earliestReset([acct([w(LOAD_FRESH_S + 1, 97)])], NOW)).toEqual({ kind: 'unmeasured', why: 'stale' });
   });
   it('an exhausted window with no reset is no-reset', () => {
     expect(earliestReset([acct([w(60, 99, { resetAt: null })])], NOW)).toEqual({ kind: 'unmeasured', why: 'no-reset' });

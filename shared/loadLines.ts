@@ -25,7 +25,7 @@ export const RUNWAY_MIN_SPAN_S = 900;
 /** Why a crossing could not be projected. */
 const CROSSING_UNMEASURED_MAP = {
   'no-sample': 'no sample of the current window',
-  stale: 'the newest sample is older than LOAD_FRESH_S and under the line',
+  stale: 'the newest sample is under the line and either too old to fit or its projected crossing is at or before now',
   rolled: 'the newest sample\'s window has reset: flagged when sampled, its reset time at or before now, or older than its window',
   thin: 'fewer than two samples, or less than RUNWAY_MIN_SPAN_S between them',
   'no-reset': 'the window carries no reset time',
@@ -33,9 +33,9 @@ const CROSSING_UNMEASURED_MAP = {
 export type CrossingUnmeasured = keyof typeof CROSSING_UNMEASURED_MAP;
 export const CROSSING_UNMEASURED = Object.keys(CROSSING_UNMEASURED_MAP) as CrossingUnmeasured[];
 
-/** When a line is crossed. `at` a time: at or before now, already past; after now, the endpoint slope's projection,
- *  before the window's reset. `not-before-reset`: not before that reset, which is in the future and ends the proof (a
- *  window may cross after it). Or unmeasured. */
+/** When a line is crossed. `at` is an observation at or above the line, or a projection strictly after now and before
+ *  the window's reset. A projection at or before now is unmeasured (`stale`), never an observation. `not-before-reset`:
+ *  not before that reset, which is in the future and ends the proof (a window may cross after it). Or unmeasured. */
 export type Crossing =
   | { readonly kind: 'at'; readonly atS: number }
   | { readonly kind: 'not-before-reset'; readonly resetS: number }

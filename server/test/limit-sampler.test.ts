@@ -8,6 +8,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { laneRow } from '../src/laneSchedule.js';
 import { limitSamplePass, limitSampleRows, type LimitSampleStore } from '../src/limitSampler.js';
 import type { AccountLimits } from '../src/limits.js';
+import { RUNWAY_READ_S } from '../src/poolRunway.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -70,34 +71,56 @@ describe('the lane (index question 8)', () => {
       warnKey: 'ccrc-server: the limit sampler failed' });
   });
 
-  const watcher = (deps: Record<string, unknown>, mono: { ms: number }): FleetWatcher =>
-    quietAtTestEnd(new FleetWatcher({ ...testDeps(mkTmp('ccrc-limit-sampler-w-')), ...deps, monotonicMs: () => mono.ms,
-      time: fakeTime({ wallMs: NOW * 1000 }).ports } as never, new Bus(), 2000));
+  const watcher = (limitSamples: LimitSampleStore | undefined, mono: { ms: number }): FleetWatcher => {
+    const fixture = testDeps(mkTmp('ccrc-limit-sampler-w-'));
+    return quietAtTestEnd(new FleetWatcher({ ...fixture, cfg: { ...fixture.cfg, roster }, limitSamples, monotonicMs: () => mono.ms,
+      time: fakeTime({ wallMs: NOW * 1000 }).ports }, new Bus(), 2000));
+  };
+  const limits = { 'lane-a': lim(40, 20, NOW - 30) };
+  const isSamplerWarn = (call: unknown[]) => String(call[0]).startsWith('ccrc-server: the limit sampler failed');
 
-  it('runs the pass at the lane\'s cadence and not between; with no store it does nothing', async () => {
+  it('runs at the lane cadence, passing the wall clock to pruning in seconds', async () => {
     const store = fakeStore();
     const mono = { ms: 1_000_000 };
-    const w = watcher({ limitSamples: store }, mono);
-    const limits = { claude: lim(40, 20, NOW - 30) };
+    const w = watcher(store, mono);
     await w.sweepLimitSamples(limits);
     mono.ms += LIMIT_SAMPLE_MS - 1;
     await w.sweepLimitSamples(limits);
     expect(store.inserts).toHaveLength(1);
+    expect(store.prunes).toEqual([NOW - LIMIT_SAMPLES_KEEP_S]);
     mono.ms += 1;
     await w.sweepLimitSamples(limits);
     expect(store.inserts).toHaveLength(2);
-    await watcher({}, mono).sweepLimitSamples(limits);
   });
 
-  it('a throwing store warns once with the row\'s sentence, and the next beat tries again', async () => {
-    const mono = { ms: 1_000_000 };
-    const store: LimitSampleStore = { insertLimitSamples: () => { throw new Error('disk gone'); }, pruneLimitSamples: () => 0 };
+  it('without a store it skips the pass without a lane failure', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const w = watcher({ limitSamples: store }, mono);
-      await w.sweepLimitSamples({ claude: lim(40, 20, NOW - 30) });
-      expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('ccrc-server: the limit sampler failed'))).toHaveLength(1);
+      await watcher(undefined, { ms: 1_000_000 }).sweepLimitSamples(limits);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toEqual([]);
     } finally { warn.mockRestore(); }
+  });
+
+  it('a throwing store warns once with the row\'s sentence, then a healthy store samples on the next beat', async () => {
+    const mono = { ms: 1_000_000 };
+    const store = fakeStore();
+    vi.spyOn(store, 'insertLimitSamples').mockImplementationOnce(() => { throw new Error('disk gone'); });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const w = watcher(store, mono);
+      await w.sweepLimitSamples(limits);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toHaveLength(1);
+      expect(store.prunes).toEqual([]);
+      mono.ms += LIMIT_SAMPLE_MS;
+      await w.sweepLimitSamples(limits);
+      expect(store.inserts).toHaveLength(1);
+      expect(store.prunes).toHaveLength(1);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toHaveLength(1);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('the retention span covers the runway read span', () => {
+    expect(LIMIT_SAMPLES_KEEP_S).toBeGreaterThanOrEqual(RUNWAY_READ_S);
   });
 
   it('tick() hands the pass its own reading after a listed tick', async () => {
