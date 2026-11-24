@@ -10,7 +10,7 @@ import { api } from '../src/lib/api';
 import { uploadErrorText } from '../src/lib/refusalWords';
 import { Composer } from '../src/session/Composer';
 import {
-  ATTACH_ACCEPT, NEUTRAL_EXT, clipboardFiles, isAttachable, namedUpload, tooLargeText, useStagedImages,
+  ATTACH_ACCEPT, NEUTRAL_EXT, clipboardFiles, isAttachable, namedUpload, stillTooLargeText, tooLargeText, useStagedImages,
 } from '../src/session/useAttachImage';
 import { CLIP_EXT_MAX, CLIP_MAX_BYTES, CLIP_MAX_PER_MESSAGE, clipExtOf, hasClipExt, isImageClip } from '../../shared/api';
 
@@ -117,17 +117,59 @@ describe('namedUpload gives every file a name the store admits', () => {
     }
   });
 
-  it('never lets the declared type override a usable extension', () => {
-    const md = new File(['# hi'], 'notes.md', { type: 'image/png' });
-    expect(namedUpload(md, 1)).toBe(md);
+  // Review 3670 F1: a declared picture whose usable extension is not one of
+  // the four pictures was a picture on main (`photo.jfif`, a Windows save from
+  // the web; `Screenshot 10.15.32`; `chart.v2`), so it stays one here: the
+  // whole name is kept and the picture's extension follows it.
+  it('gives a declared picture whose usable extension is not a picture its picture extension after the whole name', () => {
+    for (const [n, type, want] of [
+      ['photo.jfif', 'image/jpeg', 'photo.jfif.jpg'], ['photo.jpe', 'image/jpeg', 'photo.jpe.jpg'],
+      ['photo.pjpeg', 'image/jpeg', 'photo.pjpeg.jpg'], ['Screenshot 10.15.32', 'image/png', 'Screenshot 10.15.32.png'],
+      ['chart.v2', 'image/webp', 'chart.v2.webp'],
+    ] as const) {
+      const named = namedUpload(new File(['x'], n, { type }), 1);
+      expect(named.name, n).toBe(want);
+      expect(isImageClip(named.name), n).toBe(true);
+      expect(named.type, n).toBe(type);
+    }
+  });
+
+  it('leaves the name as it is when its extension is already a picture, whatever picture is declared', () => {
+    for (const [n, type] of [['shot.png', 'image/jpeg'], ['IMG.JPG', 'image/png'], ['a.webp', 'image/webp']] as const) {
+      const f = new File(['x'], n, { type });
+      expect(namedUpload(f, 1), n).toBe(f);
+    }
+  });
+
+  // The declared type wins only over an extension nothing else claims: one the
+  // serve table types as something else stays that document.
+  it('keeps a document the serve table types, though a picture is declared', () => {
+    for (const n of ['notes.md', 'report.pdf', 'data.csv', 'log.txt', 'cfg.yaml']) {
+      const f = new File(['# hi'], n, { type: 'image/png' });
+      expect(namedUpload(f, 1), n).toBe(f);
+    }
+  });
+
+  it('never renames a usable name when no picture is declared', () => {
+    for (const [n, type] of [['photo.png', 'text/plain'], ['photo.jfif', ''], ['photo.jfif', 'image/gif'], ['bundle.zip', 'application/zip']] as const) {
+      const f = new File(['x'], n, { type });
+      expect(namedUpload(f, 1), `${n} ${type}`).toBe(f);
+    }
   });
 
   // Review 3647 F7: the type table is read by a browser-declared string, so a
   // type named like an Object.prototype member must find nothing in it.
-  it('finds nothing for a declared type named like an object member', () => {
-    for (const type of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+  // Review 3670 F4: a File lower-cases its declared type, so only the member
+  // names that are lower-case already reach the table as members: two of them.
+  it('finds nothing for a declared type named like an object member (the two a File can carry)', () => {
+    expect(new File(['x'], '', { type: 'toString' }).type).toBe('tostring');
+    const probes = ['constructor', '__proto__'];
+    expect(probes).toHaveLength(2);
+    for (const type of probes) {
+      expect(new File(['x'], '', { type }).type, type).toBe(type);
       expect(namedUpload(new File(['x'], '', { type }), 7).name, type).toBe('pasted-7.noext');
       expect(namedUpload(new File(['x'], 'shot', { type }), 7).name, type).toBe('shot.noext');
+      expect(namedUpload(new File(['x'], 'photo.jfif', { type }), 7).name, type).toBe('photo.jfif');
     }
   });
 
@@ -206,11 +248,12 @@ describe('paste and drop stage a non-picture as a chip', () => {
 });
 
 /** The hook on its own, with the downscale injectable. */
-function Harness({ files, downscale }: { files: File[]; downscale?: (f: File) => Promise<Blob> }): React.ReactNode {
+function Harness({ files, then, downscale }: { files: File[]; then?: File[]; downscale?: (f: File) => Promise<Blob> }): React.ReactNode {
   const s = useStagedImages(ID, downscale);
   return (
     <div>
       <button type="button" onClick={() => s.add(files)}>add</button>
+      <button type="button" onClick={() => s.add(then ?? [])}>add then</button>
       <ul>
         {s.images.map((i) => (
           <li key={i.key}>
@@ -280,7 +323,7 @@ describe('the limits that remain', () => {
     render(<><Harness files={[sized('photo.jpg', 30 * 1024 * 1024, 'image/jpeg')]} downscale={async () => big} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
     await waitFor(() => expect(screen.getByTestId('state-photo.jpg')).toHaveTextContent('failed'));
-    expect(screen.getByTestId('error-photo.jpg')).toHaveTextContent('photo.jpg is 12.1 MB — 12 MB per file is the limit');
+    expect(screen.getByTestId('error-photo.jpg')).toHaveTextContent('photo.jpg is still 12.1 MB after shrinking — 12 MB per file is the limit');
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -325,7 +368,95 @@ describe('the limits that remain', () => {
     render(<><Harness files={[sized('', 15 * 1024 * 1024, 'image/jpeg')]} downscale={async () => big} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
     await waitFor(() => expect(screen.getByTestId('state-pasted-1000.jpg')).toHaveTextContent('failed'));
-    expect(screen.getByTestId('error-pasted-1000.jpg')).toHaveTextContent('pasted-1000.jpg is 12.1 MB — 12 MB per file is the limit');
+    expect(screen.getByTestId('error-pasted-1000.jpg')).toHaveTextContent('pasted-1000.jpg is still 12.1 MB after shrinking — 12 MB per file is the limit');
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  // Review 3670 F3: the size a still-too-large picture is refused with is
+  // the shrunk one, so the words say it is that size after shrinking.
+  it('says a picture over the limit after its downscale is still that size after shrinking', () => {
+    expect(stillTooLargeText('photo.jpg', CLIP_MAX_BYTES + 1)).toBe('photo.jpg is still 12.1 MB after shrinking — 12 MB per file is the limit');
+  });
+
+  // Review 3670 F2: the size refusals are decided before the batch is cut to
+  // the room left, so a refused file never takes the slot of one that fits.
+  it('with one slot left, a refused file does not take the slot of a picture beside it', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const three = ['f0.zip', 'f1.zip', 'f2.zip'].map((n) => new File(['x'], n));
+    render(<><Harness files={three} then={[sized('big.zip', 20 * 1024 * 1024), new File(['png'], 'a.png', { type: 'image/png' })]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
+    fireEvent.click(screen.getByText('add then'));
+    await waitFor(() => expect(screen.getByTestId('state-a.png')).toHaveTextContent('staged'));
+    expect(screen.queryByTestId('state-big.zip')).toBeNull();
+    expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).not.toMatch(/attachments per message/);
+  });
+
+  // Review 3670 F1, in the hook: a declared jpeg named photo.jfif is a picture.
+  it('stages a declared jpeg named photo.jfif as a picture, its name kept', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const downscale = vi.fn().mockResolvedValue(new Blob(['small'], { type: 'image/jpeg' }));
+    render(<Harness files={[new File(['jpeg'], 'photo.jfif', { type: 'image/jpeg' })]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-photo.jfif.jpg')).toHaveTextContent('staged'));
+    expect(screen.getByTestId('preview-photo.jfif.jpg').textContent).not.toBe('');
+    expect((upload.mock.calls[0]![1] as File).name).toBe('photo.jfif.jpg');
+  });
+
+  it('downscales a declared jpeg named photo.jfif over the limit rather than refusing it', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const downscale = vi.fn().mockResolvedValue(new Blob(['small'], { type: 'image/jpeg' }));
+    render(<><Harness files={[sized('photo.jfif', 20 * 1024 * 1024, 'image/jpeg')]} downscale={downscale} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-photo.jfif.jpg')).toHaveTextContent('staged'));
+    expect(downscale).toHaveBeenCalledTimes(1);
+    expect((upload.mock.calls[0]![1] as File).size).toBe(5);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('stages a declared png named Screenshot 10.15.32 as a picture', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 10, height: 10, close: () => {} }));
+    vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    render(<Harness files={[new File(['png'], 'Screenshot 10.15.32', { type: 'image/png' })]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-Screenshot 10.15.32.png')).toHaveTextContent('staged'));
+    expect(screen.getByTestId('preview-Screenshot 10.15.32.png').textContent).not.toBe('');
+  });
+
+  // When the declared type alone made it a picture and the bytes do not
+  // decode, the file goes up untouched under the name it came with.
+  it('stages a declared picture that does not decode as the document it arrived as', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('not an image')));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const original = new File(['not a picture'], 'photo.jfif', { type: 'image/jpeg' });
+    const downscale = vi.fn().mockRejectedValue(new Error('not an image'));
+    render(<Harness files={[original]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-photo.jfif')).toHaveTextContent('staged'));
+    expect(upload).toHaveBeenCalledWith(ID, original);
+    expect(screen.getByTestId('preview-photo.jfif').textContent).toBe('');
+  });
+
+  it('a declared picture that does not decode and is over the limit is refused as the document it arrived as', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('not an image')));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    const downscale = vi.fn().mockRejectedValue(new Error('not an image'));
+    render(<><Harness files={[sized('photo.jfif', 20 * 1024 * 1024, 'image/jpeg')]} downscale={downscale} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-photo.jfif')).toHaveTextContent('failed'));
+    expect(screen.getByTestId('error-photo.jfif')).toHaveTextContent('photo.jfif is 20.0 MB — 12 MB per file is the limit');
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('a file named as a picture whose bytes do not decode still fails, as on main', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('not an image')));
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(ZIP_CLIP);
+    render(<><Harness files={[new File(['nope'], 'shot.png', { type: 'image/png' })]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-shot.png')).toHaveTextContent('failed'));
     expect(upload).not.toHaveBeenCalled();
   });
 

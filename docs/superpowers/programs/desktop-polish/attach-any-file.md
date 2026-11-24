@@ -18,15 +18,25 @@ claim below is labelled **measured** (a command was run and its result seen), **
 - **Sourced.** `server/src/clip.ts`. `CLIP_NAME_RE` is unchanged text and derives from the new shape, so the stored
   name rule, the path pattern and the upload gate all follow one definition. `CLIP_MIME` keeps exactly its fourteen
   entries and becomes a frozen null-prototype table (below, "What an uploader can do").
+- **Sourced.** `shared/clipServe.ts` (new, imports nothing). `CLIP_MIME` moved here unchanged in a commit of its own,
+  and `server/src/clip.ts` re-exports it under the same name, so the serve route's import stands. It moved because the
+  composer's naming rule (review 3670 F1) needs to know which extensions the serve table claims, and the console can
+  import from `shared/` but never from `server/src`; moving it keeps one definition where a copy would make two. The
+  console reads only the table's keys; what a file is served as stays the server's decision.
 - **Sourced.** `pwa/src/session/useAttachImage.ts`. `ATTACH_ACCEPT` is `undefined`, so the picker's input has no
-  `accept` attribute. `isAttachable` admits every file. `namedUpload` keeps any name with a usable extension, whatever
-  type the file declares. A name with no usable extension gains one: a DECLARED picture (`image/png`, `image/jpeg`,
-  `image/webp`) gains that picture's (`png`, `jpg`, `webp`), so it still thumbnails and downscales as on main, and any
-  other file gains `.noext` (`NEUTRAL_EXT`). A nameless file's stem is `pasted-<ms>`; any other keeps its own name
-  whole as the stem (`shot` typed `image/png` becomes `shot.png`, `README` becomes `README.noext`). `add()` names each
-  file first, then refuses a non-picture over 12 MB before any request, with a toast saying the name, the size rounded
-  up to a tenth of a MB and the limit (`tooLargeText`); a picture is measured after its downscale, and one still over the
-  limit fails its chip with the same sentence and is never sent. The tray's count refusal reads its number from
+  `accept` attribute. `isAttachable` admits every file. `namedUpload` (ruled in review 3670 F1, main's rule with the
+  stem kept): a DECLARED picture (`image/png`, `image/jpeg`, `image/webp`) is a picture unless its name already has an
+  extension the serve table knows, either one of the four pictures (the name stands as it is) or one served as
+  something else (`notes.md` stays a document). Otherwise it keeps its whole name and gains the picture's extension
+  after it: `photo.jfif` becomes `photo.jfif.jpg`, `Screenshot 10.15.32` becomes `Screenshot 10.15.32.png`, `shot`
+  becomes `shot.png`. So it thumbnails and downscales as on main. If a file took the picture lane only by that rename and
+  its bytes do not decode, it goes up untouched, as the document it arrived as, under its own name. Any other file keeps
+  a usable extension untouched, and a name with none gains `.noext` (`NEUTRAL_EXT`). A nameless file's stem is
+  `pasted-<ms>`. `add()` names each file first and decides the size refusals before the batch is cut to the room left,
+  so a refused file never takes a slot (review 3670 F2). A non-picture over 12 MB is refused before any request, with a
+  toast saying the name, the size rounded up to a tenth of a MB and the limit (`tooLargeText`). A picture is measured
+  after its downscale, and one still over the limit fails its chip saying it is still that size after shrinking
+  (`stillTooLargeText`, review 3670 F3) and is never sent. The tray's count refusal reads its number from
   `CLIP_MAX_PER_MESSAGE`. The "images, text, PDF and RTF only" refusal is gone.
 - **Sourced.** `pwa/src/lib/refusalWords.ts`: the server's `unsupported-type` now reads "Can't attach that — its name
   has no extension the server can store." The composer gives every name an extension of the admitted shape before upload
@@ -62,9 +72,9 @@ paste path or to `composePrompt`.
 | Extension length | 1 to 12 | Holds every common extension (`webmanifest` is 11, `parquet` 7); a longer tail is treated as no extension. |
 | Character set | ASCII letters and digits | The brief's rule. Tested on the raw name BEFORE lower-casing: `toLowerCase` folds the Kelvin sign to `k`, which the server's case-insensitive gate does not admit, so testing after would stage a chip the server refuses. |
 | Neutral extension | `noext`, for a file that is not a declared picture | It claims no format, as `.bin` or `.txt` would, and tells the reader on the far end what happened: `README` arrives as `clip-…-README.noext`. The chip shows that name too. |
-| Picker filter | none | An `accept` with no value is what makes iOS offer the photo library, the camera and Files in one sheet. |
+| Picker filter | none | With no `accept`, iOS is documented to offer the photo library, the camera and Files in one sheet (documented, not measured on a device). |
 | Where the size refusal happens | in the composer, decided on the name the file will carry: for a non-picture before upload; for a picture after its downscale | A non-picture's size now is its size at the server; a picture's downscale may bring it under. A nameless clipboard picture is a picture by its named form, so it waits for its downscale as on main (review 3647 F1). |
-| Declared picture type (ruled, review 3647 F1) | names a picture whose name has no usable extension, nothing else | See "What the declared type is trusted with" below. |
+| Declared picture type (ruled, review 3647 F1, changed by review 3670 F1) | names a picture unless the name's extension is one the serve table knows | See "What the declared type is trusted with" below. |
 | Size in the refusal | one decimal of MB, rounded up | So a file one byte over reads `12.1 MB`, never the limit itself (review 3647 F9). |
 | Limit constants | `CLIP_MAX_BYTES` and `CLIP_MAX_PER_MESSAGE` in `shared/api.ts` | The composer needs them to say the limit. The server's own `MAX_UPLOAD_BYTES` and `MAX_ATTACHMENTS` in `server.ts` are a second copy I could not remove (the file is held); `clip-any-file.test.ts` pins the route's behaviour to the shared values (12 MiB accepted, one byte more refused, a fifth file refused). Follow-up below. |
 
@@ -96,8 +106,8 @@ They cannot:
   `;`, `&`, `|`, `<`, `>` or parenthesis, and `splitClipPaths` finds it whole. Pinned.
 - **make anything executable.** Both writers (`localIO.writeFileB64` and the agent's `writeB64`) create the file with
   Node's default mode 0o666 under the umask, which has no execute bit whatever the umask; every name is fresh (a 32-bit
-  suffix), so no existing mode is inherited. Pinned for `.sh`, `.exe` and `.py` on both sides. Nothing in ccrc opens or
-  runs a clip; the session is only told its path.
+  suffix), so no existing mode is inherited. Pinned on the server's writer for `.sh`, `.exe` and `.py`, and on the fleet
+  box's writer for `.sh`, `.exe` and `.zip`. Nothing in ccrc opens or runs a clip; the session is only told its path.
 - **make the console run it as script in the page.** The clip route serves with its own type only the fourteen types in
   `CLIP_MIME`: four pictures, nine text and data types, and `application/pdf`. None of them is a type a browser runs
   as script in the page. A PDF is served inline, as on main, and opens in the browser's own PDF viewer. Every other
@@ -114,15 +124,21 @@ with any file it can read. That is the session's sandbox, not the clip store's.
 ### What the declared type is trusted with
 
 **Sourced.** A file's declared type (`File.type`, set by the browser from the OS or the clipboard source, and so as
-untrusted as the name) decides one thing in the composer: when the name has no usable extension and the type is
-`image/png`, `image/jpeg` or `image/webp`, the name gains `png`, `jpg` or `webp`. It never overrides a usable extension,
-and it decides nothing on the server, which sees only the name. That trusts the declared type to say the bytes are a
-picture, as main did. It is safe on the serving side because the outcome is the same as an uploader naming a non-image
-file `x.png` by hand, which was always possible: the bytes are served back as `image/png`, `image/jpeg` or `image/webp`
-with `nosniff`, a browser can only try to decode them as an image (a failed decode is a broken thumbnail, which the
-bubble already shows as the file's name), and none of the three types runs script. In the composer a mislabelled file
-fails its decode (`createImageBitmap`) and its chip fails, as on main. The table is frozen and has no prototype, so a
-type declared as `constructor` or `__proto__` finds nothing in it and the file takes `.noext` (review 3647 F7).
+untrusted as the name) decides one thing in the composer: when the type is `image/png`, `image/jpeg` or `image/webp`
+and the name's extension is not one the serve table knows (none, or one like `jfif`, `jpe`, `32` or `v2`), the name
+gains `png`, `jpg` or `webp` after it. That is main's rule with the stem kept (review 3670 F1). It now overrides a usable
+extension the serve table does not know, and never one it does: a picture extension stands, and `notes.md` declared as a
+picture stays a document. It decides nothing on the server, which sees only the name. So the rule trusts the declared
+type to say the bytes are a picture, as main did, and trusts nothing to it that main did not. It can only ever choose
+`png`, `jpg`, `webp` or the neutral extension. Two checks keep that safe. In the composer, the decode
+(`createImageBitmap`) runs before any upload, so bytes that are not a picture never go up under a picture name: a file
+renamed by this rule alone goes up as the document it arrived as, under its own name, and one named as a picture by its
+own name fails its chip as on main. On the serving side the outcome is the same as an uploader naming a non-image file
+`x.png` by hand, which was always possible: the bytes are served back as `image/png`, `image/jpeg` or `image/webp` with
+`nosniff`, a browser can only try to decode them as an image, and none of the three types runs script. The table is
+frozen and has no prototype, so a type declared as `constructor` or `__proto__` finds nothing in it and the file takes
+`.noext` (review 3647 F7). A File lower-cases its declared type, so those two are the only member names a declared type
+can carry; the test probes exactly those two (review 3670 F4).
 
 ## The clean-up's listing
 
@@ -137,7 +153,8 @@ whole directory (`rm -rf` on it, through `_ws_leaf_remove`). A `.zip` or `.noext
 | Upload gate (`server.ts` `UPLOAD_EXT_RE`, built from `CLIP_EXT_ALT`) | follows the shape, unchanged code; its comment still says "built ONCE from `CLIP_EXTS`" (follow-up) |
 | Stored-name rule (`CLIP_NAME_RE`) | follows the shape |
 | Path pattern (`CLIP_PATH_RE`) | follows the shape, plus the closing look-ahead |
-| Clip route's type (`CLIP_MIME[ext] ?? octet-stream`) | still an allow-list; null prototype |
+| Clip route's type (`CLIP_MIME[ext] ?? octet-stream`) | still an allow-list; null prototype; now in `shared/clipServe.ts`, re-exported by `server/src/clip.ts` |
+| Declared-picture naming (`namedUpload`) | reads the serve table's keys only, to leave a name it knows alone |
 | Picker `accept` (`ATTACH_ACCEPT`) | none |
 | Paste and drop (`isAttachable`) | every file |
 | Thumbnail or chip (`isImageClip`, tray, `MessageBubble`, `PendingBubble`) | unchanged: the four pictures |
@@ -168,18 +185,31 @@ whole directory (`rm -rf` on it, through `_ws_leaf_remove`). A `.zip` or `.noext
   **Measured.** Eleven of them were red on 3fa18201b8 before the fix (every composer case). The pinned numbers, the
   table and the inline types were green there: they pin values that already stood, and the mutants below are their
   proof.
+- Added in the fix round for review 3670: a declared jpeg named `photo.jfif` (also `.jpe`, `.pjpeg`), a declared png
+  named `Screenshot 10.15.32` and a declared webp named `chart.v2`, each named for its picture after the whole name; the
+  same names staged as pictures in the hook, `photo.jfif` under the limit (thumbnail, stem kept) and over it
+  (downscaled, not refused); a picture extension left as it is whatever picture is declared; `notes.md`, `report.pdf`,
+  `data.csv`, `log.txt` and `cfg.yaml` declared as a picture, left as they are; `photo.png` declared as text and other
+  usable names with no picture declared, left as they are; a declared picture that does not decode, staged as the
+  document it arrived as, and refused with its own name when it is over the limit; a picture named as one that does not
+  decode, still failing as on main; a tray one short of full given an oversized file and a picture (the picture stages);
+  the "still that size after shrinking" words. The member-name probe now runs the two names a File can carry
+  (`constructor`, `__proto__`) and pins that a File lower-cases a third. **Measured.** Nine cases were red on
+  1415ff8230 before the fix; the others pin what must not change (a name left alone, the document fallback under the
+  limit, a picture-named file that fails), were green there, and the mutants below are their proof.
 
-## Mutant table (review 3647 F2)
+## Mutant table (review 3647 F2, extended for review 3670)
 
-**Measured** on the code after the fix round: each mutant applied in place to the file named, the test file named run
-through the fleet test runner, and the file restored afterwards. Every row was killed. An equivalent mutant the review
+**Measured** on the code after the second fix round: each mutant applied in place to the file named, the test file
+named run through the fleet test runner, and the file restored afterwards. Every row was killed, rows 1 to 25 re-run
+against this round's code. An equivalent mutant the review
 named (`[^./]` to `[^.]` in `clipExtOf`) is left out: both forms answer the same on every input, because a name whose
 last dot is followed by a slash has no extension either way.
 
 | # | Mutant | File | Killed by |
 |---|---|---|---|
-| 1 | serve table given a prototype | `server/src/clip.ts` | `clip-any-file`: serving `x.constructor` as an opaque download; the table has no prototype |
-| 2 | serve table left unfrozen | `server/src/clip.ts` | `clip-any-file`: the table has no prototype and is frozen |
+| 1 | serve table given a prototype | `shared/clipServe.ts` | `clip-any-file`: serving `x.constructor` as an opaque download; the table has no prototype |
+| 2 | serve table left unfrozen | `shared/clipServe.ts` | `clip-any-file`: the table has no prototype and is frozen |
 | 3 | shape put back to a list | `shared/api.ts` | `clip-any-file`: 25 cases, from storing an archive byte for byte on |
 | 4 | path pattern without its look-ahead | `shared/api.ts` | `compose`: recognises any extension of the stored shape, and nothing else |
 | 5 | raw name tested after lower-casing | `shared/api.ts` | `attach-any-file`: no non-ASCII extension (the Kelvin sign); `.noext` for a name with none |
@@ -197,12 +227,21 @@ last dot is followed by a slash has no extension either way.
 | 17 | the size arm ends the batch | `useAttachImage.ts` | `attach-any-file`: the batch case, the file beside it still staged |
 | 18 | extension length thirteen | `shared/api.ts` | `attach-any-file`: twelve and not thirteen, as numbers |
 | 19 | extension length thirteen | `shared/api.ts` | `clip-any-file`: twelve stored, thirteen refused, as numbers |
-| 20 | PDF dropped from the inline table | `server/src/clip.ts` | `clip`: the table is exactly the fourteen inline types |
+| 20 | PDF dropped from the inline table | `shared/clipServe.ts` | `clip`: the table is exactly the fourteen inline types |
 | 21 | size decided on the raw name | `useAttachImage.ts` | `attach-any-file`: both nameless clipboard picture cases |
 | 22 | declared picture type used only for a nameless file | `useAttachImage.ts` | `attach-any-file`: a declared picture with an unusable name keeps its picture extension |
 | 23 | the composer's type table given a prototype | `useAttachImage.ts` | `attach-any-file`: a type named like an object member finds nothing |
 | 24 | size rounded to the nearest tenth, not up | `useAttachImage.ts` | `attach-any-file`: six cases, the size never said as the limit among them |
 | 25 | the tray's count words not derived | `useAttachImage.ts` | `attach-any-file`: past the fourth file, the words name the limit |
+| 26 | the declared type never overrides a usable extension (the first round's rule) | `useAttachImage.ts` | `attach-any-file`: five cases, `photo.jfif` and `Screenshot 10.15.32` named and staged as pictures among them |
+| 27 | only a picture extension protects a name (the serve table not read) | `useAttachImage.ts` | `attach-any-file`: `notes.md` and the other served documents declared as a picture are left as they are |
+| 28 | the picture extension replaces the name's own instead of following it | `useAttachImage.ts` | `attach-any-file`: four cases, `photo.jfif.jpg` among them |
+| 29 | no fallback to a document when the bytes do not decode | `useAttachImage.ts` | `attach-any-file`: the declared picture that does not decode, under and over the limit |
+| 30 | the fallback taken for every picture, not only one renamed by its type | `useAttachImage.ts` | `attach-any-file`: a file named as a picture that does not decode still fails |
+| 31 | the batch cut to the room before the size refusals | `useAttachImage.ts` | `attach-any-file`: one slot left, the picture beside the oversized file stages; past the fourth file |
+| 32 | the still-over words say the plain size | `useAttachImage.ts` | `attach-any-file`: a picture, named and nameless, still over the limit after its downscale |
+| 33 | the fallback skips the size check | `useAttachImage.ts` | `attach-any-file`: the declared picture over the limit that does not decode is refused with its own name |
+| 34 | the fallback keeps the thumbnail | `useAttachImage.ts` | `attach-any-file`: the fallback document has no preview |
 
 The first round's eleven mutants (worker-only evidence in the review's reading, since they were not in the tree) are
 rows 1, 3, 4, 5, 7, 8, 9, 11, 12, 13 and 14 here, re-run against this round's code.
@@ -213,7 +252,9 @@ rows 1, 3, 4, 5, 7, 8, 9, 11, 12, 13 and 14 here, re-run against this round's co
   that. A `.noext` file, an archive or an office document reaches the session as a path; whether it reads, unpacks or
   converts it is the session's.
 - The phone pickers with no `accept`: iOS is documented to offer the photo library, camera and Files; Android's system
-  chooser offers its image and file sources. Neither was measured on a device in this wave.
+  chooser is documented to offer its image and file sources. Neither was measured on a device in this wave.
+- Real-browser decoding of `.jfif` and the other renamed pictures: jsdom stands in for `createImageBitmap` and the
+  canvas, so the picture lane for them is measured only up to the decode.
 - A dragged FOLDER arrives as a `File` the browser cannot read; it now stages a chip whose upload fails, where before it
   was ignored (it had no extension). Not measured in a browser.
 

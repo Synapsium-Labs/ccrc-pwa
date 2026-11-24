@@ -19,8 +19,9 @@ export interface AttachButtonProps {
    *  rule lives in shared/, which this package may not take a value from.
    *  Since any file attaches, the composer passes none: absent, the input has
    *  no `accept` attribute, so the picker offers every file (on a phone, the
-   *  photo library, the camera and files together) and the composer's own
-   *  limits answer a refusal. Never write a bare `image/*` at a call site: that
+   *  platforms document the photo library, the camera and files together;
+   *  documented, not measured on a device) and the composer's own limits
+   *  answer a refusal. Never write a bare `image/*` at a call site: that
    *  is what greyed every document out of the picker. */
   accept?: string;
   /** Dead session: the whole composer is read-only. */
