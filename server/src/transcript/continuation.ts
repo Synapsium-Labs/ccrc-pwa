@@ -13,8 +13,9 @@
 // WHAT IT BINDS, and how. Every field is under the MAC. The session id is carried in clear (the browser already holds it).
 // The transcript path and the read identity token are carried only as keyed tags (`tag`), so the token never reaches a
 // browser in any form it could compare across files, and the path's tag reveals nothing the backlog frame's `file` does
-// not already say. The cursor (`line-start` or `skip-record`, and its byte offset) and the boundary witness (its offset,
-// length and sha256) are carried in clear, under the MAC: the witness hashes bytes the browser was already sent.
+// not already say. The cursor (`line-start` or `skip-record`, and its byte offset) and the boundary witness's offset and
+// length are carried in clear, under the MAC; the witness's sha256 is carried only as a keyed tag, as the path and the
+// identity are, so nothing derived from the transcript's raw bytes without the key reaches the browser (review 3643).
 //
 // THE ENCODING is lowercase hex only, so no part of it can take a credential shape the stream's masker replaces (base64url
 // of a JSON object begins `eyJ`, the JWT shape's prefix).
@@ -22,14 +23,18 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WITNESS_MAX_BYTES } from './tail.js';
 
 export interface PageCursor { readonly kind: 'line-start' | 'skip-record'; readonly before: number }
+/** The boundary witness the backlog measured: `len` bytes at `at`, and their sha256 (server-side only). */
 export interface PageWitness { readonly at: number; readonly len: number; readonly sha256: string }
-/** A continuation's fields once its MAC verified. `pathTag` and `identTag` are `ContinuationKey.tag` values. */
+/** The witness as a continuation carries it: the hash only as `ContinuationKey.tag('witness', sha256)`. */
+export interface BoundWitness { readonly at: number; readonly len: number; readonly tag: string }
+/** A continuation's fields once its MAC verified. `pathTag`, `identTag` and the witness's `tag` are `ContinuationKey.tag`
+ *  values. */
 export interface OpenedContinuation {
   readonly session: string;
   readonly pathTag: string;
   readonly identTag: string;
   readonly cursor: PageCursor;
-  readonly witness: PageWitness;
+  readonly witness: BoundWitness;
 }
 export type OpenAnswer = { ok: true; value: OpenedContinuation } | { ok: false; reason: 'invalid' | 'expired' };
 
@@ -40,7 +45,6 @@ const SESSION_MAX_CHARS = 256;
 const VERSION = 'c1';
 const SHAPE = /^c1\.([0-9a-f]{16})\.((?:[0-9a-f]{2})+)\.([0-9a-f]{64})$/;
 const TAG = /^[0-9a-f]{32}$/;
-const SHA = /^[0-9a-f]{64}$/;
 
 const safeOffset = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 
@@ -49,18 +53,24 @@ export class ContinuationKey {
   /** Names this key in every continuation it issues, so one from another process reads as `expired`, not `invalid`. */
   readonly keyId = randomBytes(8).toString('hex');
 
-  /** A keyed tag of a path or an identity token: 128 bits of HMAC, domain-separated by `kind`. */
-  tag(kind: 'path' | 'ident', value: string): string {
+  /** A keyed tag of a path, an identity token or a witness hash: 128 bits of HMAC, domain-separated by `kind`. */
+  tag(kind: 'path' | 'ident' | 'witness', value: string): string {
     return createHmac('sha256', this.#key).update(`ccrc-older-${kind}-v1\0${value}`).digest('hex').slice(0, 32);
+  }
+
+  /** Whether `tag` is this key's tag of `value`, compared in constant time; a malformed tag is no match. */
+  matches(kind: 'path' | 'ident' | 'witness', value: string, tag: string): boolean {
+    return TAG.test(tag) && timingSafeEqual(Buffer.from(this.tag(kind, value), 'hex'), Buffer.from(tag, 'hex'));
   }
 
   #mac(body: string): Buffer {
     return createHmac('sha256', this.#key).update(`ccrc-older-page-v1\0${body}`).digest();
   }
 
-  /** A continuation for these facts. `path` and `ident` are tagged here and never appear in it. */
+  /** A continuation for these facts. `path`, `ident` and the witness hash are tagged here and never appear in it. */
   issue(f: { session: string; path: string; ident: string; cursor: PageCursor; witness: PageWitness }): string {
-    return this.#seal({ session: f.session, pathTag: this.tag('path', f.path), identTag: this.tag('ident', f.ident), cursor: f.cursor, witness: f.witness });
+    const witness = { at: f.witness.at, len: f.witness.len, tag: this.tag('witness', f.witness.sha256) };
+    return this.#seal({ session: f.session, pathTag: this.tag('path', f.path), identTag: this.tag('ident', f.ident), cursor: f.cursor, witness });
   }
 
   /** The next continuation of an opened one: every bound field kept, only the cursor moved. */
@@ -72,7 +82,7 @@ export class ContinuationKey {
     const payload = JSON.stringify({
       s: c.session, p: c.pathTag, i: c.identTag,
       c: [c.cursor.kind === 'line-start' ? 'l' : 's', c.cursor.before],
-      w: [c.witness.at, c.witness.len, c.witness.sha256],
+      w: [c.witness.at, c.witness.len, c.witness.tag],
     });
     const body = `${VERSION}.${this.keyId}.${Buffer.from(payload, 'utf8').toString('hex')}`;
     return `${body}.${this.#mac(body).toString('hex')}`;
@@ -97,8 +107,8 @@ export class ContinuationKey {
     if (typeof v.p !== 'string' || !TAG.test(v.p) || typeof v.i !== 'string' || !TAG.test(v.i)) return invalid;
     if (!Array.isArray(v.c) || v.c.length !== 2 || (v.c[0] !== 'l' && v.c[0] !== 's') || !safeOffset(v.c[1])) return invalid;
     if (!Array.isArray(v.w) || v.w.length !== 3 || !safeOffset(v.w[0]) || !safeOffset(v.w[1])) return invalid;
-    const [at, len, sha256] = v.w as [number, number, unknown];
-    if (len < 1 || len > WITNESS_MAX_BYTES || typeof sha256 !== 'string' || !SHA.test(sha256)) return invalid;
+    const [at, len, tag] = v.w as [number, number, unknown];
+    if (len < 1 || len > WITNESS_MAX_BYTES || typeof tag !== 'string' || !TAG.test(tag)) return invalid;
     const before = v.c[1] as number;
     if (before > at) return invalid;
     return {
@@ -106,7 +116,7 @@ export class ContinuationKey {
       value: {
         session: v.s, pathTag: v.p, identTag: v.i,
         cursor: { kind: v.c[0] === 'l' ? 'line-start' : 'skip-record', before },
-        witness: { at, len, sha256 },
+        witness: { at, len, tag },
       },
     };
   }

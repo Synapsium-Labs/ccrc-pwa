@@ -2,8 +2,9 @@
 //
 // A page is served only when the file still measures as the one its continuation was issued for, and every read made for
 // it says so:
-//   - THE WITNESS first: one read of the `len` bytes at the witness offset (the backlog's anchor), hashed and compared. A
-//     file truncated and regrown with other bytes, or replaced, fails here (`changed`).
+//   - THE WITNESS first: one read of the `len` bytes at the witness offset (the backlog's anchor), hashed, and the hash
+//     put to the binding's `witnessOk` (a keyed tag compare). A file truncated and regrown with other bytes, or
+//     replaced, fails here (`changed`).
 //   - THE IDENTITY on every read: each read that answers bytes must carry an identity token, and its tag must equal the
 //     continuation's. A read with none is `unmeasured`; one with another is `changed` (a file replaced by one of the same
 //     size has another inode or birth time, so another token). No read's bytes are used before its token is checked.
@@ -18,7 +19,7 @@ import type { FleetIO, ReadFailure } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
 import { OLDER_RANGE_LIMITS, readOlderRange, type OlderRangeLimits } from './olderRange.js';
 import { parseTranscriptLine } from './parse.js';
-import type { PageCursor, PageWitness } from './continuation.js';
+import type { PageCursor } from './continuation.js';
 
 export interface OlderPageLimits {
   readonly range: OlderRangeLimits;
@@ -39,11 +40,14 @@ export type OlderPageRead =
   | { ok: true; events: ChatEvent[]; gap: boolean; next: { kind: 'start' } | { kind: 'more'; cursor: PageCursor } }
   | { ok: false; reason: 'changed' | ReadFailure | 'unmeasured' };
 
-/** What a page checks every read against. `identOk` answers whether a read's token is the continuation's. `mask` is the
- *  stream's own masker, applied before an event is counted, so the byte cap holds on what is sent. */
+/** What a page checks every read against. `identOk` answers whether a read's token is the continuation's; `witnessOk`
+ *  whether the hash of the `len` bytes re-read at `witness.at` is the one the continuation is bound to (the page asks, it
+ *  never compares). `mask` is the stream's own masker, applied before an event is counted, so the byte cap holds on what
+ *  is sent. */
 export interface OlderPageBinding {
   readonly identOk: (ident: string) => boolean;
-  readonly witness: PageWitness;
+  readonly witness: { readonly at: number; readonly len: number };
+  readonly witnessOk: (sha256: string) => boolean;
   readonly mask: <T>(v: T) => T;
 }
 
@@ -78,7 +82,7 @@ export async function readOlderPage(
   if (identFailure !== null) return { ok: false, reason: identFailure };
   if (!seen.ok) return { ok: false, reason: seen.reason };
   // A short witness read (a file cut inside it) can never hash equal, so the hash alone decides.
-  if (createHash('sha256').update(seen.bytes).digest('hex') !== w.sha256) {
+  if (!bind.witnessOk(createHash('sha256').update(seen.bytes).digest('hex'))) {
     return { ok: false, reason: 'changed' };
   }
 

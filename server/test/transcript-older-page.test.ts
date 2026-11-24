@@ -63,7 +63,10 @@ const bindingOf = (b: BacklogRead): OlderBinding => {
 /** The first page's cursor and checks from a backlog's binding, checking identity against `ident`. */
 const firstPage = (o: OlderBinding, ident = o.ident, mask = noMask) => ({
   cursor: { kind: 'line-start', before: o.anchor } as PageCursor,
-  bind: { identOk: (x: string) => x === ident, witness: { at: o.anchor, ...o.witness }, mask },
+  bind: {
+    identOk: (x: string) => x === ident, witness: { at: o.anchor, len: o.witness.len },
+    witnessOk: (h: string) => h === o.witness.sha256, mask,
+  },
 });
 const okPage = (r: OlderPageRead): Extract<OlderPageRead, { ok: true }> => {
   if (!r.ok) throw new Error(`refused: ${r.reason}`);
@@ -270,6 +273,17 @@ describe('one older page', () => {
     await readOlderPage(m.io, 'f', cursor, bind);
     expect(m.reads[0]).toEqual([b.anchor, b.witness.len]);
     expect(m.reads.filter(([o]) => o === b.anchor)).toHaveLength(1);
+  });
+
+  it('decides nothing about the witness itself: it asks the binding\'s check once, with the hash of the bytes it re-read', async () => {
+    const b = bindingOf(await backlogOf());
+    const { cursor, bind } = firstPage(b);
+    const asked: string[] = [];
+    const no = { ...bind, witnessOk: (h: string) => { asked.push(h); return false; } };
+    const m = memIO(enc.encode(transcript));
+    expect(await readOlderPage(m.io, 'f', cursor, no)).toEqual({ ok: false, reason: 'changed' });
+    expect(asked).toEqual([b.witness.sha256]);
+    expect(m.reads).toHaveLength(1);
   });
 
   it('reaches the start of the file: `start`, never an empty page standing for the end', async () => {

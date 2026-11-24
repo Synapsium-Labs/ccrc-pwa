@@ -1,5 +1,6 @@
 // The older-page continuation's codec (desktop polish wave 171): a value an untrusted client sends back. Every case is
 // synthetic; no file is read.
+import { timingSafeEqual } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { CONTINUATION_MAX_CHARS, ContinuationKey, type OpenedContinuation } from '../src/transcript/continuation.js';
 import { WITNESS_MAX_BYTES } from '../src/transcript/tail.js';
@@ -12,6 +13,12 @@ const facts = {
   cursor: { kind: 'line-start' as const, before: 1000 },
   witness: { at: 1000, len: 64, sha256: SHA },
 };
+
+// Every compare of a tag goes through `timingSafeEqual`; the spy lets a case see that it did (review 3643's witness ruling).
+vi.mock('node:crypto', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:crypto')>();
+  return { ...real, timingSafeEqual: vi.fn(real.timingSafeEqual) };
+});
 
 const opened = (key: ContinuationKey, token: string): OpenedContinuation => {
   const r = key.open(token);
@@ -29,16 +36,30 @@ const withPayload = (token: string, json: string): string => {
 };
 
 describe('the continuation codec', () => {
-  it('round-trips every bound field: the session in clear, the path and identity as keyed tags only', () => {
+  it('round-trips every bound field: the session in clear, the path, identity and witness hash as keyed tags only', () => {
     const key = new ContinuationKey();
     const token = key.issue(facts);
     expect(opened(key, token)).toEqual({
       session: facts.session, pathTag: key.tag('path', PATH), identTag: key.tag('ident', IDENT),
-      cursor: facts.cursor, witness: facts.witness,
+      cursor: facts.cursor, witness: { at: facts.witness.at, len: facts.witness.len, tag: key.tag('witness', SHA) },
     });
-    expect(token).not.toContain(IDENT);
-    expect(Buffer.from(token.split('.')[2]!, 'hex').toString('utf8')).not.toContain(IDENT);
-    expect(Buffer.from(token.split('.')[2]!, 'hex').toString('utf8')).not.toContain(PATH);
+    const payload = Buffer.from(token.split('.')[2]!, 'hex').toString('utf8');
+    for (const raw of [IDENT, PATH, SHA]) {
+      expect(token).not.toContain(raw);
+      expect(payload).not.toContain(raw);
+    }
+  });
+
+  it('a tag matches only its own value, compared in constant time', () => {
+    const key = new ContinuationKey();
+    const tag = key.tag('witness', SHA);
+    vi.mocked(timingSafeEqual).mockClear();
+    expect(key.matches('witness', SHA, tag)).toBe(true);
+    expect(timingSafeEqual).toHaveBeenCalledTimes(1);
+    expect(key.matches('witness', 'c'.repeat(64), tag)).toBe(false);
+    expect(key.matches('ident', SHA, tag)).toBe(false);
+    expect(key.matches('witness', SHA, tag.slice(1))).toBe(false);
+    expect(key.matches('witness', SHA, 'z'.repeat(32))).toBe(false);
   });
 
   it('is lowercase hex and dots only, so no credential shape the masker replaces can appear in it', () => {
@@ -66,7 +87,9 @@ describe('the continuation codec', () => {
     const b = new ContinuationKey();
     expect(a.tag('path', PATH)).not.toBe(b.tag('path', PATH));
     expect(a.tag('ident', IDENT)).not.toBe(b.tag('ident', IDENT));
+    expect(a.tag('witness', SHA)).not.toBe(b.tag('witness', SHA));
     expect(a.tag('path', IDENT)).not.toBe(a.tag('ident', IDENT));   // domain-separated
+    expect(a.tag('witness', IDENT)).not.toBe(a.tag('ident', IDENT));
   });
 });
 
@@ -129,11 +152,21 @@ describe('the continuation codec refuses', () => {
     ['a cursor above the witness', { ...facts, cursor: { kind: 'line-start' as const, before: 1001 } }],
     ['a negative cursor', { ...facts, cursor: { kind: 'line-start' as const, before: -1 } }],
     ['a fractional cursor', { ...facts, cursor: { kind: 'line-start' as const, before: 1.5 } }],
-    ['a malformed witness hash', { ...facts, witness: { ...facts.witness, sha256: 'z'.repeat(64) } }],
     ['an empty session', { ...facts, session: '' }],
     ['an overlong session', { ...facts, session: 's'.repeat(257) }],
   ] as const)('a correctly signed token with out-of-bounds fields (%s) is invalid', (_label, f) => {
     const key = new ContinuationKey();
     expect(key.open(key.issue(f))).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  // `reissue` seals an opened continuation's fields as they are, so it signs a witness field no `issue` would write.
+  it.each([
+    ['the plain hash', SHA],
+    ['a malformed tag', 'z'.repeat(32)],
+    ['a short tag', 'b'.repeat(31)],
+  ])('a correctly signed token whose witness field is %s is invalid', (_label, field) => {
+    const key = new ContinuationKey();
+    const c = opened(key, key.issue(facts));
+    expect(key.open(key.reissue({ ...c, witness: { ...c.witness, tag: field } }, c.cursor))).toEqual({ ok: false, reason: 'invalid' });
   });
 });

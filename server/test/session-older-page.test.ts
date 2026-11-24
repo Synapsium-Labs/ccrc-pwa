@@ -276,16 +276,31 @@ describe('an older page over the stream', () => {
     expect(answers(s.frames)).toEqual([]);
   });
 
-  it('a file replaced under the stream (another identity, same path) reads `changed` before any read', async () => {
+  it('a file replaced under the stream (another identity, same path, same bytes) reads `changed` at the page\'s first read', async () => {
     const s = await open(transcriptOf(120));
     const [b] = backlogs(s.frames);
     // The stream's own backlog measured TOKEN_A; a replacement measures TOKEN_B on the next backlog. Without a new backlog
-    // the stream still serves TOKEN_A, so a page's reads (now TOKEN_B) refuse.
+    // the stream still serves TOKEN_A, so the page's first read, the witness read (now TOKEN_B), refuses on its identity:
+    // the bytes are the same, so the witness hash alone would not.
     const tmp = `${s.fileA}.new`;
     writeFileSync(tmp, transcriptOf(120));
     renameSync(tmp, s.fileA);
     s.tokens.of = () => TOKEN_B;
+    const before = s.reads.length;
     expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed' });
+    expect(s.reads.length - before).toBe(1);
+  });
+
+  it('the bytes at the anchor rewritten in place (same identity, same length) read `changed` at the witness, a read later', async () => {
+    const s = await open(transcriptOf(120));
+    const [b] = backlogs(s.frames);
+    const text = transcriptOf(120);
+    const rewritten = text.replace('"message 70"', '"massage 70"');
+    expect(rewritten).not.toBe(text);
+    writeFileSync(s.fileA, rewritten);
+    const before = s.reads.length;
+    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed' });
+    expect(s.reads.length - before).toBe(1);
   });
 
   it('a resumed stream (no backlog, no measured identity) checks the identity on every read of the page', async () => {

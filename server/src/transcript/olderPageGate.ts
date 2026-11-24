@@ -57,14 +57,18 @@ export function gateOlderPage(
   if (c.session !== session) return no('invalid');
   if (serving === null) return no('unmeasured');
   if (serving.state !== 'ok') return no(serving.state);
-  if (c.pathTag !== key.tag('path', serving.file)) return no('changed');
-  if (serving.ident !== null && c.identTag !== key.tag('ident', serving.ident)) return no('changed');
+  if (!key.matches('path', serving.file, c.pathTag)) return no('changed');
+  if (serving.ident !== null && !key.matches('ident', serving.ident, c.identTag)) return no('changed');
   return { go: true, file: serving.file, c };
 }
 
-/** What every read of the page is checked against: the continuation's identity tag and witness, and the stream's masker. */
+/** What every read of the page is checked against: the continuation's identity and witness tags, each compared in constant
+ *  time under the key, and the stream's masker. */
 export function pageBinding(key: ContinuationKey, c: OpenedContinuation, mask: <T>(v: T) => T): OlderPageBinding {
-  return { identOk: (ident) => key.tag('ident', ident) === c.identTag, witness: c.witness, mask };
+  return {
+    identOk: (ident) => key.matches('ident', ident, c.identTag), witness: { at: c.witness.at, len: c.witness.len },
+    witnessOk: (sha256) => key.matches('witness', sha256, c.witness.tag), mask,
+  };
 }
 
 /** The frame a finished page answers: a refusal's word, `start`, or `more` with the next continuation (every bound field
