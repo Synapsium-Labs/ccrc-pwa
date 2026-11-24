@@ -1,7 +1,7 @@
 // The Docs tab rule at every caller (desktop polish wave 174; the rule is `opensNewTab`, `lib/docTab.ts`). At a desk a link
 // from the console to a document is a real anchor with `target="_blank"` and no in-app click handler, so the browser opens
 // the tab; below the desk width it is the same anchor with no target, and a plain click moves within the app. A link that is
-// not to a document is unchanged at every width. Controls that are not anchors go through `followLink`. Neutral names only.
+// not to a document is unchanged at every width. Controls that are not anchors go through `useFollowLink`. Neutral names only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -15,6 +15,7 @@ import { RunDetailScreen } from '../src/screens/RunDetailScreen';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { PlaceDoor } from '../src/skins/DoorLink';
 import { ScreenFallback } from '../src/components/RenderBoundary';
+import { DocsTabContext } from '../src/lib/useTabLink';
 import { DOOR_EVENT } from '../src/command/door';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
@@ -75,7 +76,8 @@ afterEach(() => {
 function expectDeskDoc(link: HTMLElement, href: string): void {
   expect(link).toHaveAttribute('href', href);
   expect(link).toHaveAttribute('target', '_blank');
-  expect(link).toHaveAttribute('rel', 'noopener');
+  // The primitive's stated rel, in full (fix round 1, A2): no opener and no referrer.
+  expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   const before = here();
   fireEvent.click(link);
   expect(here(), 'the app does not move: the browser opens the tab').toBe(before);
@@ -249,11 +251,14 @@ describe('the session menu’s Docs item', () => {
     onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(), onChangeEffort: vi.fn(),
     onMoveAccount: vi.fn(), onArchive: vi.fn(), onRestore: vi.fn(), onOpenHistory: vi.fn(), onReapWorkspace: vi.fn(), roster: [],
   });
-  it('at a desk is a new-tab anchor and the menu closes', () => {
+  it('at a desk is a new-tab anchor, a plain click opens the tab, and the menu closes', () => {
     stubWidth(true);
     render(<SessionHeaderHost {...props()} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expectDeskDoc(screen.getByRole('link', { name: 'Docs' }), HREF);
+    // The plain click runs the item's command, which opens exactly one tab (fix round 1, A8).
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(HREF, '_blank', 'noopener,noreferrer');
     expect(screen.queryByRole('link', { name: 'Docs' })).toBeNull();
   });
   it('on a phone moves within the app and the menu closes', () => {
@@ -292,7 +297,7 @@ describe('the whole app at a desk', () => {
     mountApp();
     act(() => { window.dispatchEvent(new CustomEvent<string>(DOOR_EVENT, { detail: 'go-docs' })); });
     expect(open).toHaveBeenCalledTimes(1);
-    expect(open).toHaveBeenCalledWith('/docs', '_blank', 'noopener');
+    expect(open).toHaveBeenCalledWith('/docs', '_blank', 'noopener,noreferrer');
     expect(location.pathname).toBe('/fleet');
   });
   it.each([['Refined', REFINED], ['Instrument', INSTRUMENT]])('%s: the top bar’s Docs place is a new-tab link, its Runs place a button', (_n, skin) => {
@@ -311,16 +316,33 @@ describe('the whole app at a desk', () => {
   });
 });
 
-describe('ScreenFallback: Back to the fleet', () => {
-  it('in a Docs tab at a desk opens the fleet in a new tab and leaves the location alone', () => {
-    stubWidth(true);
+// A failed render in a Docs tab (fix round 1, A1): its way out is the tab bar's own link back, to the console's root, by the
+// same rule: a new tab at a desk, named so; a move in place below it. In the console it is the move it always was.
+describe('ScreenFallback: the way out', () => {
+  function inDocsTab(): void {
     history.replaceState(null, '', '/docs/project-a');
-    render(<ScreenFallback />);
-    fireEvent.click(screen.getByRole('button', { name: 'Back to the fleet' }));
-    expect(open).toHaveBeenCalledWith('/fleet', '_blank', 'noopener');
+    render(<DocsTabContext value={true}><ScreenFallback /></DocsTabContext>);
+  }
+  it('in a Docs tab at a desk is the link back: it opens the console in a new tab and says so', () => {
+    stubWidth(true);
+    inDocsTab();
+    const link = screen.getByRole('link', { name: 'Back to the console, opens in a new tab' });
+    expect(link).toHaveAttribute('href', '/');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.queryByRole('button', { name: 'Back to the fleet' })).toBeNull();
+    fireEvent.click(link);
     expect(location.pathname).toBe('/docs/project-a');
   });
-  it('in the console at a desk moves in-app', () => {
+  it('in a narrow Docs tab is the link back, which moves in place', () => {
+    stubWidth(false);
+    inDocsTab();
+    const link = screen.getByRole('link', { name: 'Back to the console' });
+    expect(link).not.toHaveAttribute('target');
+    fireEvent.click(link);
+    expect(location.pathname).toBe('/');
+  });
+  it('in the console at a desk is Back to the fleet, which moves in-app', () => {
     stubWidth(true);
     history.replaceState(null, '', '/runs');
     render(<ScreenFallback />);

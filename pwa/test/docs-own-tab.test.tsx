@@ -1,8 +1,9 @@
 // A Docs tab (desktop polish wave 174): at a desk a Docs route draws the reader alone, in both skins, and is quiet. It
 // mounts no fleet column, accounts strip or top bar, no toast host, badge, fleet sheets, palette or splash, opens no fleet
 // stream and asks nothing but the Docs API; the sign-in and block screens still draw there. Its title names the document,
-// and its one link back opens the console in a new tab. A phone keeps the Docs screen inside the console, characterised
-// below as it is on main.
+// and its one link back opens the console in a new tab. Below the desk width a tab that has shown only Docs pages since it
+// loaded stays a Docs tab (fix round 1, L1), while a phone that moves to Docs inside the console keeps the console's Docs
+// screen, characterised below as it is on main.
 //
 // The reader is the real `DocsScreen`. Every request the page makes is recorded by a stub `fetch` that answers 503 (so no
 // 401 raises the sign-in screen by accident) and a stub `WebSocket` that records the address it was opened on.
@@ -17,9 +18,14 @@
 //   the title effect ................................. "titles the tab with the document" / "gives the console its title back"
 //   `ConsoleLink` through `useTabLink` ............... "its one link back opens the console in a new tab"
 //   LoginScreen / BlockScreen kept in the branch ..... "still draws the sign-in screen and the block screen"
+//   `docsOnly` in `App` (the fold, L1) ............... "narrowed below the desk width and widened again, it stays a Docs tab"
+//                                                      and "a Docs address loaded first at a phone width draws the reader alone"
+//   the fold's fall in `App` ......................... "… and its link back moves in place" (the tab is the console after)
+//   `disconnect()` when a tab becomes a Docs tab ..... "a console widened while it shows a Docs page … closes its fleet stream"
+//   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 
 /** What the console's chrome mounted, by name: each mocked module below records its own mount. */
@@ -59,13 +65,32 @@ const { clearAuthLost, raiseAuthLost } = await import('../src/lib/auth');
 
 const DOC = '/docs/project-a/specs/2026-11-18-native-docs-parity-design.md';
 
-/** A desk (or not) with a fine pointer: `(min-width: 900px)` answers `desk`. */
+/** The window's width class now, and the desk query's listeners, so a case can resize the window under a mounted app. */
+let deskWide = false;
+const deskListeners = new Set<() => void>();
+
+/** A desk (or not) with a fine pointer: `(min-width: 900px)` answers `desk`, live, so `resize` moves it. */
 function stubWidth(desk: boolean): void {
-  vi.stubGlobal('matchMedia', (q: string) => ({
-    matches: q.includes('min-width: 900px') ? desk : q.includes('pointer: fine'),
-    media: q, onchange: null,
-    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
-  }));
+  deskWide = desk;
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const isDesk = q.includes('min-width: 900px');
+    return {
+      get matches(): boolean { return isDesk ? deskWide : q.includes('pointer: fine'); },
+      media: q, onchange: null,
+      addEventListener(_t: string, cb: () => void) { if (isDesk) deskListeners.add(cb); },
+      removeEventListener(_t: string, cb: () => void) { deskListeners.delete(cb); },
+      addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+/** Resize the window across the desk width, then let the effects that follow run. */
+async function resize(desk: boolean): Promise<void> {
+  await act(async () => {
+    deskWide = desk;
+    for (const cb of [...deskListeners]) cb();
+    await new Promise((r) => setTimeout(r, 30));
+  });
 }
 
 /** Every request and socket the page opened, in order. */
@@ -75,9 +100,11 @@ let sockets: string[] = [];
 /** A socket that records where it was opened and never connects. */
 class RecordingSocket extends EventTarget {
   static readonly CONNECTING = 0; static readonly OPEN = 1; static readonly CLOSING = 2; static readonly CLOSED = 3;
+  /** Every socket opened in this case, so a case can ask whether each was closed. */
+  static opened: RecordingSocket[] = [];
   readyState = 0;
   readonly url: string;
-  constructor(url: string) { super(); this.url = url; sockets.push(url); }
+  constructor(url: string) { super(); this.url = url; sockets.push(url); RecordingSocket.opened.push(this); }
   send(): void {}
   close(): void { this.readyState = 3; }
 }
@@ -103,6 +130,8 @@ beforeEach(() => {
   preloaded.session = 0;
   requests = [];
   sockets = [];
+  RecordingSocket.opened = [];
+  deskListeners.clear();
   localStorage.clear();
   document.documentElement.removeAttribute('data-skin');
   document.title = 'ccrc';
@@ -119,6 +148,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   act(() => { clearAuthLost(); });
+  // The fleet store is one per module: a stream one case opened must not stand in for the next case's.
+  act(() => { useFleetStore.getState().disconnect(); });
   navigate('/fleet');
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
   act(() => { setSkin(REFINED); });
@@ -165,7 +196,7 @@ describe('a Docs tab draws the reader alone', () => {
         const back = within(bar).getByRole('link', { name: 'Console, opens in a new tab' });
         expect(back).toHaveAttribute('href', '/');
         expect(back).toHaveAttribute('target', '_blank');
-        expect(back).toHaveAttribute('rel', 'noopener');
+        expect(back).toHaveAttribute('rel', 'noopener noreferrer');
         expect(within(bar).getAllByRole('link')).toHaveLength(1);
         // Outside the reader's head, whose action row is the reader's own.
         expect(back.closest('.docs-head')).toBeNull();
@@ -192,11 +223,12 @@ describe('a Docs tab draws the reader alone', () => {
         expect(document.querySelector('.toast-host')).toBeNull();
       });
 
-      it('opens no fleet stream and asks only the Docs API', async () => {
+      it('opens no fleet stream and asks only the Docs API: one read in its first 1.5 s', async () => {
         await mount(DOC);
+        await act(async () => { await new Promise((r) => setTimeout(r, 1500)); });
         expect(sockets).toEqual([]);
-        expect(requests.length).toBeGreaterThan(0);
-        expect(requests.map(pathOf).filter((p) => !p.startsWith('/api/docs/'))).toEqual([]);
+        expect(requests.map(pathOf)).toHaveLength(1);
+        expect(requests.map(pathOf)[0]).toMatch(/^\/api\/docs\//);
       });
 
       it('loads no session screen', async () => {
@@ -237,13 +269,63 @@ describe('the console at a desk, for comparison', () => {
   });
 });
 
-// A phone keeps the Docs screen inside the console (this wave changes no phone width): characterised on main first.
-describe('a Docs route on a phone, unchanged', () => {
+// A DOCS TAB AT ANY WIDTH (fix round 1, the coordinator's ruling L1): a tab whose first page was a Docs address, and which
+// has shown nothing but Docs pages since, stays a Docs tab below the desk width too, so a document read in a half-width
+// window beside a session never turns into the console. Resizing never flips it, never remounts the reader and never opens a
+// fleet stream. In-app navigation to Docs at a phone width is the console's Docs screen, as before.
+describe('a Docs tab at any width', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
-    it(`in ${skin} it is the console's Docs screen, with the fleet stream and the console's chrome`, async () => {
+    it(`in ${skin}, narrowed below the desk width and widened again, it stays a Docs tab with the same reader`, async () => {
+      act(() => { setSkin(skin); });
+      stubWidth(true);
+      await mount(DOC);
+      const reader = document.querySelector('.docs-screen');
+      expect(reader).not.toBeNull();
+      const title = document.title;
+      for (const desk of [false, true]) {
+        await resize(desk);
+        expect(shell()).toHaveAttribute('data-tab', 'docs');
+        expect(shell().querySelector('.shell-nav')).toBeNull();
+        expect(shell().querySelector('.shell-phone-nav')).toBeNull();
+        expect(document.querySelector('.docs-screen'), 'the reader is the same element: never remounted').toBe(reader);
+        expect(sockets).toEqual([]);
+        expect([...mounted]).toEqual([]);
+        expect(document.title).toBe(title);
+      }
+    });
+
+    it(`in ${skin}, a Docs address loaded first at a phone width draws the reader alone, and its link back moves in place`, async () => {
       act(() => { setSkin(skin); });
       stubWidth(false);
       await mount(DOC);
+      expect(shell()).toHaveAttribute('data-tab', 'docs');
+      expect(shell().querySelector('.shell-nav')).toBeNull();
+      expect(shell().querySelector('.shell-phone-nav')).toBeNull();
+      expect(screen.getByRole('main').querySelector('.docs-screen')).not.toBeNull();
+      expect(sockets).toEqual([]);
+      expect([...mounted]).toEqual([]);
+      expect(document.title).toBe('2026-11-18-native-docs-parity-design.md · project-a · Docs · ccrc');
+      const bar = document.querySelector<HTMLElement>('header.shell-tab-bar')!;
+      const back = within(bar).getByRole('link', { name: 'Console' });
+      expect(back).toHaveAttribute('href', '/');
+      expect(back).not.toHaveAttribute('target');
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      await act(async () => { fireEvent.click(back); await new Promise((r) => setTimeout(r, 30)); });
+      expect(open).not.toHaveBeenCalled();
+      // The console's root, which the home then replaces with its place (the fleet's here).
+      expect(['/', '/fleet']).toContain(location.pathname);
+      // It left Docs, so it is the console now, and stays the console when it comes back to a document.
+      expect(shell()).not.toHaveAttribute('data-tab');
+      await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+      expect(shell()).not.toHaveAttribute('data-tab');
+    });
+
+    // Characterised on main first: in-app navigation to Docs at a phone width is unchanged.
+    it(`in ${skin}, in-app navigation to Docs at a phone width is the console's Docs screen, as before`, async () => {
+      act(() => { setSkin(skin); });
+      stubWidth(false);
+      await mount('/fleet');
+      await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
       expect(shell()).not.toHaveAttribute('data-tab');
       expect(shell().className).not.toBe('app-shell');
       expect(shell().querySelector('.shell-tab-bar')).toBeNull();
@@ -256,4 +338,39 @@ describe('a Docs route on a phone, unchanged', () => {
       expect(document.title).toBe('ccrc');
     });
   }
+
+  it('a console widened while it shows a Docs page becomes a Docs tab and closes its fleet stream; narrowed, it is the console again', async () => {
+    stubWidth(false);
+    await mount('/fleet');
+    await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+    expect(sockets.length).toBeGreaterThan(0);
+    await resize(true);
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    expect(RecordingSocket.opened.length).toBeGreaterThan(0);
+    expect(RecordingSocket.opened.every((w) => w.readyState === RecordingSocket.CLOSED), 'no fleet socket stays open in a Docs tab').toBe(true);
+    const before = sockets.length;
+    await act(async () => { await new Promise((r) => setTimeout(r, 1000)); });
+    expect(sockets.length, 'and none reopens').toBe(before);
+    await resize(false);
+    expect(shell()).not.toHaveAttribute('data-tab');
+    expect(sockets.length, 'the console connects again').toBeGreaterThan(before);
+  });
+});
+
+// THE READER'S BACK AT THE INDEX (fix round 1, F1): its up door goes to the fleet, so in a Docs tab at a desk it opens the
+// console in a new tab, by the same rule as every other link, and never draws the console here.
+describe('the reader’s Back at the Docs index', () => {
+  it('in a Docs tab at a desk opens the console in a new tab and leaves this tab a Docs tab', async () => {
+    stubWidth(true);
+    await mount('/docs');
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls[0]![0]).toBe('/fleet');
+    expect(open.mock.calls[0]![1]).toBe('_blank');
+    expect(location.pathname).toBe('/docs');
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    expect(sockets).toEqual([]);
+    expect([...mounted]).toEqual([]);
+  });
 });

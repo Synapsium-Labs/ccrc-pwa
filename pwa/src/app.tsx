@@ -16,20 +16,22 @@
 // screens and the toasts — is the same element in both skins, so a switch
 // remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { Splash } from './face/SplashScreen';
 import { AppBadge } from './face/AppBadge';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
-import { TextLink, ToastHost, useDesk } from '@ccrc/ui';
+import { ToastHost, useDesk } from '@ccrc/ui';
 import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
-import { CONSOLE_PATH, NEW_TAB_WORDS, docsTabTitle, isDocsTab } from './lib/docTab';
-import { DocsTabContext, useTabLink } from './lib/useTabLink';
+import { ConsoleLink } from './components/ConsoleLink';
+import { docsTabTitle } from './docs/docsTabTitle';
+import { isDocsTab, keepsDocsOnly } from './lib/docTab';
+import { DocsTabContext } from './lib/useTabLink';
 import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
@@ -74,20 +76,6 @@ function ShellCommands(): ReactNode {
   return <CommandLayer openNewSession={useFleetFlows().openNewSession} />;
 }
 
-/** A Docs tab's one link back to the console (desktop polish wave 174): it opens the console in a new tab, by the tab
- *  rule (`useTabLink`), and never draws the console here. It sits in the frame's tab bar, outside the reader's head, whose
- *  action row is the reader's own. */
-function ConsoleLink(): ReactNode {
-  const link = useTabLink();
-  return (
-    // The name is spelled whole (it starts with the word shown, so a voice user saying what they see reaches it): a
-    // visually hidden span would put a space before its comma in Chrome's name ("Console , opens…").
-    <TextLink {...link(CONSOLE_PATH)} aria-label={'Console' + NEW_TAB_WORDS} className="shell-tab-console">
-      Console<span aria-hidden="true">{' ↗'}</span>
-    </TextLink>
-  );
-}
-
 /** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
 function ArchiveRoute(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
@@ -98,13 +86,19 @@ function ArchiveRoute(): ReactNode {
 
 export function App(): ReactNode {
   const { path, search } = useLocation();
-  // A DOCS TAB (desktop polish wave 174, `lib/docTab.ts`): a Docs route at a desk draws the reader alone and is quiet. It
-  // opens no fleet stream, starts no Overlord poll, loads no session chunk and mounts none of the console's chrome (its
-  // polls and sheets, the palette and the global keys, the badge, the toasts, the splash); the sign-in and block screens
-  // stay. Asked live, with the shell's desk test, so a phone keeps the Docs screen inside the console as before, and a Docs
-  // tab narrowed below 900 becomes the console (its tree is the console's, so the reader mounts again there).
+  // A DOCS TAB (desktop polish wave 174, `lib/docTab.ts`): it draws the reader alone and is quiet. It opens no fleet
+  // stream, starts no Overlord poll, loads no session chunk and mounts none of the console's chrome (its polls and sheets,
+  // the palette and the global keys, the badge, the toasts, the splash); the sign-in and block screens stay. A Docs page is
+  // one at a desk, asked live with the shell's desk test; below the desk width it is one while this tab has shown only
+  // Docs pages since it loaded (`docsOnly`, the fold `keepsDocsOnly` over every page, fix round 1 L1), so resizing a Docs
+  // tab never turns it into the console or remounts its reader, and a phone that moves to Docs inside the console keeps the
+  // console's Docs screen. A console widened while it shows a Docs page becomes a Docs tab (its reader mounts again there,
+  // and its fleet stream closes); narrowed again, it is the console.
   const desk = useDesk();
-  const docsTab = isDocsTab(path, desk);
+  const [docsOnly, setDocsOnly] = useState(() => keepsDocsOnly(true, path));
+  // Adjusted while rendering, React's own pattern for state that follows a prop: it only ever falls, once.
+  if (docsOnly && !keepsDocsOnly(docsOnly, path)) setDocsOnly(false);
+  const docsTab = isDocsTab(path, desk, keepsDocsOnly(docsOnly, path));
   // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
   // paint, and once loaded the first open draws it in the first commit, with no loading line (reviews 1464 F4 and 1473
   // F3). The entry's imports are unchanged.
@@ -113,7 +107,12 @@ export function App(): ReactNode {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
     // dialog badges. connect() is idempotent; the socket survives navigation.
-    if (!docsTab) useFleetStore.getState().connect();
+    // A Docs tab holds none: a console that becomes one (widened on a Docs
+    // page) closes the stream it opened, and connects again when it is the
+    // console once more (fix round 1 L1). `disconnect()` with no stream open
+    // closes nothing, so a Docs tab from its first page asks it harmlessly.
+    if (docsTab) useFleetStore.getState().disconnect();
+    else useFleetStore.getState().connect();
   }, [docsTab]);
   // The Overlord's reads (Overlord W1 home, Task 2): one store, started once at the shell, so the bars, the home route and the
   // place read one answer. Its stop ends the poll when the shell unmounts.
@@ -287,7 +286,7 @@ export function App(): ReactNode {
       <DocsTabContext value={true}>
         {authLost && <LoginScreen />}
         {blocked && <BlockScreen />}
-        <ShellFrame set={set} view={view} detailRef={detail} alone={<ConsoleLink />}>
+        <ShellFrame set={set} view={view} detailRef={detail} alone={<ConsoleLink label="Console" className="shell-tab-console" />}>
           <RenderBoundary where="detail" resetKey={path + search} fallback={(e) => <ScreenFallback error={e} />}>{ladder}</RenderBoundary>
         </ShellFrame>
       </DocsTabContext>

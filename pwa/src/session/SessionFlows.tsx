@@ -20,8 +20,7 @@ import { RENEW_NOW_RECORDED_TEXT, RENEW_NOW_SHADOW_TEXT, renewNowText } from '..
 import { commandDoor } from '../command/door';
 import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
-import { followLink } from '../lib/router';
-import { useTabLink } from '../lib/useTabLink';
+import { useFollowLink, useTabLink } from '../lib/useTabLink';
 import { PrSheet } from './PrSheet';
 import { hasPrCap } from './prCap';
 import { sessionMenu, type SessionMenuEntry } from './sessionMenu';
@@ -71,7 +70,7 @@ function MenuItem({ entry, hint }: { entry: SessionMenuEntry; hint?: ReactNode }
 /** The Docs item (docs design 4.8): a link, not a button, so it is an anchor wearing the row, at the session's Docs address,
  *  with the Docs tab rule's props (`useTabLink`, desktop polish wave 174), so the browser's middle click, copy link and context
  *  menu work on it. A plain click runs its registry command, `session-docs`, as every item of this menu does (the palette runs
- *  the same one): the menu closes and `followLink` asks the same rule, a Docs tab of its own at a desk and an in-app move
+ *  the same one): the menu closes and `useFollowLink` asks the same rule, a Docs tab of its own at a desk and an in-app move
  *  below one. A modified or middle click is the browser's. */
 function DocsMenuItem({ entry, docs, hint }: {
   entry: SessionMenuEntry; docs: NonNullable<SessionMenuEntry['docs']>; hint?: ReactNode;
@@ -145,8 +144,9 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
   const entries = sessionMenu(session);
 
   // Read at run time, never closed over: the layer may run a command a render after this host last published.
-  const latest = useRef({ entries, actions, session });
-  latest.current = { entries, actions, session };
+  const follow = useFollowLink();
+  const latest = useRef({ entries, actions, session, follow });
+  latest.current = { entries, actions, session, follow };
 
   const [doors] = useState<SessionFlowDoors>(() => ({
     openMenu: () => setMenuOpen(true),
@@ -164,7 +164,7 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
       // THE GATE IS ASKED AGAIN HERE, at the moment it runs: a palette list ranked a frame before a substrate fault
       // arrived must not reach a swap (whose sheet has no gate of its own) through a stale row.
       if (!offers(id)) return;
-      const { entries: now, actions: act } = latest.current;
+      const { entries: now, actions: act, follow: go } = latest.current;
       // Menu taps close the sheet first so the follow-up surface (swap sheet, archive sheet, arriving model dialog)
       // never fights it for the bottom edge.
       setMenuOpen(false);
@@ -176,7 +176,7 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
         case 'session-docs': {
           const href = now.find((e) => e.id === 'session-docs')?.docs?.href;
           // The palette's "Open this session's docs" (the menu's own item is a link, `DocsMenuItem`): the Docs tab rule.
-          if (href !== undefined) followLink(href);
+          if (href !== undefined) go(href);
           break;
         }
         case 'session-swap': act.moveAccount(); break;

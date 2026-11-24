@@ -558,12 +558,21 @@
 }
 
 /* ---- A Docs tab: the reader alone (desktop polish wave 174) -------------
- * At a desk a document opens in a browser tab of its own (`lib/docTab.ts`), and the frame draws the reader alone
- * (`ShellFrame`'s `alone`): the skip link, this bar with its one link back to the console, and the detail pane. No skin
- * frame class is on the shell then, so the desk grid below is the whole of its layout: one column the full width, the bar's
- * row, then the pane, which keeps the desk's own scroll region (`.shell-detail` above). Below 900 a Docs route is the
- * console's, as before, so nothing here applies there. The bar's ground and edge are the desk header's own
- * (`.shell-accounts`), so nothing here is a new contrast identity. */
+ * A Docs tab (`lib/docTab.ts`, `isDocsTab`: a Docs page at a desk, and below it a tab that has shown only Docs pages since
+ * it loaded) draws the reader alone (`ShellFrame`'s `alone`): the skip link, this bar with its one link back to the
+ * console, and the detail pane. No skin frame class is on the shell then. The bar is the same at every width; its ground
+ * and edge are the desk header's own (`.shell-accounts`), so nothing here is a new contrast identity. At a desk the shell's
+ * grid is one column the full width, the bar's row, then the pane, which keeps the desk's own scroll region
+ * (`.shell-detail` above); below it the bar and the pane stack, and the page scrolls, as the phone's detail pane does. */
+.app-shell[data-tab='docs'] > .shell-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-4);
+  border-bottom: 1px solid var(--edge-subtle);
+  background: var(--bg-surface);
+}
 @media (min-width: 900px) {
   .app-shell[data-tab='docs'] {
     grid-template-columns: minmax(0, 1fr);
@@ -571,23 +580,13 @@
   .app-shell[data-tab='docs'] > .shell-tab-bar {
     grid-column: 1;
     grid-row: 1;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    min-width: 0;
-    padding: var(--sp-1) var(--sp-4);
-    border-bottom: 1px solid var(--edge-subtle);
-    background: var(--bg-surface);
   }
   .app-shell[data-tab='docs'] > .shell-detail {
     grid-column: 1;
     grid-row: 2;
   }
 }
-/* The link back: a text link one tap tall, so a touch laptop reaches it as it reaches every other control. */
+/* The link back: the ghost anchor (`ConsoleLink`) brings the tap floor; its arrow sits one step from its word. */
 .shell-tab-console {
-  display: inline-flex;
-  align-items: center;
   gap: var(--sp-1);
-  min-height: var(--tap-min);
 }
