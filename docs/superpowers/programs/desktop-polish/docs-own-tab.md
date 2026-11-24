@@ -103,7 +103,9 @@ back, the Docs screen inside the console, sideways scroll 0, title `ccrc`.
 Each mutant measured red by this wave (a scratch driver that edits one committed file, runs the suite, restores it):
 the Docs tab branch in `App`, the frame's no-parts and no-frame-class, the gated fleet connect, Overlord start and session
 preload, the title effect and its restore, the sign-in and block screens in the branch, the context's `true`, the rule's
-desk test, its crossing test, its path cut, its in-app refusal, `followLink`'s new tab and its tab kind. One survivor, a
+desk test, its crossing test, its path cut, its in-app refusal, `followLink`'s new tab and its tab kind; on the callers'
+side, `useTabLink` never opening a tab, `PlaceDoor` always a button, the command layer and the fallback moving in-app, and
+the sheet row and the menu item not closing what they sit in (all red in `docs-tab-links.test.tsx`). One survivor, a
 refusal in `isDocsHref` that the route's pattern already made, was removed rather than kept as dead code.
 
 ## 8. Unmeasured, and known limits
