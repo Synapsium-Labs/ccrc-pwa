@@ -56,13 +56,13 @@ async function makeApp(): Promise<{ app: FastifyInstance; home: string; clipsDir
   return { app, home, clipsDir: cfg.clipsDir };
 }
 
-const form = (name: string, bytes: Uint8Array | string, type = '') => {
+const form = (name: string, bytes: Uint8Array<ArrayBuffer> | string, type = '') => {
   const f = new FormData();
   f.append('file', new Blob([bytes], { type }), name);
   return f;
 };
 
-const upload = (app: FastifyInstance, name: string, bytes: Uint8Array | string = 'x', type = '') =>
+const upload = (app: FastifyInstance, name: string, bytes: Uint8Array<ArrayBuffer> | string = 'x', type = '') =>
   app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form(name, bytes, type) });
 
 type Clip = { path: string; name: string; bytes: number };
@@ -236,7 +236,7 @@ describe('nothing stored is executable', () => {
 });
 
 describe('serving back stays an allow-list', () => {
-  const served = async (name: string, body: string | Uint8Array) => {
+  const served = async (name: string, body: string | Uint8Array<ArrayBuffer>) => {
     const { app } = await makeApp();
     const clip = (await upload(app, name, body)).json().clip as Clip;
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${clip.name}` });
