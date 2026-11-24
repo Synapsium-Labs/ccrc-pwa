@@ -102,7 +102,7 @@ describe('the store: three states per group, default shadow', () => {
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
     // as 54 (100, the replay quiz run's state and counts, goes with continuity_quiz_runs), so the reopen replays
-    // all seventy-one (54 through 124).
+    // all seventy-two (54 through 125).
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamCallId; ALTER TABLE project_linking DROP COLUMN teamSuggestions; ALTER TABLE project_linking DROP COLUMN teamWorkspace; ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;
