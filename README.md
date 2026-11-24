@@ -6100,7 +6100,7 @@ merge, not prevented: `cd server && ./node_modules/.bin/vitest run test/deviatio
 fetch) compares this branch's definitions against the base's without merging and, for a number of 10000 or
 more, reds on one defined with two different subjects across all three directories (a mirrored entry or a
 renamed file is one deviation; below 10000 the older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
-The allocator retired the same day: `POST /api/ledger/deviations` is removed (a call answers 404), and the watcher no longer runs the ledger sweeps.
+The allocator retired the same day: `POST /api/ledger/deviations` is gone (404, or 401 behind an armed sign-in gate), and the watcher no longer runs the ledger sweeps.
 `GET /api/ledger?project=<p>` (box token) still reads the numbers it issued; it stays as the box-token proof door of `ccrc token sync`.
 
 **The stall watch.** A watcher lane, `sweepStalls` (every 60 s, its verdict the

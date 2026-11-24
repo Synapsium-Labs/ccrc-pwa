@@ -496,10 +496,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   entry mirrored in a spec and its plan, or a renamed file, is one deviation; below 10000 the old rule stands: an
   allocator-era number defined in two plans). The merge queue runs it on the
   merged result, so the pair never lands; the one that lands second renumbers, the entry and every reference to
-  it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23 and its route is removed (a call answers 404);
-  its prose-seeded floor, which only ever rose, is no longer raised. `GET /api/ledger?project=` still reports it as
-  history, never a number to take, still reads the numbers it issued, and is the box-token proof door of `ccrc token
-  sync` and `probe`. Source files carry `D-N` refs in comments; **read them
+  it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23 and its route is gone (404, or 401 behind an
+  armed sign-in gate); its prose-seeded floor, which only ever rose, is no longer raised. `GET /api/ledger?project=`
+  still reports it as history, never a number to take, still reads the numbers it issued, and is the box-token proof
+  door of `ccrc token sync` and `probe`. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
