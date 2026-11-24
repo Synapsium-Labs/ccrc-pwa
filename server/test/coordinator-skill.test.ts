@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty-two clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-three clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -166,10 +166,11 @@ const CONTRACT = [
   // Linear hierarchy wave 6 (D-8185, plan Task 6.1 as amended; D-8739's follow-up): the plan clause, with the console rule
   // review 2580 ruled into it. Its one apostrophe is straight, in `programme's`; no quote.
   "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.",
+  'After a compaction or a renewal, check what you recall against `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what you intend next.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty-two clauses verbatim', () => {
+  it('carries all twenty-three clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -239,7 +240,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -654,7 +655,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(22);
+    expect(CONTRACT).toHaveLength(23);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
