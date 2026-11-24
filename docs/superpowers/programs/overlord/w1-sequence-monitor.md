@@ -36,11 +36,13 @@ request. The coordinator folds it into the programme ledger.
 
 ## Departures, by slug
 
-- `stamp-failure-is-a-row-write-failure`. The designation writer checks its lines' verdict before any append. If a stamp
-  insert still fails, `SequenceStampRefused` rolls back the designation row, the head row and the sequence lines, while the
-  durable records stand. Fix round F1 closes the original next-append gap: the journal's successful append receipt delegates
-  to the existing `AuthorityGuardPort.writerFailed('trailing')`, and the stamped writer calls it before propagating the
-  transaction failure. No successful append means no such call. The guard, remeasurement and Confirm paths are unchanged.
+- `stamp-failure-is-a-row-write-failure`. Any throw after a durable append in a stamped designation transaction calls the
+  append receipt after rollback is attempted and before the original error reaches the caller. The receipt delegates to
+  `AuthorityGuardPort.writerFailed('trailing')`: the designation row, head row and sequence lines roll back, while durable
+  records stand. A stamp insert failure throws `SequenceStampRefused`; verdict failures are checked before an append. No
+  successful append means no receipt call, and a receipt that throws cannot replace the original failure. The immediate
+  fence says `trailing` even when an independent remeasurement of a two-record file says `ahead`. No reader branches on that
+  distinction; it differs in diagnostic text only. The guard, remeasurement and Confirm paths are unchanged.
 - `ladder-stamps-ride-pr-b`. The ladder merged before sequence A. The index's "sequence writer" bullet gives its stamps to
   PR B ("if it merges after sequence A; otherwise PR B wires it"), and the plan's question 11 notes that the ladder's rows
   carry no actor kind yet. PR A therefore stamps the generation and the designation only. Its kind table has no ladder rows.
@@ -54,6 +56,21 @@ request. The coordinator folds it into the programme ledger.
   the store. A stored actor kind outside gates A's words also makes the line opaque, with `actorKind: 'unknown'`.
 - `step-refusal-logged-through-one-wrapper`. The generations lane logs a step that the sequence refused (review F11) through
   one wrapper around `stepGeneration`, which every step of the pass uses. `renewalActs.ts` keeps its own "not written" line.
+
+## Fix round 3: measured rollback controls
+
+| Control | What goes red |
+|---|---|
+| Replace the wrapper with a plain transaction in `designatePending`, `goLive`, or `retire`, one at a time | The corresponding real-journal writer case sees `coherent` instead of `rolled-back: trailing`. Retire is exercised with and without a pending attempt. |
+| Remove the receipt call from the wrapper | A durable append followed by rollback no longer fences immediately. |
+| Retain and call the previous receipt on a throw with no new append | A pending-only retire leaves the records unchanged but incorrectly fences the real guard. |
+| Make the successful journal receipt a no-op | The journal's own suite sees the guard stay `coherent` after the receipt is called. |
+| Fence only on `SequenceStampRefused` | A designation row-write error after the append leaves the guard unfenced. |
+| Let the receipt exception escape | The caller sees the receipt error instead of the original stamp refusal. |
+| Stamp only a journalled live retire | The row-only retire loses its `failed` and `retired` sequence lines. |
+
+The designation controls are in the mutation floor at 1; the journal receipt control runs in the journal's own suite. The
+unmutated cases verify the original database snapshot is restored after rollback while the durable records stand.
 
 ## For the pieces that follow
 

@@ -14,8 +14,9 @@
 // THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending` and `retire` change the
 // designation's state, so each stamps its line(s) with `stampSequenceInTx` after the row write, in its transaction, with the actor
 // it writes to the row. A writer with an append checks its lines' verdict BEFORE the append, so a refused line never follows a
-// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction, rolling back the rows
-// and stamps. If an append succeeded, its receipt fences the authority guard before the error reaches the caller.
+// record; a stamp that still fails (a failed insert) throws `SequenceStampRefused` inside the transaction. Any throw after a
+// durable append, not just a stamp refusal, calls the append receipt after rollback is attempted and before the original error
+// reaches the caller. The journal record can outlive the rolled-back rows and stamps, so the receipt fences the authority guard.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { sequenceLineVerdict } from './overlordSequence.js';
@@ -158,7 +159,8 @@ function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, w
       return a;
     }));
   } catch (error) {
-    postAppendFailed?.();
+    // Like tx's rollback, notification is best effort: a faulty receipt must not replace the transaction error.
+    try { postAppendFailed?.(); } catch { /* preserve the first error */ }
     throw error;
   }
 }

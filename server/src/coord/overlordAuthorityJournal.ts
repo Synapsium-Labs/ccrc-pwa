@@ -209,6 +209,8 @@ export class OverlordAuthorityJournal {
    * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
    * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
    * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
+   * If the caller's transaction throws after an `appended` answer, call `postAppendFailed` after rollback is attempted,
+   * then propagate the original error. The receipt fences the guard while the durable record outlives its head row.
    *
    * The ONE retained-origin exception (ladder Q20): `journalPendingInTx` may state the retained `recordFrom` when recording
    * an already-applied narrowing. The fold must see the chain from its last recorded value. Catch-up only stamps the record's
