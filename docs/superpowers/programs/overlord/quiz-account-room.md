@@ -112,7 +112,7 @@ The brief asked for every place a later step's account is compared with the setu
 | The status's account | `history-quiz-unattended.mjs`, `postStatus` | The week's when recorded, else the setup's. |
 | Step 0a's launch pin (`step0a-launch-mismatch`) and `step0a account … is not --account` | `history-replay.mjs`, W2's step 0a and pilot-source | Stay. They are W2's, not the quiz's. |
 | `report` | `history-quiz-single.mjs` | Compares no account, and spends nothing. |
-| The candidate filter (`eligibleAccountsOf`) against admission (`admitAccount`) | `history-quiz-unattended.mjs`, `history-replay.mjs` | Stay apart, by design: the filter checks hidden, the account kind, telemetry and the lane kill switch; admission also refuses an upstream account whose config folder is not `.claude`, a generated account whose provider is not anthropic, and one whose declared credentials file is undeclared, absent or unreadable; and, before the week's folder or record exists, a generated account whose launcher file is missing or unreadable (`wrapper-unmeasured`). The filter does not make those checks, so a candidate can be refused at admission; since fix round 1 the week then tries the next one on `account-refused`, as setup does. The walk passes over that word only, as setup's does (ruled in fix round 2): an unspawned week whose pick is refused `wrapper-unmeasured` closes on that word, visibly, spending nothing. An upstream account with a bad launcher fails after the record, `version-unmeasured`, and closes as before. |
+| The candidate filter (`eligibleAccountsOf`) against admission (`admitAccount`) | `history-quiz-unattended.mjs`, `history-replay.mjs` | Stay apart, by design: the filter checks hidden, the account kind, telemetry and the lane kill switch; admission also refuses an upstream account whose config folder is not `.claude`, a generated account whose provider is not anthropic, and one whose declared credentials file is undeclared, absent, not a regular file or unreadable; and, before the week's folder or record exists, a generated account whose launcher file is missing or unreadable (`wrapper-unmeasured`). The filter does not make those checks, so a candidate can be refused at admission; since fix round 1 the week then tries the next one on `account-refused`, as setup does. The walk passes over that word only, as setup's does (ruled in fix round 2): an unspawned week whose pick is refused `wrapper-unmeasured` closes on that word, visibly, spending nothing. An account whose launcher is admitted but does not run fails after the record, when its version is measured (`version-unmeasured`), and the week closes on that word as before: an upstream account with a bad launcher, and a generated account whose launcher file can be read but not run (corrected after review 3553, which found this sentence named the upstream case only). |
 
 One consequence of the move, stated so nobody reads it as an accident: the gate's code hash (`CODE_SHA_FILES`, the four
 files `gate_code` pins) covered `decideLimits` while it lived in the driver. In its own module it is covered as the
@@ -288,6 +288,10 @@ back among the damaged lists; the root-only mutant list was measured by running 
 - Setup's own fall-through loop does not check the stop flag between candidates, as on `main`; only the week's walk
   does (fix round 2). A stop that lands while a setup candidate's driver refuses at admission can let the next
   candidate's setup start.
+- A stop that lands while the last candidate with room is being refused reads as no room (review 3553): the walk asks the
+  choice again before its stop check, the choice has no candidate left, and that tick's word is `no-room`, not
+  `interrupted`. Nothing spawns, the week stays running, and the next tick resumes the same decision; that tick may send
+  the once-per-week coordinator mail.
 
 ## 10. Fix round 1 (review 3545)
 
@@ -321,7 +325,8 @@ section 11); F1-M2b the runner falls
 through though the act recorded its account: 1; F1-M3 the week closed on the first refusal: 2; F2-S1: 1; F3-S2′: 2.
 
 **Suites**, green at the round's tip, as an ordinary user: the ten quiz files of section 6 (538 cases, the runner 202 and
-the single-arm module 73 of them), the tree guards (65 files, 1990 cases, 3 skipped) and the server's type check.
+the single-arm module 73 of them), the tree guards (the list section 6 names, counted at that round's tip: 65 files,
+1990 cases, 3 skipped) and the server's type check.
 
 ## 11. Fix round 2 (review 3549)
 
@@ -353,4 +358,5 @@ admission refuses is never recorded". Review 3549's spelling (open the folder an
 reds 4; the fact is killed either way.
 
 **Suites**, green before the note's commit, as an ordinary user: the ten quiz files (539 cases, the runner 203), the tree
-guards with `coord-db` (66 files, 2145 cases, 3 skipped) and the server's type check.
+guards of section 6's list with the coordination database's test file `coord-db` (66 files, 2145 cases, 3 skipped) and the
+server's type check. Review 3553 measured the same file set at its tip: 66 files, 2235 cases, all green.
