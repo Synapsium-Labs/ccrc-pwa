@@ -348,6 +348,15 @@ describe('step 4: the box settings and the repositories', () => {
     expect(button(T.next)).toBeEnabled();
   });
 
+  it('one repository row names one package folder: two folders in the package field are refused as a name (characterization, D-9009)', async () => {
+    await atStepFour();
+    fillRepo();
+    expect(button(T.next)).toBeEnabled();
+    type(T.repoPackage, 'server pwa');
+    expect(within(flow()).getByText(T.badRepoName)).toBeInTheDocument();
+    expect(button(T.next)).toBeDisabled();
+  });
+
   it('takes one to four repository rows', async () => {
     await atStepFour();
     for (let i = 0; i < 3; i++) await click(T.addRepo);
@@ -399,6 +408,30 @@ describe('step 5: install, its six phases and the end of it', () => {
     expect(phases[1]!.textContent).toContain(phaseWord('copy'));
     // The address typed in step 1 is not kept once the install has started.
     expect(document.body.innerHTML).not.toContain(ADDRESS);
+  });
+
+  it('Install sends typed install inputs and a typed command head as the package\'s own (characterization, D-9009)', async () => {
+    const { box, posts } = fakeFleet(baseStatus());
+    box.on.key = () => { box.status = baseStatus({ addressSet: true }); return { result: { line: LINE } }; };
+    box.on.probe = () => ({ result: { fingerprint: FP } });
+    box.on.pin = () => { box.status = pinned(); return {}; };
+    box.on.preflight = () => ({ result: { pass: true, checks: [] } });
+    box.on.connect = () => { box.status = pinned({ act: connectAct() }); return { result: { act: 'a'.repeat(32) } }; };
+    await mount();
+    await toKey();
+    await click(T.makeKey);
+    await click(T.added);
+    await click(T.probe);
+    await click(T.confirmFingerprint);
+    fillRepo();
+    type(T.repoInputs, 'server/package.json server/package-lock.json shared/x.json');
+    type(T.repoCommand, 'npx vitest');
+    await click(T.next);
+    await click(T.install);
+    const sent = (posts('connect')[0]!.body as { fields: { repos: { packages: unknown }[] } }).fields;
+    expect(sent.repos.map((r) => r.packages)).toEqual([[
+      { name: 'server', installInputs: ['server/package.json', 'server/package-lock.json', 'shared/x.json'], commands: ['npx vitest'] },
+    ]]);
   });
 
   it('Install survives a remount mid-act: a reload shows the same phases, read from the status, and the poll follows the act to Connected', async () => {
