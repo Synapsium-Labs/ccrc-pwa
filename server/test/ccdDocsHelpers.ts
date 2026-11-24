@@ -46,6 +46,20 @@ export function runCcdDocs(
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` };
 }
 
+/** `runCcdDocs` for a protected verb (X2 P2.3: `docs-folder`, which ccd's body guard refuses `entry-unprivileged` unless
+ *  it starts under Bash in privileged mode): the same fixture HOME and the same three poisons, started `bash -p` as the
+ *  installed direct entry starts it, so no startup file or exported function reaches it. */
+export function runCcdDocsEntry(
+  h: CcdHarness, args: readonly string[], env: NodeJS.ProcessEnv = {}, cwd: string = h.home,
+): DocsRun {
+  const r = spawnSync('bash', ['-p', CCD, ...args], {
+    cwd, encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }),
+  });
+  const failed = r.error === undefined ? '' : `\n[runCcdDocsEntry] ${String(r.error)}`;
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` };
+}
+
 /** The run's one answer: stdout must be exactly one `\n`-terminated line holding one JSON object. Throws, naming
  *  the run, on anything else; it asserts nothing about the exit code, which each caller states itself. */
 export function parseOneLine(r: DocsRun): Record<string, unknown> {

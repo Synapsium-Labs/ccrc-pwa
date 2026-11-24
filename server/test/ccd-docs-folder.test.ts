@@ -9,7 +9,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
-import { REAL_PYTHON3, parseOneLine, runCcdDocs, type DocsRun } from './ccdDocsHelpers.js';
+import { REAL_PYTHON3, parseOneLine, runCcdDocs, runCcdDocsEntry, type DocsRun } from './ccdDocsHelpers.js';
 import { unitJson } from './docsHelperPy.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
@@ -27,7 +27,9 @@ const mkdir = (...parts: string[]): string => {
   fs.mkdirSync(p, { recursive: true });
   return p;
 };
-const ccd = (args: readonly string[], env: NodeJS.ProcessEnv = {}): DocsRun => runCcdDocs(h, ['docs-folder', ...args], env);
+// `docs-folder` is protected (X2 P2.3): ccd's body guard refuses it unless it starts privileged, as the installed direct
+// entry starts it, so every call here goes through `runCcdDocsEntry` (`bash -p`).
+const ccd = (args: readonly string[], env: NodeJS.ProcessEnv = {}): DocsRun => runCcdDocsEntry(h, ['docs-folder', ...args], env);
 const ans = (args: readonly string[], env: NodeJS.ProcessEnv = {}): Answer => parseOneLine(ccd(args, env));
 const add = (label: string, p: string, env: NodeJS.ProcessEnv = {}): Answer => ans(['--add', label, '--path', p], env);
 const list = (env: NodeJS.ProcessEnv = {}): Answer => ans(['--list'], env);

@@ -38,9 +38,11 @@ const ROOT = path.resolve(here, '..', '..');
 const readRel = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
 
 /** Every docs verb has a helper deadline and a runner row: the list is shared/docs.ts's, never a copy (X2 P1: the
- *  range verb joined it rather than keeping a deadline of its own). */
-const DOCS_BUDGET_VERBS = DOCS_VERBS;
-type DocsBudgetVerb = DocsVerb;
+ *  range verb joined it rather than keeping a deadline of its own), and the two folder verbs (X2 P2.1, P2.2), which
+ *  shared/docs.ts does not name (it lists the verbs the docs routes send; the folder doors are P2.3's), beside it. */
+const FOLDER_BUDGET_VERBS = ['docs-folder', 'docs-folder-read'] as const;
+type DocsBudgetVerb = DocsVerb | (typeof FOLDER_BUDGET_VERBS)[number];
+const DOCS_BUDGET_VERBS: readonly DocsBudgetVerb[] = [...new Set<DocsBudgetVerb>([...DOCS_VERBS, ...FOLDER_BUDGET_VERBS])];
 
 /** The one match of `re` (a `g` regex) in `text`; throws on zero or on more than one. */
 function exactlyOne(text: string, re: RegExp, what: string): RegExpMatchArray {
@@ -116,10 +118,10 @@ const helperSrc = (): string => docsHelperSource();
 const HEADROOM_S = 5;
 
 describe('docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets)', () => {
-  it('the six CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 / 20 000 / 30 000 ms', () => {
+  it('the eight CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 / 20 000 / 30 000 / 25 000 / 30 000 ms', () => {
     expect(DOCS_BUDGET_VERBS.map((v) => [v, runnerMs(v)])).toEqual([
       ['docs-index', 20_000], ['docs-tree', 20_000], ['docs-show', 15_000], ['docs-fetch', 60_000],
-      ['docs-log', 20_000], ['docs-show-range', 30_000],
+      ['docs-log', 20_000], ['docs-show-range', 30_000], ['docs-folder', 25_000], ['docs-folder-read', 30_000],
     ]);
   });
 
@@ -174,6 +176,49 @@ describe('docs-show-range: one deadline bounds the whole verb, and the runner bu
     expect(src).toContain('        if deadline and cache.dl is not None:\n            wait = min(wait, cache.dl.left())');
     expect(src).toContain('            if cache.dl is not None and cache.dl.left() <= 0:\n                raise fail(\'prepare-busy\')');
     expect(src).not.toMatch(/\bRANGE_DEADLINE_S\b/);
+  });
+});
+
+describe('docs-folder and docs-folder-read: one deadline bounds each verb, and the runner budget outlasts it (X2 P2)', () => {
+  // docs-folder: its waits are the registry lock (FOLDER_LOCK_WAIT_S, at most 5 s) and, for a remove, the cache lock
+  // (RANGE_LOCK_WAIT_S, 5 s) taken after it. Both are capped by what is left of the one Deadline (12 s: the two waits
+  // and 2 s for the admissions, the purge and the fsyncs), so the verb ends inside its deadline plus the redactor.
+  it('docs-folder: its two lock waits fit its helper deadline, with 2 s to spare for the work between them', () => {
+    const src = helperSrc();
+    expect(pyIntIn(src, 'FOLDER_LOCK_WAIT_S') + pyIntIn(src, 'RANGE_LOCK_WAIT_S') + 2).toBeLessThanOrEqual(helperDeadlinesIn(src)['docs-folder']);
+  });
+
+  it('docs-folder: helper deadline + KILL_GRACE_S + REDACT_BUDGET_MS + 5 s < the runner budget, with at least 5 s over', () => {
+    const src = helperSrc();
+    const sumS = helperDeadlinesIn(src)['docs-folder'] + pyIntIn(src, 'KILL_GRACE_S') + pyIntIn(src, 'REDACT_BUDGET_MS') / 1000 + HEADROOM_S;
+    expect(sumS).toBeLessThan(runnerMs('docs-folder') / 1000);
+    expect(runnerMs('docs-folder') / 1000 - sumS, 'a remove waits on two locks and a purge: the margin is a real 5 s').toBeGreaterThanOrEqual(5);
+  });
+
+  // docs-folder-read: ONE row for its four ops. A prepare is the longest (its copy budget DOCS_RANGE_PREPARE_BUDGET_MS plus
+  // three cache-lock waits, each capped by the Deadline), and gives its place back within RANGE_ABORT_LOCK_WAIT_S after the
+  // deadline: the same sequential worst case as docs-show-range's, 20 + 2 + 1 + 0.9 + 5 = 28.9 s against 30 s.
+  it('docs-folder-read: helper deadline + KILL_GRACE_S + RANGE_ABORT_LOCK_WAIT_S + REDACT_BUDGET_MS + 5 s < the runner budget, strictly', () => {
+    const src = helperSrc();
+    const sumS = helperDeadlinesIn(src)['docs-folder-read'] + pyIntIn(src, 'KILL_GRACE_S') + pyIntIn(src, 'RANGE_ABORT_LOCK_WAIT_S')
+      + pyIntIn(src, 'REDACT_BUDGET_MS') / 1000 + HEADROOM_S;
+    expect(sumS, 'the agent may kill ccd while a folder prepare gives its place back or its redactor runs').toBeLessThan(runnerMs('docs-folder-read') / 1000);
+  });
+
+  it('docs-folder-read: the copy budget of a prepare fits inside its helper deadline, with the cache waits', () => {
+    const src = helperSrc();
+    expect(pyIntIn(src, 'DOCS_RANGE_PREPARE_BUDGET_MS') / 1000 + pyIntIn(src, 'RANGE_LOCK_WAIT_S')).toBeLessThanOrEqual(helperDeadlinesIn(src)['docs-folder-read']);
+  });
+
+  it('each verb builds its one Deadline from its own HELPER_DEADLINE_S row, and the folder waits read it', () => {
+    const src = helperSrc();
+    expect(src).toContain("dl = Deadline(HELPER_DEADLINE_S['docs-folder'])");
+    expect(src).toContain("dl = Deadline(HELPER_DEADLINE_S['docs-folder-read'])");
+    // The registry lock's wait is capped by the Deadline, and the cache the remove opens carries it (so its lock wait is too).
+    expect(src).toContain('end = SYS.monotonic() + (FOLDER_LOCK_WAIT_S if dl is None else min(FOLDER_LOCK_WAIT_S, dl.left()))');
+    expect(src).toContain('cache = range_open_dir(cdir)._replace(dl=dl)');
+    // docs-folder-read hands its Deadline to the cache every op opens.
+    expect(src).toContain('cache = range_open_dir(range_cache_dir(ctx))._replace(dl=dl)');
   });
 });
 
@@ -252,14 +297,15 @@ describe('CONTROL: each extractor refuses zero and two, so no case above can pas
   });
 
   it('helperDeadlinesIn: a missing verb, an extra key, a non-integer and a second binding', () => {
-    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}\n";
+    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-folder':12,'docs-folder-read':20}\n";
     expect(helperDeadlinesIn(ok)).toEqual({
       'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45, 'docs-log': 10, 'docs-show-range': 20,
+      'docs-folder': 12, 'docs-folder-read': 20,
     });
-    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}\n"))
+    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-folder':12}\n"))
       .toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(
-      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-x':1}\n",
+      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20,'docs-folder':12,'docs-folder-read':20,'docs-x':1}\n",
     )).toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(ok.replace(':7,', ':7.5,'))).toThrow(/integer seconds/);
     expect(() => helperDeadlinesIn(`${ok}HELPER_DEADLINE_S={}\n`)).toThrow(/bound 2 times/);

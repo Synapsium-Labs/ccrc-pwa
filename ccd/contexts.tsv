@@ -835,6 +835,8 @@ _docs_range_count_ok	C9
 _docs_range_nums_ok	C9
 cmd_docs_show_range	C9
 cmd_docs_folder	C9
+_docs_folder_py	C9
+cmd_docs_folder_read	C9
 _docs_py	C9
 _ws_title	C1
 _ws_title_check	C1
