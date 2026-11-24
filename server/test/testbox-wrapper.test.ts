@@ -345,7 +345,7 @@ async function world(o: WorldOpts = {}): Promise<World> {
   const boxRoot = path.join(root, 'box');
   const s: ServiceSettings = {
     root: boxRoot, workers: 2, runTmpdir: '/tmp', toolsDir: path.join(boxRoot, 'tools'), envForward: ['CCRC_HISTORY_BASE', 'CCRC_LEDGER_BASE'],
-    runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1 << 20, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, outputDrainMs: 50,
+    runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1 << 20, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 30 * 86_400_000, outputDrainMs: 50,
   };
   for (let k = 1; k <= s.runs; k++) mkdirSync(path.join(boxRoot, 'runs', String(k)), { recursive: true });
   mkdirSync(path.join(s.toolsDir, 'current', 'bin'), { recursive: true });
