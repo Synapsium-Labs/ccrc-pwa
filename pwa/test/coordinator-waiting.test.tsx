@@ -9,19 +9,19 @@ import { act, cleanup, render } from '@testing-library/react';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { StatusDot } from '@ccrc/ui';
-import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type RunSummary, type SessionBucket } from '../../shared/api';
 import {
   cardFacts, headerFacts, headerStatusWord, NAME_BUDGET, sessionFacts, STATE_WORD, WAITING_ON_WORKERS,
-  WAITING_ON_WORKERS_TITLE, waitingOnWorkers, workerBusy,
+  WAITING_ON_WORKERS_TITLE, waitingOnWorkers, workerBusy, workersWaitAt,
 } from '../src/fleet/sessionFacts';
-import { coordinationOf, workersBusyOf, workersOf } from '../src/fleet/fleetTree';
+import { coordinationOf, fleetTree, workersBusyOf, workersOf } from '../src/fleet/fleetTree';
 import { summaryParts, type WorkerRow } from '../src/fleet/rollup';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { sessionHeaderView } from '../src/session/sessionHeaderView';
 import { useFleetStore } from '../src/stores/fleet';
 import { setSkin, storedSkin } from '../src/lib/skin';
 import { DEAD_LIFECYCLE, fleetSession, hibernatedSession } from './fleetFixture';
-import { HOUR, MIN, NOW, run, sess } from './rollupFixture';
+import { heldByCoordinator, HOUR, MIN, NOW, run, sess } from './rollupFixture';
 import { withRunBinding } from './runBindingFixture';
 
 afterEach(() => {
@@ -155,6 +155,58 @@ describe('the rule (waitingOnWorkers): its table', () => {
     expect(rowWord(head, f)).toBe(STATE_WORD.done);
   });
 
+  // F1 (review 3632): only a dispatch the board itself calls in flight keeps the coordinator waiting; a stalled one (the
+  // board's "dispatch never completed", `dispatchWindow` past `SPAWN_STALL_MS`) needs a person, not patience.
+  it('a dispatch in flight keeps it waiting; the same dispatch stalled does not', () => {
+    const head = coord();
+    const at = (startedAt: number) => fleetOf(head, [], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: startedAt })]);
+    expect(rowWord(head, at(NOW - SPAWN_STALL_MS + 1000))).toBe(WAITING_ON_WORKERS);
+    expect(rowWord(head, at(NOW - SPAWN_STALL_MS))).toBe(STATE_WORD.done);
+    expect(rowWord(head, at(NOW - 3 * HOUR))).toBe(STATE_WORD.done);
+  });
+
+  it('a stalled dispatch beside a working worker: the working worker still keeps it waiting', () => {
+    const head = coord();
+    const f = fleetOf(head, [working], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: NOW - HOUR })]);
+    expect(rowWord(head, f)).toBe(WAITING_ON_WORKERS);
+  });
+
+  // F2 (review 3632), the brief's item 6: a worker whose question is with its coordinator is waiting on that coordinator,
+  // so it does not keep the coordinator waiting. The pair must never read as waiting on each other.
+  for (const bucket of ['done', 'idle'] as const) {
+    it(`a coordinator ${bucket} holding a worker's question reads ${bucket}, not waiting on workers`, () => {
+      const head = coord({ bucket });
+      const f = fleetOf(head, [heldByCoordinator()]);
+      const worker = f.sessions.find((s) => s.id === 'w1')!;
+      expect(cardFacts(sessionFacts({ session: worker, now: NOW })).status.text).toMatch(/^with coordinator/);
+      expect(rowWord(head, f)).toBe(STATE_WORD[bucket]);
+    });
+
+    it(`a coordinator ${bucket} holding a worker's question beside a second worker really working reads waiting on workers`, () => {
+      const head = coord({ bucket });
+      expect(rowWord(head, fleetOf(head, [heldByCoordinator(), working]))).toBe(WAITING_ON_WORKERS);
+    });
+  }
+
+  // F3 (review 3632): the spawn arm follows the bracket. A run whose session is on the list makes no spawn row, whatever
+  // its binding reads: `latestPerSession` drops the run (its listed session is bound elsewhere), so the tree draws no
+  // pending row for it and the session where its own binding puts it, and the coordinator reads as its card shows.
+  it('a stamped dispatch naming a listed session bound to another run makes no spawn, as the tree draws none', () => {
+    const head = coord();
+    const w = sess('w1', 'project-c', { role: 'child', status: 'idle', bucket: 'idle' });
+    const other = sess('other', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' });
+    const runs = [
+      run(10, 'coord', 'w1', { state: 'planned', dispatchStartedAt: NOW - MIN }),
+      run(11, 'other', 'w1', { state: 'working' }),
+    ];
+    const sessions = withRunBinding([head, w, other], [runs[1]!]);
+    expect(workersOf('coord', sessions, runs)).toEqual([]);
+    expect(rowWord(head, { sessions, runs })).toBe(STATE_WORD.done);
+    const card = fleetTree(sessions, ['project-c'], runs).find((g) => g.project === 'project-c')!;
+    expect(card.rows.filter((r) => r.kind === 'pending')).toEqual([]);
+    expect(card.rows.find((r) => r.kind === 'session' && r.session.id === 'w1')?.depth).toBe(1);
+  });
+
   it('a coordinator with no workers reads done', () => {
     const head = coord();
     expect(rowWord(head, fleetOf(head, []))).toBe(STATE_WORD.done);
@@ -169,12 +221,34 @@ describe('the rule (waitingOnWorkers): its table', () => {
     expect(waitingOnWorkers({ coordinator: true, bucket: 'done', asleep: false, workersBusy: false })).toBe(false);
   });
 
-  it('a worker is busy when it is spawning or its row word is working, and not otherwise', () => {
-    const pending: WorkerRow = { kind: 'pending', depth: 1, run: run(1, 'coord', null, { state: 'planned', dispatchStartedAt: NOW }) };
+  it('a worker is busy when its spawn is in flight or its row word is working and not with its coordinator', () => {
+    const pending = (at: number): WorkerRow => ({ kind: 'pending', depth: 1, run: run(1, 'coord', null, { state: 'planned', dispatchStartedAt: at }) });
     const row = (over: Partial<FleetSession>): WorkerRow => ({ kind: 'session', depth: 1, session: fleetSession(over) });
-    expect(workerBusy(pending)).toBe(true);
-    expect(workerBusy(row(working))).toBe(true);
-    expect(workerBusy(row({ status: 'idle', bucket: 'done' }))).toBe(false);
+    expect(workerBusy(pending(NOW), NOW)).toBe(true);
+    expect(workerBusy(pending(NOW - SPAWN_STALL_MS), NOW)).toBe(false);
+    expect(workerBusy(row(working), NOW)).toBe(true);
+    expect(workerBusy(row({ status: 'idle', bucket: 'done' }), NOW)).toBe(false);
+    expect(workerBusy(row(heldByCoordinator()), NOW)).toBe(false);
+  });
+
+  it('the clock-free reading (workersBusyOf) says what no clock changes, and workersWaitAt reads it at a clock', () => {
+    const head = coord();
+    const spawnAt = NOW - MIN;
+    const spawnOnly = fleetOf(head, [], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: spawnAt })]);
+    const self = (f: { sessions: FleetSession[] }) => f.sessions.find((s) => s.id === 'coord')!;
+    expect(workersBusyOf(self(spawnOnly), spawnOnly.sessions, spawnOnly.runs)).toBe(spawnAt);
+    expect(workersWaitAt(spawnAt, NOW)).toBe(true);
+    expect(workersWaitAt(spawnAt, spawnAt + SPAWN_STALL_MS)).toBe(false);
+    const withWorker = fleetOf(head, [working], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: spawnAt })]);
+    expect(workersBusyOf(self(withWorker), withWorker.sessions, withWorker.runs)).toBe(true);
+    const quiet = fleetOf(head, [{ status: 'idle', bucket: 'done' }]);
+    expect(workersBusyOf(self(quiet), quiet.sessions, quiet.runs)).toBe(false);
+    // The newest dispatch decides: an older stalled one beside a fresh one is still a wait.
+    const two = fleetOf(head, [], [
+      run(30, 'coord', null, { state: 'planned', dispatchStartedAt: NOW - HOUR }),
+      run(31, 'coord', null, { state: 'planned', dispatchStartedAt: spawnAt }),
+    ]);
+    expect(workersBusyOf(self(two), two.sessions, two.runs)).toBe(spawnAt);
   });
 
   it('the worker summary line counts workers and is not changed by the coordinator word', () => {
@@ -222,6 +296,13 @@ describe('the header says the row word for the same facts', () => {
     expect(c?.coordinatorState).toBe(WAITING_ON_WORKERS);
     expect(coordinationOf(worker, [self], f.runs)?.coordinatorState).toBe(STATE_WORD.done);
   });
+
+  it('without a clock, a coordinator waiting on a spawn alone reads its bucket word; with one, the spawn in flight counts', () => {
+    const worker = f.sessions.find((s) => s.id === 'w1')!;
+    expect(coordinationOf(worker, [self], f.runs, NOW - MIN)?.coordinatorState).toBe(STATE_WORD.done);
+    expect(coordinationOf(worker, [self], f.runs, NOW - MIN, NOW)?.coordinatorState).toBe(WAITING_ON_WORKERS);
+    expect(coordinationOf(worker, [self], f.runs, NOW - HOUR, NOW)?.coordinatorState).toBe(STATE_WORD.done);
+  });
 });
 
 describe('the lamp', () => {
@@ -232,7 +313,14 @@ describe('the lamp', () => {
     expect(dot.className).toContain('dot--idle');
     expect(dot.className).not.toContain('dot--attention');
     expect(dot.className).not.toContain('dot--busy');
-    expect(dot.textContent).not.toBe('✓');
+    // Not done's check, idle's ring, the asking lamp's dot or the working lamp's half (A3).
+    for (const other of ['✓', '○', '●', '◐']) expect(dot.textContent).not.toBe(other);
+  });
+
+  it('an idle coordinator\'s lamp says it too: the long wait (done decays to idle after thirty minutes)', () => {
+    const { container } = render(<StatusDot status="idle" waitingLabel={WAITING_ON_WORKERS} />);
+    const dot = container.querySelector('[role="img"]')!;
+    expect(dot.getAttribute('aria-label')).toBe(WAITING_ON_WORKERS);
     expect(dot.textContent).not.toBe('○');
   });
 
@@ -269,6 +357,17 @@ describe('the row, in both skins', () => {
       });
     }
   }
+
+  it('the row reads its clock: a spawn in flight is a wait, and the same spawn past the stall threshold is not', () => {
+    const head = coord();
+    const f = fleetOf(head, [], [run(30, 'coord', null, { state: 'planned', dispatchStartedAt: NOW - MIN })]);
+    act(() => useFleetStore.setState({ sessions: f.sessions, runs: f.runs }));
+    const self = f.sessions.find((s) => s.id === 'coord')!;
+    const view = render(<SessionLine session={self} onOpen={() => {}} onActions={() => {}} now={NOW} />);
+    expect(view.container.querySelector('.sess-state')?.textContent).toBe(WAITING_ON_WORKERS);
+    view.rerender(<SessionLine session={self} onOpen={() => {}} onActions={() => {}} now={NOW - MIN + SPAWN_STALL_MS} />);
+    expect(view.container.querySelector('.sess-state')?.textContent).toBe(STATE_WORD.done);
+  });
 
   it('the word follows the store: the worker goes quiet and the coordinator reads done again', () => {
     const head = coord();

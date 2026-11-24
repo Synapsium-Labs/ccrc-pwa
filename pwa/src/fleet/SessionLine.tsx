@@ -139,12 +139,13 @@ function SessionLineView({
   // the task tally, the subagent disclosure and the waiting question's summary are header facts now
   // (`SessionDetails`), each still one tap away.
   const busy = session.status === 'busy';
-  const tick = useNow(30_000, busy && now === undefined);
+  // Wave 173: what this coordinator's workers say, clock-free (`workersBusyOf`, the header's own reader): a primitive, so a
+  // frame that changes no answer re-renders no row. A number is a wait on a spawn alone, which only a clock can call in
+  // flight or stalled (`workersWaitAt`), so the row ticks while it holds one, as it does while busy.
+  const workersBusy = useFleetStore((st) => workersBusyOf(session, st.sessions, st.runs));
+  const tick = useNow(30_000, (busy || typeof workersBusy === 'number') && now === undefined);
   const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
   const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
-  // Wave 173: whether a worker of this coordinator is still working or spawning, over the whole fleet and its open runs
-  // (`workersBusyOf`, the header's own reader). A boolean, so a frame that changes no answer re-renders no row.
-  const workersBusy = useFleetStore((st) => workersBusyOf(session, st.sessions, st.runs));
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
     workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,

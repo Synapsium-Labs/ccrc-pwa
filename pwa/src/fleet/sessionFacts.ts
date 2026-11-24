@@ -40,7 +40,7 @@ import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
 import { paneGone } from './presence';
 import {
-  childOfRunLabel, programmeWave, programmeWaveTail, runSentence,
+  childOfRunLabel, dispatchWindow, programmeWave, programmeWaveTail, runSentence,
   type ChildOfRunLabel, type ChildRunContext,
 } from './runWords';
 import { spawnChip, type SpawnChip } from './spawnWords';
@@ -142,9 +142,9 @@ export interface FactInput {
   /** D-8276: the newest build an awake session on THIS session's lane runs (`laneClaudeLatest`): what a restart reaches.
    *  Absent or `null` = unknown, and the words promise no roll. */
   readonly claudeLaneLatest?: string | null;
-  /** Wave 173: whether any worker row of this session is busy (`workersBusyOf`, `fleetTree.ts`, over the whole fleet and its
-   *  open runs). Absent = none, and the row reads its bucket's word. */
-  readonly workersBusy?: boolean;
+  /** Wave 173: what this session's workers say, read clock-free (`workersBusyOf`, `fleetTree.ts`, over the whole fleet and
+   *  its open runs); the facts read it at `now` (`workersWaitAt`). Absent = none, and the row reads its bucket's word. */
+  readonly workersBusy?: WorkerWait;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
@@ -162,7 +162,7 @@ export interface SessionFactSet {
   /** The state word's ink: the bucket's, or `coordinator` while a parent holds the question (D-5296). */
   readonly stateTone: string;
   readonly coordinatorRole: boolean;
-  /** Wave 173: whether any worker row of this session is busy, as the caller measured it (`FactInput.workersBusy`). */
+  /** Wave 173: whether any worker row of this session is busy at `now` (`workersWaitAt` over `FactInput.workersBusy`). */
   readonly workersBusy: boolean;
   /** Wave 173: the rule (`waitingOnWorkers`) over this row's own bucket: the status word is `WAITING_ON_WORKERS`. */
   readonly waitingOnWorkers: boolean;
@@ -247,24 +247,49 @@ export const WAITING_ON_WORKERS = 'waiting on workers';
 /** The words' hover title, on the row's word and the header's. */
 export const WAITING_ON_WORKERS_TITLE = 'this coordinator\'s own turn has ended, and at least one of its workers is still working or spawning';
 
-/** Is this worker row keeping its coordinator waiting? A spawn still coming up, or a session whose row word is `working`
- *  (`rowStateWord`: so an asleep worker is not, and neither is one asking the operator, whose word is `waiting`). These are
- *  the worker summary line's own `spawning` and `working` (`rollup.ts`'s `childWord`), read from the same row. A worker
- *  whose question its coordinator holds is filed `working` by the server, so it counts: wave 173 item 6 leaves a worker's
- *  question out of the coordinator's word. */
-export const workerBusy = (row: FleetRow): boolean =>
-  row.kind === 'pending' || rowStateWord(row.session) === STATE_WORD.working;
+/** The row's quiet state (D-5296): the question or approval its parent holds, read only off a live `working` row, the ONE
+ *  reading the row's words (`with coordinator · <parent>`) and a coordinator's wait (`sessionWorkerBusy`) both take. A dead
+ *  or not-working row that keeps a stale field shows nothing. */
+export const rowWithCoordinator = (session: FleetSession): ReturnType<typeof sessionWithCoordinator> =>
+  paneGone(session) || rowStateWord(session) !== STATE_WORD.working ? null : sessionWithCoordinator(session);
+
+/** Is this worker SESSION keeping its coordinator waiting? Its row word is `working` (`rowStateWord`: so an asleep worker is
+ *  not, and neither is one asking the operator, whose word is `waiting`) and its row does not read `with coordinator`
+ *  (`rowWithCoordinator`): a worker whose question its coordinator holds is waiting on that coordinator, so the pair never
+ *  read as waiting on each other (review 3632 F2, the brief's item 6). Clock-free. */
+export const sessionWorkerBusy = (session: FleetSession): boolean =>
+  rowStateWord(session) === STATE_WORD.working && rowWithCoordinator(session) === null;
+
+/** Is this worker ROW keeping its coordinator waiting at `now`? A session as `sessionWorkerBusy` says, or a spawn the board
+ *  itself calls in flight (`dispatchWindow`'s `in-flight` phase, its own threshold): a stalled dispatch (the board's
+ *  "dispatch never completed") needs a person, so it is not busy (review 3632 F1). */
+export const workerBusy = (row: FleetRow, now: number): boolean =>
+  row.kind === 'pending' ? dispatchWindow(row.run, now).phase === 'in-flight' : sessionWorkerBusy(row.session);
+
+/** What a coordinator's workers say, read WITHOUT a clock (`workersBusyOf`, `fleetTree.ts`), so a store selector can return
+ *  it as one primitive and re-render nothing while it holds: `true`, a worker session is busy (`sessionWorkerBusy`), which no
+ *  clock changes; a number, none is, and the newest dispatch in a window began at that instant (`dispatchStartedAt`), which
+ *  only a clock can call in flight or stalled; `false`, neither. `workersWaitAt` is its clocked reading. */
+export type WorkerWait = boolean | number;
+
+/** The clocked reading of a `WorkerWait`: busy for a busy session; for a dispatch, only while the board's own reader calls
+ *  the newest one in flight (`dispatchWindow`, so its threshold, `SPAWN_STALL_MS`, is not copied here: a dispatch in a window
+ *  is a `planned` run with that stamp, so the newest one is asked as such). If the newest is stalled, every older one is. */
+export function workersWaitAt(wait: WorkerWait, now: number): boolean {
+  if (typeof wait === 'boolean') return wait;
+  return dispatchWindow({ state: 'planned', dispatchStartedAt: wait }, now).phase === 'in-flight';
+}
 
 /** THE RULE (wave 173): a coordinator whose own bucket is `done` or `idle`, awake, with at least one busy worker
  *  (`workerBusy`), is waiting on its workers. Idle is included on purpose: `done` decays to `idle` after thirty minutes, and
  *  a coordinator waiting for hours must not read idle either. Every other bucket keeps its own word (a working, asking,
  *  exited or archived coordinator says so whatever its workers do), and so does an asleep one. Pure; the caller passes the
- *  bucket it paints (the row's, or the header's live one), so the two cannot apply the rule to different states. */
+ *  bucket it paints (the row's, or the header's `headerBucket`, which is the row's bucket unless a live stream says dead). */
 export function waitingOnWorkers(input: {
   readonly coordinator: boolean;
   readonly bucket: SessionBucket;
   readonly asleep: boolean;
-  /** Whether any of its worker rows is busy (`workerBusy` over `workersOf`, `fleetTree.ts`). */
+  /** Whether any of its worker rows is busy at the caller's clock (`workersWaitAt` over `workersBusyOf`, `fleetTree.ts`). */
   readonly workersBusy: boolean;
 }): boolean {
   return input.coordinator && !input.asleep && (input.bucket === 'done' || input.bucket === 'idle') && input.workersBusy;
@@ -320,7 +345,8 @@ export function sessionFacts(input: FactInput): SessionFactSet {
   const state = rowStateWord(session);
   const lead = coordinatorRole(session);
   // Wave 173: the bucket, its timestamp, the sort and the rollup stay the measurement; only the word (and the lamp) change.
-  const waiting = waitingOnWorkers({ coordinator: lead, bucket: session.bucket, asleep: asleepAt !== null, workersBusy });
+  const busyNow = workersWaitAt(workersBusy, now);
+  const waiting = waitingOnWorkers({ coordinator: lead, bucket: session.bucket, asleep: asleepAt !== null, workersBusy: busyNow });
 
   const childOf = childOfRunLabel(session, childRun);
   const activeRun = childRun?.run ?? null;
@@ -329,7 +355,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     : `${childOf?.title ?? runSentence(heldRun, childRun?.coordinator ?? null, false)} — ${heldWords(session.held)}`;
 
   const askRaw = sessionAsk(session);
-  const wc = dead || state !== 'working' ? null : sessionWithCoordinator(session);
+  const wc = rowWithCoordinator(session);
   const wcWords = wc === null ? null : withCoordinatorWords(wc, session.project);
   const ask = askRaw !== null && (askRaw.state === 'answered' || (askRaw.state === 'held' && wc === null)) ? askRaw : null;
   const askState = ask === null ? null : { state: ask.state, ...askWords(ask) };
@@ -384,7 +410,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     statusTitle: wcWords?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : cardBgWords?.title),
     stateTone: wcWords !== null ? 'coordinator' : state,
     coordinatorRole: lead,
-    workersBusy,
+    workersBusy: busyNow,
     waitingOnWorkers: waiting,
     workingOn,
     childOf, activeRun, coordinatorName: childRun?.coordinator ?? null, heldRun, heldTitle,

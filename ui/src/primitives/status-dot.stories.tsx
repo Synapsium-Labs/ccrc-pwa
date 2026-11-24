@@ -54,6 +54,28 @@ export const AllBuckets: Story = {
   ),
 };
 
+/** A coordinator waiting on its workers (the app's wave 173): a `done` or `idle` dot given the app's words. Matte idle ink
+ *  and the part-filled ring, so it looks neither finished (`done`'s check) nor like the lamp that asks for the operator. The
+ *  label here is a stand-in: the words are the app's, spelt once there. */
+export const WaitingOnWorkers: Story = {
+  parameters: { layout: 'padded' },
+  render: () => (
+    <table className="font-mono text-sm text-ink-secondary">
+      <tbody>
+        {(['done', 'idle'] as const).map((s) => (
+          <tr key={s}>
+            <td className="py-2 pr-4">
+              <StatusDot status={s} waitingLabel="the app's words for a coordinator whose workers are busy" />
+            </td>
+            <td className="py-2 pr-6 text-ink-primary">{s}, workers busy</td>
+            <td className="py-2 text-ink-tertiary">matte</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  ),
+};
+
 /** The dots also sit on --bg-well lamp floors, a different ground with its own
  *  3:1 floor. Both grounds ship, so both are drawn. */
 export const OnLampWell: Story = {

@@ -263,8 +263,11 @@ export function sessionHeaderView({
   // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints — it
   // always begins with the card's word (`exited` on both; the lamp still speaks `not running`), adding only what this
   // screen knows: the live clock, the age, `on you`, `ready to clean up`.
-  // Wave 173: the rule over the bucket this strip paints (the live one), with the workers the facts measured, so a coordinator
-  // the live stream shows busy says working, and one the fleet files done with a worker at it says what its row says.
+  // Wave 173: the rule over the bucket this strip paints (`headerBucket`: the fleet row's bucket whenever the row exists, so
+  // the same bucket and the same workers the row reads), with the workers the facts measured. The one divergence from the
+  // row: a live stream that says dead over a row filed done or idle paints `dead`, so the header reads exited while the row
+  // may read waiting on workers, the done-versus-exited shape that predates this wave. With no facts yet (the fleet list
+  // not loaded), the rule is off here.
   const waiting = bucket !== null && facts !== null && waitingOnWorkers({
     coordinator: facts.coordinatorRole, bucket, asleep: asleepAt !== null, workersBusy: facts.workersBusy,
   });
