@@ -356,11 +356,16 @@ describe('the start scan: a reload and a reconnect draw the same rows within its
     const end = statSync(tfile).size;
     hook([{ id: 'a1', name: 'Explore', startedAt: now - 299_000 }]);
     seedHelper(S, 'a1');
-    // Only the backlog's window read fails: the transcript's last 1 MiB, read from its size less 1 MiB.
+    // Only the backlog's window read fails: the transcript's last 1 MiB, whose first read starts at its size less 1 MiB
+    // (since wave 171 the window is read in bounded byte reads, so only that first one is failed; the start scan's own
+    // reads of the same bytes still answer).
+    let windowFailed = false;
     const io: FleetIO = {
       ...localIO,
-      readFileFromMeasured: async (p, from) => (p === tfile && from === end - MIB
-        ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, from)),
+      readFileFromBytesMeasured: async (p, from, max, ...rest) => {
+        if (!windowFailed && p === tfile && from === end - MIB) { windowFailed = true; return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileFromBytesMeasured(p, from, max, ...rest);
+      },
     };
     const { stream, frames } = open(new Bus(), io);
     try {

@@ -31,21 +31,40 @@ describe('the backlog seam: fixtures', () => {
   });
 });
 
-describe('the backlog seam: characterized (today\'s window)', () => {
-  it('a multi-event record at the boundary is cut through: the window starts mid-record', async () => {
+describe('the backlog seam: a record start', () => {
+  it('a multi-event record at the boundary is emitted whole: the backlog exceeds lastN by the rest of that record', async () => {
     const file = tmpFile();
-    writeFileSync(file, userLine('u1', 'one') + multiLine('m1', 3) + userLine('u2', 'two'));
+    const one = userLine('u1', 'one');
+    writeFileSync(file, one + multiLine('m1', 3) + userLine('u2', 'two'));
     const b = await readBacklog(localIO, file, 3);
-    expect(b.events.map(textOf)).toEqual(['m1 call 1', 'm1 call 2', 'two']);
+    expect(b.events.map(textOf)).toEqual(['m1 call 0', 'm1 call 1', 'm1 call 2', 'two']);
     expect(b.offset).toBe(statSync(file).size);
   });
 
-  it('an unterminated last line is parsed as a record when it parses, and the offset is the file size', async () => {
+  it('a record boundary exactly at lastN adds nothing', async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one') + multiLine('m1', 2) + userLine('u2', 'two'));
+    const b = await readBacklog(localIO, file, 3);
+    expect(b.events.map(textOf)).toEqual(['m1 call 0', 'm1 call 1', 'two']);
+  });
+
+  it('an unterminated last line is still parsed when it parses, and the offset is the file size (the tail is unchanged)', async () => {
     const file = tmpFile();
     writeFileSync(file, userLine('u1', 'one') + userLine('u2', 'two').trimEnd());
     const b = await readBacklog(localIO, file, 50);
     expect(b.events.map(textOf)).toEqual(['one', 'two']);
     expect(b.offset).toBe(statSync(file).size);
+  });
+
+  it('a window read that succeeds with fewer bytes than it asked for is unreadable, never a short window', async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one') + userLine('u2', 'two'));
+    const size = statSync(file).size;
+    const io = { ...localIO, readFileFromBytesMeasured: async (p: string, o: number, n: number) => {
+      const r = await localIO.readFileFromBytesMeasured(p, o, n);
+      return r.ok ? { ...r, bytes: r.bytes.slice(1) } : r;
+    } };
+    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: false, measured: false, scanEnd: size });
   });
 
   it('multibyte text across a read boundary decodes whole', async () => {

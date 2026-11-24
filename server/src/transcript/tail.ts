@@ -2,13 +2,15 @@ import { EventEmitter } from 'node:events';
 import { helperFactsOf, parseTranscriptLine, type HelperFact } from './parse.js';
 import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
+import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 
 // Read at most the last 1 MB of a transcript for the backlog, not the whole
 // file. Transcripts reach tens of MB (project-d was 17.9 MB for the last 50
 // events); reading them whole through the agent RPC ballooned the agent's RSS
 // to ~1.9 GB and stalled its event loop. 1 MB comfortably covers BACKLOG_N=50
-// events even at large (multi-KB) line sizes.
-const BACKLOG_TAIL_BYTES = 1024 * 1024;
+// events even at large (multi-KB) line sizes. Since wave 171 it is read as four bounded byte reads of the agent link's
+// read cap, framed in bytes.
+const BACKLOG_TAIL_BYTES = 4 * READ_FROM_MAX_BYTES;
 
 /**
  * What `readBacklog` answers. THREE facts, not one:
@@ -39,41 +41,70 @@ export interface BacklogRead {
   cut?: string;
 }
 
+const decoder = new TextDecoder();
+
 /**
- * Return the last `lastN` events plus the end-of-file byte offset (where a
- * tailer should resume), reading only the file's tail, and say whether the
- * answer rests on a completed measurement.
+ * Return the last `lastN` events plus the byte offset a tailer should resume at, reading only the file's tail, and say
+ * whether the answer rests on a completed measurement.
+ *
+ * THE SEAM (desktop polish wave 171). The window is framed in BYTES into whole records (a record is a line that ends in a
+ * newline the window read). The backlog begins at a record start: the record holding the oldest of the last `lastN` events
+ * is emitted whole, so the backlog may exceed `lastN` by the rest of that one record. The window's last line is framed as
+ * a record even when it is unterminated, and the offset is the file's size, as before.
  */
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
   const st = await io.statMeasured(file);
   if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
   if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
-  const res = await io.readFileFromMeasured(file, start);
-  if (!res.ok) {
-    // Absent HERE is a real race — the file was stat'd and then unlinked — and
-    // it is a MEASUREMENT, so it reports as missing-and-measured. Unreadable
-    // is the opposite: the file is still there and its bytes never came, so
-    // `missing` stays false and `measured` goes false, which is what stops the
-    // PWA rendering an empty chat over a transcript nobody could read — the
-    // empty-backlog-with-a-real-offset defect this replaced (D-1403).
-    const absent = res.reason === 'absent';
-    return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
+  const bytes = new Uint8Array(st.size - start);
+  for (let at = start; at < st.size;) {
+    const want = Math.min(READ_FROM_MAX_BYTES, st.size - at);
+    const res = await io.readFileFromBytesMeasured(file, at, want);
+    if (!res.ok || res.bytes.length !== want) {
+      // Absent HERE is a real race — the file was stat'd and then unlinked — and
+      // it is a MEASUREMENT, so it reports as missing-and-measured. Unreadable
+      // is the opposite: the file is still there and its bytes never came, so
+      // `missing` stays false and `measured` goes false, which is what stops the
+      // PWA rendering an empty chat over a transcript nobody could read — the
+      // empty-backlog-with-a-real-offset defect this replaced (D-1403). A read
+      // that answered fewer bytes than it was owed is unreadable too.
+      const absent = !res.ok && res.reason === 'absent';
+      return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
+    }
+    bytes.set(res.bytes, at - start);
+    at += want;
   }
-  let text = res.data;
-  let cut: string | undefined;
+
   // A non-zero start almost certainly lands mid-line — drop the partial head so
   // we never hand half a JSON object to the parser (the start scan parses it, joined to its head).
+  let head = 0;
+  let cut: string | undefined;
   if (start > 0) {
-    const nl = text.indexOf('\n');
-    cut = nl >= 0 ? text.slice(0, nl) : text;
-    text = nl >= 0 ? text.slice(nl + 1) : '';
+    const nl = bytes.indexOf(0x0a);
+    head = nl >= 0 ? nl + 1 : bytes.length;
+    cut = decoder.decode(bytes.subarray(0, nl >= 0 ? nl : bytes.length));
   }
-  const lines = text.split('\n').filter((l) => l.trim() !== '');
-  const events = lines.flatMap(parseTranscriptLine);
-  const helpers = lines.flatMap(helperFactsOf);
+  const offset = st.size;
+
+  const records: { at: number; line: string; events: ChatEvent[] }[] = [];
+  for (let from = head; from < bytes.length;) {
+    const nl = bytes.indexOf(0x0a, from);
+    const end = nl < 0 ? bytes.length : nl;
+    const line = decoder.decode(bytes.subarray(from, end));
+    if (line.trim() !== '') records.push({ at: from, line, events: parseTranscriptLine(line) });
+    from = end + 1;
+  }
+  const helpers = records.flatMap((r) => helperFactsOf(r.line));
+
+  // The seam: walk back from the newest record until `lastN` events are covered; that record is emitted whole.
+  let k = records.length;
+  let count = 0;
+  while (k > 0 && count < lastN) { k -= 1; count += records[k]!.events.length; }
+  const covered = count >= lastN ? records.slice(k) : records;
+  const events = covered.flatMap((r) => r.events);
   return {
-    events: events.slice(-lastN), offset: res.size, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
+    events, offset, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
     scanEnd: start, ...(cut !== undefined ? { cut } : {}),
   };
 }
