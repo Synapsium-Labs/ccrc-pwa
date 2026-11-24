@@ -1,4 +1,5 @@
-import { constants as fsConstants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { constants as fsConstants, type BigIntStats } from 'node:fs';
 import { lstat, mkdir, open, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
@@ -163,10 +164,27 @@ export async function readB64Measured(p: string, noFollow = false): Promise<Read
  *  the canonical base64 of exactly the bytes read, beside `data`, which is
  *  still the lossy UTF-8 decode of those same bytes (a character split by the
  *  bound decodes to U+FFFD there and survives byte-exact here). An older
- *  caller never sees the key. */
+ *  caller never sees the key.
+ *
+ *  `ident` is ADDITIVE beside `dataB64`, on a bounded answer that carries bytes
+ *  only (never EOF): `readIdentOf` of a bigint fstat of the handle the bytes are
+ *  read from, which `openRegular` has already proved a regular file. Absent is
+ *  UNMEASURED, never "same file"; the bytes answer either way. */
 export type ReadFromResult =
-  | { ok: true; data: string; size: number; dataB64?: string }
+  | { ok: true; data: string; size: number; dataB64?: string; ident?: string }
   | { ok: false; reason: ReadFailure };
+
+/** An open regular file's identity, for EQUALITY between bounded reads through one adapter: the sha256 (64 lowercase hex)
+ *  of its device, inode and birth time from a bigint fstat. A digest, so no caller holds the raw values. `undefined`
+ *  (unmeasured) unless the stat is a regular file with a non-zero inode and a usable birth time, `0 < birth < ctime`: zero is
+ *  a filesystem or kernel that gave none, and a birth time equal to ctime is what a runtime that fills birth time from
+ *  ctime always answers (as well as a file not changed since the tick it was created in), so neither is trusted. Two
+ *  incarnations of one path whose creations share a timestamp tick and an inode number still read the same: this is not
+ *  proof of incarnation, only a refusal to claim one without the three facts. */
+export function readIdentOf(st: BigIntStats): string | undefined {
+  if (!st.isFile() || st.ino === 0n || st.birthtimeNs <= 0n || st.birthtimeNs >= st.ctimeNs) return undefined;
+  return createHash('sha256').update(`read-ident-v1\0${st.dev}\0${st.ino}\0${st.birthtimeNs}`).digest('hex');
+}
 
 export async function readFromMeasured(
   p: string, offset: number, maxBytes?: number, noFollow = false,
@@ -185,9 +203,13 @@ export async function readFromMeasured(
     const bounded = maxBytes !== undefined;
     const end = bounded ? Math.min(size, from + maxBytes) : size;
     if (from >= end) return bounded ? { ok: true, data: '', dataB64: '', size } : { ok: true, data: '', size };
+    // The bounded arm's identity, from the handle the bytes come from, before they are read; a failed fstat leaves it
+    // unmeasured and the bytes still answer, as they did before this field existed.
+    const ident = bounded ? await fh.stat({ bigint: true }).then(readIdentOf, () => undefined) : undefined;
     const bytes = await readRange(fh, from, end);
     const data = bytes.toString('utf8');
-    return bounded ? { ok: true, data, dataB64: bytes.toString('base64'), size } : { ok: true, data, size };
+    if (!bounded) return { ok: true, data, size };
+    return { ok: true, data, dataB64: bytes.toString('base64'), size, ...(ident !== undefined ? { ident } : {}) };
   } catch (e) {
     return { ok: false, reason: failureFor(e) };
   } finally {

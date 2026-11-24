@@ -1,16 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, chmodSync, linkSync, mkdirSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  appendFileSync, chmodSync, linkSync, mkdirSync, renameSync, statSync, symlinkSync, truncateSync, writeFileSync, type BigIntStats,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
-import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
+import { MAX_READ_B64_BYTES, readFromMeasured } from '../../agent/src/fileops.js';
 
 // R99's one seam. `readFileFromBytesMeasured` stats the file, then reads the range it was promised, and a file that shrinks
 // in between is the case its length check exists for. The real `stat` is wrapped, never replaced: a row arms `afterStat`, and
 // the wrapper lets the real answer through and THEN runs it, so the shrink is the real filesystem's, at the one moment a
 // test cannot otherwise reach. Disarmed, the wrapper is the real `stat`, which is what every other row in this file sees.
 const afterStat = vi.hoisted(() => ({ run: null as null | ((p: string) => void) }));
+// The byte-read identity's seam (run 3531), the same pattern: the real `open` is wrapped, never replaced. `afterOpen` acts on
+// the handle just opened, before anything reads it (a rename-over, controlled bigint stat facts, a short read), and `opens`
+// counts the opens of each path, so a test can prove an answer opened nothing. Disarmed, it is the real `open`.
+const afterOpen = vi.hoisted(() => ({
+  run: null as null | ((p: string, fh: import('node:fs/promises').FileHandle) => void), opens: new Map<string, number>(),
+}));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -20,12 +30,47 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       afterStat.run?.(String(p));
       return answer;
     }) as typeof actual.stat,
+    open: (async (...a: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...a);
+      afterOpen.opens.set(String(a[0]), (afterOpen.opens.get(String(a[0])) ?? 0) + 1);
+      afterOpen.run?.(String(a[0]), fh);
+      return fh;
+    }) as typeof actual.open,
   };
 });
 
 const mktempDir = (): string => mkTmp('ccrc-io-');
 const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+type Handle = import('node:fs/promises').FileHandle;
+/** Controlled facts for one handle's BIGINT stat (the identity's), the real answer otherwise; `fail` rejects it. */
+interface Facts { birth?: bigint; change?: bigint; ino?: bigint; regular?: boolean; fail?: boolean }
+const withFacts = (fh: Handle, f: Facts): void => {
+  const real = fh.stat.bind(fh) as (o?: { bigint?: boolean }) => Promise<unknown>;
+  fh.stat = (async (o?: { bigint?: boolean }) => {
+    if (o?.bigint !== true) return real(o);
+    if (f.fail === true) throw Object.assign(new Error('EIO: stat failed'), { code: 'EIO' });
+    const st = (await real({ bigint: true })) as BigIntStats;
+    if (f.birth !== undefined) st.birthtimeNs = f.birth;
+    if (f.change !== undefined) st.ctimeNs = f.change;
+    if (f.ino !== undefined) st.ino = f.ino;
+    if (f.regular === false) st.isFile = () => false;
+    return st;
+  }) as Handle['stat'];
+};
+/** The token as the contract states it, derived independently of the code under test. */
+const tokenOf = (dev: bigint, ino: bigint, birth: bigint): string =>
+  createHash('sha256').update(`read-ident-v1\0${dev}\0${ino}\0${birth}`).digest('hex');
+/** A bounded answer without its optional token, which a one-call fixture file may or may not carry (its birth and change
+ *  times can fall in one tick or two): present, it must be 64 hex. */
+const sansIdent = <T extends object>(r: T): T => {
+  if (!('ident' in r)) return r;
+  expect((r as { ident: unknown }).ident).toMatch(/^[0-9a-f]{64}$/);
+  const { ident: _ident, ...rest } = r as T & { ident?: unknown };
+  return rest as T;
+};
+const u8 = (s: string): Uint8Array => new Uint8Array(Buffer.from(s));
 
 describe('localIO.readFile', () => {
   it('returns file content, null when missing', async () => {
@@ -132,8 +177,8 @@ describe('localIO.readFileFromBytesMeasured', () => {
   it('returns the bytes of the range and the whole file\'s size; the EOF arm is a positive answer, not a miss', async () => {
     const file = tmpFile();
     writeFileSync(file, '0123456789');
-    expect(await localIO.readFileFromBytesMeasured(file, 3, 4)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('3456')), size: 10 });
-    expect(await localIO.readFileFromBytesMeasured(file, 8, 99)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('89')), size: 10 });
+    expect(sansIdent(await localIO.readFileFromBytesMeasured(file, 3, 4))).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('3456')), size: 10 });
+    expect(sansIdent(await localIO.readFileFromBytesMeasured(file, 8, 99))).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('89')), size: 10 });
     expect(await localIO.readFileFromBytesMeasured(file, 10, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 10 });
   });
 
@@ -153,6 +198,132 @@ describe('localIO.readFileFromBytesMeasured', () => {
     } finally { afterStat.run = null; }
     expect(fired, 'the shrink happened between the stat and the read').toBe(1);
     expect(statSync(file).size, 'the file really is that short now').toBe(shrunk);
+  });
+});
+
+// ── run 3531: the byte-read identity on the local adapter ──
+describe('localIO.readFileFromBytesMeasured: one regular handle for bytes, size and identity; EOF still opens nothing', () => {
+  afterEach(() => { afterOpen.run = null; afterStat.run = null; });
+  const opens = (p: string): number => afterOpen.opens.get(p) ?? 0;
+  const fileWith = (content: string, name = 'x.txt'): { file: string; dev: bigint; ino: bigint } => {
+    const file = tmpFile(name);
+    writeFileSync(file, content);
+    const st = statSync(file, { bigint: true });
+    return { file, dev: st.dev, ino: st.ino };
+  };
+
+  it('EOF answers from the path stat without opening the file, and carries no token', async () => {
+    const { file } = fileWith('0123456789');
+    afterOpen.run = (_p, fh) => withFacts(fh, { birth: 5n, change: 9n });
+    expect(await localIO.readFileFromBytesMeasured(file, 10, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 10 });
+    expect(opens(file)).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('EOF of a file it may not read: ok empty, as before, never opened', async () => {
+    const { file } = fileWith('abc', 'locked.txt');
+    chmodSync(file, 0o000);
+    try {
+      expect(await localIO.readFileFromBytesMeasured(file, 3, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 3 });
+    } finally { chmodSync(file, 0o644); }
+    expect(opens(file)).toBe(0);
+  });
+
+  it('EOF of a directory at its exact size: ok empty, as before, never opened', async () => {
+    const dir = mktempDir();
+    const dirSize = statSync(dir).size;
+    expect(await localIO.readFileFromBytesMeasured(dir, dirSize, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: dirSize });
+    expect(opens(dir)).toBe(0);
+  });
+
+  it('a FIFO at offset 0: ok empty, as before, never opened (so it cannot hang)', async (ctx) => {
+    const fifo = path.join(mktempDir(), 'fifo');
+    if (spawnSync('mkfifo', [fifo]).status !== 0) ctx.skip();
+    expect(await localIO.readFileFromBytesMeasured(fifo, 0, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 0 });
+    expect(opens(fifo)).toBe(0);
+  });
+
+  it('bytes are read through exactly one open, and carry the token of that handle when the facts are usable', async () => {
+    const { file, dev, ino } = fileWith('0123456789');
+    afterOpen.run = (p, fh) => { if (p === file) withFacts(fh, { birth: 5n, change: 9n }); };
+    expect(await localIO.readFileFromBytesMeasured(file, 3, 4))
+      .toEqual({ ok: true, bytes: u8('3456'), size: 10, ident: tokenOf(dev, ino, 5n) });
+    expect(opens(file)).toBe(1);
+  });
+
+  it.each([
+    ['birth time 0', { birth: 0n, change: 9n }],
+    ['birth equal to change', { birth: 7n, change: 7n }],
+    ['birth after change', { birth: 9n, change: 5n }],
+    ['inode 0', { birth: 5n, change: 9n, ino: 0n }],
+  ] as const)('%s: the same bytes and size, and no token', async (_label, f) => {
+    const { file } = fileWith('0123456789');
+    afterOpen.run = (p, fh) => { if (p === file) withFacts(fh, f); };
+    const r = await localIO.readFileFromBytesMeasured(file, 3, 4);
+    expect(r).toEqual({ ok: true, bytes: u8('3456'), size: 10 });
+    expect(r).not.toHaveProperty('ident');
+  });
+
+  it('a handle that is not a regular file is unreadable, and no byte is read from it', async () => {
+    const { file } = fileWith('0123456789');
+    let reads = 0;
+    afterOpen.run = (p, fh) => {
+      if (p !== file) return;
+      withFacts(fh, { regular: false });
+      const real = fh.read.bind(fh);
+      fh.read = ((...a: Parameters<Handle['read']>) => { reads += 1; return real(...(a as [never])); }) as Handle['read'];
+    };
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+    expect(reads).toBe(0);
+  });
+
+  it('a directory below its size is still unreadable', async () => {
+    const dir = mktempDir();
+    expect(await localIO.readFileFromBytesMeasured(dir, 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a failed stat of the open handle is unreadable on this adapter (it supplies the size and the type)', async () => {
+    const { file } = fileWith('0123456789');
+    afterOpen.run = (p, fh) => { if (p === file) withFacts(fh, { fail: true }); };
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a rename-over AFTER the open: the old bytes with the old token, then the new bytes with a new token', async () => {
+    const { file, dev, ino } = fileWith('OLD-BYTES\n');
+    const next = path.join(path.dirname(file), 'next.txt');
+    writeFileSync(next, 'NEW-BYTES-LONGER\n');
+    const nextIno = statSync(next, { bigint: true }).ino;
+    let swaps = 0;
+    afterOpen.run = (p, fh) => {
+      if (p !== file) return;
+      withFacts(fh, { birth: 1n, change: 2n });
+      if (swaps === 0) { swaps += 1; renameSync(next, file); }
+    };
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 9)).toEqual({ ok: true, bytes: u8('OLD-BYTES'), size: 10, ident: tokenOf(dev, ino, 1n) });
+    expect(swaps).toBe(1);
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 9)).toEqual({ ok: true, bytes: u8('NEW-BYTES'), size: 17, ident: tokenOf(dev, nextIno, 1n) });
+  });
+
+  it('a short read and a shrink after the open are unreadable, never short bytes', async () => {
+    const { file } = fileWith('0123456789');
+    afterOpen.run = (p, fh) => { if (p === file) fh.read = (async () => ({ bytesRead: 0, buffer: Buffer.alloc(0) })) as never; };
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+    afterOpen.run = (p) => { if (p === file) truncateSync(file, 2); };
+    expect(await localIO.readFileFromBytesMeasured(file, 0, 10)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a file that GREW between the path stat and the open answers the handle\'s size and bytes (the named change)', async () => {
+    const { file } = fileWith('0123456789');
+    afterStat.run = (p) => { if (p === file) { afterStat.run = null; appendFileSync(file, 'XYZ'); } };
+    expect(sansIdent(await localIO.readFileFromBytesMeasured(file, 8, 99))).toEqual({ ok: true, bytes: u8('89XYZ'), size: 13 });
+  });
+
+  it('the local and the agent derivations give the same token for the same file and facts', async () => {
+    const { file, dev, ino } = fileWith('0123456789');
+    afterOpen.run = (_p, fh) => withFacts(fh, { birth: 5n, change: 9n });
+    const local = await localIO.readFileFromBytesMeasured(file, 0, 4);
+    const agent = await readFromMeasured(file, 0, 4);
+    expect(local.ok && local.ident).toBe(tokenOf(dev, ino, 5n));
+    expect(agent.ok && agent.ident).toBe(tokenOf(dev, ino, 5n));
   });
 });
 
