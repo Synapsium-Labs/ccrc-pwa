@@ -208,7 +208,7 @@ describe('no empty fourth column', () => {
   it('the tracks follow the width: 340 below 1600, 420 from 1600, never a third (desk-nav Task A, D-8100)', async () => {
     for (const [width, tracks] of [[900, ['340px', '560px']], [1280, ['340px', '940px']], [1599, ['340px', '1259px']],
       [1920, ['420px', '1500px']]] as const) {
-      const { ctx, page } = await open(PHOSPHOR, width, 900, '/');
+      const { ctx, page } = await open(PHOSPHOR, width, 900, '/fleet');
       try {
         const got = await page.evaluate(() => getComputedStyle(document.querySelector('.app-shell')!).gridTemplateColumns.split(' '));
         expect(got, `${width}px`).toEqual(tracks);
@@ -232,7 +232,7 @@ const BUDGET = BEFORE - AFTER_OFFSET;
 describe("the bar's Inbox count (T2e review R32, F7; desk-nav Task A, D-8100)", () => {
   for (const [width, theme] of [900, 1280].flatMap((w) => THEMES.map((t) => [w, t] as const))) {
     it(`at ${width}x800 the count pill sits on the Inbox door's icon, at its top-right corner, inside the door (${theme})`, async () => {
-      const { ctx, page } = await open(theme, width, 800, '/');
+      const { ctx, page } = await open(theme, width, 800, '/fleet');
       try {
         await page.waitForSelector('.ins-door-count', { timeout: 20_000 });
         const m = await page.evaluate(() => {
@@ -281,7 +281,7 @@ describe("the bar's Inbox count (T2e review R32, F7; desk-nav Task A, D-8100)", 
 describe('one head in the list column', () => {
   for (const theme of THEMES) {
     it(`at 1280x800 the first row starts ${BUDGET} px higher than on origin/main, no less (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
+      const { ctx, page } = await open(theme, 1280, 800, '/fleet');
       try {
         const offset = await page.evaluate(() => {
           const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
@@ -305,7 +305,7 @@ const SAVING = 27;
 describe('one count at the desk (T2g, D-6715)', () => {
   for (const theme of THEMES) {
     it(`at 1280x800 the first row starts ${SAVING} px higher than after T2e, no less (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
+      const { ctx, page } = await open(theme, 1280, 800, '/fleet');
       try {
         const offset = await page.evaluate(() => {
           const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
@@ -325,7 +325,7 @@ describe('one count at the desk (T2g, D-6715)', () => {
   // more room than the operator's.
   for (const touch of [false, true]) {
     it(`at 900 the status bar's count is whole, with two open runs and a release waiting (${touch ? 'touch' : 'fine pointer'})`, async () => {
-      const { ctx, page } = await open(PHOSPHOR, 900, 800, '/', touch, WITH_RUNS);
+      const { ctx, page } = await open(PHOSPHOR, 900, 800, '/fleet', touch, WITH_RUNS);
       try {
         await page.waitForFunction(() => (document.querySelector('.ins-status-summary')?.textContent ?? '').includes('run')
           && document.querySelector('.ins-status .update-indicator-door') !== null, undefined, { timeout: 20_000 });
@@ -442,7 +442,7 @@ describe('dense rows under a fine pointer', () => {
   for (const theme of THEMES) {
     for (const [width, column] of [[1280, 340], [1600, 420]] as const) {
       it(`at ${width} (the ${column} column) a row whose name and state fit on one line is two lines and at most 42 px, the state word takes a line of its own only when neither the name's line nor the context's has room for it, and every row is at most three lines and under 61 px (${theme})`, async () => {
-        const { ctx, page } = await open(theme, width, 900, '/');
+        const { ctx, page } = await open(theme, width, 900, '/fleet');
         try {
           const rows = await measureRows(page);
           expect(rows.length, 'open rows').toBeGreaterThanOrEqual(5);
@@ -480,7 +480,7 @@ describe('dense rows under a fine pointer', () => {
     }
 
     it(`at 1280 the two workspace needs-you rows, a long name beside "waiting · needs you", are exactly three lines: the name, the state, the context, whose branch would not fit whole beside the state; the second main checkout is the name and the state (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
+      const { ctx, page } = await open(theme, 1280, 800, '/fleet');
       try {
         const rows = (await measureRows(page)).filter((r) => r.needsYou);
         expect(rows.map((r) => r.id).sort()).toEqual(['project-a-ask-routing-follow-up', 'project-a-project-a-review-wave-two', 'project-b']);
@@ -497,7 +497,7 @@ describe('dense rows under a fine pointer', () => {
     });
 
     it(`at 1600 every row is two lines (one for the main checkout project-a), project-a-review-wave-two included, its state word on the context line (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1600, 900, '/');
+      const { ctx, page } = await open(theme, 1600, 900, '/fleet');
       try {
         const rows = await measureRows(page);
         for (const r of rows) {
@@ -513,7 +513,7 @@ describe('dense rows under a fine pointer', () => {
     });
 
     it(`the lamp sits on the name's first line in every row: one, two and three lines (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
+      const { ctx, page } = await open(theme, 1280, 800, '/fleet');
       try {
         const rows = await measureRows(page);
         // The comment in instrument.css says the lamp sits on the name's line; in a one-line row (no context fact) the
@@ -535,7 +535,7 @@ describe('dense rows under a fine pointer', () => {
 describe('a touch screen keeps the tap floor', () => {
   for (const theme of THEMES) {
     it(`under touch emulation, every row and control is at least 44 px (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/', true);
+      const { ctx, page } = await open(theme, 1280, 800, '/fleet', true);
       try {
         expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches),
           'the context emulates a coarse pointer').toBe(true);
@@ -616,7 +616,7 @@ describe('the Status view shows programmes, not children (G3)', () => {
   async function openStatus(theme: string, width: number, touch = false) {
     const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, PFIXTURE);
     await opened.page.setViewportSize({ width, height: 800 });
-    await opened.page.goto(server!.origin + '/');
+    await opened.page.goto(server!.origin + '/fleet');
     await opened.page.waitForSelector('.ins-table section.pg-box', { timeout: 20_000 });
     await opened.page.evaluate(async () => { await document.fonts.ready; });
     await opened.page.waitForTimeout(600); // the first paint's transitions and the fleet frame settle

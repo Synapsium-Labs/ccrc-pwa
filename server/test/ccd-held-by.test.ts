@@ -178,9 +178,10 @@ describe('ccd names the rows that hold the child, by id and word', () => {
     expect(heldBy(a.doc)).toEqual([{ id: 'demo-linked', word: 'workdir-unreadable', workspace: 'absent' }]);
   }, 90_000);
 
-  it('entry-pending: a row whose entry field reads pending', () => {
+  it('entry-pending: a row whose entry field reads pending, spelled through a link (D-8954)', () => {
     makeChild(h);
-    const elsewhere = mk('elsewhere');
+    const elsewhere = path.join(fs.realpathSync(h.home), 'pending-link');
+    fs.symlinkSync(mk('elsewhere'), elsewhere);
     otherRow('demo-pending', elsewhere);
     writeField(h, 'demo-pending', `v1\tpending\t${AT}\t-\t${elsewhere}`);
     const a = reclaimAudit();

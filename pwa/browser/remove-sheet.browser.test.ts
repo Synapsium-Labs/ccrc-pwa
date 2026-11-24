@@ -156,7 +156,7 @@ describe('Remove, Discard and Replace token at every width and skin (D-7742)', (
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         const routes = await removeRoutes(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-b"] .acct-fold', { timeout: 30_000 });
 

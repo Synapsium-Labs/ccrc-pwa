@@ -8,6 +8,7 @@ import { mergeBaseText } from '../mergeBase.js';
 import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } from './coordBlockedDay.js';
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { FACE_MUTANT_SETS } from './faceSets.js';
+import { HOME_MUTANT_SETS } from './homeSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
 import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
@@ -19,6 +20,8 @@ import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
 import { PROBE_MUTANT_SETS } from './probeSets.js';
 import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
+import { OVERLORD_INBOX_MUTANT_SETS } from './overlordInboxSets.js';
+import { FIXED_LINE_MAIL_MUTANT_SETS } from './fixedLineMailSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
@@ -38,6 +41,7 @@ import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { OVERLORD_RESTORE_MUTANT_SETS } from './overlordRestoreSets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
 import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
 import { HOOK_REPORT_MUTANT_SETS } from './hookReportSets.js';
@@ -65,6 +69,7 @@ import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
 import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { WITNESS_MUTANT_SETS } from './witnessSets.js';
+import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -198,11 +203,14 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...URGENT_MAIL_MUTANT_SETS,
   ...MAIL_HOLD_POLICY_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
+  ...HOME_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
   ...PROBE_DOOR_MUTANT_SETS,
+  ...OVERLORD_INBOX_MUTANT_SETS,
+  ...FIXED_LINE_MAIL_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,
@@ -222,6 +230,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...OVERLORD_RESTORE_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
   ...ACT_KEY_MUTANT_SETS,
   ...HOOK_REPORT_MUTANT_SETS,
@@ -249,6 +258,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...APPROVAL_PARK_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
   ...WITNESS_MUTANT_SETS,
+  ...ISOLATION_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

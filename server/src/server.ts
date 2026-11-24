@@ -88,6 +88,7 @@ import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectRea
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
 import { registerApprovalCensusRoutes } from './coord/approvalCensusRoutes.js';
+import { registerDelegationBackfillRoutes } from './coord/delegationBackfillRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
@@ -112,7 +113,10 @@ import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
-import { overlordGateRun } from './coord/overlordGateRun.js';
+import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
+import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
+import { runOverlordRead } from './coord/overlordRead.js';
+import { readTurnMarkMeasured } from './turnmark.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
@@ -295,6 +299,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
   '/api/portfolio', '/api/overlord/ladder',
+  // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
+  '/api/overlord/inbox', '/api/overlord/messages/:id',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1475,7 +1481,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { lane } = req.params as { lane: string };
     if (!deps.cfg.roster.byId.has(lane)) return refuseRoute(reply, 'not-found');
     reply.header('cache-control', 'no-store');
-    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, deps.cfg.ccrcDir, lane) };
+    const answer: LaneModelsAnswer = { ok: true, lane, models: await readLaneModels(deps.io, lane) };
     return answer;
   });
 
@@ -2007,13 +2013,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
               : '; if the lane is meant to be a codex lane, its row in this box\'s accounts.json needs a complete codex '
                 + 'exec block, not exec.kind alone (exec.provider "openai", exec.authDir, and two ports of its own, '
                 + 'exec.proxyPort and exec.litellmPort), and the server refuses a roster with an incomplete one at '
-                + 'start: fix the row, and restart the server')
+                + 'start: fix the row, and restart the server; if it is meant to be an Anthropic lane, its row in this '
+                + 'box\'s accounts.json needs telemetry "anthropic", and no codex exec block: fix the row, and restart '
+                + 'the server')
           : decision.reason === 'over-cap'
             ? `: the line is longer than the push cap of ${MODELS_PUSH_MAX} characters; a failure line with long model `
               + 'ids is refused this way by design, and the banner carries it'
             : '';
         console.warn('ccrc-server: /api/notify: push:true on a notice that is not a model-class line of a codex-kind '
-          + `lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
+          + `or Anthropic lane (${decision.reason})${detail}; the banner went out, the phone push did not`);
       } else {
         notifyPushOnly(deps, { title: 'Model classes', body: message, tag: decision.tag, url: '/accounts' },
           'ccrc-server: /api/notify: the push did not go out');
@@ -2170,15 +2178,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Hold, Release and Revert, registered
+  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Revert only, registered
   // from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`MODELS_DOORS`) read by name.
   registerLaneModelsRoutes(app, {
-    io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
+    io: deps.io, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
   // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own
   // file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`APPROVAL_CENSUS_DOORS`) read by name.
   registerApprovalCensusRoutes(app, { sources: (fromMs, toMs) => questions.censusSources(fromMs, toMs), wall: () => deps.time.clock.wall() });
+  // The one-time pass over the delegation broker's unmeasured records (session helpers S2, D-8874): its dry run, pass and undo, session-gated,
+  // no box token, registered from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`DELEGATION_BACKFILL_DOORS`) read.
+  registerDelegationBackfillRoutes(app, {
+    applier: async () => (watcher === undefined ? null : watcher.delegationApplier()), io: deps.io, registryDir: deps.cfg.registryDir,
+    listedIds: () => watcher?.currentRegistryIds() ?? null, now: () => deps.time.clock.wall(), signedIn: (req) => deps.cfg.authEnabled && sessionAuth(req).reason === 'session',
+  });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({
@@ -2226,23 +2240,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id) }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
-  const gate = overlordGateRun({
+  const continuityLive = () => deps.coord !== undefined && laneArmRowViewOf(CONTINUITY_LANE, deps.coord.laneArmSetting(CONTINUITY_LANE)).live;
+  const gateDeps: OverlordGateDeps = {
     identity, serverWords: () => SERVER_CAPS, now: () => deps.time.clock.wall(),
     designation: () => deps.coord?.designationRead() ?? { kind: 'unmeasured', why: noCoord },
     authority: () => deps.overlordAuthorityGuard?.state() ?? { kind: 'unmeasured', why: 'journal' },
     ladder: () => { if (ladderDeps === undefined) return { kind: 'unmeasured', why: noCoord }; const r = ladderRead(ladderDeps.coord, ladderDeps.inputs, ladderDeps.witness ?? NO_WITNESS_YET, ladderDeps.serverCaps); return r.kind === 'measured' ? { kind: 'read', rung: r.effective } : r; },
     generations: () => deps.coord?.liveGenerations() ?? { ok: false, detail: noCoord },
-    continuityLive: () => deps.coord !== undefined && laneArmRowViewOf(CONTINUITY_LANE, deps.coord.laneArmSetting(CONTINUITY_LANE)).live,
+    continuityLive,
     cardRead: (startId) => deps.coord?.cardReadOfStart(startId) ?? { ok: false, detail: noCoord },
     actKey: (g, key) => (deps.coord === undefined ? { kind: 'unmeasured', why: noCoord } : actKeyFact(deps.coord.db, g, key)),
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
-  });
+  };
+  const gate = overlordGateRun(gateDeps);
+  // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.
+  watcher?.useInboxReadGate?.(overlordReadGate(gateDeps));
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project, and (D-8809)
   // the Overlord's confirm of a team candidate behind the gate above.
   registerLinkingRoutes(app, {
@@ -2252,6 +2270,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
+  });
+  // The Overlord's inbox doors (W1 inbox piece): box-token lanes behind the gate above, each read counted and recorded by the one runner.
+  registerOverlordInboxRoutes(app, {
+    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(),
+    readRunner: runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
+      turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) }),
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
@@ -2367,7 +2391,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps,
+    ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({

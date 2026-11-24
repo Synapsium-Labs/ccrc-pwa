@@ -18,6 +18,8 @@
 # (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
 # witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
 # retried never, and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
+# Since door process B2 the same sender also runs from the main case block: one `model-switch` report on PostModelSwitch from EVERY
+# main-thread, non-child session with a registry row (door or not), and one on a typed `/model` refused in a session with a door.
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
 # worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
@@ -112,7 +114,7 @@ _hook_net_bound() {   # <max ms> -> NET_LEFT_MS, and NET_B (seconds, for `_hook_
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both, and a typed /model's block answer on UserPromptSubmit in a session with a door (Overlord W1 door process B2), printed from its own arm, which then exits. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
@@ -182,6 +184,9 @@ _hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could
 # is `additionalContext` and the call proceeds. A `Read` is never denied, which
 # is the ruling itself — `Edit` requires a prior `Read`, so a deny here would
 # charge every session told to fix a named file one denial before its edit.
+# The PROMPT's block answer (door process B2, Task 8: "the hook's builders gain" a UserPromptSubmit envelope): the event's own
+# `decision: block` shape, which stops the prompt and shows `reason` to whoever typed it. Called only by `_hook_typed_model`.
+_hook_prompt_block_json() { jq -cn --arg r "$1" '{decision: "block", reason: $r}' 2>/dev/null; }   # <reason> -> one line; 1 when it could not be built
 _hook_nudge_json() {   # <nudge> -> the nudge envelope, one line; 1 when it could not be built
   local j=""
   j=$(jq -cn --arg c "$1" \
@@ -3316,9 +3321,34 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
   return 0
 }
 
+# ── THE MODEL EVENTS AND THE TYPED /model (Overlord W1 door process B2, Task 8; spec §3.6 H1, §3.4 Table 3.4b, W0-12) ───
+# Both model events are REPORT-ONLY (ruled, F11). `PreModelSwitch` refuses nothing and sends nothing: Claude Code's own switch
+# on a flagged request is pinned on, and a refusal there could stop it. `PostModelSwitch` sends one `model-switch` report,
+# `how: switched`, `from` and `to` read from the payload's `from_model` and `to_model` (W0-12), for every session the start
+# report covers (main thread, a registry row, not a child: plan question 11, so a coordinator's switch is measured too). The
+# one refusal is on the PROMPT path: in a session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a
+# fact, never a role's name), a prompt that begins `/model` is blocked with the prompt event's own block answer and reported
+# `typed-refused`, which changed nothing and is never drift (slug `typed-model-refused-on-the-prompt-path`). Each arm EXITS in
+# the case block below, before every writer (ruled, F14): the state file, the turn marker and the spools never see a model
+# event or a refused prompt. The report rides the door's one sender, `_hook_door_report` (B1), defined here so these arms reach
+# it. Whether the pinned build passes a typed `/model` through UserPromptSubmit at all is the pull request's live step.
+REPORT_TIMEOUT_S=3
+_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'
+_hook_model_report() {   # <how> -> one model-switch report from a main-thread, non-child session with a registry row; silent on every failure
+  local b; [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0   # the start report's own id, marker and child tests (`_hook_start_report`)
+  b=$(jq -c --arg id "$id" --arg how "$1" --argjson at "$(_hook_epoch_ms)" "$MODEL_REPORT_JQ"'{kind: "model-switch", how: $how, from: (if $how == "switched" then .from_model | mdl else null end), to: (if $how == "switched" then .to_model else typed | .[6:] | (split("\n")[0] // "") | split("\t") | join(" ") | split(" ") | map(select(. != "")) | .[0] end | mdl), fromId: $id, fromUuid: (.session_id // "" | tostring), at: $at}' <<<"$payload" 2>/dev/null) && _hook_door_report "$b"
+}
+_hook_typed_model() {   # -> 0 when this prompt is a typed /model in a session with a door: reported, and its block answer printed
+  local j; [[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$payload" == *'/model'* ]] || return 1
+  jq -e "$MODEL_REPORT_JQ"'typed | startswith("/model") and (.[6:7] | IN("", " ", "\t", "\n", "\r"))' <<<"$payload" >/dev/null 2>&1 || return 1
+  j=$(_hook_prompt_block_json "ccrc: a typed /model is refused in this session. Its model is the designation's, set at each start; a change inside a generation reads as model drift. Change the designated model in the Overlord's Settings: it takes effect at the next generation.") || return 1
+  _hook_model_report typed-refused; printf '%s\n' "$j"
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
-  UserPromptSubmit) state="working" ;;
+  UserPromptSubmit) state="working"; _hook_typed_model && exit 0 ;;
   PostToolUse)
     state="working"
     # ONE payload read for the counter, on the one event that can carry a
@@ -3516,6 +3546,8 @@ case "$event" in
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
+  PreModelSwitch) exit 0 ;;   # report-only, and it refuses nothing (the model events' block above)
+  PostModelSwitch) _hook_model_report switched; exit 0 ;;
   *) exit 0 ;;
 esac
 # THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
@@ -3531,7 +3563,11 @@ esac
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
 # reaches this line (all but SessionStart `compact`, which this test leaves out, and an
 # unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
-# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# registry. NOT CAPTURED: PreModelSwitch, PostModelSwitch and a typed `/model` refused
+# in a session with a door exit in the case block above, before every writer (door
+# process B2, ruled F11 and F14), so they skip this arm and the start report's resend
+# pass too; their real payloads stay unmeasured here (the build capture records them).
+# Each file's line 1 is a meta line naming this pane's own session id, sanitised; the
 # rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
 # in it reaches the exit status. Raw files never leave the box:
 # deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
@@ -4885,6 +4921,22 @@ fi
 # programme wave or the child marker is refused with wave 2's reason, byte for
 # byte), and the bypass reasons name the door as the way for a coordinator.
 #
+# THE CHILD'S WORKSPACE DENY (D-8978, D-8979). A session whose workspace carries the child marker never runs `ccd
+# ws-add`: a workspace a worker makes itself belongs to no run (no `--child`, and no run row names it), so the console
+# lists it as "Not in a programme" and its coordinator never sees it, a scope escape (measured once in 1215 creates on a
+# live fleet). It rides THIS arm's strip, so it reads what the merge question reads: CCD_WSADD_RE (the head grammar, cut
+# where CCD_DOOR_RE is) asked of the stripped text, so a commit message, a PR body, a grep pattern or a heredoc that
+# names `ccd ws-add` passes, as a merge mention does, and a `ccd ws-addx` is another word. The prefilter wakes the strip
+# for `ws-add` only in a child (`wchild`: the marker's existence, a dangling link included, never its contents), so no
+# other session forks for it. The marker asks it, never the hold: a held session without one is not asked. The server's
+# own dispatch (`ws-add --no-rc --child <run>`) is an agent exec through `CcdArgv`, never a session's tool call, so no
+# hook sees it; a top-level session, a coordinator and the operator are never asked. It is one of two layers: the deny
+# file's `Bash(ccd ws-add:*)` (`childDenyRules` in shared/api.ts, and the installer's loop) is the other, at Claude
+# Code's own matcher. AN ACCIDENT GUARD, NOT A WALL: it passes unparsed every form the merge head passes (the list
+# above: `bash -c "…"`, a quoted or variable command word, a quoted verb, `xargs`, `eval`, an unlisted or path-spelled
+# wrapper, a leading redirection), a command over MERGE_PARSE_CAP, a verb split so that `ws-add` is not in the payload
+# (`ws\-add`), a script file and another interpreter.
+#
 # THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
 # in every session, by the same single jq and with the same reason prefix. Once the
 # STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
@@ -5125,6 +5177,9 @@ GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
 # the wrapper prefix, so cutting there leaves the head alone and the door's own command word and verb follow it.
 CCD_DOOR_CUT=$'([^[:space:];&|()]*/)?gh('
 CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-admin-merge([[:space:];&|()<>]|$)'
+# CCD_WSADD_RE (D-8978): the same head grammar with `ccd ws-add`, cut at the same place as CCD_DOOR_RE, so the four never
+# drift. Asked of a child only, by THE CHILD'S WORKSPACE DENY below.
+CCD_WSADD_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+ws-add([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -5197,8 +5252,11 @@ def capped(f): (.tool_input.command // "") as $c
     then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
     else "=" + ($c | vflags) + "\u001f" + f end;
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
+wchild=""
+if [[ -n "$id" ]] && { [[ -e "$REG/$id.child" ]] || [[ -L "$REG/$id.child" ]]; }; then wchild=1; fi
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
-      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
+      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* \
+           || ( -n "$wchild" && "$payload" == *ws-add* ) ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
   mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
@@ -5278,6 +5336,12 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
   fi
+  # THE CHILD'S WORKSPACE DENY (D-8978), asked after the merge questions and only when they set no deny.
+  if [[ -n "$wchild" && -n "$mcmd" && "$pre_json" != *'"permissionDecision":"deny"'* && "$mcmd" =~ $CCD_WSADD_RE ]]; then
+    wreason="ccrc: this workspace carries the child marker — a dispatched child — and a child never creates a workspace (\`ccd ws-add\`): one it makes belongs to no run, so the console lists it as \"Not in a programme\" and your coordinator never sees it (D-8978)."
+    wreason+=" If your task needs another worktree or a second session, ask your coordinator; for scratch files use \`\$TMPDIR\`."
+    pre_json=$(_hook_deny_json "$wreason") || pre_json=""
+  fi
 fi
 
 # ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
@@ -5319,8 +5383,9 @@ fi
 # rename turns that suite red rather than silently disarming this deny.
 # ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
 # `paid` are already in memory, so a non-Skill event, and the main thread's
-# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
-# jq for the skill's name.
+# Skill call, pay no fork in this arm, and only a subagent's Skill call pays its
+# one jq for the skill's name. A session under a launch profile pays one more jq
+# on every PreToolUse, in the surface arm below, which reads the name too.
 # A deny already set is never replaced (the merge deny's own guard, copied
 # whole). Today it cannot be set on a Skill call, because every other deny here
 # fires on another tool, and the guard is written for the day one does.
@@ -5330,17 +5395,18 @@ fi
 # `pre_json` as it was. This arm prints nothing itself: the one print site at
 # the end of the file emits the envelope, after the hookstate rename.
 ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
-if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  rsk=$(jq -r '
-    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+# The skill's name, read the way Claude Code reads it (above); the surface arm below reads it with this one definition too.
+SKILL_NAME_JQ='def skillname: def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
       or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
       or . == 8287 or . == 12288 or . == 65279;
     .tool_input.skill? // "" | tostring | explode
     | until(length == 0 or (.[0] | ws | not); .[1:])
     | until(length == 0 or (.[-1] | ws | not); .[:-1])
     | if .[0] == 47 then .[1:] else . end
-    | implode' <<<"$payload" 2>/dev/null) || rsk=""
+    | implode;'
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r "$SKILL_NAME_JQ skillname" <<<"$payload" 2>/dev/null) || rsk=""
   rbare=${rsk#*:}
   for rname in $ROLE_SKILLS; do
     if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
@@ -5350,6 +5416,39 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
       break
     fi
   done
+fi
+
+# ── THE SURFACE ARM (Overlord W1 sandbox PR B, Task 8; spec §3.6 H1, H4; slug surface-arm-refuses-what-the-profile-lacks) ──
+# A session launched under a surfaced profile carries `CCRC_LAUNCH_PROFILE=<role>:<digest>` (ccd's spawn composes it). Here
+# the hook reads that role's row from the INSTALLED `lib/launch-profiles.json` (beside this file, else `~/.cc-sessions/lib`,
+# as `_hook_role_compact_text` finds it) and denies, on the main thread and in a subagent alike: a tool the row does not list
+# (its `--tools`, or a tool `mcp__<server>__…` of a server its reader types name: the door's); an `Agent` or `Task` call (one
+# tool, as the row lists `Agent`) whose `subagent_type` is not a declared reader type (`--agents`'s keys), one naming none
+# included; and a `Skill` call whose name, read by SKILL_NAME_JQ and compared WHOLE, the row does not stage (`stagedSkills`),
+# so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
+# session's argv is the row it was spawned with, so this can only be stricter.
+# FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
+# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
+# enforcement is Claude Code's own (`--tools` and the deny rules).
+SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
+  | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
+  | if $ti == null or $ai == null then error("row") else . end
+  | ($row.flags[$ti + 1] | split(",")) as $tools | ($row.flags[$ai + 1] | fromjson) as $ag
+  | if ($row.stagedSkills | type) != "object" or ($ag | type) != "object" then error("row") else . end
+  | ([$ag[].tools[]? | strings | select(startswith("mcp__")) | "mcp__" + split("__")[1] + "__"] | unique) as $srv
+  | if (($tools | index(if $t == "Task" then "Agent" else $t end)) == null and ([$srv[] as $p | $t | startswith($p)] | any | not)) then "the tool `" + $t + "`"
+    elif ($t == "Agent" or $t == "Task") and ($ag | has($at) | not) then "the agent type `" + (if $at == "" then "(none)" else $at end) + "`"
+    elif $t == "Skill" and ($row.stagedSkills | has($sk) | not) then "the skill `" + $sk + "`"
+    else "" end'
+if [[ "$event" == PreToolUse && -n "${CCRC_LAUNCH_PROFILE:-}" && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  srole=${CCRC_LAUNCH_PROFILE%%:*} sf="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"; [[ -f "$sf" ]] || sf="$HOME/.cc-sessions/lib/launch-profiles.json"
+  sout="" sok=""; [[ "$srole" =~ ^[a-z]{1,16}$ ]] && sout=$(jq -r --arg r "$srole" --slurpfile rows "$sf" "$SKILL_NAME_JQ $SURFACE_ARM_JQ" <<<"$payload" 2>/dev/null) && sok=1
+  if [[ -z "$sok" ]]; then sreason="ccrc: this session runs under a launch profile (\`${CCRC_LAUNCH_PROFILE%%:*}\`) whose row could not be read, so every tool call is refused until it can be (W1 sandbox, the surface arm)."
+  elif [[ -n "$sout" ]]; then sreason="ccrc: this session runs under the \`$srole\` launch profile, which does not list $sout, so the call is refused (W1 sandbox, the surface arm). Use the tools, reader type and skill the profile gives you."
+  else sreason=""; fi
+  if [[ -n "$sreason" ]] && sjson=$(_hook_deny_json "$sreason"); then pre_json=$sjson; fi
 fi
 
 # ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
@@ -5935,6 +6034,24 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* &
   fi
 fi
 
+# THE READER ARMS (Overlord W1 door process B2, Task 8; spec §3.3.10 C55), each keyed on a fact, never a role's name; a denied door call
+# sends no witness. SCOPE: a reader (a recorded join, or an `agent_type`) calling a door tool but `mcp__door__read`. THREE READERS: a fourth
+# main-thread Agent or Task call with a door. MODEL: under the pin, a named model that is not the pin. Residuals: w1-door-process-b2-notes.md.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rd=""
+  case "${tool:-}" in
+    mcp__door__read) ;;
+    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+      && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
+    Agent|Task)
+      [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
+        && rd="ccrc: three readers already run (C55's bound): wait for one to finish before starting another."
+      [[ -z "$rd" && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && rmod=$(jq -r '.tool_input.model | strings' <<<"$payload" 2>/dev/null) \
+        && [[ -n "$rmod" && "$rmod" != "$CLAUDE_CODE_SUBAGENT_MODEL" ]] && rd="ccrc: a subagent here runs on the pinned model, $CLAUDE_CODE_SUBAGENT_MODEL; this call names $rmod. Leave the model out, or name the pinned one." ;;
+  esac
+  [[ -n "$rd" ]] && rj=$(_hook_deny_json "$rd") && pre_json=$rj
+fi
+
 # A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
 # Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
 # naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
@@ -6351,8 +6468,7 @@ if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate ||
 # (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
 # SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
 # header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
-REPORT_TIMEOUT_S=3
-_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+# REPORT_TIMEOUT_S and the sender are defined above the main case block, whose model arms (door process B2) send through it too, from every non-child registry session.
 DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
 _hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
   local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1

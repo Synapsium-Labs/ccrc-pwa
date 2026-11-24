@@ -13,6 +13,7 @@ import { setTheme } from '../lib/theme';
 import { setCharacter } from '../lib/character';
 import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
+import { useHome, useOverlordShown } from '../stores/overlord';
 import { useSessionCommandTarget } from '../session/SessionFlows';
 import { useInspectorCommandTarget } from '../inspector/inspectorShown';
 import { baseCommands, fleetOrder } from './commands';
@@ -124,6 +125,10 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   const session = useSessionCommandTarget();
   // The inspector rail's flip (desktop polish T3e, D-6385), while a part places one.
   const inspector = useInspectorCommandTarget();
+  // The home and the word (Overlord W1 home, Task 3): "Go home" and the wordmark read where the home is, and "Go to Overlord"
+  // is offered only while the server advertises the word.
+  const home = useHome();
+  const overlordShown = useOverlordShown();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
@@ -138,7 +143,9 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     paletteOpen: open,
     session,
     inspector,
-  }), [path, ordered, runs, openNewSession, openPalette, open, session, inspector]);
+    home,
+    overlordShown,
+  }), [path, ordered, runs, openNewSession, openPalette, open, session, inspector, home, overlordShown]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 

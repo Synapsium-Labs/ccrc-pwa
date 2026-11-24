@@ -4277,6 +4277,8 @@ export const MIGRATIONS: readonly string[] = [
   // before merge (it must print 119 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // Since run 3538 the status row's `account` is the week's account when the week's folder records one, else the setup's.
+  // The SQL comment on that column says "the setup's account id": it is stored text of this frozen entry, so it stays.
   `
   CREATE TABLE continuity_quiz_status (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -4300,6 +4302,110 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 121: user_version 120 -> 121 ──────────────────────────────────────────
+  // The run cap is derived from the machine (D-8920; the operator's ruling of 2026-11-22, task note
+  // `docs/superpowers/programs/overlord/run-cap-derived.md`): `coordinator_state.capMode` says what the stored
+  // `maxConcurrentWorkers` IS. `automatic`: the cap is derived from the fleet host's memory and cores
+  // (`caps.ts#deriveCap`), and the stored number is only what is used while the host is unmeasured. `override`: the
+  // operator set the stored number, and it is the cap. ONE writer, `CoordStore.setCaps`; one reader, `CoordStore.capMode`.
+  //
+  // THE UPGRADE MOVES NO CAP SOMEBODY SET. A fresh box, and a box that still holds the untouched seed (3, never
+  // written: `updatedAt` 0), is `automatic`: nobody chose that number. A row somebody wrote (`updatedAt > 0`, the caps
+  // route's stamp) or edited by hand to another number becomes `override`: that number bounded things the formula does
+  // not measure (other tenants of the box, disk per worktree, account usage), and it may have been LOWERED on purpose,
+  // so an upgrade must not raise it, or drop it, with no operator act. The control then says "Set by hand: N.
+  // Automatic would be M" and offers `use automatic`: one tap, and a recorded one. The UPDATE below is that rule;
+  // `run-cap-derived.test.ts` reds without it.
+  //
+  // AN OLDER BUILD opening a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing);
+  // its reads and writes name their columns and never this one, so it enforces the stored number as it always did: an
+  // override if one stands, else the number the box ran on before. A number it WRITES leaves the mode as it was. STILL
+  // OPEN: after a roll forward, a number set by the older build under `automatic` is not an override until it is set
+  // again, so a cap lowered during a rollback is replaced by the derived one. It is recorded when it happens (the
+  // automatic cap's feed line, `caps.ts#capAutomaticNotice`, keyed on that write), and nothing prevents it.
+  //
+  // The slot is the next free one by position on `main` (b33a9ae13 holds 120); whoever lands second renumbers.
+  // RE-MEASURE the slot before merge (it must print 120, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE coordinator_state ADD COLUMN capMode TEXT NOT NULL DEFAULT 'automatic'
+    CHECK (capMode IN ('automatic', 'override'));
+  UPDATE coordinator_state SET capMode = 'override' WHERE updatedAt > 0 OR maxConcurrentWorkers <> 3;
+  `,
+
+  // ── 122: user_version 121 -> 122 ──────────────────────────────────────────
+  // The class the Overlord's generation was minted under (Overlord W1 renewal readings PR C, plan `w1-renewal-readings.md`
+  // Task 5, slug designated-class-stamped-at-mint): `designatedClass` on `continuity_generations`, the designation's model
+  // class when the generation was minted as the Overlord, so `classChanged` asks whether the operator changed the class
+  // after the mint and never compares the class the generation runs (a fallback generation runs another). ONE writer,
+  // `continuityStore.ts#mintGeneration`. Nothing is back-filled: NULL is a coordinator's or a plain session's generation, an
+  // Overlord generation minted before this entry or by an older build, and `classChanged` reads it unmeasured.
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 122` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // RE-MEASURE the slot before merge (it must print 121 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
+  `,
+
+  // ── 123: user_version 122 -> 123 ──────────────────────────────────────────
+  // The coordinator advisor (plan `2026-11-23-coordinator-advisor.md`, D-8967, D-8970, D-8971). `advisor_settings` is the
+  // Settings row "Coordinator advisor": ONE ROW, `CHECK (id = 1)`, the `plain_memory_settings` idiom. `choice` (an
+  // `AdvisorChoice`), `cap` and `scope` (an `AdvisorScope` as JSON) are read back through `coordinatorAdvisorOf`'s
+  // narrowings, never cast, so NO CHECK on them: a word a newer build writes reads as unknown, and the lane writes nothing
+  // from it. Its one writer is `CoordStore.setCoordinatorAdvisor` (`POST /api/coord/coordinator-advisor`), its one reader
+  // `CoordStore.coordinatorAdvisorSettings`. `advisor_calls` holds one row per advisor call a coordinator's transcript
+  // carried, keyed by the session and the call's own id, so a duplicate streamed line or a transcript a swap carried
+  // counts once; `day` is the UTC day of the line's timestamp, and the four token columns are the `advisor_message`
+  // usage of the call's message (NULL until a line carries it). `advisor_reads` is the forward reader's place in each
+  // coordinator's transcript and what it saw since the spawn it last read for, and `droppedDay` the UTC day of a drop,
+  // which outlives a new spawn. ONE writer of both: the count lane
+  // (`advisorStore.ts#recordAdvisorRead`). Rows older than 14 days are pruned by it.
+  // THREE NEW TABLES: an older build opening a file at `user_version 123` takes rule 3 (it warns, reads as-is, migrates
+  // nothing) and never names them.
+  // RE-MEASURE the slot before merge (it must print 122 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE advisor_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    choice TEXT NOT NULL,
+    cap INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO advisor_settings (id, choice, cap, scope, updatedAt) VALUES (1, 'off', 12, '{"kind":"all"}', 0);
+  CREATE TABLE advisor_calls (
+    sessionId TEXT NOT NULL,
+    callId TEXT NOT NULL,
+    day TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    model TEXT,
+    inputTokens INTEGER,
+    outputTokens INTEGER,
+    cacheReadTokens INTEGER,
+    cacheWriteTokens INTEGER,
+    PRIMARY KEY (sessionId, callId)
+  );
+  CREATE INDEX advisor_calls_by_day ON advisor_calls (sessionId, day);
+  CREATE TABLE advisor_reads (
+    sessionId TEXT PRIMARY KEY,
+    file TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    spawnAt INTEGER NOT NULL,
+    requests INTEGER NOT NULL,
+    lastMessageId TEXT,
+    available TEXT,
+    availableAt INTEGER,
+    lastCallAt INTEGER,
+    unreadable INTEGER NOT NULL,
+    droppedDay TEXT,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 124: user_version 123 -> 124 ──────────────────────────────────────────
   // The one sequence (Overlord spec §10.4, H3, H27; Table 11.1a's row `overlord_sequence`; plan
   // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-sequence-monitor.md` Task 1): one line per stamped change, in one order,
   // written by `overlordSequenceStore.ts#stampSequenceInTx` inside the transaction that writes the stamped row, and deleted only by
@@ -4307,8 +4413,7 @@ export const MIGRATIONS: readonly string[] = [
   // pruned). AUTOINCREMENT, so a prune that empties the table never reissues a number. No index on `at`: the retention lane
   // reads the oldest lines by `seq`, the primary key. TWO NEW TABLES, nothing else: an older build opening a file at this
   // entry's version takes rule 3 (it warns, reads as-is and migrates nothing) and never names them. The slot is the next free
-  // one by position on `main` (b33a9ae137 holds 120); whoever lands second renumbers. RE-MEASURE the slot before merge (it must
-  // print 120, the count before this entry):
+  // one by position on `main`. RE-MEASURE the slot before merge (it must print 123, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

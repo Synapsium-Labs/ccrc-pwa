@@ -75,6 +75,17 @@
             ]
           }
         ],
+        "PostModelSwitch": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
         "PostToolUse": [
           {
             "hooks": [
@@ -87,6 +98,17 @@
           }
         ],
         "PreCompact": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "PreModelSwitch": [
           {
             "hooks": [
               {

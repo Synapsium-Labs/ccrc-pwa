@@ -46,7 +46,7 @@ const index = (): HTMLElement => screen.getByRole('navigation', { name: 'Setting
 const row = (id: string): HTMLElement => index().querySelector<HTMLElement>(`a[data-section="${id}"]`)!;
 
 describe('the index and the section routes', () => {
-  it('/settings is the index: five rows with icon, name, purpose and a status, each a link to its page', () => {
+  it('/settings is the index: six rows with icon, name, purpose and a status, each a link to its page', () => {
     pendingReads();
     renderSettings(null);
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
@@ -77,12 +77,18 @@ describe('the index and the section routes', () => {
       appearance: () => screen.findByRole('group', { name: 'Theme' }),
       notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
       automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
-      // Five cards load on this page, and exactly five: the sign-in gate's skeleton, the box token's, the Linear card's,
-      // the Approvals card's (D-8382) and the Permission prompts (M38) card's. A sixth (a card drawn twice, or a skeleton left behind) is a defect, so the
-      // count is asserted and not merely "some".
+      // Four cards load on this page, and exactly four: the sign-in gate's skeleton, the box token's, the Approvals
+      // card's (D-8382) and the Permission prompts (M38) card's (the Linear card's left with it, D-8932).
+      // A fifth (a card drawn twice, or a skeleton left behind) is a defect, so the count is asserted and not merely "some".
       security: () => waitFor(() => {
         expect(screen.getByRole('heading', { level: 3, name: 'Sign-in gate' })).toBeInTheDocument();
-        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(5);
+        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(4);
+      }),
+      // Two load here, and exactly two: the Linear card's skeleton and the GitHub card's status line, which waits on the
+      // project list. Project linking says "Reading the projects…" in words.
+      integrations: () => waitFor(() => {
+        expect(screen.getByRole('heading', { level: 3, name: 'Linear' })).toBeInTheDocument();
+        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(2);
       }),
     };
     for (const s of SETTINGS_SECTIONS) {
@@ -102,14 +108,14 @@ describe('the index and the section routes', () => {
     render(<SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>);
     const line = screen.getByText('That section does not exist.');
     expect(line.compareDocumentPosition(index()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(5);
+    expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(6);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its sixteen cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its seventeen cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -123,17 +129,18 @@ const DIAGNOSTICS = [
 const diagnosticRow = (label: string): HTMLElement =>
   within(index()).getByRole('link', { name: new RegExp(`^${label}`) });
 
-describe('the two diagnostics under the five sections (library 1.1 take-up, Task 9)', () => {
-  it('Settings still has exactly five sections', () => {
-    expect(SETTINGS_SECTIONS).toHaveLength(5);
+describe('the two diagnostics under the six sections (library 1.1 take-up, Task 9)', () => {
+  it('Settings has exactly six sections, Integrations the last (D-8932)', () => {
+    expect(SETTINGS_SECTIONS).toHaveLength(6);
+    expect(SETTINGS_SECTIONS.map((x) => x.id)).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security', 'integrations']);
   });
 
-  it('Reader lab is discoverable after the five ordinary sections', () => {
+  it('Reader lab is discoverable after the six ordinary sections', () => {
     pendingReads();
     renderSettings(null);
     const nav = index();
     const ordinary = nav.querySelectorAll('a[data-section]');
-    expect(ordinary).toHaveLength(5);
+    expect(ordinary).toHaveLength(6);
     const lab = diagnosticRow('Reader lab');
     expect(lab).toHaveAttribute('href', '/settings/reader-lab');
     expect(lab).toHaveAttribute('data-command', 'go-reader-lab');
@@ -143,15 +150,15 @@ describe('the two diagnostics under the five sections (library 1.1 take-up, Task
     expect(lab.querySelector('.settings-index-name')?.textContent).toBe('Reader lab');
     expect(lab.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[0].purpose);
     expect(lab.querySelector('.settings-index-status')).toBeNull();
-    expect(ordinary[4]!.compareDocumentPosition(lab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ordinary[5]!.compareDocumentPosition(lab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('Measure highlighting is discoverable after the five ordinary sections', () => {
+  it('Measure highlighting is discoverable after the six ordinary sections', () => {
     pendingReads();
     renderSettings(null);
     const nav = index();
     const ordinary = nav.querySelectorAll('a[data-section]');
-    expect(ordinary).toHaveLength(5);
+    expect(ordinary).toHaveLength(6);
     const hl = diagnosticRow('Measure highlighting');
     expect(hl).toHaveAttribute('href', '/settings/measure-highlighting');
     expect(hl).toHaveAttribute('data-command', 'go-measure-highlighting');
@@ -161,16 +168,16 @@ describe('the two diagnostics under the five sections (library 1.1 take-up, Task
     expect(hl.querySelector('.settings-index-name')?.textContent).toBe('Measure highlighting');
     expect(hl.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[1].purpose);
     expect(hl.querySelector('.settings-index-status')).toBeNull();
-    expect(ordinary[4]!.compareDocumentPosition(hl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ordinary[5]!.compareDocumentPosition(hl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('the index holds exactly two diagnostic rows and seven links, the diagnostics last and in order', () => {
+  it('the index holds exactly two diagnostic rows and eight links, the diagnostics last and in order', () => {
     pendingReads();
     renderSettings(null);
     expect(index().querySelectorAll('a[data-diagnostic]')).toHaveLength(2);
     const links = within(index()).getAllByRole('link');
-    expect(links).toHaveLength(7);
-    expect(links.slice(5).map((a) => a.getAttribute('data-diagnostic'))).toEqual(['reader-lab', 'measure-highlighting']);
+    expect(links).toHaveLength(8);
+    expect(links.slice(6).map((a) => a.getAttribute('data-diagnostic'))).toEqual(['reader-lab', 'measure-highlighting']);
   });
 
   describe.each(DIAGNOSTICS)('$label: a click', (d) => {
@@ -390,12 +397,13 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
     appearance: ['Layout and theme', 'Character'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
-    security: ['Sign-in gate', 'Box token', 'Linear', 'Project linking', 'Approvals', 'Permission prompts (M38)'],
+    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Coordinator advisor', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
+    security: ['Sign-in gate', 'Box token', 'Approvals', 'Permission prompts (M38)'],
+    integrations: ['Linear', 'Project linking', 'GitHub'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 
-  it('each card carries its scope word and purpose line, on all five pages (the scope census)', async () => {
+  it('each card carries its scope word and purpose line, on all six pages (the scope census)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
     vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));

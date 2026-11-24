@@ -229,6 +229,11 @@ export interface GenRow {
   readonly startId: number; readonly startReportedAt: number;
   readonly observed: Observed; readonly mintedObservedMs: number;
   readonly softRenewalObservedMs: number | null; readonly holdOffUntilObservedMs: number | null;
+  /** The designation's model class when minted under the `overlord` identity, written by the mint alone (renewal readings
+   *  PR C, slug designated-class-stamped-at-mint). A mint under its own session id, including a pending rebind body with
+   *  role `overlord`, stamps null. A row minted before the column or by an older build also stores null; `classChangedOf`
+   *  reads null as unmeasured. */
+  readonly designatedClass: string | null;
 }
 
 /** What a compare-and-set compares: the row's place in its identity's line and both state columns with the walk, as the
@@ -280,7 +285,7 @@ const deadlineFor = (s: GenerationState, now: number): number | null => {
 const GEN_COLUMNS = 'id, identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, walkClass, enteredAt, '
   + 'deadlineAt, shadowDeadlineAt, dueSince, dueWhy, dueClass, dueSinceObservedMs, proven, renudged, probeRounds, hostEnded, '
   + 'blind, model, prevModel, lane, host, cardHash, snapshotId, attempts, outcome, resumed, startId, startReportedAt, observed, '
-  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs, prevLane';
+  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs, prevLane, designatedClass';
 
 /** The generation functions' statements, prepared once per database: the lane runs every period over a handful of rows,
  *  and compiling the same SQL on every call is most of a pass's cost. */
@@ -348,7 +353,7 @@ function genRowOf(raw: Record<string, unknown>): GenRow | string {
     host: strOrNull(raw.host), cardHash: strOrNull(raw.cardHash), snapshotId: strOrNull(raw.snapshotId), attempts: num('attempts') ?? 0,
     outcome, resumed: num('resumed') === 1, startId, startReportedAt,
     observed, mintedObservedMs: minted, softRenewalObservedMs: num('softRenewalObservedMs'),
-    holdOffUntilObservedMs: num('holdOffUntilObservedMs'),
+    holdOffUntilObservedMs: num('holdOffUntilObservedMs'), designatedClass: strOrNull(raw.designatedClass),
   };
 }
 
@@ -379,6 +384,9 @@ const changedOf = (r: { changes: number | bigint }): { changed: boolean } => ({ 
 export interface MintInput {
   identity: string; sessionId: string; role: FleetRole; term: number; rowIncarnation: string | null;
   startId: number; startReportedAt: number; resumed: boolean; model: string | null; lane: string | null; host: string | null;
+  /** The designation's class an Overlord generation is minted under (`renewalReadings.ts#designatedClassAtMint`); absent or
+   *  null writes NULL. */
+  designatedClass?: string | null;
   /** The outcome written on the generation this start ends, when there is one. */
   outcome: GenerationOutcome;
   /** This process's monotonic reading and id: the new row's accumulator is re-anchored on them with no advance. */
@@ -440,12 +448,12 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       const res = stmt(db, 
         'INSERT INTO continuity_generations (identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, enteredAt, '
         + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs, '
-        + 'prevLane) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + 'prevLane, designatedClass) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(input.identity, input.sessionId, input.role, input.term, input.rowIncarnation, n,
         mode === 'live' ? 'carded' : 'active', mode === 'live' ? null : 'carded', mode, input.now,
         mode === 'live' ? deadline : null, mode === 'live' ? null : deadline,
         input.resumed ? 1 : 0, input.startId, input.startReportedAt, input.model, strOrNull(newest?.model), input.lane, input.host,
-        JSON.stringify(observed), carried, strOrNull(newest?.lane));
+        JSON.stringify(observed), carried, strOrNull(newest?.lane), input.designatedClass ?? null);
       const id = Number(res.lastInsertRowid);
       stampGeneration(db, id, mode === 'live' ? 'carded' : 'active', input.now);
       if (cursor !== null && !advanceCursorIn(db, cursor)) throw new Superseded();

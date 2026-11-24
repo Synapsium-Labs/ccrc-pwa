@@ -211,6 +211,34 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
   });
 
+  // REVIEW 2964 F1. The check used to take the caller's chosen lane as a leading `lane=<wrapper>` pair of the SAME array
+  // as the user's pairs, so a user's own first `--route lane=x` was taken for it, skipped past the field check and written
+  // by `_route_argv_write` into `<id>.lane` (and echoed into swap.log). The trusted lane now rides apart from the pairs.
+  it('a user\'s --route lane=x is refused, with a known lane and without one', () => {
+    const refusal = "unknown routing field 'lane'";
+    const forms: [string, string][] = [
+      ['ws-add --wrapper', `${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --wrapper claude --route lane=x demo`],
+      ['ws-add, no wrapper', `${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route lane=x demo`],
+      ['start <wrapper> <project>', `${START_SPAWNLESS} cmd_start --route lane=x claude demo`],
+      ['start <id>', `${START_SPAWNLESS} cmd_start --route lane=x demo-quiet-mesa`],
+    ];
+    for (const [name, snippet] of forms) {
+      const r = shStatus(snippet);
+      expect(r.status, name).toBe(1);
+      expect(r.out, name).toContain(refusal);
+    }
+    // the box exactly as it was found: no row, no lane file, no log line, no pane
+    const reg = path.join(h.home, '.cc-sessions');
+    const stray = fs.existsSync(reg) ? fs.readdirSync(reg).filter((f) => /\.(lane|uuid|wrapper|class)$/.test(f)) : [];
+    expect(stray).toEqual([]);
+    expect(swapLines().filter((l) => l.includes(' route '))).toEqual([]);
+    expect(newSessions()).toHaveLength(0);
+    // and a lane-looking pair after a known lane is no different (the first position is not special)
+    const second = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --wrapper claude --route class=opus --route lane=x demo`);
+    expect(second.status).toBe(1);
+    expect(second.out).toContain(refusal);
+  });
+
   it('a ccd-only field is refused on the argv, before anything is minted', () => {
     const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route degraded=opus demo`);
     expect(r.status).toBe(1);
@@ -622,7 +650,7 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // mint promise and by nothing else (that is what `undiverge` had to strip
     // for them to land in this set at all).
     expect(diverged[0]).toMatch(/die "bad value for \$f /);
-    expect(diverged[1]).toMatch(/die "class haiku takes no effort level/);
+    expect(diverged[1]).toMatch(/die "\$subj takes no effort level/);   // A3.3: the subject is the model when the lane's data decided, `class haiku` when the standing rule did
     for (const l of diverged) expect(l).toContain(MINT_PROMISE);
   });
 
@@ -642,14 +670,14 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // `_route_argv_class` reads the FIRST `class=` and picks the LANE while the
     // write loop's LAST one wins the RECORD — so a repeat is two answers to one
     // question. The signature line moved with it (`seen=""`), which is why the
-    // count is five rather than four plus one. SIX since the Overlord W1's pool set: the refusal of `poolset` and
+    // count is five rather than four plus one. SIX still, with the model-class arm's A3.3 lane (`ROUTE_ARGV_LANE`, the caller's chosen lane, which rides apart from the pairs and is argv-only because `cmd_route` reads its lane off the record: it rewrote the signature line and added no line); SIX since the Overlord W1's pool set: the refusal of `poolset` and
     // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer; the same
-    // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`.
+    // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`. So does `advisor` (the coordinator advisor, D-8967), whose one writer is the launch-profile lane.
     expect(only).toEqual([
-      `local kv f v rc cls="" eff="" seen=""`,
+      `local kv f v rc cls="" eff="" seen="" lane="\${ROUTE_ARGV_LANE-}" subj`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
-      `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
+      `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold || "$f" == advisor ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
       `_route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "`,
       `return 0`,
     ]);

@@ -18,6 +18,8 @@ import type { PerfHealth } from './perf.js';
 import type { HelperFrameMembers, HelperReportAnswer, HelperReportRequest, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
+import type { AdvisorApplyPath, AdvisorSpawnRecord, AdvisorState, FleetAdvisor } from './coordinatorAdvisor.js';
+import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
@@ -343,6 +345,14 @@ export interface FleetSession {
    *  (optional): an older server. The intended value is `route.fields.browser`, else the box default; the two differ
    *  until the next spawn (`browserMcpView`, the PWA's one reader). Display only: no decision reads it. ADDITIVE. */
   browserMcp?: BrowserMcpApplied | null;
+  /** The coordinator advisor (plan 2026-11-23-coordinator-advisor, D-8967): what this session's last spawn applied, from
+   *  `$REG/<id>.advisorspawn` (`registry.ts#advisorSpawnOf`); null: no record. ABSENT (optional): an older server. The roll's
+   *  `advisor-stale` reason compares it with `route.fields.advisor` (`advisorStaleOf`). ADDITIVE. */
+  advisorSpawn?: AdvisorSpawnRecord | 'unreadable' | null;
+  /** The coordinator advisor's readout (spec §6): its state, today's calls and tokens against the cap, and which act applies
+   *  a change. Present only for a session the advisor touches (its route asks for one, its spawn applied one, or it made
+   *  calls today); computed once by the server (`advisorReadoutOf`), rendered by `pwa/src/fleet/advisorWords.ts`. ADDITIVE. */
+  advisor?: FleetAdvisor;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
    *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
    *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
@@ -3243,6 +3253,29 @@ const reviveBrowserMcp = (o: RawObj, k: string): BrowserMcpApplied | null => {
   return typeof v === 'string' && (BROWSER_MCP_APPLIED as readonly string[]).includes(v) ? v as BrowserMcpApplied : null;
 };
 
+/** The coordinator advisor's spawn record off raw JSON: the record's own shape, `unreadable`, else null. */
+const reviveAdvisorSpawn = (v: unknown): AdvisorSpawnRecord | 'unreadable' | null => {
+  const r = (v ?? {}) as { kind?: unknown; model?: unknown; at?: unknown; fastDeath?: unknown };
+  if (v === 'unreadable' || typeof r.at !== 'number' || !Number.isFinite(r.at)) return v === 'unreadable' ? v : null;
+  if (r.kind === 'applied' && (r.model === 'fable' || r.model === 'opus')) return { kind: 'applied', model: r.model, at: r.at };
+  return r.kind === 'off' && typeof r.fastDeath === 'boolean' ? { kind: 'off', at: r.at, fastDeath: r.fastDeath } : null;
+};
+// Complete by type (a `Record` over each union), since this file may import only types: `coordinatorAdvisor.ts`'s lists stay the vocabulary.
+const ADVISOR_WORDS: Readonly<Record<AdvisorState | AdvisorApplyPath, 'state' | 'applies'>> = { off: 'state', queued: 'state',
+  unmeasured: 'state', requested: 'state', live: 'state', dropped: 'state', unseen: 'state', capped: 'state', roll: 'applies', renewal: 'applies', 'next-spawn': 'applies' };
+/** The coordinator advisor's readout off raw JSON, or null when absent or not of its shape. */
+const reviveFleetAdvisor = (v: unknown): FleetAdvisor | null => {
+  const a = (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  const n = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  const word = (k: string): boolean => typeof a[k] === 'string' && (ADVISOR_WORDS as Record<string, string>)[a[k] as string] === k;
+  if (!word('state') || !word('applies') || !n(a['cap']) || !n(a['overrun']) || !(a['today'] === null || n(a['today']))) return null;
+  const t = (a['tokens'] ?? {}) as Record<string, unknown>;
+  const tokens = n(t['input']) && n(t['output']) && n(t['cacheRead']) && n(t['cacheWrite'])
+    ? { input: t['input'], output: t['output'], cacheRead: t['cacheRead'], cacheWrite: t['cacheWrite'] } : null;
+  return { state: a['state'] as AdvisorState, model: a['model'] === 'fable' || a['model'] === 'opus' ? a['model'] : null,
+    today: a['today'] as number | null, cap: a['cap'], overrun: a['overrun'], tokens, applies: a['applies'] as AdvisorApplyPath };
+};
+
 /** D-5237. Absent → null (an older snapshot or server predates the field);
  *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
  *  nothing); an unknown cause word → `unknown`. */
@@ -3520,6 +3553,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // before the field said nothing), and a present one this build cannot read revives as null (a display line, it
       // gates nothing).
       ...(o['browserMcp'] === undefined ? {} : { browserMcp: reviveBrowserMcp(o, 'browserMcp') }),
+      // The coordinator advisor's two fields: display and a roll reason; a present value this build cannot read revives as
+      // null (the spawn record) or is dropped (the readout), never a guess.
+      ...(o['advisorSpawn'] === undefined ? {} : { advisorSpawn: reviveAdvisorSpawn(o['advisorSpawn']) }),
+      ...((a) => (a === null ? {} : { advisor: a }))(reviveFleetAdvisor(o['advisor'])),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -6469,11 +6506,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `mailhold` (mid-turn mail spec 2026-11-19 §3.3) is the urgent-mail hold's lease, in `shared/mailHold.ts`'s grammar. Its
  * one writer is the mail-hold projection lane; ccd refuses it at the mint and from a session's shell, and an empty value
  * clears it.
+ * `advisor` (coordinator advisor, D-8967) is `fable`/`opus`: the model a coordinator's next spawn passes as `--advisor`.
+ * Its one writer is the launch-profile lane (`advisorFor`); ccd refuses it at the mint and from a session's shell, records
+ * what each spawn applied in `$REG/<id>.advisorspawn`, and an empty value clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold', 'advisor'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
  *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, the pool set's two (W1),
- *  written by the designation's doors, and the mail-hold projection's `mailhold`.
+ *  written by the designation's doors, the mail-hold projection's `mailhold`, and the coordinator advisor's `advisor`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
@@ -8236,6 +8276,12 @@ export interface CoordCapsView {
    *  `null` (a box nobody has tuned) alike — which is why both are spelled out
    *  here rather than discovered then. */
   updatedAt?: number | null;
+  /** D-8920: THE CAP IN FORCE, and where it comes from (`shared/runCap.ts`, which holds the vocabulary and
+   *  the field's one reader, `readCapNow`). ADDITIVE: an older server omits it, and then the console shows
+   *  `caps.maxConcurrentWorkers` as before. It is on the VIEW, not on `CoordCaps`, for `updatedAt`'s reason: `CoordCaps`
+   *  is the stored number, which since this field is the operator's override when one stands and otherwise only the
+   *  number used while the host is unmeasured. */
+  capNow?: CoordCapNow;
 }
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
@@ -13273,6 +13319,15 @@ export const DELEGATION_SPOOL_BOUNDS = {
 const CHILD_DENY_CCD_VERBS: readonly string[] =
   'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
+/** The `ccd` verbs a dispatched child never runs that are NOT SAFETY verbs (D-8978): a top-level session, the operator's
+ *  shell and the server's own composition may run them, so they stay off `FORBIDDEN_CCD_VERBS` and the classifier. Today
+ *  one: `ws-add`. A worker that makes a workspace itself makes one outside every run (no `--child`, no run row names it), so
+ *  the console lists it as "Not in a programme" and its coordinator never sees it; a child that needs another tree asks its
+ *  coordinator. The server's dispatch (`ws-add --no-rc --child <run>`) is an agent exec through `CcdArgv`, never a child's
+ *  tool call, so no deny rule can reach it. The hook's twin is `CCD_WSADD_RE` (`ccd/session-hook.sh`), the installer's its
+ *  loop's second list (`ccd/install-session-hooks.sh`). An accident guard, not a wall (D-8979). */
+const CHILD_SCOPE_DENY_CCD_VERBS: readonly string[] = 'ws-add'.split('|');
+
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
  *  deny matcher takes a leading wildcard; Task 13 decides, and turning them on is this one word here and its bash twin
@@ -13286,7 +13341,7 @@ const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
 /** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
- *  (`roll` and the operator's `claude …` switches among them), then `ccrc update`, `rollback` and `rollout`, then Claude
+ *  (`roll` and the operator's `claude …` switches among them), then the child-scope verbs (`ws-add`, D-8978), then `ccrc update`, `rollback` and `rollout`, then Claude
  *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
  *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
  *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
@@ -13294,6 +13349,7 @@ export function childDenyRules(upstreamId: string | null): readonly string[] {
   const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
   return [
     ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+    ...CHILD_SCOPE_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
     ...['update', 'rollback', 'rollout'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
     ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
   ];

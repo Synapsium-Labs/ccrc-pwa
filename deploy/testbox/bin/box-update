@@ -1,0 +1,786 @@
+#!/usr/bin/env bash
+# The test box's updater: the update act's spine on the box (D-8903, D-8905, D-8907, D-8913, D-8919; spec
+# docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.5 to §2.8; note
+# docs/superpowers/programs/overlord/testbox-box-updater.md). Root, idempotent, run from the release tree it ships in:
+#
+#   <stage>/<tree>/deploy/testbox/bin/box-update <spec file>
+#
+# NOTHING CALLS IT YET: no unit, no admin sub and no route (spec §9, PR 2). The fleet host's driver, which copies the
+# verified release into a root-owned stage and starts this file as a short-lived root unit, is PR 4.
+#
+# It is the TARGET release's updater: no file of the box's installed release runs in the update path (D-8913), so a box
+# whose installed sync script is broken is moved by the same act as a healthy one. It installs the test service and
+# nothing of ccrc's own, as the installer does (D-7424): no `ccrc install`, no agent, no user unit.
+#
+# THE SPEC is the one input, a root-owned file of `<key><TAB><value>` lines after the header line
+# `ccrc-testbox-update-spec`. A key this file does not name is skipped, so a later driver may say more:
+# The spec file sits in the stage, beside the tree: the stage directory, the spec, the tarball and a staged token are
+# root's alone (the box file's own rule), or the act is refused.
+#   act <id>             the act's id, minted by the driver; every report carries it (D-8905). Required.
+#   kind update|rollback an update refuses a release below the box's floor; a rollback is exempt (spec §2.7). Required.
+#   release <tag>        the release to end on; it must be this tree's build.json version. Required.
+#   tool <name> <ver>    a tool version measured on the fleet host. A tool left out keeps the box's version (spec §2.6).
+#   sha256 <hex>         the digest of `<stage>/release.tar.gz`: a spec that names one is refused when the tarball is
+#                        not there or is not that. A spec that names none is not compared (O2 is not ruled).
+#   verified 1           the driver verified the release's provenance: `installed` is then the one line the other
+#                        nodes write for a verified tree. Otherwise its second line is `unsigned`.
+#   from <word>          who started the act, one of the update lane's `--from` words. Default `cli`.
+#   drain <seconds>      the drain's bound, at most 900 (the default).
+#   bound <step> <secs>  a step's bound made SHORTER (stage 720, switch 420, restore 180); a longer one is not taken.
+#
+# THE SPINE, in order (spec §2.5). Nothing a run uses changes before step 5:
+#   1. the refusals that read only the stage and the box file, before the lock: the stage's ownership; the spec's
+#      shape and each version's format; the box file and every value in it (deploy/testbox/box-steps, the installer's
+#      own rules); an installed release (a box with none is the installer's, see "LEFT" below); this tree's MANIFEST,
+#      its build.json and its ownership; the tarball's digest; a staged token's shape. Then the box's update lock,
+#      `<root>/run/ccrc-testbox-update/lock`, in a directory only root enters: a lock another updater holds is a
+#      deferral (exit 3), never a failure. Then SETTLING: a last report still in flight, whose updater is gone (this
+#      run holds the lock), means the box may be half switched, so the box is first left on a release whose gate
+#      passes: the installed one, else the one the dead act replaced;
+#   2. the refusals that read what settling may have changed: the floor; a service token, in place or in the stage;
+#      this process's place in the firewall's tools set;
+#   3. the stage: the release tree placed root-owned at `<tools>/release/<tag>` with its production dependencies
+#      (`npm ci --omit=dev --ignore-scripts`), node and npm fetched into directories of their own version (the tool
+#      sync's functions, sourced: one owner), and a new tool set staged whole. A box that holds the tree and the
+#      versions fetches nothing;
+#   4. the drain (D-8907): the request file, a lease with a deadline, and the service's answer, read as data; then this
+#      file's own measurement that no run, prepare or install unit is active. A release from before this design
+#      cannot be asked, so its units are measured alone. A drain that runs out of time changes nothing;
+#   5. the switch: `replaced` written (the release and the tool set this act replaces, and the `previous` it found:
+#      restore arm 1's one input), the service stopped, `current` and `release/installed` re-linked, `previous`
+#      written. A stop that fails with the service still up is a deferral: nothing was flipped;
+#   6. the render: the token moved into place when the stage holds one (D-8919), then the installer's steps with a
+#      `put` that writes a file only when its bytes differ; the system manager reloads only when a unit file changed,
+#      and the firewall loads only when its file or its load step changed, after the report says `firewall`;
+#   7. the start and the gate: the update lane's own loop (`_upd_gate`), whose `testbox` arm is `_tb_gate_probe` below;
+#   8. `done`: the node files, the measured tools, the prune. Or restore arm 1 and `reverted`: this file flips back to
+#      the pair `replaced` names, renders from that tree, starts it, gates it and puts `previous` back. No download,
+#      no fleet host. A tools-only act (the same release, another node or npm) restores to its old set the same way.
+#      When that pair is the one whose gate just failed, or fails its own, the release that was `previous` before the
+#      switch is tried, with the set it was kept with.
+# A run that finds the box on the release and the versions, with every file as it would render it and the gate
+# passing, ends at `done` before the drain: the spine run twice changes nothing.
+#
+# THE NODE FILES, in `<tools>/node-state/` (root's, world-readable, versions and phases only; this file is their one
+# writer): build.json, installed, ccrc-caps, floor, previous, node-id, update.json, each in the format the other nodes
+# write (their one reader is server/src/update/inventory.ts), and beside them tools.json (the tool versions this file
+# measured after the switch; Chrome's is read from the set's link, never run: its download has no checksum, D-7422),
+# kept (the kept releases and their tool sets, oldest first), replaced (above) and rendered (the system files the last
+# act changed). The report is the update lane's own (`_upd_phase`), so its phases
+# are that lane's closed words: `fetching` the stage, `installing` the drain, the switch and the render (the detail
+# says which: `drain`, `switch`, `firewall`), `restarting`, `checking`, `restoring`, then `done`, `reverted` or
+# `failed`. A deferral, an act that ended with nothing on the box changed, is `failed` with a detail that begins
+# `deferred: `, and exit 3.
+#
+# EXIT: 0 done; 1 failed (no release passes its gate, or a write failed after the switch); 2 usage; 3 refused or
+# deferred, nothing on the box changed (a busy update lock among them); 4 reverted, the replaced release serves.
+#
+# TWO PREDICATES OVER A RELEASE TREE, never one: it has a render entry when it carries deploy/testbox/box-steps (a tree
+# without it is rendered by its own `install.sh --reapply --force`), and its service writes the ready file when it
+# carries deploy/testbox/service-ready, the marker that ships with the writer (spec §9, PR 3). A tree with the
+# updater and no marker is gated by the legacy arm: its service is up and stays up, and node and npm answer.
+#
+# LEFT, each for a named reason (the note says more): a box with no installed release (the first install stays
+# deploy/testbox/install.sh's until the act carries Connect, PR 4, which needs O4 for npm before a proxy answers); the
+# registry when the service's proxy does not answer, whatever the firewall's state (O4: the updater never asks the
+# upstream registry itself); the box's own verifier
+# (O2: under either answer the box checks the digest and the MANIFEST, which this does); Chrome, python3, git and tmux
+# (the one comparison and the one measurer are PR 4's, and the tool sync still moves them).
+#
+# Every system call goes through the one seam, TB_SYS (empty on a box), as in the installer.
+# shellcheck disable=SC2034  # the names set here are read by the files this one sources: box-steps, tools-sync, ccd/ccrc
+set -uo pipefail
+umask 022
+
+TBU_PROG=ccrc-testbox-update
+TBU_SPEC_HEADER=ccrc-testbox-update-spec
+TBU_UNIT=ccrc-testbox.service
+TBU_TIMER=ccrc-testbox-egress.timer
+TBU_KEEP=3   # release trees and their tool sets kept (spec §2.7; the other nodes' default)
+# Words of the box's own (D-8901), never a core word (`detach`, `update-gate`, `rollback`). `verify` is the word that
+# lets the one reader take a one-line `installed` as verified: this updater writes one line only for `verified 1`.
+TBU_CAPS=(verify box-node-files box-update box-gate box-restore box-keep)
+TBU_DEFERRED='deferred: '   # the detail's prefix for an act that ended with nothing changed; one spelling
+# The release tag's and a version's patterns and the six tool names are the tool sync's (TBT_RE_TAG, TBT_RE_VERSION,
+# TBT_TOOLS_ORDER), sourced before any function here runs: one owner.
+TBU_RE_ACT='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+TBU_REPORTING=0   # 1 once the refusals are past: from then on an end is a terminal report
+TBU_SWITCHED=0    # 1 once the service was stopped for the switch: from then on a failure restores
+TBU_GATED=0       # 1 once the new release passed its gate
+TBU_RESTORING=0   # 1 while restore arm 1 runs
+TBU_SETTLED=0     # 1 once settling changed the box: a later refusal says so
+TBU_FAILED_PAIR=''   # `<tag><TAB><set>` whose gate has just failed: a restore does not try it again
+TBU_CHANGED=()    # the system files this run wrote
+TBU_DRY=0         # 1 while the render only compares
+TBU_WATCH=''
+
+# ── the caller's five (deploy/testbox/box-steps' contract) ───────────────────────────────────────────────────────
+say() { printf '%s: %s\n' "$TBU_PROG" "$*" >&2; }
+refuse() {   # a rule is broken; this act changed nothing on the box
+  if [ "$TBU_SETTLED" = 0 ]; then printf '%s: refused: %s; nothing was written\n' "$TBU_PROG" "$*" >&2
+  else printf '%s: refused: %s; this act wrote nothing (settling the last act, above, came first)\n' "$TBU_PROG" "$*" >&2; fi
+  [ "$TBU_REPORTING" = 0 ] || _upd_phase failed "${TBU_DEFERRED}refused: $*"
+  exit 3
+}
+defer() {   # the act ends with nothing on the box changed (spec §2.7, Table 11)
+  printf '%s: deferred: %s; nothing on the box changed\n' "$TBU_PROG" "$*" >&2
+  [ "$TBU_REPORTING" = 0 ] || _upd_phase failed "$TBU_DEFERRED$*"
+  exit 3
+}
+fail() {   # a write or a system call failed: before the switch that is a deferral, after it the box is restored
+  printf '%s: failed: %s\n' "$TBU_PROG" "$*" >&2
+  [ "$TBU_SWITCHED" = 1 ] || defer "$*"
+  # After the switch a failure restores the replaced release, unless the gate has passed already (the box serves the
+  # new release: what failed is a record) or the restore itself is what failed.
+  if [ "$TBU_GATED" = 0 ] && [ "$TBU_RESTORING" = 0 ]; then _tbu_restore "$*" && exit 4; fi
+  _upd_phase failed "$*"
+  exit 1
+}
+dir() {   # <mode> <owner> <group> <path>: made when it is not there
+  [ -d "$4" ] && return 0
+  [ "$TBU_DRY" = 1 ] && { TBU_CHANGED+=("$4/"); return 0; }
+  _sys install -d -m "$1" -o "$2" -g "$3" "$4" || fail "cannot make $4"
+}
+put() {   # <mode> <src> <dst>: a root-owned file, written only when its bytes differ (spec §2.5 step 6)
+  if [ -f "$3" ] && [ ! -L "$3" ] && cmp -s -- "$2" "$3"; then return 0; fi
+  TBU_CHANGED+=("$3")
+  [ "$TBU_DRY" = 1 ] && return 0
+  _sys install -m "$1" -o root -g root "$2" "$3.tbu-new" && mv -f -- "$3.tbu-new" "$3" || fail "cannot write $3"
+}
+
+# ── small readers ────────────────────────────────────────────────────────────────────────────────────────────────
+_tbu_data() {   # <file> -> its text, when it is a regular file that is no link and at most 4096 bytes; else 1
+  [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le 4096 ] && cat -- "$1"
+}
+_tbu_field() {   # <text> <key> -> the value of the first `<key><TAB><value>` line
+  local k v
+  while IFS=$'\t' read -r k v; do [ "$k" = "$2" ] && { printf '%s' "$v"; return 0; }; done <<<"$1"
+  return 1
+}
+_tbu_roots_alone() {   # <path> -> 0 when it is there, is no link, is the box owner's and is not writable by group or other
+  [ -e "$1" ] && [ ! -L "$1" ] && [ -z "$(find "$1" -maxdepth 0 \( ! -user "$(_tb_box_owner_uid)" -o -perm -g+w -o -perm -o+w \) -print 2>/dev/null)" ]
+}
+_tbu_token_ok() {   # <file> -> 0 when it is a root-only regular file holding one token: 64 hex characters (the pair phase's shape)
+  local t=''
+  [ -f "$1" ] && _tbu_roots_alone "$1" && [ -z "$(find "$1" -maxdepth 0 \( -perm -g+r -o -perm -o+r \) -print 2>/dev/null)" ] || return 1
+  [ "$(wc -c < "$1")" -le 65 ] || return 1
+  IFS= read -r t < "$1" || :
+  [[ $t =~ ^[0-9a-f]{64}$ ]]
+}
+_tbu_tree_tag() {   # <tree> -> its build.json version
+  local bj
+  bj=$(cat -- "$1/build.json" 2>/dev/null) || return 1
+  [[ $bj =~ \"version\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+_tbu_tree_sha() { local bj; bj=$(cat -- "$1/build.json" 2>/dev/null) || return 1; [[ $bj =~ \"sha\"[[:space:]]*:[[:space:]]*\"([0-9a-f]{40})\" ]] && printf '%s' "${BASH_REMATCH[1]}"; }
+_tbu_render_tree() { [ -f "$1/deploy/testbox/box-steps" ]; }      # a release with a render entry (spec §2.7)
+_tbu_ready_tree() { [ -f "$1/deploy/testbox/service-ready" ]; }   # a release whose service writes the ready file (PR 3's marker)
+_tbu_ver_lt() {   # <tag a> <tag b> -> 0 when a is below b
+  local a=${1#v} b=${2#v} x y i
+  IFS=. read -r -a x <<<"$a"; IFS=. read -r -a y <<<"$b"
+  for i in 0 1 2; do
+    ((10#${x[i]} < 10#${y[i]})) && return 0
+    ((10#${x[i]} > 10#${y[i]})) && return 1
+  done
+  return 1
+}
+_tbu_state_put() {   # <name> <text>: a node file, world-readable, written whole
+  printf '%s\n' "$2" > "$WORK/state" || fail "cannot stage the node file $1"
+  local was=("${TBU_CHANGED[@]+"${TBU_CHANGED[@]}"}")
+  put 0644 "$WORK/state" "$STATE/$1"
+  TBU_CHANGED=("${was[@]+"${was[@]}"}")
+}
+
+# ── step bounds (spec §2.9): a step that runs past its bound is ended, with everything it started ────────────────
+_tbu_kill_tree() {   # <signal> <pid> <skip>: every descendant of <pid> signalled, but <skip> and what it started
+  local c
+  for c in $(pgrep -P "$2" 2>/dev/null); do
+    [ "$c" = "$3" ] && continue
+    _tbu_kill_tree "$1" "$c" "$3"
+    kill "-$1" "$c" 2>/dev/null
+  done
+}
+_tbu_bound() {   # <step> <seconds>: the spec may only make a bound shorter
+  _tbu_unbound
+  local step=$1 secs=$2 me=$BASHPID   # this shell, which after a bound is the subshell that restores
+  [ -z "${TBU_BOUND[$step]:-}" ] || { ((TBU_BOUND[$step] < secs)) && secs=${TBU_BOUND[$step]}; }
+  TBU_BOUND_STEP=$step TBU_BOUND_SECS=$secs
+  # The watcher holds no copy of the update lock, and at the bound it ends the step's whole tree, not only this
+  # shell's children: a grandchild left running would keep the lock's descriptor and write into the next act's stage.
+  ( trap - EXIT USR1; [ -z "$UPD_LOCK_FD" ] || { exec {UPD_LOCK_FD}>&-; } 2>/dev/null
+    sleep "$secs" & wait $! && { kill -USR1 "$me" 2>/dev/null; _tbu_kill_tree TERM "$me" "$BASHPID"; sleep 5; _tbu_kill_tree KILL "$me" "$BASHPID"; } ) &
+  TBU_WATCH=$!
+}
+_tbu_unbound() {
+  [ -n "$TBU_WATCH" ] || return 0
+  pkill -P "$TBU_WATCH" 2>/dev/null; kill "$TBU_WATCH" 2>/dev/null; wait "$TBU_WATCH" 2>/dev/null
+  TBU_WATCH=''
+}
+_tbu_overran() {
+  _tbu_unbound
+  # What follows the bound (a deferral, or the restore and its gate) runs in a subshell, never in the handler itself:
+  # in bash 5.2 a bare `return` in a function called from a signal handler gives the status of the command the signal
+  # interrupted, the ended step's, so a gate that passed read as failed. A subshell is not in the handler. Nothing it
+  # sets is read afterwards, since this act ends here with its status; the exit steps and the lock stay this shell's.
+  ( trap _tbu_overran USR1; fail "the $TBU_BOUND_STEP step ran past its bound of ${TBU_BOUND_SECS}s" )
+  exit $?
+}
+
+# ── the spec ─────────────────────────────────────────────────────────────────────────────────────────────────────
+_tbu_read_spec() {   # <file, which the caller found to be root's alone> -> TBU_ACT, TBU_KIND, REL, TBU_V[tool], TBU_SHA, TBU_VERIFIED, TBU_FROM, TBU_DRAIN_S, TBU_BOUND
+  local f=$1 k a b header='' w ok
+  declare -gA TBU_V=() TBU_BOUND=()
+  TBU_ACT='' TBU_KIND='' REL='' TBU_SHA='' TBU_VERIFIED=0 TBU_FROM=cli TBU_DRAIN_S=900
+  while IFS=$'\t' read -r k a b || [ -n "$k" ]; do
+    if [ -z "$header" ]; then [ "$k" = "$TBU_SPEC_HEADER" ] || refuse "not an update spec: $f"; header=1; continue; fi
+    case $k in
+      act) TBU_ACT=$a ;;
+      kind) TBU_KIND=$a ;;
+      release) REL=$a ;;
+      tool) TBU_V[$a]=$b ;;
+      sha256) TBU_SHA=$a ;;
+      verified) [ "$a" = 1 ] && TBU_VERIFIED=1 ;;
+      from) TBU_FROM=$a ;;
+      drain) [[ $a =~ ^[0-9]{1,4}$ ]] && ((10#$a <= 900)) || refuse "the spec's drain bound is not a number of seconds up to 900"; TBU_DRAIN_S=$((10#$a)) ;;
+      bound) [[ $b =~ ^[0-9]{1,4}$ ]] || refuse "the spec's bound for $a is not a number of seconds"; TBU_BOUND[$a]=$((10#$b)) ;;
+      *) ;;
+    esac
+  done < "$f"
+  [ -n "$header" ] || refuse "an empty spec: $f"
+  [[ $TBU_ACT =~ $TBU_RE_ACT ]] || refuse "the spec names no act id"
+  case $TBU_KIND in update|rollback) ;; *) refuse "the spec's kind is neither update nor rollback" ;; esac
+  [[ $REL =~ $TBT_RE_TAG ]] || refuse "the spec's release is not a release tag"
+  [ -z "$TBU_SHA" ] || [[ $TBU_SHA =~ ^[0-9a-f]{64}$ ]] || refuse "the spec's sha256 is not a digest"
+  for k in "${!TBU_V[@]}"; do
+    case " ${TBT_TOOLS_ORDER[*]} " in *" $k "*) ;; *) refuse "the spec names a tool beyond the six: $(_tbt_clean "$k")" ;; esac
+    [[ ${TBU_V[$k]} =~ $TBT_RE_VERSION ]] || refuse "the spec's $k version is not a version"
+  done
+  ok=0; for w in "${UPD_FROM_WORDS[@]}"; do [ "$w" = "$TBU_FROM" ] && ok=1; done
+  [ "$ok" = 1 ] || refuse "the spec's from is none of: ${UPD_FROM_WORDS[*]}"
+}
+
+# ── the gate's two arms (spec §2.7), called by the update lane's `_upd_gate_probe` ───────────────────────────────
+_tbu_tool_answers() {   # node and npm, run here under a bound of their own, answer the versions the current set names
+  local set=$TOOLS/current want got f=$TOOLS/current/versions t v
+  got=$(timeout 10 "$set/node" --version 2>/dev/null) || { UPD_GATE_WHY="$set/node does not run"; return 1; }
+  [ -f "$f" ] || return 0   # a set from before the tool sync names no version: node runs, which is what it can show
+  while IFS=$'\t' read -r t v; do
+    case $t in
+      node) [ "$got" = "v$v" ] || { UPD_GATE_WHY="node answers $got, not v$v"; return 1; } ;;
+      npm) want=$(timeout 10 "$set/node" "$set/bin/npm" --version 2>/dev/null) || want=''
+           [ "$want" = "$v" ] || { UPD_GATE_WHY="npm answers ${want:-nothing}, not $v"; return 1; } ;;
+    esac
+  done < "$f"
+}
+_tb_gate_probe() {   # <testbox|testbox-legacy> <tag> -> 0 pass, 1 fail; UPD_GATE_WHY
+  local role=$1 want=$2 st pid ready
+  st=$(_sys systemctl is-active "$TBU_UNIT" 2>/dev/null) || :
+  [ "$st" = active ] || { UPD_GATE_WHY="$TBU_UNIT is ${st:-unanswered} (systemctl is-active), not active"; return 1; }
+  pid=$(_sys systemctl show -P MainPID "$TBU_UNIT" 2>/dev/null) || pid=''
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || { UPD_GATE_WHY="$TBU_UNIT has no main pid"; return 1; }
+  # "Has stayed up", in both arms: the same main pid a second later. A service that binds, says so and exits is
+  # not up, whatever its ready file says.
+  sleep 1
+  [ "$(_sys systemctl show -P MainPID "$TBU_UNIT" 2>/dev/null)" = "$pid" ] || { UPD_GATE_WHY="$TBU_UNIT did not stay up (its main pid changed)"; return 1; }
+  if [ "$role" = testbox-legacy ]; then
+    # A release whose service writes no ready file: the unit is active and has kept its main pid.
+    _tbu_tool_answers || return 1
+    UPD_GATE_WHY="$TBU_UNIT up and staying up (a release from before the ready file)"
+    return 0
+  fi
+  ready=$(_tbu_data "$SYSROOT/run/ccrc-testbox/ready") || { UPD_GATE_WHY="the service wrote no ready file"; return 1; }
+  [ "$(_tbu_field "$ready" release)" = "$want" ] || { UPD_GATE_WHY="the ready file names $(_tbt_clean "$(_tbu_field "$ready" release)"), not $want"; return 1; }
+  [ "$(_tbu_field "$ready" pid)" = "$pid" ] || { UPD_GATE_WHY="the ready file is not the running service's (the unit's main pid is $pid)"; return 1; }
+  _sys nft list table inet ccrc_testbox >/dev/null 2>&1 || { UPD_GATE_WHY="the firewall table is not loaded"; return 1; }
+  st=$(_sys systemctl is-active "$TBU_TIMER" 2>/dev/null) || :
+  [ "$st" = active ] || { UPD_GATE_WHY="$TBU_TIMER is ${st:-unanswered}, not active"; return 1; }
+  _tbu_tool_answers || return 1
+  UPD_GATE_WHY="$TBU_UNIT up, its ready file names $want, the firewall loaded, node and npm answer"
+}
+_tbu_gate_role() { if _tbu_ready_tree "$TREE"; then echo testbox; else echo testbox-legacy; fi; }   # the arm for the installed tree
+_tbu_gate() { _upd_gate "$(_tbu_gate_role)" "$1" >&2; }   # <tag> -> the gate for the tree the installed link names
+
+# ── the render and the start (steps 6 and 7), from the tree the installed link names ─────────────────────────────
+_tbu_token() {   # the staged token moved into place by a temp file and a rename, before the service starts (D-8919)
+  [ -f "$STAGE/token" ] || return 0   # its owner, mode and shape were checked before the lock
+  local t
+  dir 0700 "$SVC" "$SVC" "$(dirname -- "$TOKEN")"
+  # The directory is the service user's, so root writes there under no name that user could know before: a random
+  # name made exclusively (the pair phase's own way), and one rename(2), which replaces a link and never follows it.
+  t=$(umask 077; mktemp "$TOKEN.XXXXXXXX") || fail "cannot place the service token"
+  cat -- "$STAGE/token" > "$t" && _sys chown "$SVC:$SVC" "$t" && chmod 0600 "$t" && _tbt_swap "$t" "$TOKEN" \
+    || { rm -f -- "$t"; fail "cannot place the service token"; }
+  rm -f -- "$STAGE/token"
+}
+_tbu_render() {   # -> TBU_CHANGED; with TBU_DRY=1 nothing is written
+  TBU_CHANGED=()
+  if [ "$TBU_DRY" = 0 ]; then tbs_users; tbs_run_root_dirs; tbs_rows_install; fi
+  tbs_push_key_install
+  tbs_units
+  tbs_rule_firewall
+}
+_tbu_apply() {   # the system manager and the firewall told what changed, the service started
+  local c units=0 fw=0
+  for c in "${TBU_CHANGED[@]+"${TBU_CHANGED[@]}"}"; do
+    case $c in
+      "$UNITDIR"/*) units=1 ;;
+      "$ETC/ccrc-testbox.nft"|"$FIREWALL") fw=1 ;;
+    esac
+  done
+  [ "$units" = 0 ] || _sys systemctl daemon-reload || fail "systemctl daemon-reload failed"
+  _sys nft list table inet ccrc_testbox >/dev/null 2>&1 || fw=1
+  if [ "$fw" = 1 ]; then
+    # A read that is open while a changed firewall loads can freeze: the report says so first (spec §2.5 step 8).
+    _upd_phase installing firewall
+    tbs_firewall_load
+  fi
+  # A takeover file left by the old mover would make an old service's start remove the release it names: the kept
+  # releases are this file's (spec §2.7).
+  rm -f -- "$TOOLS/takeover"
+  _upd_phase restarting
+  tbs_service_start again
+  printf '%s\n' "${TBU_CHANGED[@]+"${TBU_CHANGED[@]}"}" > "$WORK/rendered"
+  local was=("${TBU_CHANGED[@]+"${TBU_CHANGED[@]}"}")
+  put 0644 "$WORK/rendered" "$STATE/rendered"
+  TBU_CHANGED=("${was[@]+"${was[@]}"}")
+}
+
+# ── the node files (spec §2.2) ───────────────────────────────────────────────────────────────────────────────────
+_tbu_measure() {   # <command>... -> the first version-shaped word it prints, or nothing
+  local out
+  out=$(timeout 10 "$@" 2>/dev/null | head -n 1) || :
+  [[ $out =~ ([0-9]+(\.[0-9]+){0,3}[a-z]?) ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+_tbu_tools_json() {   # the six versions as this box answers them now: measured, never copied from the spec (spec §2.6)
+  local cur=$TOOLS/current t v out='{' sep='' old l
+  declare -A m=()
+  m[node]=$(_tbu_measure "$cur/node" --version)
+  m[npm]=$([ -e "$cur/bin/npm" ] && _tbu_measure "$cur/node" "$cur/bin/npm" --version)
+  # Chrome is never run here: its download has no published checksum (D-7422), and today root unpacks it and only a
+  # run user executes it. Its version is the directory the set's link names, which is where the tool sync put it.
+  if l=$(readlink -- "$cur/chrome" 2>/dev/null) && [[ $l =~ (^|/)chrome/([^/]+)/chrome-linux64/chrome$ ]]; then
+    l=${BASH_REMATCH[2]}
+    [[ $l =~ $TBT_RE_VERSION ]] && m[chrome]=$l
+  fi
+  m[python3]=$(_tbu_measure python3 --version)
+  m[git]=$(_tbu_measure git --version)
+  m[tmux]=$(_tbu_measure tmux -V)
+  for t in "${TBT_TOOLS_ORDER[@]}"; do
+    v=${m[$t]:-}
+    if [ -n "$v" ]; then out+="$sep\"$t\":\"$v\""; else out+="$sep\"$t\":null"; fi
+    sep=','
+  done
+  # Written when a version changed, not at every act: a run that changes nothing leaves the file and its time.
+  old=$(_tbu_data "$STATE/tools.json") || old=''
+  [ "${old%,\"measuredAt\":*}" = "$out" ] && return 0
+  _tbu_state_put tools.json "$out,\"measuredAt\":$(date +%s)}"
+}
+_tbu_replaced_get() {   # -> TBU_R_TAG, TBU_R_SET, TBU_R_PREV (the `previous` file's two lines, or nothing); 1 when no act recorded one
+  local rec p
+  TBU_R_TAG='' TBU_R_SET='' TBU_R_PREV=''
+  rec=$(_tbu_data "$STATE/replaced") || return 1
+  TBU_R_TAG=$(_tbu_field "$rec" release) || :
+  TBU_R_SET=$(_tbu_field "$rec" set) || :
+  if p=$(_tbu_field "$rec" previous) && [[ ${p%%$'\t'*} =~ $TBT_RE_TAG ]]; then TBU_R_PREV=${p%%$'\t'*}$'\n'${p#*$'\t'}; fi
+  [[ $TBU_R_TAG =~ $TBT_RE_TAG ]] && [[ $TBU_R_SET =~ $TBT_RE_SET ]]
+}
+_tbu_replaced_put() {   # <tag> <set>: what this act replaces, with the `previous` it found, before anything is flipped
+  local l1='' l2='' p=''
+  if [ -f "$STATE/previous" ]; then { IFS= read -r l1; IFS= read -r l2; } < "$STATE/previous" || :; fi
+  [[ $l1 =~ $TBT_RE_TAG ]] && p=$'\n'previous$'\t'$l1$'\t'$l2
+  _tbu_state_put replaced "release"$'\t'"$1"$'\n'"set"$'\t'"$2$p"
+}
+_tbu_previous_put() { _tbu_state_put previous "$1"$'\n'"$(_tbu_tree_sha "$TOOLS/release/$1" || echo unstamped)"; }   # <tag>: the other nodes' format
+_tbu_node_files() {   # after a gate that passed: what this box now is
+  local tag=$1 sha id floor='' kept=() l
+  put 0644 "$TREE/build.json" "$STATE/build.json"
+  sha=$(_tbu_tree_sha "$TREE") || sha=unstamped
+  # The other nodes' format, read by the one reader they share (`installFrom`): one line, the sha, for a tree whose
+  # provenance was verified; the sha and `unsigned` for any other.
+  if [ "$TBU_VERIFIED" = 1 ] && [ "$tag" = "$REL" ]; then _tbu_state_put installed "$sha"; else _tbu_state_put installed "$sha"$'\n'unsigned; fi
+  _tbu_state_put ccrc-caps "os linux"$'\n'"$(printf '%s\n' "${TBU_CAPS[@]}")"
+  [ -f "$STATE/floor" ] && IFS= read -r floor < "$STATE/floor"
+  if ! [[ $floor =~ $TBT_RE_TAG ]] || _tbu_ver_lt "$floor" "$tag"; then _tbu_state_put floor "$tag"; fi
+  if [ ! -f "$STATE/node-id" ]; then   # minted once, never rewritten
+    id=$(_plat_uuid) && [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || fail "could not mint a node id"
+    _tbu_state_put node-id "$id"
+  fi
+  # kept: every kept release and its tool set, oldest first; this one last.
+  [ -f "$STATE/kept" ] && while IFS= read -r l; do [ "${l%%$'\t'*}" = "$tag" ] || [ -z "$l" ] || kept+=("$l"); done < "$STATE/kept"
+  kept+=("$tag"$'\t'"$(_tbt_current_set)")
+  _tbu_state_put kept "$(printf '%s\n' "${kept[@]}")"
+}
+_tbu_prune() {   # releases beyond TBU_KEEP removed, never the installed one, the previous one or the replaced one; then unused sets and versions
+  local lines=() l tag keep=() n prev='' i sets=() safe d
+  [ -f "$STATE/previous" ] && IFS= read -r prev < "$STATE/previous"
+  _tbu_replaced_get || :
+  # Never removed, whether or not a kept line names them: a restore's and a rollback's targets, and what serves.
+  safe=" $prev $TBU_R_TAG $(_tbt_installed_tag) "
+  while IFS= read -r l; do [ -n "$l" ] && lines+=("$l"); done < "$STATE/kept"
+  n=${#lines[@]}
+  for i in "${!lines[@]}"; do
+    tag=${lines[$i]%%$'\t'*}
+    if ((i >= n - TBU_KEEP)) || [[ $safe == *" $tag "* ]]; then keep+=("${lines[$i]}"); sets+=("${lines[$i]#*$'\t'}"); continue; fi
+    [[ $tag =~ $TBT_RE_TAG ]] && rm -rf -- "${TOOLS:?}/release/$tag"
+  done
+  _tbu_state_put kept "$(printf '%s\n' "${keep[@]}")"
+  # A release that never passed its gate is in no record: its tree goes with the first act that ends `done`.
+  for d in "$TOOLS/release"/v*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    tag=${d##*/}
+    [[ $safe == *" $tag "* ]] && continue
+    case $'\n'"$(printf '%s\n' "${keep[@]}")" in *$'\n'"$tag"$'\t'*) ;; *) [[ $tag =~ $TBT_RE_TAG ]] && rm -rf -- "$d" ;; esac
+  done
+  # The tool sync's own sweep: every set none of these names, every version no kept set links, and leftover staging.
+  # The replaced set is kept with them until a later act replaces another: it is what a restore re-links.
+  [ -z "$TBU_R_SET" ] || sets+=("$TBU_R_SET")
+  TBT_NEW_SET=$(_tbt_current_set) TBT_KEEP=("${sets[@]}")
+  _tbt_prune "$TBT_NEW_SET"
+}
+
+# ── restore arm 1 (spec §2.7): this file flips back by itself ────────────────────────────────────────────────────
+_tbu_restore() {   # <why> -> 0 and the report `reverted` when the replaced release passes its gate; else 1
+  local rc=0
+  TBU_RESTORING=1 TBU_SWITCHED=1
+  _tbu_restore_arm "$1" || rc=1
+  _tbu_unbound   # a restore that gave up before its gate leaves no bound armed over what follows
+  return "$rc"
+}
+_tbu_restore_arm() {
+  local why=$1 c1 c2='' ptag l set cand
+  # Where to: the pair the last switch replaced, release and tool set (a tools-only act restores to its own release's
+  # old set), and after it the release that was `previous` before that switch, with the set it was kept with. A pair
+  # whose gate has just failed is not tried again.
+  _tbu_replaced_get || { say "no act recorded what it replaced: nothing to restore to"; return 1; }
+  c1=$TBU_R_TAG$'\t'$TBU_R_SET
+  ptag=${TBU_R_PREV%%$'\n'*}
+  if [ -n "$ptag" ] && [ -f "$STATE/kept" ]; then while IFS=$'\t' read -r l set; do [ "$l" = "$ptag" ] && c2=$l$'\t'$set; done < "$STATE/kept"; fi
+  [ "$c2" != "$c1" ] || c2=''
+  _upd_phase restoring "$why"
+  for cand in "$c1" "$c2"; do
+    [ -n "$cand" ] && [ "$cand" != "$TBU_FAILED_PAIR" ] || continue
+    say "restoring ${cand%%$'\t'*}: $why"
+    if _tbu_restore_to "${cand%%$'\t'*}" "${cand#*$'\t'}"; then
+      put 0644 "$TREE/build.json" "$STATE/build.json"
+      _tbu_state_put installed "$(_tbu_tree_sha "$TREE" || echo unstamped)"$'\n'unsigned
+      # `previous` as the act found it: the box is where it was, so its previous release is the one it had.
+      if [ -n "$TBU_R_PREV" ]; then _tbu_state_put previous "$TBU_R_PREV"; else rm -f -- "$STATE/previous"; fi
+      _tbu_tools_json
+      _upd_phase reverted "$why"
+      say "reverted to ${cand%%$'\t'*}"
+      return 0
+    fi
+  done
+  return 1
+}
+_tbu_restore_to() {   # <tag> <set> -> 0 when that pair is linked, rendered, started and passes its gate
+  local prev=$1 pset=$2
+  [ -d "$TOOLS/release/$prev" ] || { say "the release $prev is not kept: nothing to restore to"; return 1; }
+  [ -d "$TOOLS/sets/$pset" ] || { say "the tool set $pset is not kept: nothing to restore to"; return 1; }
+  _tbu_bound restore 180
+  _sys systemctl stop "$TBU_UNIT" || :
+  TBT_SWAP_NODE=$TOOLS/sets/$pset/node
+  _tbt_link "sets/$pset" "$TOOLS/current" && _tbt_link "$prev" "$TOOLS/release/installed" || { say "cannot re-link $prev"; return 1; }
+  rm -f -- "$TOOLS/takeover"
+  if _tbu_render_tree "$TREE"; then
+    _tbu_render; _tbu_apply
+  else
+    # A release from before this design has no render entry: its own installer applies its units, rule and firewall.
+    bash "$TREE/deploy/testbox/install.sh" --reapply --force >&2 || { say "the installer of $prev failed"; return 1; }
+  fi
+  _tbu_unbound
+  _tbu_gate "$prev" && return 0
+  say "$prev does not pass its gate either: $UPD_GATE_WHY"
+  return 1
+}
+
+# ── settling (spec §2.8): what a dead updater left ───────────────────────────────────────────────────────────────
+_tbu_settle() {
+  local rep phase='' inst
+  rep=$(_tbu_data "$STATE/update.json") || return 0
+  [[ $rep =~ \"phase\":\"([a-z-]+)\" ]] && phase=${BASH_REMATCH[1]}
+  case $phase in ''|done|failed|reverted) return 0 ;; esac
+  inst=$(_tbt_installed_tag) || inst=''
+  say "the last act left its report at '$phase' and its updater is gone: settling on a release whose gate passes"
+  UPD_REPORT_TARGET=$inst
+  TBU_SWITCHED=1 TBU_SETTLED=1
+  if [ -d "$TOOLS/release/$inst" ] && [ -e "$TOOLS/current/node" ]; then
+    _tbu_bound switch 420
+    if _tbu_render_tree "$TREE"; then _tbu_render; _tbu_apply; else rm -f -- "$TOOLS/takeover"; _sys systemctl restart "$TBU_UNIT" || :; fi
+    _tbu_unbound
+    if _tbu_gate "$inst"; then
+      # The dead act switched and never wrote what the box became: the node files are written here, for the release
+      # that serves, and `previous` names the release that act replaced.
+      TBU_GATED=1
+      _tbu_node_files "$inst"
+      if _tbu_replaced_get && [ "$TBU_R_TAG" != "$inst" ] && [ -d "$TOOLS/release/$TBU_R_TAG" ]; then _tbu_previous_put "$TBU_R_TAG"; fi
+      _tbu_tools_json
+      _upd_phase 'done' "settled: $inst passes its gate"
+      TBU_GATED=0 TBU_SWITCHED=0
+      return 0
+    fi
+  fi
+  TBU_FAILED_PAIR=$inst$'\t'$(_tbt_current_set)
+  _tbu_restore "settling: ${inst:-no installed release} does not pass its gate" || say "settling left no release that passes its gate: this act goes on"
+  TBU_RESTORING=0 TBU_SWITCHED=0 TBU_FAILED_PAIR=''
+}
+
+# ── the drain (spec §2.5, D-8907) ────────────────────────────────────────────────────────────────────────────────
+_tbu_busy_units() {   # -> TBU_BUSY, the run, prepare and install units active now, one per line; 1 when the system manager did not answer
+  local out
+  # Its own status, never a pipe's: "could not be measured" is not "no unit is active".
+  out=$(_sys systemctl list-units --plain --no-legend --state=active,activating 'ccrc-testbox-run@*' 'ccrc-testbox-prepare@*' ccrc-testbox-install.service 2>/dev/null) || return 1
+  TBU_BUSY=$(awk 'NF { print $1 }' <<<"$out")
+}
+_tbu_drain() {
+  local req=$SYSROOT/run/ccrc-testbox-drain/request ans ready asked=0 start=$SECONDS n what
+  _upd_phase installing drain
+  # Only a service that wrote a ready file knows the request: a release from before this design is measured alone.
+  ready=$(_tbu_data "$SYSROOT/run/ccrc-testbox/ready") && [ "$(_sys systemctl is-active "$TBU_UNIT" 2>/dev/null)" = active ] && asked=1
+  if [ "$asked" = 1 ]; then
+    dir 0755 root root "$SYSROOT/run/ccrc-testbox-drain"
+    printf 'act\t%s\ndeadline\t%s\n' "$TBU_ACT" "$(($(date +%s) + TBU_DRAIN_S))" > "$WORK/request"
+    _exit_add "rm -f -- $(printf '%q' "$req")"   # the request is a lease: withdrawn however this ends
+    _sys install -m 0644 -o root -g root "$WORK/request" "$req.tbu-new" && mv -f -- "$req.tbu-new" "$req" || defer "cannot write the drain request"
+  fi
+  while :; do
+    if _tbu_busy_units; then
+      n=$(grep -c . <<<"$TBU_BUSY" || :); what="$n units active"
+      if [ "$n" = 0 ]; then
+        [ "$asked" = 0 ] && break
+        ans=$(_tbu_data "$SYSROOT/run/ccrc-testbox/drain") && [ "$(_tbu_field "$ans" act)" = "$TBU_ACT" ] && [ "$(_tbu_field "$ans" state)" = idle ] && break
+      fi
+    else
+      what='the active units could not be measured'   # unmeasured: the updater waits, and never stops a service on it
+    fi
+    ((SECONDS - start < TBU_DRAIN_S)) || { rm -f -- "$req"; defer "the drain ran out of time after ${TBU_DRAIN_S}s ($what)"; }
+    _upd_phase installing "drain: waiting ($what)"
+    sleep 2 {UPD_LOCK_FD}>&-   # no copy of the lock in the wait: an updater ended here frees it at once
+  done
+}
+
+# ── the stage (step 3) ───────────────────────────────────────────────────────────────────────────────────────────
+_tbu_registry() {   # -> TBU_REGISTRY, where npm fetches from now; else a deferral
+  local proxy; proxy=$(k CCRC_TESTBOX_REGISTRY_PROXY)
+  if curl -g -fsS --connect-timeout 5 --max-time 20 -o /dev/null -- "http://$proxy/npm" 2>/dev/null; then TBU_REGISTRY="http://$proxy/"; return 0; fi
+  # No proxy answers. Whether a root updater may then ask the upstream registry itself is O4, which is not ruled, so
+  # it never does, whatever the firewall's state: the act is deferred.
+  defer "the registry proxy at $proxy does not answer (the service is down), and the updater asks no other registry"
+}
+_tbu_set_path() {   # <set> -> the PATH prefix that runs its node and its npm: its bin/, then its node's own directory
+  local n; n=$(cd -- "$TOOLS/sets/$1" && cd -- "$(dirname -- "$(readlink node)")" && pwd) || n=''
+  printf '%s' "$TOOLS/sets/$1/bin${n:+:$n}"
+}
+_tbu_stage_release() {   # <PATH prefix>: the tree at <tools>/release/<tag>, root's, with its production dependencies
+  local dst=$TOOLS/release/$REL st=$TOOLS/release/.stage.$REL pkg need=0
+  if [ ! -d "$dst" ]; then
+    # The installer's own steps (deploy/testbox/box-steps), with the dependencies installed before the tree is
+    # placed: a tree under its release name is whole, so a failed `npm ci` leaves nothing a later act would take.
+    _upd_phase fetching release
+    tbs_tree_copy "$STAGING" "$st"
+    for pkg in server agent; do [ -f "$st/$pkg/package.json" ] && need=1; done
+    if [ "$need" = 1 ]; then _tbu_registry; _upd_phase fetching dependencies; tbs_tree_deps "$st" "$1" "$TBU_REGISTRY"; fi
+    tbs_tree_place "$st" "$dst"
+  fi
+  tbs_tree_owned "$dst"
+}
+_tbu_stage_tools() {   # node and npm at the spec's versions; -> TBU_NEW_SET, the set to switch to (the current one when nothing moves)
+  local cur nv pv have_n='' have_p='' t v d proxy; proxy=$(k CCRC_TESTBOX_REGISTRY_PROXY)
+  cur=$(_tbt_current_set) || fail "$TOOLS/current names no tool set"
+  TBU_NEW_SET=$cur
+  if [ -f "$TOOLS/current/versions" ]; then while IFS=$'\t' read -r t v; do case $t in node) have_n=$v ;; npm) have_p=$v ;; esac; done < "$TOOLS/current/versions"; fi
+  nv=${TBU_V[node]:-$have_n} pv=${TBU_V[npm]:-$have_p}
+  [ -n "$nv" ] && [ -n "$pv" ] || return 0             # a version neither the spec nor the box names is left as it is
+  [ "$nv" = "$have_n" ] && [ "$pv" = "$have_p" ] && return 0
+  _upd_phase fetching node
+  _tbt_node_install "$TOOLS" "$nv" "$proxy" || fail "node: $TBT_WHY"
+  _upd_phase fetching npm
+  _tbt_npm_install "$TOOLS" "$pv" "$proxy" "$TOOLS/node/$nv/bin/node" || fail "npm: $TBT_WHY"
+  d=$(mktemp -d "$TOOLS/sets/s.XXXXXXXX") || fail "cannot create a tool set"
+  # The current set's links, with node and npm re-pointed: what this act does not move stays as the set had it.
+  cp -RP -- "$TOOLS/sets/$cur/." "$d/" && chmod 0755 "$d" && { [ -d "$d/bin" ] || mkdir -m 0755 -- "$d/bin"; } || fail "cannot stage the tool set $d"
+  ln -sfn "../../node/$nv/bin/node" "$d/node" && ln -sfn "../../../node/$nv/bin/node" "$d/bin/node" \
+    && ln -sfn "../../../npm/$pv/bin/npm-cli.js" "$d/bin/npm" && ln -sfn "../../../npm/$pv/bin/npx-cli.js" "$d/bin/npx" || fail "cannot link the tool set $d"
+  { printf 'node\t%s\nnpm\t%s\n' "$nv" "$pv"; if [ -f "$TOOLS/sets/$cur/versions" ]; then grep -vE $'^(node|npm)\t' "$TOOLS/sets/$cur/versions" || :; fi; } > "$d/versions.new" \
+    && chmod 0644 "$d/versions.new" && mv -f -- "$d/versions.new" "$d/versions" || fail "cannot write $d/versions"
+  TBU_NEW_SET=${d##*/}
+}
+
+# ── the act ──────────────────────────────────────────────────────────────────────────────────────────────────────
+_tbu_main() {
+  local here spec inst cur floor='' cg psha bad lrc=0
+  [ "$#" -eq 1 ] || { printf 'usage: box-update <spec file>\n' >&2; exit 2; }
+  spec=$1
+  here=${BASH_SOURCE[0]}; [[ $here == */* ]] || here=./$here
+  here=$(cd "${here%/*}" && pwd) || { say "cannot find the updater's directory"; exit 2; }
+  STAGING=${here%/deploy/testbox/bin}
+  [ "$STAGING" != "$here" ] || { say "not run from a release tree's deploy/testbox/bin: $here"; exit 2; }
+  STAGE=${STAGING%/*}
+  # The tool sync's functions first: `_tbt_home` gives this root unit a HOME before ccd/ccrc is read (it reads $HOME
+  # at its top level under `set -u`: testbox-sync-home), and node and npm are its to fetch.
+  # shellcheck source=/dev/null
+  . "$STAGING/deploy/testbox/bin/tools-sync" || { say "cannot load this tree's tools-sync"; exit 3; }
+  _tbt_home || { say "refused: $TBT_WHY; nothing was written"; exit 3; }
+  while IFS= read -r v; do case $v in CCRC_TESTBOX_*) unset "$v" ;; esac; done < <(compgen -e)
+  # shellcheck source=/dev/null  # this tree's ccd/testbox-knobs, which loads this tree's ccd/ccrc: the update lane's report, lock and gate
+  . "$STAGING/ccd/testbox-knobs" || { say "cannot load this tree's ccd/testbox-knobs"; exit 3; }
+  # shellcheck source=/dev/null
+  . "$STAGING/deploy/testbox/box-steps" || { say "cannot load this tree's box-steps"; exit 3; }
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-testbox-update.XXXXXX") || { say "no temporary directory"; exit 3; }
+  _exit_add "rm -rf -- $(printf '%q' "$WORK")"
+  _exit_add _tbu_unbound
+  trap _tbu_overran USR1
+
+  # ── step 1: the refusals that read only the box file and the stage, before the lock ──
+  BOXFILE=$(_tb_box_env_file); SYSROOT=${BOXFILE%/etc/*}; ETC=${BOXFILE%/*}
+  _tb_box_file_ok "$BOXFILE" || refuse "the box file: $TB_BOX_WHY"
+  PROG=$TBU_PROG _tb_load box || refuse "the box file's settings cannot be read"
+  if [ "${#TBK_WARN[@]}" -gt 0 ]; then
+    for w in "${TBK_WARN[@]}"; do printf '%s\n' "$w" >&2; done
+    refuse "the box file holds a value that is not its setting's shape (above)"
+  fi
+  MODE=reapply A_REPOS=() A_KEY=''   # the rows and the push key are the installed ones, as for the installer's --reapply
+  tbs_box_paths
+  STATE=$TOOLS/node-state
+  TBT_TOOLS=$TOOLS   # the tool sync's readers of the two links (`_tbt_installed_tag`, `_tbt_current_set`) and its sweep read this name
+  tbs_token_path
+  # Root takes its orders and a token from the stage: the directory and the spec in it are root's alone before a
+  # line of the spec is read (spec §2.5 steps 2 and 5).
+  _tbu_roots_alone "$STAGE" || refuse "the stage is not root's alone: $STAGE"
+  [ -f "$spec" ] || refuse "no spec file: $spec"
+  [ "$(cd -- "$(dirname -- "$spec")" 2>/dev/null && pwd -P)" = "$(cd -- "$STAGE" && pwd -P)" ] || refuse "the spec file is not in the stage $STAGE"
+  _tbu_roots_alone "$spec" || refuse "the stage is not root's alone: $spec"
+  _tbu_read_spec "$spec"
+  inst=$(_tbt_installed_tag) || refuse "the box has no installed release (the first install is deploy/testbox/install.sh's)"
+  # The installer's own value rules, read here because settling renders too: reads only, each a refusal.
+  tbs_addresses; tbs_egress_names; tbs_rows; tbs_push_key; tbs_users_ok; tbs_run_root_fs
+  tbs_manifest "$STAGING"
+  [ "$(_tbu_tree_tag "$STAGING")" = "$REL" ] || refuse "this tree's build.json version is not the spec's release $REL"
+  if [ -n "$TBU_SHA" ]; then
+    # A digest the spec names is compared, never skipped: no tarball, or a link in its place, is a refusal (M9).
+    [ -f "$STAGE/release.tar.gz" ] && _tbu_roots_alone "$STAGE/release.tar.gz" || refuse "the spec names a sha256 and the stage holds no tarball of root's own to compare"
+    psha=$(_tbt_sha256 "$STAGE/release.tar.gz") || psha=''
+    [ "$psha" = "$TBU_SHA" ] || refuse "the staged tarball's sha256 is not the one the spec names"
+  fi
+  bad=$(find "$STAGING" \( ! -user "$(_tb_box_owner_uid)" -o -perm -g+w -o -perm -o+w \) ! -type l -print -quit 2>/dev/null)
+  [ -z "$bad" ] || refuse "the stage is not root's alone: $bad"
+  if [ -e "$STAGE/token" ] || [ -L "$STAGE/token" ]; then
+    _tbu_token_ok "$STAGE/token" || refuse "the staged token is not a root-only file holding one token of 64 hex characters"
+  fi
+
+  # ── the lock, the report's names, settling ──
+  # The update lane's lock and report, re-pointed (their sentences still say ~/.ccrc). The lane's settings file is not
+  # re-pointed and is not this box's: the gate's window is read from the environment, else from root's home ccrc.env,
+  # which a test box does not have, which gives its default (D-7451: no test box script assigns that name).
+  BOX_UPDATE_LOCK=$SYSROOT/run/ccrc-testbox-update/lock
+  BOX_UPDATE_JSON=$STATE/update.json
+  PROG=$TBU_PROG UPD_FROM=$TBU_FROM UPD_ACT_ID=$TBU_ACT UPD_REPORT_TARGET=$REL
+  [ -d "${BOX_UPDATE_LOCK%/*}" ] || _sys install -d -m 0700 -o root -g root "${BOX_UPDATE_LOCK%/*}" || refuse "cannot make the lock's directory"
+  # The lane's own acquirer that answers in words (`_ver_lock_try`), not the one that dies: a lock another updater
+  # holds is a deferral, nothing changed (exit 3), and is never read as `failed`, the box is down (exit 1). No report
+  # is written: the holder's is the live one.
+  _ver_lock_try || lrc=$?
+  case $lrc in
+    0) ;;
+    1) defer "another update holds the box's update lock ($(_upd_lock_holder))" ;;
+    2) refuse "flock is not installed, so the box's update lock cannot be taken" ;;
+    *) refuse "the box's update lock could not be opened or measured" ;;
+  esac
+  if [ -d "$STATE" ]; then _tbu_settle; fi
+  UPD_REPORT_TARGET=$REL UPD_REPORT_STARTED=''
+  inst=$(_tbt_installed_tag) || inst=''
+
+  # ── step 2: the refusals that read what settling may have changed ──
+  [ -f "$STATE/floor" ] && IFS= read -r floor < "$STATE/floor"
+  if [ "$TBU_KIND" = update ] && [[ $floor =~ $TBT_RE_TAG ]] && _tbu_ver_lt "$REL" "$floor"; then
+    refuse "$REL is below this box's floor $floor (a move down is a rollback)"
+  fi
+  [ -f "$TOKEN" ] || [ -f "$STAGE/token" ] || refuse "the service has no token, in place or in the stage"
+  # Every fetch runs inside the firewall's tools set: with the table loaded, this process's cgroup must be in it.
+  if _sys nft list table inet ccrc_testbox >/dev/null 2>&1; then
+    cg=$(cat -- "$SYSROOT/proc/self/cgroup" 2>/dev/null) || cg=''
+    cg=${cg##*::/}
+    # The set is read whole before it is searched: piped into `grep -q`, which stops at its match, nft is left writing
+    # into a closed pipe and dies of SIGPIPE, and under pipefail an updater in the set would be refused.
+    tools_cg=$(_sys nft list set inet ccrc_testbox tools_cg 2>/dev/null) || tools_cg=''
+    [ -n "$cg" ] && grep -qF "\"$cg\"" <<< "$tools_cg" \
+      || refuse "this updater does not run in the firewall's tools set, so none of its fetches would leave the box"
+  fi
+  TBU_REPORTING=1
+  [ -d "$STATE" ] || _sys install -d -m 0755 -o root -g root "$STATE" || refuse "cannot make $STATE"
+
+  # ── step 3: the stage ──
+  # The report is written again before each part of the stage. One part can still run longer than two minutes (an
+  # `npm ci`); the stage's own bound, 12 minutes, is inside the server's 15 with no report.
+  _upd_phase fetching
+  _tbu_bound stage 720
+  _tbu_stage_tools
+  _tbu_stage_release "$(_tbu_set_path "$TBU_NEW_SET")"
+  _tbu_unbound
+  cur=$(_tbt_current_set)
+
+  # Nothing to move: the box is on the release and the versions. A render that would change no byte, on a box whose
+  # gate passes, ends here, before the drain (spec §2.6 "No drain for nothing").
+  if [ "$inst" = "$REL" ] && [ "$cur" = "$TBU_NEW_SET" ]; then
+    TBU_DRY=1; _tbu_render; TBU_DRY=0
+    if [ "${#TBU_CHANGED[@]}" -eq 0 ] && { [ -f "$TOKEN" ] && [ ! -f "$STAGE/token" ]; } && _tb_gate_probe "$(_tbu_gate_role)" "$REL"; then
+      # A box no act has moved yet is adopted here (spec §2.8), and node files that are not this tree's (an act that
+      # died after its switch) are written again: the files say what serves.
+      { [ -f "$STATE/node-id" ] && cmp -s -- "$TREE/build.json" "$STATE/build.json"; } || _tbu_node_files "$REL"
+      _tbu_tools_json
+      _upd_phase 'done' "nothing to change: $REL is installed and passes its gate"
+      say "$REL is installed, every file is as it would be rendered and the gate passes; nothing to do"
+      exit 0
+    fi
+  fi
+
+  # ── step 4: the drain ──
+  _tbu_drain
+
+  # ── step 5: the switch ──
+  _upd_phase installing switch
+  _tbu_bound switch 420
+  [ -d "$STATE" ] || fail "no node state directory"
+  # What this act replaces, release and tool set, recorded before anything is flipped: restore arm 1's one input.
+  # Until a link moves it names the box as it is, so a restore from here is a re-link to the same pair.
+  _tbu_replaced_put "$inst" "$cur"
+  if ! _sys systemctl stop "$TBU_UNIT"; then
+    # Nothing is flipped. A service that still answers is left serving and the act is deferred; one that is down
+    # is put back on the pair above by arm 1, rendered, started and gated.
+    _sys systemctl start "$TBU_UNIT" || :
+    [ "$(_sys systemctl is-active "$TBU_UNIT" 2>/dev/null)" = active ] || TBU_SWITCHED=1
+    fail "cannot stop the test service"
+  fi
+  TBU_SWITCHED=1
+  rm -f -- "$SYSROOT/run/ccrc-testbox-drain/request"
+  if [ ! -f "$STATE/node-id" ]; then
+    # Adoption (spec §2.8): a box no act has moved yet. Its release and its set are recorded as kept.
+    _tbu_state_put kept "$inst"$'\t'"$cur"
+  fi
+  TBT_SWAP_NODE=$TOOLS/sets/$TBU_NEW_SET/node
+  [ "$cur" = "$TBU_NEW_SET" ] || _tbt_link "sets/$TBU_NEW_SET" "$TOOLS/current" || fail "cannot switch $TOOLS/current"
+  [ "$inst" = "$REL" ] || _tbt_link "$REL" "$TOOLS/release/installed" || fail "cannot switch $TOOLS/release/installed"
+  [ "$inst" = "$REL" ] || _tbu_previous_put "$inst"
+
+  # ── steps 6 and 7: the render, the start, the gate ──
+  _tbu_token
+  _tbu_render
+  _tbu_apply
+  _tbu_unbound
+  if ! _tbu_gate "$REL"; then
+    TBU_FAILED_PAIR=$REL$'\t'$TBU_NEW_SET
+    _tbu_restore "$REL failed its health gate: $UPD_GATE_WHY" && exit 4
+    _upd_phase failed "$REL failed its health gate and no replaced release passes: $UPD_GATE_WHY"
+    exit 1
+  fi
+
+  # ── step 8: done ──
+  TBU_GATED=1
+  _tbu_node_files "$REL"
+  _tbu_tools_json
+  _tbu_prune
+  _upd_phase 'done'
+  say "installed $REL"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then _tbu_main "$@"; fi

@@ -527,6 +527,24 @@ describe('Repair and Apply release to box', () => {
     expect(q('[data-testbox="disconnect"]')).toBeDisabled();
   });
 
+  it('a running act says the latest time it can end when the status records one, and nothing when it does not (D-8899)', async () => {
+    const deadlineAt = Date.UTC(2026, 10, 18, 11, 37, 59);
+    fakeFleet(connected({ act: actState({ deadlineAt }) }));
+    const first = await mount();
+    expect(q('[data-testbox="ends-by"]')!.textContent).toBe('It ends by 2026-11-18 11:38 UTC at the latest.');
+    first.unmount();
+    // an older fleet host's status has no latest end: the phases alone show
+    fakeFleet(connected({ act: actState() }));
+    const older = await mount();
+    expect(q('[data-testbox="phases"]')).not.toBeNull();
+    expect(q('[data-testbox="ends-by"]')).toBeNull();
+    older.unmount();
+    // an act that ended says none
+    fakeFleet(connected({ act: actState({ outcome: 'failed', code: 'interrupted', endedAt: 2 }) }));
+    await mount();
+    expect(q('[data-testbox="ends-by"]')).toBeNull();
+  });
+
   it('Apply release to box shows only when the running release differs from the installer marker', async () => {
     // Equal: nothing to apply. Unread marker or unmeasured box: nothing is said.
     for (const [rel, tag] of [['v1.2.0', 'v1.2.0'], ['v1.2.0', null], [null, 'v1.1.0']] as const) {

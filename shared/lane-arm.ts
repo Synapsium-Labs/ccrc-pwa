@@ -142,7 +142,8 @@ export function isQuizTickOutcome(v: unknown): v is QuizTickOutcome {
   return typeof v === 'string' && (QUIZ_TICK_OUTCOMES as readonly string[]).includes(v);
 }
 /** The unattended run's last tick as the server stored it (`POST /api/continuity/quiz-status`): the ISO week, the act it
- *  reached, its outcome and word, one line of detail, the setup's account id, and when the tick ran. */
+ *  reached, its outcome and word, one line of detail, the account id (the week's when recorded, else the setup's), and when the
+ *  tick ran. */
 export interface LaneArmQuizTick {
   week: string | null;
   act: string;

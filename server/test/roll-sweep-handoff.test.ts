@@ -150,7 +150,7 @@ describe('rollPass: the act-time re-check reads the continuity row again (review
         rowAtAct: async () => ({ ok: true as const, row: row() }), listing: async () => [], admitWake: () => ({ refund: () => { /* none */ } }),
       } as never,
     };
-    const m: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map() };
+    const m: RollSweepMemory = { lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map(), builtFor: new Map(), modelFor: new Map(), laneReads: new Map(), entryPending: { rows: new Map(), seenAt: null } };
     claimRun(coord);
     const out = await rollPass(deps, m, [row()], [record()], [HIBERNATE_LIVE_MARKER]);
     expect(releases, 'the flip ran between the pass read and the act').toBeGreaterThanOrEqual(2);

@@ -23,7 +23,7 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   const FIELDS = ROUTE_WRITABLE_FIELDS;
 
   it('the field list this scans is real, and is the routing record\'s own list', () => {
-    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10; the pool set (Overlord W1) `poolset`, `acctorder`: 10 -> 12; the W1 sandbox `profiledigest`: 12 -> 13; the mid-turn mail hold `mailhold`: 13 -> 14').toBe(14);
+    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6; the launch profile added `profile`, `automem`, `compactwindow`: 6 -> 9; the compaction piece `precompact`: 9 -> 10; the pool set (Overlord W1) `poolset`, `acctorder`: 10 -> 12; the W1 sandbox `profiledigest`: 12 -> 13; the mid-turn mail hold `mailhold`: 13 -> 14; the coordinator advisor `advisor`: 14 -> 15').toBe(15);
     expect(FIELDS).toContain('class');
   });
 
@@ -846,6 +846,8 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
   //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
   //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
+  //   - the dependency shed's refusal word `run-open` (`server/src/depsShed.ts`, ccd's `_ws_shed_refused` words, D-8955) —
+  //     the shed's seam, not the door's;
   //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`, `pwa/src/docs/docsText.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
   // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
@@ -872,7 +874,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'server/src/depsShed.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });

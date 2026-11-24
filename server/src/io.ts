@@ -1,18 +1,19 @@
 import { constants as fsConstants, createReadStream, watch, type FSWatcher } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { ModelsAction, ModelsAsked, ReadFailure, TestboxAdminAsked, TestboxCaptureReply, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
-import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
+import { measurePressure, measureSessions } from '../../agent/src/pressure.js';
 import { measureBackup } from '../../agent/src/backup.js';
+import { readIdentOf } from '../../agent/src/fileops.js';
 import type { BackupRead } from '../../shared/backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
 import type { ModelClass } from '../../shared/models.js';
-import type { HostPsi } from '../../shared/pressure.js';
+import { readHostMachine, type HostMachineReading, type HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
@@ -129,9 +130,17 @@ export type MeasuredDirectoryRead =
  *  complete lines — and an answer that cannot prove those bytes (an older
  *  peer's decoded `data`, malformed or non-canonical base64, a length that
  *  disagrees with `size`, a size that has regressed below `offset`) is
- *  `unreadable`, never reconstructed. */
+ *  `unreadable`, never reconstructed.
+ *
+ *  `ident`, ADDITIVE and server-internal: an opaque token naming the regular
+ *  file whose bytes these are, measured on the handle that read them
+ *  (`agent/src/fileops.ts#readIdentOf`, on both adapters), for equality
+ *  between reads through one adapter only; never sent to a browser. Only an
+ *  answer that carries bytes may have one (never EOF). Absent is UNMEASURED
+ *  (EOF, an older agent, a failed fstat, no usable birth time, a malformed
+ *  token), never "the same file". */
 export type MeasuredByteRangeRead =
-  | { ok: true; bytes: Uint8Array; size: number }
+  | { ok: true; bytes: Uint8Array; size: number; ident?: string }
   | { ok: false; reason: ReadFailure };
 
 /**
@@ -325,10 +334,15 @@ export type MeasuredBackup =
   | { ok: true; read: BackupRead }
   | { ok: false; reason: 'unsupported' | 'unanswered' };
 
-/** The `pressure` reading as a seam answers it (#1170), or why there is none. */
+/** The `pressure` reading as a seam answers it (#1170), or why there is none. `machine` is the host's size
+ *  (D-8920) as its one reader answered it: measured, or unmeasured WITH ITS REASON, which an adapter
+ *  keeps (no ready frame yet, an agent with no size to give, a read that failed). It rides BOTH members, because a size
+ *  does not depend on the PSI: a box with no PSI (a local server on a Mac, an old kernel) still has memory and cores.
+ *  ABSENT is one condition only, an answerer that knows no size (a double written before the field): `agent-older` to
+ *  the lane, its one reader (`pressure.ts#machineAfter`). */
 export type MeasuredPressure =
-  | { ok: true; psi: HostPsi; headroomBytes?: number | null }
-  | { ok: false; reason: 'unsupported' | 'unanswered' };
+  | { ok: true; psi: HostPsi; headroomBytes?: number | null; machine?: HostMachineReading }
+  | { ok: false; reason: 'unsupported' | 'unanswered'; machine?: HostMachineReading };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -413,13 +427,38 @@ export const localIO: FleetIO = {
     if (offset > size) return { ok: false, reason: 'unreadable' };
     const owed = Math.min(maxBytes, size - offset);
     if (owed === 0) return { ok: true, bytes: new Uint8Array(0), size };   // EOF: a measurement, not a miss
+    // Bytes are owed: ONE handle for the size, the identity and the bytes, as the agent reads. The path stat above only
+    // decided that a read is owed; nothing it measured stamps these bytes. O_NONBLOCK, so a FIFO the stat raced cannot
+    // hang the open, and a regular file on the handle is required before a byte is read (the path stat's directory or
+    // device would have failed at its read, or been read, before).
+    let fh: FileHandle;
+    try { fh = await open(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK); } catch (err) { return { ok: false, reason: failureFor(err) }; }
     try {
-      const bytes = await readRange(p, offset, offset + owed);
-      // Fewer bytes than the size promised means the file shrank between the
-      // stat and the read: not a measurement of this range.
-      if (bytes.length !== owed) return { ok: false, reason: 'unreadable' };
-      return { ok: true, bytes: new Uint8Array(bytes), size };   // a copy: a plain Uint8Array, not a pooled Buffer view
-    } catch (err) { return { ok: false, reason: failureFor(err) }; }
+      const st = await fh.stat({ bigint: true });
+      if (!st.isFile()) return { ok: false, reason: 'unreadable' };
+      const now = Number(st.size);
+      // Shrank since the path stat, so the bytes it promised are not all there: `unreadable`, never the short bytes (R99).
+      // A file that grew answers the handle's size and its bytes, `min(maxBytes, size − offset)` exactly.
+      if (now < offset + owed) return { ok: false, reason: 'unreadable' };
+      const due = Math.min(maxBytes, now - offset);
+      const ident = readIdentOf(st);
+      const buf = Buffer.alloc(due);
+      let got = 0;
+      while (got < due) {
+        const { bytesRead } = await fh.read(buf, got, due - got, offset + got);
+        if (bytesRead === 0) break;
+        got += bytesRead;
+      }
+      // Fewer bytes than the handle's size promised means the file shrank between the
+      // fstat and the read: not a measurement of this range.
+      if (got !== due) return { ok: false, reason: 'unreadable' };
+      // a copy: a plain Uint8Array, not a pooled Buffer view
+      return { ok: true, bytes: new Uint8Array(buf), size: now, ...(ident !== undefined ? { ident } : {}) };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    } finally {
+      await fh.close().catch(() => {});
+    }
   },
 
   async readFileB64Measured(p) {
@@ -554,8 +593,13 @@ export const localIO: FleetIO = {
 
   // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
   // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
+  // D-8920: in local mode this box IS the fleet host, so its own size is the machine's. Measured outside
+  // the PSI's `try` (it never throws), so the `unsupported` member carries it too; a size that could not be measured
+  // is `read-failed`, through the wire's own reader.
   pressureMeasured: async () => {
-    try { return { ok: true, psi: measurePressure(), headroomBytes: measureHeadroom() }; } catch { return { ok: false, reason: 'unsupported' }; }
+    const sessions = measureSessions();
+    const machine = readHostMachine({ machine: sessions.machine });
+    try { return { ok: true, psi: measurePressure(), headroomBytes: sessions.headroomBytes, machine }; } catch { return { ok: false, reason: 'unsupported', machine }; }
   },
 
   // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.

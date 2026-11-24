@@ -2660,7 +2660,9 @@ describe('a team key two workspaces hold, on rows that name no workspace, raises
     expect(item).toMatchObject({ kind: 'do', title: 'Choose the Linear workspace of team AAA', program: LINEAR_SYNC_PROGRAMME, raisedBy: 'ccrc', options: null, state: 'open' });
     expect(JSON.parse(item!.action!)).toEqual({ verb: 'linear-team-workspace', teamKey: 'AAA' });
     expect(item!.why).toContain('The project project-a holds the key and names no workspace');
-    expect((JSON.parse(item!.how) as string[]).join('\n')).toContain('/settings/security');
+    // The page that holds the project rows: Settings' Integrations section (D-8932; Security before it).
+    expect((JSON.parse(item!.how) as string[]).join('\n')).toContain('Open /settings/integrations and, on the row of the project that owns team AAA');
+    expect(item!.how).not.toContain('/settings/security');
     expect([rowOf(r, 12)?.state, rowOf(r, 13)?.state]).toEqual(['waiting', 'waiting']);
     expect(mails(r)).toEqual([]);
     // the item takes no act: its remedy is the project row's setting

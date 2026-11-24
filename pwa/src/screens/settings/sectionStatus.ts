@@ -5,6 +5,7 @@
 // names a tag, the predicate (fleet/releaseWaiting.ts) the fleet's update line and BuildLine use, so the three never
 // disagree. Automation's pause part is a skeleton until the first coord frame, never "runs normally". Notifications
 // says "not available" where push is unsupported, never "off". Security is red only when `unarmedExposure`.
+// Integrations reads the frame's one Linear read and nothing else.
 import type { NodeWire, NotifyMode, UpdatesView } from '../../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '../../../../shared/api';
 import { COLLECT_STATE_TEXT } from '../../fleet/collectLaneWords';
@@ -135,6 +136,24 @@ function securityStatus(view: SettingsView, hostname: string, now: number): Sect
   return line(parts.join(' · '), tone);
 }
 
+/** How GitHub is reached today (`githubWords.ts`): said on the index as a fact, since no read reports it. */
+export const INTEGRATIONS_GITHUB_STATUS = "GitHub: the fleet box's own sign-in";
+
+/** Integrations (D-8932): the Linear keys, from the frame's one Linear read, then how GitHub is
+ *  reached today, which is a fact of the build and not a reading. A key that is not `connected` (rejected, forbidden,
+ *  unreachable, unreadable, not described) turns the line amber: its card says which and what to do. */
+function integrationsStatus(view: SettingsView): SectionStatus {
+  const l = view.linear;
+  if (l.view === null) return l.failure === null ? SKELETON : line(`Linear ${UNREAD_STATUS}`, 'amber');
+  if (l.view.store === 'unreadable') return line(`Linear keys ${UNREAD_STATUS} · ${INTEGRATIONS_GITHUB_STATUS}`, 'amber');
+  const legacy = l.view.legacy !== null && l.view.legacy.view.state !== 'not-connected' && !l.view.legacy.superseded ? [l.view.legacy.view] : [];
+  const keys = [...l.view.workspaces, ...legacy];
+  const troubled = keys.filter((k) => k.state !== 'connected').length;
+  const linear = keys.length === 0 ? 'Linear: no key yet'
+    : troubled > 0 ? `Linear: ${troubled} of ${keys.length} key${keys.length === 1 ? '' : 's'} need${troubled === 1 ? 's' : ''} attention`
+      : `Linear: ${keys.length} workspace${keys.length === 1 ? '' : 's'} connected`;
+  return line(`${linear} · ${INTEGRATIONS_GITHUB_STATUS}`, troubled > 0 ? 'amber' : 'calm');
+}
 /** The status of section `id`, from the one view. */
 export function sectionStatus(
   id: SettingsSectionId, view: SettingsView, facts: AppearanceFacts & { hostname: string; now: number },
@@ -154,5 +173,7 @@ export function sectionStatus(
       return automationStatus(view);
     case 'security':
       return securityStatus(view, facts.hostname, facts.now);
+    case 'integrations':
+      return integrationsStatus(view);
   }
 }

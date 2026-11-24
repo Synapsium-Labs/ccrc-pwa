@@ -134,7 +134,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await insetHomeIndicator(ctx, page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 5
           && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
           && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null
@@ -211,7 +211,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
       const { ctx, page, errors } = await openApp(browser!, view, WAITING);
       try {
         await insetHomeIndicator(ctx, page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelector('.ref-fab') !== null
           && document.querySelector('.update-indicator-dismiss') !== null, undefined, { timeout: 20_000 });
         await page.waitForTimeout(200); // the FAB's ResizeObserver publishes
@@ -236,7 +236,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
     it(`no + New at a desk: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelector('.ref-bar') !== null && document.querySelectorAll('.proj-card').length > 0, undefined, { timeout: 20_000 });
         const seen = await page.evaluate(() => ({
           fab: document.querySelectorAll('.ref-fab, .fab').length,
@@ -255,7 +255,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
   it("Instrument's phone keeps today's head and round +", async () => {
     const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width: 390 }, FIXTURE);
     try {
-      await page.goto(server!.origin + '/');
+      await page.goto(server!.origin + '/fleet');
       // Wait on the fleet itself, not one grouping's rows: the list may open grouped by status or by project.
       await page.waitForFunction(() => document.querySelector('.fleet-head') !== null && document.querySelector('.fab') !== null
         && document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
@@ -286,7 +286,7 @@ describe("the face on Instrument's phone head keeps its place", () => {
       it(`${theme}, ${width}px: the wordmark stays on one line and the face costs at most its own cell`, async () => {
         const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme, width }, FIXTURE);
         try {
-          await page.goto(server!.origin + '/');
+          await page.goto(server!.origin + '/fleet');
           await page.waitForFunction(() => document.querySelector('.fleet-head .face-mark') !== null
             && document.body.innerText.includes('9 sessions'), undefined, { timeout: 20_000 });
           await page.waitForTimeout(300);
@@ -439,7 +439,7 @@ describe("Refined's phone header and the bottom bar with the Waiting badge drawn
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, WITH_LIST);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForFunction(() => document.querySelector('.shell-phone-nav [aria-label="Waiting, 101 waiting on you"]') !== null
           && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
           && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
@@ -564,7 +564,7 @@ async function openFolded(view: AppView, cards: number, expanded = false, sessio
   };
   const opened = await openApp(browser!, view, fixture);
   if (expanded) await seedStripExpanded(opened.ctx);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForFunction((n) => document.querySelectorAll('.accounts-strip .account-gauge').length === n
     && document.querySelector('.accounts-end [aria-expanded]') !== null && document.querySelector('.sess-line') !== null, cards, { timeout: 20_000 });
   if (waiting) await opened.page.waitForSelector('.update-indicator', { timeout: 20_000 });

@@ -17,8 +17,9 @@ import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
 import type { AnswerMarksView, AskMarkRow } from './answerMarks.js';
 
-/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
- *  `secret`'s value goes to its slot, never through the answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` needs none, and its tick may carry the
+ *  operator's optional note as its answer (D-8931); a `secret`'s value goes to its slot, never through the
+ *  answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -106,7 +107,15 @@ export type ItemAction =
   | ReleaseReviewAction
   // Approvals PR 2 (plan 2026-11-18 §3.2.2, Task 2.2), narrowed by the Overlord's slug item-only-when-given-up: ccrc gave up
   // capturing this Claude Code build. The build is the item's key: one open item per build. It names no run, so it abandons nothing.
-  | { verb: 'untrusted-build'; build: string };
+  | { verb: 'untrusted-build'; build: string }
+  // D-8955: a disk cleanup lane (`lane`) has stalled under disk pressure, for `reason` (a held-by word, ccd's token, or
+  // `unknown`). One open item per lane and reason; ccrc settles it once the lane finishes one again, so it names no run and
+  // takes no act of its own.
+  | { verb: 'disk-lane-stall'; lane: string; reason: string };
+/** The disk-lane stall action's verb, the one spelling its readers bind (D-8955). */
+export const DISK_LANE_STALL_VERB = 'disk-lane-stall' as const;
+export type DiskLaneStallAction = Extract<ItemAction, { verb: 'disk-lane-stall' }>;
+export const isDiskLaneStallAction = (a: ItemAction | null): a is DiskLaneStallAction => a !== null && a.verb === DISK_LANE_STALL_VERB;
 /** The untrusted-build action's verb, the one spelling its readers bind (approvals PR 2, Task 2.2). */
 export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;
 export type UntrustedBuildAction = Extract<ItemAction, { verb: 'untrusted-build' }>;
@@ -114,9 +123,10 @@ export const isUntrustedBuildAction = (a: ItemAction | null): a is UntrustedBuil
 /** The console page the untrusted-build item's step links to (review 2752 F4): Settings' Automation section, whose Test box
  *  build list holds the build's row and its Capture again. The item's text names it, and the console links a routed path. */
 export const UNTRUSTED_BUILD_SETTINGS_PATH = '/settings/automation';
-/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Security section.
- *  The `linear-team-workspace` item's text names it and the console links it. */
-export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/security';
+/** The console page that holds every project's Linear row, its team key and its Workspace (D-8808): Settings' Integrations
+ *  section (D-8932; Security held it before, and an item written then still names `/settings/security`,
+ *  where a line points here). The `linear-team-workspace` item's text names it and the console links it. */
+export const LINEAR_PROJECTS_SETTINGS_PATH = '/settings/integrations';
 /** The six hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). `linear-team-workspace`
  *  takes none: its remedy is a setting on the project's row (D-8808). */
 export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner' | 'linear-team-workspace';
@@ -203,6 +213,11 @@ export function parseItemAction(text: string): ItemAction | null {
   if (o['verb'] === UNTRUSTED_BUILD_VERB) {
     const build = word('build');
     return build === null ? null : { verb: UNTRUSTED_BUILD_VERB, build };
+  }
+  if (o['verb'] === DISK_LANE_STALL_VERB) {
+    const lane = word('lane');
+    const reason = word('reason');
+    return lane === null || reason === null ? null : { verb: DISK_LANE_STALL_VERB, lane, reason };
   }
   if (typeof o['runId'] !== 'number' || !Number.isInteger(o['runId'])) return null;
   if (o['verb'] === 'release-review') {

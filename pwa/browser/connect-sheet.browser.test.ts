@@ -134,7 +134,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
       // The narrowed door, on a dark gate's answer.
       const dark = await openApp(browser!, view, DARK);
       try {
-        await dark.page.goto(server!.origin + '/');
+        await dark.page.goto(server!.origin + '/fleet');
         await go(dark.page, '/accounts');
         await dark.page.waitForSelector('.acct-door-reason', { timeout: 30_000 });
         const n = await dark.page.evaluate(() => {
@@ -167,7 +167,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         await ctx.route(`**/api/accounts/${LONG_ID}/check`, async (route) => {
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, lane: checkPasses ? READY : UNREACHED }) });
         });
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
 
@@ -381,7 +381,7 @@ describe('the Add account door and the connect sheet offline, one cell per skin 
       const warm = await openApp(browser!, view, OFFLINE_FIXTURE);
       try {
         await warm.page.clock.install({ time: now });
-        await warm.page.goto(server!.origin + '/');
+        await warm.page.goto(server!.origin + '/fleet');
         await go(warm.page, '/accounts');
         await warm.page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
         await warm.page.click('.acct-door, .acct-door-action');
@@ -439,7 +439,7 @@ describe('the Add account door and the connect sheet offline, one cell per skin 
         await cold.ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
         cold.cut();
         await cold.page.clock.install({ time: now });
-        await cold.page.goto(server!.origin + '/');
+        await cold.page.goto(server!.origin + '/fleet');
         // The snapshot was read: the fleet counts its one session.
         await cold.page.getByText('1 session', { exact: true }).first().waitFor({ timeout: 30_000 });
         await go(cold.page, '/accounts');

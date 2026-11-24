@@ -466,13 +466,18 @@ number from `POST /api/ledger/deviations`.
   `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
   for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
   wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
-  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
-  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
-  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
-  unchanged key with the workspace absent keeps the stored workspace, a row written before this wave's migration keeping its
-  none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
-  if two workspaces hold it. An explicit `workspace: null` with the unchanged key reads the store like any other write with
-  a key (the code is the rule, review 3020 F1; the card never sends null). Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
+  a named one must hold the key (`team-unknown`), and a named one whose slot cannot be read is `unavailable`. A cleared key
+  reads no store. With the workspace absent, saving an unchanged key keeps the stored workspace (including none) without
+  reading the store; a later use of an unpinned key can refuse `team-ambiguous`. If the key changed and the stored workspace
+  holds the new key, omitting the workspace uses that stored workspace even when another slot is unread (review 3307 F3);
+  while the stored workspace itself cannot be read, that write is `unavailable` (run 3326's note).
+  For a write that resolves without a workspace pin, two readable holders give `team-ambiguous`; otherwise an unreadable
+  store or an unread slot gives `unavailable` (since run 3279). With every slot read, one holder is selected, and no holder
+  or no connected workspace leaves the key stored with no workspace. Explicit `workspace: null` is not omission: even for an
+  unchanged key it reads the store, and an unread slot can refuse the write (the card never sends null). An unchanged key
+  sent back naming its one readable holder keeps a stored none and its evidence even while another slot is unread; a named
+  slot that is itself unread still refuses, and a choice between two readable holders stores the named workspace (reviews
+  3286 and 3307). Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
   sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
   project. The inbound owner rule takes the issue's workspace at all four of its key lookups (review 2971 F1). Task 8.3's read
   (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
@@ -540,22 +545,28 @@ number from `POST /api/ledger/deviations`.
   Return alike (review 3073 F5, F6). Migration completion waits rather than dropping an unnamed declared
   programme whose membership cannot be measured. Ambiguous inbound with no owner waits, counts in the console and, since run
   3187, raises the shared-key item above. Follow-ups this wave leaves:
-  `w8-attached-wire` and `w8-confirm-unmeasured` (the confirm route answers `unavailable` when the pair is unmeasured);
+  `w8-attached-wire`;
   `w8-write-ambiguous` was built in the review's fix round and dropped, `w8-migration-workspace` by run 3027,
   `w8-triage-l1` by run 3155, `w8-ambiguous-notice` by run 3187, before the pilot rather than after it, at the
   coordinator's call, since it only adds an item, `w8-call-anchor` by run 3209, `w8-folded-pin` by run 3230 (#3172),
   and `w8-skill-section` (Task 8.6's skill step, which the review judge's rules-mixed rule moved to a PR of its own) by
-  run 3238, `w8-overlord-skill` by run 3251, and `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
-  suggest and confirm doors and the call record) by run 3264. Record: the
-  wave 8 note.
+  run 3238, `w8-overlord-skill` by run 3251, `w8-suggest-pair-last` (the client puts the pane's pair last on the linking
+  suggest and confirm doors and the call record) by run 3264, and `w8-confirm-unmeasured` (the team doors answer
+  `unavailable` when a workspace the pair depends on cannot be read, and the suggest and confirm doors `not-configured` when
+  none is connected) by run 3279, `w8-linking-measurement-record` (workspace selection stated once, one refusal vocabulary
+  per team door) by run 3326 (#3242), `w8-suggest-workspace-id` (the `team-ambiguous` detail names each holder by the id
+  the suggest door accepts) by run 3476 (#3245), and `w8-pair-refusal-pins` by run 3492 (#3247). Record: the wave 8 note
+  and the notes beside it.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
   act kind, `link-team` (chat refuse, advise refuse, full allow), and one Overlord door row, `POST /api/linking/confirm`,
   with the word `overlord-v1`, so it lights later than the doors on `continuity-v1`. The link is stored as `teamSource`
   `auto` plus a nullable `teamCallId`, because migration 64's CHECK admits only `manual` and `auto` and cannot widen
   without a table rebuild; exactly one function, `linkSourceOf`, derives the wire's `overlord` source from the pair, and a
   single-definition test fails on any other read. The link and its big call are one transaction, under the automatic
-  link's own statement, after the chosen candidate's pair is re-checked against the live Linear store (`team-unknown`,
-  `team-ambiguous`, or `unavailable` when the store cannot be read). The call is filed under `linear-sync` (design call 19 as amended), names the project, the team and
+  link's own statement, after the chosen candidate's pair is re-checked against the live Linear store. The original
+  refusals were `team-unknown`, `team-ambiguous` and `unavailable` for an unreadable store. See D-8808 for run 3279's
+  measured workspace refusals, including `not-configured` when none is connected. The call is filed under `linear-sync`
+  (design call 19 as amended), names the project, the team and
   the workspace by display name and the evidence, and shows in "calls made for you"; the operator overturns it by a key
   write on the card, which makes the key `manual`. The door process gains a `link_team` tool row. A call has an address on the
   Waiting on you screen since run 3209: `/waiting?call=<id>`, a query on the list's route as its filter is (`callPath`,

@@ -518,13 +518,25 @@ describe('systemd.ts: the static unit names only, the polkit rule\'s regex', () 
     ['ExecStartPre= refused (start exits 1, the main never ran)', 1, 'ExecMainCode=0\nExecMainStatus=0\nResult=exit-code\n'],
     ['a unit that is not found (start exits 5, show gives the defaults)', 5, 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n'],
     ['a denied start (start exits 4, show gives the last run\'s pass)', 4, 'ExecMainCode=1\nExecMainStatus=0\nResult=success\n'],
-    ['a start that exits 0 but whose main never ran', 0, 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n'],
+    ['a start that exits 0 over a collected unit\'s defaults but was killed by its bound', 0, 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n', true],
+    ['a start that exits 0 over defaults whose Result is not success', 0, 'ExecMainCode=0\nExecMainStatus=0\nResult=exit-code\n'],
     ['a start that exits 0 with no ExecMainCode', 0, 'ExecMainStatus=0\nResult=success\n'],
     ['a main that exited 0 in a unit whose Result is not success', 0, 'ExecMainCode=1\nExecMainStatus=0\nResult=timeout\n'],
-  ])('never a pass: %s', async (_name, startStatus, show) => {
-    const m = systemctlManager(answering(startStatus, show), answering(startStatus, show), 'systemctl');
-    expect((await m.run(units.run(1))).exit).not.toBe(0);
-    expect(unitEnd({ status: startStatus, killed: false }, parseShow(show)).exit).not.toBe(0);
+  ] as [string, number, string, boolean?][])('never a pass: %s', async (_name, startStatus, show, killed = false) => {
+    if (!killed) {
+      const m = systemctlManager(answering(startStatus, show), answering(startStatus, show), 'systemctl');
+      expect((await m.run(units.run(1))).exit).not.toBe(0);
+    }
+    expect(unitEnd({ status: startStatus, killed }, parseShow(show)).exit).not.toBe(0);
+  });
+  // D-8962: systemd unloads a unit that ended inactive (CollectMode=inactive), so the `show` after a
+  // `start --wait` that passed reads a freshly loaded unit's defaults. Measured on systemd 259: every passing prepare,
+  // run and clean read as 255, so every run's prepare "failed" and every clean held its run user for good.
+  it('a collected pass is a pass: start exits 0 and show gives the defaults (ExecMainCode=0, Result=success)', async () => {
+    const show = 'ExecMainCode=0\nExecMainStatus=0\nResult=success\n';
+    expect(await systemctlManager(answering(0, show), answering(0, show), 'systemctl').run(units.run(1))).toEqual({ exit: 0, result: 'success' });
+    expect(await systemctlManager(answering(0, show), answering(0, show), 'systemctl').run(units.clean(1))).toEqual({ exit: 0, result: 'success' });
+    expect(unitEnd({ status: 0, killed: false }, parseShow(show))).toEqual({ exit: 0, result: 'success' });
   });
   it('a real pass is 0, a test failure keeps its exit, a signal is 128 plus its number', async () => {
     const read = async (startStatus: number, show: string) => (await systemctlManager(answering(startStatus, show), answering(startStatus, show), 'systemctl').run(units.run(1)));
@@ -559,8 +571,9 @@ describe('fsprobe.ts: the reflink probe', () => {
   it('the probe writes in `out`, the service user\'s directory of the run root, never at the run root, which is root\'s', () => {
     expect(reflinkProbeDir('/srv/box')).toBe(path.join('/srv/box', 'out'));
     const here = path.dirname(fileURLToPath(import.meta.url));
-    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on
-    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'install.sh'), 'utf8');
+    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on. Its
+    // steps are the functions of deploy/testbox/box-steps since D-8903, which the box updater calls too.
+    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'box-steps'), 'utf8');
     expect(installer).toContain('dir 0755 root root "$ROOT"');
     expect(installer).toMatch(/for d in [a-z ]*\bout\b[a-z ]*; do dir 0750 "\$SVC" "\$SVC" "\$ROOT\/\$d"; done/);
     expect(readFileSync(path.join(here, '..', 'src', 'testbox', 'main.ts'), 'utf8')).toContain('reflinkProbe(reflinkProbeDir(cfg.root), short)');
@@ -1087,6 +1100,17 @@ describe('the scripts read only their spec', () => {
     writeFileSync(f, 'Aecho\0');
     const r = spawnSync(path.join(BIN, 'runner'), [f], { encoding: 'utf8' });
     expect([r.status, r.stderr.trim()]).toEqual([2, `ccrc-testbox-runner: not a test box spec: ${f}`]);
+  });
+  it('the runner makes the spec\'s TMPDIR before the command runs: the run unit\'s private /tmp is not the prepare\'s (D-8963)', () => {
+    // Measured on the test box: TMPDIR=/tmp/r, which only the prepare had made (in its own private /tmp), so every
+    // mkdtemp of the run failed with ENOENT.
+    const root = mkTmp('ccrc-tb-run-');
+    const tmp = path.join(root, 'private-tmp', 'r');
+    const f = path.join(root, 'spec');
+    writeFileSync(f, ['ccrc-testbox-spec', `C${root}`, `ETMPDIR=${tmp}`, 'EPATH=/usr/bin:/bin', 'A/bin/sh', 'A-c', 'Atest -d "$TMPDIR" && echo "made $TMPDIR"', ''].join('\0'));
+    expect(existsSync(tmp)).toBe(false);
+    const r = spawnSync(path.join(BIN, 'runner'), [f], { encoding: 'utf8' });
+    expect([r.status, r.stdout.trim()], r.stderr).toEqual([0, `made ${tmp}`]);
   });
 });
 

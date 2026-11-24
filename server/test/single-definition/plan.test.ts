@@ -32,13 +32,16 @@ describe('the plan vocabulary has one home (D-8181)', () => {
   });
 
   // D-8808 (review 3196 F2): the page that holds every project's Linear row is spelled once. The server's item text and the
-  // console's link both read the shared constant; the two sign-in links name the same page for passkeys and stay literal.
+  // console's links (the item's, the name sheets' pointers, Security's own pointer) all read the shared constant.
+  // D-8932: that page is Settings' Integrations section now, so its path is the literal counted, and
+  // Security's path is left to the two sign-in links, which name that page for passkeys and stay literal.
   // Review 3199 F2: the row counts occurrences, so a second copy inside a listed file reds it too.
   it('the Linear projects settings path is declared once, in shared/ledgers.ts (D-8808)', () => {
     expect(holders(decl('LINEAR_PROJECTS_SETTINGS_PATH'))).toEqual(['shared/ledgers.ts']);
     expect(holders(/\bLINEAR_SETTINGS_PATH\s*=\s*['"`]/)).toEqual([]);
+    expect(occurrences(/['"`]\/settings\/integrations\/?['"`]/g)).toEqual(['shared/ledgers.ts: 1']);
     expect(occurrences(/['"`]\/settings\/security\/?['"`]/g)).toEqual([
-      'pwa/src/fleet/PasskeyNotice.tsx: 1', 'pwa/src/screens/settings/SignInGateCard.tsx: 2', 'shared/ledgers.ts: 1',
+      'pwa/src/fleet/PasskeyNotice.tsx: 1', 'pwa/src/screens/settings/SignInGateCard.tsx: 2',
     ]);
   });
 

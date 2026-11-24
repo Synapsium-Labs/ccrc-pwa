@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
 // THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
-// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider, the divergence sweep's ccd identity of a worktree and `rowStanding`, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider, the divergence sweep's ccd identity of a worktree, `rowStanding` and the end basis's `hasMeasuredEnd` (D-8874), and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
 //
@@ -32,6 +32,7 @@ import {
   type DelegationCheckpointV1,
 } from './delegation-model.js';
 import { delegationTreeKey } from './delegation-correlation.js';
+import { hasMeasuredEnd } from './delegation-end-basis.js';
 import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { delegationCarrierStateOf } from './delegation-lease-state.js';
@@ -97,7 +98,8 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
 
   const activityRows: DelegationActivityWire[] = [];
   for (const a of checkpoint.activities) {
-    if (a.sourceKind === 'bash-worktree' || leasedActivities.has(a.activityId)) continue;
+    // An ended record is never a row, whatever its end rests on (D-8874: one the one-time pass closed included, spec Table 10).
+    if (a.sourceKind === 'bash-worktree' || leasedActivities.has(a.activityId) || a.executionState === 'ended') continue;
     const now = liveness(a);
     if (now === 'ended') continue;
     activityRows.push({
@@ -162,7 +164,9 @@ function livenessOf(
   refused: ReadonlySet<string>,
   incarnations: DelegationProjectionInput['census']['incarnations'],
 ): DelegationLiveness {
-  if (a.executionState === 'ended') return 'ended';
+  // D-8874 (review 2900 F1, the corrected first row of spec Table 10): the basis is read, so a record the one-time pass closed (no
+  // measured end) reads as it read before the pass, and a lease row on it never draws `end recorded`.
+  if (hasMeasuredEnd(a)) return 'ended';
   if (refused.has(a.parentId)) return 'unmeasured';
   const parent = sessions.get(a.parentId);
   const standing = parent === undefined ? 'gone' : rowStanding(parent);

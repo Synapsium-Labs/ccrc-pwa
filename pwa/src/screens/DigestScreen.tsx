@@ -20,6 +20,7 @@ import {
 } from '../../../shared/api';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 import { isCount, isNum, isRecord } from '../lib/wire';
 import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
@@ -252,7 +253,7 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT, store
   return (
     <div className="digest-screen">
       <header className="digest-head">
-        <BackButton className="digest-back" aria-label="Back to fleet" onClick={() => navigate('/')} {...doorMark('go-fleet')}>‹</BackButton>
+        <BackButton className="digest-back" aria-label="Back to fleet" onClick={() => navigate(FLEET_PATH)} {...doorMark('go-fleet')}>‹</BackButton>
         <h1 className="digest-title">Coordinator digest</h1>
       </header>
       {shown !== null && (

@@ -125,6 +125,7 @@ export function SessionDetails({ facts, coordination }: {
       {rows.pr !== null && <Detail>{`PR #${rows.pr}`}</Detail>}
       {rows.lane !== null && <Detail>{rows.lane}</Detail>}
       {rows.asks !== null && <Detail title="the question it is waiting on">{`asks: ${rows.asks}`}</Detail>}
+      {rows.advisor !== null && <Detail title={rows.advisor.title}>{rows.advisor.text}</Detail>}
       <SessionMeta
         facts={facts}
         mode="header"

@@ -725,3 +725,69 @@ export function helperFactsOf(line: string): HelperFact[] {
   const fact = (r.type === 'user' ? launchFact(r.toolUseResult, at) : null) ?? noticeFact(envelopeOf(r), at);
   return fact === null ? [] : [fact];
 }
+
+// ── THE COORDINATOR ADVISOR'S FACTS (plan 2026-11-23-coordinator-advisor, D-8969, D-8971) ─────────────────────────────
+// What one raw transcript line says about Claude Code's advisor tool, in the shape found in the installed build's strings
+// (2.1.331): a call is a `server_tool_use` block named `advisor` (its `id` is the call's) in an assistant message, its
+// result an `advisor_tool_result` block; the advisor's tokens are `message.usage.iterations[]` entries of type
+// `advisor_message`; turning the tool on or off is an `attachment` line of type `advisor_tool` with `available`. No local
+// transcript held a call when this was written, so the saved line is the trial's first thing to confirm (D-8969). Pure:
+// one line in, one fact out; a line that is not JSON is `unreadable`, counted by the reader, never dropped in silence.
+
+/** The advisor tokens of one assistant message's usage: the sum of its `advisor_message` iterations. */
+export interface AdvisorUsage { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number }
+
+export type AdvisorLineFact =
+  /** A main-loop assistant line (one API request; the streamed lines of one message share `messageId`). */
+  | { readonly kind: 'request'; readonly messageId: string | null; readonly at: number | null; readonly calls: readonly string[];
+      readonly model: string | null; readonly usage: AdvisorUsage | null }
+  | { readonly kind: 'availability'; readonly available: boolean; readonly model: string | null; readonly at: number | null }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'none' };
+
+const tokenOf = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+
+function advisorUsageOf(usage: unknown): { model: string | null; usage: AdvisorUsage | null } {
+  const its = usage !== null && typeof usage === 'object' ? (usage as { iterations?: unknown }).iterations : undefined;
+  if (!Array.isArray(its)) return { model: null, usage: null };
+  let model: string | null = null; let found = false;
+  const sum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const it of its) {
+    if (it === null || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    if (o['type'] !== 'advisor_message') continue;
+    found = true;
+    if (typeof o['model'] === 'string') model = o['model'];
+    sum.input += tokenOf(o['input_tokens']); sum.output += tokenOf(o['output_tokens']);
+    sum.cacheRead += tokenOf(o['cache_read_input_tokens']); sum.cacheWrite += tokenOf(o['cache_creation_input_tokens']);
+  }
+  return { model, usage: found ? sum : null };
+}
+
+/** The advisor fact of ONE raw transcript line. Never throws. */
+export function advisorFactsOf(line: string): AdvisorLineFact {
+  if (line.trim() === '') return { kind: 'none' };
+  if (!line.includes('"assistant"') && !line.includes('"advisor_tool"')) return { kind: 'none' };
+  let raw: unknown;
+  try { raw = JSON.parse(line); } catch { return { kind: 'unreadable' }; }
+  if (raw === null || typeof raw !== 'object') return { kind: 'unreadable' };
+  const r = raw as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; message?: unknown; attachment?: unknown };
+  const at = timeOf(r.timestamp);
+  if (r.type === 'attachment' && r.attachment !== null && typeof r.attachment === 'object') {
+    const a = r.attachment as { type?: unknown; available?: unknown; model?: unknown };
+    if (a.type !== 'advisor_tool' || typeof a.available !== 'boolean') return { kind: 'none' };
+    return { kind: 'availability', available: a.available, model: typeof a.model === 'string' ? a.model : null, at };
+  }
+  if (r.type !== 'assistant' || r.isSidechain === true || r.message === null || typeof r.message !== 'object') return { kind: 'none' };
+  const m = r.message as { id?: unknown; content?: unknown; usage?: unknown };
+  const calls: string[] = [];
+  if (Array.isArray(m.content)) {
+    for (const b of m.content) {
+      if (b === null || typeof b !== 'object') continue;
+      const o = b as { type?: unknown; name?: unknown; id?: unknown };
+      if (o.type === 'server_tool_use' && o.name === 'advisor' && typeof o.id === 'string' && o.id !== '') calls.push(o.id);
+    }
+  }
+  const u = advisorUsageOf(m.usage);
+  return { kind: 'request', messageId: typeof m.id === 'string' && m.id !== '' ? m.id : null, at, calls, model: u.model, usage: u.usage };
+}

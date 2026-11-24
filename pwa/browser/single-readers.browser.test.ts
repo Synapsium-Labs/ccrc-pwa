@@ -86,7 +86,7 @@ describe('the single readers change nothing on screen (C7n, D-7192, D-7209)', ()
       try {
         const sent = recordRequests(page);
         const feedDone = (): number => events.filter((e) => e.kind === 'fulfil-done' && e.path === '/api/feed').length;
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         // The store's connect-time feed read has landed.
         await expect.poll(feedDone, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
         await page.waitForTimeout(300);
@@ -130,7 +130,7 @@ describe('the single readers change nothing on screen (C7n, D-7192, D-7209)', ()
         expect([count(sent.slice(before), '/api/feed?limit=100'), count(sent.slice(before), '/api/runs?closed=1')], 'a re-open reads again').toEqual([1, 1]);
 
         // New session: pick the account, and the project list is drawn from one class-blind GET /api/projects.
-        await go(page, '/');
+        await go(page, '/fleet');
         await page.waitForTimeout(500);
         before = sent.length;
         await page.getByRole('button', { name: 'New session' }).first().click();

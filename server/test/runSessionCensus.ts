@@ -84,6 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
+  { file: 'server/src/coord/envelope.ts', text: 'designated.sessionId === m.toId',
+    why: 'a mail\'s recipient against the designated Overlord\'s session, read once a mail sweep (the fixed-line table, Overlord W1 inbox): no run is read' },
   { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
     why: 'a lookup of a REGISTRY record by its id (the approval raise\'s child gate, moved from coord/routes.ts with raiseApproval, W3 Q3e): no run is read' },
   { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',
@@ -255,6 +257,12 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the designation row's pending session against the session a bind, go-live or fail names: the one row's own columns (Overlord §3.3), no run is read" },
   { file: 'server/src/coord/overlordDesignationStore.ts', text: 'x !== sessionId',
     why: "the designation row's owed-stop list with one session taken out when its stop is confirmed: the row's own list, no run is read" },
+  { file: 'server/src/coord/overlordDesignationStore.ts', text: 'row.bound.sessionId !== r.binding.sessionId',
+    why: "Confirm the restore's kept binding against the designation row's bound session, a re-check inside its one transaction: the row's own columns (Overlord §7.6), no run is read" },
+  { file: 'server/src/coord/overlordRestore.ts', text: 'journal.binding.sessionId === db.binding.sessionId',
+    why: "the designation row's bound session against the authority journal's last binding, Confirm the restore's stricter-of for the binding (Overlord §7.6): the designation fact's two sides, no run is read" },
+  { file: 'server/src/coord/overlordRestoreState.ts', text: 'r.sessionId === d.sessionId',
+    why: "the continuity generation row of the designation's bound session, read for termRaised (Overlord §7.6): the generation table and the designation row, no run is read" },
   { file: 'server/src/roleOf.ts', text: 'd.pending === sessionId', count: 2,
     why: "the designation row's pending session against the session whose role or identity is asked (Overlord §3.3.9): the designation fact's own read, no run is read" },
   { file: 'server/src/roleOf.ts', text: 'd.live === sessionId', count: 2,
@@ -271,6 +279,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
   { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
     why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
+  { file: 'server/src/continuity/renewalReadings.ts', text: 'd.sessionId === sessionId',
+    why: "the designation's bound session against the session an Overlord generation runs in (the renewal readings PR C, termRaisedOf and classChangedOf): the designation read, no run is read" },
   { file: 'server/src/turnverdict.ts', text: "live.state.sessionId !== ''",
     why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
   { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',

@@ -297,7 +297,11 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES, epicPath, upkeepPath } = await import('../src/lib/routes');
-const { DESK_DOORS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
+const { deskDoorsFor, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
+const { deskPlacesFor } = await import('../src/lib/places');
+const { useOverlordStore } = await import('../src/stores/overlord');
+/** The desk doors with no Overlord (Overlord W1 home): the places every desk bar draws before `overlord-v1`. */
+const DESK_DOORS = deskDoorsFor(deskPlacesFor(false, { kind: 'none' }, { place: 'fleet', why: 'none' }));
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
 const { ShellFrame } = await import('../src/skins/frame');
@@ -383,7 +387,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
   vi.restoreAllMocks();
-  navigate('/');
+  navigate('/fleet');
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false, waiting: null }));
   resetAcks();
   act(() => { setSkin(REFINED); });
@@ -453,11 +457,10 @@ const homeDoor = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-do
 const placeDoors = (): HTMLElement[] => within(primary()).getAllByRole('button').filter((b) => !b.classList.contains('ins-home'));
 const primary = (): HTMLElement => screen.getByRole('navigation', { name: 'Primary' });
 const doorNamed = (name: string): HTMLElement => within(topBar()).getByRole('button', { name });
-const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
 
 /** One path per `ROUTES` row, and one outside the table. */
 const ROUTE_PATHS: Record<string, string> = {
-  fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
+  session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
   programme: '/programmes/prog-a', run: '/runs/410', 'runs-advanced': '/runs/advanced',
   epic: epicPath('prog-a', 'e1'), upkeep: upkeepPath('project-a'),
 };
@@ -465,10 +468,10 @@ const ROUTE_PATHS: Record<string, string> = {
 describe('the desk top bar (desk-nav Task A)', () => {
   it("the bar's DOM order is its focus order", () => {
     stubAt(1280);
-    mount('/');
+    mount('/fleet');
     const order = barControls().map((el) => el.getAttribute('data-command') ?? '(bell)');
     expect(order.slice(0, 11)).toEqual([
-      'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
+      'go-home', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
       'new-session',
     ]);
     // The eleven are the bar's line, and every control after them is the lanes row's, under the line.
@@ -483,11 +486,11 @@ describe('the desk top bar (desk-nav Task A)', () => {
 
   it('the Primary nav holds the wordmark door and the six doors, and nothing else', () => {
     stubAt(1280);
-    mount('/');
+    mount('/fleet');
     const nav = primary();
     expect(nav.closest('.ins-topbar')).not.toBeNull();
     expect([...nav.children].map((c) => c.getAttribute('data-command')))
-      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+      .toEqual(['go-home', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
     expect(DESK_DOORS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
     expect(within(nav).queryByRole('button', { name: /activity/i })).toBeNull();
@@ -503,21 +506,23 @@ describe('the desk top bar (desk-nav Task A)', () => {
       act(() => { setSkin(skin); });
       for (const width of [899, 900, 1280, 1920]) {
         stubAt(width);
-        mount('/');
+        mount('/fleet');
         expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${skin} ${width}`).toBe(width >= 900 ? 1 : 0);
         cleanup();
       }
     }
   });
 
-  it('the wordmark door runs go-fleet, is named "ccrc, Fleet", holds the wordmark, and is current on / and on a session', () => {
+  // Overlord W1 home, Task 3: the wordmark runs Go home, named for the home, and lands where the home is: the Fleet while no
+  // Overlord is designated. With no Fleet door drawn (D25) it is current on the Fleet and on a session, as before.
+  it('the wordmark door runs go-home, is named "ccrc, Home", holds the wordmark, and is current on /fleet and on a session', () => {
     stubAt(1280);
-    expect(HOME_DOOR_NAME).toBe(`ccrc, ${FLEET()}`);
-    for (const at of ['/', `/s/${S.id}`, `/s/${WS.id}`]) {
+    expect(HOME_DOOR_NAME).toBe('ccrc, Home');
+    for (const at of ['/fleet', `/s/${S.id}`, `/s/${WS.id}`]) {
       mount(at);
       const home = homeDoor();
-      expect(home, at).toBe(doorNamed('ccrc, Fleet'));
-      expect(home).toHaveAttribute('data-command', 'go-fleet');
+      expect(home, at).toBe(doorNamed('ccrc, Home'));
+      expect(home).toHaveAttribute('data-command', 'go-home');
       expect(home.querySelector('[data-wordmark]'), `${at}: the wordmark is inside the door`).not.toBeNull();
       expect(topBar().querySelectorAll('[data-wordmark]'), `${at}: one wordmark`).toHaveLength(1);
       expect(home, at).toHaveAttribute('aria-current', 'page');
@@ -525,7 +530,45 @@ describe('the desk top bar (desk-nav Task A)', () => {
     }
     mount('/runs');
     fireEvent.click(homeDoor());
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/fleet');
+  });
+
+  // Overlord W1 home, Task 3 (ruled F5, plan question 14): with the Overlord designated and the home the Overlord, the bar draws
+  // the Overlord's door and the Fleet's; the Fleet door is current on /fleet and on a session, the wordmark nowhere, so every
+  // path marks at most one door. With the rung off the home is the Fleet again: no Fleet door, and the wordmark is current.
+  it('with the Overlord: /fleet marks the Fleet door alone, and the wordmark runs go-home to the place', () => {
+    stubAt(1280);
+    const at = 1_700_000_000_000;
+    const row = {
+      bound: { sessionId: 'lane-a-overlord', generation: 'g1' }, pending: null, term: 1, designatedTerm: 1, model: 'opus',
+      accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'operator', lastAttempt: null, stopsOwed: [],
+    } as const;
+    const withRung = (rung: string): void => act(() => useOverlordStore.setState({
+      caps: { state: 'answered', value: ['overlord-v1'], at }, designation: { state: 'answered', value: row, at },
+      ladder: { state: 'answered', value: { operatorRung: rung } as never, at },
+    }));
+    const currents = (): (string | null)[] =>
+      [...topBar().querySelectorAll('[aria-current="page"]')].map((d) => d.getAttribute('data-command'));
+    for (const where of ['/fleet', `/s/${S.id}`]) {
+      withRung('chat');
+      mount(where);
+      expect([...primary().children].map((c) => c.getAttribute('data-command')), where)
+        .toEqual(['go-home', 'go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+      expect(currents(), where).toEqual(['go-fleet']);
+      cleanup();
+    }
+    withRung('chat');
+    mount('/overlord');
+    expect(currents()).toEqual(['go-overlord']);
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/overlord');
+    cleanup();
+    withRung('off');
+    mount('/fleet');
+    expect([...primary().children].map((c) => c.getAttribute('data-command')))
+      .toEqual(['go-home', 'go-overlord', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+    expect(currents()).toEqual(['go-home']);
+    act(() => useOverlordStore.setState({ caps: { state: 'loading' }, designation: { state: 'loading' }, ladder: { state: 'loading' } }));
   });
 
   it('it is current nowhere else', () => {
@@ -543,7 +586,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     const doors = (): HTMLElement[] => [...placeDoors(), doorNamed('Settings')];
     for (const width of [1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       for (const d of placeDoors()) {
         const name = d.getAttribute('aria-label')!;
         expect(d.querySelector('.ins-door-word')?.textContent, `${width} ${name}`).toBe(name);
@@ -559,7 +602,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     }
     for (const width of [900, 1279]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       for (const d of doors()) {
         const name = d.getAttribute('aria-label')!;
         expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name.split(',')[0]);
@@ -579,7 +622,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     ] as unknown as RunSummary[];
     act(() => useFleetStore.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
     try {
-      mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+      mount('/fleet', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
       const counted = placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null).map((d) => d.getAttribute('data-command'));
       expect(counted, 'the counted doors').toEqual(['go-waiting', 'go-inbox', 'go-runs']);
       for (const d of [homeDoor(), ...placeDoors()]) {
@@ -593,7 +636,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
       for (const width of [900, 1279]) {
         cleanup();
         stubAt(width);
-        mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+        mount('/fleet', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
         expect(placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null), `${width}: counted`).toHaveLength(3);
         for (const d of [homeDoor(), ...placeDoors(), doorNamed('Settings')]) {
           const name = d.getAttribute('aria-label')!;
@@ -612,7 +655,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     stubAt(1280);
     const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
     act(() => useFleetStore.setState({ fleetFrameSeen: true, waiting: waitingView({ items }) }));
-    mount('/');
+    mount('/fleet');
     // 120 open items and the suite's own asking session: a three-digit count, whatever it is exactly.
     const d = within(topBar()).getByRole('button', { name: /^Waiting on you, 1\d\d waiting on you$/ });
     const name = d.getAttribute('aria-label')!;
@@ -670,7 +713,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
 
   it('the bell in the bar is at the tap floor', () => {
     stubAt(1280);
-    mount('/');
+    mount('/fleet');
     expect(topBar().querySelector('.ins-bar-doors > .bell')).not.toBeNull();
     const rule = declsOf('.ins-bar-doors > .bell');
     expect(rule).toMatch(/min-height:\s*var\(--tap-min\)/);
@@ -706,6 +749,8 @@ describe('the desk top bar (desk-nav Task A)', () => {
   // for the pane to leave it; the assertion below is as strict as it was.
   it('every route says where you are', async () => {
     stubAt(1280);
+    // A server without `overlord-v1` (Overlord W1 home): the home, `/`, lands on the Fleet and `/overlord` replaces to it.
+    act(() => useOverlordStore.setState({ caps: { state: 'answered', value: [], at: 0 } }));
     act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
     const paths = ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path);
     expect(paths.every((p) => p !== null), 'a path for every row').toBe(true);
@@ -739,7 +784,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     mount('/runs');
     const runsDoor = placeDoors().find((d) => d.getAttribute('data-command') === 'go-runs')!;
     // `r` runs last, from `/`, so it moves the page: from `/runs` itself `g r` would change nothing (review 1646 A3; Task C14, D-8110).
-    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/'], ['r', '/runs']] as const) {
+    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/fleet'], ['h', '/fleet'], ['r', '/runs']] as const) {
       act(() => { runsDoor.focus(); });
       expect(document.activeElement, key).toBe(runsDoor);
       fireEvent.keyDown(runsDoor, { key: 'g' });
@@ -749,11 +794,11 @@ describe('the desk top bar (desk-nav Task A)', () => {
     cleanup();
     mount('/runs');
     fireEvent.click(homeDoor());
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/fleet');
   });
 
   it('the command field opens the palette, and is not a text field', () => {
-    mount('/');
+    mount('/fleet');
     const field = within(topBar()).getByRole('button', { name: 'Search or run a command' });
     expect(field.tagName).toBe('BUTTON');
     expect(field).toHaveAttribute('data-command', 'open-palette');
@@ -768,7 +813,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
 
   it('a door runs its command: Runs goes to /runs', () => {
     stubAt(900);
-    mount('/');
+    mount('/fleet');
     fireEvent.click(placeDoors().find((b) => b.getAttribute('data-command') === 'go-runs')!);
     expect(window.location.pathname).toBe('/runs');
   });
@@ -828,7 +873,7 @@ describe('the status bar', () => {
     const other = CSS.replace(/@media\s*\(pointer:\s*fine\)\s*\{(?:[^{}]*\{[^}]*\})*[^{}]*\}/g, '');
     expect(other).not.toMatch(/24px/);
     // And the keys carry the hook the rules select.
-    mount('/');
+    mount('/fleet');
     const keys = within(footer()).getAllByRole('button');
     expect(keys.map((k) => k.getAttribute('data-command'))).toEqual(['open-palette', 'show-shortcuts']);
     for (const k of keys) expect(k).toHaveClass('ins-status-key');
@@ -838,7 +883,7 @@ describe('the status bar', () => {
   // keys are measured here. The ⌘K cap shows a command icon and `K`; its name
   // spells the key as it is said, `Command K`, then what it does.
   it('the status bar\'s keys hold the words they show (label in name, D-8383)', () => {
-    mount('/');
+    mount('/fleet');
     const palette = within(footer()).getByRole('button', { name: 'Command K (Open the command palette)' });
     expect(palette).toHaveAttribute('data-command', 'open-palette');
     expect(shownText(palette)).toBe('K');
@@ -847,7 +892,7 @@ describe('the status bar', () => {
 
   it('the agent link reads "agent: checking" until the health poll answers, never an all-clear', () => {
     vi.stubGlobal('fetch', () => new Promise(() => {}));
-    mount('/');
+    mount('/fleet');
     expect(footer().querySelector('.ins-status-link')).toHaveTextContent('agent: checking');
     expect(footer()).not.toHaveTextContent('agent connected');
   });
@@ -855,7 +900,7 @@ describe('the status bar', () => {
   it('runs are counted only after a runs frame has arrived', () => {
     const runs = [{ state: 'working' }] as unknown as RunSummary[];
     act(() => useFleetStore.setState({ runs, runsFrameSeen: false }));
-    mount('/');
+    mount('/fleet');
     const summary = (): string => footer().querySelector('.ins-status-summary')!.textContent ?? '';
     expect(summary()).toBe(fleetSummary([S, WS], null).readout);
     expect(summary()).not.toContain('run');
@@ -866,7 +911,7 @@ describe('the status bar', () => {
   });
 
   it('the status bar renders fleetSummary', () => {
-    mount('/');
+    mount('/fleet');
     expect(footer()).toHaveTextContent(fleetSummary([S, WS], null).readout);
     expect(footer().textContent).toContain('1 waiting');
     // The footer is not a live region.
@@ -893,7 +938,7 @@ describe('the lanes row (T2c, D-6329)', () => {
     });
     const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g', 'lane-h'].map((w, i) => lane(w, 5 + i));
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
-    mount('/');
+    mount('/fleet');
     const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
     await within(topBar()).findByText('lane-h');
     expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
@@ -907,7 +952,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
     const f = seventeenLanes(Math.floor(Date.now() / 1000));
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
     stubWidth(false);
-    mount('/');
+    mount('/fleet');
     const fleet = screen.getByRole('region', { name: 'Fleet' });
     const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
     await within(strip).findByText('lane-a');
@@ -920,7 +965,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
     const f = seventeenLanes(Math.floor(Date.now() / 1000));
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
     stubWidth(false);
-    mount('/');
+    mount('/fleet');
     const fleet = screen.getByRole('region', { name: 'Fleet' });
     const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
     await within(strip).findByText('lane-a');
@@ -946,7 +991,7 @@ describe('one instance per width', () => {
     for (const desk of [false, true]) {
       stubWidth(desk);
       act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
-      navigate('/');
+      navigate('/fleet');
       render(<App />);
       const at = desk ? '900' : '899';
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
@@ -1025,7 +1070,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
   it('at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors', () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
       // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
@@ -1038,7 +1083,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // Docs, Accounts and Inbox doors, so the head keeps only Settings and the bell (desktop-polish PL10, D-7952; the ruling of
     // 2026-11-04): one door per place.
     stubAt(899);
-    mount('/');
+    mount('/fleet');
     expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
     expect(document.querySelectorAll('.shell-phone-nav [data-command]'), '899px: the bottom bar').toHaveLength(7);
     expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
@@ -1062,7 +1107,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
   it("the bar's Inbox door says 'waiting for you' with Refined's count, in both forms", () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      mount('/', waitingFleet(2));
+      mount('/fleet', waitingFleet(2));
       const door = within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
       // The word reads in both forms, as the label from 1280 and as the tip below it, and the pill prints the number.
@@ -1080,18 +1125,18 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // Refined's tab counts the same fleet the same way (R32's F1): one function, so no skin's door counts for itself.
     act(() => { setSkin(REFINED); });
     stubAt(1280);
-    mount('/', waitingFleet(2));
+    mount('/fleet', waitingFleet(2));
     expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
     cleanup();
     act(() => { setSkin(INSTRUMENT); });
     // The printed count is capped like the sibling doors' and the name carries the real number.
     stubAt(1280);
-    mount('/', waitingFleet(120));
+    mount('/fleet', waitingFleet(120));
     const capped = within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
     expect(capped.textContent).toBe('Inbox 99+');
     cleanup();
     stubAt(900);
-    mount('/', waitingFleet(120));
+    mount('/fleet', waitingFleet(120));
     expect(within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' }).textContent).toBe('Inbox 99+');
   });
 
@@ -1100,7 +1145,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     stubAt(1280);
     const sessions = waitingFleet(1);
     act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }) }));
-    mount('/', sessions);
+    mount('/fleet', sessions);
     const door = within(primary()).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }); // 1 open item + 1 question
     expect(door).toHaveAttribute('data-command', 'go-waiting');
     expect(door.querySelector('.ins-door-word')?.textContent).toBe('Waiting on you');
@@ -1120,21 +1165,21 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     const sessions = withRunBinding(waitingFleet(1), runs);
     act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
     try {
-      mount('/', sessions);
+      mount('/fleet', sessions);
       const door = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
       expect(door).toHaveAttribute('data-command', 'go-runs');
       expect(door.querySelector('.ins-door-word')?.textContent).toBe('Runs');
       expect(door.querySelector('.ins-door-count')?.textContent).toBe('1');
       cleanup();
       stubAt(1279);
-      mount('/', sessions);
+      mount('/fleet', sessions);
       const tipped = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
       expect(tipped.querySelector('.ins-door-tip')?.textContent).toBe('Runs');
       expect(tipped.querySelector('.ins-door-count')?.textContent).toBe('1');
       cleanup();
       stubAt(1280);
       act(() => { setSkin(REFINED); });
-      mount('/', sessions);
+      mount('/fleet', sessions);
       expect(screen.getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
     } finally {
       act(() => { setSkin(INSTRUMENT); });
@@ -1145,7 +1190,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
   it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {
     for (const width of [900, 1920]) {
       stubAt(width);
-      mount('/', waitingFleet(0));
+      mount('/fleet', waitingFleet(0));
       const door = within(primary()).getByRole('button', { name: 'Inbox' });
       expect(door.textContent, `${width}px`).toBe('Inbox');
       expect(door.querySelector('.ins-door-count'), `${width}px`).toBeNull();
@@ -1157,7 +1202,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     stubAt(1280);
     const sessions = waitingFleet(2);
     act(() => useFleetStore.setState({ fleetFrameSeen: false }));
-    mount('/', sessions);
+    mount('/fleet', sessions);
     expect(within(primary()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
   });
 
@@ -1165,14 +1210,14 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       expect(screen.getAllByTestId('pool-epoch-lag'), `${width}px`).toHaveLength(1);
       expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
       cleanup();
     }
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
     stubAt(1280);
-    mount('/');
+    mount('/fleet');
     expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
   });
 
@@ -1180,7 +1225,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [899, 900, 1280, 1920]) {
       stubAt(width);
       act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
-      navigate('/');
+      navigate('/fleet');
       render(<App />);
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${width}px: banner stacks`).toBe(1);
       cleanup();
@@ -1196,7 +1241,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
   it("at 900, 1280 and 1920 Instrument's list column draws no count line, and the status bar's fleetSummary is the one count in the frame", () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
       expect(counts, `${width}px: count elements`).toHaveLength(1);
@@ -1211,7 +1256,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
 
   it("at 899 Instrument's list column keeps its count line", () => {
     stubAt(899);
-    mount('/');
+    mount('/fleet');
     expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
     expect(document.querySelector('footer.shell-status')).toBeNull();
   });
@@ -1219,14 +1264,14 @@ describe('the desk (T2g): one count, in the status bar', () => {
   it("at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree", () => {
     stubAt(1280);
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
-    mount('/');
+    mount('/fleet');
     const head = document.querySelector('.shell-nav .fleet-head');
     expect(head).not.toBeNull();
     expect(head!.textContent).toBe(poolLagText(5, 3));
     expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
     cleanup();
     act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
-    mount('/');
+    mount('/fleet');
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
   });
@@ -1234,7 +1279,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
   it("Refined's desk column keeps its count line", () => {
     act(() => { setSkin(REFINED); });
     stubAt(1280);
-    mount('/');
+    mount('/fleet');
     expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
   });
 
@@ -1242,7 +1287,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     act(() => { setSkin(REFINED); });
     for (const width of [390, 899, 900, 1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       const columns = document.querySelectorAll<HTMLElement>('section[aria-label="Fleet"]');
       expect(columns, `${width}px: the fleet column is mounted, once`).toHaveLength(1);
       if (width >= 900) expect(columns[0]!.closest('.shell-nav'), `${width}px: the column is the frame's nav`).not.toBeNull();
@@ -1260,7 +1305,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
   it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
     act(() => { setSkin(REFINED); });
     stubAt(1280);
-    mount('/', []);
+    mount('/fleet', []);
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
   });
@@ -1272,7 +1317,7 @@ describe('no floating + at the desk (T2b, D-6328)', () => {
   it('exactly one [data-command=new-session] at 900, 1280 and 1920', () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/fleet');
       const doors = document.querySelectorAll('[data-command="new-session"]');
       expect(doors, `${width}px: marked doors`).toHaveLength(1);
       expect(topBar().contains(doors[0]!), `${width}px: inside the top bar`).toBe(true);
@@ -1285,7 +1330,7 @@ describe('no floating + at the desk (T2b, D-6328)', () => {
 
   it('at 390 the round + dispatches the new-session door event', async () => {
     stubAt(390);
-    mount('/');
+    mount('/fleet');
     const { DOOR_EVENT } = await import('../src/command/door');
     const seen: string[] = [];
     const listen = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
@@ -1301,7 +1346,7 @@ describe('no floating + at the desk (T2b, D-6328)', () => {
 
   it('at 899 the round + is the one New session door', () => {
     stubAt(899);
-    mount('/');
+    mount('/fleet');
     const doors = document.querySelectorAll('[data-command="new-session"]');
     expect(doors).toHaveLength(1);
     expect(doors[0]).toHaveClass('fab');

@@ -138,7 +138,7 @@ async function open(skin: string, theme: string, width: number, touch = false) {
   await opened.ctx.addInitScript(([key]) => {
     try { localStorage.setItem(key, 'project'); } catch { /* the default mode is then measured, and the box is absent */ }
   }, [GROUP_MODE_KEY] as const);
-  await opened.page.goto(server!.origin + '/');
+  await opened.page.goto(server!.origin + '/fleet');
   await opened.page.waitForSelector('section.pg-box', { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   await opened.page.waitForTimeout(400); // the first paint's transitions settle

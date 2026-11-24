@@ -190,6 +190,9 @@ export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
 export const RUN_STUCK_SWEEP_MS = 60_000;
 /** The runs-closed notice's drain (D-8073): a minute, as the stuck verdict's pass. */
 export const RUN_UNTOLD_SWEEP_MS = 60_000;
+/** D-8955: the disk-lane stall alert's beat. Its window is an hour, so a pass every five minutes says it at most five
+ *  minutes late; each pass is one bounded journal read and the open items of one programme. */
+export const DISK_LANE_STALL_SWEEP_MS = 5 * 60_000;
 /** The run-close lane's pass (D-8077, rows E1 and E1r): a minute, the dead-coordinator lane's own sibling cadence. DERIVED from
  *  it by reference (`CHILD_RECLAIM_SWEEP_MS`), never a second literal: R7's budget is "per pass" and a pass is that throttle. */
 export const RUN_CLOSE_SWEEP_MS = CHILD_RECLAIM_SWEEP_MS;
@@ -209,10 +212,10 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -306,6 +309,12 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     warnKey: 'ccrc-server: the mailhold lane failed',
     derivedFrom: { name: 'MAIL_SWEEP_MS', reason: 'a hold appears and clears with mail, so the projection looks as often as the mail lane does' },
   },
+  // The Overlord inbox's coalesced wake (W1 inbox piece, Task 4; `coord/overlordInboxWake.ts`): one pass at a time at the mail lane's
+  // cadence by reference; it queues at most one `inbox-wake` mail a pass, and a thrown pass is caught here.
+  {
+    name: 'inboxWake', cadenceMs: MAIL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the inbox wake lane failed',
+    derivedFrom: { name: 'MAIL_SWEEP_MS', reason: 'the wake rides the mail lane, so looking more often than the mail lane delivers buys nothing' },
+  },
   { name: 'asks', cadenceMs: ASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -371,6 +380,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // overlap as it always has (a pass spends its minute before it awaits anything), and never rejects, so no row warns;
   // `tick` dispatches it above the registry read's fail-shut return.
   { name: 'diskAlarm', cadenceMs: DISK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The disk-lane stall alert (D-8955): one pass at a time, beside the disk alarm above the registry read's fail-shut
+  // return; its pass catches its own failure with its own sentence, so no warnKey.
+  { name: 'diskLaneStall', cadenceMs: DISK_LANE_STALL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   // The tmp sweep census (D-6624) starts due as it always has, lets passes overlap, and its pass never rejects; `tick`
   // dispatches it beside the disk alarm, on the last good registry listing.
   { name: 'tmpCensus', cadenceMs: TMP_SWEEP_CENSUS_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -412,6 +424,12 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'launchProfile', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the launch-profile lane failed',
     derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'the lane reads the usage sidecar\'s window, which changes no faster than that lane reads it, and a route it writes is applied only at the session\'s next launch' },
+  },
+  // The coordinator advisor's count lane (plan 2026-11-23-coordinator-advisor PR C, D-8971): one pass at a time, at the usage
+  // lane's cadence by reference. It reads advised coordinators' transcripts forward and records their calls; a thrown pass is caught here.
+  {
+    name: 'advisorCount', cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the advisor count lane failed',
+    derivedFrom: { name: 'USAGE_SWEEP_MS', reason: 'a daily cap needs the count within minutes, and the launch-profile lane that reads it runs at this cadence' },
   },
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.

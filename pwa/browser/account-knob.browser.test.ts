@@ -134,7 +134,7 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForFunction(() => document.querySelectorAll('.acct-knob').length === 3
           && document.querySelector(".accounts-row[data-lane='lane-d'] .acct-knob-state")?.textContent?.includes('2 running'),
