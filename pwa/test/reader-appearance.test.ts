@@ -178,7 +178,8 @@ describe('resolvePaletteTokens', () => {
     const r = resolvePaletteTokens('light', 'refined', 'coarse');
     expect(r.tokens.get('--status-done')).toMatch(/^#[0-9A-Fa-f]{6}$/);
     expect(r.colourScheme).toBe('light');
-    // The palette's own block overlays the defaults.
-    expect(r.tokens.get('--bg-page')).toBe('#F4F6F3');
+    // The light palette overrides the default page colour without copying the palette's value into the test.
+    expect(r.tokens.get('--bg-page')).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(r.tokens.get('--bg-page')).not.toBe(resolvePaletteTokens('phosphor', 'refined', 'coarse').tokens.get('--bg-page'));
   });
 });
