@@ -321,7 +321,9 @@ interface Where { readonly top: string; readonly pkg: string; readonly repositor
 async function whereAmI(): Promise<Where> {
   const git = boundedExec(gitEnv(), SHORT_BOUND_MS);
   const r = await git('git', ['rev-parse', '--show-toplevel', '--show-prefix']);
-  if (r.status !== 0) return fall('unreachable', 'not inside a git work tree');
+  // A directory outside every git work tree has no repository, so no row on the box: `not-set-up`, never
+  // `unreachable`, which says the box failed (D-8977). `remote` asks this before it opens the link.
+  if (r.status !== 0) return fall('not-set-up');
   const [top = '', prefix = ''] = r.stdout.split('\n');
   const o = await git('git', ['remote', 'get-url', 'origin']);
   const url = o.status === 0 ? o.stdout.trim() : '';
@@ -507,13 +509,13 @@ async function remote(c0: { explicit: boolean; argv: readonly string[] }, releas
   let token: string;
   try { token = readFileSync(s.tokenFile, 'utf8').trim(); } catch { return fall('unreachable', `no token file at ${s.tokenFile.replace(os.homedir(), '~')}`); }
   if (token === '') return fall('unreachable', 'the token file is empty');
+  const w = await whereAmI();
   const c: Ctx = { s, token, explicit: c0.explicit, argv: c0.argv, link: null, runId: null, started: false, done: false };
   onCtx(c);
   let opened;
   try { opened = await Link.open(s.url, token, s.statusDeadlineMs); } catch (e) { return fall('unreachable', e instanceof Error ? e.message : String(e)); }
   c.link = opened.link;
   try {
-    const w = await whereAmI();
     const mirrorPath = await checkStatus(c, opened.status, w);
     if (w.pkg === '') return fall('runs-locally', c.argv[0] ?? '');
     const snap = await snapshot(c, release, mirrorPath);

@@ -407,9 +407,9 @@ async function world(o: WorldOpts = {}): Promise<World> {
 }
 
 interface Ran { status: number | null; stdout: string; stderr: string; lines: string[] }
-function wrapAsync(w: World, args: readonly string[], o: { env?: NodeJS.ProcessEnv; onSpawn?: (c: ChildProcess) => void; script?: string } = {}): Promise<Ran> {
+function wrapAsync(w: World, args: readonly string[], o: { env?: NodeJS.ProcessEnv; onSpawn?: (c: ChildProcess) => void; script?: string; cwd?: string } = {}): Promise<Ran> {
   return new Promise((resolve) => {
-    const c = spawn('bash', [o.script ?? WRAPPER, ...args], { cwd: w.pkg, env: { ...w.env, ...o.env }, detached: true });
+    const c = spawn('bash', [o.script ?? WRAPPER, ...args], { cwd: o.cwd ?? w.pkg, env: { ...w.env, ...o.env }, detached: true });
     let out = '';
     let err = '';
     c.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
@@ -632,6 +632,20 @@ describe('TB8: every fallback row, in TESTBOX_FALLBACK\'s order (spec §5 row 7)
     const { w, r, exit, command } = await make();
     expectFallback(w, r, id, exit, command);
     if (id === 'over-budget') expect(r.stderr).toContain(CI_LINE);
+  }, T);
+});
+
+// D-8977: a run started outside every git work tree (a session's scratch directory) has no repository, so no
+// row on the box. It is `not-set-up`, decided before the link opens: the closed port below would answer `unreachable`
+// if the client opened the link first, and `unreachable` reads as a box fault on the console's fallback count.
+describe('TB8: a directory outside every git work tree is not-set-up, never unreachable', () => {
+  it('falls back not-set-up before opening the link, and logs that id', async () => {
+    const w = await world({ url: 'closed' });
+    const bare = mkTmp('tb8-nogit-');
+    const r = await wrapAsync(w, VITEST_A, { cwd: bare, env: { GIT_CEILING_DIRECTORIES: path.dirname(bare) } });
+    expect(r.lines[0], r.stderr).toMatch(reasonOf('not-set-up'));
+    expect(r.stderr).not.toContain('unreachable');
+    expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'fallback', fallback: 'not-set-up' })]);
   }, T);
 });
 
