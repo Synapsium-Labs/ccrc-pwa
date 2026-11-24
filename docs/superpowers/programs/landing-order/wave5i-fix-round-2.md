@@ -383,3 +383,80 @@ OOM, rc 137, stands as a limitation, not a green), a full run, and any slice-lim
 
 Privacy: the added lines of all 22 files changed since 59d3223fa, and this round's commit messages, have zero hits against the
 private-name list, and no home path or private address.
+
+## Named-base merge and re-gate
+
+The local merge `47ac9340154a1a27a9f68e2f8f74cd379f8a944d` has the frozen fix tip `3c432734dc8287f463eb133276366fea320adfaa`
+as first parent and the authorized main commit `e0e8989c054914f14c799bf183b37c0e04be4377` as second parent. There were three
+content conflicts. For each, the current holder explicitly agreed to the exact unified diff against that main commit before
+it was applied. The accepted bytes were re-applied in memory to that base and matched the staged and committed resolutions.
+The watcher diff was sent in two whole-hunk parts; removing the repeated header from the second reconstructs all 8850 bytes.
+
+| Resolved file | What both sides keep | Named-base diff SHA-256 |
+|---|---|---|
+| `server/src/coord/ports.ts` | Main's complete `WatcherCoordMember` list, including `applyPairMoves`, plus `applyLandingControl`. | `dfb03b45a09b2321d201013207f033bb2d30bdf55046f77933206b5579bb980b` |
+| `server/src/watch.ts` | Main's renewal imports and radar unread distinctions, and the wave's control reads, generation fence and store-owned application. A failed registry listing publishes `listing` even if inventory projects still need control reads. An absent probe listing and project-unread evidence remain separate from a failed control bundle. | `ec5208f2a079387d356dbb051c5c9eb062196999180d9094afbd109149a03b1a` |
+| `server/test/single-definition/core-vocab.test.ts` | Main's handle-holder list plus the one `landingControlTx.ts` entry for the store-owned transaction described above. | `c756640659338d83a2425f07d5571336c8c0f83e2c32f6931871cf0a9cc57c82` |
+
+The staged re-read kept the coordinator contract at twenty-two clauses and its pin's wording in sync. The FleetIO contract's
+23 members match the declaration in order. The landing read still imports and calls `landingReadView`; the changed census
+and route pins were measured against the resolved tree.
+
+One newly arrived inline pin needed a correction. `server/test/overlord-other-lanes-pin.test.ts` is absent from the first
+parent and arrived byte-identical to main. On independently installed clean main, the suite passed 13/13. On the merge it
+passed 12/13 locally and the same snapshot failed on the test box: the no-control fixture's landing read adds
+`"binding":{"mode":"held","reason":"opt-in-unknown","entryId":1}`. Only that expected field was added. The write, order,
+refusal and other read expectations were not changed. The isolated test commit `34889fc5bc378033fac2e8b2f213ff2c13d2b2f2`
+records wave 5i's intended addition to the landing read. The corrected pin and landing read suite passed together (39 tests),
+including the focused rerun before that commit.
+
+The server source and tests typechecks both exited 0 after refreshing the agent and server installs to the merged lockfiles.
+Before the refresh, the tests typecheck failed on the missing locked `@xterm/headless` in a test inherited from main; clean
+main with the same stale install reproduced that error. No tracked dependency change was made.
+
+All selections used the foreground `ccrc test` wrapper from `server/`, with `--maxWorkers=2` for Vitest. The test box ran
+snapshots of the resolved tree; the local slice ran the typechecks, comparisons and committed-tip checks. The static guard
+set was derived with this tree's `fast-plan.mjs` without historical scanner or timing artifacts; it is not the full suite.
+
+| Selection | Files | Measured result |
+|---|---:|---|
+| Radar, lineage and FleetIO reader contract | 4 | 309 passed |
+| Landing policy, watcher radar frames, continuity generations and renewal readings | 10 | 453 passed |
+| Landing store, order, write and read routes | 10 | 428 passed |
+| Resolved-path guards, censuses, coordinator pin, mail routes, anchors and citations | 9 | 542 passed |
+| Landing notice callers, run routes and the land probe | 8 | 1344 passed |
+| Committed-tip repository checks, including growth and deviation references | 9 | 327 passed |
+| Armed growth check at the merge commit, measured separately | 1 | 98 passed; watcher delta +38 and store delta +50 against the named base |
+| Remaining rings and single-definition guards, four batches | 54 | 387, 470, 342 and 444 passed |
+| Remaining static guards, batches 1, 3, 5, 7 and 8 | 116 | 3135 (1 skipped), 522, 1232, 678 (1 skipped), and 1363 (12 skipped) passed |
+| Remaining static guards, batches 2, 4 and 6 | 69 | 22 of 23 files passed in each original batch; the three failed files and their follow-ups are below |
+
+- Batch 2 on the test box: 758 passed, 19 failed, all in the private-socket tmux fixture. The fixture pane did not print its
+  marker; in isolation in the local slice, both the merge and clean main passed all 35 tests in that file.
+- Batch 4 on the test box: 817 passed, 1 failed and 4 skipped. The BSD-order chmod fixture expected exit 1 and received exit 0;
+  in isolation in the local slice, both the merge and clean main passed all 42 tests in that file.
+- Batch 6 on the test box: 1079 passed, 1 failed. The landing snapshot was the only red. Its main comparison and the measured
+  one-field correction are above.
+- The tests-inclusive typecheck **guard is not green locally**. The default test-box run collected no tests because the PWA
+  package's compiler could not be resolved in the prepared checkout. In the local slice, the merge and clean main with its
+  own locked installs both exited 1: 11 passed, 1 failed, with an empty file list in the helpers-in-program check. The
+  shared slice reported 2 and 4 OOM kills, respectively; no compiler diagnostic was printed. No change was made to this
+  guard. The exact-tip fast CI run is the arbiter for it, not the successful direct typechecks.
+
+The earlier OOM limit on the whole `rundefsTx.ts` related selection remains recorded; the focused notice callers are not an
+equivalent run. No full-suite run was made. The fast PR run is separate evidence on the published tip.
+
+### Note layout
+
+The enforced pull-request ledger guard passed its edit arm but rejected nine nested task and fix-round notes at the merge
+commit. The same guard passed both arms on clean named main. Against that base the nine files were additions, regardless of
+when the branch first wrote them. No trailer bypasses the layout arm.
+
+Commit `5876b3e8e07d024b3de069d272ee245838cf1f44` moves exactly those nine notes to flat `wave5i-*.md` names under
+`docs/superpowers/programs/landing-order/`. Only references to moved paths changed inside the notes; the review evidence stayed
+intact. The plan and programme ledger were not changed. The plan's Task 7 file list still points at the old note folder for the
+coordinator to correct.
+
+Re-running the CI-equivalent guard (`pull_request`, enforce mode, `--base origin/main`) on the relocation commit exited 0 with
+both arms reporting success. The five affected local guard files (ledger guard, anchors, citations, deviation references and
+pending deviation IDs) passed all 80 tests. No check setting or exception was used.
