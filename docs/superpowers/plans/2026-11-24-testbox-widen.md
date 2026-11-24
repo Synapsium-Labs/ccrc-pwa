@@ -18,15 +18,27 @@ back to one package.
 
 ## Task 1: the card builds several packages and several heads (D-9009)
 
-- [x] `pwa/src/fleet/testboxAdminWords.ts` (L1): `repoRowOf` and `repoDraftProblems` move here from the card, which
-  only renders them. The package field takes folders in install order, separated by spaces. The command field takes
-  heads separated by commas, every package gets every head, and the default is §2.5's four heads with the runner first
-  (`TESTBOX_DEFAULT_HEADS`). The first package's first head stays the one parity runs (`_tba_row_record`). A typed
-  install input goes to the listed package its path starts with, else to the first package, so a one-package draft
-  builds exactly the row it built before.
+- [x] Characterization first: `pwa/src/fleet/TestBoxConnect.test.tsx` pins the row the card built on `main` (one package
+  folder per row, typed install inputs and a typed command head sent as typed), green against the old card.
+- [x] A move with no change in behaviour: `repoRowOf` and `repoDraftProblems` move from the card to
+  `pwa/src/fleet/testboxAdminWords.ts` (L1), which the card only renders. The repository and package name shape is
+  exported once, `shared/testbox.ts#isTestboxName`, and the card, the words file and `shared/testbox-admin.ts`'s PR row
+  reader import it rather than keep copies.
+- [x] The behaviour change, its own commit: the package field takes folders in install order, separated by spaces. The
+  command field takes heads separated by commas, every package gets every head, and the default is §2.5's four heads with
+  the runner first (`TESTBOX_DEFAULT_HEADS`). So an untouched one-package draft is not the row it was: it carries four
+  heads where it carried the runner alone (the characterization cases show the change).
+- [x] Review fixes. A package's install inputs are always its own `package.json` and `package-lock.json` first, and a
+  typed input is added, once, to the listed package its first path segment names, else to the first package: a typed
+  input never takes the pair's place, because the box builds and keys a package's pristine copy from its inputs alone
+  (`agent/src/testbox/pristine.ts`). A draft whose first command is not a vitest program is refused on the command
+  field: parity runs the first package's first head (`_tba_row_record`), and the box adds the report flags only to a
+  vitest program, now decided once in `shared/testbox.ts#isVitestProgram`, which `agent/src/testbox/spec.ts` imports.
+  Nothing in the draft can say whether the first package has vitest installed (a `ui` first would pass this check), so
+  the hint still says the first package is the one parity runs.
 - [x] `pwa/test/testbox-repo-draft.test.ts`: the default heads, a four-package row that `parseRepoRow` takes, the input
-  assignment, and each field's problem (a package or head named twice is said on its own field, not as a bad row).
-  It was red before the move (the functions did not exist), and green after.
+  assignment (the pair always first), each field's problem (a package or head named twice is said on its own field, not
+  as a bad row) and the runner refusal. Each case was red before its change and green after.
 - [x] `pwa/src/fleet/TestBoxConnect.test.tsx`: Install sends a two-package row, each package with the default heads.
 
 ## Task 2: the live row (operator, by hand, on the box)

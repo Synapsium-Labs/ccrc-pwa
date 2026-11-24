@@ -3,7 +3,7 @@
 // install order, each with the command heads the box runs there; spec 2026-10-28 §2.5's heads are the default. Every row this
 // builds must parse as the box's own reader parses it (`shared/testbox.ts#parseRepoRow`).
 import { describe, expect, it } from 'vitest';
-import { parseRepoRow } from '../../shared/testbox';
+import { isVitestProgram, parseRepoRow } from '../../shared/testbox';
 import {
   TESTBOX_CONNECT_TEXT as T, TESTBOX_DEFAULT_HEADS, TESTBOX_DEFAULT_RUNNER, blankRepoDraft, repoDraftProblems, repoRowOf,
   type TestboxRepoDraft,
@@ -51,18 +51,34 @@ describe('repoRowOf (D-9009)', () => {
     expect(pkgs(row)[1]!.commands).toEqual(['./node_modules/.bin/vitest', 'npm run test:browser']);
   });
 
-  it('a typed install input goes to the listed package its path starts with, and replaces that package\'s pair only', () => {
-    const row = repoRowOf(draft({ pkg: 'server pwa', inputs: 'pwa/package.json pwa/package-lock.json pwa/extra.json' }), ROOT);
+  it('a typed install input is added to the listed package its path starts with, after that package\'s own pair', () => {
+    const row = repoRowOf(draft({ pkg: 'server pwa', inputs: 'pwa/extra.json' }), ROOT);
     expect(pkgs(row)[0]!.installInputs).toEqual(['server/package.json', 'server/package-lock.json']);
     expect(pkgs(row)[1]!.installInputs).toEqual(['pwa/package.json', 'pwa/package-lock.json', 'pwa/extra.json']);
   });
 
-  it('an input under no listed package goes to the first package, so a one-package draft reads exactly as before', () => {
-    const one = repoRowOf(draft({ inputs: 'server/package.json server/package-lock.json shared/x.json' }), ROOT);
-    expect(pkgs(one)[0]!.installInputs).toEqual(['server/package.json', 'server/package-lock.json', 'shared/x.json']);
+  it('an input under no listed package is added to the first package\'s pair, never in place of it (review of #3342)', () => {
+    // The box builds a package's pristine copy from a tree holding only its install inputs and keys it on them
+    // (agent/src/testbox/pristine.ts), so a package whose inputs lack its own package.json and lockfile fails every npm ci.
     const two = repoRowOf(draft({ pkg: 'server pwa', inputs: 'shared/x.json' }), ROOT);
-    expect(pkgs(two)[0]!.installInputs).toEqual(['shared/x.json']);
+    expect(pkgs(two)[0]!.installInputs).toEqual(['server/package.json', 'server/package-lock.json', 'shared/x.json']);
     expect(pkgs(two)[1]!.installInputs).toEqual(['pwa/package.json', 'pwa/package-lock.json']);
+    const one = repoRowOf(draft({ inputs: 'shared/x.json' }), ROOT);
+    expect(pkgs(one)[0]!.installInputs).toEqual(['server/package.json', 'server/package-lock.json', 'shared/x.json']);
+  });
+
+  it('typing a package\'s own pair again changes nothing: each input is listed once', () => {
+    const row = repoRowOf(draft({ inputs: 'server/package.json server/package-lock.json shared/x.json shared/x.json' }), ROOT);
+    expect(pkgs(row)[0]!.installInputs).toEqual(['server/package.json', 'server/package-lock.json', 'shared/x.json']);
+    expect(parseRepoRow(JSON.stringify(row)).ok).toBe(true);
+  });
+
+  it('every package of every row holds its own package.json and package-lock.json first, whatever was typed', () => {
+    for (const inputs of ['', 'shared/x.json', 'pwa/extra.json agent/y.json', 'ui/package.json other/z.json']) {
+      for (const p of pkgs(repoRowOf(draft({ pkg: 'server agent ui pwa', inputs }), ROOT))) {
+        expect(p.installInputs.slice(0, 2), `${inputs} ${p.name}`).toEqual([`${p.name}/package.json`, `${p.name}/package-lock.json`]);
+      }
+    }
   });
 });
 
@@ -88,6 +104,21 @@ describe('repoDraftProblems (D-9009)', () => {
   it('no command at all, or a head with a doubled space, is the command field\'s problem', () => {
     expect(repoDraftProblems(draft({ command: ' , ' }), ROOT).command).toBe(T.badRepoWord);
     expect(repoDraftProblems(draft({ command: 'npm  test' }), ROOT).command).toBe(T.badRepoWord);
+  });
+
+  it('the first command must be a vitest runner, because parity runs it and only a vitest head gets the report flags (review of #3342)', () => {
+    for (const command of ['./node_modules/.bin/tsc, ./node_modules/.bin/vitest', 'npm test', 'npx vitest', 'npm run test:browser, ./node_modules/.bin/vitest']) {
+      expect(repoDraftProblems(draft({ command }), ROOT).command, command).toBe(T.badRepoRunner);
+    }
+    for (const command of [TESTBOX_DEFAULT_RUNNER, 'node_modules/.bin/vitest, npm test', 'vitest', TESTBOX_DEFAULT_HEADS.join(', ')]) {
+      expect(repoDraftProblems(draft({ command }), ROOT).command, command).toBeUndefined();
+    }
+    expect(repoDraftProblems(draft({ pkg: 'server agent ui pwa', command: './node_modules/.bin/tsc' }), ROOT).command).toBe(T.badRepoRunner);
+  });
+
+  it('a vitest program is a word whose last path segment is vitest, as the box decides it for a run\'s first word', () => {
+    for (const w of ['./node_modules/.bin/vitest', 'vitest', '/opt/x/vitest', 'node_modules/.bin/vitest/']) expect(isVitestProgram(w), w).toBe(true);
+    for (const w of ['npx', './node_modules/.bin/vitest-x', './node_modules/.bin/tsc', 'vitest/run', '']) expect(isVitestProgram(w), w).toBe(false);
   });
 
   it('a row the box would refuse is the row\'s problem', () => {

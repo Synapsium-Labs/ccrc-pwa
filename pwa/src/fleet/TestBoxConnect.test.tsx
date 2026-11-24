@@ -418,7 +418,7 @@ describe('step 5: install, its six phases and the end of it', () => {
     expect(document.body.innerHTML).not.toContain(ADDRESS);
   });
 
-  it('Install sends typed install inputs and a typed command head as the package\'s own (characterization, D-9009)', async () => {
+  it('Install sends typed install inputs after the package\'s own pair, and the typed command heads (D-9009)', async () => {
     const { box, posts } = fakeFleet(baseStatus());
     box.on.key = () => { box.status = baseStatus({ addressSet: true }); return { result: { line: LINE } }; };
     box.on.probe = () => ({ result: { fingerprint: FP } });
@@ -432,13 +432,17 @@ describe('step 5: install, its six phases and the end of it', () => {
     await click(T.probe);
     await click(T.confirmFingerprint);
     fillRepo();
-    type(T.repoInputs, 'server/package.json server/package-lock.json shared/x.json');
+    type(T.repoInputs, 'shared/x.json');
     type(T.repoCommand, 'npx vitest');
+    // Parity runs the first command with vitest's report flags, which the box adds to a vitest program only.
+    expect(within(flow()).getByText(T.badRepoRunner)).toBeInTheDocument();
+    expect(button(T.next)).toBeDisabled();
+    type(T.repoCommand, 'node_modules/.bin/vitest, npm test');
     await click(T.next);
     await click(T.install);
     const sent = (posts('connect')[0]!.body as { fields: { repos: { packages: unknown }[] } }).fields;
     expect(sent.repos.map((r) => r.packages)).toEqual([[
-      { name: 'server', installInputs: ['server/package.json', 'server/package-lock.json', 'shared/x.json'], commands: ['npx vitest'] },
+      { name: 'server', installInputs: ['server/package.json', 'server/package-lock.json', 'shared/x.json'], commands: ['node_modules/.bin/vitest', 'npm test'] },
     ]]);
   });
 

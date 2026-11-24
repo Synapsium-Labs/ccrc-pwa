@@ -18,7 +18,7 @@ import {
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
 import type { TestboxEventRow } from '../../../shared/api';
-import { isTestboxName, parseRepoRow } from '../../../shared/testbox';
+import { isTestboxName, isVitestProgram, parseRepoRow } from '../../../shared/testbox';
 import { boxSettingsOf } from './boxSettingsWords';
 
 /** The preflight's one code that carries a corrected access line (`fixLine`), spelled once. */
@@ -90,9 +90,9 @@ export const TESTBOX_CONNECT_TEXT = {
   repoName: 'Name',
   repoUrl: 'Fetch URL',
   repoPackage: 'Package folders, in install order',
-  repoInputs: 'Install inputs',
+  repoInputs: 'Other install inputs',
   repoCommand: 'Test commands',
-  repoFieldsHint: 'Separate package folders with spaces and test commands with commas. Every package gets every command. Parity runs the first package\'s first command.',
+  repoFieldsHint: 'Separate package folders and install inputs with spaces, and test commands with commas. Every package gets every command. Parity runs the first command, so it is a vitest runner. Each package installs from its own package.json and package-lock.json; another input is added to the package its path starts with, else to the first.',
   addRepo: 'Add a repository',
   removeRepo: 'Remove',
   offered: 'From the fleet',
@@ -101,6 +101,7 @@ export const TESTBOX_CONNECT_TEXT = {
   badRepoUrl: 'An https or ssh URL such as https://git.invalid/team/project.',
   badRepoWord: 'Required.',
   badRepoTwice: 'Each one once.',
+  badRepoRunner: 'Parity runs the first command, so it is a vitest runner, such as ./node_modules/.bin/vitest.',
   badRepoRow: 'That row is not one the box can take. Check the install inputs.',
   needListen: 'The address the service listens on is required: the box\'s private address, the one ccrc reaches it on.',
   listenNotPrivate: 'The service listens on the box\'s private address, an IP address on a tailnet, a VPN or your provider\'s private network, the one ccrc reaches it on.',
@@ -337,7 +338,7 @@ export const TESTBOX_DEFAULT_RUNNER = './node_modules/.bin/vitest';
 export const TESTBOX_DEFAULT_HEADS: readonly string[] = [TESTBOX_DEFAULT_RUNNER, './node_modules/.bin/tsc', 'npm test', 'npm run test:browser'];
 
 /** One repository row as the card's step 4 holds it, as typed: `pkg` is the package folders in install order, separated by
- *  spaces; `command` is the command heads, separated by commas; `inputs` is blank for each package's own pair. */
+ *  spaces; `command` is the command heads, separated by commas; `inputs` is the install inputs added to the packages' own pairs. */
 export interface TestboxRepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
 export const blankRepoDraft = (): TestboxRepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_HEADS.join(', ') });
 
@@ -347,20 +348,22 @@ const words = (s: string): string[] => s.trim().split(/\s+/).filter((w) => w !==
 const heads = (s: string): string[] => s.split(',').map((h) => h.trim()).filter((h) => h !== '');
 const twice = (xs: readonly string[]): boolean => new Set(xs).size !== xs.length;
 
-/** The row's JSON object for one draft, with the mirror under the box's root (D-9009). Each package gets every head, and its
- *  install inputs are the typed ones whose first path segment names it (a typed input under no listed package goes to the
- *  first package, so a one-package draft reads as it always did), or else its own `package.json` and `package-lock.json`. */
+/** The row's JSON object for one draft, with the mirror under the box's root (D-9009). Each package gets every head. Its install
+ *  inputs are always its own `package.json` and `package-lock.json` first, because the box builds its pristine copy from a tree
+ *  holding only them and keys the copy on them (`agent/src/testbox/pristine.ts`); a typed input is added, once, to the listed
+ *  package its first path segment names, else to the first package. */
 export function repoRowOf(d: TestboxRepoDraft, root: string): Record<string, unknown> {
   const names = words(d.pkg);
-  const owned = new Map<string, string[]>();
+  const owned = new Map<string, string[]>(names.map((n) => [n, [`${n}/package.json`, `${n}/package-lock.json`]]));
   for (const input of words(d.inputs)) {
-    const owner = names.includes(input.split('/')[0] ?? '') ? input.split('/')[0]! : names[0] ?? '';
-    owned.set(owner, [...(owned.get(owner) ?? []), input]);
+    const top = input.split('/')[0] ?? '';
+    const list = owned.get(names.includes(top) ? top : names[0] ?? '');
+    if (list !== undefined && !list.includes(input)) list.push(input);
   }
   const commands = heads(d.command);
   return {
     name: d.name, fetchUrl: d.fetchUrl, mirrorPath: `${root.replace(/\/+$/, '')}/mirrors/${d.name}.git`,
-    packages: names.map((n) => ({ name: n, installInputs: owned.get(n) ?? [`${n}/package.json`, `${n}/package-lock.json`], commands })),
+    packages: names.map((n) => ({ name: n, installInputs: owned.get(n) ?? [], commands })),
     buildOutputs: [], systemTools: [],
   };
 }
@@ -376,6 +379,7 @@ export function repoDraftProblems(d: TestboxRepoDraft, root: string): Partial<Re
   else if (twice(names)) out.pkg = TESTBOX_CONNECT_TEXT.badRepoTwice;
   if (commands.length === 0 || !commands.every((c) => COMMAND_HEAD.test(c))) out.command = TESTBOX_CONNECT_TEXT.badRepoWord;
   else if (twice(commands)) out.command = TESTBOX_CONNECT_TEXT.badRepoTwice;
+  else if (!isVitestProgram(commands[0]?.split(' ')[0] ?? '')) out.command = TESTBOX_CONNECT_TEXT.badRepoRunner;
   if (Object.keys(out).length === 0 && !parseRepoRow(JSON.stringify(repoRowOf(d, root))).ok) out.row = TESTBOX_CONNECT_TEXT.badRepoRow;
   return out;
 }

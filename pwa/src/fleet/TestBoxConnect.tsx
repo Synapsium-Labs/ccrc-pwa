@@ -435,7 +435,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, fetchUrl: v } : x)))} />
                   <Field label={T.repoPackage} value={d.pkg} error={d.pkg === '' ? null : problems[i]?.pkg ?? null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, pkg: v } : x)))} />
-                  <Field label={T.repoInputs} value={d.inputs} placeholder={d.pkg.trim() === '' ? '' : d.pkg.trim().split(/\s+/).map((n) => `${n}/package.json ${n}/package-lock.json`).join(' ')} error={null}
+                  <Field label={T.repoInputs} value={d.inputs} error={null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, inputs: v } : x)))} />
                   <Field label={T.repoCommand} value={d.command} error={d.command === '' ? null : problems[i]?.command ?? null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, command: v } : x)))} />
