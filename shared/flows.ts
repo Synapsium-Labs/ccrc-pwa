@@ -364,3 +364,9 @@ export interface FlowAnswer {
   /** Wave 2: whether new programmes pin this flow; absent from an older server reads as false. */
   isDefault?: boolean;
 }
+
+/** Wave 3a: where a programme is on its flow. `blockId` null is "on no block the run machine can name", and `why` says
+ *  which fact was read (or why none places it). */
+export interface FlowPosition { blockId: string | null; why: string }
+/** Wave 3a: one programme that pins a flow, and where it is. */
+export interface FlowProgrammeRow { slug: string; title: string; version: number; position: FlowPosition }

@@ -297,6 +297,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
   '/api/portfolio', '/api/overlord/ladder',
+  // The programmes on a flow (Flows wave 3a): each programme's title, which its coordinator wrote.
+  '/api/flows/:id/programmes',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
