@@ -6084,16 +6084,17 @@ invited reply, never a mail to oneself), one per mail, recorded in `mail.answers
 **Deviation numbers are self-assigned.** Plans record their departures as numbered `D-N` entries in one
 global, monotonic namespace, and since 2026-11-23 the author takes the number, with no server and no token:
 `git fetch origin main`, then `cd server && npm run next-deviation -- <count>`, which prints
-`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` in any `.md` file
-under `docs/superpowers/plans/`, `programs/` or `specs/` (`server/scripts/next-deviation.ts`, reading with the
-guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). A coordinator names the
+`max(highest + 1, 10000)` onward, the highest being the highest `D-N` defined on `origin/main` and on your branch
+in any `.md` file under `docs/superpowers/plans/`, `programs/` or `specs/` (`server/scripts/next-deviation.ts`, reading with the
+guards' own `definitionsIn`; `SELF_ASSIGNED_ERA` in `server/src/coord/ledger.ts`). When `origin` is a fork,
+`git fetch upstream main` and pass `--ref upstream/main`. A coordinator names the
 numbers it takes in the brief (coordinator clause 10), and a worker takes its own the same way (worker clause
 11). Until a number is taken the entry is `D-TBD-<slug>`, and `server/test/dtbd.test.ts` reds any tracked
 file that carries a concrete `D-TBD-` placeholder (the `<slug>` meta-form is exempt). A collision is caught at
 merge, not prevented: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` (after the
 fetch) compares this branch's definitions against `origin/main`'s without merging and, for a number of 10000 or
-more, reds on one defined in two files or twice in one file across all three directories (below 10000 the
-older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
+more, reds on one defined with two different subjects across all three directories (a mirrored entry or a
+renamed file is one deviation; below 10000 the older rule stands); the merge queue runs it on the merged result, and the one that lands second renumbers.
 The allocator retired the same day: `POST /api/ledger/deviations` still checks the box token, then answers
 `410 retired` naming the helper and writes nothing, and the watcher no longer runs the ledger sweeps.
 `GET /api/ledger?project=<p>` (box token) still reads the numbers it issued.

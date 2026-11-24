@@ -200,6 +200,7 @@ route-parity suite binds each registration to this corpus from the commit that r
   names every holder and hands each address.
 - `POST /api/claims/:id/release` — release on the final merge, with the claimant's own attribution.
 - `GET /api/claims` — the live claim table for a project, with `recentlyLapsed` beside it (rows that lapsed within the last lease; treat one as held until its holder confirms; `?all=1` includes ended rows).
-- `POST /api/ledger/deviations` — retired on 2026-11-23 (answers 410): take D-numbers with
-  `npm run next-deviation` in `server/`; never invent a number, and never reuse one.
+- `POST /api/ledger/deviations` — retired on 2026-11-23 (answers 410): a D-number is the highest `D-N`
+  defined in the project's plans, notes and specs on its main and on the branch, plus one, from 10000 (in
+  ccrc, `cd server && npm run next-deviation -- <count>` prints it); never guess a number, and never reuse one.
 - `GET /api/ledger` — the record of the numbers the retired allocator issued, for a project.

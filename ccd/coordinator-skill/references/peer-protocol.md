@@ -166,15 +166,18 @@ archive stamp, which is measured false on live rows. `GET /api/ledger?project=<s
 (`allocated`, `landed`) and its derived `stale` flag — reported at read
 time, never stored.
 
-## Deviation numbers — `npm run next-deviation`
+## Deviation numbers
+
+A deviation number is self-assigned: the highest `D-N` defined in the project's
+plans, notes and specs (any file under `docs/superpowers/plans/`, `programs/` or
+`specs/`) on its main and on the branch, plus one, and never below 10000. In
+ccrc a helper prints that many consecutive numbers, with no server and no token:
 
     git fetch origin main
     (cd server && npm run next-deviation -- 3)
 
-A deviation number is self-assigned: the highest `D-N` defined on `origin/main`
-(in any file under `docs/superpowers/plans/`, `programs/` or `specs/`) plus one,
-and never below 10000; the helper prints that many consecutive numbers, with no
-server and no token. Take them when the wave records a deviation, and define them
+When `origin` is a fork, `git fetch upstream main` and add `--ref upstream/main`.
+Take them when the wave records a deviation, and define them
 in the same commit. Two branches in flight will sometimes take the same number:
 `deviation-refs.test.ts` compares a branch's definitions against `origin/main`'s
 without merging, and the merge queue runs it on the merged result, so the pair

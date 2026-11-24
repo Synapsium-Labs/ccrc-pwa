@@ -477,14 +477,16 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   **You take your own number — nobody issues it** (self-assigned since 2026-11-23, spec
   `2026-11-23-deviation-numbers-self-assigned-design.md`). `git fetch origin main`, then `cd server && npm run
   next-deviation -- <count>`: it prints `max(highest + 1, 10000)` onward, the highest being the highest `D-N`
-  DEFINED on `origin/main` in any `.md` file under `docs/superpowers/plans/`, `programs/` or `specs/`, with no server
-  and no token. Take and DEFINE IN THE SAME COMMIT; until then a deviation is `D-TBD-<slug>`, which
+  DEFINED on `origin/main` and on your branch (`HEAD`) in any `.md` file under `docs/superpowers/plans/`,
+  `programs/` or `specs/`, with no server and no token. When `origin` is a fork, measure the project itself:
+  `git fetch upstream main`, then `npm run next-deviation -- <count> --ref upstream/main` (`--ref` names the base). Take and DEFINE IN THE SAME COMMIT; until then a deviation is `D-TBD-<slug>`, which
   `dtbd.test.ts` refuses to land. 10000 is the cut-over, clear of every number the allocator issued, not a guard:
   nothing reds a low number. **A collision is caught, not prevented:** two branches in flight will often take the
   same number, and `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` (after `git fetch
   origin main`) compares this branch's definitions against `origin/main`'s **without merging** and reds, for a
-  number of 10000 or more, on one defined in two files or twice in one file across all three directories (below
-  10000 the old rule stands: an allocator-era number defined in two plans). The merge queue runs it on the
+  number of 10000 or more, on one defined with two different subjects anywhere across all three directories (one
+  entry mirrored in a spec and its plan, or a renamed file, is one deviation; below 10000 the old rule stands: an
+  allocator-era number defined in two plans). The merge queue runs it on the
   merged result, so the pair never lands; the one that lands second renumbers, the entry and every reference to
   it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23: it answers 410 and writes nothing,
   and its prose-seeded floor, which only ever rose, is no longer read; `GET /api/ledger?project=` still reads

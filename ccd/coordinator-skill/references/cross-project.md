@@ -96,7 +96,8 @@ ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
 
 **Deviations found during a foreign-repo wave are numbered in the HOME
 project** — the highest `D-N` defined in the home project's plans, notes and
-specs on its `origin/main`, plus one, from 10000 (when the home project is ccrc,
+specs on its `origin/main` and on the branch that will define it, plus one, from
+10000 (when the home project is ccrc,
 `npm run next-deviation` in its `server/` prints it) — and defined in the home
 plan, because that is where the plan lives. Nothing can tell which project's
 tree the number was read from, so this one is

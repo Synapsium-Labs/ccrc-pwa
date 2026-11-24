@@ -1,7 +1,6 @@
-// D-TBD placeholders never land (build 9 D13). A session that cannot reach
-// the allocator writes `D-TBD-<slug>` and STOPS — this suite is what turns
-// the outage into a red diff instead of an invented number, which is the
-// root cause (bb47c9e).
+// D-TBD placeholders never land (build 9 D13). A deviation not yet numbered is
+// `D-TBD-<slug>` — this suite is what turns a forgotten number into a red diff
+// instead of an invented one, which is the root cause (bb47c9e).
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -31,8 +30,9 @@ describe('no D-TBD placeholder lands (D13)', () => {
       expect(err.status, 'git grep itself failed').toBe(1);
       return;
     }
-    expect.fail('a D-TBD placeholder is trying to land — the allocator was unreachable when ' +
-      'this was written; take the real number (`cd server && npm run next-deviation -- <count>`) and replace ' +
-      `it before merging:\n${out}`);
+    expect.fail('a D-TBD placeholder is still in the tree; take a real number (`cd server && npm run ' +
+      'next-deviation -- <count>`, which counts origin/main and your branch, after `git fetch origin main`, or ' +
+      '`upstream` and `--ref upstream/main` when origin is your fork) and replace it before merging:' +
+      `\n${out}`);
   });
 });
