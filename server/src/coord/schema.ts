@@ -4433,7 +4433,7 @@ export const MIGRATIONS: readonly string[] = [
   // `flow_settings` by `server/src/flows/flowsStore.ts` alone; the two columns by the `programs` inserters
   // (`CoordStore.openRun`, `planStore.applyPlanChanges` through `applyPlanChangesInTx`), which take the value from `flows/flowPinSql.ts`. Every
   // `INSERT INTO programs` names its columns, so an older build at this `user_version` leaves both NULL. Same slot rule as
-  // 124 (flows wave 1): whoever lands second renumbers; RE-MEASURE (it must print 123 before this entry is counted):
+  // 124 (flows wave 1): whoever lands second renumbers; RE-MEASURE (it must print 124 before this entry is counted):
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   CREATE TABLE flow_settings (id INTEGER PRIMARY KEY CHECK (id = 1), defaultFlowId INTEGER REFERENCES flows(id));
