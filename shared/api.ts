@@ -13319,6 +13319,15 @@ export const DELEGATION_SPOOL_BOUNDS = {
 const CHILD_DENY_CCD_VERBS: readonly string[] =
   'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
+/** The `ccd` verbs a dispatched child never runs that are NOT SAFETY verbs (D-8978): a top-level session, the operator's
+ *  shell and the server's own composition may run them, so they stay off `FORBIDDEN_CCD_VERBS` and the classifier. Today
+ *  one: `ws-add`. A worker that makes a workspace itself makes one outside every run (no `--child`, no run row names it), so
+ *  the console lists it as "Not in a programme" and its coordinator never sees it; a child that needs another tree asks its
+ *  coordinator. The server's dispatch (`ws-add --no-rc --child <run>`) is an agent exec through `CcdArgv`, never a child's
+ *  tool call, so no deny rule can reach it. The hook's twin is `CCD_WSADD_RE` (`ccd/session-hook.sh`), the installer's its
+ *  loop's second list (`ccd/install-session-hooks.sh`). An accident guard, not a wall (D-8979). */
+const CHILD_SCOPE_DENY_CCD_VERBS: readonly string[] = 'ws-add'.split('|');
+
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
  *  deny matcher takes a leading wildcard; Task 13 decides, and turning them on is this one word here and its bash twin
@@ -13332,7 +13341,7 @@ const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
 /** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
- *  (`roll` and the operator's `claude …` switches among them), then `ccrc update`, `rollback` and `rollout`, then Claude
+ *  (`roll` and the operator's `claude …` switches among them), then the child-scope verbs (`ws-add`, D-8978), then `ccrc update`, `rollback` and `rollout`, then Claude
  *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
  *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
  *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
@@ -13340,6 +13349,7 @@ export function childDenyRules(upstreamId: string | null): readonly string[] {
   const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
   return [
     ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+    ...CHILD_SCOPE_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
     ...['update', 'rollback', 'rollout'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
     ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
   ];
