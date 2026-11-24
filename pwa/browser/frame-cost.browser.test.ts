@@ -500,8 +500,10 @@ describe('measurement — C6 Step 0/4', () => {
   // is in and the plain view's "Formatting" line is gone (the frame's `ready`, as reader-frame.browser.test.ts's
   // `__readyAts` reads it); `srcdocChars` is the length of the hosted frame's `srcdoc`. The size check runs independently
   // of the on-demand timing comparison. For timing, set CCRC_MEASURE=1 and CCRC_PAIRED_READER_BASE_DIST to the built
-  // Task 1 BASE (same library bytes, no hosted appearance), then select 'reader paired timing'. Both builds use this
-  // exact fixture in one browser; a historical wall-clock median is not a comparator.
+  // Task 1 BASE (same library bytes, no hosted appearance) and CCRC_PAIRED_READER_MODE_ONLY_DIST to the diagnostic
+  // candidate build, then select 'reader paired timing'. All builds use this exact fixture in one browser; a historical
+  // wall-clock median is not a comparator. The diagnostic forces the hosted decision false without removing the stamp
+  // hook or the rest of the bridge; this harness consumes the build, never makes that mutation.
   const READER_PROJECT = 'demo';
   const READER_SECTION = DOC_SECTION_SLUGS[0]!;
   const READER_LEAF = '2026-10-20-path-identity-design.md';
@@ -561,40 +563,56 @@ describe('measurement — C6 Step 0/4', () => {
   }
 
   const PAIR_BASE_DIST = process.env['CCRC_PAIRED_READER_BASE_DIST'];
-  it.runIf(MEASURE && PAIR_BASE_DIST !== undefined)('reader paired timing: interleaved BASE and hosted opens', async () => {
+  const PAIR_MODE_ONLY_DIST = process.env['CCRC_PAIRED_READER_MODE_ONLY_DIST'];
+  it.runIf(MEASURE && PAIR_BASE_DIST !== undefined)('reader paired timing: interleaved BASE, hosted and mode-only opens', async () => {
+    if (!PAIR_MODE_ONLY_DIST) throw new Error('CCRC_PAIRED_READER_MODE_ONLY_DIST must name the built mode-only checkout');
     const base = await serveDist(PAIR_BASE_DIST!);
+    let modeOnly: DistServer | undefined;
     try {
-      const comparisons: { skin: string; round: number; ratio: number }[] = [];
-      for (const round of [1, 2]) {
-        for (const { id: skin } of SKINS) {
-          const samples = { base: [] as number[], hosted: [] as number[] };
-          const sizes = { base: new Set<number>(), hosted: new Set<number>() };
-          for (let i = 0; i < READER_OPENS; i += 1) {
-            // Alternate the leading build, and reverse the lead in the second round.
-            const order = (i + round) % 2 === 1 ? (['base', 'hosted'] as const) : (['hosted', 'base'] as const);
-            for (const build of order) {
-              const open = await openReaderOnce(skin, build === 'base' ? base.origin : server!.origin);
-              samples[build].push(Math.round(open.openToReadyMs * 10) / 10);
-              sizes[build].add(open.srcdocChars);
+      modeOnly = await serveDist(PAIR_MODE_ONLY_DIST);
+      const failures: string[] = [];
+      for (const arm of ['hosted', 'mode-only'] as const) {
+        for (const round of [1, 2]) {
+          for (const { id: skin } of SKINS) {
+            const samples = { base: [] as number[], candidate: [] as number[] };
+            const sizes = { base: new Set<number>(), candidate: new Set<number>() };
+            for (let i = 0; i < READER_OPENS; i += 1) {
+              // Each arm has its own contemporaneous BASE; alternate the lead and reverse it in round 2.
+              const order = (i + round) % 2 === 1 ? (['base', 'candidate'] as const) : (['candidate', 'base'] as const);
+              for (const build of order) {
+                const origin = build === 'base' ? base.origin : arm === 'hosted' ? server!.origin : modeOnly.origin;
+                const open = await openReaderOnce(skin, origin);
+                samples[build].push(open.openToReadyMs);
+                sizes[build].add(open.srcdocChars);
+              }
             }
+            const describeSamples = (values: number[]) => ({ samples: values, median: medianOf(values), min: Math.min(...values), max: Math.max(...values) });
+            const baseline = describeSamples(samples.base);
+            const candidate = describeSamples(samples.candidate);
+            const delta = candidate.median - baseline.median;
+            const ratio = candidate.median / baseline.median;
+            const ceiling = arm === 'hosted' ? baseline.median + 30 : 1.10 * baseline.median;
+            const row = { arm, skin, round, baseline, candidate, delta, ratio, ceiling,
+              sizes: { base: [...sizes.base], candidate: [...sizes.candidate] } };
+            console.log(`FRAME-COST-PAIRED ${JSON.stringify(row)}`);
+            if (sizes.base.size !== 1 || !sizes.base.has(BASE_SRCDOC_CHARS)) {
+              failures.push(`${arm} ${skin} round ${round}: BASE srcdoc size changed`);
+            }
+            if (sizes.candidate.size !== 1
+              || (arm === 'hosted' ? [...sizes.candidate][0]! <= BASE_SRCDOC_CHARS : !sizes.candidate.has(BASE_SRCDOC_CHARS))) {
+              failures.push(`${arm} ${skin} round ${round}: candidate srcdoc size control failed`);
+            }
+            if (candidate.median > ceiling) failures.push(`${arm} ${skin} round ${round}: timing ceiling exceeded`);
           }
-          const describeSamples = (values: number[]) => ({ samples: values, median: medianOf(values), min: Math.min(...values), max: Math.max(...values) });
-          const baseline = describeSamples(samples.base);
-          const hosted = describeSamples(samples.hosted);
-          const ratio = hosted.median / baseline.median;
-          console.log(`FRAME-COST-PAIRED ${JSON.stringify({ skin, round, baseline, hosted, ratio, ceiling: 1.10 * baseline.median, sizes: { base: [...sizes.base], hosted: [...sizes.hosted] } })}`);
-          expect([...sizes.base], 'the paired BASE is the original no-appearance document').toEqual([BASE_SRCDOC_CHARS]);
-          expect([...sizes.hosted], 'the candidate carries appearance in the same document').toHaveLength(1);
-          expect([...sizes.hosted][0]).toBeGreaterThan(BASE_SRCDOC_CHARS);
-          comparisons.push({ skin, round, ratio });
         }
       }
-      // Print every row before failing, so the first red cannot hide the second round.
-      expect(comparisons.filter(({ ratio }) => ratio > 1.10), 'every paired timing median is at most 1.10 x its same-round BASE').toEqual([]);
+      // Print every row before asserting, so neither arm nor a later round is hidden by a failed comparison.
+      expect(failures, 'paired timing and srcdoc controls').toEqual([]);
     } finally {
+      await modeOnly?.close();
       await base.close();
     }
-  }, 480_000);
+  }, 540_000);
 
   for (const skin of SKINS.map((k) => k.id)) {
     it(`reader srcdoc budget, ${skin}: one ordinary Docs page`, async () => {

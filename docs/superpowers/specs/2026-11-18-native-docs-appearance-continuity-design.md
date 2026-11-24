@@ -355,6 +355,8 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
 | Contrast | 4.5:1 for every text colour on every ground and tint, code on the well, and the labels of the covered Mermaid kinds on the shapes painted behind them. 3:1 for the focus ring on `bg`, `surface`, `surface2` and the tints, and the covered kinds' lines. Edges have no floor. Tints at most 4%. A Mermaid kind outside `MERMAID_HOSTED_KINDS`, or an author-styled figure, keeps 1.1.0's drawing and is not gated here (§10) | unit gate, every palette, both skins; the library's test 5 for the covered kinds |
 
+**Open-to-`ready` amendment (2026-11-24; D-9018).** Desktop Chromium: for each skin, the hosted nine-open median may add at most 30 ms over its same-session paired BASE. A mode-only mount retains the separate 1.10× guard; both measurements use D-9017's interleaved procedure. F records the paired figure on a phone engine, where more than 100 ms added stops and returns to the coordinator. This does not change the srcdoc, geometry or live-update budgets.
+
 ## 10. The library's part
 
 This section is written for the library programme to plan from. It names the library by role, the shared rendering library, and proposes no new name. Its release, signed tag and ccrc's re-pin are the operator's.
