@@ -133,8 +133,12 @@ JSON
    never the literal `main`): the producer LANDS BEFORE IT CLOSES. Once its review is
    clean and wave N+1 is open — or, on the programme's LAST wave, which has
    no wave N+1, once its review is clean (its close is SKILL.md step 7's and
-   §6's) — advance the producer's run to `merging` (§4 — from
-   `awaiting-review`, re-measured). Enqueue only a PR whose required checks
+   §6's) — mark its PR ready for review with `gh pr ready <pr>`, then
+   advance the producer's run to `merging` (§4 — from `awaiting-review`,
+   re-measured). Every worker opens its PR as a draft and it stays one until
+   this moment (SKILL.md clause 15, D-8997): marked ready first, the advance
+   measures it `open`, so the landing's checks lane reads it, where a draft at
+   the advance leaves that lane off (D-8999). Enqueue only a PR whose required checks
    have all passed — every required name the verdict discovered passes on the
    head, and `gh pr checks <pr> --required` exits 0: for any other
    PR gh arms auto-merge instead of queueing it,
@@ -165,7 +169,7 @@ JSON
    enqueue is what an unattended lander does (ruling R5 as amended
    2026-10-25: the queue re-tests the combined code, the required checks gate
    the enqueue, the head is bound): it needs no human present, and a worker
-   still never enqueues its own PR. Prove it
+   still never marks its own PR ready or enqueues it. Prove it
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null
@@ -181,7 +185,11 @@ JSON
    those landed answers means nothing is queued: read why before you do anything else. Disarm the
    same way before any fix round from `merging` — an armed auto-merge queues
    whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
-   from a login without write access. End your turn. The run waits at
+   from a login without write access. Before any fix round from `merging`,
+   also turn the PR back into a draft with `gh pr ready <pr> --undo`, so a PR
+   back under review is never landable; a `checks:` mail whose `left` names
+   `draft` for that run is this act and needs nothing (D-8997, D-8999). End
+   your turn. The run waits at
    `merging`, holding the child, so its workspace is not reclaimed under a PR
    still in the queue, and the server tells you how the queue answered: a
    `status` mail `merged:#<pr>` once the PR reads merged, or
@@ -213,9 +221,9 @@ JSON
    no worker would be left to fix it. A coordinator whose own workspace
    carries a programme-wave hold or the child marker — a self-claimed run's,
    or a reclaim heir that was the programme's own worker — is refused its
-   enqueue by the session hook, like any worker. Do not close to shed the
+   ready and its enqueue by the session hook, like any worker. Do not close to shed the
    hold (a final close of a child reclaims your own pane): ask the operator
-   to enqueue, or disarm, with the same spellings from their own shell, and
+   to mark it ready and enqueue it, or disarm, with the same spellings from their own shell, and
    wait at `merging` as above.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then

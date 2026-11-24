@@ -83,7 +83,16 @@ same, and shows as `absent`.
   --session <worker id>`, and `git -C <worktree> rev-parse` for the tip) is a
   sanity check on the claim before you spend a round trip on it — never a
   source for half the submission — and either way **believe the server's own
-  re-measurement over yours** (contract clause 6). A mismatch answers
+  re-measurement over yours** (contract clause 6). **Ready, then
+  `merging` (D-8997):** a worker opens its PR as a draft, and before the
+  advance to `merging`, on every landing route, this session marks it ready
+  for review with `gh pr ready <pr>`, once its review passed and never
+  earlier; the claim's `prPhase` stays the worker's `draft`, which the server
+  reads as no regression from a measured `open`. A PR still a draft at that
+  advance leaves the landing's checks lane off for the episode (D-8999), and a
+  merge of a draft is refused by GitHub. On a send-back from `merging` to
+  `working`, turn it back into a draft first (`gh pr ready <pr> --undo`). A
+  mismatch answers
   `{"ok":false,"reject":{"code":"<code>","detail":"<why>"}}` and leaves the
   run state untouched:
 

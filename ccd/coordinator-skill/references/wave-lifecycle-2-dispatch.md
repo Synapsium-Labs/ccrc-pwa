@@ -373,6 +373,17 @@ to another session, or before a stop that could lose the work. A brief that
 asks for a push per task, per commit or per green test contradicts this
 sentence, and the sentence wins.
 
+**A third sentence goes in every brief that may open a PR: "open your PR as
+a draft (`gh pr create --draft`) and leave it a draft; never mark it ready
+for review."** (Owner ruling 2026-11-24, D-8997; worker clause 16 says it
+too, for the branch sentence's reason.) An unattended lander lands every
+green, non-draft PR whose author holds the maintainer role or higher on its
+repository, and the fleet's PRs are such PRs, so a PR still under review must
+be a draft. CI runs on a draft as on any PR (D-9000), so the review still
+reads green checks. This session marks the PR ready (`gh pr ready <pr>`) only
+once its review passes, immediately before the advance to `merging` (§4); the
+session hook refuses `gh pr ready` to a worker (D-8998).
+
 **The workspace's name is frozen for the life of the claim.** This is a fact
 the fleet did not previously guarantee, not a correction to anything above:
 the automatic naming sweep used to rename a workspace to a slug of the
