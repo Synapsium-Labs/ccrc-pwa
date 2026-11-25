@@ -16,7 +16,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { ACTOR_KIND_MAP, type ActorKind } from '../../../shared/overlord-identity.js';
 import type { SequenceKind, SequenceWireLine } from '../../../shared/overlord-sequence.js';
-import { LINE_REFUSALS, SEQUENCE_KEPT_KIND, sequenceLineKnown, sequenceLineVerdict, type LineRefusal, type SequenceFacts } from './overlordSequence.js';
+import { LINE_REFUSALS, SEQUENCE_KEPT_KIND, keptDesignationLine, sequenceLineKnown, sequenceLineVerdict, type LineRefusal, type SequenceFacts } from './overlordSequence.js';
 
 /** The stamp's answer. It never throws: every caller checks it and writes no row on a refusal (by throwing inside its own
  *  transaction, so the row rolls back with the line). */
@@ -114,17 +114,33 @@ export function sequenceAfter(db: DatabaseSync, after: number, limit: number):
   }
 }
 
-/** The oldest `limit` lines in seq order, each marked `keep` when it is the newest line of `SEQUENCE_KEPT_KIND`, or the newest
- *  `live` line of that kind (the standing binding's while a rebind is pending or after one failed; review 3740 F2). */
+/** The kept designation line's seq, or null: the lines from the newest `live` one on (or the newest line alone when none is
+ *  `live`), handed to `keptDesignationLine`. Throws on a database it cannot read; its two callers answer `unmeasured`. */
+function keptDesignationSeq(db: DatabaseSync): number | null {
+  const rows = db.prepare(`SELECT seq, id, state FROM overlord_sequence WHERE kind = ?1 AND seq >= coalesce(
+    (SELECT max(seq) FROM overlord_sequence WHERE kind = ?1 AND state = 'live'), (SELECT max(seq) FROM overlord_sequence WHERE kind = ?1))`)
+    .all(SEQUENCE_KEPT_KIND) as Record<string, unknown>[];
+  return keptDesignationLine(rows.map((r) => ({ seq: num(r['seq']), id: text(r['id']), state: text(r['state']) })));
+}
+
+/** The term baseline (review 3740 F2, call 1077): the kept designation line as served, or null when no designation line stands. */
+export function designationBaseline(db: DatabaseSync): SequenceRead<SequenceWireLine | null> {
+  try {
+    const seq = keptDesignationSeq(db);
+    if (seq === null) return { kind: 'measured', value: null };
+    const r = db.prepare(`SELECT ${SERVED_COLUMNS} FROM overlord_sequence WHERE seq = ?`).get(seq) as Record<string, unknown> | undefined;
+    return { kind: 'measured', value: r === undefined ? null : servedLine(r) };
+  } catch (e) {
+    return { kind: 'unmeasured', why: `the sequence could not be read: ${errText(e)}` };
+  }
+}
+
+/** The oldest `limit` lines in seq order, each marked `keep` when it is the kept designation line (`keptDesignationLine`). */
 export function sequenceOldest(db: DatabaseSync, limit: number): SequenceRead<readonly { seq: number; at: number; keep: boolean }[]> {
   try {
-    const seqOf = (r: { seq: unknown } | undefined): number | null => (r === undefined || r.seq === null ? null : num(r.seq));
-    const kept = [
-      seqOf(db.prepare('SELECT max(seq) AS seq FROM overlord_sequence WHERE kind = ?').get(SEQUENCE_KEPT_KIND) as { seq: unknown } | undefined),
-      seqOf(db.prepare("SELECT max(seq) AS seq FROM overlord_sequence WHERE kind = ? AND state = 'live'").get(SEQUENCE_KEPT_KIND) as { seq: unknown } | undefined),
-    ];
+    const kept = keptDesignationSeq(db);
     const rows = db.prepare('SELECT seq, at FROM overlord_sequence ORDER BY seq LIMIT ?').all(Math.max(0, Math.trunc(limit))) as Record<string, unknown>[];
-    return { kind: 'measured', value: rows.map((r) => ({ seq: num(r['seq']), at: num(r['at']), keep: kept.includes(num(r['seq'])) })) };
+    return { kind: 'measured', value: rows.map((r) => ({ seq: num(r['seq']), at: num(r['at']), keep: num(r['seq']) === kept })) };
   } catch (e) {
     return { kind: 'unmeasured', why: `the sequence could not be read: ${errText(e)}` };
   }

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import {
-  isSequenceStampKebab, pruneSequenceThrough, sequenceAfter, sequenceOldest, STAMP_FAILURES, stampSequenceInTx, type SequenceLineInput,
+  designationBaseline, isSequenceStampKebab, pruneSequenceThrough, sequenceAfter, sequenceOldest, STAMP_FAILURES, stampSequenceInTx, type SequenceLineInput,
 } from '../src/coord/overlordSequenceStore.js';
 import { LINE_REFUSALS, sequencePage } from '../src/coord/overlordSequence.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -63,7 +63,7 @@ describe('stampSequenceInTx, the one writer', () => {
   it('a refused line answers its word and writes nothing', () => {
     const db = openDb();
     expect(stamp(db, { state: 'live' })).toMatchObject({ ok: false, error: 'unknown-state' });
-    expect(stamp(db, { kind: 'ladder-rung' as SequenceLineInput['kind'] })).toMatchObject({ ok: false, error: 'unknown-kind' });
+    expect(stamp(db, { kind: 'grant' as SequenceLineInput['kind'] })).toMatchObject({ ok: false, error: 'unknown-kind' });
     expect(stamp(db, { id: '' })).toMatchObject({ ok: false, error: 'bad-id' });
     expect(stamp(db, { at: -1 })).toMatchObject({ ok: false, error: 'bad-at' });
     expect(count(db)).toBe(0);
@@ -108,7 +108,7 @@ describe('the prune and the reads', () => {
     expect(r).toEqual({ kind: 'measured', value: [1, 2, 3, 4, 5].map((seq) => ({ seq, at: AT + seq - 1, keep: seq === 4 })) });
     expect(sequenceOldest(db, 2)).toEqual({ kind: 'measured', value: [{ seq: 1, at: AT, keep: false }, { seq: 2, at: AT + 1, keep: false }] });
   });
-  it('sequenceOldest marks keep both the newest designation line and the newest live one when they differ (a rebind pending or failed)', () => {
+  it('sequenceOldest marks keep only the standing binding\'s live line while a rebind is pending or after one failed (review 3740 F2, call 1077)', () => {
     const db = openDb();
     stamp(db, { kind: 'designation', id: 'overlord-a', state: 'live', at: AT });
     stamp(db, { at: AT + 1 });
@@ -116,7 +116,67 @@ describe('the prune and the reads', () => {
     stamp(db, { kind: 'designation', id: 'overlord-b', state: 'failed', at: AT + 3 });
     stamp(db, { at: AT + 4 });
     const r = sequenceOldest(db, 10);
-    expect(r).toEqual({ kind: 'measured', value: [1, 2, 3, 4, 5].map((seq) => ({ seq, at: AT + seq - 1, keep: seq === 1 || seq === 4 })) });
+    expect(r).toEqual({ kind: 'measured', value: [1, 2, 3, 4, 5].map((seq) => ({ seq, at: AT + seq - 1, keep: seq === 1 })) });
+  });
+
+  describe('the term baseline (review 3740 F2, call 1077): while a binding stands, the newest live designation line', () => {
+    const d = (db: DatabaseSync, id: string, state: string, at: number): void => { stamp(db, { kind: 'designation', id, state, at }); };
+    const baselineOf = (db: DatabaseSync): unknown => {
+      const r = designationBaseline(db);
+      if (r.kind !== 'measured') throw new Error(r.why);
+      return r.value === null ? null : { id: r.value.id, state: r.value.state, seq: r.value.seq };
+    };
+    const kept = (db: DatabaseSync): number[] => {
+      const r = sequenceOldest(db, 100);
+      if (r.kind !== 'measured') throw new Error(r.why);
+      return r.value.filter((l) => l.keep).map((l) => l.seq);
+    };
+    it('no designation line: no baseline, nothing kept', () => {
+      const db = openDb(); stamp(db);
+      expect(baselineOf(db)).toBeNull(); expect(kept(db)).toEqual([]);
+    });
+    it('after a rebind\'s go-live: the new body\'s live line, whichever order go-live stamps its two lines in', () => {
+      for (const order of [['retired', 'live'], ['live', 'retired']] as const) {
+        const db = openDb();
+        d(db, 'overlord-a', 'pending', AT); d(db, 'overlord-a', 'live', AT + 1); d(db, 'overlord-b', 'pending', AT + 2);
+        for (const st of order) d(db, st === 'live' ? 'overlord-b' : 'overlord-a', st, AT + 3);
+        const liveSeq = order[0] === 'live' ? 4 : 5;
+        expect(baselineOf(db)).toEqual({ id: 'overlord-b', state: 'live', seq: liveSeq });
+        expect(kept(db)).toEqual([liveSeq]);
+      }
+    });
+    it('while a rebind is pending: the standing binding\'s live line, not the new body\'s pending', () => {
+      const db = openDb();
+      d(db, 'overlord-a', 'live', AT); d(db, 'overlord-b', 'pending', AT + 1);
+      expect(baselineOf(db)).toEqual({ id: 'overlord-a', state: 'live', seq: 1 });
+      expect(kept(db)).toEqual([1]);
+    });
+    it('after a failed rebind: the standing binding\'s live line, not the failed body\'s line', () => {
+      const db = openDb();
+      d(db, 'overlord-a', 'live', AT); d(db, 'overlord-b', 'pending', AT + 1); d(db, 'overlord-b', 'failed', AT + 2);
+      expect(baselineOf(db)).toEqual({ id: 'overlord-a', state: 'live', seq: 1 });
+      expect(kept(db)).toEqual([1]);
+    });
+    it('after a retire with no binding: the last line, as before (and a later pending-only attempt\'s line after it)', () => {
+      const db = openDb();
+      d(db, 'overlord-a', 'live', AT); d(db, 'overlord-a', 'retired', AT + 1);
+      expect(baselineOf(db)).toEqual({ id: 'overlord-a', state: 'retired', seq: 2 });
+      expect(kept(db)).toEqual([2]);
+      d(db, 'overlord-b', 'pending', AT + 2);
+      expect(baselineOf(db)).toEqual({ id: 'overlord-b', state: 'pending', seq: 3 });
+      d(db, 'overlord-a', 'failed', AT + 3); d(db, 'overlord-b', 'failed', AT + 4);
+      expect(kept(db)).toEqual([5]);
+    });
+    it('a retire while a rebind is pending (failed, then retired): the last line', () => {
+      const db = openDb();
+      d(db, 'overlord-a', 'live', AT); d(db, 'overlord-b', 'pending', AT + 1); d(db, 'overlord-b', 'failed', AT + 2); d(db, 'overlord-a', 'retired', AT + 2);
+      expect(baselineOf(db)).toEqual({ id: 'overlord-a', state: 'retired', seq: 4 });
+    });
+    it('a database it cannot read is unmeasured, never null', () => {
+      const db = openDb(); db.close();
+      expect(designationBaseline(db)).toMatchObject({ kind: 'unmeasured' });
+      expect(sequenceOldest(db, 10)).toMatchObject({ kind: 'unmeasured' });
+    });
   });
   it('a prune deletes through the floor, keeps the kept line and raises the floor', () => {
     const db = openDb();
@@ -162,13 +222,13 @@ describe('the prune and the reads', () => {
   it('a stored line with an unknown kind or state comes back known: false with its text, and the rest of the page whole', () => {
     const db = openDb();
     stamp(db);
-    db.prepare("INSERT INTO overlord_sequence (kind, id, state, actor, actorKind, at) VALUES ('ladder-rung', 'operator', 'chat', 'acct:a', 'operator', ?)").run(AT);
+    db.prepare("INSERT INTO overlord_sequence (kind, id, state, actor, actorKind, at) VALUES ('grant', 'operator', 'chat', 'acct:a', 'operator', ?)").run(AT);
     db.prepare("INSERT INTO overlord_sequence (kind, id, state, actor, actorKind, at) VALUES ('generation', '8', 'paused', 'server', 'robot', ?)").run(AT);
     stamp(db, { id: '9' });
     const r = sequenceAfter(db, 0, 10);
     expect(r.kind === 'measured' && r.value.lines).toEqual([
       { seq: 1, at: AT, kind: 'generation', id: '7', state: 'carded', actor: 'server', actorKind: 'server', known: true },
-      { seq: 2, at: AT, kind: 'ladder-rung', id: 'operator', state: 'chat', actor: 'acct:a', actorKind: 'operator', known: false },
+      { seq: 2, at: AT, kind: 'grant', id: 'operator', state: 'chat', actor: 'acct:a', actorKind: 'operator', known: false },
       { seq: 3, at: AT, kind: 'generation', id: '8', state: 'paused', actor: 'server', actorKind: 'unknown', known: false },
       { seq: 4, at: AT, kind: 'generation', id: '9', state: 'carded', actor: 'server', actorKind: 'server', known: true },
     ]);

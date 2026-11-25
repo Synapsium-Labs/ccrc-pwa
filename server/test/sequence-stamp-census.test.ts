@@ -11,6 +11,7 @@ import { SEQUENCE_KINDS, type SequenceKind } from '../../shared/overlord-sequenc
 const CS = 'server/src/continuity/continuityStore.ts';
 const DS = 'server/src/coord/overlordDesignationStore.ts';
 const OM = 'server/src/operatorModel/store.ts';
+const LS = 'server/src/coord/overlordLadderStore.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
 const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
 const RECORD_ACK = 'server/src/coord/store.ts#CoordStore.recordInboxAcknowledgement';
@@ -59,10 +60,24 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
     },
     afterCommit: { route: INBOX, delegate: RECORD_ACK, stamp: STAMP_ACK },
   },
+  'ladder-rung': {
+    table: 'overlord_ladder',
+    stampers: [`${LS}#setRungInTx`, `${LS}#applyRestoreInTx`],
+    nothing: {
+      [`${LS}#journalPendingInTx`]: 'the catch-up stamps a pending record\'s sequence only; the rung it records was stamped when it moved',
+    },
+  },
+  'ladder-latch': {
+    table: 'overlord_latches',
+    stampers: [`${LS}#raiseLatchInTx`, `${LS}#clearLatchInTx`, `${LS}#applyRestoreInTx`],
+    nothing: {
+      [`${LS}#journalPendingInTx`]: 'the catch-up stamps a pending record\'s sequence only; the latch it records was stamped when it was raised',
+    },
+  },
 };
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
-const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`] as const;
+const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`] as const;
 const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
 const STAMP_HELPERS = [...TX_STAMP_HELPERS, ...AFTER_COMMIT.map((row) => row.stamp)];
 

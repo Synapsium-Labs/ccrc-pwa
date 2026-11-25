@@ -14,7 +14,7 @@ import { tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
-  applyRestoreInTx, clearLatchInTx, journalPendingInTx, ladderRows, ladderRungRead, raiseLatchInTx, setRungInTx,
+  applyRestoreInTx, clearLatchInTx, journalPendingInTx, ladderRows, ladderRungRead, laneRaiser, raiseLatchInTx, setRungInTx,
   type AuthorityAppender, type LadderWrite,
 } from '../src/coord/overlordLadderStore.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt, type AuthorityAppend, type AuthorityAppendError } from '../src/coord/overlordAuthorityJournal.js';
@@ -25,7 +25,7 @@ import { fakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 // Boot coherence reads the head and each authority table, so each fixture creates all four from their real migrations.
-const fixtureMigrations = ['overlord_authority_head', 'overlord_designation', 'overlord_ladder', 'decision_rows'].map((table) => {
+const fixtureMigrations = ['overlord_authority_head', 'overlord_designation', 'overlord_ladder', 'decision_rows', 'overlord_sequence'].map((table) => {
   const sql = MIGRATIONS.find((migration) => migration.includes(`CREATE TABLE ${table} (`));
   if (sql === undefined) throw new Error(`migration not found for ${table}`);
   return sql;
@@ -656,5 +656,101 @@ describe('boot coherence over the ladder\'s tables (OVERLORD_AUTHORITY_TABLES)',
     const db = openDb();
     putLatch(db, 'latch-a', 'chat');
     expect(verdict(db)).toEqual({ kind: 'rolled-back', cause: 'missing' });
+  });
+});
+
+// Sequence PR B1 (plan `w1-sequence-monitor.md` Task 5, "The ladder's lines first"; slug `ladder-stamps-ride-pr-b`): every ladder
+// writer that moves a state word, or creates a row, stamps its line in its own transaction; a write that changes only a cap or a
+// sequence stamps nothing, and a refused stamp rolls the row back with it.
+describe('the ladder\'s sequence lines', () => {
+  const lines = (db: DatabaseSync): Record<string, unknown>[] =>
+    db.prepare('SELECT kind, id, state, actor, actorKind, at FROM overlord_sequence ORDER BY seq').all() as Record<string, unknown>[];
+  const refuseStamps = (db: DatabaseSync): void => {
+    db.exec("CREATE TRIGGER refuse_lines BEFORE INSERT ON overlord_sequence BEGIN SELECT RAISE(ABORT, 'refused for the test'); END");
+  };
+
+  it('a rung move stamps ladder-rung with the operator id, the new rung, the row\'s actor and its kind', () => {
+    const db = openDb(); const f = fake(db);
+    setRung(db, f, 'off');
+    expect(lines(db)).toEqual([{ kind: 'ladder-rung', id: 'operator', state: 'off', actor: 'operator-a 00000000', actorKind: 'operator', at: NOW }]);
+    setRung(db, f, 'chat', { opKey: 'op-2' });
+    expect(lines(db).map((l) => l['state'])).toEqual(['off', 'chat']);
+  });
+
+  it('the console\'s brake stamps the console\'s subject with the operator\'s kind', () => {
+    const db = openDb(); const f = fake(db);
+    setRung(db, f, 'off', { actor: 'device:phone' });
+    expect(lines(db)).toMatchObject([{ kind: 'ladder-rung', state: 'off', actor: 'device:phone', actorKind: 'operator' }]);
+  });
+
+  it('a row-only narrowing is a state move too, and stamps its line', () => {
+    const db = openDb(); const f = fake(db);
+    f.script.push(rowOnly());
+    expect(setRung(db, f, 'off')).toMatchObject({ ok: true, changed: true, journalled: false });
+    expect(lines(db)).toMatchObject([{ kind: 'ladder-rung', state: 'off' }]);
+  });
+
+  it('a same-rung write, a refused move and the catch-up stamp nothing', () => {
+    const db = openDb(); const f = fake(db);
+    expect(setRung(db, f, 'chat')).toEqual({ ok: true, changed: false });
+    put(db, 'off', { seq: null, from: 'chat' });
+    tx(db, () => { journalPendingInTx(db, f, 'op-cu'); });
+    expect(rungRow(db)).toMatchObject({ recordSequence: 101 });
+    f.script.push(refuse('journal-append'));
+    expect(setRung(db, f, 'chat', { opKey: 'op-3' })).toMatchObject({ ok: false });
+    expect(lines(db)).toEqual([]);
+  });
+
+  it('a latch raise stamps ladder-latch raised with the cause as its id; a second raise stamps nothing', () => {
+    const db = openDb(); const f = fake(db);
+    raise(db, f, 'latch-a', 'advise');
+    raise(db, f, 'latch-a', 'off', 'op-r2');
+    expect(lines(db)).toEqual([{ kind: 'ladder-latch', id: 'latch-a', state: 'raised', actor: 'lane-a 00000000', actorKind: 'operator', at: NOW }]);
+  });
+
+  it('a lane\'s raise is the server\'s', () => {
+    const db = openDb(); const f = fake(db);
+    tx(db, () => raiseLatchInTx(db, f, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: laneRaiser('renewal-lane'), at: NOW, opKey: 'op-l' }));
+    expect(lines(db)).toMatchObject([{ kind: 'ladder-latch', state: 'raised', actor: 'renewal-lane', actorKind: 'server' }]);
+  });
+
+  it('a clear stamps ladder-latch cleared; a clear of no standing row stamps nothing', () => {
+    const db = openDb(); const f = fake(db);
+    raise(db, f); clear(db, f); clear(db, f, 'latch-a', 'op-c2');
+    expect(lines(db).map((l) => [l['kind'], l['id'], l['state'], l['actorKind']])).toEqual([
+      ['ladder-latch', 'latch-a', 'raised', 'operator'], ['ladder-latch', 'latch-a', 'cleared', 'operator'],
+    ]);
+  });
+
+  it('Confirm the restore stamps the rung it writes and each latch it inserts, as restore, the server\'s', () => {
+    const db = openDb();
+    put(db, 'advise'); putLatch(db, 'latch-b', 'advise', null);
+    tx(db, () => applyRestoreInTx(db, { operatorRung: 'off', latches: [{ cause: 'latch-a', cap: 'chat' }, { cause: 'latch-b', cap: 'off' }] }, 55, NOW));
+    expect(lines(db)).toEqual([
+      { kind: 'ladder-rung', id: 'operator', state: 'off', actor: 'restore', actorKind: 'server', at: NOW },
+      { kind: 'ladder-latch', id: 'latch-a', state: 'raised', actor: 'restore', actorKind: 'server', at: NOW },
+    ]);
+  });
+
+  it('Confirm over an absent row creates it and stamps it; over an equal row it only stamps a sequence and writes no line', () => {
+    const db = openDb();
+    tx(db, () => applyRestoreInTx(db, { operatorRung: 'chat', latches: [] }, 55, NOW));
+    expect(lines(db)).toMatchObject([{ kind: 'ladder-rung', state: 'chat', actor: 'restore' }]);
+    const db2 = openDb();
+    put(db2, 'off', { seq: null, from: 'chat' });
+    tx(db2, () => applyRestoreInTx(db2, { operatorRung: 'off', latches: [] }, 55, NOW));
+    expect(lines(db2)).toEqual([]);
+  });
+
+  it.each(['rung', 'raise', 'clear', 'restore'] as const)('a refused %s stamp rolls the row back with it', (which) => {
+    const db = openDb(); const f = fake(db);
+    if (which === 'clear') putLatch(db, 'latch-a', 'chat');
+    if (which === 'restore') put(db, 'advise');
+    const rowsBefore = { rung: rungRow(db), latches: latchRows(db) };
+    refuseStamps(db);
+    const act = (): unknown => which === 'rung' ? setRung(db, f, 'off') : which === 'raise' ? raise(db, f) : which === 'clear' ? clear(db, f)
+      : tx(db, () => applyRestoreInTx(db, { operatorRung: 'off', latches: [] }, 55, NOW));
+    expect(act).toThrow(/ladder line refused/);
+    expect({ rung: rungRow(db), latches: latchRows(db) }).toEqual(rowsBefore);
   });
 });

@@ -334,7 +334,7 @@ describe('the one sequence (Overlord §10.4): a rebind\'s designation lines', ()
     expect(failPending(db, B, 'deadline-passed', NOW + 4, true)).toEqual({ ok: true, changed: true });
     expect(lines(db)).toEqual([...before, { id: B, state: 'failed', ...OP, at: NOW + 4 }]);
   });
-  it('a failed rebind followed by a prune keeps the standing binding\'s live line beside the newest one', () => {
+  it('a failed rebind followed by a prune keeps only the standing binding\'s live line (review 3740 F2, call 1077)', () => {
     const db = openDb(); const f = fake(db);
     liveA(db, f);
     expect(rebind(db).ok).toBe(true);
@@ -344,7 +344,7 @@ describe('the one sequence (Overlord §10.4): a rebind\'s designation lines', ()
     const cut = retentionCut(NOW + 10 * 365 * 86_400_000, oldest.value);
     if (cut.through === null) throw new Error('nothing to prune');
     expect(pruneSequenceThrough(db, cut.through, cut.keep)).toMatchObject({ pruned: expect.any(Number) });
-    expect(lines(db)).toEqual([{ id: A, state: 'live', ...OP, at: NOW + 1 }, { id: B, state: 'failed', ...OP, at: NOW + 3 }]);
+    expect(lines(db)).toEqual([{ id: A, state: 'live', ...OP, at: NOW + 1 }]);
   });
   it('a rebind go-live whose line the verdict refuses throws before the append: no record, no row change, no line', () => {
     const db = openDb(); const f = fake(db);

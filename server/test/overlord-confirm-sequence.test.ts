@@ -31,6 +31,9 @@ function restoreBeforeRetire(withPending = false): { r: Rig; generationId: numbe
   return { r, generationId: minted.id };
 }
 
+// Confirm also writes the ladder's stricter side in the same transaction: the rig has no ladder row and the journal no rung, so the
+// rung row is created at `off` and stamped as Confirm's (sequence PR B1, slug `ladder-stamps-ride-pr-b`).
+const RESTORED_RUNG = { kind: 'ladder-rung', id: 'operator', state: 'off', actor: 'restore', actorKind: 'server', at: NOW + 1 };
 const lines = (r: Rig) => r.db.prepare('SELECT kind, id, state, actor, actorKind, at FROM overlord_sequence ORDER BY seq').all();
 const generations = (r: Rig) => r.db.prepare('SELECT id, state, outcome, walk, deadlineAt, shadowDeadlineAt FROM continuity_generations ORDER BY id').all();
 
@@ -43,6 +46,7 @@ describe('Confirm stamps the restored designation transaction', () => {
     expect(lines(r)).toEqual([...before,
       { kind: 'generation', id: String(generationId), state: 'ended', actor: 'server', actorKind: 'server', at: NOW + 1 },
       { kind: 'designation', id: S1, state: 'retired', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+      RESTORED_RUNG,
     ]);
   });
 
@@ -56,6 +60,7 @@ describe('Confirm stamps the restored designation transaction', () => {
       { kind: 'generation', id: String(generationId), state: 'ended', actor: 'server', actorKind: 'server', at: NOW + 1 },
       { kind: 'designation', id: S2, state: 'failed', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
       { kind: 'designation', id: S1, state: 'retired', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+      RESTORED_RUNG,
     ]);
   });
 
@@ -71,6 +76,7 @@ describe('Confirm stamps the restored designation transaction', () => {
     expect(designationRead(r.db)).toMatchObject({ kind: 'not-designated', row: { pending: null, lastAttempt: { sessionId: S2, outcome: 'retired' } } });
     expect(lines(r)).toEqual([...before,
       { kind: 'designation', id: S2, state: 'retired', actor: OPERATOR.subject, actorKind: OPERATOR.kind, at: NOW + 1 },
+      RESTORED_RUNG,
     ]);
   });
 
@@ -80,7 +86,7 @@ describe('Confirm stamps the restored designation transaction', () => {
     r.guard.witnessRefused('witness-epoch');
     const before = lines(r);
     expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'kept' });
-    expect(lines(r)).toEqual(before);
+    expect(lines(r)).toEqual([...before, RESTORED_RUNG]);
   });
 
   it.each([false, true])('a refused Confirm stamp rolls back and fences with pending attempt = %s', (withPending) => {

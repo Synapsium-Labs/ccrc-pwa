@@ -4,7 +4,8 @@
 //   - `sequenceLineVerdict`: whether a line may be written (the writer's check, before any insert);
 //   - `sequenceLineKnown`: whether this build can name a stored line (else it is served opaque, `known: false`);
 //   - `sequencePage`: the cursor read's answer over one read of the facts and the lines (`ahead`, `gap` or a `page`);
-//   - `retentionCut`: what the retention lane deletes, which never includes the newest line, or the newest `live` line, of `SEQUENCE_KEPT_KIND`.
+//   - `retentionCut`: what the retention lane deletes, which never includes the kept line of `SEQUENCE_KEPT_KIND`;
+//   - `keptDesignationLine`: which designation line is kept, the term baseline (review 3740 F2's ruling).
 import { ACTOR_KIND_MAP } from '../../../shared/overlord-identity.js';
 import {
   SEQUENCE_ACTOR_MAX, SEQUENCE_ID_MAX, SEQUENCE_KEEP_MS, SEQUENCE_KIND_MAP, SEQUENCE_PAGE_MAX, isSequenceKind,
@@ -63,11 +64,9 @@ export function sequencePage(after: number, limit: number, f: SequenceFacts, lin
   return { kind: 'page', lines: served, next: served.length === 0 ? after : served[served.length - 1]!.seq, head: f.head, restoreGeneration };
 }
 
-/** The kind whose newest line, and newest `live` line, the retention lane never deletes. With no attempt pending the newest
- *  designation line is the current binding's (a rebind's go-live stamps the old body `retired` before the new one `live`); while
- *  a rebind is pending, or after one failed, the newest line is the attempt's and the binding's is the newest `live` line, so
- *  both are kept, and I5's term arm reads them as the window's baseline (slug `newest-designation-line-is-kept`; review 3740
- *  F2). They sit below the floor once the lines around them are pruned, so the cursor read never serves them again. */
+/** The kind whose kept line the retention lane never deletes, and the store's baseline read answers (`keptDesignationLine`). It
+ *  sits below the floor once the lines around it are pruned, so the cursor read never serves it again; I5's term arm reads it as
+ *  the window's baseline (slug `newest-designation-line-is-kept`). */
 export const SEQUENCE_KEPT_KIND: SequenceKind = 'designation';
 
 /** What the retention lane deletes: of the oldest lines in seq order, the highest seq of the leading run older than
@@ -85,4 +84,17 @@ export function retentionCut(now: number, oldest: readonly { seq: number; at: nu
     if (l.keep) keep.push(l.seq);
   }
   return through === null ? { through: null } : { through, keep };
+}
+
+/** The kept designation line, the term baseline (review 3740 F2, ruled by the coordinator, call 1077): while a binding stands, the
+ *  newest `live` line; with none standing, the newest line. A binding stands when the newest `live` line has no later `retired`
+ *  line of the same id. So after a rebind's go-live (which stamps the new body `live`, then the old body `retired`), while a rebind
+ *  is pending (the new body's `pending` is newest) and after one failed (its `failed` is newest), the standing binding's `live`
+ *  line is kept; after a retire with no binding the last line is, as before. `lines` are designation lines in any order, and hold
+ *  every line from the newest `live` one on; null for none. */
+export function keptDesignationLine(lines: readonly { seq: number; id: string; state: string }[]): number | null {
+  const sorted = [...lines].sort((a, b) => a.seq - b.seq);
+  const live = sorted.filter((l) => l.state === 'live').at(-1);
+  if (live !== undefined && !sorted.some((l) => l.seq > live.seq && l.state === 'retired' && l.id === live.id)) return live.seq;
+  return sorted.at(-1)?.seq ?? null;
 }
