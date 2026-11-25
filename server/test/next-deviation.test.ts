@@ -52,7 +52,7 @@ function onMainAhead(root: string, tree: Record<string, string | null>): void {
   git('branch', '-q', '-D', 'main-ahead');
 }
 /** The collision guard's own composition (`deviation-refs.test.ts`), run on a fixture repo against `origin/main`. */
-function guard(root: string): { n: number; files: string[] }[] {
+function guard(root: string): ReturnType<typeof selfAssignedCollisions> {
   return selfAssignedCollisions(readDefinitionFilesAt(root, 'HEAD'), readDefinitionFilesAt(root, 'origin/main'),
     changedDefinitionPaths(root, 'origin/main'));
 }
