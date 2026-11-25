@@ -613,7 +613,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge` (Overlord W1 inbox; their handlers are in
   `server/src/coord/overlordInboxRoutes.ts`, a lane source of its own for the census), each check the box token in their own
   `onRequest`, then ask the Overlord gate with their own row's key, and sit in `auth/gate.ts`'s EXEMPT table like the linking
-  confirm. The dual-credential reads, including `GET /api/feed`,
+  confirm. So does the Overlord's history door, `POST /api/overlord/history` (Overlord W1 PR B1: a read whose search words ride the
+  body; its handler is in `server/src/coord/overlordHistoryRoutes.ts`, a lane source of its own for the census). The dual-credential reads, including `GET /api/feed`,
   the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
   the open items cookieless through `ccrc-api`, the console with a session)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from

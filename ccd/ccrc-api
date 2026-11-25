@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, one-hundred-and-one rows, and nothing else; the
+#   * The route comes from ROUTES below, one-hundred-and-two rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -108,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# One-hundred-and-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# One-hundred-and-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -376,6 +376,10 @@ declare -A ROUTES=(
   [overlord.inbox]='GET|/api/overlord/inbox|no|-'
   [overlord.messages]='GET|/api/overlord/messages/{id}|yes|-'
   [overlord.acknowledge]='POST|/api/overlord/messages/{id}/acknowledge|yes|-'
+  # The Overlord's history read (Overlord W1, PR B1): `ccrc history`'s three read verbs over every project, through the agent that
+  # advertises them. A POST only so the search words ride the body, never a URL. Parsed whole by `parse_overlord_history`, which
+  # builds the body and puts the pane's pair LAST; a `--json` or a typed identity is refused, unsent.
+  [overlord.history]='POST|/api/overlord/history|no|-'
 )
 
 # A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
@@ -475,6 +479,8 @@ usage() {
     printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork|delta): an anchor answer as it came, else exit 3'
     printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
     printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
+    printf '  %-18s %s\n' '' 'overlord history takes <search|describe|expand> [--all | --project <name> | --session <id>] [--agents]'
+    printf '  %-18s %s\n' '' 'then the verb'"'"'s own arguments; it fills this pane'"'"'s identity and takes no --json'
     printf '  %-18s %s\n' 'probe' 'this session'"'"'s open probe round, one page per call (--page N), as plain text;'
     printf '  %-18s %s\n' '' '`probe answer --json -` answers every question of the round in one call (no id: the pane'"'"'s)'
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
@@ -708,6 +714,81 @@ parse_timer() {   # verb, then the verb's arguments
         + (if $run == "" then {} else {runId: ($run | tonumber)} end) + (if $programme == "" then {} else {programme: $programme} end)') \
       || refuse 'bad-args' 'timer set: jq could not build the body; no timer was set'
   fi
+}
+
+# `overlord history <search|describe|expand> [--all | --project <name> | --session <id>] [--agents] [<args>…]` (Overlord W1,
+# PR B1; plan w1-board-history.md Task 5, ruled R7): a grammar of its own, parsed whole before the generic parser, as
+# `parse_timer` is. The target and `--agents` lead; every word after them is the verb's own argument, as the history CLI takes
+# it after the verb. THE SECOND GRAMMAR of one request: it refuses locally, unsent, what `readOverlordHistoryRequest`
+# (shared/overlordHistory.ts) refuses, with the reader's own word and in the reader's own order (the bound first, then the verb,
+# the target, the arguments' count and length, `--regex`, a bare `--`, a scope argument), and `server/test/ccrc-api.test.ts`
+# runs the shared corpus (server/test/fixtures/overlord-history-requests.json) through both, so they cannot drift. The request
+# is built and judged by one jq program; each argument rides its own `--arg`, which every jq since 1.6 reads as a value
+# whatever it starts with. Where the two differ today (review 3730 F5; the corpus pins each it can spell): jq counts a
+# string's length in code points where the reader counts UTF-16 units, so an argument of astral characters near the length
+# bound passes here and is refused by the server; jq's `tojson` writes the delete character (U+007F) as six bytes where the
+# reader's JSON writes one, so a request of many such characters near the byte bound is refused here as `oversize` where
+# the server would take it; and an argument that is not valid UTF-8, which jq would change to U+FFFD, is refused here as
+# `bad-args` (it cannot reach the server as typed), when `iconv` is on PATH to tell. The pane's
+# pair goes LAST (review 2039 F7), and nothing else of it is taken: a flag that is not the grammar's is an argument.
+# Sets HISTORY_BODY, or refuses. NEVER call it inside $( ).
+OVERLORD_HISTORY_REQUEST_MAX_BYTES=8192   # shared/overlordHistory.ts, held equal by ccrc-api.test.ts
+OVERLORD_HISTORY_ARGS_MAX=32
+OVERLORD_HISTORY_ARG_MAX_CHARS=1024
+HISTORY_BODY=''
+parse_overlord_history() {   # the verb, then the target, --agents and the verb's arguments
+  local verb="${1-}" kind="" name="" agents=false flag verdict i body=""
+  local -a named=()
+  (( $# >= 1 )) && shift
+  # The head: one target and one `--agents`, in either order. A second of either, or a `--project`/`--session` with no value,
+  # ends the head and is read as an argument, so the reader's own word judges it (a scope argument is `bad-args`).
+  while (( $# > 0 )); do
+    flag="$1"
+    if [[ "$flag" == '--all' && -z "$kind" ]]; then
+      kind='all'; shift
+    elif [[ ( "$flag" == '--project' || "$flag" == '--session' ) && -z "$kind" && $# -ge 2 ]]; then
+      kind="${flag#--}"; name="$2"; shift 2
+    elif [[ "$flag" == '--agents' && "$agents" == false ]]; then
+      agents=true; shift
+    else
+      break
+    fi
+  done
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'overlord history builds its body with jq, and jq is not on PATH; nothing was sent'
+  if command -v iconv >/dev/null 2>&1; then
+    for flag in "$@"; do
+      printf '%s' "$flag" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+        || refuse 'bad-args' 'overlord history: an argument is not valid UTF-8, and would not be sent as typed; nothing was sent'
+    done
+  fi
+  for (( i = 1; i <= $#; i += 1 )); do named+=(--arg "a$i" "${!i}"); done
+  verdict=$(jq -cn --arg verb "$verb" --arg kind "$kind" --arg name "$name" --argjson agents "$agents" --argjson n "$#" \
+    --argjson maxBytes "$OVERLORD_HISTORY_REQUEST_MAX_BYTES" --argjson maxArgs "$OVERLORD_HISTORY_ARGS_MAX" \
+    --argjson maxChars "$OVERLORD_HISTORY_ARG_MAX_CHARS" "${named[@]}" '
+    def name_ok: test("^[A-Za-z0-9._-]{1,224}$") and . != "." and . != "..";
+    [range(1; $n + 1) as $i | $ARGS.named["a\($i)"]] as $a
+    | ({verb: $verb}
+      + (if $kind == "" then {} elif $kind == "all" then {target: {kind: "all"}}
+         elif $kind == "project" then {target: {kind: "project", project: $name}} else {target: {kind: "session", session: $name}} end)
+      + {agents: $agents, args: $a}) as $req
+    | if ($req | tojson | utf8bytelength) > $maxBytes then "oversize"
+      elif (["search", "describe", "expand"] | any(.[]; . == $verb) | not) then "bad-verb"
+      elif $kind == "" then "bad-target"
+      elif $kind == "project" and ($name | name_ok | not) then "bad-project"
+      elif $kind == "session" and ($name | name_ok | not) then "bad-session"
+      elif ($a | length) > $maxArgs or any($a[]; length > $maxChars) then "bad-args"
+      elif any($a[]; . == "--regex" or startswith("--regex=")) then "regex"
+      elif any($a[]; . == "--") then "separator"
+      elif any($a[]; . as $x | ["--session", "--project", "--workspace", "--agents", "--json"] | any(.[]; . == $x)) then "bad-args"
+      else "ok " + ($req | tojson) end') \
+    || refuse 'bad-args' 'overlord history: jq could not build the body; nothing was sent'
+  [[ "$verdict" == '"ok '* ]] || refuse "$(jq -r '.' <<< "$verdict")" 'overlord history: the request is refused here, as the server would refuse it; nothing was sent'
+  HISTORY_BODY=$(jq -r '.[3:]' <<< "$verdict")
+  derive_identity
+  body="$HISTORY_BODY"
+  append_body_field 'byId' "$DERIVED_ID" 'the history body is not a JSON object; byId cannot be added'
+  append_body_field 'byUuid' "$DERIVED_UUID" 'the history body is not a JSON object; byUuid cannot be added'
+  HISTORY_BODY="$body"
 }
 
 # ONE RUN, MANY REQUESTS (D-6780). Every request this client sends goes through `send_request`: the one-request rows
@@ -1099,6 +1180,10 @@ main() {
   elif [[ "$key" == timer.* ]]; then
     parse_timer "$verb" "$@"
     id="$TIMER_ID"; intent_body="$TIMER_BODY"
+    set --
+  elif [[ "$key" == 'overlord.history' ]]; then
+    parse_overlord_history "$@"
+    intent_body="$HISTORY_BODY"
     set --
   elif [[ "$key" == 'mail.inbox' ]]; then
     # `mail inbox` takes NOTHING (D-6780): no id, no flag, no `--to`. A session reads its own inbox, the pane's.

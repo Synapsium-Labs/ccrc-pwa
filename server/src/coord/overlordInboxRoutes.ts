@@ -46,22 +46,25 @@ export interface OverlordInboxRoutesDeps {
 }
 
 const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
-const TOKEN_DETAIL = {
+/** Each box-token verdict's detail (the history door answers the same words). */
+export const TOKEN_DETAIL = {
   legacy: `no box token presented: this lane takes the box token (${MAIL_TOKEN_HEADER}) and nothing else`,
   bad: 'wrong box token',
   unconfigured: 'no box token is configured on this server: this lane fails shut, it does not fail open',
 } as const;
 
-/** The caller's pair, from the query of a `GET` or the body of the `POST`: a shape check only, answered before the gate. */
-function callerOf(raw: unknown): { ok: true; id: string; uuid: string } | { ok: false } {
+/** The caller's pair, from the query of a `GET` or the body of a `POST`: a shape check only, answered before the gate (the
+ *  history door's too). */
+export function callerOf(raw: unknown): { ok: true; id: string; uuid: string } | { ok: false } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: false };
   const { byId, byUuid } = raw as Record<string, unknown>;
   if (typeof byId !== 'string' || !IDENTITY_RE.test(byId) || typeof byUuid !== 'string' || !IDENTITY_RE.test(byUuid)) return { ok: false };
   return { ok: true, id: byId, uuid: byUuid };
 }
 
-/** One of this file's own rows, narrowed: a key the table lacks, or one that is not an Overlord door, is a programming error. */
-function overlordRow(key: string): OverlordDoorRow {
+/** One of the Overlord's box-token doors' rows, narrowed: a key the table lacks, or one that is not an Overlord door, is a
+ *  programming error (the history door's too). */
+export function overlordRow(key: string): OverlordDoorRow {
   const row = doorRow(key);
   if (row.group !== 'overlord') throw new Error(`overlordInboxRoutes: ${key} is not an Overlord door`);
   return row;

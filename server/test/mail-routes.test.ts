@@ -76,6 +76,7 @@ import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
 import { isOverlordGateKebab } from '../src/coord/overlordGate.js';
 import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
+import { isOverlordHistoryKebab } from '../src/coord/overlordHistory.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
@@ -1293,6 +1294,10 @@ describe('the rejection table is total, in both directions', () => {
         // rides a verdict, a row or a log line, never a `refused` or `reject.code`; the gate's refusal words are
         // `OVERLORD_REFUSALS`' (admitted above). Admitted through that file's exported guard, never NOT_CODES.
         || isOverlordInboxKebab(tok)
+        // THE OVERLORD HISTORY DOOR (W1 PR B1): `coord/overlordHistory.ts` names the causes of `history-unreachable` and the
+        // agent's refused request as a line's outcome. A word rides a door answer's `cause` or a read-ledger line, never a
+        // `refused` or `reject.code`. Admitted through that file's exported guard, never NOT_CODES.
+        || isOverlordHistoryKebab(tok)
         // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
         // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
         // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
@@ -1343,7 +1348,7 @@ describe('the rejection table is total, in both directions', () => {
         // `'write-failed'`). Each is a stamped writer's internal answer, never a `refused` or `reject.code`. Admitted through
         // the store's guard, derived from `LINE_REFUSALS` and `STAMP_FAILURES`, never NOT_CODES.
         || isSequenceStampKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
     }
   });
 });
