@@ -1679,10 +1679,12 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
     expect(total, 'the shard matrix names no total').toBeDefined();
     expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
-    // THREE shards (D-8167): at two, both shards took 14 to 19 minutes in the merge queue and a loaded runner was
-    // cancelled at the 20-minute limit while its tests still passed. The count is a measured choice, and the limit
-    // stays 20: a change to either is a deliberate edit with new times in the job's comment.
-    expect(Number(total), 'the browser leg runs as three shards (D-8167)').toBe(3);
+    // FOUR shards (D-9026): at three (D-8167, after two shards took 14 to 19 minutes), the second shard took 916 s to
+    // 1,211 s in six merge-queue runs of 2026-11-25 and was cancelled twice at the 20-minute limit while its tests
+    // still passed, with the file-time table 36 files behind and one file grown from 360 s to 870 s. The count is a
+    // measured choice, and the limit stays 20: a change to either is a deliberate edit with new times in the job's
+    // comment.
+    expect(Number(total), 'the browser leg runs as four shards (D-9026)').toBe(4);
     expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 

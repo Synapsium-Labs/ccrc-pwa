@@ -26,7 +26,7 @@ browser tests (its three shards took about 23 s each), and 45532069453 ran them 
 and 4,333 tests and 7,400,708 ms, its median file at 1.10 times this table's figure. One file stands out:
 `project-linking-card.browser.test.ts` took **425,156 ms** there against 869,850 ms here, every one of its 22 tests
 about half as long, in the same proportions. So that file's time varies about twofold from run to run; this table
-keeps the higher figure, which places it most cautiously. Reported as `D-TBD-linking-card-time-varies`.
+keeps the higher figure, which places it most cautiously. Reported as the departure `linking-card-time-varies`.
 
 ## What changed
 

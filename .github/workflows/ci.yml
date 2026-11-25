@@ -1457,12 +1457,23 @@ jobs:
     # of the sequencer that put the two-shard run at 1,039 s and 931 s), so a
     # shard expects about 12 minutes with its setup: 8 minutes under 20, and
     # no file alone is larger than a shard.
+    # FOUR SHARDS (D-9026). At three, the second shard took 916 s to 1,211 s
+    # in the six merge-queue runs of 2026-11-25 that ran the suite, and was
+    # cancelled twice at the 20-minute limit while every file passed (runs
+    # 45516946367 and 45527962041), each ejecting a green entry. `FILE_MS`
+    # named 82 of the 118 files, and project-linking-card had grown from
+    # 360 s to 870 s, one file whose 22 cases run serially. Run 45527962041
+    # (jobs 138915898214, 138915898216 and 138915898257) reported 7,887 s of
+    # file time; `FILE_MS` is refreshed from it and that file runs as two
+    # files of 443 s and 420 s. Split in four by those times, each shard
+    # holds about 1,970 s, about 660 s over three workers, so a shard expects
+    # about 11 minutes, and about 12 with its setup. The limit stays 20.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
-        total: [3]
+        shard: [1, 2, 3, 4]
+        total: [4]
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
