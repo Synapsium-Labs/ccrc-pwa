@@ -12,9 +12,10 @@
 // The words are `activityWords`' (L1); the decision of what is in the stretch is `foldToolActivity`'s. This component
 // only draws them. The open state is the list's `ExpansionMemo`, so it outlives the virtual list unmounting the row,
 // and nothing here ever opens a row on its own: a call arriving in a closed stretch leaves it closed.
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '@ccrc/ui';
+import { underKey, underRow } from './mailRows';
 import { activityWords, waitControlWord, waitWord, type ToolActivityItem } from './toolActivity';
 import { useTranscriptRow } from './transcriptRow';
 
@@ -28,8 +29,17 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
   const { renderItem, renderRow, expansion, answer } = useTranscriptRow();
   const [open, setOpen] = useState(() => expansion.get(item.key));
   const bodyId = useId();
-  const words = activityWords(item);
+  const choice = (k: string): boolean | undefined => expansion.choice(k);
+  const words = activityWords(item, choice);
   const first = item.attention[0];
+  const under = open ? [] : underRow(item.mail, choice);
+  // A card drawn under the closed row stays there for the view (`underRow`): recorded once it is drawn.
+  const drawn = under.map((m) => m.key).join('\u0000');
+  useEffect(() => {
+    for (const key of drawn === '' ? [] : drawn.split('\u0000')) {
+      if (expansion.choice(underKey(key)) !== true) expansion.set(underKey(key), true);
+    }
+  }, [drawn, expansion]);
   const toggle = (): void => {
     const next = !open;
     expansion.set(item.key, next);
@@ -48,6 +58,12 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
         <span className="tool-activity-title">{words.title}</span>
         <Dot />
         <span className="tool-activity-calls">{words.calls}</span>
+        {words.messages !== null && (
+          <>
+            <Dot />
+            <span className="tool-activity-calls tool-activity-messages">{words.messages}</span>
+          </>
+        )}
         {words.state !== null && (
           <>
             <Dot />
@@ -82,6 +98,12 @@ export function ToolActivityRow({ item }: { item: ToolActivityItem }): ReactNode
       {!open && first !== undefined && (
         <div className="tool-activity-first" data-attention={first.kind}>{renderItem(first.entry)}</div>
       )}
+      {/* Closed, the mail card that opens by default (the newest asking the session shown) is drawn under it too, with
+          every card drawn here earlier in this view, in the stretch's order, so a question is never hidden behind a tap
+          and nothing moves under the reader (desktop polish wave 176, `underRow`). Opened, they are in the body. */}
+      {under.map((m) => (
+        <div key={m.key} className="tool-activity-first" data-attention="mail">{renderItem(m)}</div>
+      ))}
       {open && (
         <div id={bodyId} className="tool-activity-body">
           {item.inner.map((row) => <div key={row.key}>{renderRow(row)}</div>)}

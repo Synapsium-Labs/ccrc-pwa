@@ -12,6 +12,7 @@ import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } fr
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import type { PendingSend } from '../stores/session';
 import { isLocalDivider } from './localDivider';
+import { isMailPrompt } from './mailRows';
 import type { MessageEvent } from './MessageBubble';
 import { timeOf } from '../lib/format';
 
@@ -35,7 +36,21 @@ export type ChatItem =
    *  own `GET /api/mail/:id`). Which door a card came through is a real
    *  question about it, so the item carries the answer rather than discarding
    *  it. */
-  | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent }
+  | {
+    kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent;
+    /** Drawn open until the reader closes it (desktop polish wave 176): false as built, and set by `foldMailRows`
+     *  (`mailRows.ts#opensByDefault`) on the newest card that asks something of the session shown. */
+    opens: boolean;
+    /** Whether it asks something of the session shown (`mailRows.ts#asksOf`): false as built, set by `foldMailRows`. */
+    asks: boolean;
+  }
+  /** The mail lane's own prompt (desktop polish wave 176): a user turn that begins with the mail prompt's fixed head
+   *  (`mailRows.ts#isMailPrompt`), drawn as one quiet line, never as a bubble from the person. Derived at render time
+   *  from the user event already in the store, exactly as `mail` is. */
+  | { kind: 'mail-prompt'; key: string; event: MessageEvent }
+  /** Two or more mail prompts with nothing a person would read between them (`mailRows.ts#SAYS_NOTHING`), folded by
+   *  `foldMailRows` into one line with a count; `members` are the prompts and the dividers between them, in order. */
+  | { kind: 'mail-prompts'; key: string; members: Extract<ChatItem, { kind: 'mail-prompt' | 'divider' }>[] }
   /** The harness's report of a finished background task. DERIVED at render
    *  time from a `system` event already in the store, exactly as `mail` is —
    *  nothing is minted into `s.events`, so the revival discipline needs no new
@@ -115,7 +130,7 @@ export function buildChatItems(
           // the reconciliation problem spec §2.2 refused a second frame over —
           // and would break the derived-from-one-event property that lets the
           // revival discipline stay unchanged.
-          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e });
+          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e, opens: false, asks: false });
         }
       }
       continue;
@@ -178,7 +193,13 @@ export function buildChatItems(
         // shapes: a typed envelope is never a JSON response.
         const parsed = parseMailEnvelope(e.text);
         if (parsed.ok) {
-          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e });
+          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e, opens: false, asks: false });
+          continue;
+        }
+        // The mail lane's own prompt (desktop polish wave 176): the one shared head, at the start of the turn, and
+        // nothing looser (`isMailPrompt`). It still starts a turn (`toolActivity.ts#isPrompt`).
+        if (isMailPrompt(e)) {
+          items.push({ kind: 'mail-prompt', key: e.uuid, event: e });
           continue;
         }
       }
