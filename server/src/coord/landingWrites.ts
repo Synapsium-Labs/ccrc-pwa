@@ -28,9 +28,10 @@
 //   7. an effective no-op (the same resulting afterIds and fixesMain) -> {kind:'noop'}, appending nothing.
 // Omitted `afterIds`/`fixesMain` keep the current value; `[]` and `false` are explicit clears.
 import type {
-  LandingEntry, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery, LandingSubjectRef,
+  LandingBoundaryFailure, LandingEntry, LandingEntryState, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery,
+  LandingSubjectRef,
 } from '../../../shared/landingLine.js';
-import type { LandingProjectionRead } from './landingEntry.js';
+import type { LandingProjectionRead, LandingTerminalRepair } from './landingEntry.js';
 import type { NoticeRecord } from '../notice.js';
 
 type Coordinator = { kind: 'no-run' } | { kind: 'run'; runId: number; claimedBy: string | null };
@@ -41,6 +42,10 @@ export interface LandingMutationFacts {
   flags: LandingLineFlags;
   entries: LandingEntry[];
   projections: { id: number; value: LandingProjectionRead }[];
+  /** Wave 5i (fix round 1, R1): the STORED state word of each entry of this project, as the row holds it (the raw
+   *  `row.state`), `'unrecognised'` when it is not a word of the L0 vocabulary. Read before the display fold; it never
+   *  says the row reads, and no reader may take it for readability. Every entry has one record. */
+  stateWords: { id: number; value: LandingEntryState | 'unrecognised' }[];
   dependencies: { id: number; value: { kind: 'readable'; afterIds: number[] } | { kind: 'unreadable' } }[];
   recovery: LandingRecovery;
   /** The next entry id, or null when the one allocator would overflow. */
@@ -49,6 +54,13 @@ export interface LandingMutationFacts {
   foreignIds: number[];
   /** The current association of each entry, from its projection's own run id (never a historical one). */
   coordinators: { id: number; value: Coordinator | { kind: 'unreadable' } }[];
+  /** Wave 5i (D-8626): the terminal-evidence permission of each open row that does not read, from `landingFactsOf`. It is
+   *  independent of `projections` and `dependencies`, never a repaired display, and no reader may take it for readability. */
+  terminalRepairs: { id: number; value: LandingTerminalRepair }[];
+  /** Wave 5i: the journal creation claim of each entry of this project whose exact identity (id, project, pr) a recorded
+   *  creation names, with that creation's seq and its claimant. Never read off the mutable projection's `setBy`: an order
+   *  setter replaces that, and the next-to-land cue goes to the creator. */
+  creations: { id: number; seq: number; setBy: string }[];
 }
 export type LandingReadResult =
   | { ok: true; facts: LandingMutationFacts }
@@ -56,7 +68,7 @@ export type LandingReadResult =
 
 export type LandingJournalReplay =
   | { ok: true; applied: number; lastSeq: number }
-  | ({ ok: false } & LandingInfrastructureFailure);
+  | ({ ok: false } & LandingBoundaryFailure);
 export type LandingAuthorityWrite =
   | { ok: true; entry: LandingEntry; previous: LandingEntry | null; changed: boolean; seq: number | null; coordinator: Coordinator }
   | ({ ok: false } & LandingInfrastructureFailure)

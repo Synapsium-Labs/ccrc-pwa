@@ -319,7 +319,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
-  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state'] as const;
+  'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -407,6 +407,10 @@ describe(TABLES_PIN, () => {
       // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
       // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
       overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
+      // The one sequence (Overlord W1, §10.4): one inserter, called inside each stamped writer's transaction, and one deleter,
+      // which alone raises the prune floor in the same transaction.
+      overlord_sequence: ['pruneSequenceThrough', 'stampSequenceInTx'].map((f) => `server/src/coord/overlordSequenceStore.ts#${f}`),
+      overlord_sequence_pruned: ['server/src/coord/overlordSequenceStore.ts#pruneSequenceThrough'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       // Confirm the restore's inner writer (authority journal C, `applyDesignationRestoreInTx`): Table 11.1a names Confirm among the
@@ -474,6 +478,8 @@ describe(TABLES_PIN, () => {
       // caller). A second method that writes the mode reds here. The seed row and migration 121's upgrade rule are SQL in
       // MIGRATIONS' string, so the scanner names its module.
       coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
+      // The history of limits (Overlord W1 serviceability PR B, plan w1-serviceability.md Task 5): the sampler's insert and prune.
+      limit_samples: ['insertLimitSamples', 'pruneLimitSamples'].map((f) => `server/src/coord/limitSamplesStore.ts#${f}`),
     });
   });
 

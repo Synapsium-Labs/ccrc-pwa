@@ -2,7 +2,7 @@
 // the skills do not"): on a Bash call that merges, pulls or rebases `main` into
 // the current branch — or asks GitHub to do it with update-branch — the
 // PreToolUse arm of `ccd/session-hook.sh` emits `additionalContext` naming the
-// three triggers and the probe command. It NEVER denies: 27% of sync episodes
+// four triggers and the probe command. It NEVER denies: 27% of sync episodes
 // came from sessions that load no ccrc skill, and this is the only text those
 // sessions see; a deny would be a merge gate this spec does not ship.
 //
@@ -109,11 +109,16 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     expect(out.hookEventName).toBe('PreToolUse');
     expect(out, 'the advisory never denies, asks or allows').not.toHaveProperty('permissionDecision');
     const text: string = out.additionalContext;
-    // The three triggers, each by the phrase that names it, and the probe.
-    expect(text).toContain('three triggers');
+    // The four triggers, each by the phrase that names it, and the probe.
+    expect(text).toContain('four triggers');
     expect(text).toContain('(1) the branch conflicts');
     expect(text).toContain('(2) a required check on the PR is red while main');
     expect(text).toContain('(3) the coordinator');
+    // Landing-order wave 1c (D-9011, D-9012): the conflict-sync mail, bounded
+    // to the one commit it names.
+    expect(text).toContain('(4) the coordinator');
+    expect(text).toContain('`conflict-sync:`');
+    expect(text).toContain('exactly that commit');
     expect(text).toContain('git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD');
     // Both halves of the conflict answer, in clause 16's words: git 2.43 exits
     // 1 for an unresolvable ref too, so "exit 1" alone would license a typo.
@@ -156,7 +161,7 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     fs.writeFileSync(path.join(home, '.ccrc', 'graph-gate-off'), '');   // `$GRAPH_GATE_OFF`
     fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json'), '{not json');
     const env = oneLine(hook(bash('git pull origin main')).stdout);
-    expect(env.hookSpecificOutput.additionalContext).toContain('three triggers');
+    expect(env.hookSpecificOutput.additionalContext).toContain('four triggers');
   });
 
   // The hot path. A newline-separated run of `git merge a` lines gave the

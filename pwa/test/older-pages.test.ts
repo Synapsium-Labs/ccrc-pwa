@@ -13,6 +13,8 @@ import {
   prependPage, requestOf, retryDue, type OlderPaging,
 } from '../src/session/olderPages';
 import { buildChatItems } from '../src/session/chatItems';
+import { foldMailRows } from '../src/session/mailRows';
+import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
 
 const TS = '2026-11-24T10:00:00.000Z';
@@ -329,6 +331,20 @@ describe('older rows are display only', () => {
     expect(items.slice(0, from).map((i) => i.key)).toEqual(expect.arrayContaining(['p0', 't0']));
     expect(items.slice(from).map((i) => i.key)).toEqual(expect.arrayContaining(['b0', 't1']));
     expect(liveFromOf(items, s.events, NO_PAGING)).toBe(0);
+  });
+
+  it('measured on the list after the mail fold: a run of mail prompts across the boundary is live when any prompt is', () => {
+    const nudge = (uuid: string): ChatEvent => user(uuid, `${INJECTED_PROMPTS['mail-nudge'].text} Use the client.`);
+    let s = applySessionMsg(snap(), backlog([nudge('b0'), user('b1')], C0));
+    s = applySessionMsg(asked(s, C0), answer('start', { for: C0, events: [user('p0'), nudge('p1')] }));
+    const items = foldMailRows(buildChatItems(s.events, [], false), 'lane-a-project-a');
+    const run = items.findIndex((i) => i.kind === 'mail-prompts');
+    expect(run, 'the older prompt and the live one are not one run').toBeGreaterThan(-1);
+    expect(liveFromOf(items, s.events, s.older!)).toBe(run);
+    // A lone prompt is read by its own event: one older row, then a live prompt.
+    const events = [user('o0'), nudge('l1')];
+    const lone = foldMailRows(buildChatItems(events, [], false), 'lane-a-project-a');
+    expect(liveFromOf(lone, events, { ...NO_PAGING, rows: 1 })).toBe(lone.findIndex((i) => i.kind === 'mail-prompt'));
   });
 });
 

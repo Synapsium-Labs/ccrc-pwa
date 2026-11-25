@@ -45,7 +45,7 @@ import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
-import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { childRunContext, coordinationOf, parentIdOf, workersBusyOf } from '../fleet/fleetTree';
 import { readDelegation } from '../fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../fleet/sessionWorktrees';
 import { sessionFacts } from '../fleet/sessionFacts';
@@ -237,6 +237,12 @@ export function SessionScreen({
   // on its own lane, which is what a restart reaches.
   const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
   const claudeLaneLatest = useFleet((s) => (live === null ? null : laneClaudeLatest(s.sessions, live.wrapper)));
+  // Desktop polish wave 173: whether a worker of this session, and of its coordinator, is still working or spawning
+  // (`workersBusyOf`, the fleet row's own reader). Each a `WorkerWait`, a primitive (a boolean, or the newest spawn's
+  // stamp, which only the clock below reads as in flight or stalled), so a frame that changes neither answer re-renders
+  // nothing (C6).
+  const workersBusy = useFleet((s) => (live === null ? false : workersBusyOf(live, s.sessions, s.runs)));
+  const parentWorkersBusy = useFleet((s) => (parent === null ? false : workersBusyOf(parent, s.sessions, s.runs)));
 
   const kbInset = useKeyboardInsets();
   const { busy: restarting, ensure: ensureNow } = useEnsure();
@@ -340,14 +346,17 @@ export function SessionScreen({
     repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey), runsElsewhere,
   }), [repo, project, branch, runIdsKey, itemIdsKey, runsElsewhere]);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
-  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
+  const factsNow = useNow(30_000);
+  // Review 3651 F1: the coordination reader gets this clock, so a worker's header reads a coordinator whose only wait is
+  // a spawn in flight as waiting (`WAITING_ON_WORKERS`), the word that coordinator's row, header and lamp say.
+  const coordination = live === null ? null
+    : coordinationOf(live, parent === null ? [] : [parent], activeRuns, parentWorkersBusy, factsNow);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
   // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
   // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordinatorPresence`, the orphan
   // marker's) — so the header can never know less than the card.
   const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
-  const factsNow = useNow(30_000);
   // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
   // (the usage-limit pill) draws again when it changes, within one tick of local midnight. The row barrier skips the
   // day for every other row, so midnight alone redraws none of them; a bubble that another prop change redraws after
@@ -364,6 +373,7 @@ export function SessionScreen({
     worktrees: delegation === null ? null : worktreesOf(readDelegation(delegation).leases, worktreeKey),
     claudeLatest,
     claudeLaneLatest,
+    workersBusy,
   });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'

@@ -237,16 +237,20 @@ export function prependPage(
   return [...head, ...fresh, ...marker, ...held];
 }
 
-/** The rows an item is drawn from, as `chatItems.ts` builds them: a message, mail or task card its event, a tool card its
- *  call; a time divider, a pending send and the working pulse none. */
+/** The rows an item is drawn from, as `chatItems.ts` builds them and the mail fold folds them (`mailRows.ts`): a message,
+ *  mail or task card and a mail prompt its event, a tool card its call, a run of mail prompts its members; a time
+ *  divider, a pending send and the working pulse none. */
 type Sourced =
-  | { readonly kind: 'message' | 'mail' | 'task'; readonly event: ChatEvent }
+  | { readonly kind: 'message' | 'mail' | 'task' | 'mail-prompt'; readonly event: ChatEvent }
   | { readonly kind: 'tool'; readonly use: ChatEvent }
+  | { readonly kind: 'mail-prompts'; readonly members: readonly Sourced[] }
   | { readonly kind: 'divider' | 'pending' | 'working' };
 
 /** The index of the first item drawn from a live row (one after the older rows, `OlderPaging.rows`), which the
  *  tool-activity fold takes as `liveFrom`: every item before it is an older page's, display only. 0 when no older row is
- *  held; the item count when no item is drawn from a live row. A pending send and the working pulse are live. */
+ *  held; the item count when no item is drawn from a live row. A pending send and the working pulse are live. Measured on
+ *  the list after the mail fold (wave 176), the one the tool fold receives: a run of mail prompts is live when any of its
+ *  prompts is. */
 export function liveFromOf(items: readonly Sourced[], events: readonly ChatEvent[], p: OlderPaging): number {
   if (p.rows === 0) return 0;
   const live = new Set<ChatEvent>(events.slice(rowsFrom(events) + p.rows));
@@ -260,6 +264,9 @@ export function liveFromOf(items: readonly Sourced[], events: readonly ChatEvent
         break;
       case 'tool':
         if (live.has(it.use)) return i;
+        break;
+      case 'mail-prompts':
+        if (it.members.some((m) => m.kind === 'mail-prompt' && live.has(m.event))) return i;
         break;
       default:
         if (live.has(it.event)) return i;

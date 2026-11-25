@@ -9,7 +9,7 @@ import * as machine from '../../src/continuity/generationMachine.js';
 import * as renewal from '../../src/continuity/renewalDue.js';
 import * as soft from '../../src/continuity/softRenewal.js';
 import * as observed from '../../src/time/observed.js';
-import { GEN_DAY_INVARIANTS, generationDay, type GenDayModules } from './generationDay.js';
+import { GEN_DAY_INVARIANTS, generationDay, type GenDayEdge, type GenDayModules } from './generationDay.js';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,7 +17,7 @@ import * as feed from '../../src/continuity/renewalFeed.js';
 import type { runRenewalActs } from '../../src/continuity/renewalActs.js';
 import { rewriteRelativeImports } from './mutate.js';
 import { mkTmp } from '../tmpHelpers.js';
-import { assertScenario, simSeeds, simulate } from './run.js';
+import { assertCovered, runSeeds, seedRanges, simSeeds, simulate } from './run.js';
 import type { CoordStore } from '../../src/coord/store.js';
 import type { GenerationsCoord } from '../../src/continuity/generationsLane.js';
 import type { SequenceLine } from './sequence.js';
@@ -30,11 +30,21 @@ const timed = (rows: readonly TRow[]): SequenceLine[] => rows.map(([kind, id, st
 const byName = (n: string) => GEN_DAY_INVARIANTS.find((i) => i.name === n)!;
 const REAL: GenDayModules = { renewal, soft, machine, observed };
 const FILE = 'test/sim/generation-day.test.ts';
+const FULL = process.env.CCRC_SIM === 'full';
 /** 200 seeds in CI; CCRC_SIM=full runs 5,000. */
-const DEFAULTS = Array.from({ length: process.env.CCRC_SIM === 'full' ? 5_000 : 200 }, (_, i) => i + 1);
+const DEFAULTS = Array.from({ length: FULL ? 5_000 : 200 }, (_, i) => i + 1);
 const H = 3_600_000;
-/** A case's time bound: about 0.3 s a seed since the day runs the real lane and store, so 5,000 seeds need more. */
-const BOUND_MS = process.env.CCRC_SIM === 'full' ? 3_600_000 : 600_000;
+/** A seed's time bound. A seed runs the real lane and store for a day, about 2,800 passes: measured 2026-11-25 at about 0.6 s
+ *  a seed on the dev box, 1.9 s on the test box and up to 3.7 s on CI's runners (737 s for 200 seeds), so 15 s is four times
+ *  the worst measured (docs/superpowers/programs/overlord/generation-day-sim-bound.md). */
+const SEED_MS = 15_000;
+/** The seeded cases' seeds (the defaults, or the replay variables' choice), cut into ranges of 20, one case each: 300 s a
+ *  case, which the worst measured runner meets four times over, and which a hung seed still fails. */
+const SEEDS = simSeeds(DEFAULTS);
+const RANGES = seedRanges(SEEDS, 20);
+/** A mutation case's time bound: it runs the defaults until the first red, measured at seed 1, 7, 8, 9 or 15 (the budget
+ *  mutant), so twenty seeds' worth meets the worst of them several times over. */
+const MUTATION_MS = 20 * SEED_MS;
 
 describe('the generation day\'s invariants go red on a hand-made sequence', () => {
   it('CONTROL: G1 is red on a minted generation that is active without a passed round', () => {
@@ -237,42 +247,61 @@ type Observe = typeof observed.observeTime;
 const withObserve = (f: Observe): GenDayModules => ({ ...REAL, observed: { ...observed, observeTime: f } });
 
 describe('the generation day over seeded runs', () => {
-  it('holds G1 to G12 on every seed and reaches every edge', async () => {
-    await assertScenario(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
-  }, BOUND_MS);
+  it('the seeded ranges run every seed exactly once, in order: 200 default seeds in CI, 5,000 under CCRC_SIM=full', () => {
+    expect(DEFAULTS).toEqual(Array.from({ length: FULL ? 5_000 : 200 }, (_, i) => i + 1));
+    expect(RANGES.flat()).toEqual(SEEDS);
+    expect(new Set(RANGES.flat()).size).toBe(SEEDS.length);
+    for (const r of RANGES) expect(r.length).toBeGreaterThan(0);
+    if (process.env.CCRC_SIM_SEED === undefined && process.env.CCRC_SIM_SEEDS === undefined) expect(SEEDS).toEqual(DEFAULTS);
+  });
+
+  // Each range holds G1 to G12 on its seeds; the edges they reached are pooled, and the last case checks the pool, so
+  // reaching every edge stays a property of the whole run. `ran` is what the range cases ran, in order.
+  const reached = new Set<GenDayEdge>();
+  const ran: number[] = [];
+  for (const seeds of RANGES) {
+    it(`holds G1 to G12 on seeds ${seeds[0]} to ${seeds[seeds.length - 1]}`, async () => {
+      for (const e of await runSeeds(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds, testFile: FILE })) reached.add(e);
+      ran.push(...seeds);
+    }, seeds.length * SEED_MS);
+  }
+  it('the ranges together ran every seed and reached every edge', () => {
+    expect(ran).toEqual(SEEDS);
+    assertCovered(generationDay(REAL), reached);
+  });
 
   it('MUTATION: a generationStep that takes any card read as a match goes red on G1 within the CI seeds (review I4)', async () => {
     expect(await redSeed({ ...REAL, machine: { ...machine,
       generationStep: (g, e) => machine.generationStep(g, e.kind === 'card-read' ? { kind: 'card-read', hashMatches: true } : e) } }, 'G1')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that advances nothing across a freeze goes red on G4 within the CI seeds (review 1894, F1)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap?.kind === 'step' && p !== null ? { at: { ...st.at, ms: p.ms }, gap: st.gap } : st;
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that counts each step twice, under the cap, goes red on G4 within the CI seeds (review 1912, F2)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.min(cap, 2 * (st.at.ms - p.ms)) } } : st;
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that counts half of each step goes red on G4 within the CI seeds (review 1920, R5)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap === null && p !== null ? { ...st, at: { ...st.at, ms: p.ms + Math.floor((st.at.ms - p.ms) / 2) } } : st;
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that answers no gap for a freeze goes red on G4 within the CI seeds (review 1912, F7)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return st.gap?.kind === 'step' ? { ...st, gap: null } : st;
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that leaves the stored mono stale goes red on G4 within the CI seeds (review 2003 F6: the oracle is the scenario\'s clock)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
@@ -281,14 +310,14 @@ describe('the generation day over seeded runs', () => {
       // was ever written after the first, and G4 held vacuously.
       return p !== null ? { ...st, at: { ...st.at, mono: p.mono } } : st;
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: an observeTime that stores a mono 31 s behind the clock goes red on G4 within the CI seeds (review 2006 R7: each beat then answers a step gap)', async () => {
     expect(await redSeed(withObserve((p, mono, proc, cap) => {
       const st = observed.observeTime(p, mono, proc, cap);
       return { ...st, at: { ...st.at, mono: st.at.mono - 31_000 } };
     }), 'G4')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: a cursor advanced before the mint it covers goes red on G8 within the CI seeds (review 2003 F9)', async () => {
     const cursorFirst = (store: CoordStore): GenerationsCoord => Object.assign(Object.create(store) as CoordStore, {
@@ -298,23 +327,23 @@ describe('the generation day over seeded runs', () => {
       },
     });
     expect(await redSeed({ ...REAL, coord: cursorFirst }, 'G8')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: a softRenewalMay that ignores the budget goes red on G2 within the CI seeds', async () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, softRenewalsInWindow: 0 }) } }, 'G2')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: a soft renewal that ignores the hold-off, in softRenewalMay and at the permit, goes red on G7 within the CI seeds (review 1912, F9; review 2149 F1)', async () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) },
       permit: { renewalPermit: (i) => feed.renewalPermit({ ...i, holdOff: false }) } }, 'G7')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: a renewalFeed that offers every due as a hard one lets a soft due drain a degraded generation, and goes red on G7 within the CI seeds (review 1912, F9)', async () => {
     expect(await redSeed({ ...REAL, feed: { renewalFeed: (f) => feed.renewalFeed({ ...f, due: f.due === null ? null : { cls: 'hard' } }) } }, 'G7')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 
   it('MUTATION: a renewal act that reads no receipt before a retry starts a second fresh conversation and goes red on G9 within the CI seeds (Task 5)', async () => {
     const acts = await mutantActs("if (tryN > 1) {", "if (tryN > 1 && false) {");
     expect(await redSeed({ ...REAL, acts }, 'G9')).not.toBeNull();
-  }, BOUND_MS);
+  }, MUTATION_MS);
 });

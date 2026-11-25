@@ -1,21 +1,22 @@
 // Overlord W1, designation plan Task 1 (PR A): the designation row, its six writers and its one reader
-// (`overlordDesignationStore.ts`), over a coord db opened through the real migrations and a FAKE authority appender, so
-// each writer's record, its order against the row write and its `from` are pinned without a journal file.
+// (`overlordDesignationStore.ts`), over a coord db opened through the real migrations. A fake appender pins each writer's
+// record, its order against the row write and its `from`; the rollback fence cases use a real journal and guard.
 import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb, tx } from '../src/coord/db.js';
-import {
-  bindPendingGeneration, designatePending, designationRead, failPending, goLive, retire, stopDone,
-  type AuthorityAppender,
-} from '../src/coord/overlordDesignationStore.js';
+import * as designationStore from '../src/coord/overlordDesignationStore.js';
+import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
+import { designationFenceCases } from './overlordDesignationFenceCases.js';
 import { authorityEntry, type OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+
+const { bindPendingGeneration, designatePending, designationRead, failPending, goLive, retire, stopDone, SequenceStampRefused } = designationStore;
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
@@ -66,7 +67,7 @@ const kinds = (f: Fake): string[] => f.seen.map((s) => s.entry.kind);
 const rowOf = (db: DatabaseSync): Record<string, unknown> | undefined =>
   db.prepare('SELECT * FROM overlord_designation').get() as Record<string, unknown> | undefined;
 
-const des = (db: DatabaseSync, f: Fake, over: Partial<Parameters<typeof designatePending>[2]> = {}): ReturnType<typeof designatePending> =>
+const des = (db: DatabaseSync, f: AuthorityAppender, over: Partial<Parameters<typeof designatePending>[2]> = {}): ReturnType<typeof designatePending> =>
   designatePending(db, f, { sessionId: A, deadlineAt: NOW + 60_000, model: 'opus', accountPools: SET_X, actor: OPERATOR, at: NOW,
     opKey: 'op-designate-1', ...over });
 const live = (db: DatabaseSync, f: Fake, id = A): void => {
@@ -438,4 +439,67 @@ describe('designationRead', () => {
     expect(des(db, f, { sessionId: B })).toMatchObject({ ok: false });
     expect(tx(db, () => 1)).toBe(1);
   });
+});
+
+describe('the one sequence (Overlord §10.4): the designation lines', () => {
+  const lines = (db: DatabaseSync): unknown[] =>
+    db.prepare("SELECT id, state, actor, actorKind, at FROM overlord_sequence WHERE kind = 'designation' ORDER BY seq").all();
+  const OP = { actor: 'operator-a 01234567', actorKind: 'operator' };
+  it('each state-changing writer stamps its line with the session it concerns, its actor and the time it took', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    expect(goLive(db, f, A, GEN, NOW + 1)).toMatchObject({ ok: true, changed: true });
+    expect(retire(db, f, { actor: OPERATOR, at: NOW + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+    des(db, f, { sessionId: B, opKey: 'op-designate-2', at: NOW + 3 });
+    expect(failPending(db, B, 'deadline-passed', NOW + 4, true)).toEqual({ ok: true, changed: true });
+    expect(lines(db)).toEqual([
+      { id: A, state: 'pending', ...OP, at: NOW }, { id: A, state: 'live', ...OP, at: NOW + 1 },
+      { id: A, state: 'retired', ...OP, at: NOW + 2 }, { id: B, state: 'pending', ...OP, at: NOW + 3 },
+      { id: B, state: 'failed', ...OP, at: NOW + 4 },
+    ]);
+  });
+  it('a pending-only retire stamps retired for the pending id and raises no term', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    expect(retire(db, f, { actor: OPERATOR, at: NOW + 1, opKey: 'k' })).toMatchObject({ ok: true, changed: true, term: 0 });
+    expect(lines(db)).toEqual([{ id: A, state: 'pending', ...OP, at: NOW }, { id: A, state: 'retired', ...OP, at: NOW + 1 }]);
+  });
+  it('a live retire over a pending attempt stamps failed for the pending id, then retired for the bound id', () => {
+    const db = openDb(); const f = fake(db);
+    live(db, f);
+    db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o', "
+      + "pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'").run(B);
+    expect(retire(db, f, { actor: OPERATOR, at: NOW + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+    expect(lines(db).slice(-2)).toEqual([{ id: B, state: 'failed', ...OP, at: NOW + 2 }, { id: A, state: 'retired', ...OP, at: NOW + 2 }]);
+  });
+  it('the writers that change no state stamp nothing, and nothing is stamped when nothing changes', () => {
+    const db = openDb(); const f = fake(db);
+    des(db, f);
+    expect(bindPendingGeneration(db, A, GEN, NOW + 1)).toEqual({ ok: true, changed: true });
+    expect(goLive(db, f, B, GEN, NOW + 1)).toEqual({ ok: true, changed: false });
+    expect(failPending(db, B, 'create-failed', NOW + 1, true)).toEqual({ ok: true, changed: false });
+    expect(lines(db)).toHaveLength(1);
+    goLive(db, f, A, GEN, NOW + 1); retire(db, f, { actor: OPERATOR, at: NOW + 2, opKey: 'k' });
+    const n = lines(db).length;
+    expect(stopDone(db, A)).toEqual({ ok: true, changed: true });
+    expect(retire(db, f, { actor: OPERATOR, at: NOW + 3, opKey: 'k2' })).toEqual({ ok: true, changed: false });
+    expect(lines(db)).toHaveLength(n);
+  });
+  it('a refused designation writes no row and no line', () => {
+    const db = openDb(); const f = fake(db);
+    f.answer = () => refuse();
+    expect(des(db, f)).toMatchObject({ ok: false, authority: 'authority-rolled-back' });
+    expect(lines(db)).toEqual([]);
+  });
+  it('a line the verdict refuses stops the writer before any record is appended', () => {
+    const db = openDb(); const f = fake(db);
+    expect(() => des(db, f, { sessionId: '' })).toThrow(SequenceStampRefused);
+    expect(() => des(db, f, { at: -1 })).toThrow(SequenceStampRefused);
+    expect(f.seen).toEqual([]);
+    expect(rowOf(db)).toBeUndefined();
+  });
+});
+
+describe('the immediate authority fence on designation rollback', () => {
+  for (const [name, run] of Object.entries(designationFenceCases(designationStore))) it(name, run);
 });

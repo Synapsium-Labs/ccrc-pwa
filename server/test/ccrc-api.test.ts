@@ -26,6 +26,7 @@ import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
 import { renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE } from '../../shared/api.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
+import { OVERLORD_HISTORY_ARG_MAX_CHARS, OVERLORD_HISTORY_ARGS_MAX, OVERLORD_HISTORY_REQUEST_MAX_BYTES, readOverlordHistoryRequest } from '../../shared/overlordHistory.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loopbackCurlFront } from './containedTools.js';
@@ -295,6 +296,8 @@ describe('the closed route table', () => {
     [['overlord', 'inbox'], 'GET', '/api/overlord/inbox'],
     [['overlord', 'messages', '12'], 'GET', '/api/overlord/messages/12'],
     [['overlord', 'acknowledge', '12'], 'POST', '/api/overlord/messages/12/acknowledge'],
+    // The Overlord's history read (Overlord W1, PR B1): parsed whole by `parse_overlord_history`, the pane's pair last in the body it builds.
+    [['overlord', 'history', 'search', '--all', 'deploy'], 'POST', '/api/overlord/history'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
@@ -360,7 +363,8 @@ describe('the closed route table', () => {
     // Ninety-three since `plan.map-propose` (the per-team migration, D-8186); ninety-four since `linking.suggest` (D-8808);
     // ninety-five since `linking.confirm` (D-8809); ninety-eight since `quiz.confirm`, `quiz.live` and `quiz.status` (run 3212, the unattended quiz).
     // One hundred and one since `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece).
-    expect(keys).toHaveLength(101);
+    // One hundred and two since `overlord.history` (Overlord W1, PR B1, the history door).
+    expect(keys).toHaveLength(102);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -375,7 +379,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one', 102: 'one-hundred-and-two',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -555,7 +559,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
-      ['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12'],
+      ['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12'], ['overlord', 'history', 'search', '--all', 'deploy'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
       ['programme', 'remaining', 'prog-a', '--json', '-'],
       ['quiz', 'record', '--json', '-'], ['quiz', 'confirm', '12', '--json', '-'], ['quiz', 'live', '--json', '-'], ['quiz', 'status', '--json', '-'],
@@ -2298,5 +2302,126 @@ describe('the Overlord inbox rows fill identity from the pane and send nothing e
       expect(r.status, a.join(' ')).not.toBe(0);
     }
     expect(seen).toEqual([]);
+  });
+});
+
+// The Overlord's history read (Overlord W1, PR B1; plan w1-board-history.md Task 5, ruled R7): `overlord history` is the second
+// grammar of one request, so the shared corpus runs through both readers and each case gets one verdict. The pane's pair goes
+// LAST, and a request the reader refuses is refused here, unsent, with the reader's own word.
+type CorpusArg = string | { $repeat: string; times: number } | { $list: string; times: number } | { $pad: string };
+interface CorpusCase { name: string; verdict: string; clientVerdict?: string; bytes?: number; request: { verb: string; target?: Record<string, string>; agents: boolean; args: CorpusArg[] } }
+const CORPUS = (JSON.parse(fs.readFileSync(path.join(root, 'server/test/fixtures/overlord-history-requests.json'), 'utf8')) as { cases: CorpusCase[] }).cases;
+/** A case's request, its compact args expanded: `$repeat` is one argument, `$list` that many, `$pad` fills to `bytes`. */
+function expandCase(c: CorpusCase): { verb: string; target?: Record<string, string>; agents: boolean; args: string[] } {
+  const args: string[] = [];
+  for (const a of c.request.args) {
+    if (typeof a === 'string') args.push(a);
+    else if ('$repeat' in a) args.push(a.$repeat.repeat(a.times));
+    else if ('$list' in a) for (let i = 1; i <= a.times; i += 1) args.push(`${a.$list}${i}`);
+    else args.push('');
+  }
+  const req = { ...c.request, args };
+  const pad = c.request.args.findIndex((a) => typeof a === 'object' && '$pad' in a);
+  if (pad >= 0) {
+    const fill = (c.request.args[pad] as { $pad: string }).$pad;
+    args[pad] = fill.repeat(c.bytes! - Buffer.byteLength(JSON.stringify(req)));
+    expect(Buffer.byteLength(JSON.stringify(req)), c.name).toBe(c.bytes);
+  }
+  return req;
+}
+/** The argv a case is typed as: the verb, the target's flag, `--agents`, then the arguments. */
+const argvOf = (r: ReturnType<typeof expandCase>): string[] => [
+  'overlord', 'history', r.verb,
+  ...(r.target === undefined ? [] : r.target.kind === 'all' ? ['--all'] : [`--${r.target.kind}`, r.target[r.target.kind]!]),
+  ...(r.agents ? ['--agents'] : []), ...r.args,
+];
+
+describe('overlord history: one request, two grammars (the shared corpus, ruled R7)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row: a POST to the history door, no id, no query key', () => {
+    const r = clientRoutes().find((x) => x.key === 'overlord.history')!;
+    expect([r.method, r.path, r.needsId, r.query]).toEqual(['POST', '/api/overlord/history', false, []]);
+  });
+
+  it("the client's three bounds are shared/overlordHistory.ts's", () => {
+    const src = fs.readFileSync(CCRC_API, 'utf8');
+    const lit = (k: string): number => Number(new RegExp(`^${k}=(\\d+)`, 'm').exec(src)![1]);
+    expect(lit('OVERLORD_HISTORY_REQUEST_MAX_BYTES')).toBe(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
+    expect(lit('OVERLORD_HISTORY_ARGS_MAX')).toBe(OVERLORD_HISTORY_ARGS_MAX);
+    expect(lit('OVERLORD_HISTORY_ARG_MAX_CHARS')).toBe(OVERLORD_HISTORY_ARG_MAX_CHARS);
+  });
+
+  it('the corpus covers every verdict the grammar can type (a corpus of one word would make the rest vacuous)', () => {
+    expect(new Set(CORPUS.map((c) => c.verdict))).toEqual(new Set(['ok', 'oversize', 'bad-verb', 'bad-target', 'bad-project', 'bad-session', 'bad-args', 'regex', 'separator']));
+  });
+
+  it.each(CORPUS.map((c) => [c.name, c] as const))('%s', async (_n, c) => {
+    const req = expandCase(c);
+    const read = readOverlordHistoryRequest(req);
+    expect(read.ok ? 'ok' : read.refusal, 'the server reader').toBe(c.verdict);
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(argvOf(req), undefined, pane);
+    // A known difference (`clientVerdict`) pins what the client does today, beside the reader's verdict.
+    const client = c.clientVerdict ?? c.verdict;
+    if (client === 'ok') {
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/overlord/history', TOKEN]);
+      expect(seen[0]!.body.endsWith(',"byId":"demo-ws","byUuid":"uuid-7"}'), seen[0]!.body.slice(-80)).toBe(true);
+      const { byId: _i, byUuid: _u, ...sent } = JSON.parse(seen[0]!.body) as Record<string, unknown>;
+      // The request the client sent is the case's, byte for byte, so the server's reader reads what the agent will read.
+      expect(JSON.stringify(sent)).toBe(JSON.stringify(req));
+      expect(readOverlordHistoryRequest(sent)).toEqual({ ok: true, request: { ...req, target: req.target } });
+    } else {
+      expect([r.status, errorOf(r)], 'the client').toEqual([2, client]);
+      expect(seen).toEqual([]);
+    }
+  }, 30_000);
+
+  it('a --json is an argument the reader refuses, so it is refused unsent; a pane with no identity sends nothing', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['overlord', 'history', 'search', '--all', '--json', '-'], '{"verb":"search"}', pane);
+    expect([r.status, errorOf(r)]).toEqual([2, 'bad-args']);
+    // No pane: both pane variables cleared at the call, as the file's other no-pane cases do, so a run inside a fleet pane
+    // measures the fixture, not the runner's own terminal (review 3730 F1).
+    expect((await run(['overlord', 'history', 'search', '--all', 'x'], undefined, { TMUX_PANE: undefined, TMUX: undefined })).status).not.toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it('an argument that is not valid UTF-8 is refused bad-args here, unsent, not changed to U+FFFD and sent (review 3730 F5)', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    // Node writes argv as UTF-8, so the raw byte rides a driver script that passes it to the client.
+    const driver = path.join(home, 'history-non-utf8');
+    fs.writeFileSync(driver, `#!/bin/bash\nexec ${JSON.stringify(CCRC_API)} overlord history search --all $'x\\xffy'\n`, { mode: 0o755 });
+    const r = await runClient(home, [], undefined, pane, driver);
+    expect([r.status, errorOf(r)], r.stdout + r.stderr).toEqual([2, 'bad-args']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a typed byId is a search word, never the identity: the pane\'s pair goes last', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['overlord', 'history', 'search', '--all', '--byId', 'lane-b-project-a'], undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ verb: 'search', target: { kind: 'all' }, agents: false, args: ['--byId', 'lane-b-project-a'], byId: 'demo-ws', byUuid: 'uuid-7' });
+  });
+
+  // A mutant that loosens the bash side must red (R7): the same corpus over a copy of the client with one refusal cut out
+  // sends a request the server's reader refuses.
+  it.each([
+    ['the separator check', /\n\s*elif any\(\$a\[\]; \. == "--"\) then "separator"/, 'a bare separator'],
+    ['the --regex check', /\n\s*elif any\(\$a\[\]; \. == "--regex" or startswith\("--regex="\)\) then "regex"/, '--regex as an argument'],
+    ['the byte bound', /if \(\$req \| tojson \| utf8bytelength\) > \$maxBytes then "oversize"\n\s*elif/, 'a request one byte past its bound'],
+  ])('CONTROL: a client without %s disagrees with the reader on its case', async (_n, cut, name) => {
+    const src = fs.readFileSync(CCRC_API, 'utf8');
+    expect(cut.test(src), String(cut)).toBe(true);
+    const mutant = path.join(home, 'ccrc-api-mutant');
+    fs.writeFileSync(mutant, src.replace(cut, name === 'a request one byte past its bound' ? 'if false then "oversize"\n      elif' : ''), { mode: 0o755 });
+    const c = CORPUS.find((x) => x.name === name)!;
+    plantPane('demo-ws', 'uuid-7');
+    const r = await runClient(home, argvOf(expandCase(c)), undefined, pane, mutant);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
   });
 });

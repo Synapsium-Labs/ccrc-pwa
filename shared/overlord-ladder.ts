@@ -70,6 +70,11 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
     spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)',
   },
+  // Serviceability PR B (plan w1-serviceability.md Task 7): an unmeasured line caps by this table's rule (ruled F3).
+  'load-past-95': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'the Overlord\'s accounts past the 95% load line (Table 7.5a, §6.8)',
+  },
   'unwitnessed-third': {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
     spec: 'the third unwitnessed write in a day (Table 7.5a)',

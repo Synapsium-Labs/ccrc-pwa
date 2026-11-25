@@ -9,6 +9,7 @@
 // `at` reads 0, a mark of `OPERATOR_MARK_MS` or more, and a programme with no mark, read as "no activity" (the break opens),
 // and a read that failed is unmeasured.
 import { OPERATOR_MARK_MS } from '../../../shared/continuity.js';
+import { OVERLORD_OPERATOR_MARK } from '../../../shared/operatorMessages.js';
 import type { Observed } from '../time/observed.js';
 import type { SoftReading } from './softRenewal.js';
 
@@ -16,11 +17,12 @@ import type { SoftReading } from './softRenewal.js';
 export type ProgrammeRunsRead = { readonly ok: true; readonly siblings: readonly { readonly program: string }[] } | { readonly ok: false };
 
 /** The programmes a prompt into this session marks: those of the open runs it claims and those it works on, each once, in
- *  order. `unmeasured` when either read failed: the route then writes no mark (a partial list would mark one programme and
- *  miss another). */
-export function markProgrammesOf(claimant: ProgrammeRunsRead, worker: ProgrammeRunsRead): readonly string[] | 'unmeasured' {
-  if (!claimant.ok || !worker.ok) return 'unmeasured';
-  return [...new Set([...claimant.siblings, ...worker.siblings].map((r) => r.program))];
+ *  order, then the Overlord's `@overlord` when the session is the designated one (`overlord`; renewal readings E, so every
+ *  path the operator types through marks alike). `unmeasured` when a read failed: the route then writes no mark (a partial
+ *  list would mark one programme and miss another). */
+export function markProgrammesOf(claimant: ProgrammeRunsRead, worker: ProgrammeRunsRead, overlord: boolean | 'unmeasured' = false): readonly string[] | 'unmeasured' {
+  if (!claimant.ok || !worker.ok || overlord === 'unmeasured') return 'unmeasured';
+  return [...new Set([...claimant.siblings, ...worker.siblings].map((r) => r.program)), ...(overlord ? [OVERLORD_OPERATOR_MARK] : [])];
 }
 
 /** One mark as the lane read it: its `at`, and the `quiet` kept for that `at` (null: none yet, which reads 0). */

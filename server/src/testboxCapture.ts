@@ -27,6 +27,11 @@
 //   - outcome `unanswered` ................................................................. unavailable `unanswered`
 //   - a thrown io call (the member never rejects, and the lane catches too) ............... unavailable `unanswered`
 //   - a `refused` reply with no refusal word (the op's reader forbids it) ................. unavailable `unanswered`
+//
+// THE DROPPED DETAIL (review 3226 F9, capture runner PR 3b): the port carries a word, never the op's `detail`. A refusal's
+// detail is its word's own sentence, so nothing is lost there; every other reply that brings back no verdict (the box
+// ended with none, the job went unanswered, no box or no hello) is the one place its `detail` says why, so it is written to
+// the server's log, one line naming the build and the outcome, before the word is answered.
 import type { FleetIO } from './io.js';
 import type { BuildCaptureAnswer, BuildCaptureTransport, BuildCaptureUnavailable } from './buildCaptureLane.js';
 import type { TestboxCaptureReply } from '../../shared/agent-protocol.js';
@@ -49,6 +54,13 @@ function answerOf(r: TestboxCaptureReply): BuildCaptureAnswer {
   }
 }
 
+/** The log line of a reply whose `detail` the port's word drops (a refusal's detail is its word's sentence, and a verdict is
+ *  kept, so neither is logged). */
+function logDropped(build: string, r: TestboxCaptureReply): void {
+  if (r.detail === null || r.outcome === 'refused' || (r.outcome === 'answered' && r.result !== null)) return;
+  console.warn(`ccrc-server: build capture ${build}: ${r.outcome}, no verdict: ${r.detail}`);
+}
+
 /** The production adapter: `io` is read at each call, so a rebuilt connection is the one used. */
 export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'>): BuildCaptureTransport {
   return {
@@ -62,6 +74,7 @@ export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'
             case 'unanswered': return gone('unanswered');
           }
         }
+        logDropped(job.build, asked.reply);
         return answerOf(asked.reply);
       } catch {
         return gone('unanswered');

@@ -5,15 +5,18 @@
 // `useAttachImage` that typed the upload's path straight into the textarea; the
 // tray replaced it — see git history around the attachment-tray feature.)
 //
-// TWO KINDS, one lane. An image is staged for what it looks like, so it may be
-// re-encoded on the way. A DOCUMENT is staged for what reads it — the path is
-// typed into the session and Claude Code opens the file itself — so it is
-// uploaded byte-identical and never touches the canvas. Which kind a file is
-// comes from `isImageClip` on its NAME, the same answer the server and the
-// bubble reach, rather than from a `File.type` the OS may not have set.
+// TWO KINDS, one lane, and ANY FILE (2026-11-24). A picture is staged for what
+// it looks like, so it may be re-encoded on the way. Every other file is
+// staged for what reads it — the path is typed into the session and the
+// session opens the file itself — so it is uploaded byte-identical and never
+// touches the canvas. Which kind a file is comes from `isImageClip` on its
+// NAME, the same answer the server and the bubble reach, rather than from a
+// `File.type` the OS may not have set. What remains of a gate is the two
+// limits, `CLIP_MAX_BYTES` per file and `CLIP_MAX_PER_MESSAGE` per message.
 import { useEffect, useRef, useState } from 'react';
 import { toast, type StagedImage } from '@ccrc/ui';
-import { CLIP_DOC_EXTS, hasClipExt, isImageClip } from '../../../shared/api';
+import { CLIP_MAX_BYTES, CLIP_MAX_PER_MESSAGE, clipExtOf, isImageClip } from '../../../shared/api';
+import { CLIP_MIME } from '../../../shared/clipServe';
 import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
 /** PNGs under this size upload untouched — lossless screenshots stay lossless. */
@@ -22,40 +25,63 @@ const SMALL_PNG_MAX = 1024 * 1024;
 const MAX_EDGE = 2048;
 const JPEG_QUALITY = 0.85;
 
-/** The image types the server admits, by filename extension. Clipboard-only:
- *  a picked or dropped file brings its own name, and that name is what decides. */
-const EXT_FOR_TYPE: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-};
+/** The declared picture types, and the extension each is named for when its
+ *  file's own name does not already say how it is served, so it still
+ *  thumbnails and may still downscale, as on main (see `namedUpload`). A
+ *  frozen table with no prototype, because the key is a type the browser
+ *  declares: `constructor` or `__proto__` must find nothing (review 3647 F7,
+ *  the repair `CLIP_MIME` got on the server). */
+const EXT_FOR_TYPE: Readonly<Partial<Record<string, string>>> = Object.freeze(Object.assign(
+  Object.create(null) as Record<string, string>,
+  { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' },
+));
 
 /**
- * The OS picker's filter. Images go in as `image/*` — a phone reads that as
- * "open the gallery", and no extension list would — while documents go in as
- * EXTENSIONS, because the type a phone reports for a .md or .rtf is unreliable
- * and the server gates on the extension anyway.
+ * The OS picker's filter: NONE. Any file is admitted. With no `accept`, the
+ * platforms DOCUMENT a picker that offers everything at once — on iOS the
+ * photo library, the camera and Files in one sheet; that is documented
+ * behaviour, not measured on a device here. A list here (it was `image/*`
+ * plus the document extensions) is what greyed every other file out.
  *
- * Derived HERE and handed to `@ccrc/ui`'s `AttachButton` as its `accept` prop:
- * the design system may not take a value from shared/, so the one derivation
- * stays on the app side of the boundary, next to the list it reads.
+ * Still handed to `@ccrc/ui`'s `AttachButton` as its `accept` prop, and still
+ * derived here rather than in the design system: undefined leaves the input
+ * with no `accept` attribute at all, which is the button's documented "every
+ * file" case.
  */
-export const ATTACH_ACCEPT = ['image/*', ...CLIP_DOC_EXTS.map((e) => `.${e}`)].join(',');
+export const ATTACH_ACCEPT: string | undefined = undefined;
 
-/** What a refusal offers instead. Named rather than enumerated: spelling the
- *  ten document extensions into a toast would bury the one word — "text" — that
- *  actually tells someone holding a .docx what to do about it. */
-const ATTACH_REFUSAL = 'images, text, PDF and RTF only';
+/** The extension a file with none of the admitted shape is given before upload.
+ *  `noext` claims no format — a `.bin` or a `.txt` would — and says plainly to
+ *  the reader on the far end what happened to the name: `README` arrives as
+ *  `clip-…-README.noext`. */
+export const NEUTRAL_EXT = 'noext';
+
+/** Bytes, the way the refusal says them: one decimal place of MB, rounded UP,
+ *  so a file one byte over the limit never reads as the limit itself. */
+const mb = (bytes: number): string => `${(Math.ceil((bytes * 10) / (1024 * 1024)) / 10).toFixed(1)} MB`;
+
+const limitWords = `${String(CLIP_MAX_BYTES / (1024 * 1024))} MB per file is the limit`;
+
+/** The one refusal that remains before an upload: the per-file limit, said
+ *  with the file's name and its size. */
+export function tooLargeText(name: string, bytes: number): string {
+  return `${name} is ${mb(bytes)} — ${limitWords}`;
+}
+
+/** The same limit for a picture its downscale did not bring under it: the
+ *  size said is the shrunk one, so the words say so (review 3670 F3). */
+export function stillTooLargeText(name: string, bytes: number): string {
+  return `${name} is still ${mb(bytes)} after shrinking — ${limitWords}`;
+}
 
 /**
- * Worth handing to `add()`. Drag-and-drop and paste both use it, so a dropped
- * .zip is ignored exactly as it was before documents existed rather than
- * becoming a chip that fails at the server. `image/*` on top of the extension
- * test is what keeps a clipboard screenshot — type set, name blank or `.gif` —
- * reaching `namedUpload`, which owns the verdict on those.
+ * Worth handing to `add()`: every file. Drag-and-drop and paste both use it,
+ * and since any file is admitted there is nothing left to tell apart by type
+ * or name — the limits are `add()`'s, where a refusal can be said. Kept as a
+ * function because the composer's two doors import it.
  */
-export function isAttachable(file: File): boolean {
-  return file.type.startsWith('image/') || hasClipExt(file.name);
+export function isAttachable(_file: File): boolean {
+  return true;
 }
 
 /**
@@ -89,22 +115,39 @@ export async function downscaleImage(file: File | Blob): Promise<Blob> {
   }
 }
 
+/** A file renamed into the picture lane by its declared type alone, mapped to
+ *  the file it arrived as: if its bytes do not decode, that file goes up
+ *  untouched as the document it is (review 3670 F1). Weak, so a chip removed
+ *  or sent lets both go. */
+const RENAMED_BY_TYPE = new WeakMap<File, File>();
+
 /**
- * The name the upload will carry. A file the user PICKED or dropped already has
- * one the server admits — hand it back untouched, so the stem that reaches the
- * prompt is the name the user recognises. A clipboard image has no useful name
- * — Chrome calls every one of them "image.png", Safari leaves it empty — so one
- * is derived from the actual MIME type, with the timestamp keeping two pastes
- * from colliding in the clips directory.
+ * The name the upload will carry. A DECLARED picture (`image/png`,
+ * `image/jpeg`, `image/webp`) is a picture, as on main, unless its name
+ * already has an extension the serve table knows — one of the four pictures,
+ * when the name stands as it is, or one served as something else (`notes.md`
+ * stays the document it says it is). Otherwise it keeps its whole name and
+ * gains the picture's extension after it: `photo.jfif` becomes
+ * `photo.jfif.jpg`, `Screenshot 10.15.32` `Screenshot 10.15.32.png`, `shot`
+ * `shot.png`. Only the serve table's KEYS are read here; what a name is served
+ * as stays the server's decision.
  *
- * Returns null for something we can't accept (a pasted GIF, say), so the caller
- * can say so rather than stage a chip that is going to 415.
+ * Any other file with an extension of the admitted shape is handed back
+ * untouched, so the stem that reaches the prompt is the name the user
+ * recognises, and one with none gains `.noext`. A nameless file takes
+ * `pasted-<ms>` as its stem, the timestamp keeping two pastes from colliding.
  */
-export function namedUpload(file: File, now: number): File | null {
-  if (hasClipExt(file.name)) return file;
-  const ext = EXT_FOR_TYPE[file.type];
-  if (!ext) return null;
-  return new File([file], `pasted-${now}.${ext}`, { type: file.type });
+export function namedUpload(file: File, now: number): File {
+  const picture = EXT_FOR_TYPE[file.type];
+  const ext = clipExtOf(file.name);
+  if (ext !== '' && (picture === undefined || CLIP_MIME[ext] !== undefined)) return file;
+  if (ext !== '' && picture !== undefined) {
+    const renamed = new File([file], `${file.name}.${picture}`, { type: file.type });
+    RENAMED_BY_TYPE.set(renamed, file);
+    return renamed;
+  }
+  const stem = file.name === '' ? `pasted-${String(now)}` : file.name;
+  return new File([file], `${stem}.${picture ?? NEUTRAL_EXT}`, { type: file.type });
 }
 
 /** Every attachable file on the clipboard. Text pastes give []. */
@@ -116,7 +159,7 @@ export function clipboardFiles(data: DataTransfer | null): File[] {
     .filter(isAttachable);
 }
 
-export const MAX_IMAGES = 4;
+export const MAX_IMAGES = CLIP_MAX_PER_MESSAGE;
 
 export interface StagedImages {
   images: StagedImage[];
@@ -150,39 +193,68 @@ export function useStagedImages(
   const patch = (key: string, next: Partial<StagedImage>): void =>
     commit(listRef.current.map((i) => (i.key === key ? { ...i, ...next } : i)));
 
+  // A document goes up EXACTLY as it arrived. The picture machinery would
+  // either throw on a PDF or, worse, succeed and upload a picture of nothing,
+  // and `createImageBitmap` throws on text — which would land the chip in
+  // `failed` with a decoder error as the reason. There are no dimensions to
+  // report either. Oversize was refused in `add()`, before this chip existed.
+  const uploadAsIs = async (key: string, file: File): Promise<void> => {
+    const staged = await api.upload(id, file);
+    patch(key, { state: 'staged', path: staged.path, error: undefined });
+  };
+
+  /** The picture as it will go up, and its size in pixels. */
+  const asPicture = async (file: File): Promise<{ payload: File; width: number; height: number }> => {
+    const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
+    let payload = file;
+    if (!keepOriginal) {
+      const blob = await downscale(file);
+      const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+      payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
+    }
+    // Measure the PAYLOAD on both branches — the caption answers "did the
+    // downscale ruin my screenshot", and keepOriginal never decodes otherwise.
+    const bitmap = await createImageBitmap(payload);
+    const { width, height } = bitmap;
+    bitmap.close();
+    return { payload, width, height };
+  };
+
   const upload = async (key: string, file: File): Promise<void> => {
     try {
       if (!isImageClip(file.name)) {
-        // A document goes up EXACTLY as it arrived. Everything below this line
-        // is image machinery: the canvas pass would either throw on a PDF or,
-        // worse, succeed and upload a picture of nothing, and `createImageBitmap`
-        // throws on text — which would land the chip in `failed` with a decoder
-        // error as the reason. There are no dimensions to report either.
-        const staged = await api.upload(id, file);
-        patch(key, { state: 'staged', path: staged.path, error: undefined });
+        await uploadAsIs(key, file);
         return;
       }
-      const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
-      let payload = file;
-      if (!keepOriginal) {
-        const blob = await downscale(file);
-        const ext = blob.type === 'image/png' ? 'png' : 'jpg';
-        payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
+      const arrivedAs = RENAMED_BY_TYPE.get(file);
+      let picture: Awaited<ReturnType<typeof asPicture>>;
+      try {
+        picture = await asPicture(file);
+      } catch (err) {
+        // A picture only by its declared type, whose bytes do not decode: the
+        // name it arrived with stands, and it goes up untouched as a document.
+        if (arrivedAs === undefined) throw err;
+        const was = listRef.current.find((i) => i.key === key)?.previewUrl;
+        if (was) URL.revokeObjectURL(was);
+        patch(key, { file: arrivedAs, previewUrl: undefined });
+        if (arrivedAs.size > CLIP_MAX_BYTES) throw new Error(tooLargeText(arrivedAs.name, arrivedAs.size));
+        await uploadAsIs(key, arrivedAs);
+        return;
       }
-      // Measure the PAYLOAD on both branches — the caption answers "did the
-      // downscale ruin my screenshot", and keepOriginal never decodes otherwise.
-      const bitmap = await createImageBitmap(payload);
-      const width = bitmap.width;
-      const height = bitmap.height;
-      bitmap.close();
-      const clip = await api.upload(id, payload);
-      patch(key, { state: 'staged', path: clip.path, width, height, error: undefined });
+      // A picture is measured AFTER the downscale, which is what may bring it
+      // under the limit; the server refuses the same bytes, but this says the
+      // size, and it costs no request.
+      if (picture.payload.size > CLIP_MAX_BYTES) throw new Error(stillTooLargeText(file.name, picture.payload.size));
+      const clip = await api.upload(id, picture.payload);
+      patch(key, { state: 'staged', path: clip.path, width: picture.width, height: picture.height, error: undefined });
     } catch (err) {
       // Say it out loud as well as on the chip. The chip alone was a dead end:
       // a 413 arrived as a thumbnail whose only affordance was a retry that can
       // never succeed, with the reason set on the image and rendered nowhere.
       // (The toast that used to carry this was removed because it covered the
       // composer; the `--composer-h` offset now lifts toasts clear of it.)
+      // `apiErrorText`'s floor is the bare message, so the size refusal thrown
+      // above reaches the chip and the toast as its own sentence.
       const why = uploadErrorText(apiErrorText(err));
       patch(key, { state: 'failed', error: why });
       toast(why, 'error');
@@ -191,20 +263,33 @@ export function useStagedImages(
 
   const add = (files: readonly File[]): void => {
     const cur = listRef.current;
-    const room = MAX_IMAGES - cur.length;
-    if (files.length > room) toast(`Four attachments per message — send these first`, 'error');
+
+    // The size refusals come BEFORE the batch is cut to the room left, so a
+    // refused file never takes the slot of one that fits (review 3670 F2).
+    const fits: File[] = [];
+    for (const file of files) {
+      // Named FIRST: whether this is a picture is decided on the name it will
+      // carry, so a nameless clipboard picture waits for its downscale as on
+      // main, and the refusal always has a name to say (review 3647 F1).
+      const named = namedUpload(file, Date.now() + fits.length);
+      // Anything else goes up byte for byte, so its size now is its size at
+      // the server: refuse it here, with no chip, rather than upload 40 MB to
+      // be told no.
+      if (!isImageClip(named.name) && named.size > CLIP_MAX_BYTES) {
+        toast(tooLargeText(named.name, named.size), 'error');
+        continue;
+      }
+      fits.push(named);
+    }
+    const room = Math.max(0, MAX_IMAGES - cur.length);
+    if (fits.length > room) toast(`${String(CLIP_MAX_PER_MESSAGE)} attachments per message — send these first`, 'error');
 
     // Built OUTSIDE any updater: pure, so StrictMode's double-invoke cannot
     // duplicate chips or leak an extra object URL, and two add() calls in the
     // same tick each see the other's result via listRef rather than a stale
     // closure over `cur`.
     const accepted: StagedImage[] = [];
-    for (const file of files.slice(0, Math.max(0, room))) {
-      const named = namedUpload(file, Date.now() + accepted.length);
-      if (named === null) {
-        toast(`Can't attach ${file.type || 'that'} — ${ATTACH_REFUSAL}`, 'error');
-        continue;
-      }
+    for (const named of fits.slice(0, room)) {
       seq.current += 1;
       accepted.push({
         key: `img${seq.current}`,
