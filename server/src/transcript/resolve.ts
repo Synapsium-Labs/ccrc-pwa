@@ -242,6 +242,17 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
 export const GLOB_STAT_CONCURRENCY = 32;
 
 /**
+ * Where rung 5 looks for `<uuid>.jsonl` under one account: its `projects` root, and one place in each directory a listing of
+ * that root names. Every exact rung's path (`transcriptPath`) is one of these places whenever its directory exists, so they
+ * are every place the ladder looks under the account. Pure; `globByUuid` and the renewal readings' measured search
+ * (`renewalReadingsWiring.ts`, review 3718 F3) both read it, so the places have one owner.
+ */
+export function uuidGlobPlaces(configDir: string, uuid: string): { readonly root: string; readonly placesIn: (names: readonly string[]) => string[] } {
+  const root = path.join(configDir, 'projects');
+  return { root, placesIn: (names) => names.map((name) => path.join(root, name, `${uuid}.jsonl`)) };
+}
+
+/**
  * `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`
  * means the directory could not be MEASURED — never that it held nothing.
  * Every io call goes through `limit`, the one limiter the whole `ladder` call
@@ -311,7 +322,7 @@ async function globByUuid(
   io: FleetIO, configDir: string, uuid: string, account: string | null, order: number,
   livenessWitness: string | null, limit: Limit,
 ): Promise<{ hits: GlobHit[]; complete: boolean }> {
-  const root = path.join(configDir, 'projects');
+  const { root, placesIn } = uuidGlobPlaces(configDir, uuid);
   const names = await limit(() => io.readdir(root));
   if (names === null) {
     if ((await limit(() => io.stat(configDir))) !== null) return { hits: [], complete: true };
@@ -323,7 +334,7 @@ async function globByUuid(
   // (mtime, then roster order, then path) and so is `collapseHits`' survivor (lowest (order, path) of a size:mtime
   // group), so no input order, completion order included, changes it. A null stat is folded to absent, as it
   // always was (see the choice recorded above).
-  const paths = names.map((name) => path.join(root, name, `${uuid}.jsonl`));
+  const paths = placesIn(names);
   const stats = await Promise.all(paths.map((p) => limit(() => io.stat(p))));
   const hits: GlobHit[] = [];
   stats.forEach((st, i) => {

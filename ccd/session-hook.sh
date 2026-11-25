@@ -4601,7 +4601,7 @@ fi
 # A Bash call that merges, pulls or rebases `main` into the current branch —
 # or asks GitHub to do the same from its side (the Update branch button's
 # `gh pr` verb, its REST route or its GraphQL mutation) — gets
-# `additionalContext` naming the three triggers worker clause 16 licenses an
+# `additionalContext` naming the four triggers worker clause 16 licenses an
 # absorption on, and the probe that measures the first. ADVICE, NEVER A
 # DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
 # sessions that load no ccrc skill, and this text is the only thing those
@@ -4705,10 +4705,11 @@ if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
   lcmd=$(jq -r '.tool_input.command // "" | tostring' \
     <<<"$payload" 2>/dev/null) || lcmd=""
   if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
-    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of four triggers:'
     lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
     lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
     lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=" (4) the coordinator's mail whose subject begins \`conflict-sync:\` names this PR and a base sha for a conflict it measured, and your own probe of that commit agrees: absorb exactly that commit, once per mail, before this round's wave-done only."
     lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
     lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>` (`ccd/ccd` carries no committed stamp, so it never has one).'
     pre_json=$(_hook_nudge_json "$lreason") || pre_json=""

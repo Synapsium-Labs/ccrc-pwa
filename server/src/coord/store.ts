@@ -41,9 +41,9 @@ import type { CaseDue } from './practiceCases.js';
 import {
   advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
   generationsCursor, handoverBefore, handoverOf, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
-  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startById, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
-  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
+  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartRead, type StartsRead,
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
   type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead, type StepResult,
 } from '../continuity/continuityStore.js';
@@ -5690,6 +5690,7 @@ export class CoordStore {
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  startById(id: number): StartRead { return startById(this.db, id); }
   /** Overlord W1 door process B1: the session's reported model switches since its generation's start, by the server's clock (the off-model input's read). */
   modelSwitchesOf(sessionId: string, startId: number): HookStoreRead<ModelSwitchRow[]> { return modelSwitchesSinceStart(this.db, sessionId, startId); }
   /** Overlord W1 renewal readings PR E: the session's reader events since its generation's start, with that floor, by the server's clock. */

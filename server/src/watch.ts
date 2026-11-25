@@ -6355,7 +6355,8 @@ export class FleetWatcher {
       const lane = this.overlordLane;   // designation B: the write-set before each Overlord renewal, and the deadline sweep's facts
       const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo, lane && ((t) => lane.beforeRenew(t.sessionId)));
       const attempt = await lane?.facts().catch((e: unknown) => { console.warn(`ccrc-server: overlord attempt: facts unread: ${String(e)}`); return undefined; });
-      const w1 = renewalReadingsOf(this.deps, coord, records);   // W1's renewal readings, one wiring (and its memo) per pass
+      // W1's renewal readings, one wiring (and its memo) per pass; `notLocal` asks the watcher's one memoized resolver (PR B).
+      const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
