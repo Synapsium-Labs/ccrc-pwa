@@ -32,18 +32,18 @@
 import type { ChatEvent } from '../../../shared/api';
 import { isLocalDivider } from './localDivider';
 
-/** The content an event shows, every field of it, joined by a separator no field's own text decides. */
+/** The content an event shows, every field of it, as one unambiguous string (a JSON array). */
 function contentOf(e: ChatEvent): string {
   switch (e.kind) {
     case 'user':
     case 'assistant':
-      return `${e.compaction === true ? 'c' : ''}\u0001${e.text}`;
+      return JSON.stringify([e.compaction === true, e.text]);
     case 'tool_use':
-      return `${e.name}\u0001${e.truncatedBytes ?? ''}\u0001${e.input}`;
+      return JSON.stringify([e.name, e.truncatedBytes ?? null, e.input]);
     case 'tool_result':
-      return `${e.isError ? 'e' : ''}\u0001${e.truncatedBytes ?? ''}\u0001${e.text}`;
+      return JSON.stringify([e.isError, e.truncatedBytes ?? null, e.text]);
     case 'system':
-      return `${e.origin ?? ''}\u0001${e.resetsAt ?? ''}\u0001${e.text}`;
+      return JSON.stringify([e.origin ?? null, e.resetsAt ?? null, e.text]);
   }
 }
 
@@ -70,8 +70,8 @@ export function eventIdentity(e: ChatEvent): string {
   const known = memo.get(e);
   if (known !== undefined) return known;
   const content = contentOf(e);
-  const source = e.kind === 'tool_result' ? `r\u0002${e.toolId}` : `u\u0002${e.uuid}`;
-  const id = `${e.kind}\u0000${source}\u0000${e.ts}\u0000${content.length}:${hash53(content).toString(36)}`;
+  const source = e.kind === 'tool_result' ? e.toolId : e.uuid;
+  const id = JSON.stringify([e.kind, source, e.ts, content.length, hash53(content)]);
   memo.set(e, id);
   return id;
 }

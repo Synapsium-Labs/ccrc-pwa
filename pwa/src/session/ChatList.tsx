@@ -418,6 +418,9 @@ const NEAR_TOP_SCREENS = 1.5;
 
 const keyOf = (item: TranscriptItem): string => item.key;
 
+/** The row virtuoso's index `i` names, given its first index (see `computeItemKey`). */
+const rowAt = (i: number, first: number): number => (i >= first ? i - first : i);
+
 /** Wave 175: a tool stretch that takes an older page's calls at its start changes its key (`activity-<first entry's key>`)
  *  but is the same stretch, grown, and a stretch keeps its open or closed state as it grows: the new key opens when the
  *  stretch the reader had open is inside it. Read off the two lists, never off the key's spelling. */
@@ -1078,10 +1081,12 @@ function ChatScroller({
   // THE SAME TWO FUNCTIONS UNTIL WHAT THEY READ CHANGES (desktop polish Task C7): virtuoso calls `itemContent` again for
   // every rendered row when it is handed a new one, so a render of this list that changes nothing they read (a screen
   // render with the same events and the same callbacks) hands it the ones it has.
-  // Virtuoso hands both its own index, which counts from its first index (wave 175).
-  const computeItemKey = useCallback((i: number) => items[i - firstIndex]?.key ?? i, [items, firstIndex]);
+  // Virtuoso hands both its own index, which counts from its first index (wave 175). An index below the first index is
+  // read as the row's own: no virtuoso sends one, and the suites' stand-in lists count rows from 0, as virtuoso does with
+  // no first index.
+  const computeItemKey = useCallback((i: number) => items[rowAt(i, firstIndex)]?.key ?? i, [items, firstIndex]);
   const itemContent = useCallback((i: number): ReactNode => {
-    const item = items[i - firstIndex];
+    const item = items[rowAt(i, firstIndex)];
     if (!item) return null;
     return (
       <MeasuredItem
