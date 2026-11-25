@@ -1,0 +1,143 @@
+// The limit sampler (Overlord W1 serviceability PR B, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-serviceability.md`
+// Task 6): one row per measured Anthropic account a beat, at the lane's cadence, over the tick's own reading.
+import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { LIMIT_SAMPLE_MS, LIMIT_SAMPLES_KEEP_S } from '../../shared/loadLines.js';
+import { parseRoster } from '../../shared/roster.js';
+import { laneRow } from '../src/laneSchedule.js';
+import { limitSamplePass, limitSampleRows, type LimitSampleStore } from '../src/limitSampler.js';
+import type { AccountLimits } from '../src/limits.js';
+import { RUNWAY_READ_S } from '../src/poolRunway.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { loadConfig } from '../src/config.js';
+import { nameWrites } from './scan/parse.js';
+import { parsedFile } from './scan/symbols.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
+import { quietAtTestEnd } from './laneQuiet.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const NOW = 2_000_000_000;
+const roster = parseRoster({ version: 1, accounts: [
+  { id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+  { id: 'lane-b', label: 'lane-b', configDirSuffix: '.lane-b', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+  { id: 'lane-c', label: 'lane-c', configDirSuffix: '.lane-c', exec: { kind: 'generated' }, homeAble: false, hue: 'blue', telemetry: 'codex' },
+  { id: 'lane-d', label: 'lane-d', configDirSuffix: '.lane-d', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+  { id: 'lane-e', label: 'lane-e', configDirSuffix: '.lane-e', exec: { kind: 'generated' }, homeAble: false, hue: 'amber', telemetry: 'codex' },
+] });
+const lim = (five: number | null, seven: number | null, ts: number | null, over: Partial<AccountLimits> = {}): AccountLimits => ({
+  five, seven, ts, fiveResetAt: NOW + 9_000, sevenResetAt: NOW + 300_000, fiveRolledOver: false, sevenRolledOver: false,
+  disabled: false, authDead: false, ...over,
+});
+
+const fakeStore = (): LimitSampleStore & { inserts: unknown[][]; prunes: number[] } => {
+  const s = {
+    inserts: [] as unknown[][], prunes: [] as number[],
+    insertLimitSamples: (rows: readonly unknown[]) => { s.inserts.push([...rows]); return rows.length; },
+    pruneLimitSamples: (b: number) => { s.prunes.push(b); return 0; },
+  };
+  return s;
+};
+
+describe('limitSamplePass (F14)', () => {
+  it('writes one row per measured Anthropic account and prunes past the bound', () => {
+    const store = fakeStore();
+    const limits = { 'lane-a': lim(40, 20, NOW - 30), 'lane-b': lim(10, 5, NOW - 90, { fiveWindowMinutes: 0, fiveRolledOver: true }) };
+    expect(limitSamplePass(store, limits, roster, NOW)).toEqual({ inserted: 2, pruned: 0 });
+    expect(store.inserts[0]).toEqual([
+      { account: 'lane-a', ts: NOW - 30, five: 40, seven: 20, fiveResetAt: NOW + 9_000, sevenResetAt: NOW + 300_000, fiveRolled: false, sevenRolled: false, fiveWindowMinutes: null },
+      { account: 'lane-b', ts: NOW - 90, five: 10, seven: 5, fiveResetAt: NOW + 9_000, sevenResetAt: NOW + 300_000, fiveRolled: true, sevenRolled: false, fiveWindowMinutes: 0 },
+    ]);
+    expect(store.prunes).toEqual([NOW - LIMIT_SAMPLES_KEEP_S]);
+  });
+  it('a codex lane\'s file and ccd\'s exclusion row on a rostered codex lane write nothing; nor do an unrostered file or a reading with no time', () => {
+    const exclusion: AccountLimits = { five: 100, seven: 0, ts: NOW - 60, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false,
+      sevenRolledOver: false, disabled: false, authDead: false };
+    const limits = { 'lane-c': lim(30, 30, NOW - 60), 'lane-e': exclusion, 'lane-x': lim(30, 30, NOW - 60), 'lane-d': lim(null, null, null) };
+    expect(limitSampleRows(limits, roster)).toEqual([]);
+    // the exclusion row alone, on the rostered codex lane, is left out by the telemetry test and nothing else
+    expect(limitSampleRows({ 'lane-e': exclusion }, roster)).toEqual([]);
+    expect(limitSampleRows({ 'lane-e': exclusion }, parseRoster({ version: 1, accounts: [
+      { id: 'lane-e', label: 'lane-e', configDirSuffix: '.lane-e', exec: { kind: 'upstream' }, homeAble: true, hue: 'amber', telemetry: 'anthropic' },
+    ] }))).toHaveLength(1);
+  });
+});
+
+describe('the lane (index question 8)', () => {
+  it('its row: every LIMIT_SAMPLE_MS on the monotonic clock, one pass at a time, caught with its own sentence', () => {
+    expect(laneRow('limitSamples')).toEqual({ name: 'limitSamples', cadenceMs: LIMIT_SAMPLE_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the limit sampler failed' });
+  });
+
+  const watcher = (limitSamples: LimitSampleStore | undefined, mono: { ms: number }): FleetWatcher => {
+    const fixture = testDeps(mkTmp('ccrc-limit-sampler-w-'));
+    return quietAtTestEnd(new FleetWatcher({ ...fixture, cfg: { ...fixture.cfg, roster }, limitSamples, monotonicMs: () => mono.ms,
+      time: fakeTime({ wallMs: NOW * 1000 }).ports }, new Bus(), 2000));
+  };
+  const limits = { 'lane-a': lim(40, 20, NOW - 30) };
+  const isSamplerWarn = (call: unknown[]) => String(call[0]).startsWith('ccrc-server: the limit sampler failed');
+
+  it('runs at the lane cadence, passing the wall clock to pruning in seconds', async () => {
+    const store = fakeStore();
+    const mono = { ms: 1_000_000 };
+    const w = watcher(store, mono);
+    await w.sweepLimitSamples(limits);
+    mono.ms += LIMIT_SAMPLE_MS - 1;
+    await w.sweepLimitSamples(limits);
+    expect(store.inserts).toHaveLength(1);
+    expect(store.prunes).toEqual([NOW - LIMIT_SAMPLES_KEEP_S]);
+    mono.ms += 1;
+    await w.sweepLimitSamples(limits);
+    expect(store.inserts).toHaveLength(2);
+  });
+
+  it('without a store it skips the pass without a lane failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await watcher(undefined, { ms: 1_000_000 }).sweepLimitSamples(limits);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toEqual([]);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a throwing store warns once with the row\'s sentence, then a healthy store samples on the next beat', async () => {
+    const mono = { ms: 1_000_000 };
+    const store = fakeStore();
+    vi.spyOn(store, 'insertLimitSamples').mockImplementationOnce(() => { throw new Error('disk gone'); });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const w = watcher(store, mono);
+      await w.sweepLimitSamples(limits);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toHaveLength(1);
+      expect(store.prunes).toEqual([]);
+      mono.ms += LIMIT_SAMPLE_MS;
+      await w.sweepLimitSamples(limits);
+      expect(store.inserts).toHaveLength(1);
+      expect(store.prunes).toHaveLength(1);
+      expect(warn.mock.calls.filter(isSamplerWarn)).toHaveLength(1);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('the retention span covers the runway read span', () => {
+    expect(LIMIT_SAMPLES_KEEP_S).toBeGreaterThanOrEqual(RUNWAY_READ_S);
+  });
+
+  it('tick() hands the pass its own reading after a listed tick', async () => {
+    const home = mkTmp('ccrc-limit-sampler-tick-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+    const w = quietAtTestEnd(new FleetWatcher({ ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg,
+      limitSamples: fakeStore() } as never, new Bus(), 10_000));
+    const spy = vi.spyOn(w, 'sweepLimitSamples').mockResolvedValue(undefined);
+    await w.tick();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toEqual(w.currentLimits()!.limits);
+  });
+
+  it('the composition root hands the lane the coord store (read through the parser: ARCH-06)', () => {
+    const writes = nameWrites(parsedFile('server/src/index.ts')).filter((x) => x.name === 'deps' && x.member === 'limitSamples');
+    expect(writes.map((x) => x.value)).toEqual(['coord']);
+  });
+});

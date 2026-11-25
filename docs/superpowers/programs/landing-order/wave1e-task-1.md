@@ -22,7 +22,7 @@ indented under its `describe`, ending in `<ms>ms`.
 
 The plan's run is kept as the source. Two later queue runs of the night read `success`: 45535140754 skipped the
 browser tests (its three shards took about 23 s each), and 45532069453 ran them green, its shards 15.2, 13.8 and
-16.1 minutes (jobs 138929574018, 138929574043 and 138929574062). Read the same way, that run reports the same 118 files
+16.1 minutes (jobs 138929574018, 138929574062 and 138929574043, in shard order; corrected after review run 3750). Read the same way, that run reports the same 118 files
 and 4,333 tests and 7,400,708 ms, its median file at 1.10 times this table's figure. One file stands out:
 `project-linking-card.browser.test.ts` took **425,156 ms** there against 869,850 ms here, every one of its 22 tests
 about half as long, in the same proportions. So that file's time varies about twofold from run to run; this table

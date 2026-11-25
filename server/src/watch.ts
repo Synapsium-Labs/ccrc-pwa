@@ -191,6 +191,7 @@ import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
 import { runSequenceRetentionLane } from './coord/sequenceRetentionLane.js';
 import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
+import { limitSamplePass } from './limitSampler.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -3067,6 +3068,7 @@ export class FleetWatcher {
         this.bus.emit('fleet', sessions);
       }
       this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids };
+      void this.sweepLimitSamples(limits).catch(() => { /* one bad sweep must not kill the poll */ });   // the LIMIT SAMPLER (W1 serviceability B): this listed tick's own reading
       const sigs = rowSignatures(records, paneListing, this.rowSigs);
       for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
       this.rowSigs = sigs;
@@ -6504,6 +6506,13 @@ export class FleetWatcher {
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
       if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });
+  }
+
+  /** The limit sampler (Overlord W1 serviceability PR B, `limitSampler.ts`): every `LIMIT_SAMPLE_MS`, the listed tick's own reading into
+   *  `limit_samples`. It adds no read and reads the wall clock through the time port; a store that throws is the row's warn. */
+  async sweepLimitSamples(limits: TickFacts['limits']): Promise<void> {
+    const store = this.deps.limitSamples;
+    if (store) await this.runLane('limitSamples', () => { limitSamplePass(store, limits, this.deps.cfg.roster, Math.floor(this.deps.time.clock.wall() / 1000)); });
   }
 
   /** The decision model's anchor-set lane (Overlord W2; `coord/decisionModelLane.ts`): anchors, admission and canary through the one caller. */

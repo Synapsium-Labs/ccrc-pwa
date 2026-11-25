@@ -32,6 +32,7 @@ import type { ClaudeCodeOwnLists } from '../../shared/overlord-sandbox.js';
 import type { SettleOutcome } from './continuity/routes.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
+import type { LimitSampleStore } from './limitSampler.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
@@ -229,6 +230,9 @@ export interface Deps {
   /** The forecast lane's port (Overlord W2 forecasts A, `coord/forecastLane.ts`): the coordination store itself, set in
    *  `index.ts`. Absent: the lane does not run. */
   forecasts?: ForecastLanePort;
+  /** The limit sampler's store (Overlord W1 serviceability PR B, `limitSampler.ts`): the coordination store, set in `index.ts`.
+   *  Absent: the `limitSamples` lane does not run. */
+  limitSamples?: LimitSampleStore;
   /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
    *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
   decisions?: DecisionDeps;
