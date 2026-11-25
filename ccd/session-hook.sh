@@ -3634,7 +3634,7 @@ fi
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
 # restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 # `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
-# `failAts` (D-TBD-provider-retry-count): the last 8 epochs of CONSECUTIVE provider failures. A failed whose token is a
+# `failAts` (D-9086): the last 8 epochs of CONSECUTIVE provider failures. A failed whose token is a
 # provider's appends its own stamp; another token leaves the list; done and clear empty it; working and restart carry it
 # (a restart relabels a failed line done, so the list is what still says a retry is owed). The tokens are
 # `server/src/coord/stopFailure.ts#PROVIDER_FAILURE_ERRORS`; session-hook-turnmark.test.ts holds the two equal.

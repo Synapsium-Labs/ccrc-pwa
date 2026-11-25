@@ -72,7 +72,7 @@ export class ProviderRetryLane {
     const mark = stallCurrentMark(session);
     const owed = mark === null ? null : providerRetryOwed(mark);
     if (owed === null || s === undefined) { this.owing.delete(id); return; }
-    this.owing.set(id, { provider: outageProviderOf(s.wrapper, this.deps().cfg.roster.byId.get(s.wrapper)?.telemetry), at: owed.at });
+    this.owing.set(id, { provider: outageProviderOf(s.wrapper, this.deps().cfg.roster.byId.get(s.wrapper)?.telemetry), at: owed.at, since: owed.since });
   }
 
   /** The end of a pass: a session with no live pane owes nothing, and the outage steps. An unarmed pass raises nothing. */

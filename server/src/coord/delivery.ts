@@ -230,7 +230,7 @@ export function decideSendFailure(
   if (error === 'auto-continue-armed') {
     return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_ARMED_HOLD_MS, tellSender: d.lastError !== error } };
   }
-  // D-TBD-provider-retry-draft: only a fixed line with `draft: 'refuse'` reaches this word on this lane. A person is writing, so it
+  // D-9090: only a fixed line with `draft: 'refuse'` reaches this word on this lane. A person is writing, so it
   // waits and counts nothing: no attempt, no park, no escalation.
   if (error === 'draft-present') {
     return { gate: null, action: { kind: 'hold', why: error, until: now + MAIL_TURN_HOLD_MS, tellSender: false } };

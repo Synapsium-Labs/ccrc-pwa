@@ -6287,7 +6287,8 @@ nothing is typed, and the mail waits for the box. A queued nudge the session has
 moved past is taken back. No coordinator is asked to mend a provider, and a
 worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
 about it. When three sessions owe a retry on one provider (the Anthropic lanes,
-the Codex lanes, or any other lane by itself) within 10 minutes, one notice with
+the Codex lanes, or any other lane by itself) within 10 minutes, or one session has
+got past none of its failures for an hour, one notice with
 no session goes to the operator, and one record-only row says when none has owed
 one for 10 minutes; the standing outages are kept in
 `~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed

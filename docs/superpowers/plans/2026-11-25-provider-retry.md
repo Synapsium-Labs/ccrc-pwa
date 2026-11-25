@@ -77,22 +77,24 @@ and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 
 ## Deviations found
 
-- **D-TBD-provider-retry-armed** — the arm that reads a provider failure was dark by design (D-3605: a wave-2 arm is shadow
+- **D-9085** — the arm that reads a provider failure was dark by design (D-3605: a wave-2 arm is shadow
   until `stall-watch-w2-live`). The operator's ruling of 2026-11-25 above is what arms it. Its rule is its own: the two
   provider tokens leave the `failed` arm (class `provider`) and the repeat report to a coordinator is gone for them.
-- **D-TBD-provider-retry-count** — the marker gains a second additive field, `failAts`, after `crons`. A restart relabels a
+- **D-9086** — the marker gains a second additive field, `failAts`, after `crons`. A restart relabels a
   `failed` line `done` and starts no turn (W0), so the state word cannot say a retry is owed; the list can.
-- **D-TBD-provider-retry-files-armed** — "stopped by Log only" is read as a level *chosen* in Settings. A box that follows its
+- **D-9087** — "stopped by Log only" is read as a level *chosen* in Settings. A box that follows its
   files with no `stall-watch-live` reads as Log only in Settings too, but it is armed: otherwise the ladder would ship dark on
   every box where nothing was ever touched, against the ruling.
-- **D-TBD-provider-retry-run-less** — a run worker's nudge is run-less too, keyed on its mail subject (the due time is in it),
+- **D-9088** — a run worker's nudge is run-less too, keyed on its mail subject (the due time is in it),
   and writes no `run_events` row, unlike the `failed` arm's. One dedupe serves every kind of session, and a provider row on a
   run would read as a prior failure to the `failed` arm's repeat rule.
-- **D-TBD-provider-retry-fixed-line** — the mail is a fixed-line mail, not the generic nudge. The generic one asks the session to
+- **D-9089** — the mail is a fixed-line mail, not the generic nudge. The generic one asks the session to
   fetch and ack; in an outage it does neither, so the lane's replays would stand beside the ladder's repeats (two outstanding),
   and the designated Overlord has no mail client at all.
-- **D-TBD-provider-retry-draft** — the one mail that refuses a person's draft instead of stashing it (D-5912). A person writing
+- **D-9090** — the one mail that refuses a person's draft instead of stashing it (D-5912). A person writing
   in that box is about to continue the session, and the hold waits for the box, with no attempt counted and no park.
-- **D-TBD-provider-retry-program-hold** — "a held session" is not read as a workspace's programme hold: every programme
+- **D-9091** — "a held session" is not read as a workspace's programme hold: every programme
   worker carries one, so the ladder would reach no worker.
-- **D-TBD-provider-retry-notice** — the outage notice shares the ladder's arming, so a stopped ladder raises none.
+- **D-9092** — the outage notice shares the ladder's arming, so a stopped ladder raises none. One
+  session that has got past none of its failures for an hour raises it too (the orchestrator's review): its coordinator is not
+  told and the quiet ladder holds, so nobody else would hear of it.

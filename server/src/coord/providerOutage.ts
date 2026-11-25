@@ -1,14 +1,17 @@
 /**
- * THE PROVIDER OUTAGE'S ONE NOTICE (the provider-failure ladder, wave 1, D-TBD-provider-retry-notice; plan
+ * THE PROVIDER OUTAGE'S ONE NOTICE (the provider-failure ladder, wave 1, D-9092; plan
  * `docs/superpowers/plans/2026-11-25-provider-retry.md`). L1, pure: it decides which notice is due, and
  * `providerRetryLane.ts` (L4) sends it in the disk alarm lane's shape.
  *
  * One notice per PROVIDER per outage, never one per session: an outage stops many sessions at once and the retries are
  * ccrc's own, so the operator needs the fact and no act. Raised when PROVIDER_OUTAGE_SESSIONS sessions owe a retry on one
- * provider within PROVIDER_OUTAGE_WINDOW_MS; cleared, record-only, when none has owed one for PROVIDER_OUTAGE_CLEAR_MS.
+ * provider within PROVIDER_OUTAGE_WINDOW_MS, or when ONE session has got past none of its failures for PROVIDER_OUTAGE_STUCK_MS
+ * (nobody else is told of it: its coordinator is not, and the quiet ladder holds); cleared, record-only, when none has owed one for PROVIDER_OUTAGE_CLEAR_MS.
  */
 export const PROVIDER_OUTAGE_SESSIONS = 3;
 export const PROVIDER_OUTAGE_WINDOW_MS = 10 * 60_000;
+/** *Chosen*: five steps of the ladder (1, 4, 15, 15, 15 min) and a margin. */
+export const PROVIDER_OUTAGE_STUCK_MS = 60 * 60_000;
 export const PROVIDER_OUTAGE_CLEAR_MS = 10 * 60_000;
 
 /** The provider a lane's turns run on: every lane of the Anthropic array is one provider, every lane of the Codex array is
@@ -20,8 +23,8 @@ export function outageProviderOf(lane: string, telemetry: string | undefined): O
   return { key: `lane:${lane}`, name: lane };
 }
 
-/** A session that owes a retry, and when its newest failure was. */
-export interface OwingSession { readonly provider: OutageProvider; readonly at: number }
+/** A session that owes a retry, when its newest failure was, and when the oldest of the consecutive ones it keeps was. */
+export interface OwingSession { readonly provider: OutageProvider; readonly at: number; readonly since: number }
 /** A standing outage: when it was raised, when a session last owed a retry on it, and whether this process has offered its
  *  notice. One resumed from its durable mark has not: the notice is offered once more under its first key, and the lane's
  *  once-only read drops it when it was archived, so a server that stopped between the mark and the push still tells. */
@@ -34,7 +37,7 @@ export interface ProviderOutageNotice {
 const minutes = (ms: number): string => `${ms / 60_000} minutes`;
 const raised = (key: string, o: Pick<ProviderOutage, 'since' | 'name'>): ProviderOutageNotice => ({
   mode: 'push', key, dedupeKey: `provider-outage:${key}:${o.since}`, title: `${o.name} is returning errors`,
-  body: `${PROVIDER_OUTAGE_SESSIONS} or more sessions stopped on a provider error within ${minutes(PROVIDER_OUTAGE_WINDOW_MS)}. ccrc tells each one to continue until it can, so there is nothing for you to do.`,
+  body: `${PROVIDER_OUTAGE_SESSIONS} or more sessions stopped on a provider error within ${minutes(PROVIDER_OUTAGE_WINDOW_MS)}, or one has got past none for ${minutes(PROVIDER_OUTAGE_STUCK_MS)}. ccrc keeps telling each one to continue. To stop waiting, move a session to another account.`,
 });
 
 /** One pass: the next set of standing outages, and the notices it makes due, in key order. */
@@ -57,8 +60,9 @@ export function providerOutageStep(standing: ProviderOutages, owing: readonly Ow
       continue;
     }
     const recent = here.filter((o) => now - o.at <= PROVIDER_OUTAGE_WINDOW_MS);
-    if (recent.length < PROVIDER_OUTAGE_SESSIONS) continue;
-    const name = recent[0]!.provider.name;
+    const stuck = here.some((o) => now - o.since >= PROVIDER_OUTAGE_STUCK_MS);
+    if (recent.length < PROVIDER_OUTAGE_SESSIONS && !stuck) continue;
+    const name = here[0]!.provider.name;
     next.set(key, { since: now, lastOwedAt: now, name, offered: true });
     notices.push(raised(key, { since: now, name }));
   }

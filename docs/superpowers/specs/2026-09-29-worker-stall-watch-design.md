@@ -516,7 +516,7 @@ nothing on Stop. The one `jq` call at the payload parse (~2767) becomes one prog
 lostBg, lostKinds, lostIds}`
 
 (Amended: two additive fields follow them, `crons` (D-5242) and `failAts`, the epochs of the last eight consecutive provider
-failures, D-TBD-provider-retry-count.)
+failures, D-9086.)
 
 - Every write rewrites the whole line and carries forward every field it does not set.
 - A payload with a non-empty top-level `agent_id` never touches the marker. Only main-thread events write it, and they
@@ -636,7 +636,7 @@ All wave-2 arms are gated by `stall-watch-w2-live` as well as the markers in §4
 **`STOP_FAILURE_ERRORS`** is one total `Record` in `stall.ts` over StopFailure's documented values:
 - **retry:** `max_output_tokens`, `unknown` — a `failed:` self-mail at 10 min; a second
   failure within `FAILED_REPEAT_MS` (2 h) goes to the coordinator.
-- **provider** (amended 2026-11-25, D-TBD-provider-retry-armed; the operator's ruling of that day): `server_error`,
+- **provider** (amended 2026-11-25, D-9085; the operator's ruling of that day): `server_error`,
   `overloaded` — not this arm's. The provider-failure ladder (`coord/providerRetry.ts`, plan
   `2026-11-25-provider-retry.md`) nudges any live session itself at 1, 4 and 15 min, tells no coordinator, and is armed by
   its own rule rather than by `stall-watch-w2-live` (D-3605). The table now lives in `coord/stopFailure.ts`.

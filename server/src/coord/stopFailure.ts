@@ -16,7 +16,7 @@ import {
 
 // ── StopFailure's error tokens (§5.2) ────────────────────────────────────────────────────────────────────────
 /** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in four classes.
- *  `provider`: the provider's own failure, `providerRetry.ts`'s ladder (D-TBD-provider-retry-armed): never this arm's, so no
+ *  `provider`: the provider's own failure, `providerRetry.ts`'s ladder (D-9085): never this arm's, so no
  *  coordinator is asked to mend one. `retry`: a self-mail, then the coordinator on a repeat. `account`: a hold, because the limit, swap and authdead
  *  machinery owns it. `request`: the coordinator, because a retry fails the same way. It is one total Record, and
  *  the classifier reads it through `hasOwnProperty`, so an inherited name is never a token. */

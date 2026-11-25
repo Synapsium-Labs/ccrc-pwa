@@ -55,27 +55,31 @@ const delivery = (mailId: number, over: Partial<StallDeliveryRow> = {}): StallDe
 
 describe('what a marker says is owed', () => {
   it('a counted failure with no turn since: its epoch and its place in the count', () => {
-    expect(providerRetryOwed(mark())).toEqual({ at: T, count: 1 });
-    expect(providerRetryOwed(mark({ failAts: [T - 9 * MIN, T - 4 * MIN, T] }))).toEqual({ at: T, count: 3 });
-    expect(providerRetryOwed(mark({ turnAt: null }))).toEqual({ at: T, count: 1 });
+    expect(providerRetryOwed(mark())).toEqual({ at: T, count: 1, since: T });
+    expect(providerRetryOwed(mark({ failAts: [T - 9 * MIN, T - 4 * MIN, T] }))).toEqual({ at: T, count: 3, since: T - 9 * MIN });
+    expect(providerRetryOwed(mark({ turnAt: null }))).toEqual({ at: T, count: 1, since: T });
+    // Failures up to two repeats apart are one stretch; a longer gap is a turn that worked between them.
+    expect(providerRetryOwed(mark({ failAts: [T - 60 * MIN, T - 30 * MIN, T] }))!.since).toBe(T - 60 * MIN);
+    expect(providerRetryOwed(mark({ failAts: [T - 60 * MIN, T - 30 * MIN + 1, T] }))!.since).toBe(T - 30 * MIN + 1);
+    expect(providerRetryOwed(mark({ failAts: [T - 180 * MIN, T] }))!.since).toBe(T);
   });
   it('a turn since, or at the very instant, owes nothing', () => {
     expect(providerRetryOwed(mark({ state: 'working', turnAt: T + 1 }))).toBeNull();
     expect(providerRetryOwed(mark({ state: 'working', turnAt: T }))).toBeNull();
   });
   it('a restart relabels the failed line done, and the retry is still owed', () => {
-    expect(providerRetryOwed(mark({ state: 'done', event: 'SessionStart', restartAt: T + 5_000 }))).toEqual({ at: T, count: 1 });
+    expect(providerRetryOwed(mark({ state: 'done', event: 'SessionStart', restartAt: T + 5_000 }))).toEqual({ at: T, count: 1, since: T });
   });
   it('a finished turn owes nothing: the hook emptied the count', () => {
     expect(providerRetryOwed(mark({ state: 'done', event: 'Stop', err: 'server_error', failAts: [] }))).toBeNull();
   });
   it('an older hook counts none: its failed line with a provider token owes one, any other token none', () => {
-    for (const err of PROVIDER_FAILURE_ERRORS) expect(providerRetryOwed(mark({ failAts: [], err })), err).toEqual({ at: T, count: 1 });
+    for (const err of PROVIDER_FAILURE_ERRORS) expect(providerRetryOwed(mark({ failAts: [], err })), err).toEqual({ at: T, count: 1, since: T });
     for (const err of ['unknown', 'max_output_tokens', 'rate_limit', 'invalid_request', null, 'new_error']) {
       expect(providerRetryOwed(mark({ failAts: [], err })), String(err)).toBeNull();
     }
     const { failAts: _none, ...older } = mark();
-    expect(providerRetryOwed(older)).toEqual({ at: T, count: 1 });
+    expect(providerRetryOwed(older)).toEqual({ at: T, count: 1, since: T });
     expect(providerRetryOwed(mark({ failAts: [], stopAt: null }))).toBeNull();
   });
   it('a later failure of another kind ends the owing: the turn that ended on it ran', () => {

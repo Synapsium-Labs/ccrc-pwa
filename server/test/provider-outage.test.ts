@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  PROVIDER_OUTAGE_CLEAR_MS, PROVIDER_OUTAGE_SESSIONS, PROVIDER_OUTAGE_WINDOW_MS, outageProviderOf, providerOutageStep, type OwingSession, type ProviderOutages,
+  PROVIDER_OUTAGE_CLEAR_MS, PROVIDER_OUTAGE_SESSIONS, PROVIDER_OUTAGE_STUCK_MS, PROVIDER_OUTAGE_WINDOW_MS, outageProviderOf, providerOutageStep, type OwingSession, type ProviderOutages,
 } from '../src/coord/providerOutage.js';
 import { readOutageMarks, writeOutageMarks } from '../src/providerOutageMark.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -12,7 +12,7 @@ const NOW = 1_800_000_000_000;
 const MIN = 60_000;
 const NONE: ProviderOutages = new Map();
 const ANTHROPIC = outageProviderOf('lane-a', 'anthropic');
-const owe = (n: number, at = NOW - MIN, provider = ANTHROPIC): OwingSession[] => Array.from({ length: n }, () => ({ provider, at }));
+const owe = (n: number, at = NOW - MIN, provider = ANTHROPIC): OwingSession[] => Array.from({ length: n }, () => ({ provider, at, since: at }));
 const step = (standing: ProviderOutages, owing: readonly OwingSession[], now = NOW) => providerOutageStep(standing, owing, now);
 
 describe('the provider a lane runs on', () => {
@@ -25,19 +25,26 @@ describe('the provider a lane runs on', () => {
 });
 
 describe('raised', () => {
-  it('the numbers: three sessions, ten minutes, ten minutes', () => {
-    expect([PROVIDER_OUTAGE_SESSIONS, PROVIDER_OUTAGE_WINDOW_MS, PROVIDER_OUTAGE_CLEAR_MS]).toEqual([3, 10 * MIN, 10 * MIN]);
+  it('the numbers: three sessions, ten minutes, ten minutes, and one session stuck for an hour', () => {
+    expect([PROVIDER_OUTAGE_SESSIONS, PROVIDER_OUTAGE_WINDOW_MS, PROVIDER_OUTAGE_CLEAR_MS, PROVIDER_OUTAGE_STUCK_MS]).toEqual([3, 10 * MIN, 10 * MIN, 60 * MIN]);
   });
   it('at three, not at two', () => {
     expect(step(NONE, owe(2)).notices).toEqual([]);
     const r = step(NONE, owe(3));
     expect(r.notices).toEqual([{ mode: 'push', key: 'anthropic', dedupeKey: `provider-outage:anthropic:${NOW}`, title: 'Anthropic is returning errors',
-      body: '3 or more sessions stopped on a provider error within 10 minutes. ccrc tells each one to continue until it can, so there is nothing for you to do.' }]);
+      body: '3 or more sessions stopped on a provider error within 10 minutes, or one has got past none for 60 minutes. ccrc keeps telling each one to continue. To stop waiting, move a session to another account.' }]);
     expect(r.next).toEqual(new Map([['anthropic', { since: NOW, lastOwedAt: NOW, name: 'Anthropic', offered: true }]]));
   });
   it('only failures inside the window count', () => {
     expect(step(NONE, [...owe(2), ...owe(1, NOW - PROVIDER_OUTAGE_WINDOW_MS)]).notices).toHaveLength(1);
     expect(step(NONE, [...owe(2), ...owe(1, NOW - PROVIDER_OUTAGE_WINDOW_MS - 1)]).notices).toEqual([]);
+  });
+  it('one session that has got past none of its failures for an hour raises it alone, and not a moment before', () => {
+    const one = (since: number): OwingSession[] => [{ provider: ANTHROPIC, at: NOW - 20 * MIN, since }];
+    expect(step(NONE, one(NOW - PROVIDER_OUTAGE_STUCK_MS + 1)).notices).toEqual([]);
+    const r = step(NONE, one(NOW - PROVIDER_OUTAGE_STUCK_MS));
+    expect(r.notices.map((n) => [n.mode, n.title])).toEqual([['push', 'Anthropic is returning errors']]);
+    expect(step(r.next, one(NOW - PROVIDER_OUTAGE_STUCK_MS), NOW + 60 * MIN).notices).toEqual([]);
   });
   it('each provider on its own', () => {
     const codex = outageProviderOf('lane-c', 'codex');

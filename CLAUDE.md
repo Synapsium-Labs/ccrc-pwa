@@ -749,7 +749,7 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
   record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. A provider error (`server_error`, `overloaded`) is not the `failed` arm's: the
-  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-TBD-provider-retry-armed, stopped by
+  provider-failure ladder (`coord/providerRetry.ts`, armed by its own rule since D-9085, stopped by
   `stall-watch-disabled`, a chosen Off or Log only, and `mail-disabled`) mails any live session itself at 1, 4 and 15 min,
   asks no coordinator, and raises one operator notice per provider outage. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,

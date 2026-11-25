@@ -7,7 +7,7 @@ import {
 } from './stall.js';
 import type { StallResolved } from './stallsettings.js';
 /**
- * THE PROVIDER-FAILURE LADDER, wave 1 (operator ruling 2026-11-25, D-TBD-provider-retry-armed; plan
+ * THE PROVIDER-FAILURE LADDER, wave 1 (operator ruling 2026-11-25, D-9085; plan
  * `docs/superpowers/plans/2026-11-25-provider-retry.md`). L1, C5, pure: no clock, no I/O, no store.
  *
  * A session whose turn ended on a provider error is nudged to carry on, 1, 4 and then every 15 minutes after the n-th
@@ -27,14 +27,15 @@ export const PROVIDER_RETRY_DELAYS_MS: readonly number[] = [60_000, 4 * 60_000, 
  *  the provider, so it neither counts as a failure nor earns a shorter wait. */
 export const PROVIDER_RETRY_REPEAT_MS = 15 * 60_000;
 
-/** The retry a marker says is owed: the newest failure's epoch, and how many in a row. Null when none is.
+/** The retry a marker says is owed: the newest failure's epoch, how many in a row, and the oldest of the ones no more
+ *  than two repeats apart (a turn that worked for hours between two failures got past the first). Null when none is.
  *  - `failAts` non-empty and its newest entry newer than `turnAt`: the hook counted it, and no turn ran since.
  *  - A `failed` line whose token is a provider's and whose hook counted none (an older fleet build): one failure, at its stop. */
-export function providerRetryOwed(m: Pick<TurnMark, 'state' | 'err' | 'stopAt' | 'turnAt' | 'failAts'>): { readonly at: number; readonly count: number } | null {
+export function providerRetryOwed(m: Pick<TurnMark, 'state' | 'err' | 'stopAt' | 'turnAt' | 'failAts'>): { readonly at: number; readonly count: number; readonly since: number } | null {
   const fails = m.failAts ?? [];
   const last = fails[fails.length - 1];
-  if (last !== undefined && (m.turnAt === null || m.turnAt < last)) return { at: last, count: fails.length };
-  return m.state === 'failed' && m.stopAt !== null && isProviderFailure(m.err) ? { at: m.stopAt, count: 1 } : null;
+  if (last !== undefined && (m.turnAt === null || m.turnAt < last)) return { at: last, count: fails.length, since: fails.reduceRight((from, f) => (from - f <= 2 * PROVIDER_RETRY_REPEAT_MS ? f : from), last) };
+  return m.state === 'failed' && m.stopAt !== null && isProviderFailure(m.err) ? { at: m.stopAt, count: 1, since: m.stopAt } : null;
 }
 
 /** When the first nudge after the n-th consecutive failure falls due. */
