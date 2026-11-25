@@ -22162,12 +22162,31 @@ SWAP_BG_HOLD_MAX=7200           # seconds after the last Stop that live backgrou
                                 # (`_swap_bg_hold`): past it a stuck count can no longer pin a session off its home lane
 SWAP_BG_HOLD_SKEW=60            # seconds a marker's stamp may sit AHEAD of this clock and still read as measured (else: no hold)
 
+_turn_mark_read() {   # id -> rc 0 and the TM_* globals: the hook's turn marker | 1 absent | 2 unreadable | 3 not the hook's line (every TM_* is emptied first)
+  # THE ONE READER OF A TURN MARKER'S EVIDENCE (`$REG/<id>.turn.json`, `TURN_MARK_PROGRAM` in session-hook.sh): the affinity
+  # move's background hold reads it here. `cmd_hibernate` reads its own three facts inline and refuses on anything else.
+  # Builtins only; each field is its own regex, so the key order is not relied on. Nothing here decides what a fact means, and
+  # rc 1, 2 and 3 are never one answer: the hold treats them differently. Whose conversation the line is, the caller asks.
+  # `TM_SID` carries a leading `=` so a present-but-empty sessionId still reads as present. A field the line does not carry, or
+  # carries as null, reads empty.
+  local line="" re
+  TM_SID="" TM_STATE="" TM_AT="" TM_BG="" TM_STOP="" TM_KINDS=""
+  _reg_read_to line "$1" turn.json || return $?
+  re='^\{"v":1,'; { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && return 3
+  re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && TM_SID="=${BASH_REMATCH[1]}"
+  re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && TM_STATE="${BASH_REMATCH[1]}"
+  re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && TM_AT="${BASH_REMATCH[1]}"
+  re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && TM_BG="${BASH_REMATCH[1]}"
+  re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && TM_STOP="${BASH_REMATCH[1]}"
+  re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && TM_KINDS="${BASH_REMATCH[1]}"
+  # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
+  [[ -n "$TM_SID" && -n "$TM_STATE" && -n "$TM_AT" ]] && [[ "$TM_STATE" != done || "$TM_BG" == -1 || "$TM_BG" =~ ^[0-9]+$ ]] || return 3
+}
+
 _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says background work is live (the affinity move waits), 1 iff nothing holds it
-  # THE ONE READER OF THE TURN MARKER ON THE AFFINITY PATH. `$REG/<id>.turn.json` is the
-  # hook's line (`TURN_MARK_PROGRAM`, session-hook.sh; server/src/turnmark.ts reads it for
-  # the mail gate and the stall watch), and at a Stop it records `bg`, the count of
-  # background tasks Claude Code listed. Read with builtins, as `cmd_hibernate` reads it:
-  # this runs on the 5 s tick. Each field is its own regex, so the key order is not relied on.
+  # THE TURN MARKER ON THE AFFINITY PATH, read through `_turn_mark_read` (above): at a Stop the
+  # hook records `bg`, the count of background tasks Claude Code listed (server/src/turnmark.ts
+  # reads the same line for the mail gate and the stall watch). This runs on the 5 s tick.
   #
   # WHAT HOLDS, AND WHAT DOES NOT (each undecidable case decided once, here):
   #   - `done` with `bg` > 0 and a Stop inside SWAP_BG_HOLD_MAX: HOLDS. This is the case.
@@ -22190,32 +22209,20 @@ _swap_bg_hold() {   # id now -> rc 0 iff the session's own turn marker says back
   #     Today's behaviour returns.
   # The marker is not re-measured against the live process: a restart writes `bg` 0
   # (`restart` in the hook) and the bound caps a hook that did not run.
-  local id="$1" now="$2" line="" rrc re st="" sid="" at="" stop="" bg="" kinds="" uuid="" why="" anchor sig msg age
-  _reg_read_to line "$id" turn.json; rrc=$?; (( rrc == 2 )) && why=unreadable
-  (( rrc == 1 )) && { _swap_bg_release "$id"; return 1; }
-  re='^\{"v":1,'; [[ -z "$why" ]] && { (( ${#line} > 4096 )) || [[ "$line" == *$'\n'* || ! "$line" =~ $re ]]; } && why=malformed
-  if [[ -z "$why" ]]; then
-    # `sid` carries a leading `=` so a present-but-empty sessionId still reads as present.
-    re='"sessionId":"([^"]*)"';             [[ "$line" =~ $re ]] && sid="=${BASH_REMATCH[1]}"
-    re='"state":"(done|working|failed)"';   [[ "$line" =~ $re ]] && st="${BASH_REMATCH[1]}"
-    re='"at":([0-9]{1,16})[,}]';            [[ "$line" =~ $re ]] && at="${BASH_REMATCH[1]}"
-    re='"bg":(-?[0-9]{1,9})[,}]';           [[ "$line" =~ $re ]] && bg="${BASH_REMATCH[1]}"
-    re='"stopAt":([0-9]{1,16})[,}]';        [[ "$line" =~ $re ]] && stop="${BASH_REMATCH[1]}"
-    re='"bgKinds":"([a-z_,-]{0,200})"';     [[ "$line" =~ $re ]] && kinds="${BASH_REMATCH[1]}"
-    # Malformed: no sessionId, state or `at`, or a `done` whose `bg` is not -1 or a count.
-    [[ -n "$sid" && -n "$st" && -n "$at" ]] && [[ "$st" != done || "$bg" == -1 || "$bg" =~ ^[0-9]+$ ]] || why=malformed
-  fi
+  local id="$1" now="$2" uuid="" why="" anchor sig msg age
+  _turn_mark_read "$id"
+  case $? in 1) _swap_bg_release "$id"; return 1 ;; 2) why=unreadable ;; 3) why=malformed ;; esac
   if [[ -z "$why" ]]; then
     # Not a `done` line, or nothing running: no hold. Then another conversation's line: no hold.
-    { [[ "$st" != done ]] || { [[ "$bg" != -1 ]] && (( 10#$bg == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
+    { [[ "$TM_STATE" != done ]] || { [[ "$TM_BG" != -1 ]] && (( 10#$TM_BG == 0 )); }; } && { _swap_bg_release "$id"; return 1; }
     _reg_read_to uuid "$id" uuid; (( $? == 2 )) && why=unreadable
-    [[ -z "$why" && ( -z "$uuid" || "$sid" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
+    [[ -z "$why" && ( -z "$uuid" || "$TM_SID" != "=$uuid" ) ]] && { _swap_bg_release "$id"; return 1; }
   fi
   if [[ -n "$why" ]]; then
     anchor=$(_plat_mtime "$REG/$id.turn.json" 2>/dev/null) || anchor=""
     [[ "$anchor" =~ ^[0-9]{1,13}$ ]] || { _swap_bg_release "$id"; return 1; }
     anchor=$(( 10#$anchor * 1000 )); sig="$why:$anchor"; msg="the turn marker is $why, so what runs in the background is unknown"
-  else anchor=$(( 10#${stop:-$at} )); sig="bg:$anchor"; msg="background work (bg=${bg/#-1/unknown} kinds=${kinds:-none})"; fi
+  else anchor=$(( 10#${TM_STOP:-$TM_AT} )); sig="bg:$anchor"; msg="background work (bg=${TM_BG/#-1/unknown} kinds=${TM_KINDS:-none})"; fi
   age=$(( now * 1000 - anchor ))
   (( age < -(SWAP_BG_HOLD_SKEW * 1000) || age >= SWAP_BG_HOLD_MAX * 1000 )) && { _swap_bg_release "$id" expired; return 1; }
   _swap_bg_note "$id" "$sig" "$msg"; return 0

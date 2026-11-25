@@ -354,6 +354,7 @@ _affinity_cur_serves	C1
 _swap_stagger_off	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
+_turn_mark_read	C1
 _swap_bg_hold	C1
 _swap_bg_note	C1
 _swap_bg_release	C1
