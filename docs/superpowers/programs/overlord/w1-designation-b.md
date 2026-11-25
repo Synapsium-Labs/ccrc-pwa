@@ -104,10 +104,11 @@ either. No gate is built for it (the coordinator's ruling).
 - No migration, no ccd verb, no capability word, no new refusal word (`overlord-attempt-pending` was already in
   `OVERLORD_REFUSALS`), no change to `shared/api.ts`.
 - The gate counts in `auth/gate.ts` and its census and the id-taking argv census (56 calls) were applied on each holder's yes
-  to the exact diff, and re-derived in fix round 1's one merge with main `9ae84dca5b20fc75a188757666308839591e7e1c`. That main
-  carries #3286's draft-review door (305 scanned, 302 HTTP, 112 exempt); with this PR's two doors the gate counts are 307
-  scanned, 304 HTTP, 192 gated and 112 exempt, applied on the holder's yes to the exact merge packet. The id-taking census
-  needed no change. The flag-aware test's title still says thirty-five (its holder's note; nothing asserts it).
+  to the exact diff. They were re-derived in each merge with main: fix round 1's with `9ae84dca5b20fc75a188757666308839591e7e1c`
+  and fix round 3's with `2f140376dd2e80e29ae1f7bed8d7ec0cdd4448ab`. That main carries #3348's history door (306 scanned, 303
+  HTTP, 113 exempt). With this PR's two doors the gate counts are 308 scanned, 305 HTTP, 192 gated and 113 exempt, applied on
+  the holder's yes to the exact merge packet. The holder added one word: the flag-aware test's title now says thirty-seven, its
+  sorted list's length. Nothing asserts that word. The id-taking census needed no change.
 
 ## Measured
 
@@ -117,7 +118,7 @@ run; CI and the merge queue are the arbiters for everything else.
 - New and touched suites, each green: `overlord-rebind` (31), `overlord-restart-deadline` (35), `overlord-rebind-route` (38),
   `overlord-lane-port` (15), `overlord-lane-wiring` (3), `overlord-body` (45), `overlord-designate-route` (51), `overlord-settings-doors` (60),
   `continuity-start-loads-route` (61), `continuity-renewal-acts` (37), `continuity-generations-lane` (112, with main's cases), `sandbox-settle` (12).
-- Censuses, each green: `auth-gate` (394), `box-token-census` (80), `overlord-doors-census` (32), `overlord-gate-census` (33),
+- Censuses, each green: `auth-gate` (395), `box-token-census` (80), `overlord-doors-census` (33), `overlord-gate-census` (33),
   `overlord-gate-doors` (42), `id-argv-census` (11), `verb-gate` (25), `mail-routes` (61), `single-definition/writers-map` (49), `sequence-stamp-census` (6);
   every `rings/*` and `single-definition/*` file (56 files), each alone.
 - Mutation, scoped to BASELINE, the floors check, `sandboxCheck.ts#sandboxSettle` (T2 and T7 rewritten for the rebind arm) and
