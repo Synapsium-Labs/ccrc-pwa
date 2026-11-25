@@ -75,6 +75,9 @@ const CENSUS: readonly Row[] = [
       + 'bounded to an open run, where a role-addressed park goes only to the run\'s worker or claimant, which '
       + '`run-worker` and `run-claimant` keep awake; a literal-addressed recipient that is asleep reads `stopped`, so its '
       + 'park waits (nothing written, nothing lost) and comes back once it is listed awake' },
+  { source: 'dead-lifecycle', file: 'server/src/coord/providerRetry.ts', hits: 1, stances: ['consults'],
+    why: 'the provider-failure ladder never nudges a dead row, and asks the marker first: `input.hibernated` (the row\'s `hibernatedAt`) holds a sleeper, and its '
+      + 'nudge is queued `wake: never`, so it wakes none either' },
   { source: 'dead-lifecycle', file: 'server/src/coord/stall.ts', hits: 1, stances: ['held-awake'],
     why: 'the stall watch reads an open run\'s worker, and an open run as worker or claimant holds `run-worker` or '
       + '`run-claimant`; were it to meet one, `stopped` holds `lifecycle-stopped` (no push), which is right for a sleep' },

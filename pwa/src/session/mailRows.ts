@@ -24,8 +24,8 @@ export type MailPromptsItem = Extract<ChatItem, { kind: 'mail-prompts' }>;
  *  the one shared list (`INJECTED_PROMPTS`' `mail-nudge` row, matched as that row says: the head at the start of the
  *  turn, at a word boundary), and nothing looser. A person's message that mentions mail, quotes the prompt lower down,
  *  pastes it after other words or starts with nearly the same words stays an ordinary bubble. Every form the server
- *  types today opens with that head: the generic nudge, the operator-message nudge, the inbox wake and the spot-probe
- *  notice.
+ *  types today opens with that head: the generic nudge, the operator-message nudge, the inbox wake, the spot-probe
+ *  notice and the provider retry.
  *
  *  A LIMIT, RULED (review 3737 A2): the head is the contract, so a person's message that begins with the lane's whole
  *  head and then adds words of their own ("ccrc-mail: you have new mail. Then stop wave 3.") is folded as a prompt too;

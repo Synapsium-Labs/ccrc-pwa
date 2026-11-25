@@ -3634,6 +3634,10 @@ fi
 # (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
 # restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 # `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
+# `failAts` (D-9086): the last 8 epochs of CONSECUTIVE provider failures. A failed whose token is a
+# provider's appends its own stamp; another token leaves the list; done and clear empty it; working and restart carry it
+# (a restart relabels a failed line done, so the list is what still says a retry is owed). The tokens are
+# `server/src/coord/stopFailure.ts#PROVIDER_FAILURE_ERRORS`; session-hook-turnmark.test.ts holds the two equal.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -3652,14 +3656,16 @@ def fiti: .[0:8] | join(",");
    lostBg: (if $same then ($p.lostBg // 0) else 0 end),
    lostKinds: (if $same then ($p.lostKinds // "") else "" end),
    lostIds: (if $same then ($p.lostIds // "") else "" end),
-   crons: (if $same then ($p.crons // -1) else -1 end)} as $b
+   crons: (if $same then ($p.crons // -1) else -1 end),
+   failAts: (if $same and ($p.failAts | type) == "array" then ($p.failAts | map(numbers) | .[-8:]) else [] end)} as $b
 | if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
-  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons, failAts: []}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+    + (if $err == "server_error" or $err == "overloaded" then {failAts: (($b.failAts + [$at]) | .[-8:])} else {} end)
   elif $kind == "restart" then $b
     + (if $same and ($p.state == "done" or $p.state == "failed") then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
     + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
-  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1, failAts: []}
   else empty end'
 _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
   local kind="$1" mf="$REG/$id.turn.json" prev="" out

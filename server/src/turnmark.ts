@@ -27,8 +27,9 @@ import {
  *   with no live read passes `live === null` and judges staleness itself, in L1, with the same helper.
  * There is no freshness window: the marker changes only on main events, so a days-old `done` is still true.
  *
- * One field is ADDITIVE and outside the ladder: `crons` (D-5242, the last Stop's `session_crons` length) reads as
- * null when it is absent or not an integer from −1 up, and the line stays `ok`.
+ * Two fields are ADDITIVE and outside the ladder. `crons` (D-5242, the last Stop's `session_crons` length) reads as
+ * null when it is absent or not an integer from −1 up, and the line stays `ok`. `failAts` (the provider-failure ladder)
+ * is a second: a list of at most eight epochs, and anything else reads as none.
  *
  * The ok arm carries every field, the three comma-joined lists split (an empty list is `[]`, never `['']`), and
  * `graceUntil` (`turnMarkGraceUntil`): the mail gate imports nothing, so the grace a restart opens reaches it here.
@@ -64,6 +65,10 @@ const isLostBg = (v: unknown): v is number => typeof v === 'number' && Number.is
 /** D-5242: `crons` is an integer from −1 up; anything else reads as absent (null) and NEVER condemns the line, because
  *  the field is additive and every other consumer of the marker must still read an older or odder line. */
 const cronsOf = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= -1 ? v : null);
+/** The provider-failure ladder's count: at most eight epochs, and anything else reads as NONE and never condemns the line,
+ *  for `crons`' reason. */
+const failAtsOf = (v: unknown): readonly number[] =>
+  Array.isArray(v) && v.length <= 8 && v.every(isEpoch) ? (v as number[]) : [];
 const isKinds = (v: unknown): v is string =>
   typeof v === 'string' && Buffer.byteLength(v, 'utf8') <= TURN_MARK_KINDS_MAX_BYTES && TURN_MARK_KINDS_RE.test(v);
 const isIds = (v: unknown): v is string => typeof v === 'string' && TURN_MARK_IDS_RE.test(v);
@@ -96,7 +101,7 @@ export async function readTurnMarkMeasured(io: FleetIO, registryDir: string, id:
   if (currentUuid === null || currentUuid === '' || sessionId !== currentUuid) return FOREIGN;
   const mark: Omit<TurnMark, 'graceUntil'> = {
     sessionId, state, event, at, turnAt, stopAt, bg, bgKinds: splitList(bgKinds), bgIds: splitList(bgIds), err,
-    restartAt, lostBg, lostKinds: splitList(lostKinds), lostIds: splitList(lostIds), crons: cronsOf(raw['crons']),
+    restartAt, lostBg, lostKinds: splitList(lostKinds), lostIds: splitList(lostIds), crons: cronsOf(raw['crons']), failAts: failAtsOf(raw['failAts']),
   };
   if (live !== null && (live.startedAt === null || turnMarkStale(mark, live.startedAt))) return STALE;
   return { ok: true, ...mark, graceUntil: turnMarkGraceUntil(mark) };
