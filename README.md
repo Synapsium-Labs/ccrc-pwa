@@ -5813,15 +5813,18 @@ names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
-CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
+CI, so a session absorbs `main` only on a licence. Worker clause 16 names four, each read after one
 `git fetch origin`: the branch conflicts —
 `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its
 first line (exit 0 is clean; any other answer is unmeasured and licenses nothing); a required check on
 its PR is red while `main` passes the same tests, measured by re-running the failing test files on a
 clean checkout of `origin/HEAD` in scratch (a red that `main` shows too is reported once as `main-red`
-and left alone); or a `fix-round` mail from the coordinator names the PR ejected from the landing line,
-or next to land in a strict-protection repository. The first two license at most one absorption per
-PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
+and left alone); a `fix-round` mail from the coordinator names the PR ejected from the landing line,
+or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
+names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
+that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
+absorption of exactly the named commit per mail, before the worker's wave-done of that round only. An
+absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run
@@ -8594,7 +8597,14 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
+jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
+stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
+when the queue branch is gone and the group's commit is not on `main`; an unmeasured read lets the job run, and a job
+already running when its group is superseded runs to its end (D-9015). The growth check measures a queue entry against
+the group's parent commit (`merge_group.base_sha`, when it is an ancestor of HEAD), not the merge base with
+`origin/main`, so a stack is judged entry by entry at the same per-PR limit (D-9016). The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when

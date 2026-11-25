@@ -62,6 +62,7 @@ const coord: ReadingsCoord = {
   backstopRead: () => ({ ok: true, backstop: { hour: 4, zone: 'UTC', isDefault: true, setAt: 0 } }),
   designationRead: () => ({ kind: 'not-designated', row: null }),
   raiseLatch: () => { throw new Error('no latch in these tests'); },
+  startById: () => { throw new Error('no start read in these tests'); },
 };
 const deps = (operatorModel: Pick<OperatorModelStore, 'messagesSince'> | undefined, logs: string[] = []) => ({
   time: { clock: { wall: () => START + 86_400_000 }, entropy: { hex: (n: number) => 'a'.repeat(2 * n) } }, log: (l: string) => logs.push(l),

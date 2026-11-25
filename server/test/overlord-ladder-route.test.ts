@@ -25,7 +25,7 @@ function rig(witness?: NarrowingWitness) {
   const app = Fastify();
   registerOverlordRoutes(app, { identity,
     coord, gate: () => { throw Error('ladder must not ask account gate'); }, serial: () => { throw Error('ladder must not serialize'); },
-    facts: { serverWords: [] }, ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, witness, serverCaps: [] },
+    facts: { serverWords: [] }, ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, witness, serverCaps: [] },
   } as unknown as OverlordRouteDeps);
   return { app, db };
 }
@@ -41,7 +41,7 @@ describe('ladder write doors', () => {
     registerOverlordRoutes(app, { identity,
       coord, facts: {}, serial: async (f: () => unknown) => f(),
       gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: accountActor }; },
-      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
       journal: { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 7 } }) },
       clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: false, device: null }),
     } as unknown as OverlordRouteDeps);
@@ -62,7 +62,7 @@ describe('ladder write doors', () => {
     registerOverlordRoutes(app, { identity,
       coord, facts: {}, serial: async (f: () => unknown) => f(),
       gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: accountActor }; },
-      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
       journal: { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 7 } }) },
       clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: false, device: null }),
     } as unknown as OverlordRouteDeps);
@@ -91,7 +91,7 @@ function writeRig(options: { gateError?: string; actor?: string; caps?: string[]
       if (options.gateError) { reply.code(403).send({ ok: false, error: options.gateError }); return { pass: false }; }
       return { pass: true, actor: accountActor };
     },
-    ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, witness: options.witness, serverCaps: options.caps ?? [] },
+    ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, witness: options.witness, serverCaps: options.caps ?? [] },
     journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return options.journalAnswer ?? { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
     clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: options.actor !== undefined && options.actor !== 'flag-off', device: options.actor?.replace(/^device:/, '') ?? null }),
   } as unknown as OverlordRouteDeps);
@@ -110,7 +110,7 @@ describe('ladder write safeguards', () => {
       ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'future'"); return read; } };
     registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), consoleFacts: () => ({ armed: false, device: null }),
       journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
-      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/pause' });
     expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
@@ -125,7 +125,7 @@ describe('ladder write safeguards', () => {
       ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'off'"); return read; } };
     registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), consoleFacts: () => ({ armed: false, device: null }),
       journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
-      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'chat' } });
     expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
@@ -136,7 +136,7 @@ describe('ladder write safeguards', () => {
     const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
     const coord = new CoordStore(db); const app = Fastify();
     registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(),
-      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'off' } });
     expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
@@ -254,7 +254,7 @@ describe('ladder write safeguards', () => {
     const app = Fastify();
     registerOverlordRoutes(app, { identity, coord, journal, facts: {}, serial: async (f: () => unknown) => f(),
       gate: () => ({ pass: true, actor: accountActor }), clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
-      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/latches/latch-a/clear' });
     expect(res.json()).toMatchObject({ error: 'journal-unreadable' });
@@ -318,7 +318,7 @@ describe('ladder write safeguards', () => {
     const coord = new CoordStore(db); const app = Fastify();
     registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: accountActor }),
       journal: NO_LADDER_AUTHORITY, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
-      ladder: { coord, journal: NO_LADDER_AUTHORITY, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
+      ladder: { coord, journal: NO_LADDER_AUTHORITY, inputs: { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     expect((await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'chat' } })).json()).toMatchObject({ error: 'authority-rolled-back' });
     expect((await app.inject({ method: 'POST', url: '/api/overlord/latches/latch-a/clear' })).json()).toMatchObject({ error: 'authority-rolled-back' });
@@ -380,7 +380,7 @@ describe('ladder GET', () => {
     const coord = new CoordStore(db);
     const caps = ['overlord-route-v1', 'overlord-answer-v1'];
     const app = Fastify();
-    registerOverlordRoutes(app, { identity, coord, facts: {}, ladder: { coord, inputs: ladderConditionInputs({ coord, serverCaps: caps, continuityGate: () => null }), serverCaps: caps } } as unknown as OverlordRouteDeps);
+    registerOverlordRoutes(app, { identity, coord, facts: {}, ladder: { coord, inputs: { ...ladderConditionInputs({ coord, serverCaps: caps, continuityGate: () => null }), 'load-past-95': () => 'lifted' }, serverCaps: caps } } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'GET', url: '/api/overlord/ladder' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ operatorRung: 'full', effectiveRung: 'chat', binding: [{ cause: 'generation-degraded', reading: 'standing' }], conditions: expect.arrayContaining([expect.objectContaining({ cause: 'generation-degraded', reading: 'standing' })]) });

@@ -34,6 +34,8 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
+import * as limitSamples from './limitSamplesStore.js';
+import type { LimitSample } from '../poolRunway.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
@@ -41,9 +43,9 @@ import type { CaseDue } from './practiceCases.js';
 import {
   advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
   generationsCursor, handoverBefore, handoverOf, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
-  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startById, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
-  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
+  type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartRead, type StartsRead,
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
   type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead, type StepResult,
 } from '../continuity/continuityStore.js';
@@ -5682,6 +5684,7 @@ export class CoordStore {
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  startById(id: number): StartRead { return startById(this.db, id); }
   /** Overlord W1 door process B1: the session's reported model switches since its generation's start, by the server's clock (the off-model input's read). */
   modelSwitchesOf(sessionId: string, startId: number): HookStoreRead<ModelSwitchRow[]> { return modelSwitchesSinceStart(this.db, sessionId, startId); }
   /** Overlord W1 renewal readings PR E: the session's reader events since its generation's start, with that floor, by the server's clock. */
@@ -6512,6 +6515,10 @@ export class CoordStore {
 
   /** Every `claude_builds` row, newest build first (`coord/claudeBuildsStore.ts`). Throws when the table cannot be read. */
   claudeBuilds(): ClaudeBuildRecord[] { return builds.claudeBuildRecords(this.db); }
+  /** C57's history of limits (`coord/limitSamplesStore.ts`): the sampler's insert and prune, and the runway's read. */
+  insertLimitSamples(rows: readonly LimitSample[], sampledAt: number): number { return limitSamples.insertLimitSamples(this.db, rows, sampledAt); }
+  pruneLimitSamples(beforeS: number): number { return limitSamples.pruneLimitSamples(this.db, beforeS); }
+  limitSamplesSince(accounts: readonly string[], sinceS: number): LimitSample[] { return limitSamples.limitSamplesSince(this.db, accounts, sinceS); }
   /** One `queued` row per build that has none; answers the builds recorded. */
   noteClaudeBuildsSeen(seen: readonly string[], now: number): string[] { return builds.noteClaudeBuildsSeen(this.db, seen, now); }
   /** The queue tried a `queued` build: a job went out, or why none could. */

@@ -412,6 +412,8 @@ deps.plan = planStorePort(coord.db);
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 // The forecast lane's port (Overlord W2 forecasts A): the store's own delegates, over the same coord.db.
 deps.forecasts = coord;
+// The limit sampler's store (Overlord W1 serviceability PR B): `limit_samples` over the same coord.db.
+deps.limitSamples = coord;
 // The decision model's anchor-set lane and its ports (Overlord W2, plan `w2-decision-model.md` Task 9), over the same coord.db and
 // authority journal. Every row ships `off`, so the lane asks nothing until the operator switches one on.
 /** The hosted egress screen (question 9; review 2418 F2): the private-name list through its one reader. */

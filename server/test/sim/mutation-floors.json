@@ -257,6 +257,8 @@
   "server/src/continuity/renewalReadings.ts#classChangedOf": 1,
   "server/src/continuity/renewalReadings.ts#designatedClassAtMint": 1,
   "server/src/continuity/renewalReadings.ts#probesFailedTwiceOf": 1,
+  "server/src/continuity/renewalReadings.ts#notLocalOf": 1,
+  "server/src/continuity/renewalReadings.ts#notLocalAskOf": 1,
   "server/src/coord/overlordLadder.ts#effectiveRung": 1,
   "server/src/coord/overlordLadder.ts#highestHeldRung": 1,
   "server/src/coord/overlordLadder.ts#rungWordReading": 1,
@@ -335,5 +337,7 @@
   "server/src/isolationWord.ts#isolationWord": 1,
   "server/src/isolationWord.ts#hostRelation": 1,
   "server/src/isolationWord.ts#isolationCondition": 1,
-  "server/src/isolationWord.ts#wakingHostKey": 1
+  "server/src/isolationWord.ts#wakingHostKey": 1,
+  "server/src/poolRunway.ts#poolRunway": 1,
+  "server/src/accountLoad.ts#loadLines": 1
 }

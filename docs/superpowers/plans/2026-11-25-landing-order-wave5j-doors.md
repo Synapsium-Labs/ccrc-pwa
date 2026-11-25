@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task, as the dispatch specifies. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: each half is built by a worker the coordinator dispatches.
 
-**Status: revised on 2026-11-25 after review run 3743 (fix round 2, the last), with the coordinator's rulings on its findings, over round 1's revision after review run 3735.** Drafted for run 3729 from the brief's eight decisions. No implementation exists. The wave is built as two halves, **5j-a** then **5j-b**, each its own run and pull request (section 2 says where the seam is and why). Wave 5k (the console) follows 5j-b and is not planned here.
+**Status: revised on 2026-11-25 after review run 3743 (fix round 2, the last), with the coordinator's rulings on its findings, over round 1's revision after review run 3735.** Drafted for run 3729 from the brief's eight decisions. **Corrected by the coordinator on 2026-11-25 after review run 3748 (round 3, the last): section 11 lists each correction, and where it and a task disagree, section 11 wins.** No implementation exists. The wave is built as two halves, **5j-a** then **5j-b**, each its own run and pull request (section 2 says where the seam is and why). Wave 5k (the console) follows 5j-b and is not planned here.
 
 **Goal:** The operator can pause and resume one project's landing line, and withdraw one entry from it with a notice to that entry's coordinator, from two session-only routes. Pause, resume and withdraw work alike: with sign-in armed the gate demands a session for each, and with sign-in dark each works and records `flag-off`. Both facts are journalled and survive replay. Neither door chooses, reorders or brings forward which entry lands next: a withdrawal frees nothing that waited on the withdrawn entry. The console can read the line with its session.
 
@@ -153,7 +153,7 @@ export interface LandingWait { entryId: number; reason: 'withdrawn'; on: { entry
 ```
 
 - Each waited-on target carries its entry id and its PR number (F12 ruling). The default read lists open entries only, so a withdrawn target is absent from `entries`, and `?pr=` takes a PR number: with both values, one read names what a dependant waits on.
-- The wait ends without any door writing an edge, in one of two ways. Any attributed session declares the entry's order again without that target, through the existing `POST /api/landing/order`: a deliberate, attributed act with its feed note, not a door (F11 ruling; a different setter already costs a feed note today). Or the target re-enters (it is then `pinned`, outstanding as any pinned target is) and later lands (`landed`, met).
+- The wait ends without any door writing an edge, in one of two ways. Any attributed session declares the entry's order again without that target, through the existing `POST /api/landing/order`: a deliberate, attributed act with its feed note, not a door (F11 ruling). Today the feed owes that note only when the setter is not the run's own claimant; from 5j-b a release of a withdrawn hold owes it whoever the setter is (section 11, C1). "Any attributed session" is any session the order door admits: the Overlord's body is refused there (`overlord-uses-its-doors`). Or the target re-enters (it is then `pinned`, outstanding as any pinned target is) and later lands (`landed`, met) or is closed by GitHub (`closed`, met as today). A run-less withdrawn target cannot re-enter (decision 7), so its dependants wait until their order is declared again.
 - `landingBindingOf` selects its head through the same walk, so a held dependant is never a binding head, and nothing is cued to land it.
 - `landed` and `closed` targets keep today's meaning: met. Whether a `closed` target should hold too is a follow-up question ("What this does not claim").
 
@@ -233,7 +233,7 @@ export function landingWithdrawNoticesOf(f: { project: string; mutation: Extract
   - A run-less one cannot come back yet (follow-up `landing-runless-reentry`), and `POST /api/landing/entries` refuses it `landing-entry-exists`.
 - **Each dependant's notice:** `identity` is `JSON.stringify(['landing-held', 1, project, dependant.id, dependant.pr, entry.id, seq, toId])`. The body says:
   - `<project> #<dependant pr>` waits on `#<pr>`, which the operator withdrew, and will not land while that edge stands.
-  - Any attributed session may release it by declaring its order again without `#<pr>` (`POST /api/landing/order`), a deliberate act the feed records. Otherwise it waits until `#<pr>` re-enters and lands.
+  - Any attributed session may release it by declaring its order again without `#<pr>` (`POST /api/landing/order`), a deliberate act the feed records. Otherwise it waits until `#<pr>` re-enters and then lands or is closed; a run-less `#<pr>` cannot re-enter yet.
 
 `landingMutationNotice` is retyped (below) and owes these feed events, all `record-only`, each with `sessionId: ''` as every operator door's event in `routes.ts` carries (the review-cap and capture-again doors). The actor text goes in the body:
 - `landing-paused: <project>` or `landing-resumed: <project>`, for a changed pause.
@@ -299,7 +299,7 @@ export type LandingWithdrawWrite =
 - Refusals:
   - 400 `bad-request`.
   - 404 `landing-entry-missing`.
-  - 409 `landing-entry-terminal` (its `detail` names the state), `landing-entry-moved`, `landing-recovery-unresolved`, `landing-identity-conflict` and `landing-sequence-overflow`.
+  - 409 `landing-entry-terminal` (it carries no detail: the caller reads the entry's state from `GET /api/landing?pr=`; section 11, C5), `landing-entry-moved`, `landing-recovery-unresolved`, `landing-identity-conflict` and `landing-sequence-overflow`.
   - 500 `landing-record-unparseable`.
   - 503 `landing-projection-unreadable` (with `recovery: 'repair'`), `run-unreadable` and every `LandingInfrastructureCode`.
   - 401 as for pause.
@@ -432,7 +432,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
   - **Inverted:** `landing-terminal-damage.test.ts`'s R4 loop ("a dependent head behind a damaged terminal target", `for (const word of TERMINAL)` over its five damages) expects a healthy head H behind a damaged terminal T to be the ready head with one cue. Its `withdrawn` rows (five) become: H is held, `waits` names T (entry id and PR), the binding is not `ready` for H, no cue is queued, and T's bytes are unchanged. Its `landed` and `closed` rows stay as they are. Its R1 loop has no edge and stays green.
   - **New, "nothing brought forward":** A head, B after A, C after B with `fixesMain`. Withdraw B (fixture state): C waits (`waits: [{entryId: C, reason: 'withdrawn', on: [{entryId: B, pr: <B's pr>}]}]`), and the head stays A. With C older than A and no `fixesMain`: the same.
   - **New:** a withdrawn head with one dependant. The dependant waits, the head is the next independent entry, or `null` if there is none.
-  - **New:** an attributed session other than C's setter declares C's order again without B, and C is free. B re-pinned is outstanding as a pinned target. B landed is met.
+  - **New:** an attributed session other than C's setter declares C's order again without B, and C is free; so is C when its own run's claimant declares it (the feed's side of that case is Task 7's, section 11, C1). B re-pinned is outstanding as a pinned target. B landed is met, and B re-pinned and then closed is met.
   - **New:** `landingBindingOf` never selects a held dependant.
   - **New:** with `stateWords` omitted, a display `withdrawn` target holds too.
   - **New, the field:** a line with no withdrawn target answers no `waits` key at all; two withdrawn targets under one dependant give one `waits` entry with `on` sorted by entry id.
@@ -455,7 +455,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
 
   Run red on the session-only and dark cells.
 - [ ] **Step 2: Implement** section 4.5's read block, through `refuseRoute`.
-- [ ] **Step 3: Rewrite** `GET /api/landing`'s `EXEMPT` reason to open `EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the same dual-credential arrangement as GET /api/feed:`, and to say that `ccrc-api landing show` reads cookieless and the console with a session. Add `/api/landing` to the header's reason-2 list, with no number word. Write section 9's blocks 1 and 2 into `CLAUDE.md` and its README blocks R1 to R3 into `README.md`, byte for byte.
+- [ ] **Step 3: Rewrite** the JSDoc above the `GET /api/landing` route, which says "box token" today (section 11, C4), and `GET /api/landing`'s `EXEMPT` reason to open `EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the same dual-credential arrangement as GET /api/feed:`, and to say that `ccrc-api landing show` reads cookieless and the console with a session. Add `/api/landing` to the header's reason-2 list, with no number word. Write section 9's blocks 1 and 2 into `CLAUDE.md` and its README blocks R1 to R3 into `README.md`, byte for byte.
 - [ ] **Step 4: The gate for 5j-a.** One file per process, from `server/`:
   - `landing-journal`, `landing-journal-store`, `landing-entry-store`, `landing-entry-census`, `landing-read-route`, `landing-writes-route`, `landing-line-order`, `landing-control`, `landing-terminal-damage` and `auth-gate`;
   - `box-token-census`, `coord-pause-route`, `coordinator-skill`, `refusal-status`, `secret-mask`, `mail-routes`, `growth-check`;
@@ -477,7 +477,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
 
 ### Task 7: the decisions
 
-**Files:** Modify `server/src/coord/landingWrites.ts` (parse, decider arms and decision types, notices, `landingMutationNotice`'s pair, `landingCommandOf`'s narrowed return), `server/src/coord/landingEntry.ts` (`landingRecordOf`; `landingFactsOf`'s `flagsRow` and `pinTimes`). Test: `server/test/landing-writes.test.ts`, `server/test/mail-routes.test.ts` (`NOT_CODES`).
+**Files:** Modify `server/src/coord/landingWrites.ts` (parse, decider arms and decision types, notices, `landingMutationNotice`'s pair, `landingCommandOf`'s narrowed return), `server/src/coord/landingEntry.ts` (`landingRecordOf`; `landingFactsOf`'s `flagsRow` and `pinTimes`). Test: `server/test/landing-writes.test.ts`, `server/test/mail-routes.test.ts` (`NOT_CODES`), `server/test/landing-facts-scope.test.ts` (both whole-object literals gain the two new facts fields), and every test file that builds a typed `LandingMutationFacts` whole (on main: `landed-decide`, `landed-lane`, `landing-control`, `landing-terminal-damage` and `landingFixture.ts`; measure the set with the server tests' typecheck; section 11, C2). This task's commit also moves the act's one call of `landingMutationNotice` in `landingWritesAct.ts` and the seven calls in `landing-writes.test.ts` to the retyped signature, so the commit typechecks alone (section 11, C7).
 
 - [ ] **Step 0: Admit the two notice words in the kebab scan.** In `mail-routes.test.ts`'s `NOT_CODES`, beside `'landing-next'`, add `'landing-withdrawn'` and `'landing-held'`, each with a comment in that entry's form: `coord/landingWrites.ts: the withdrawal notice's identity tuple and subject tag (landing order wave 5j), a tag on a stored value, not a mail or run refusal code` (and the dependant's notice for the second). The scan goes red at Step 2 without them.
 - [ ] **Step 1: Failing pure cases.**
@@ -496,9 +496,10 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
     - a pause is not refused by a recovery hold or an identity conflict.
   - **Records:** `landingRecordOf` builds both records, and each parses with Task 1's parser (a round trip), with a real, long User-Agent passed through `deviceActor`. Pick one whose 120-unit cut ends in a space, and one with an emoji at the cut.
   - **Notices:** `landingWithdrawNoticesOf`'s identity strings and bodies name what section 4.4 says, the retreat first and "any attributed session" included, and it builds no notice for a `none` or `unreadable` recipient. `landingMutationNotice` owes the three feed events, each with `sessionId: ''` and the actor in the body, the withdrawal's naming each `none` and `unreadable` recipient, and none for `unchanged`.
+  - **A release is always in the feed (section 11, C1):** a changed order that drops an edge to a target whose stored word is `withdrawn` owes the order arm's existing feed event when the setter is the run's own claimant, when it is another session, and for a run-less or unclaimed dependant; its body names each released target by PR. A changed order by the run's own claimant that drops no such edge still owes none, as today.
 
   Run red.
-- [ ] **Step 2: Implement** section 4.4's L1 half. The decider stays one function; the new arms read only the facts they are given.
+- [ ] **Step 2: Implement** section 4.4's L1 half. The decider stays one function; the new arms read only the facts they are given. Rewrite the decider's header comment, whose "Refusal order for both commands" is no longer true of four (section 11, C4).
 - [ ] **Step 3: Run green; commit.** `feat(landing): the doors' decisions, records and notices (wave 5j-b, D-9049, D-9050)`
 
 ### Task 8: the writer, the journal and the notices
@@ -514,8 +515,8 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
     - A recipient of kind `none` gets no mail, and the answer's `notices` says why.
     - A dependant whose association does not read (its run row damaged by fixture) gets no mail; the withdrawal is applied, and `notices` names that dependant `unreadable`.
   - **Parse before append:**
-    - A record the parser would refuse answers `landing-record-unparseable`: a test-only seam builds a `withdraw` with a control character in its actor, and an `order` record (an old kind) with a duplicate `after`. The journal's bytes and the database are unchanged, and the fence stays open.
-    - The same seam hands the check a probe text that leaves out the built record, so the parse is `ok` with a `lastSeq` other than the record's: refused the same way.
+    - A record the parser would refuse answers `landing-record-unparseable`: a `withdraw` command whose `actor` carries a control character, handed to the writer directly (no route in between). The journal's bytes and the database are unchanged, and the fence stays open.
+    - The check itself is one exported pure function in `landingDoorsTx.ts` (section 11, C6), and no test-only seam is added to the store. The cases call it directly for the two inputs no command can reach: an `order` record (an old kind) with a duplicate `after`, and a journal text that leaves out the built record, so the parse is `ok` with a `lastSeq` other than the record's. Each is refused.
   - **Fence and replay:**
     - A fault after the append (the journal port's test seam, as the file already uses for order writes) fences every landing entrance.
     - `replayLandingJournal` then clears it. The entry is `withdrawn`, its dependants wait, and no mail was queued by the replay.
@@ -529,7 +530,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
   - **The act** (`landing-writes-act.test.ts`, with a fake `write` and `notice`): `actLandingWrite` answers each of the three shapes and raises the right feed event for each, and none for an `unchanged` pause.
 
   Run red.
-- [ ] **Step 2: Implement** section 4.4's L3 half and the act's overloads. Measure `store.ts`'s growth (`growth-check`), and keep it at or under 40 net code lines through the companion file.
+- [ ] **Step 2: Implement** section 4.4's L3 half and the act's overloads. Measure `store.ts`'s growth (`growth-check`), and keep it at or under 40 net code lines through the companion file. Rewrite `writeLandingAuthority`'s JSDoc for the four kinds and the parse before the append (section 11, C4).
 - [ ] **Step 3: Run green; commit.** `feat(landing): the authority writer journals the operator's pause and withdrawal, parses before it appends, and tells the coordinators (wave 5j-b, D-9045, D-9049, D-9050)`
 
 ### Task 9: the two doors
@@ -541,7 +542,7 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
   - **`coordinator-skill.test.ts`:** add `'POST /api/landing/pause'` and `'POST /api/landing/withdraw'` to its census's `EXEMPT`, with a reason comment: operator doors the coordinator is never told about. Add nothing to the skill text: a pin there holds the writes reference's landing paths to exactly three.
   - **`auth-gate.test.ts`, the case "the landing write doors … are plain EXEMPT box-token lanes":** it asserts that the `SESSION_ONLY` literal holds no `/api/landing/`. Narrow it to say the literal names neither `/api/landing/entries` nor `/api/landing/order`.
   - **`auth-gate.test.ts`, the tallies:** raise the `coord/routes.ts` tally and the total by two each, from the values measured at the dispatch base (78 and 305 at the baseline), each with a dated comment.
-- [ ] **Step 2: Failing route cases** in `landing-doors-route.test.ts`, on the `landing-writes-route.test.ts` harness:
+- [ ] **Step 2: Failing route cases** in `landing-doors-route.test.ts`, on the `landing-writes-route.test.ts` harness. The armed cases build their app through the harness's `over: Partial<Deps>`: a login with a chosen `user-agent` header gives the labelled session, and a hand-built `sessionAuth` answering `device: null` gives the `unmeasured` word, which no real session yields (`collect-lane-route.test.ts` is the pattern; section 11, C8):
   - **Sign-in dark:** a pause, a resume of that pause, and a withdraw each answer 200 with no credential, and each record's actor is `flag-off`.
   - **Sign-in armed with a session:** each answers 200, the resume included. The record's actor is the device actor text: `unmeasured` for a session with no label, and for a session whose label is a real, long User-Agent, exactly `deviceActor`'s text for it (the 120-unit cut, untrimmed).
   - **Armed with the box token only:** each door answers 401 and nothing is journalled.
@@ -571,8 +572,8 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
   - **The dependants are told:** each case's direct dependants got one `landing-held` mail each, a transitive dependant got none, and a direct dependant whose association does not read got none while the withdrawal still applied.
   - **Pause and resume restore the head:** after a pause then a resume, the head equals the head before the pause.
   - **No door names a successor.** A static read of `routes.ts`: the two handlers' bodies construct only `withdraw` and `pause` commands and name neither `afterIds` nor `fixesMain`. The parse refusals above cover the request side.
-- [ ] **Step 2: The 5j-b mutation rows** (section 8, rows B1 to B32), each measured red and restored from a saved copy with its sha256 checked.
-- [ ] **Step 3: The gate for 5j-b.** Task 5 Step 4's list, plus `landing-doors-route`, `landing-subtractive`, `landing-writes`, `landing-writes-act` and `overlord-other-lanes-census`, one file per process, and the server typecheck.
+- [ ] **Step 2: The 5j-b mutation rows** (section 8, rows B1 to B33), each measured red and restored from a saved copy with its sha256 checked.
+- [ ] **Step 3: The gate for 5j-b.** Task 5 Step 4's list, plus `landing-doors-route`, `landing-subtractive`, `landing-writes`, `landing-writes-act`, `landing-facts-scope`, `landed-decide`, `landed-lane` and `overlord-other-lanes-census`, one file per process, and the server typecheck.
 - [ ] **Step 4: The landing gate.** Before the wave-done, read the server box's `/health` `version` through the console's own read, and say in the wave-done whether it contains 5j-a's merge. The coordinator enqueues only when it does.
 - [ ] **Step 5: Commit, push once, wave-done.** `test(landing): the doors may pause or remove, never choose, reorder or bring forward (wave 5j-b)`
 
@@ -638,6 +639,7 @@ Each row is one change to the built code, measured red by the named test, then r
 | B30 | an `unchanged` pause owes a feed event | `landing-writes`' unchanged case; `landing-writes-act`'s unchanged case |
 | B31 | the doors' feed events carry the actor as `sessionId` instead of `''` | `landing-writes`' feed event cases |
 | B32 | a dependant's unreadable association refuses the whole withdrawal `run-unreadable` (the operator's stop failing on another entry's damage) | `landing-writes`' dependant-unreadable case; `landing-journal-store`'s dependant-unreadable case; `landing-subtractive`'s dependants-told case |
+| B33 | a release of a withdrawn hold by the run's own claimant owes no feed event (today's rule kept for it) | `landing-writes`' release-by-the-claimant case |
 
 ## 9. CLAUDE.md and README lines for the operator to read
 
@@ -679,10 +681,11 @@ New:
 ```text
   `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family),
   `POST /api/landing/pause` and `POST /api/landing/withdraw` (landing order wave 5j, D-9049: the operator's pause and resume
-  of one project's landing line, and the operator's withdrawal of one entry from it with a notice to its coordinator and to
-  the coordinator of each direct dependant; neither chooses, reorders or brings forward the head, a dependant stays held
-  until an attributed session declares its order again without the withdrawn entry or that entry re-enters and lands, and
-  the pause, the resume and the withdrawal all work while sign-in is dark and record `flag-off` then) and
+  of one project's landing line, and the operator's withdrawal of one entry from it, with a notice to its coordinator and to
+  the coordinator of each direct dependant where one is recorded and reads; neither chooses, reorders or brings forward the
+  head, a dependant stays held until a session declares its order again without the withdrawn entry, which the feed records
+  whoever does it, or that entry re-enters through its run and then lands or is closed, and the pause, the resume and the
+  withdrawal all work while sign-in is dark and record `flag-off` then) and
   `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
 ```
 
@@ -778,10 +781,11 @@ the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an ex
 operator has two session-only doors on the line (D-9049), with no box token and no `ccrc-api` verb: `POST /api/landing/pause`
 (`{project, paused}`) pauses or resumes one project's line, and `POST /api/landing/withdraw` (`{project, pr, pinnedAt}`, the pin
 time the console read) withdraws one entry that is not terminal, with a notice to its coordinator and to the coordinator of each
-entry whose order names it directly. Both are journalled, and both work while sign-in is dark, recording `flag-off`. Neither
-chooses, reorders or brings forward the head: an order edge to a withdrawn entry stays outstanding, so its dependant waits, named
-in the read's `order.waits` with each target's entry id and PR, until an attributed session declares its order again without that
-entry, or the entry re-enters at its run's next verified pin and lands (D-9047).
+entry whose order names it directly, where one is recorded and reads; the answer names anyone who could not be told. Both are
+journalled, and both work while sign-in is dark, recording `flag-off`. Neither chooses, reorders or brings forward the head: an
+order edge to a withdrawn entry stays outstanding, so its dependant waits, named in the read's `order.waits` with each target's
+entry id and PR, until a session declares its order again without that entry, which the feed records whoever does it, or the
+entry re-enters at its run's next verified pin and then lands or is closed; a run-less entry cannot re-enter (D-9047).
 ```
 
 The census phrases still match after these blocks:
@@ -791,6 +795,16 @@ The census phrases still match after these blocks:
 - No test on `origin/main` reads the phrases R1, R2 or R5 replace (checked with `git grep` over `server/test`, `pwa/test`, `shared` and `.github`).
 
 ## 10. Rulings received
+
+**On review run 3748 (round 3, the last, 2026-11-25).** The plan was accepted at the review cutoff and landed as reviewed; the coordinator made these corrections itself, on its ledger pull request, and no review run read them. Section 11 carries each one.
+
+| Item | Ruling | Where the plan carries it |
+|---|---|---|
+| F1 | The feed always records a release of a withdrawn hold, the run's own claimant's included. The plan's sentences and the notice body stay as written; the code is made to match them | Section 11 C1, section 4.3, Tasks 4 and 7, row B33, D-9047 |
+| F2 | The test files Task 7's two new facts fields touch are named, and three join the 5j-b gate | Section 11 C2, Task 7's files, Task 10 Step 3 |
+| F3 | The wait's end is said whole: a re-entered target that is then closed also frees its dependant, a run-less target cannot re-enter, and the Overlord's body cannot declare an order | Section 11 C3, section 4.3, the dependant's notice body, block 3, README R5 |
+| F4 to F8 | Three comments to rewrite; the terminal refusal carries no detail; the parse before the append is one exported pure function and no seam enters the store; Task 7's commit typechecks alone; the armed-session rig is named | Section 11 C4 to C8, section 4.5, Tasks 5, 7, 8 and 9 |
+| Section 9 | Block 3 and README R5 say who is told and how a wait ends, as the review's reading of them asked | Section 9 |
 
 **On review run 3743 (fix round 2, 2026-11-25).**
 
@@ -814,11 +828,32 @@ The census phrases still match after these blocks:
 |---|---|---|
 | F8 | A withdrawal never brings another landing forward: an edge to a withdrawn target stays outstanding; the direct dependants' coordinators are told; `closed` keeps today's meaning, as a follow-up question | Decision 3a, section 4.3, Task 4, Task 10, rows A13, A14, B7, B8, "What this does not claim" |
 | F1, F7 | No new actor mapping or word; the existing device actor text armed, `flag-off` dark; parse every built record before the append | Section 4.1, section 4.4, Task 7 and Task 8 cases, rows A4, A5, B10, B11 |
-| Q1 | Resume is stricter: a signed-in session, `sign-in-unarmed` otherwise, no step-up; pause and withdraw work dark | Reversed in fix round 2 (F5 above) |
+| Q1 | **Reversed in fix round 2 (F5 above); no longer the rule.** As first ruled: resume was stricter, a signed-in session, `sign-in-unarmed` otherwise, no step-up, while pause and withdraw worked dark | Nowhere; see F5 above |
 | Q2 | The split and the `/health` gate suffice for this wave; the follow-up is one capability floor row | Section 2, "What this does not claim" |
 | Q3 | Run-less re-entry is out, as a named follow-up | Decision 7, "What this does not claim" |
 | Q4 | The read opens on a dark box, in the feed read's shape | Decision 4, section 4.5, Task 5 |
 | F2 to F6, F9 to F12 | Fixed as the report says | Sections 2 to 4, Global Constraints, Tasks 1 to 10, section 9's README block R4 |
+
+## 11. Corrections after review run 3748
+
+Review run 3748 read the plan at `5c34de804e` against `origin/main` at `b4677c29ce`: no critical defect, two important findings and six minor ones. It was the third round, so the plan landed as reviewed and the coordinator corrected it here. Where this section and a task disagree, this section wins. A builder who finds one of these wrong on its dispatch base says so in its task note; it does not adapt silently.
+
+- **C1, a release is always in the feed (F1; ruled, not a wording change).**
+  - The fact on main: `landingWrites.ts#landingMutationNotice` owes a feed event for a changed order only when the setter is not the current run's claimant. A held dependant's own coordinator is that claimant and the recipient of the `landing-held` notice, so its release of its own dependant would leave no feed event, while the notice it was sent says the feed records it.
+  - The rule from 5j-b: a changed order that drops an edge to a target whose stored word is `withdrawn` owes that same feed event whoever the setter is: the run's own claimant, another session, and for a run-less or unclaimed dependant. Its body names each released target by PR. Every other changed order keeps today's rule.
+  - Why: freeing a held entry undoes part of the operator's withdrawal, so the operator sees it. The plan's sentences ("a deliberate, attributed act with its feed note", the notice's "a deliberate act the feed records") are then true as written.
+  - Where: Task 7 (the decider hands the notice what it needs to know the write released a withdrawn hold; the builder chooses the shape and says it in the task note), its new case, and mutation row B33. Task 4 holds the order's side: the claimant's re-declaration frees the dependant.
+- **C2, the files Task 7's facts fields touch (F2).** `flagsRow` and `pinTimes` are required fields of `LandingMutationFacts`. `server/test/landing-facts-scope.test.ts` compares the whole object against two literals, and both gain the two keys. Every test file that builds the typed object whole stops typechecking until it supplies them: on main `landed-decide`, `landed-lane`, `landing-control`, `landing-terminal-damage` and `landingFixture.ts`; the builder measures the exact set. `landing-facts-scope`, `landed-decide` and `landed-lane` join the 5j-b gate.
+- **C3, how a wait ends, said whole (F3).** Three facts the plan left out, now in section 4.3, the dependant's notice body, block 3 and README R5:
+  - a target that re-enters and is then closed by GitHub also frees its dependant, because `closed` stays met;
+  - a run-less withdrawn target cannot re-enter, so its dependants wait until their order is declared again;
+  - "any attributed session" is any session the order door admits; the Overlord's body is refused there.
+- **C4, comments made false (F4).** Rewritten in the commit that makes each false: the JSDoc above `GET /api/landing` (Task 5), the decider's header "Refusal order for both commands" (Task 7), and `writeLandingAuthority`'s JSDoc (Task 8).
+- **C5, the terminal refusal (F5).** `landing-entry-terminal` carries no `detail`. No type had a field for it, and the caller reads the entry's state from the line (`GET /api/landing?pr=`).
+- **C6, the parse before the append (F6).** It is one exported pure function in `landingDoorsTx.ts`: given the journal's text, the record the writer built and its line, it answers whether the text with that line parses and ends at the record's seq. The store calls it; no test-only seam is added to the growth-checked store. The cases call the function directly for the inputs no command can reach (an old kind with a duplicate `after`; a text without the built record), and reach the store's refusal with a `withdraw` whose actor carries a control character. Rows B28 and B29 red those direct cases.
+- **C7, Tasks 7 and 8 (F7).** Task 7 retypes `landingMutationNotice`, so its commit also moves the act's one call and the seven calls in `landing-writes.test.ts`. Each commit typechecks alone.
+- **C8, the armed-session rig (F8).** Named in Task 9 Step 2.
+- **Section 9.** Block 3 and README R5 now say that a coordinator is told where one is recorded and reads, that the feed records a release whoever makes it, and that a run-less entry cannot re-enter. The spec's two sentences this plan departs from (its section 4 coordinator row, "pause the line", against decision 2; and the "PWA doors" sentence on the successor, against D-9047) are amended on the same ledger pull request.
 
 ## Deviations found
 
@@ -837,6 +872,7 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
 - **D-9047 (2026-11-25)** — `landing-withdrawn-holds-and-repins`: a withdrawal is neither a ban nor a release.
   - **Not a ban:** a run-bound `withdrawn` entry re-pins at its run's next verified `advance → merging` (after a retreat when it is still at `merging`) over a readable, unquarantined projection, exactly as a `closed` one does.
   - **Not a release:** an edge to a withdrawn target stays outstanding, so its dependant waits, named in the read's `order.waits` (each target by entry id and PR), until an attributed session declares its order again without that target (a deliberate act with its feed note, not a door) or the target re-enters and lands. Today an edge to any terminal target is met; `landed` and `closed` keep that meaning.
+  - **A release is always in the feed** (ruled after review run 3748; section 11, C1): a changed order that drops an edge to a withdrawn target owes the order arm's feed event whoever the setter is. Before, the feed owed nothing when the setter was the run's own claimant, which is who a held dependant's notice goes to.
   - Re-entry of a run-less entry is left out (follow-up `landing-runless-reentry`): it needs a journal claim over an existing identity, which the parser forbids.
 - **D-9048 (2026-11-25)** — `landing-read-dual-credential`: `GET /api/landing` takes a session or the box token, in the `GET /api/feed` shape, authenticated before `501`, and open on a dark box like every dual-credential read. Before, it took the box token on every box, so the console could not read the line.
 - **D-9049 (2026-11-25)** — `landing-operator-doors`: `POST /api/landing/pause` and `POST /api/landing/withdraw`, session-only (no box token, not `EXEMPT`).
