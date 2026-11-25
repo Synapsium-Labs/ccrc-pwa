@@ -431,6 +431,18 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     expect(lay.props!.firstItemIndex, 'a new list\'s lead was counted as rows put before the first').toBe(first);
   });
 
+  for (const [name, tail] of [['idle', {}], ['busy', { busy: true }]] as const satisfies readonly (readonly [string, Tail])[]) {
+    it(`wave 179, fix round 1, F2: a page under a list that is only the reset row moves no first index (${name})`, () => {
+      const { rerender } = render(view([reset], { ...NO_PAGING, edge: 'more', next: 'c' }, tail));
+      frame();
+      const first = lay.props!.firstItemIndex;
+      const keys = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+      rerender(view([reset, ...session(5)], { ...NO_PAGING, edge: 'more', next: 'c', rows: 20 }, tail));
+      const now = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+      expect(lay.props!.firstItemIndex, `${keys.join(' ')} -> ${now.slice(0, 4).join(' ')}`).toBe(first);
+    });
+  }
+
   it('desktop polish wave 179, A2: a page under the reset row holds the reader\'s row (the lead read at the call site)', () => {
     const events = [reset, ...session()];
     const { rerender } = resting(events);
