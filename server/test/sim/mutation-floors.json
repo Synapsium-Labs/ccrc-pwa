@@ -334,6 +334,7 @@
   "server/src/coord/overlordSequence.ts#sequenceLineKnown": 1,
   "server/src/coord/overlordSequence.ts#sequencePage": 1,
   "server/src/coord/overlordSequence.ts#retentionCut": 1,
+  "server/src/coord/overlordSequence.ts#keptDesignationLine": 1,
   "shared/isolation.ts#readHostReport": 1,
   "server/src/isolationWord.ts#holdingExposure": 1,
   "server/src/isolationWord.ts#linkKernel": 1,

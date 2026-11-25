@@ -701,11 +701,21 @@ describe('the ladder\'s sequence lines', () => {
     expect(lines(db)).toEqual([]);
   });
 
-  it('a latch raise stamps ladder-latch raised with the cause as its id; a second raise stamps nothing', () => {
+  it('a latch raise stamps ladder-latch raised with the cause as its id, the server\'s kind; a second raise stamps nothing', () => {
     const db = openDb(); const f = fake(db);
     raise(db, f, 'latch-a', 'advise');
     raise(db, f, 'latch-a', 'off', 'op-r2');
-    expect(lines(db)).toEqual([{ kind: 'ladder-latch', id: 'latch-a', state: 'raised', actor: 'lane-a 00000000', actorKind: 'operator', at: NOW }]);
+    expect(lines(db)).toEqual([{ kind: 'ladder-latch', id: 'latch-a', state: 'raised', actor: 'lane-a 00000000', actorKind: 'server', at: NOW }]);
+  });
+
+  it('an unwitnessed write by a session raises the latch: the row keeps the session as its raiser, the line reads the server\'s kind (call 1220)', async () => {
+    const db = openDb(); const f = fake(db);
+    const caller = await identity.session('overlord-a', 'uuid-a', 'fromUuid');
+    if (!caller.ok) throw new Error('the fixture session was not attributed');
+    expect(caller.actor.kind).toBe('session');
+    tx(db, () => raiseLatchInTx(db, f, { cause: 'unwitnessed-third', cap: 'chat', detail: 'why', raisedBy: caller.actor, at: NOW, opKey: 'op-u' }));
+    expect(latchRows(db)).toMatchObject([{ cause: 'unwitnessed-third', raisedBy: caller.actor.subject }]);
+    expect(lines(db)).toEqual([{ kind: 'ladder-latch', id: 'unwitnessed-third', state: 'raised', actor: caller.actor.subject, actorKind: 'server', at: NOW }]);
   });
 
   it('a lane\'s raise is the server\'s', () => {
@@ -718,7 +728,7 @@ describe('the ladder\'s sequence lines', () => {
     const db = openDb(); const f = fake(db);
     raise(db, f); clear(db, f); clear(db, f, 'latch-a', 'op-c2');
     expect(lines(db).map((l) => [l['kind'], l['id'], l['state'], l['actorKind']])).toEqual([
-      ['ladder-latch', 'latch-a', 'raised', 'operator'], ['ladder-latch', 'latch-a', 'cleared', 'operator'],
+      ['ladder-latch', 'latch-a', 'raised', 'server'], ['ladder-latch', 'latch-a', 'cleared', 'operator'],
     ]);
   });
 
@@ -752,5 +762,36 @@ describe('the ladder\'s sequence lines', () => {
       : tx(db, () => applyRestoreInTx(db, { operatorRung: 'off', latches: [] }, 55, NOW));
     expect(act).toThrow(/ladder line refused/);
     expect({ rung: rungRow(db), latches: latchRows(db) }).toEqual(rowsBefore);
+  });
+});
+
+// Sequence PR B1, piece 4 (review 3646 F4, call 1216): the ladder's three door writers open their transaction through the journal's
+// `txWithAuthorityReceipt`, so a throw after a durable append (here, a refused line) calls the append's receipt once.
+describe('the post-append receipt on the ladder\'s door writers', () => {
+  const receipted = (db: DatabaseSync): { f: Fake; calls: () => number } => {
+    const f = fake(db); let n = 0;
+    f.appendInTx = (_db, entry) => { f.seen.push({ entry, inTx: db.isTransaction, rung: undefined, latches: 0 }); return { ok: true, kind: 'appended', record: { sequence: ++f.seq }, postAppendFailed: () => { n++; } } as unknown as AuthorityAppend; };
+    return { f, calls: () => n };
+  };
+  const refuseLines = (db: DatabaseSync): void => {
+    db.exec("CREATE TRIGGER refuse_lines BEFORE INSERT ON overlord_sequence BEGIN SELECT RAISE(ABORT, 'refused for the test'); END");
+  };
+  it.each(['setRung', 'raiseLatch', 'clearLatch'] as const)('%s: a refused line after the append calls the receipt once and rolls back', (which) => {
+    const db = openDb(); const store = new CoordStore(db); const { f, calls } = receipted(db);
+    if (which === 'clearLatch') putLatch(db, 'latch-a', 'chat');
+    const before = { rung: rungRow(db), latches: latchRows(db) };
+    refuseLines(db);
+    const act = (): unknown => which === 'setRung' ? store.setRung(f, { from: 'chat', to: 'off', actor: operator, at: NOW, opKey: 'op-1' })
+      : which === 'raiseLatch' ? store.raiseLatch(f, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: lane, at: NOW, opKey: 'op-r' })
+      : store.clearLatch(f, { cause: 'latch-a', actor: operator, at: NOW, opKey: 'op-c' });
+    expect(act).toThrow(/ladder line refused/);
+    expect(calls()).toBe(1);
+    expect({ rung: rungRow(db), latches: latchRows(db) }).toEqual(before);
+  });
+  it('a write that commits, and a refusal before the append, call no receipt', () => {
+    const db = openDb(); const store = new CoordStore(db); const { f, calls } = receipted(db);
+    expect(store.setRung(f, { from: 'chat', to: 'off', actor: operator, at: NOW, opKey: 'op-1' })).toMatchObject({ ok: true, changed: true });
+    expect(store.setRung(f, { from: 'advise', to: 'chat', actor: operator, at: NOW, opKey: 'op-2' })).toEqual({ ok: false, error: 'row-changed' });
+    expect(calls()).toBe(0);
   });
 });

@@ -315,7 +315,9 @@ export function raiseLatchInTx(db: DatabaseSync, journal: AuthorityAppender, lat
   const sequence = a.kind === 'appended' ? a.record.sequence : null;
   db.prepare(`INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy, raiseSequence) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(latch.cause, latch.cap, latch.detail, latch.at, actor.subject, sequence);
-  stampLadderLine(db, { kind: 'ladder-latch', id: latch.cause, state: 'raised', actor: actor.subject, actorKind: ladderActorKind(latch.raisedBy), at: latch.at });
+  // The server's kind for every raise, whoever tripped it (call 1220, slug `latch-lines-are-the-servers`): a check raises a latch,
+  // never a session's ask, so the term check never reads one as a session's act. The row keeps its raiser; so does the line's text.
+  stampLadderLine(db, { kind: 'ladder-latch', id: latch.cause, state: 'raised', actor: actor.subject, actorKind: 'server', at: latch.at });
   const notice = Object.hasOwn(LADDER_CAUSE_MAP, latch.cause) ? LADDER_CAUSE_MAP[latch.cause as keyof typeof LADDER_CAUSE_MAP].notice : 'none';
   return { ok: true, changed: true, journalled: sequence !== null, recordSequence: sequence, notice };
 }
