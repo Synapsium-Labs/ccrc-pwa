@@ -784,9 +784,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[122] (advisor_settings, advisor_calls and advisor_reads, the coordinator advisor, D-8967),
     // and MIGRATIONS[123] (the claude_builds rebuild for the capture refusal words),
     // and MIGRATIONS[124] (overlord_sequence and overlord_sequence_pruned, the Overlord sequence),
-    // and MIGRATIONS[125] (limit_samples, the history of each account's limits, Overlord W1 serviceability PR B, run 3296).
-    expect(COORD_SCHEMA_VERSION).toBe(126);
-    expect(MIGRATIONS.length).toBe(126);
+    // and MIGRATIONS[125] (limit_samples, the history of each account's limits, Overlord W1 serviceability PR B, run 3296),
+    // and MIGRATIONS[126] (continuity_timers.setRestoreGeneration and continuity_timer_refusals, the Overlord's timers).
+    expect(COORD_SCHEMA_VERSION).toBe(127);
+    expect(MIGRATIONS.length).toBe(127);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -938,8 +939,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[122] (the coordinator advisor's three tables, D-8967),
     // and MIGRATIONS[123] (the claude_builds rebuild),
     // and MIGRATIONS[124] (overlord_sequence and overlord_sequence_pruned, Overlord W1 sequence A),
-    // and MIGRATIONS[125] (limit_samples, run 3296); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(126);
+    // and MIGRATIONS[125] (limit_samples, run 3296),
+    // and MIGRATIONS[126] (the Overlord's timers' restore column and refusal counts); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(127);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

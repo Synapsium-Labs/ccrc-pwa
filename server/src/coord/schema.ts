@@ -4487,6 +4487,28 @@ export const MIGRATIONS: readonly string[] = [
   ) WITHOUT ROWID;
   CREATE INDEX limit_samples_ts ON limit_samples(ts);
   `,
+
+  // ── 127: user_version 126 -> 127 ──────────────────────────────────────────
+  // The Overlord's timers (Overlord spec §3.3.12 C61 to C65, M36; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-overlord-timers.md` Task 2): `continuity_timers.setRestoreGeneration`, the restore generation read at the set (NULL:
+  // not measured then, or a row an older build or this migration left), written by `insertTimer` alone on every set; and
+  // `continuity_timer_refusals`, one count per UTC day, timer door and refusal word, raised by `recordTimerRefusal` and
+  // pruned by `purgeTimerRefusals`. A COLUMN ON AN EXISTING TABLE AND A NEW TABLE: an older build opening a file at this
+  // entry's version takes rule 3 (it warns, reads as-is and migrates nothing), names its columns in every timer SELECT and
+  // never names the new table, so it boots and reads every timer as before. The slot is the next free one by position on
+  // `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 126 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_timers ADD COLUMN setRestoreGeneration INTEGER;  -- restoreGeneration() at the set; NULL: unmeasured
+  CREATE TABLE continuity_timer_refusals (
+    day  TEXT NOT NULL,     -- the UTC date of the refusal, YYYY-MM-DD
+    door TEXT NOT NULL,     -- a TimerDoor (shared/continuity-timers.ts)
+    word TEXT NOT NULL,     -- the refusal word the door answered
+    n    INTEGER NOT NULL,  -- how many times that day
+    PRIMARY KEY (day, door, word)
+  ) WITHOUT ROWID;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

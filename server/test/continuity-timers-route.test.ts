@@ -101,7 +101,7 @@ const rows = (r: Rig) => r.coord.db.prepare('SELECT id, setter, setterIncarnatio
 /** A timer of `setter`, written through the store as the set door would. */
 const plant = (r: Rig, setter: string, over: { runId?: number | null; programme?: string | null; setAt?: number } = {}): number => {
   const setAt = over.setAt ?? r.now - 1_000;
-  const ins = r.coord.insertTimer({ setter, setterIncarnation: INC, setById: setter, setByUuid: UUID, role: 'plain', note: `n-${setter}`,
+  const ins = r.coord.insertTimer({ setRestoreGeneration: null, setter, setterIncarnation: INC, setById: setter, setByUuid: UUID, role: 'plain', note: `n-${setter}`,
     runId: over.runId ?? null, programme: over.programme ?? null, setAt, dueAt: setAt + HOUR });
   if (!ins.ok) throw new Error('plant: write failed');
   return ins.id;
@@ -499,7 +499,7 @@ const cookieOf = async (a: FastifyInstance): Promise<string> => {
   return line.slice(0, line.indexOf(';'));
 };
 const plantOn = (coord: CoordStore, setter: string): number => {
-  const ins = coord.insertTimer({ setter, setterIncarnation: INC, setById: setter, setByUuid: UUID, role: 'plain', note: `n-${setter}`,
+  const ins = coord.insertTimer({ setRestoreGeneration: null, setter, setterIncarnation: INC, setById: setter, setByUuid: UUID, role: 'plain', note: `n-${setter}`,
     runId: null, programme: null, setAt: NOW, dueAt: NOW + HOUR });
   if (!ins.ok) throw new Error('plant: write failed');
   return ins.id;
@@ -551,7 +551,7 @@ describe("the operator's doors: GET /api/sessions/:id/timers and POST /api/sessi
     expect(MASKED_GET_ROUTES.has('/api/timers')).toBe(true);
     expect(MASKED_GET_ROUTES.has('/api/sessions/:id/timers')).toBe(true);
     const { app: a, coord } = await server(false);
-    const ins = coord.insertTimer({ setter: ME, setterIncarnation: INC, setById: ME, setByUuid: UUID, role: 'plain', note: `old ${SECRET}`,
+    const ins = coord.insertTimer({ setRestoreGeneration: null, setter: ME, setterIncarnation: INC, setById: ME, setByUuid: UUID, role: 'plain', note: `old ${SECRET}`,
       runId: null, programme: null, setAt: NOW, dueAt: NOW + HOUR });
     expect(ins.ok).toBe(true);
     const own = await a.inject({ method: 'GET', url: `/api/timers?byId=${ME}&byUuid=${UUID}`, headers: { 'x-ccrc-mail-token': TOKEN } });

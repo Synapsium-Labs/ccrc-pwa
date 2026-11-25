@@ -858,7 +858,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const dueAt = now + body.durationMs;
     const r = coord.insertTimer({
       setter: fromId, setterIncarnation: stamp.incarnation, setById: fromId, setByUuid: fromUuid, role, note: body.note,
-      runId: runId as number | null, programme: programme as string | null, setAt: now, dueAt,
+      runId: runId as number | null, programme: programme as string | null, setAt: now, dueAt, setRestoreGeneration: null,
     });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_timers could not be written' });
     return reply.code(201).send({ ok: true, id: r.id, dueAt });

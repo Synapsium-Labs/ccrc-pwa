@@ -36,7 +36,7 @@ const LATER = '99999999-2222-3333-4444-555555555555';
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-timer-lane-'), '.ccrc', 'coord.db')));
 const set = (s: CoordStore, over: Partial<TimerInsert> = {}): number => {
-  const r = s.insertTimer({ setter: ID, setterIncarnation: STAMP, setById: ID, setByUuid: 'u', role: 'worker',
+  const r = s.insertTimer({ setRestoreGeneration: null, setter: ID, setterIncarnation: STAMP, setById: ID, setByUuid: 'u', role: 'worker',
     note: 'check the checks', runId: null, programme: null, setAt: NOW - 3 * H, dueAt: NOW - MIN, ...over });
   if (!r.ok) throw new Error('timer not set');
   return r.id;
