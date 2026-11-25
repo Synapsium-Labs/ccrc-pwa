@@ -41,6 +41,58 @@ The withdraw needs your identity in the body; without it the route refuses. The 
 the asker is told either way. A second request for a run that has one open is refused `already-asked`, and the same asker
 is refused `recently-asked` for 24 hours after a withdraw or a kept run unless the run's stuck reason has changed.
 
+## A conflict mid-round: the conflict-sync mail
+
+Worker clause 16's fourth trigger (spec 2026-09-23 §5.1 and §11 item 23;
+D-9011 to D-9013). Clause 15 already lets you send a conflict-sync request on a
+conflict you have measured; this is that request's form.
+
+**When.** A worker at `working`, before its wave-done, whose branch conflicts
+with `main` and whose pull request has used the one absorption its own two
+triggers give it. Never after a wave-done: from `merging` the route is the
+ejection of `references/wave-steps.md` step 6, and a worker that has sent its
+wave-done reads no `conflict-sync:` mail as a licence.
+
+**Measure first.** After one `git fetch origin`:
+
+```bash
+git merge-tree --write-tree --name-only --no-messages \
+  <the branch tip> origin/main
+```
+
+It must exit 1 with a tree id on its first line, then the conflicted paths.
+Exit 0, or any other answer (exit 1 with no tree id is a ref git could not
+resolve), sends nothing.
+
+**The mail.** `"$API" mail send --json -` to the worker's session id, with the
+run's `runId`, `kind` `status`, subject `conflict-sync: #<pr>`, and a body of
+two entries, one to a line, and nothing else: `base: <sha>`, the `origin/main`
+sha you just read, copied from the command's output and never typed, then
+`paths: <the conflicted paths>`, space-separated.
+
+```bash
+"$API" mail send --json - <<JSON
+{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>",
+ "runId":<work run id>,"kind":"status","subject":"conflict-sync: #<pr>",
+ "body":"base: <sha>\npaths: <the conflicted paths>","artifacts":[]}
+JSON
+```
+
+**One mail per measured conflict,** recorded with `ccrc-api calls record` as a
+`routine` call that names the base. The worker probes the named commit itself
+and absorbs exactly that commit, once, with `git merge`; a probe that answers
+clean or unmeasured absorbs nothing, and the worker replies with what it
+measured. A newer `main` is not the named commit: a conflict with a later
+`main` is a new measurement and a new mail.
+
+**What it does not do.** It waives no check and no review. The worker's
+wave-done still gets its review run, and the landing still binds the reviewed
+head. It gives you no way to merge: the worker absorbs, and the pull request's
+checks and its review gate the result. A worker whose installed clause 16
+still names three triggers (a home not yet on the release that carries this
+text) is not licensed by the mail; there a further merge still needs the
+operator's word.
+
 ## The run's own signals — a measurement, never a dial
 
 `GET /api/runs/:id` — one run, plus its spend: the tokens its bound sessions have used and their proxy
