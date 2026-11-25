@@ -2465,6 +2465,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
+  const drawerMarks = new DrawerInterruptThrottle();   // the drawer's input marks as a typed prompt does, once per session per 2 s
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -2552,6 +2553,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
           const src = drawerInterruptSource(m.data);
           if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt({ notice }, id, src, 'sent');
+          if (deps.coord !== undefined && drawerMarks.admit(id, deps.time.clock.wall())) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
         } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
@@ -3039,6 +3041,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await submitEnter(sendDeps, id, body.expect);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
