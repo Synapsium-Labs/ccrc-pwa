@@ -17,9 +17,10 @@ const NOW = 1_790_000_000_000;
 const H = 3_600_000;
 
 const fresh = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-run-last-move-'), '.ccrc', 'coord.db')));
-/** A work run claimed by `coord-a`, its worker session `worker`. */
-const open = (coord: CoordStore, program = 'program-a', worker = 'worker-1'): number => {
-  const r = coord.openRun({ program, title: 'T', project: 'project-a', wave: 1, waveOf: 3, claimedBy: 'coord-a' });
+/** A work run claimed by `claimedBy` (`coord-a` by default), its worker session `worker`. R11: one coordinator owns one live
+ *  programme, so a run in another programme names that programme's own coordinator. */
+const open = (coord: CoordStore, program = 'program-a', worker = 'worker-1', claimedBy = 'coord-a'): number => {
+  const r = coord.openRun({ program, title: 'T', project: 'project-a', wave: 1, waveOf: 3, claimedBy });
   if (!('id' in r)) throw new Error('fixture openRun refused');
   coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(worker, r.id);
   return r.id;
@@ -27,7 +28,7 @@ const open = (coord: CoordStore, program = 'program-a', worker = 'worker-1'): nu
 /** A review run of `reviewed`, its reviewer session `reviewer` (its own program row: `openRun` answers an open program's
  *  wave with the run already there). */
 const openReview = (coord: CoordStore, reviewed: number, reviewer: string): number => {
-  const id = open(coord, `review-of-${reviewed}`, reviewer);
+  const id = open(coord, `review-of-${reviewed}`, reviewer, `coord-review-of-${reviewed}`);
   coord.db.prepare("UPDATE runs SET kind = 'review', reviews = ? WHERE id = ?").run(reviewed, id);
   return id;
 };
@@ -106,7 +107,7 @@ describe('CoordStore.runLastMoves: the newest act on a run', () => {
   it('only the run named counts: another run\'s act and run-less mail do not move it', () => {
     const coord = fresh();
     const a = open(coord, 'program-a');
-    const b = open(coord, 'program-b', 'worker-2');
+    const b = open(coord, 'program-b', 'worker-2', 'coord-b');
     event(coord, b, NOW - H, 'worker-2');
     mail(coord, b, NOW - H, 'worker-2');
     mail(coord, null, NOW - H, 'worker-1');
@@ -133,7 +134,7 @@ describe('CoordStore.runLastMoves: the newest act on a run', () => {
   it('a mail from a session unrelated to the run moves nothing: a peer worker, another coordinator, a reviewer of another run', () => {
     const coord = fresh();
     const id = open(coord);
-    const other = open(coord, 'program-b', 'worker-2');
+    const other = open(coord, 'program-b', 'worker-2', 'coord-b');
     openReview(coord, other, 'reviewer-2');
     event(coord, id, NOW - 3 * H, 'coordinator');
     for (const sender of ['worker-2', 'coord-b', 'reviewer-2']) mail(coord, id, NOW - H, sender);
@@ -173,7 +174,7 @@ describe('withLastMoves: the runs frame carries lastMoveAt, once per frame', () 
   it('every summary gets its run\'s move, null included', () => {
     const coord = fresh();
     const a = open(coord, 'program-a');
-    const b = open(coord, 'program-b', 'worker-2');
+    const b = open(coord, 'program-b', 'worker-2', 'coord-b');
     mail(coord, b, NOW - H, 'worker-2');
     const out = withLastMoves(coord, summaries(coord), () => { throw new Error('no failure expected'); });
     expect(out.map((r) => [r.id, r.lastMoveAt])).toEqual([[a, null], [b, NOW - H]]);
@@ -182,7 +183,7 @@ describe('withLastMoves: the runs frame carries lastMoveAt, once per frame', () 
   it('one read for the whole frame', () => {
     const coord = fresh();
     open(coord, 'program-a');
-    open(coord, 'program-b');
+    open(coord, 'program-b', 'worker-1', 'coord-b');
     const spy = vi.spyOn(coord, 'runLastMoves');
     withLastMoves(coord, summaries(coord), () => undefined);
     expect(spy).toHaveBeenCalledTimes(1);

@@ -22,8 +22,9 @@ const open = (project: string = P, claimedBy = 'coord-a', program = 'prog-a'): n
 };
 const dispatch = (id: number, intents?: readonly string[], items: readonly string[] = []) =>
   coord.dispatchRun({ runId: id, sessionId: `ws-${id}`, workspace: null, branch: null, resumed: false, clearedAt: null, items, ...(intents === undefined ? {} : { intents }) });
-const dispatched = (intents: readonly string[], project: string = P, program = 'prog-a'): number => {
-  const id = open(project, 'coord-a', program);
+// R11 (programme lifecycle W1): a coordinator owns one live programme, so another programme gets its own claimant.
+const dispatched = (intents: readonly string[], project: string = P, program = 'prog-a', claimedBy = program === 'prog-a' ? 'coord-a' : `coord-${program}`): number => {
+  const id = open(project, claimedBy, program);
   expect(dispatch(id, intents).ok).toBe(true);
   return id;
 };

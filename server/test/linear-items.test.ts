@@ -44,11 +44,12 @@ async function rig(o: { projectBInitiatives?: 'on' | 'off'; projectAInitiatives?
   for (const [project, setting] of [['project-a', o.projectAInitiatives ?? 'on'], ['project-b', o.projectBInitiatives ?? 'on']] as const) {
     db.prepare('INSERT INTO project_linking (project, teamKey, override, initiatives) VALUES (?, ?, ?, ?)').run(project, 'AAA', 'private', setting);
   }
-  for (const [slug, project] of [['prog-a', 'project-a'], ['prog-b', 'project-b']] as const) {
+  // Programme lifecycle W1 (R11): one coordinator owns at most one live programme, so each programme has its own.
+  for (const [slug, project, coordinator] of [['prog-a', 'project-a', 'coord-a'], ['prog-b', 'project-b', 'coord-b']] as const) {
     applyPlanChanges(db, slug, changes({
       epics: { insert: [{ key: 'e1', project, waves: [1], ordinal: 0, title: 'Epic', summary: 'Summary' }], update: [], drop: [] },
       checkpoints: { insert: [{ epicKey: 'e1', key: 'c1', ordinal: 0, title: 'Checkpoint', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] },
-    }), 'coord-a', T, { home: project, title: slug });
+    }), coordinator, T, { home: project, title: slug });
   }
   const plan = planStorePort(db);
   const r = { db, coord, dir: { initiatives: 'off' as LinearDirectoryEntries['initiatives'] }, queued: [] as unknown[], t: { now: T }, ccrcDir } as Rig;

@@ -345,23 +345,24 @@ describe('the three ccrc raisers: shown at the raise, silent, no push', () => {
 
   it('a run-close refusal that is not tell-and-hold; a tell-and-hold one is held, with no stamp and no row', async () => {
     const r = await rig();
-    const fixtureRun = (program: string): number => {
-      const o = r.coord.openRun({ program, title: program, project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'lane-gone' });
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so each programme has its own claimant.
+    const fixtureRun = (program: string, claimedBy: string): number => {
+      const o = r.coord.openRun({ program, title: program, project: 'project-a', wave: 1, waveOf: 2, claimedBy });
       if (!('id' in o)) throw new Error(`openRun refused: ${JSON.stringify(o)}`);
       return o.id;
     };
     const refuse = (id: number, reason: RefusedClose['reason'], lives: boolean): number[] => {
       const run = r.coord.runCloseRuns().find((x) => x.id === id)!;
-      const refused: RefusedClose = { run, row: 'never-started', reason, claimant: 'lane-gone', lives, held: lives };
+      const refused: RefusedClose = { run, row: 'never-started', reason, claimant: run.claimedBy!, lives, held: lives };
       return [...routeRefusals({ coord: r.coord, abandonRefusal: (i) => abandonRefusal(r.coord, i),
         itemReach: (item) => reachBound(r, item) }, [refused], T).raised];
     };
-    const [shown] = refuse(fixtureRun('prog-x'), 'open-pr', false);
+    const [shown] = refuse(fixtureRun('prog-x', 'lane-gone'), 'open-pr', false);
     expect(shown).toBeDefined();
     expect(r.coord.itemById(shown!)!.heldUntil).toBeNull();
     expect(reached(r.coord, shown!)).toBe(T);
     expect(rowsOfItem(r.coord, shown!)).toMatchObject([{ state: 'silent', silentWhy: 'level' }]);
-    const [held] = refuse(fixtureRun('prog-y'), 'child-marker-unreadable', true);
+    const [held] = refuse(fixtureRun('prog-y', 'lane-gone-b'), 'child-marker-unreadable', true);
     expect(r.coord.itemById(held!)!.heldUntil).toBe(T + ASK_GRACE_MS);
     expect(reached(r.coord, held!)).toBeNull();
     expect(rowsOfItem(r.coord, held!)).toEqual([]);

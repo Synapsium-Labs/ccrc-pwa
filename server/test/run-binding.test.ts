@@ -171,8 +171,13 @@ describe('childrenOf', () => {
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string): number =>
-  (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  return opened.id;
+};
 // The minting run opens BEFORE the worker it dispatches is born, as in real use. A fixture that opened it after the
 // birth would let it bind through the opened-after-birth rule alone, and the store's read of the birth columns
 // (sessionBornAt/sessionBornFor) would go unpinned.
@@ -236,7 +241,7 @@ describe('the #746 fixture, through a store', () => {
     const input = { program: 'prog-two', title: 't', project: 'p', wave: 2, waveOf: null, claimedBy: 'coord-1' };
     const wave2 = (s.openRun(input) as { id: number }).id;
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, wave2);
-    const wave1 = open(s, 'prog-one', 'coord-1');
+    const wave1 = open(s, 'prog-two', 'coord-1');
     backdate(s, wave1, BORN - 10);
     s.setSession(wave1, 'demo-w', BORN);
     const again = (s.openRun(input) as { id: number }).id;

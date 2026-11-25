@@ -282,6 +282,9 @@ const inboundSend = (w: { app: World['app'] }, url: string, body: unknown, who_:
   w.app.inject({ method: 'POST', url: `${url}?byId=${who_.byId}&byUuid=${who_.byUuid}`, headers: TOK, payload: body as never });
 /** A plan programme with a plan and a ticket and NO owner: the arm that admits any attributed caller. */
 async function seedUnownedPlan(w: World, slug: string): Promise<void> {
+  // Programme lifecycle W1 (R11, D-8993): COORD owns prog-a, so its put could not start a new programme; the programme is a
+  // legacy row nobody was ever bound to (as the migration leaves one it could not seed), whose plan COORD declares.
+  seedLegacyProgramme(w.db, slug, 'demo');
   expect((await planSend(w, slug, '', PLAN, as(COORD))).statusCode).toBe(200);
   expect((await planSend(w, slug, '/tickets', TICKET, as(COORD))).statusCode).toBe(200);
   w.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(slug);
