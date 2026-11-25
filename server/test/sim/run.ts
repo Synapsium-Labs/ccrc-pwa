@@ -6,6 +6,9 @@
 // - Any value of either variable that is not a positive safe integer throws, and so does setting both, so a typo never
 //   runs zero seeds and passes.
 // - A failure names the scenario, the seed, the invariant, the line, the replay command and the 20 lines before it.
+// - A test whose seeds would sit one case near its time bound splits them with `seedRanges` into cases over disjoint,
+//   consecutive ranges (`runSeeds` each), pins that the ranges' union is exactly its seed list, and checks the edges over
+//   that union once, in a last case (`assertCovered`): reaching every edge is a property of the whole run, not of a range.
 // - A seed that found a defect becomes a unit row in the decider's own test file, with the inputs the trace shows. A
 //   seed's meaning depends on the order of the scenario's draws, so the seed alone is not a regression test.
 // - entropy.below, chance and pick each take exactly one draw. A scenario draws in a fixed order on each beat, whether
@@ -137,13 +140,11 @@ function failureMessage(name: string, seed: number, v: Violation, lines: readonl
   ].join('\n');
 }
 
-/** Throws on the first seed with a violation, then on any edge no seed covered (skipped when the variables carry
- *  CCRC_SIM_SEED). The variables default to process.env. */
-export async function assertScenario<E extends string>(
-  s: Scenario<E>, inv: readonly Invariant[],
-  o: { readonly seeds: readonly number[]; readonly testFile: string; readonly env?: Readonly<Record<string, string | undefined>> },
-): Promise<void> {
-  const vars = o.env ?? process.env;
+/** Runs the seeds one after another and throws on the first seed with a violation; answers the edges they reached, so a
+ *  test that splits its seeds over several cases can check coverage over their union (`assertCovered`). */
+export async function runSeeds<E extends string>(
+  s: Scenario<E>, inv: readonly Invariant[], o: { readonly seeds: readonly number[]; readonly testFile: string },
+): Promise<Set<E>> {
   const covered = new Set<E>();
   for (const seed of o.seeds) {
     const r = await simulate(s, seed, inv);
@@ -151,7 +152,33 @@ export async function assertScenario<E extends string>(
     if (v !== undefined) throw new Error(failureMessage(s.name, seed, v, r.lines, o.testFile));
     for (const e of r.covered) covered.add(e);
   }
-  if (vars.CCRC_SIM_SEED !== undefined) return;
+  return covered;
+}
+
+/** Throws on any edge of the scenario that `covered` lacks, skipped when the variables carry CCRC_SIM_SEED. The variables
+ *  default to process.env. */
+export function assertCovered<E extends string>(
+  s: Scenario<E>, covered: ReadonlySet<E>, env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  if (env.CCRC_SIM_SEED !== undefined) return;
   const missing = s.edges.filter((e) => !covered.has(e));
   if (missing.length > 0) throw new Error(`scenario ${s.name}: never reached: ${missing.join(', ')}`);
+}
+
+/** The seeds cut into consecutive ranges of `size` (the last may be shorter), in order: their union is `seeds`, each seed
+ *  in exactly one range. */
+export function seedRanges(seeds: readonly number[], size: number): number[][] {
+  if (!Number.isSafeInteger(size) || size < 1) throw new Error(`seedRanges: size must be a positive safe integer, got ${size}`);
+  const out: number[][] = [];
+  for (let i = 0; i < seeds.length; i += size) out.push(seeds.slice(i, i + size));
+  return out;
+}
+
+/** Throws on the first seed with a violation, then on any edge no seed covered (skipped when the variables carry
+ *  CCRC_SIM_SEED). The variables default to process.env. */
+export async function assertScenario<E extends string>(
+  s: Scenario<E>, inv: readonly Invariant[],
+  o: { readonly seeds: readonly number[]; readonly testFile: string; readonly env?: Readonly<Record<string, string | undefined>> },
+): Promise<void> {
+  assertCovered(s, await runSeeds(s, inv, o), o.env ?? process.env);
 }
