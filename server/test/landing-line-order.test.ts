@@ -374,16 +374,17 @@ describe('landingOrder: an edge to a withdrawn entry holds (wave 5j-a, D-9047)',
     expect(prs(alone)).toEqual([2]);
   });
 
-  it('a session other than C\'s setter declares C\'s order again without B, and C is free; so is C when its own claimant does', () => {
-    for (const setBy of ['lane-b', 'coordinator']) {
-      const C = e(3, { pinnedAt: 300, afterIds: [], fixesMain: true, setBy });
-      const o = landingOrder([A, B({ state: 'withdrawn' }), C], OPEN);
-      expect(head(o), setBy).toBe(3);
-      expect('waits' in o, setBy).toBe(false);
-    }
+  // Fix round 1, R2: this case looped over two setters, but the walk never reads `setBy`, so the loop fed it the same
+  // input twice. Who may declare C's order again is the next half's (the feed side); this case asserts the walk alone.
+  it('C with its order declared again without the withdrawn B is free: C is the head and nothing waits', () => {
+    const C = e(3, { pinnedAt: 300, afterIds: [], fixesMain: true });
+    const o = landingOrder([A, B({ state: 'withdrawn' }), C], OPEN);
+    expect(head(o)).toBe(3);
+    expect('waits' in o).toBe(false);
   });
 
-  it('B re-pinned is outstanding as a pinned target; B landed is met; B re-pinned and then closed is met', () => {
+  // Fix round 1, R2: retitled; the closed arm sets B closed directly, with no re-pin before it.
+  it('B pinned again (a later pin time) is outstanding as a pinned target; B landed is met; B closed is met', () => {
     const C = e(3, { pinnedAt: 300, afterIds: [102], fixesMain: true });
     const repinned = landingOrder([A, B({ pinnedAt: 400 }), C], OPEN);
     expect(head(repinned)).toBe(1);
