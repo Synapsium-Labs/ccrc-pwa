@@ -20440,7 +20440,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
     #
-    # NOR TO A HOME WHOSE PROVIDER IS FAILING (`_provfail_holds_home`, D-TBD-provfail-mark), or a session a failing lane stopped
+    # NOR TO A HOME WHOSE PROVIDER IS FAILING (`_provfail_holds_home`, D-9095), or a session a failing lane stopped
     # would be pulled back onto it. Only the preference is spent: a call that MUST leave (`$force`, the caller's or `pool`)
     # keeps such a home as `hfb`, the fallback below, so no rescue is ever refused for the mark.
     if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
@@ -33203,7 +33203,7 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   return 0
 }
 
-# THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-TBD-provfail-mark; docs/superpowers/plans/2026-11-25-provider-retry.md).
+# THE LANE-FAILING MARK (the provider-failure ladder, wave 3a, D-9095; docs/superpowers/plans/2026-11-25-provider-retry.md).
 # `$REG/<lane>-provfail` holds `<epoch> <err>`, `_authdead`'s shape: several sessions' turn markers say the provider answers this
 # lane's turns with errors. A PREFERENCE of an AUTOMATIC move and nothing else (`_swap_target`'s home arm and its ranking,
 # `_rescue_target`'s spread): no lane is ever ineligible for it, no session is moved for it, and the operator's own verbs never

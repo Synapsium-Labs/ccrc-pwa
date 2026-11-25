@@ -153,15 +153,15 @@ The order a provider move takes its target in (`_provider_move_rank_to`, pure, n
 
 ### Deviations found (wave 3a)
 
-- **D-TBD-provfail-mark** — the mark is a per-lane fact with one writer in the limit watchdog's pass, so it is off with it:
+- **D-9095** — the mark is a per-lane fact with one writer in the limit watchdog's pass, so it is off with it:
   `CCRC_LIMIT_WATCHDOG_MIN=0` reads and writes nothing, by that setting's own rule. Readers then see no mark.
-- **D-TBD-provfail-fresh** — "fresh" is 10 minutes for an owed failure (the outage notice's window), and the three counted
+- **D-9096** — "fresh" is 10 minutes for an owed failure (the outage notice's window), and the three counted
   failures also need their newest inside the mark's own 30 minutes. Without the second rule a session that was stopped after its
   third failure would mark its lane again every 30 minutes for 2 h.
-- **D-TBD-provfail-rank** — the mark is last among lanes a turn can run on, not behind a dead credential: that one cannot run a
+- **D-9097** — the mark is last among lanes a turn can run on, not behind a dead credential: that one cannot run a
   turn at all. Auth-dead moves from 101 to 102. Both rank inside a bracket, so a marked home-able lane still beats an unmarked
   overflow lane, as an auth-dead one does.
-- **D-TBD-provfail-spread** — `_rescue_target`'s spread pass would have taken a marked lane as the only one no rescue had just
+- **D-9098** — `_rescue_target`'s spread pass would have taken a marked lane as the only one no rescue had just
   landed on, ahead of a healthy one. Its name is refused when it is marked, and the pass after it decides.
-- **D-TBD-provfail-prefer** — `ccd prefer` acts through the home arm, so gate 1 alone would have held it back. A `.home` written
+- **D-9099** — `ccd prefer` acts through the home arm, so gate 1 alone would have held it back. A `.home` written
   after the mark is not held, for one move: a row whose `lastswap` is newer than its `.home` is held like any other.
