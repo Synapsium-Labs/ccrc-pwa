@@ -61,7 +61,7 @@ export const INVARIANT_MAP = {
   },
   I8: {
     says: 'after a crash, the next card lists every unsettled message and open hold',
-    tables: ['operator_messages', 'the card'], waitsOn: 'ticket invariant-message-predicates', w1: 'predicate-not-built',
+    tables: ["the private store's messages", 'the card'], waitsOn: 'ticket invariant-message-predicates', w1: 'predicate-not-built',
   },
   I9: { says: 'while mayHold is false, question rows push as without the Overlord', tables: [], waitsOn: null, w1: 'simulator-only' },
   I10: { says: 'every open row is on the operator\'s list at all times', tables: ['hold rows', 'requests'], waitsOn: 'W2, the requests; W3, the holds', w1: 'tables-absent' },
@@ -72,7 +72,7 @@ export const INVARIANT_MAP = {
   I12: { says: 'every open request has a follow-up time or an open child that does', tables: ['requests'], waitsOn: 'W2, the requests', w1: 'tables-absent' },
   I13: {
     says: 'after a restore, the store serves nothing retired, replaced or wiped, and no id twice',
-    tables: ['operator_messages', 'the privacy journal'], waitsOn: 'ticket invariant-message-predicates; the entries: W2', w1: 'predicate-not-built',
+    tables: ["the private store's messages", 'the privacy journal'], waitsOn: 'ticket invariant-message-predicates; the entries: W2', w1: 'predicate-not-built',
   },
   I14: { says: 'no answer is delivered and no grant used while a latch or condition forbids it', tables: ['answers', 'grants'], waitsOn: 'W3, the answers and grants', w1: 'tables-absent' },
   I15: { says: 'an agreement joins a gate, cell or grant once, only from a scored operator answer', tables: ['gates'], waitsOn: 'W3, the gates', w1: 'tables-absent' },

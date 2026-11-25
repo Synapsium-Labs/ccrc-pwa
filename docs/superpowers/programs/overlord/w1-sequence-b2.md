@@ -152,6 +152,23 @@ With the `invariants` row at its seed, `shadow`:
 - it records each new finding as a `shadow` row and logs one line when a verdict word moves. It raises no latch and no
   item: nothing reaches the operator until the row is set Live.
 
+## The first full run
+
+The first full run on the pushed tip (`2e77441905`) was red in four server shards, on five cases this branch's own named
+runs had not included; each is fixed in one commit, and each file ran green alone after it:
+- `programme-lifecycle-migration.test.ts` pinned the lifecycle's migration as the last entry, and
+  `limit-samples-store.test.ts` rolled a database back to its slot past every later migration: migration 128 moved both by
+  one, and the roll-back now undoes 128 too (its table and its lane-arm seed row).
+- `run-session-census.test.ts` (ARCH-62) counted two comparisons in `invariants.ts`, I5's retire of the bound session and
+  I7's binding comparison; neither reads a run, so both are named in `NOT_BINDING_SITES` with that reason, beside the
+  restore's own.
+- `operator-message-readers.test.ts` refuses any string outside the private store that names its tables: I8's and I13's
+  rows named `operator_messages` in their descriptive `tables` list. They now say "the private store's messages"; no code
+  reads that list.
+
+The two face mood floors that failed on the test box (it could not resolve `@ccrc/ui`) ran green in that full run's
+`server 9/12` job, with the rest of `mutation-floors.test.ts`.
+
 ## Known limits
 
 - I5 reads unmeasured until the kept designation line's read is wired (the other sequence run's store). It is wired in
