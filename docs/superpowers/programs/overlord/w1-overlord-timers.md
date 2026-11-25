@@ -27,8 +27,11 @@ Every refusal a timer door answers itself after its token is counted (M36). One 
 | 3, step 1 | `test(timers): pin the timer doors' answers before the gate` | `timer-doors-characterization.test.ts`: the five doors through the real server, as a coordinator, a worker and the operator, every status and body pinned, green on the base. |
 | 3 | `feat(timers): the Overlord's timers through its door process, stamped with designatedTerm` | The three rows (`act: null`, `unmeasuredDesignation: 'by-profile'`); step 10 skipped for a `null` act; step 1's profile arm; the doors' role path, the restore stamp on every set, the reserved identity word, the operator's read and cancel, the refusal count; the mail route's reserved recipient; the console's mark. |
 | 4, move | `refactor(gate): the card fact's mapping is one L1 function` | `cardFactFrom` moved out of the runner, move only, gate suites green. |
-| 4 | `feat(timers): the role's timer mail to overlord, one fixed line after the card` | The lane's reads at the top of the pass, the role's arm, `deliverTo`, the refusal purge; the `timer` row of `FIXED_LINE_MAIL`, `renderTimerFiredLine`, `cardHoldVerdict` (in `overlordGate.ts`, beside step 8), the sweep's hold; the card's timers by identity; the timer day's Overlord case. |
+| 4 | `feat(timers): the role's timer mail to overlord, one fixed line after the card` | The lane's reads at the top of the pass, the role's arm, `deliverTo`, the refusal purge; the `timer` row of `FIXED_LINE_MAIL`, `renderTimerFiredLine`, `cardHoldVerdict` (first in `envelope.ts`, in this commit), the sweep's hold; the card's timers by identity; the timer day's Overlord case. |
+| 4, move | `refactor(gate): the timer line's card hold lives beside step 8, the one home of card-unread` (`b69b9e41c1`) | `cardHoldVerdict` moved from `envelope.ts` to `overlordGate.ts`, move only: the core vocabulary check holds `card-unread` to one spelling file, and step 8 already spells it. |
 | 5 | this note | The older-build measurement, departures, mutation tables, what arms on merge. |
+| fix round 1 | `fix(timers): the five checks the fast run caught ...` | The census, two migration pins, the mail forms fixture, the sweep's line cap (below). |
+| review 3841 | `fix(timers): review 3841: a held timer line claims nothing ...` | F1 to F4 and the note's corrections (below). |
 
 ## Where main differed from the plan's "What exists today"
 
@@ -84,6 +87,10 @@ This build's own:
   retire), not a seeded scenario.
 - `task-notes-in-the-programme-note`: the plan's `w1-overlord-timers/older-build.md` and `departures.md` are this note (the
   layout guard refuses undated files under `plans/`).
+- `refusal-counts-without-rowid`: `continuity_timer_refusals` is `WITHOUT ROWID`, which the plan's table definition does not
+  say. Its primary key `(day, door, word)` is the only key it is ever read, upserted or purged by, and a row is three short
+  words and a count, so the key is the table: no second b-tree, and no rowid anything could come to depend on. The plan's
+  columns, key and writers are unchanged.
 - `restore-generation-is-required-on-insert`: `TimerInsert.setRestoreGeneration` is required, so a set that forgets the
   stamp is a compile error.
 
@@ -103,6 +110,12 @@ Floors (`server/test/sim/mutation-floors.json`, run by `mutation-floors.test.ts`
 | `overlordGate.ts#overlordGate` | O-19 step 10 run for a door with no act kind | killed |
 | `envelope.ts#fixedLineMailOf` | F20 matched on the sender alone, F21 open to every session, F22 types before the card, F24 never matched | all |
 | `envelope.ts#renderTimerFiredLine` (new key, floor 1) | T1 no count, T2 a zero counted, T3 the generic head lost, T4 the hold not carried, T5 matched on the delivery | all |
+
+T4 and T5 mutate `mailNudgeOf`, not `renderTimerFiredLine`, and `mailNudgeOf` has no floor key of its own, so they stay in
+the timer line's set, whose cases call `mailNudgeOf` (review 3841 A2). The label is the set's, not the mutated function's.
+
+| Set | New mutants | Killed |
+|---|---|---|
 | `overlordGate.ts#cardHoldVerdict` (new key, floor 1; beside step 8, the one home of `card-unread`) | C1 a stale card delivers, C2 unmeasured read as unread, C3 every card delivers | all |
 | `roleOf.ts#identityOf` | I3's quote reshaped to the constant | killed |
 
@@ -133,6 +146,16 @@ By hand (applied one at a time to the source, the named suite run through `ccrc 
 | M2 | a held delivery spends an attempt | held: attempts unchanged |
 | M3 | the hold reads a stale card as current | held while read-stale |
 | M4 | the timer row matched on the sender alone | a session-keyed timer mail keeps the generic nudge |
+| V1 | the session claimed before the ack-once and the card hold (F1) | a held timer row followed by a plain mail, and by a second timer row |
+| V2 | a fired row with no fire time served at zero (F3) | a fired role timer with no fire time is timer-unmeasured |
+| V3 | the hold's reason logged on every sweep (F4) | three holds for one reason log once |
+| V4 | the hold's reason never logged (F4) | three holds for one reason log once |
+| V5 | the gate's profile port deleted in `server.ts` (F2) | a coordinator and a worker are served at all three doors with the designation unreadable |
+| V6 | the doors' restore generation port deleted in `server.ts` (F2) | a set stores the restore generation the server's restore state answers |
+| V7 | the lane's authority always coherent in `watch.ts` (F2) | a real watcher fires a planted role timer, not while the guard is not coherent |
+| V8 | the lane's authority binding deleted in `watch.ts` (F2) | the same real-watcher case |
+| V9 | the lane's restore generation binding deleted in `watch.ts` (F2) | the same real-watcher case (its restore line) |
+| V10 | the unmeasured episode line written on every call (F2, the plan's case) | one episode line over the timer calls of one episode |
 
 ## What an older build does, measured (Table 11.5, ruled F12)
 
@@ -143,6 +166,9 @@ delivery queued to a fixture session; that build's own code was then imported fr
 (`git archive`) and run on the file: `openCoordDb`, `pendingTimers`, `runTimersLane` (its own `incarnationOf` over a fixture
 registry with no row named `overlord`), `dueDeliveries`, `mailOrigin`, `mailNudgeOf` and `MAIL_ROLE_IDS`. The rest was read
 from that build's source.
+
+So this reads the fleet box's two kept builds, `v0.0.1428` and `v0.0.1466`, and no server box build. The mail sweep was
+not run on either: its replay ceiling, the park and the park's push naming were read from each tag's source (review 3841 A1).
 
 `v0.0.1428` (`1dedc34fc6`):
 
@@ -220,6 +246,34 @@ was a file the local runs had not included:
 
 The full run dispatched on that tip ran no tests: its test selection failed to download an artifact (HTTP 503, egress
 over the account limit), so `test (server)` reported failure.
+
+## Review 3841: what changed
+
+- **F1, a held line claims nothing.** For one due delivery, the mail pass's order is now:
+  1. every gate, in its old order;
+  2. the nudge;
+  3. the ack-once of a fixed line already delivered, or the card hold (neither types anything);
+  4. the session's claim for this sweep;
+  5. the send.
+
+  So a held timer row, or a fixed line acked without typing, claims nothing. A plain mail behind it is delivered in the same
+  sweep. A second timer row behind a held one holds for the same card. Once the card reads, the first is typed and claims the
+  session, and the second waits one sweep as `same-sweep`, as any second mail to one session does. The order of every other
+  check is unchanged, and `mailPass` stays at its cap. The ack-once now claims nothing either: it types nothing, so the
+  comment over the claim, "one message per session per sweep", is true of both.
+- **Nothing times a held line out.** A held timer row stays queued, with no attempt spent and no park, for as long as its
+  card does not read current. It is freed when the live Overlord generation of the session it is queued to reads the
+  current card. If that session stops being the designated one, the row no longer matches the designated-only timer row,
+  so it takes the generic nudge and is not held. No timeout, retry count or park frees it. While it holds, other mail to that
+  session is not held behind it (F1).
+- **F2.** Four new cases, each red when its binding is deleted (V5 to V10 above):
+  - the gate's launch-profile port and the doors' restore generation port, through the real server;
+  - the lane's guard and restore bindings, through a real watcher;
+  - the plan's one-episode-line case.
+- **F3.** The Overlord's list answers `timer-unmeasured` for a fired row whose fire time is null.
+- **F4.** One case counts the card hold's log lines: once per change of reason, again after a delivery.
+- **F5, A1 and A2** are the departure `refusal-counts-without-rowid`, the sentence under the older-build measurement, and the
+  sentence under the floors table.
 
 ## Known limits
 
