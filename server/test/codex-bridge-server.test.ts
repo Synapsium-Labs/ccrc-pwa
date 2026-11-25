@@ -2761,6 +2761,16 @@ describe.skipIf(!PY)('a short upstream failure is absorbed before the commit poi
     }, { consts: { ...QUICK, 'absorb.BUDGET_S': 0.5 } });
   });
 
+  it('each wait of one message is longer than the last', async () => {
+    const many = Array.from({ length: 60 }, () => overloaded());
+    await withBridge(many, async ({ bridge, up }) => {
+      expect((await send(bridge)).status).toBe(529);
+      // waits of 0.2, 0.4 and 0.8 s fit in 1.9 s and 1.6 s does not; equal waits of 0.2 s would make about nine attempts
+      expect(up.requests.length).toBeGreaterThanOrEqual(3);
+      expect(up.requests.length).toBeLessThanOrEqual(4);
+    }, { consts: { 'absorb.FIRST_S': 0.2, 'absorb.JITTER': 0, 'absorb.BUDGET_S': 1.9 } });
+  });
+
   it('no other row is tried again: rate, plan limit, policy, overflow, ineligible, another 4xx, a response that ended', async () => {
     const body = (code: string): Json => ({ error: { code, message: 'no' } });
     const unknown = created() + ev('response.incomplete', { response: {
@@ -2889,6 +2899,25 @@ describe.skipIf(!PY)('a short upstream failure is absorbed before the commit poi
       expect(up.requests).toHaveLength(1);
       expect(readStats(lane).outcomes).toEqual({ 'drain-cut': 1 });
     }, { consts: { 'absorb.FIRST_S': 15, 'server.DRAIN_S': 0.3, 'server.DRAIN_WRITE_S': 3 } });
+    // a client that takes the cut's answer and keeps its side open: only the cut itself ends the wait, so the drain does
+    // not sit out DRAIN_WRITE_S for this request
+    await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
+      const payload = JSON.stringify(messages());
+      const s = connect({ port: bridge.port, host: '127.0.0.1', allowHalfOpen: true });
+      s.on('error', () => { /* the bridge exits under it */ });
+      s.resume();
+      s.write(`POST /v1/messages HTTP/1.1\r\nHost: x\r\nx-api-key: ${bridge.key}\r\nanthropic-beta: ${CLAUDE_CODE_BETA}\r\n`
+        + `content-type: application/json\r\ncontent-length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200);
+      const t1 = Date.now();
+      bridge.proc.kill('SIGTERM');
+      expect(await bridge.wait()).toEqual({ code: 0, signal: null });
+      expect(Date.now() - t1).toBeLessThan(4000);
+      s.destroy();
+      expect(up.requests).toHaveLength(1);
+    }, { consts: { 'absorb.FIRST_S': 15, 'server.DRAIN_S': 0.3, 'server.DRAIN_WRITE_S': 4.5 } });
   });
 
   it('what is not the upstream\'s failure is not recorded, and what is, is: a drain\'s cut, and a POST nobody waited for', async () => {
