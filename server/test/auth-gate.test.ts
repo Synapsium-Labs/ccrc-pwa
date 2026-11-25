@@ -72,7 +72,9 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
    'GET /api/programmes/:slug/goals',
    // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
-   'GET /api/programmes/:slug/plan']);
+   'GET /api/programmes/:slug/plan',
+   // D-9048 (landing order wave 5j-a): the landing line's read, `ccrc-api landing show` cookieless, the console with a session.
+   'GET /api/landing']);
 
 /** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
  *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET

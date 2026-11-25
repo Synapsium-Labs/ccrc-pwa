@@ -40,8 +40,14 @@ const CASES: Case[] = [
     [e(1, { pinnedAt: 100, fixesMain: true, afterIds: [102] }), e(2, { pinnedAt: 200 })], OPEN, [2, 1], 2, null],
   ['C9 an edge to an ejected entry holds the entry back',
     [e(1, { pinnedAt: 100, afterIds: [107] }), e(7, { state: 'ejected', ejections: 1 }), e(3, { pinnedAt: 200 })], OPEN, [3, 1], 3, null],
-  ['C10 an edge to a landed, withdrawn or absent id holds nothing',
-    [e(1, { afterIds: [105, 106, 199] }), e(5, { state: 'landed' }), e(6, { state: 'withdrawn' })], OPEN, [1], 1, null],
+  // Wave 5j-a (D-9047), inverted: C10 read "an edge to a landed, withdrawn or absent id holds nothing" over afterIds
+  // [105, 106, 199] and answered order [1], head 1. A landed or absent target still holds nothing (C10); a withdrawn one now
+  // holds its dependant, which waits last (C10w).
+  ['C10 an edge to a landed or absent id holds nothing',
+    [e(1, { afterIds: [105, 199] }), e(5, { state: 'landed' })], OPEN, [1], 1, null],
+  ['C10w an edge to a withdrawn id holds its dependant, which waits last (5j-a, D-9047)',
+    [e(1, { pinnedAt: 100, afterIds: [105, 106, 199] }), e(5, { state: 'landed' }), e(6, { state: 'withdrawn' }), e(3, { pinnedAt: 200 })],
+    OPEN, [3, 1], 3, null],
   ['C11 a cycle goes last and never heads',
     [e(1, { pinnedAt: 100, afterIds: [102] }), e(2, { pinnedAt: 200, afterIds: [101] }), e(3, { pinnedAt: 300 })], OPEN, [3, 1, 2], 3, null],
   ['C12 a line of only a cycle has no head', [e(1, { afterIds: [102] }), e(2, { afterIds: [101] })], OPEN, [1, 2], null, null],
@@ -302,8 +308,20 @@ describe('landingOrder stateWords (R4)', () => {
     expect(headWith([dep, target()])).toBeNull();
     expect(landingOrder([dep, target()], OPEN)).toEqual(landingOrder([dep, target()], OPEN, undefined, undefined));
   });
-  for (const w of ['landed', 'closed', 'withdrawn'] as const) it(`a stored ${w} behind display unknown settles the edge`, () => {
+  // Wave 5j-a (D-9047), inverted: this loop ran for landed, closed and withdrawn, each settling the edge (head 1). A stored
+  // `withdrawn` no longer settles: it holds its dependant, which `waits` names (the case below).
+  for (const w of ['landed', 'closed'] as const) it(`a stored ${w} behind display unknown settles the edge`, () => {
     expect(headWith([dep, target()], [{ id: 101, value: 'pinned' }, { id: 102, value: w }])).toBe(1);
+  });
+  it('a stored withdrawn behind display unknown does not settle: it holds, and waits names it (5j-a, D-9047)', () => {
+    const o = landingOrder([dep, target()], OPEN, undefined, [{ id: 101, value: 'pinned' }, { id: 102, value: 'withdrawn' }]);
+    expect(head(o)).toBeNull();
+    expect(o.waits).toEqual([{ entryId: 101, reason: 'withdrawn', on: [{ entryId: 102, pr: 2 }] }]);
+  });
+  it('a stored withdrawn that is not exactly identified stays outstanding as an unknown target, and waits does not name it', () => {
+    const o = landingOrder([dep, target()], OPEN, undefined, [{ id: 102, value: 'withdrawn' }, { id: 102, value: 'withdrawn' }]);
+    expect(head(o)).toBeNull();
+    expect('waits' in o).toBe(false);
   });
   for (const w of ['pinned', 'ejected', 'unknown', 'unrecognised'] as const) it(`a stored ${w} behind display unknown stays outstanding`, () => {
     expect(headWith([dep, target()], [{ id: 102, value: w }])).toBeNull();
@@ -316,5 +334,99 @@ describe('landingOrder stateWords (R4)', () => {
   it('a non-positive or unsafe id is never settled', () => {
     const bad = e(2, { id: 0, state: 'unknown' });
     expect(headWith([e(1, { afterIds: [0] }), bad], [{ id: 0, value: 'landed' }])).toBeNull();
+  });
+});
+
+// Landing order wave 5j-a (D-9047, the F8 ruling): a withdrawal never brings another landing forward. An edge to a withdrawn
+// target stays outstanding; its dependant waits last, never the head, and `waits` names it with each target's entry id and PR.
+describe('landingOrder: an edge to a withdrawn entry holds (wave 5j-a, D-9047)', () => {
+  // A heads the line; B after A; C after B. Ids are pr + 100.
+  const A = e(1, { pinnedAt: 100 });
+  const B = (over: Partial<LandingEntry> = {}) => e(2, { pinnedAt: 200, afterIds: [101], ...over });
+  const waitC = [{ entryId: 103, reason: 'withdrawn', on: [{ entryId: 102, pr: 2 }] }];
+
+  it('nothing brought forward: withdraw B, and C (fixesMain, behind B) waits while A stays the head', () => {
+    const C = e(3, { pinnedAt: 300, afterIds: [102], fixesMain: true });
+    const o = landingOrder([A, B({ state: 'withdrawn' }), C], OPEN);
+    expect(head(o)).toBe(1);
+    expect(prs(o)).toEqual([1, 3]);
+    expect(o.waits).toEqual(waitC);
+  });
+
+  it('nothing brought forward: the same with C older than A and no fixesMain', () => {
+    const C = e(3, { pinnedAt: 50, afterIds: [102] });
+    const o = landingOrder([A, B({ state: 'withdrawn' }), C], OPEN);
+    expect(head(o)).toBe(1);
+    expect(prs(o)).toEqual([1, 3]);
+    expect(o.waits).toEqual(waitC);
+  });
+
+  it('a withdrawn head with one dependant: the head is the next independent entry, or none', () => {
+    const H = e(1, { pinnedAt: 100, state: 'withdrawn' });
+    const D = e(2, { pinnedAt: 150, afterIds: [101] });
+    const I = e(3, { pinnedAt: 300 });
+    const o = landingOrder([H, D, I], OPEN);
+    expect(head(o)).toBe(3);
+    expect(prs(o)).toEqual([3, 2]);
+    expect(o.waits).toEqual([{ entryId: 102, reason: 'withdrawn', on: [{ entryId: 101, pr: 1 }] }]);
+    const alone = landingOrder([H, D], OPEN);
+    expect(head(alone)).toBeNull();
+    expect(prs(alone)).toEqual([2]);
+  });
+
+  // Fix round 1, R2: this case looped over two setters, but the walk never reads `setBy`, so the loop fed it the same
+  // input twice. Who may declare C's order again is the next half's (the feed side); this case asserts the walk alone.
+  it('C with its order declared again without the withdrawn B is free: C is the head and nothing waits', () => {
+    const C = e(3, { pinnedAt: 300, afterIds: [], fixesMain: true });
+    const o = landingOrder([A, B({ state: 'withdrawn' }), C], OPEN);
+    expect(head(o)).toBe(3);
+    expect('waits' in o).toBe(false);
+  });
+
+  // Fix round 1, R2: retitled; the closed arm sets B closed directly, with no re-pin before it.
+  it('B pinned again (a later pin time) is outstanding as a pinned target; B landed is met; B closed is met', () => {
+    const C = e(3, { pinnedAt: 300, afterIds: [102], fixesMain: true });
+    const repinned = landingOrder([A, B({ pinnedAt: 400 }), C], OPEN);
+    expect(head(repinned)).toBe(1);
+    expect(prs(repinned)).toEqual([1, 2, 3]);
+    expect('waits' in repinned).toBe(false);
+    for (const state of ['landed', 'closed'] as const) {
+      const o = landingOrder([A, B({ state }), C], OPEN);
+      expect(head(o), state).toBe(3);
+      expect('waits' in o, state).toBe(false);
+    }
+  });
+
+  it('with stateWords omitted, a display withdrawn target holds too', () => {
+    const o = landingOrder([e(1, { afterIds: [102] }), e(2, { state: 'withdrawn' })], OPEN, undefined, undefined);
+    expect(head(o)).toBeNull();
+    expect(o.waits).toEqual([{ entryId: 101, reason: 'withdrawn', on: [{ entryId: 102, pr: 2 }] }]);
+  });
+
+  it('the field: a line with no withdrawn target answers no waits key at all', () => {
+    for (const flags of [OPEN, OP, RED]) {
+      expect('waits' in landingOrder([A, B(), e(3, { afterIds: [199] })], flags)).toBe(false);
+    }
+    expect('waits' in landingOrder([], OPEN)).toBe(false);
+  });
+
+  it('the field: two withdrawn targets under one dependant give one waits entry, its targets sorted by entry id', () => {
+    const D = e(1, { afterIds: [109, 105, 109] });
+    const o = landingOrder([D, e(9, { state: 'withdrawn' }), e(5, { state: 'withdrawn' })], OPEN);
+    expect(o.waits).toEqual([{ entryId: 101, reason: 'withdrawn', on: [{ entryId: 105, pr: 5 }, { entryId: 109, pr: 9 }] }]);
+  });
+
+  it('the field rides both arms: a paused line still says what waits, and a recovery hold keeps it', () => {
+    const line = [e(1, { afterIds: [102] }), e(2, { state: 'withdrawn' })];
+    expect(landingOrder(line, OP).waits).toEqual([{ entryId: 101, reason: 'withdrawn', on: [{ entryId: 102, pr: 2 }] }]);
+    const HOLD = { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [7] } };
+    expect(landingOrder(line, OPEN, HOLD)).toEqual({ paused: false, order: [line[0]], head: null, held: HOLD.hold,
+      waits: [{ entryId: 101, reason: 'withdrawn', on: [{ entryId: 102, pr: 2 }] }] });
+  });
+
+  it('only pinned dependants are listed: an ejected entry behind a withdrawn target is in no waits entry', () => {
+    const o = landingOrder([e(1, { state: 'ejected', ejections: 1, afterIds: [102] }), e(2, { state: 'withdrawn' }), e(3)], OPEN);
+    expect('waits' in o).toBe(false);
+    expect(head(o)).toBe(3);
   });
 });

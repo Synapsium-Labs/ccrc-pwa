@@ -493,7 +493,7 @@ describe('matchDigestSlots: every slot compared, every time', () => {
 });
 
 describe('every box-token lane names itself to the check', () => {
-  // The 18 call sites (server.ts 2, coord/routes.ts 15, update/routes.ts 1) each
+  // The 19 call sites (server.ts 2, coord/routes.ts 16, update/routes.ts 1) each
   // pass their route key, so a retired presentation is counted per lane. The
   // one call before the first registration is requireMailToken's own, which
   // passes the `route` its callers name. Two are the test box's read and tools
@@ -502,6 +502,8 @@ describe('every box-token lane names itself to the check', () => {
   // the session OR the box token, the same dual gate as `GET /api/runs/:id`, so a
   // coordinator can read a run's record cookieless. A deliberate new door: it is
   // EXEMPT-BUT-AUTHENTICATED in auth-gate.test.ts and counted in the census.
+  // 19 since landing order wave 5j-a's `GET /api/landing` (D-9048): the line's read takes the session OR the box token,
+  // the `GET /api/feed` shape, where it called requireMailToken before, so its check is now a call site of its own.
   const CALL = /checkMailToken\(deps\.mailToken \?\? null, req\.headers\[MAIL_TOKEN_HEADER\](?:, ([^)]+))?\)/g;
   const sites = (rel: string): { lane: string | null; route: string | null }[] => {
     const src = readFileSync(path.join(repoRoot, 'server', 'src', rel), 'utf8');
@@ -513,9 +515,9 @@ describe('every box-token lane names itself to the check', () => {
     });
   };
 
-  it('all eighteen pass a lane, and a literal lane is its own route key', () => {
+  it('all nineteen pass a lane, and a literal lane is its own route key', () => {
     const all = ['server.ts', 'coord/routes.ts', 'update/routes.ts'].flatMap(sites);
-    expect(all).toHaveLength(18);
+    expect(all).toHaveLength(19);
     for (const s of all) {
       expect(s.lane, `a call inside ${s.route ?? 'the helper'} names no lane`).not.toBeNull();
       if (s.route === null) expect(s.lane).toBe('route');
