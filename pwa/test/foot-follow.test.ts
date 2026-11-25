@@ -1,7 +1,7 @@
 // What the chat list does when its height changes (desktop polish wave 168, review 3478 F5, F6 and A8, review 3607 F1):
 // pure, beside the other chat policy. What the list feeds it, and does with its answer, is `hold-wiring.test.tsx`'s.
 import { describe, expect, it } from 'vitest';
-import { MOVE_SETTLE_MS, TAP_SETTLE_MS, heightMove, holdShift, prependShift, type HeightChange } from '../src/session/footFollow';
+import { MOVE_SETTLE_MS, TAP_SETTLE_MS, footLeft, heightMove, holdShift, prependShift, type HeightChange } from '../src/session/footFollow';
 
 /** A reader at the foot of a 2000px list in an 800px view, the pill's band 40px, nothing tapped. */
 const AT_FOOT: HeightChange = {
@@ -97,5 +97,25 @@ describe('prependShift: how far the rows moved, by key', () => {
 
   it('rows taken from the top move it the other way', () => {
     expect(prependShift(['o1', 'o2', 'a', 'b'], ['a', 'b'], 'a')).toBe(-2);
+  });
+});
+
+describe('footLeft: the foot left the reader, or the reader left the foot (desktop polish wave 175, item 6a)', () => {
+  const GREW = { settling: false, movedUp: false, sinceTap: null };
+  it('growth below the reader, or a view that shrank, takes them back to the foot', () => {
+    expect(footLeft(GREW)).toBe('foot');
+    expect(footLeft({ ...GREW, sinceTap: TAP_SETTLE_MS + 1 })).toBe('foot');
+  });
+
+  it('a reader who moved the scroller up leaves the foot', () => {
+    expect(footLeft({ ...GREW, movedUp: true })).toBe('leave');
+  });
+
+  it('a change the reader caused by tapping a disclosure leaves them where they tapped', () => {
+    expect(footLeft({ ...GREW, sinceTap: TAP_SETTLE_MS - 1 })).toBe('leave');
+  });
+
+  it('while the column settles, a pinned reader is taken back whatever moved', () => {
+    expect(footLeft({ settling: true, movedUp: true, sinceTap: 0 })).toBe('foot');
   });
 });
