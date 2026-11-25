@@ -649,6 +649,63 @@ describe('a page of calls only, joining the top stretch, holds the reader (fix r
   }, 60_000);
 });
 
+// ---- a page of mail prompts joining the top run (wave 176's fold, absorbed in fix round 2) ------------------------------
+/** 52 mail prompts ten seconds apart, one day, nothing between (one run, `mailRows.ts#foldMailRows`), then six long
+ *  messages. The backlog holds the newest 24 prompts and the messages; the one older page, the other 28 prompts. */
+function promptsAtTop(): Ev[] {
+  const out: Ev[] = [];
+  let t = Date.parse('2026-11-20T08:00:00.000Z');
+  const ts = (): string => { t += 10_000; return new Date(t).toISOString(); };
+  for (let n = 1; n <= 52; n += 1) out.push({ kind: 'user', uuid: `mp${n}`, ts: ts(), text: 'ccrc-mail: you have new mail. Use the client.' });
+  for (let n = 1; n <= 6; n += 1) {
+    out.push({ kind: n % 2 === 0 ? 'user' : 'assistant', uuid: `jm${n}`, ts: ts(), text: `Message ${n}: ${'words '.repeat(70)}` });
+  }
+  return out;
+}
+const topRun = (page: Page) => page.evaluate(() => {
+  const row = document.querySelector<HTMLElement>('.chat-scroller [data-row-key^="mail-prompts-"]');
+  return row === null ? null : {
+    key: row.dataset.rowKey!, open: row.querySelector('.mail-prompt-line')?.getAttribute('aria-expanded') === 'true',
+  };
+});
+
+describe('a page of mail prompts joining the top run holds the reader (absorb of wave 176, fix round 2)', () => {
+  for (const view of [VIEWS.find((v) => v.width === 390 && v.theme === PHOSPHOR && v.skin === REFINED)!,
+    VIEWS.find((v) => v.width === 1280 && v.theme === PHOSPHOR && v.skin === INSTRUMENT)!]) {
+    it(`${named(view)}: the run the reader opened stays open under its new key, and the message under it does not move`, async () => {
+      const all = promptsAtTop();
+      const { ctx, page, errors, s } = await open(view, () => all);
+      try {
+        s.hold();
+        await scrollList(page, 0);
+        await waitAsked(s, 1);
+        const was = await topRun(page);
+        expect(was, 'no run of prompts at the top').not.toBeNull();
+        expect(was!.key).toBe('mail-prompts-mp29');
+        await page.locator('.chat-scroller [data-row-key^="mail-prompts-"] .mail-prompt-line').first().click();
+        await page.waitForTimeout(400);
+        expect((await topRun(page))!.open, 'the run did not open').toBe(true);
+        const before = await topOf(page, 'jm1');
+        expect(before, 'the message under the run is not drawn').not.toBeNull();
+        s.release();
+        const until = Date.now() + 10_000;
+        while (s.answered < 1 && Date.now() < until) await page.waitForTimeout(20);
+        await page.waitForTimeout(1200);
+        const now = await topRun(page);
+        const after = await topOf(page, 'jm1');
+        report(`prompt run, ${named(view)}: key ${was!.key} -> ${now?.key ?? 'gone'}, open ${String(now?.open)}, the message under it moved ${after === null ? 'out of reach' : (after - before!).toFixed(1)} px`);
+        expect(now?.key, 'the page did not join the run').toBe('mail-prompts-mp1');
+        expect(now!.open, 'the run the reader opened closed across the join').toBe(true);
+        expect(after, 'the message under the run is no longer drawn').not.toBeNull();
+        expect(Math.abs(after! - before!), 'the message under the run moved').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});
+
 // ---- paging after a context reset (fix round 2, F1) ---------------------------------------------------------------------
 /** The rows in view that a page can move: every row but the reset's own (a local row and its time divider). */
 const transcriptRowsInView = async (page: Page) =>
