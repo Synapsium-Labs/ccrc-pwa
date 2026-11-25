@@ -3135,8 +3135,8 @@ none per supervise tick). When tmux pronounces the session `gone`, the supervise
 end: `oom` when that scope's journal names an OOM kill in the last 120 s (`journalctl --user -u
 <scope>`, bounded by `timeout 5`), `tmux-server` when `tmux list-sessions` fails, `exited`
 otherwise, and `unknown` when the journal read fails or no scope was recorded on Linux. `cmd_swap`
-records `swap-manual`, `swap-auto-home`, `swap-auto-rescue` or `swap-auto` after its act-time gates
-and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
+records `swap-manual`, `swap-auto-home`, `swap-auto-rescue`, `swap-auto-provider` or `swap-auto` after its
+act-time gates and before it stops the unit, so a refused swap records no end. Each goes to `$REG/<id>.lastend`
 (`<epoch> <cause>`; an `oom` also appends to `$REG/<id>.oomends`, kept to the last 10 minutes) and
 to `swap.log` as `ended <id>: <cause>`. `_resume_prompt_for` composes the prompt per spawn: a
 `lastend` at most 10 minutes old replaces RESUME_PROMPT's "an account swap or a supervisor revival"

@@ -19709,7 +19709,7 @@ _rescue_jitter_max() {   # id arm -> RESCUE_JITTER_MAX
   return 0
 }
 
-_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear] — run `ccd swap` in ITS OWN transient systemd unit.
+_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear fail] — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
@@ -19788,13 +19788,13 @@ _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear]
   # row's `lastswap` from before the caller stamped it (restored by a refusal),
   # the decision's epoch (the `ts` of a rescue's limits row), the degrade rung
   # (stamped at the act now, `_route_degrade_at_move`), and for a rescue the
-  # transcript and its size (output since then backs the rescue off), and a rescue's organization near miss. Each
+  # transcript and its size (output since then backs the rescue off), a rescue's organization near miss, and a provider move's newest failure. Each
   # value is `%q`-quoted, so a path cannot break out of the `bash -c` string.
   # Positional, all optional: a caller passing two arguments composes exactly
   # the old line plus empty words, which the act reads as "no gate" (an older
   # caller's dispatch) and so proceeds as it always did.
   local env="" k v i=3
-  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES ORGNEAR; do
+  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES ORGNEAR FAIL; do
     printf -v v '%q' "${!i-}"; i=$((i + 1))
     env+="CCD_SWAP_$k=$v "
   done
@@ -25969,7 +25969,7 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
   _end_record "$id" "$(_end_cause "$id")"
   _inflight_write "$id" revival
 }
-_swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
+_swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto-provider | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
   # (D-5240, Task 11): `affinity` (the move home) or `rescue`, the same two
   # words `cmd_swap`'s act-time gates read. An automatic swap whose arm is not
@@ -25979,6 +25979,7 @@ _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home 
     affinity) printf 'swap-auto-home' ;;
     rescue)   printf 'swap-auto-rescue' ;;
     watchdog) printf 'swap-auto-rescue' ;;   # D-8123: the fleet watchdog's forced move is a rescue; the existing word, so no server contract changes
+    provider) printf 'swap-auto-provider' ;;
     wake)     printf 'swap-auto' ;;   # D-8123: the wake move is named by its arm but takes the generic word; a new cause word would be a server contract
     *)        printf 'swap-auto' ;;
   esac
@@ -26009,6 +26010,7 @@ _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). 
     exited)           what="a supervisor revival after the process exited on its own" ;;
     swap-auto-home)   what="an automatic account swap back to its home account" ;;
     swap-auto-rescue) what="an automatic account swap off a blocked account" ;;
+    swap-auto-provider) what="an automatic account swap off a lane whose provider answered with errors" ;;
     swap-auto)        what="an automatic account swap" ;;
     swap-manual)      what="an account swap asked for by hand" ;;
     limit-resume)     what="a restart on the same account after its usage limit reset" ;;   # D-8123: `_watchdog_resume_here`
@@ -30870,6 +30872,7 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   # up on one full account, must see the targets the earlier ones took (the spread list), and a session moved off A by the
   # watchdog while A's telemetry still read under the ceiling must not be rescued back onto A (do not bounce). Both land
   # through the same `swap <id>:` line.
+  # SO IS A PROVIDER MOVE (`provider-rescue <id>: A -> B …`, the provider-failure ladder's): do not bounce, and spread.
   # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
   # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
   # so is a tail with no rescue in it (`grep` rc 1). A forged line cannot crash
@@ -30880,11 +30883,11 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   [[ -e "$REG/swap.log" ]] || return 0
   [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
   command -v python3 >/dev/null 2>&1 || return 2
-  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' watchdog-rescue ' -e ' wake-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' watchdog-rescue ' -e ' provider-rescue ' -e ' wake-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
 import re, sys, time
 sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
-wd = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) watchdog-rescue (\S+): (\S+) -> (\S+)(.*)$")
+wd = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?:watchdog|provider)-rescue (\S+): (\S+) -> (\S+)(.*)$")
 wake = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) wake-rescue (\S+): (\S+) \(ceiling [^)]*\) -> (\S+)(.*)$")
 land = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d swap (\S+): (\S+) -> (\S+) \(uuid ")
 count, left, recent, in_left, in_recent, pending = 0, [], [], set(), set(), None
@@ -30942,6 +30945,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # just-left-only pass below then decides, as it does for everything else.
   # NOR WITH A LANE WHOSE PROVIDER IS FAILING (`_provfail`): the spread pass's name is not taken when it is marked, and the
   # just-left-only pass, which ranks a marked lane behind the rest, decides.
+  # A SKIP LIST THE CALLER SET stands in every pass (a provider move's: the lanes it never takes, or not in this tier).
   # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
   # rescued onto would only be returned to by the affinity path at the next
   # idle tick — two moves where one does (do-not-bounce still skips a home the
@@ -30955,14 +30959,14 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   fi
   recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
   if [[ -n "${recent// /}" ]]; then
-    out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
+    out=$(SWAP_TARGET_SKIP="${SWAP_TARGET_SKIP:-} $RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
     [[ -n "$out" && "$rc" -eq 0 ]] && ! _provfail "${out%%$'\n'*}" && { printf '%s\n' "$out"; return 0; }
     # …and ITS undecidable answer is never returned: the unskipped probe above
     # already answered every question the skip cannot change (rc 2-4 are asked
     # before the walk), so an rc 5 here means the skip removed every measured
     # candidate and left only an unmeasured lane — the just-left-only pass decides.
   fi
-  SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+  SWAP_TARGET_SKIP="${SWAP_TARGET_SKIP:-} $RESCUE_SKIP_LEFT" _swap_target "$@"
 }
 
 _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
@@ -32191,6 +32195,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
       rescue)
         _swap_rescue_act_gate "$id" "$cur" || return 0 ;;
       watchdog) _swap_watchdog_act_gate "$id" "$cur" || return 0 ;;   # D-8123: the fleet watchdog's forced rescue re-asks its own sign at the act
+      provider) _swap_provider_act_gate "$id" "$target" || return 0 ;;   # the provider-failure ladder: the owed failure re-proved, the box empty
       wake) ;;   # D-8123: nothing is running to back off from or to re-queue, so no act gate; the carry's own pre-flights still apply
     esac
     if ! _route_degrade_at_move "$id" "${CCD_SWAP_DFROM:-}" "${CCD_SWAP_DTO:-}"; then
@@ -32398,7 +32403,8 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # Optional user notification (swap kills any attached remote session — give them a ping).
   # Drop an executable ~/.cc-sessions/notify.sh taking the message as its LAST argument (the models
   # step passes a leading --push; curl to a Discord webhook / ntfy topic / anything); absent hook = silent.
-  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
+  # A provider move is silent: the ruling is one notice per outage, and the server raises it.
+  [[ "${CCD_SWAP_ARM:-}" != provider && -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap: $id moved $cur -> $target (limits) — reopen it on claude.ai under the $target account" >/dev/null 2>&1
   echo "swapped $id: $cur -> $target (discover on claude.ai under the $target account)"
 }
 
@@ -33257,6 +33263,42 @@ _provfail_row() {   # id now-ms [lastswap] -> rc 0 and PF_LANE, PF_GOOD and the 
     (( 10#$t > lo && 10#$t > $2 - PROVFAIL_SPAN * 1000 && 10#$t <= $2 + 60000 )) && PF_N=$(( PF_N + 1 )) PF_LAST=$(( 10#$t )) PF_FIRST=$(( PF_FIRST ? PF_FIRST : 10#$t ))
   done
   return 0
+}
+_provfail_owed() {   # id now [lastswap] -> rc 0 iff its third counted failure since its last move, or a later one, still owes a retry (the PF_* are `_provfail_row`'s) | 1
+  # Counted from the marker alone, as wave 1 counts (`server/src/coord/providerRetry.ts#providerRetryOwed`): no turn newer than the
+  # newest failure. A line whose own word is not a provider's (a limit, `unknown`, `max_output_tokens`) owes none: what stopped it
+  # last was something else.
+  _provfail_row "$1" $(( $2 * 1000 )) "${3:-}" && (( PF_N >= 3 && PF_LAST > 10#${TM_TURN:-0} )) && [[ "$TM_ERR" =~ ^\"(server_error|overloaded)\"$ ]]
+}
+_provider_hold_to() {   # var id now -> rc 0 and var = idle-gate | background | draft | no-box, what a provider move waits for | 1 and var empty: nothing (asked after `_provfail_owed`)
+  # `_swap_idle_gate` is the affinity move's own question (a turn, a shell, a touch, a pane too narrow to tell, a live status other
+  # than idle, which an open question is). It reads nothing into the `bg` of a `failed` line, which the last good Stop counted, so
+  # that is asked here: any count but 0 holds, for the 30 minutes from the first failure in which such work may still be running.
+  # A draft is a person about to continue the session; no box is a dialog. The box is READ, never written.
+  local __r=""
+  if ! _swap_idle_gate "$2"; then __r=idle-gate
+  elif [[ "$TM_BG" != 0 ]] && (( $3 * 1000 - PF_FIRST < PROVFAIL_TTL * 1000 )); then __r=background
+  else case "$(_pane_box_read "$("${_TMX_ARGV[@]}" capture-pane -t "$(_tmux_t "$2")" -p -e 2>/dev/null)")" in empty) ;; draft) __r=draft ;; *) __r=no-box ;; esac; fi
+  printf -v "$1" '%s' "$__r"; [[ -n "$__r" ]]
+}
+_swap_provider_act_gate() {   # id target -> rc 0 proceed as decided | 1 cancelled (logged, `lastswap` restored, nothing stopped)
+  # `_swap_rescue_act_gate` would cancel this move as no longer blocked: a provider error is no limit sign. So its own questions,
+  # after the jitter: the operator may have stopped the session; the failure the decision read (CCD_SWAP_FAIL) is still the newest
+  # and still owed, counted since the `lastswap` the decision saw (the dispatch has stamped the field since, and a stamp that is no
+  # longer the dispatch's is a move that landed meanwhile, the operator's own: nothing is undone and its stamp stays); the target
+  # still takes work; and `_provider_hold_to`. NO KEY IS SENT, here or after.
+  local id="$1" now why="" sw
+  _reg_get_to sw "$id" lastswap
+  if [[ -z "$sw" || "$sw" != "${CCD_SWAP_DECIDED:-}" ]]; then echo "$(date '+%F %T') provider-cancel $id: it moved meanwhile" >> "$REG/swap.log"; return 1; fi
+  _now_s_to now; _session_probe "$id"
+  if [[ -e "$REG/$id.stopped" || -e "$REG/$id.hibernated" ]]; then why="stopped or asleep"
+  elif [[ "$PROBE_VERDICT" != live ]]; then why="not live ($PROBE_VERDICT)"
+  elif ! _provfail_owed "$id" "$now" "${CCD_SWAP_PREV:-0}" || [[ "$PF_LAST" != "${CCD_SWAP_FAIL:-}" ]]; then why="its newest failure changed or is no longer owed"
+  elif _provfail "$2" || ! _account_ok "$2" || ! _avail "$2"; then why="$2 no longer takes it"
+  else _provider_hold_to why "$id" "$now" || return 0; fi
+  echo "$(date '+%F %T') provider-cancel $id: $why" >> "$REG/swap.log"
+  _swap_lastswap_restore "$id"
+  return 1
 }
 _provfail_pass() {   # now -> each lane's mark set or cleared from every row's turn marker; its rc says nothing
   # HEALTH (`good`): the lane's newest good Stop. FAILURE: three counted failures of one session inside PROVFAIL_SPAN, the newest

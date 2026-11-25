@@ -223,7 +223,7 @@ describe('cmd_swap records its cause before it stops the unit (D-5237)', () => {
   const SWAP = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; case "$*" in *stop*) kill -9 $$ ;; esac; };
     launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; case "$*" in *bootout*) kill -9 $$ ;; esac; };
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; }; sleep() { :; };
-    _swap_idle_gate() { :; }; _swap_rescue_act_gate() { :; };`;
+    _swap_idle_gate() { :; }; _swap_rescue_act_gate() { :; }; _swap_provider_act_gate() { :; };`;
   const seed = (): void => {
     const wd = path.join(h.home, 'projects', 'project-a');
     fs.mkdirSync(wd, { recursive: true });
@@ -246,7 +246,7 @@ describe('cmd_swap records its cause before it stops the unit (D-5237)', () => {
     expect(swapLog()).toContain(`ended ${ID}: swap-manual`);
   });
   it.each([
-    ['affinity', 'swap-auto-home'], ['rescue', 'swap-auto-rescue'], ['', 'swap-auto'], ['home', 'swap-auto'],
+    ['affinity', 'swap-auto-home'], ['rescue', 'swap-auto-rescue'], ['provider', 'swap-auto-provider'], ['', 'swap-auto'], ['home', 'swap-auto'],
   ])('an automatic swap with arm %j writes %s', (arm, cause) => {
     seed(); swap({ CCD_SWAP_AUTO: '1', CCD_SWAP_ARM: arm });
     expect(lastEnd()).toBe(lastEnd()!.split(' ')[0] + ' ' + cause);
