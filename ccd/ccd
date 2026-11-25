@@ -45387,6 +45387,7 @@ DOCS_MAX_FILE_BYTES=4194304
 DOCS_MAX_ANSWER_BYTES=6291456
 DOCS_MAX_LISTING_WIRE_BYTES=1048576
 DOCS_MAX_ENTRIES=5000
+DOCS_INDEX_NEWEST_PER_SECTION=5
 DOCS_DRAFT_HASH_BUDGET=33554432
 DOCS_MAX_DRAFTS=1000
 DOCS_FETCH_MIN_INTERVAL_MS=10000
@@ -46820,6 +46821,35 @@ def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
     return sections, entries, unlisted, blobs
 
 
+def trim_newest(obj):
+    """The docs-index answer `obj` with `newest` dropped from the LAST projects
+    backwards, as few as the wire bound needs, and newestTruncated: true; None
+    when it is over the bound even with every `newest` gone. The rule: the
+    projects that carry names keep them in order from the front, and the
+    largest such prefix whose framed line fits is kept whole (a project's names
+    go together, never name by name). Fitting only gets easier as the prefix
+    shrinks, so it is found by bisection, a few serialisations. Every
+    `sections` count is kept."""
+    rows = obj['projects']
+    have = [i for i, r in enumerate(rows) if 'newest' in r]
+
+    def cut(k):
+        drop = set(have[k:])
+        return dict(obj, newestTruncated=True, projects=[
+            dict((x, v) for x, v in r.items() if x != 'newest') if i in drop else r for i, r in enumerate(rows)])
+
+    def fits(k):
+        return framed_len(line_of(cut(k))) <= DOCS_MAX_LISTING_WIRE_BYTES
+
+    if not have or not fits(0):
+        return None
+    lo, hi = 0, len(have) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        lo, hi = (mid, hi) if fits(mid) else (lo, mid - 1)
+    return cut(lo)
+
+
 def guard_listing(obj, line):
     """The tree and index final guard (section 2 (b), section 6.1): `line`, or
     the too-many-entries line in its place.
@@ -46832,6 +46862,10 @@ def guard_listing(obj, line):
     costs 2 bytes in the line and 4 once framed (M6.8). Either bound over
     gives too-many-entries {count, bytes}, carrying the answer's own
     elapsedMs. A failure answer is not a listing and passes through untouched.
+
+    docs-index only, a line over the wire bound with the entry count in bound
+    is first trimmed by trim_newest: the projects' `newest` names go, never a
+    count, and the answer is refused only if it is still over without them.
     """
     if obj.get('ok') is not True:
         return line
@@ -46839,6 +46873,10 @@ def guard_listing(obj, line):
     size = framed_len(line)
     if count <= DOCS_MAX_ENTRIES and size <= DOCS_MAX_LISTING_WIRE_BYTES:
         return line
+    if count <= DOCS_MAX_ENTRIES and obj['verb'] == 'docs-index':
+        trimmed = trim_newest(obj)
+        if trimmed is not None:
+            return line_of(trimmed)
     return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
                     'failure': 'too-many-entries', 'count': count, 'bytes': size})
 
@@ -47010,20 +47048,33 @@ def index_section_counts(repo, commit, dl):
     under the section at commit: it is absent there, or it is itself a
     symlink, a gitlink or a file (docs-tree's absent and not-a-directory).
     An expiry, an overflow or a non-zero rc raises, which index_row reads as
-    repo-unreadable."""
+    repo-unreadable.
+
+    Returns (counts, newest). newest is {slug: names} for every section with a
+    count above 0: the section-relative paths listing_admit admitted, from
+    this same listing, the first DOCS_INDEX_NEWEST_PER_SECTION in DESCENDING
+    UTF-16 code-unit order of the full path (the console's string order, which
+    its project page's newest-first list uses too, in every section); a section
+    with no admitted name has no key."""
     argv = ['ls-tree', '-r', '-z', '--name-only', '--full-tree', '--end-of-options', commit, '--']
     argv.extend(SECTIONS.values())
     s = docs_git(repo.path, argv, call_s=CALL_S['index'], dl=dl, ceiling=ceiling_of(repo.path))
     if s.rc != 0:
         raise fail('git-failed', step='ls-tree', rc=s.rc, stderrHead=stderr_head(s.err))
     counts = {}
+    names = {}
     for name in s.out.split(b'\0'):
         for slug, sb in LS_SECTION_BYTES:
             if name.startswith(sb + b'/'):
-                listed = listing_admit(name[len(sb) + 1:])[1] is None
-                counts[slug] = counts.get(slug, 0) + (1 if listed else 0)
+                rel = listing_admit(name[len(sb) + 1:])[0]
+                counts.setdefault(slug, 0)
+                if rel is not None:
+                    counts[slug] += 1
+                    names.setdefault(slug, []).append(rel)
                 break
-    return dict((slug, counts.get(slug)) for slug in SECTIONS)
+    newest = dict((slug, sorted(names[slug], key=lambda r: r.encode('utf-16-be'), reverse=True)[:DOCS_INDEX_NEWEST_PER_SECTION])
+                  for slug in SECTIONS if slug in names)
+    return dict((slug, counts.get(slug)) for slug in SECTIONS), newest
 
 
 def index_failed_row(ctx, row, f):
@@ -47070,7 +47121,7 @@ def index_row(ctx, name, dl, now):
             row['state'] = 'no-default-branch'
             return row
         branch = ref_side(served)[0]
-        sections = index_section_counts(repo, commit, dl)
+        sections, newest = index_section_counts(repo, commit, dl)
     except Fail as f:
         if index_budget_spent(f, dl):
             return INDEX_UNWALKED
@@ -47078,6 +47129,8 @@ def index_row(ctx, name, dl, now):
         return row
     row['default'] = {'name': branch, 'via': via, 'commit': commit}
     row['sections'] = sections
+    if newest:
+        row['newest'] = newest
     st = stamp_for(ctx.reg, repo.key, branch)
     if st is not None:
         ages = stamp_ages(st, now)
@@ -50000,7 +50053,14 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
             raise Fail('unreadable', {'reason': 'foreign-owner'})
         if stat.S_IMODE(st.st_mode) != 0o700:
             os.fchmod(reg_fd, 0o700)
-        lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        # A registry a refused first add took back (its lock, then its directory) stands no more: a remove has nothing to
+        # remove, and an add retries (review 3783 A1). The directory can go before the lock's open (review 3816 R2), so
+        # that open's ENOENT answers the same.
+        taken_back = lambda: Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
+        try:
+            lock_fd = os.open(FOLDER_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=reg_fd)
+        except FileNotFoundError:
+            raise taken_back()
         try:
             if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
                 raise Fail('unreadable', {'reason': 'lock-not-regular'})
@@ -50017,7 +50077,7 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
                 time.sleep(0.02)
             locked = True
             if os.fstat(lock_fd).st_nlink == 0:   # taken back with its empty registry by a refused first add: nothing stands
-                raise Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
+                raise taken_back()
             closer = guard() if guard is not None else None
             try:
                 os.lstat(label, dir_fd=reg_fd)

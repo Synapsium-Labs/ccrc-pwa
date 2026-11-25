@@ -839,8 +839,20 @@ export interface DocsIndexOk {
     sections?: Partial<Record<DocSectionSlug, number | null>>;
     sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: one lstat per section */; owner?: string | null; branch?: string | null;
     fetch?: { okAgeMs: number | null; lastOutcome: string };
+    /** X2 P4.1 (spec §5.1, I1): per section of `sections` with a count above 0, its newest names, at most
+     *  `DOCS_INDEX_NEWEST_PER_SECTION`, each a path relative to the section, newest first (name descending, code-unit
+     *  order; names are date-prefixed). Additive: an older ccd sends none, and a project's whole `newest` is left out once
+     *  the wire cap dropped it (`newestTruncated`). Read through `pwa/src/docs/docsTree.ts#indexNewest` alone. */
+    newest?: Partial<Record<DocSectionSlug, string[]>>;
   }[];
+  /** X2 P4.1: set when the listing wire cap made ccd drop projects' `newest`, whole, from the last project backwards; the counts in
+   *  `sections` are kept whole. Absent when nothing was dropped. */
+  newestTruncated?: true;
 }
+
+/** How many newest names `docs-index` carries per section (spec §5.1, the standalone index's five). ccd holds a parity
+ *  copy (`docs-parity.test.ts`). */
+export const DOCS_INDEX_NEWEST_PER_SECTION = 5;
 
 export type DocsIndexRow = DocsIndexOk['projects'][number];
 

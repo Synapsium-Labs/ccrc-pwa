@@ -118,7 +118,7 @@ describe('canonical URLs are fixed by replace (spec 3.1, M4.R4)', () => {
     render(<Routed loaders={f.loaders} />);
     await waitFor(() => expect(here()).toBe('/docs/demo/specs/d/?ref=ws/a'));
     expect(history.length).toBe(before);
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     expect(f.tree).toHaveBeenCalledTimes(1);
   });
 
@@ -249,7 +249,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     open('/docs/b/specs/x.md?ref=ws/a', f);
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     expect(screen.queryByText(NOTE)).toBeNull();
   });
 
@@ -259,7 +259,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md'));
     expect(await screen.findByText(NOTE)).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     act(() => { navigate('/docs/a/specs/x.md'); });
     expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
     expect(screen.queryByText(NOTE)).toBeNull();
@@ -290,7 +290,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     open('/docs/b/specs/x.md', f);
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
     act(() => { navigate('/docs/a/specs?ref=ws/a'); });
-    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(await screen.findByText('x')).toBeInTheDocument();
     act(() => { navigate('/docs/b/specs/x.md'); });
     await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
     expect(screen.queryByText(LOOP)).toBeNull();
@@ -423,7 +423,7 @@ describe('the project page (spec 4.4)', () => {
     t.sections[3] = { ...t.sections[3]!, state: 'not-a-directory', count: 0 };
     open('/docs/demo', fakeLoaders({ tree: okTree(t) }));
     await screen.findByText('specs');
-    const rows = [...document.querySelectorAll('.docs-project .docs-row')];
+    const rows = [...document.querySelectorAll('.docs-project > .docs-rows > li > .docs-row')];
     expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['specs', 'plans', 'design', 'conventions', 'vision', 'promise']);
     expect(rows[0]).toHaveTextContent('docs/superpowers/specs');
     expect(rows[2]).toHaveTextContent(`not in this repository at ${COMMIT_A.slice(0, 8)}`);
@@ -474,15 +474,15 @@ describe('section and directory pages (spec 4.4)', () => {
     open('/docs/demo/specs?ref=main', fakeLoaders({ tree: okTree(treeOk({ entries, drafts: holder() })) }));
     await screen.findByText('old/');
     const rows = [...document.querySelectorAll('.docs-listing .docs-row')];
-    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['old/', 'l.md', '2026-02-01-b.md', '2026-01-01-a.md']);
+    expect(rows.map((r) => r.querySelector('.docs-row-name')?.textContent)).toEqual(['old/', 'l', 'b', 'a']);
     expect(rows[0]).toHaveTextContent('2');
     expect(rows[2]).toHaveTextContent('draft · modified');
     expect(rows[2]).toHaveTextContent('1 KiB');
     expect(rows[1]).toHaveTextContent('symlink');
     fireEvent.click(rows[0] as HTMLElement);
     expect(here()).toBe('/docs/demo/specs/old/?ref=main');
-    expect(await screen.findByText('y.md')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('y.md').closest('button') as HTMLElement);
+    expect(await screen.findByText('y')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('y').closest('button') as HTMLElement);
     expect(here()).toBe('/docs/demo/specs/old/y.md?ref=main');
   });
 
@@ -491,7 +491,7 @@ describe('section and directory pages (spec 4.4)', () => {
     await screen.findByText('old/');
     expect(screen.getByRole('searchbox', { name: 'Filter this listing' })).toHaveAttribute('placeholder', 'Filter this listing');
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter this listing' }), { target: { value: '-b.' } });
-    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['2026-02-01-b.md']);
+    expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['b']);
   });
 
   it('a committed symlink leaf says it is not followed, and asks for no file', async () => {
@@ -755,7 +755,7 @@ describe('one mount is one visit', () => {
     open('/docs/demo', f);
     await screen.findByText('specs');
     act(() => { navigate('/docs/demo/specs'); });
-    await screen.findByText('a.md');
+    await screen.findByText('a');
     act(() => { navigate('/docs/demo/specs/a.md'); });
     await screen.findByRole('heading', { name: 'A' });
     expect(f.tree).toHaveBeenCalledTimes(1);

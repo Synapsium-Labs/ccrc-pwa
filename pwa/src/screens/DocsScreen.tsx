@@ -259,6 +259,18 @@ export function DocsScreen(p: {
     return () => { live = false; };
   }, [isIndex, folderIdx, folders]);
   useEffect(() => onAuthRegained(() => setFolderIdx((s) => (s?.s === 'quiet' ? null : s))), []);
+  // A labels read answered `caps-unknown` is read once more after the wait `docsRetryPlan` gives it (the slot carries it;
+  // the projects read below follows the same rule), once per visit, so a folder group appears without another visit once
+  // the server has learned the fleet box's caps (review 3816, carried to X2 P4). The timer ends with the page or the screen.
+  const foldersRetried = useRef(false);
+  useEffect(() => {
+    if (!isIndex || folderIdx?.s !== 'ok' || folderIdx.retryAfterMs === undefined || foldersRetried.current) return undefined;
+    const t = setTimeout(() => {
+      foldersRetried.current = true;
+      setFolderIdx((s) => (s === folderIdx ? null : s));
+    }, folderIdx.retryAfterMs);
+    return () => clearTimeout(t);
+  }, [isIndex, folderIdx]);
   // An auto-class word (`docs-busy` and its kind) is read once more after its wait, like the tree's and the file's
   // (`useDocsVisit`): once per visit, and only if the index is still that same failure when the wait ends. The second
   // failure shows Retry. The timer ends with the page or the screen.

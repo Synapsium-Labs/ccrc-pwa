@@ -539,6 +539,13 @@ export const DOCS_VIEW_TEXT = {
   redirectBadBranch: "That checkout's branch {branch} is not one Docs can address; showing {owner}'s default branch.",
   redirectLoop: 'Docs did not follow it: the owner named for this folder leads back to this folder.',
   indexLink: 'Docs index',
+  /** X2 P4.1: the index's newest names. `{n}` is the docs beyond the names shown. */
+  newestMore: '{n} more',
+  /** The "N more" link's accessible name: the section and the project it opens. */
+  newestMoreLabel: '{n} more {section} in {project}',
+  /** The accessible name of one project's list of a section's newest docs. */
+  newestListLabel: '{project}: {section}',
+  newestTruncated: 'Some newest names were left out to keep this index small; the counts are whole.',
 } as const;
 
 /** A count's plural suffix for `{s}`. */

@@ -7,9 +7,9 @@ import { formatAge } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import { docsLocation } from './docsLinks';
 import { DOCS_FOLDER_TEXT, DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
-import { presentSectionCounts, sectionCountsText } from './docsTree';
+import { SECTION_LABEL, indexNewest, leafName, presentSectionCounts, sectionCountsText } from './docsTree';
 import type { FolderIndexSlot } from './folderPage';
-import { DocsPageLink, RowButton } from './DocsTreeView';
+import { DOC_CHILD_LIST, DocLinkRow, DocsPageLink, RowButton } from './DocsTreeView';
 
 /** A non-ready state in words (spec 4.4). `linked-worktree` and `shared-repo` are "part of <owner>" instead. */
 const INDEX_STATE_TEXT: Readonly<Record<Exclude<DocsIndexRow['state'], 'ready' | 'linked-worktree' | 'shared-repo'>, string>> = {
@@ -39,6 +39,48 @@ function defaultViewHref(project: string): string {
   return docsPageUrl(docsLocation(INDEX, { kind: 'default-view', project }));
 }
 
+/** A ready row's newest docs (X2 P4.1, spec §5.1), after its button and never inside it: per section `indexNewest` reads, the
+ *  section's label, each name as a link to its default-view page, and an "N more" link to the section's page. A row that
+ *  sent no names draws nothing. */
+function NewestLists(p: { readonly row: DocsIndexRow }): ReactNode {
+  const { row } = p;
+  const groups = indexNewest(row);
+  if (groups.length === 0) return null;
+  const home = docsLocation(INDEX, { kind: 'default-view', project: row.project });
+  return (
+    <>
+      {groups.map(({ slug, names, more }) => (
+        <div key={slug} className={`${DOC_CHILD_LIST} grid`}>
+          <span className="docs-note px-[var(--sp-1)] pt-[var(--sp-1)]">{SECTION_LABEL[slug]}</span>
+          <ul
+            className="docs-rows"
+            aria-label={fillSentence(DOCS_VIEW_TEXT.newestListLabel, { project: row.project, section: SECTION_LABEL[slug] })}
+          >
+            {names.map((name) => (
+              <li key={name}>
+                <DocLinkRow
+                  name={leafName(name)} detail={name}
+                  href={docsPageUrl(docsLocation(home, { kind: 'path', section: slug, path: name, dirSlash: false }))}
+                />
+              </li>
+            ))}
+            {more > 0 && (
+              <li>
+                <DocsPageLink
+                  className="docs-row" href={docsPageUrl(docsLocation(home, { kind: 'section', section: slug }))}
+                  label={fillSentence(DOCS_VIEW_TEXT.newestMoreLabel, { n: more, section: SECTION_LABEL[slug], project: row.project })}
+                >
+                  <span className="docs-row-note">{fillSentence(DOCS_VIEW_TEXT.newestMore, { n: more })}</span>
+                </DocsPageLink>
+              </li>
+            )}
+          </ul>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly string[] }): ReactNode {
   const { row, sameAs } = p;
   const dup = sameAs.length > 0
@@ -47,21 +89,24 @@ function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly str
   if (row.state === 'ready') {
     const fetch = row.fetch;
     return (
-      <button type="button" className="docs-row" onClick={() => navigate(defaultViewHref(row.project))}>
-        <span className="docs-row-name">{row.project}</span>
-        {row.default !== undefined && (
-          <> <span className="docs-row-ref">{row.default.name} · <code>{shortCommit(row.default.commit)}</code></span></>
-        )}
-        {row.sections !== undefined && <> <span className="docs-row-count">{sectionCountsText(row.sections)}</span></>}
-        {fetch !== undefined && (
-          <> <span className="docs-row-age">
-            {fetch.okAgeMs === null
-              ? DOCS_VIEW_TEXT.neverFetched
-              : fillSentence(DOCS_VIEW_TEXT.fetched, { age: formatAge(fetch.okAgeMs / 1000) })}
-          </span></>
-        )}
-        {dup !== null && <> {dup}</>}
-      </button>
+      <>
+        <button type="button" className="docs-row" onClick={() => navigate(defaultViewHref(row.project))}>
+          <span className="docs-row-name">{row.project}</span>
+          {row.default !== undefined && (
+            <> <span className="docs-row-ref">{row.default.name} · <code>{shortCommit(row.default.commit)}</code></span></>
+          )}
+          {row.sections !== undefined && <> <span className="docs-row-count">{sectionCountsText(row.sections)}</span></>}
+          {fetch !== undefined && (
+            <> <span className="docs-row-age">
+              {fetch.okAgeMs === null
+                ? DOCS_VIEW_TEXT.neverFetched
+                : fillSentence(DOCS_VIEW_TEXT.fetched, { age: formatAge(fetch.okAgeMs / 1000) })}
+            </span></>
+          )}
+          {dup !== null && <> {dup}</>}
+        </button>
+        <NewestLists row={row} />
+      </>
     );
   }
   let state: ReactNode;
@@ -149,6 +194,7 @@ export function DocsIndexView(p: { readonly answer: DocsProjectsResponse; readon
       {index.unlisted > 0 && (
         <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.indexUnlisted, { n: index.unlisted, s: pluralS(index.unlisted) })}</p>
       )}
+      {index.newestTruncated === true && <p className="docs-note">{DOCS_VIEW_TEXT.newestTruncated}</p>}
       {unwalked > 0 && (
         <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.indexUnwalked, { n: unwalked, s: pluralS(unwalked) })}</p>
       )}
