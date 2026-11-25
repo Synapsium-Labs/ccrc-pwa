@@ -209,7 +209,10 @@ describe('readDeliveryCaptureResult: the one reader', () => {
   });
   it('reads back a faulty result, divergence and all', () => {
     const cases = allIntact(1);
-    const obs: DeliveryObserved = { send: 'ok', turns: [deliveryExpected('c3').replace('\t', '  ')], sideRequests: 1, hookPrompts: [] };
+    // The first tab alone becomes two spaces: one divergence, at its index.
+    const c3 = deliveryExpected('c3');
+    const tab = c3.indexOf('\t');
+    const obs: DeliveryObserved = { send: 'ok', turns: [`${c3.slice(0, tab)}  ${c3.slice(tab + 1)}`], sideRequests: 1, hookPrompts: [] };
     cases[1] = deliveryCaseResult('c3', obs);
     const r = deliveryCaptureResult(BUILD, 1, cases);
     expect(r.word).toBe('fault');

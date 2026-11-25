@@ -300,10 +300,9 @@ export interface FleetIO {
    *  another capture. `unanswered` is an ask that failed after the send, the deadline, or a reply in no shape
    *  `readTestboxCaptureReply` knows (a job may have gone out). None is ever `ok`. `recipe: 'delivery'` with its `part`
    *  (Desktop polish wave 178) asks for one part of the paste delivery recipe and reads the reply as one; absent, the job is
-   *  a build-trust capture. Two signatures, so a delivery ask with no part cannot be written (call 1253); an untyped caller's is
-   *  never sent, and answers `not-started`: no job went out. */
-  testboxCapture(build: string): Promise<CaptureAsked>;
-  testboxCapture(build: string, recipe: 'delivery', part: number): Promise<CaptureAsked>;
+   *  a build-trust capture. One member whose arguments are either ask, so a delivery ask with no part cannot be written
+   *  (call 1253); an untyped caller's is never sent, and answers `not-started`: no job went out. */
+  testboxCapture(...ask: [build: string] | [build: string, recipe: 'delivery', part: number]): Promise<CaptureAsked>;
   /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
    *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
    *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left

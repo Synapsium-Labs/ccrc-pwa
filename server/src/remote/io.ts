@@ -362,7 +362,7 @@ export function createIo(client: FleetClient): FleetIO {
     async testboxCapture(build: string, recipe?: 'delivery', part?: number) {
       if (!(client.state.agentOps ?? []).includes(TESTBOX_CAPTURE_OP)) return { ok: false, reason: 'no-op' };
       // `recipe` and `part` travel only for a delivery job, and together (Desktop polish wave 178); a delivery ask with no
-      // part, which the two signatures leave only an untyped caller, is never sent: `not-started`, no job went out.
+      // part, which the member's arguments leave only an untyped caller, is never sent: `not-started`, no job went out.
       if (recipe === 'delivery' && part === undefined) return { ok: false, reason: 'not-started' };
       try {
         const req = recipe === 'delivery'

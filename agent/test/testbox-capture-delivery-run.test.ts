@@ -329,6 +329,8 @@ describe('a fault of the box is never a verdict, and the directories go on every
 const REAL_TMUX = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux', '/opt/homebrew/bin/tmux']
   .find((f) => existsSync(f) && spawnSync(f, ['-V'], { encoding: 'utf8', timeout: 10_000, env: {} }).status === 0) ?? null;
 const SHIPPED_TMUX_CONF = fileURLToPath(new URL('../../ccd/tmux.conf', import.meta.url));
+/** The fleet config's `default-terminal`, which tmux gives every pane as TERM. */
+const FLEET_TERMINAL = /^set -g default-terminal "([^"]+)"$/m.exec(readFileSync(SHIPPED_TMUX_CONF, 'utf8'))?.[1] ?? 'unset';
 
 describe('the delivery launch on a real tmux', () => {
   it.skipIf(REAL_TMUX === null || !existsSync('/proc/self/environ'))('starts the build with no shell under the fleet config, and gives it the capture\'s environment, whatever the config adds', async (ctx) => {
@@ -362,7 +364,8 @@ describe('the delivery launch on a real tmux', () => {
         // Exactly the two words, the fixed start program and the build's path, which tmux runs with no shell; the fleet's size.
         expect(shown.stdout.trim(), conf).toBe(`${CAPTURE_START} ${binary} ${DELIVERY_PANE.cols}x${DELIVERY_PANE.rows}`);
         // The pane's process once it has become the build: its environment holds every variable of the capture's, and the
-        // fixed shell as SHELL.
+        // fixed shell as SHELL. Except TERM: tmux sets a pane's TERM from the config's `default-terminal`, so under the fleet's
+        // config the build sees the fleet's terminal, as every fleet session does (measured on CI, where this case runs).
         expect(panePid).not.toBeNull();
         let seen: string[] | null = null;
         for (let n = 0; n < 100 && seen === null; n++) {
@@ -373,7 +376,8 @@ describe('the delivery launch on a real tmux', () => {
           if (seen === null) await new Promise((res) => { setTimeout(res, 100); });
         }
         expect(seen, 'the pane never became the build').not.toBeNull();
-        for (const [k, v] of env) expect(seen, `${k} in the build's environment (${conf})`).toContain(`${k}=${v}`);
+        for (const [k, v] of env) if (k !== 'TERM') expect(seen, `${k} in the build's environment (${conf})`).toContain(`${k}=${v}`);
+        expect(seen, `TERM in the build's environment (${conf})`).toContain(`TERM=${FLEET_TERMINAL}`);
         expect(seen).toContain(`SHELL=${CAPTURE_SHELL}`);
         await l.stop();
       } finally {
@@ -436,15 +440,16 @@ describe('the driver child', () => {
     const dir = mkTmp('ccrc-capdel-echo-');
     const seen = path.join(dir, 'seen.json');
     const script = path.join(dir, 'echo.cjs');
-    writeFileSync(script, `let s = ''; process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => { require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ input: JSON.parse(s), env: process.env })); process.stdout.write('{"send":"ok"}'); });\n`);
-    const a = await nodeDeliveryDriver(process.execPath, script, 10_000, 1_000).drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' }, { path: '/opt/tools/bin:/usr/bin', tmpBase: '/srv/svc-tmp' });
+    // A fixed script: it finds where to write from the TMPDIR it is given, so no value is spliced into its code.
+    writeFileSync(script, "let s = ''; process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => { require('node:fs').writeFileSync(require('node:path').join(process.env.TMPDIR, 'seen.json'), JSON.stringify({ input: JSON.parse(s), env: process.env })); process.stdout.write('{\"send\":\"ok\"}'); });\n");
+    const a = await nodeDeliveryDriver(process.execPath, script, 10_000, 1_000).drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' }, { path: '/opt/tools/bin:/usr/bin', tmpBase: dir });
     expect(a).toEqual({ kind: 'sent', send: 'ok' });
     const got = JSON.parse(readFileSync(seen, 'utf8')) as { input: unknown; env: Record<string, string> };
     expect(got.input).toEqual({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' });
     expect(Object.keys(got.env).filter((k) => k !== 'PATH' && k !== 'LANG' && k !== 'TMPDIR')).toEqual([]);
     expect(got.env['PATH']).toBe('/opt/tools/bin:/usr/bin');
     // The runner's tmux base is the child's temporary directory, the one parent the driver accepts (wave 178 departure).
-    expect(got.env['TMPDIR']).toBe('/srv/svc-tmp');
+    expect(got.env['TMPDIR']).toBe(dir);
   });
 
   it('a child that ignores TERM at its bound is killed its grace later, not sooner: the grace the worst case counts is taken (call 1208)', async () => {

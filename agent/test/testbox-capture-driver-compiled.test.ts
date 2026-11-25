@@ -35,13 +35,17 @@ beforeAll(() => {
   // The server's own compiler options (its tsconfig, extended), the driver as the one root: tsc emits it and every file it
   // imports, laid out as `npm run build` lays them out under `server/dist`. A shared `.mjs` beside its `.d.mts` is resolved
   // to the declaration, so the real build emits it only through its include of `../shared/**/*.mjs`, which this keeps.
+  // The compiler is the agent package's own (the same TypeScript as the server's, pinned below): the agent's CI leg installs
+  // only the agent's packages. So it emits without checking (`noCheck`): the driver's type imports reach server files that
+  // name the server's packages, which the server's own build checks, and which emit no runtime import (the run below loads
+  // the tree with no `node_modules` at all).
   const config = path.join(mkTmp('ccrc-capdrv-cfg-'), 'tsconfig.json');
   writeFileSync(config, JSON.stringify({
     extends: path.join(repo, 'server', 'tsconfig.json'),
-    compilerOptions: { outDir: path.join(server, 'dist') },
+    compilerOptions: { outDir: path.join(server, 'dist'), noCheck: true },
     files: [path.join(repo, 'server', 'src', 'inject', 'deliveryDrive.ts')], include: [path.join(repo, 'shared', '**', '*.mjs')],
   }));
-  const r = spawnSync(process.execPath, [path.join(repo, 'server', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', config],
+  const r = spawnSync(process.execPath, [path.join(repo, 'agent', 'node_modules', 'typescript', 'bin', 'tsc'), '-p', config],
     { cwd: path.join(repo, 'server'), encoding: 'utf8', timeout: 170_000 });
   expect(r.stdout + r.stderr, 'the driver does not compile').toBe('');
   driver = path.join(tree, ...DRIVER_IN_TREE);
@@ -56,6 +60,13 @@ describe('the compiled delivery driver, as a test box runs it', () => {
     expect(tsconfig.compilerOptions.rootDir).toBe('..');
     expect(tsconfig.include).toContain('src/**/*.ts');
     expect(tsconfig.include).toContain('../shared/**/*.mjs');
+    // The agent's compiler, which emits the driver here, is the server's own version: the version each lockfile resolves
+    // (both are in the tree, so the agent's leg reads them with no install), and the range each package declares.
+    const resolved = (pkg: string): string => (JSON.parse(readFileSync(path.join(repo, pkg, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string }> }).packages['node_modules/typescript']?.version ?? 'none';
+    expect(resolved('agent')).not.toBe('none');
+    expect(resolved('agent')).toBe(resolved('server'));
+    const version = (pkg: string): string => (JSON.parse(readFileSync(path.join(repo, pkg, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> }).devDependencies?.['typescript'] ?? 'none';
+    expect(version('agent')).toBe(version('server'));
     expect(existsSync(driver)).toBe(true);
   });
 

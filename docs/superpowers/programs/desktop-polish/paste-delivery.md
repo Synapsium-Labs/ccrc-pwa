@@ -247,6 +247,10 @@ build is queued. Its conditions are built with it:
 - The recipe measures prompts that reach the model. A leading `!` is, by design, not one (section 6).
 - Only the newest trusted build is measured (section 7).
 - The pane: the delivery recipe uses the fleet's 220x50 and its `ccd/tmux.conf`; build trust keeps 200x50 and `/dev/null`.
+  tmux gives a pane the config's `default-terminal` as `TERM`. So under the fleet config the build sees the fleet's
+  `tmux-256color`, as every fleet session does, and the capture's own `xterm-256color` is replaced. Without that config
+  (build trust) the capture's own is kept. Measured on CI, where the real-tmux launch case runs. The case holds `TERM`
+  equal to the shipped file's own value (the capture owner's call 1311).
 - The real-tmux launch case (and build trust's two real-tmux cases) skip where the temporary directory's path would make
   the capture's socket path too long for tmux, as on a fleet session's own temporary root. They run on CI.
 
@@ -290,6 +294,12 @@ The driver is the one thing in the recipe that types keys. Each statement has a 
   that base as its `TMPDIR`. The directory must also be owned by the driver's own user and writable by neither group nor
   other (the capture owner's call 1145); the runner makes it 0700. Whatever directory it is given, the driver's fixed
   server name means it can never address the fleet's own tmux server.
+- **driver-a-second-operator-caller-of-the-send** (legitimately different: another process, on another host). The driver
+  is the seventh caller of `sendPrompt`, after the route, the clear, the two lanes and the renewal host's two prompts. It
+  is legitimate because the recipe's whole point is to drive the product's own send with the route's own options: refuse
+  a draft, no attachments. It does so on a test box capture's own tmux server, never a fleet session, so it adds no
+  path by which text reaches a fleet pane. Both send censuses list it with the route's policy (the call-site table of
+  D-5912 and the caller list), and the call spells `onDraft` by name, so the table reads the policy where the call is.
 - **driver-runs-server-code-on-the-box** (legitimately different: another process, on another host). The recipe must run
   the product's send, not a copy. The driver is a server file, run compiled from the release tree, and imported by nothing.
 - **driver-own-keyed-queue.** The driver constructs its own `KeyedQueue` (`core-vocab.test.ts` names it beside

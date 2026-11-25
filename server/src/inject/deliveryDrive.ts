@@ -118,7 +118,9 @@ export const ROUTE_PLAIN_PROMPT_OPTIONS = Object.freeze({ onDraft: 'refuse' as c
 /** One case through the product's send, on the capture's session: `ok`, or sendPrompt's refusal word. */
 export async function driveCase(input: DriveInput, runner: Runner, sleep?: SendDeps['sleep']): Promise<string> {
   const deps: SendDeps = { tmux: new Tmux(runner), queue: new KeyedQueue(), ...(sleep === undefined ? {} : { sleep }) };
-  const res = await sendPrompt(deps, CAPTURE_TMUX_SESSION, deliveryCaseText(input.case), ROUTE_PLAIN_PROMPT_OPTIONS);
+  // The route's own options, `onDraft` spelled at the call: `lane-draft-never-blocks.test.ts` reads each call's policy there.
+  const res = await sendPrompt(deps, CAPTURE_TMUX_SESSION, deliveryCaseText(input.case),
+    { onDraft: ROUTE_PLAIN_PROMPT_OPTIONS.onDraft, attachments: ROUTE_PLAIN_PROMPT_OPTIONS.attachments });
   return res.ok ? 'ok' : res.error;
 }
 

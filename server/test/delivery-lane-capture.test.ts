@@ -280,7 +280,7 @@ describe('the remote arm sends the recipe and the part for a delivery ask only',
     const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request: async () => GOOD } as never);
     expect(await io.testboxCapture(BUILD, 'delivery', 1)).toEqual({ ok: false, reason: 'unanswered' });
   });
-  it('a delivery ask with no part is never sent: not-started, no job went out (the two signatures leave it only an untyped caller)', async () => {
+  it('a delivery ask with no part is never sent: not-started, no job went out (the member\'s arguments leave it only an untyped caller)', async () => {
     const request = vi.fn();
     const io = createIo({ state: { agentOps: [TESTBOX_CAPTURE_OP] }, request } as never);
     const untyped = io.testboxCapture as (build: string, recipe?: 'delivery', part?: number) => Promise<CaptureAsked>;
