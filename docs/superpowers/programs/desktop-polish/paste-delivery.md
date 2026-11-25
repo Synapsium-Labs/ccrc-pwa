@@ -271,7 +271,7 @@ The driver is the one thing in the recipe that types keys. Each statement has a 
 
 ## 11. Mutation record
 
-52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145) 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7) and 7 for call 1208 (round 8), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
+52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145), 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7) and 7 for call 1208 (round 8), each run through `ccrc test` with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
