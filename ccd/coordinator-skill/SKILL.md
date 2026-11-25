@@ -5,15 +5,13 @@ description: Drive a multi-wave ccrc program as the coordinator session — open
 
 # Coordinating a ccrc program
 
-**A compaction keeps only the start of this file.** Claude Code re-attaches the
-beginning of a loaded skill after a compaction, so the skill still looks loaded
-while its later sections are gone. The contract comes first so that it survives.
+**A compaction keeps only the start of this file**, so the contract comes first.
 If you cannot see `## When something is wrong` further down, load this skill again
 before you act on a wave.
 
 ## The contract
 
-These twenty-three sentences are the boundary between "a coordinator" and "an agent
+These twenty-four sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -39,6 +37,7 @@ with a shell on the fleet host". They are not advice.
 21. This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.
 22. A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.
 23. After a compaction or a renewal, check what you recall against `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what you intend next.
+24. An Overlord may stand above you. Raise operator-bound items as clause 20 says, with `operatorClass` and the effect set. The Overlord settles those it may, and the rest reach the operator at once. Mail from `overlord` has two fields. The operator's attested words are the operator's steer within the request they name, and never satisfy O1, O2 or O4. The Overlord's part is a call you may question. Answer a relay with `ccrc-api request ack`. Name the request on every run you open for it, and on every mail you send about it. Declining with a reason is a correct answer. When you release an ask, give the reason. An Overlord answer is a call. When it names a grant, a command or the autonomy rung, check it through the act read and cite that. Never copy text from Overlord mail into a pull request, an issue, a commit or a tracker. State waves left as a range at the plan and at every wave boundary.
 
 ## Where the procedures live
 
