@@ -257,3 +257,65 @@ measurements of section 6 ran again on this code and read the same, row for row 
 - The light palette in Chrome (Phosphor only was run); the stylesheet uses the same tokens in both.
 - A real coordinator transcript from the fleet (the fixture is synthetic, with neutral names).
 - Screen-reader speech itself: the accessible names and `aria-expanded` are pinned, not listened to.
+
+## 11. Wave 179, the follow-up (2026-11-25, run 3814)
+
+What the second review of #3358 (run 3763) and the coordinator's later rulings left, built on `main` after #3358 and
+#3361 merged. Measured unless marked.
+
+| Item | Change | Pinned by |
+|---|---|---|
+| B1, an older page's question (the coordinator's ruling on review 3795) | `foldMailRows` takes the older rows' boundary as `liveFrom`, measured by the list (`ChatList.tsx#itemsOf`, on the list the fold receives) and never inside the fold: only a card on the live side can be the newest asking card, so an older page's question never opens by default and is never drawn under a closed row. It still asks, so a closed stretch holding it names it | `mail-rows.test.tsx`: the fold with and without the boundary; in both skins, an older page holding a question changes nothing that is open and draws nothing under a row; a live question still opens, under its row, with an older question above it |
+| B2, the question words cut at phone width | The row draws the question words in their own span (`toolActivity.ts#activityWords`' `asks`, `.tool-activity-asks`), which never shrinks; the label and the plain counts give way first; the row is `flex-wrap: wrap` with zero-basis parts grown back to their content in the old give-way order, so it wraps to a second line before the question words are cut (`chat.css`) | `mail-rows.browser.test.ts`, Refined and Instrument at 320, 360 and 390 px, plain and with a "waiting on you" flag: "1 question" whole, inside the row and the column; and the wrap, in both skins at 390 px with the stretch narrowed to 230 px and wide gaps (so the fixed parts cannot share one line): the row grows past one line (56 px Refined, 53 Instrument), the question words whole and inside the row and the column, nothing overflowing |
+| B3, an open stretch still said "1 question" | `activityWords(item, choice, open)`: an open row names no question; its body draws every card | `mail-rows.test.tsx`, both skins: open, no question words; closed again, the sign is back |
+| B4, the row barrier pinned less than its comment | Two cases, one changing only a card's `opens` and one only its `asks`, alone and inside its stretch's row; the comment on the old case now says it pins a newer card in the stretch, not a card's own fields | `mail-rows.test.tsx` |
+| B5, rendered pins | A question then a status in one wake, inside one stretch; a card the reader closed under the row, then a newer question in the same stretch; the under-row marks surviving a recycled row (the row unmounted and drawn again over the same memo). The Chrome file's header now says what catches what (below) | `mail-rows.test.tsx` |
+| B6, the spoken-name guard | The card in the label-in-name case has a subject that ends in a word. After a `?` the measure read the subject and the kind word as apart with or without the space between them | `mail-rows.test.tsx` |
+| C, this note | Section 1's line count for `ChatList.tsx`, section 3's day rule, the module header of `mailRows.ts` (it named `askWord`, which does not exist; it now names `hiddenAsks` and `activityWords`), and the limit of section 7 on the inbox wake and the probe notice | |
+
+**B2 red first.** On the base (the words in one span), the plain case was red in all four phone views, the question words
+cut by 73 px (Refined 360), 55 (Refined 390), 56 (Instrument 360) and 37 (Instrument 390). With the words split and no
+CSS change, the plain cases were green (the new span does not shrink), and the case with a "waiting on you" flag was red:
+the row overflowed its own box by 53, 23, 32 and 2 px in the same views. With the CSS, all green, and
+`tool-activity.browser.test.ts` (48 cases, the 360 px fit with two flags among them) green unchanged.
+
+**What the Chrome file's measure cases catch (B5's header).** Measured with each mutant applied alone: a prompt line that
+stopped being compact (`isMailPrompt` false) is red in all four views on the prompt-row count and over the bound (16073 px
+at 390 against 8203; 8686 and 9514 px at 1280 against about 5161). A fold that stopped folding runs (the run arm cut) is
+NOT caught by the bound (4229 px at 390, 4150 at 1280, both under it): the assertion of one prompt row per wake catches it
+(36 rows against 30), in all four views. The header says so.
+
+**Mutants** (each applied alone, run against its file, restored):
+
+| Mutant | Red by |
+|---|---|
+| B1a the fold ignores its boundary | "the fold takes the boundary in"; "Refined/Instrument: an older page holding a question changes nothing that is open" |
+| B1b the list passes the fold no boundary | "Refined/Instrument: an older page holding a question changes nothing that is open" |
+| B3 the words ignore an open row | "Refined/Instrument: an open stretch names no question"; "the hidden questions" |
+| B4a the barrier skips a card's `opens` | "B4: a card whose default alone (opens) differs is another row" (this mutant survived 227 cases before) |
+| B4b the barrier skips a card's `asks` | "B4: a card whose asking alone (asks) differs is another row" |
+| B5a the newest card opens only when it asks | "Refined/Instrument: a question then a status in one wake, inside one stretch" (and two older cases) |
+| B5b a card the reader closed leaves the row | "Refined/Instrument: a card the reader closed under the row stays there, closed" (and "the list prices what the row draws") |
+| B5c the row clears its under-row marks when it unmounts | "the under-row marks survive a recycled row", alone |
+| B6 no space after the card's subject (`ui`, `mail-card.tsx`) | with the old subject ending in `?`: survived (2 of 2 green); with the new subject: "Refined/Instrument: every mail line ... holds the words it shows in its name" |
+| B2 the row cannot wrap (`flex-wrap` removed from the row) | "refined/instrument, phosphor, 390px, stretch narrowed to 230px with wide gaps: wraps, the question words whole": one line (44 px), the row overflowing by 271 and 250 px |
+
+B1 and B2 were red first. B3's test was written after its change, and B4, B5 and B6 pin what `main` already does, so
+each of those is proven by its mutant instead.
+
+**Suites.** Through the runner, on this wave's code (eafe13d2da; the head adds only the notes). The **first full pwa
+run was red**: three census cases, from B2's stylesheet. The shape census's registered pair, the stretch row with the mail
+card's head, no longer clusters once the row wraps (a stale entry, and 12 clusters against 13), and the contrast census met
+`.tool-activity-asks`' own colour. Fixed by removing the stale entry and letting the question words take the row's own
+ink. (That run's process was then killed by the test slice's memory cap.) Then the whole pwa set in four parts: 156, 156,
+155 and 155 files (622 by vitest's own `Test Files` lines), 18,752 cases passed, 1 failed and 11 skipped. Eight files failed
+to run only for this worktree's missing server-package dependencies (seven could not import the server's scanner, one
+could not build the worker), and the one case, `settings-screen`'s release window, failed under load. After installing
+those dependencies, the nine files ran together, green: 689 cases. Every file under `pwa/browser` (123) in four parts of 30, 31,
+31 and 31: parts three and four green; parts one and two green but for one case each while the slice's memory cap killed
+processes (2 and 7 kills): `connect-sheet` (instrument 1280, the clock's fast-forward) and `tool-activity` (refined 1280,
+a page key, "the case measures nothing"). Each file then ran alone, green: 20 of 20 and 48 of 48. In all: 123 files, 4,400
+cases passed, 1 expected to fail, 52 skipped, none failed. On a scratch merge of this branch with `main` at 861cd77728
+(after #3370, the coordinator's heads-up 35952): the changed and neighbouring jsdom files, 11 files and 686 cases, and the
+two changed browser files, `chat-history` and `mail-rows`, 68 cases: all green. The merge probe against `main` was clean,
+so nothing was absorbed.

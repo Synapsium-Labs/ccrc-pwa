@@ -373,3 +373,87 @@ unrun. No server file changed in this round.
 - iOS WebKit's momentum scrolling (fix round 2, A4): while the reader scrolls there, virtuoso defers its compensation
   into a CSS offset and commits it with `scrollBy` later, so the settle's reading of a fling there is unmeasured; the
   fling was measured in Chrome at 390px only.
+
+## 12. Wave 179, the follow-up (2026-11-25, run 3814)
+
+What the reviews of #3361 left in the scroll back, built on `main` after it merged. Measured unless marked.
+
+| Item | Before | After | Pinned by |
+|---|---|---|---|
+| A1, the shift after a transcript change | `prependShift` answered 0 both for "the first rows are the same" and for "no row in common", and the list added the lead difference after either: a context reset, then a backlog onto another file with no rotation notice, moved virtuoso's first index by 2 on a list nothing was put before | "No row in common" is its own answer (`null`); the list adds the lead difference to a found shift only | `foot-follow.test.ts` (the answer), `hold-wiring.test.tsx` (the list, red first: the first index moved from 1000000000 to 1000000002) |
+| A2a, the build order | a mutant measuring the live-from index before the mail fold survived every jsdom file | A list-level case: older rows holding a run of prompts that crosses the boundary, then a live call, which reads as running | `chat-history.test.tsx`, both skins |
+| A2b, the reset lead at the call site | a mutant forcing both leads to 0 survived jsdom (only Chrome killed it) | A case that opens with the reset row, lands a page under it and holds the reader's row | `hold-wiring.test.tsx` |
+| A3, a list that is only the reset row and its divider | unmeasured | measured, and pinned as it is (the coordinator's ruling (a), mail 35942): see below | `chat-history.browser.test.ts` |
+| A4, reopening a chat whose older edge reads `expired` | unmeasured on screen | measured: no defect of the reopen; see below | `chat-history.browser.test.ts` |
+
+**A3.** The list fits the view, so the reader is at the foot with the scroller at 0 and the reset row in view. When a page
+lands, the list computes no shift and no settle (the lead covers the whole list), and the foot follow takes the reader to
+the new foot one frame after the page lands: the reset row, the only row they were reading, leaves the view above, and the
+foot shows the newest rows of the page, as any prepend at the foot does. On the way, at 390 px the view stands 108 px
+(Refined) and 147 px (Instrument) short of the foot for about five frames, then snaps to it; at 1280 px one frame flickers
+(the height 3354 then 2205 px, the first drawn row changing). **Accepted as a limit** (ruling (a)): it is the foot follow
+catching up after the page lands. Holding the reset row in view (b) and settling at the foot with no intermediate snap (c)
+were considered and left out, each a change to the foot follow or the prepend settle. Pinned: before the page, scrollTop 0
+and the reset row in view; at rest, within 2 px of the foot, the page's rows drawn, and nothing moving over the last 8 sampled frames (scrollTop, height, first and last drawn row identical; the list's settle
+waits `SETTLE_FRAMES`, 2 quiet frames, so a view left short of the foot goes red).
+The snap's size and the row's departure are printed, never asserted.
+
+| View | Short of the foot after the page | Frames short | Then |
+|---|---|---|---|
+| Refined 390 | up to 108 px | 4 | snaps 108 px to the foot |
+| Instrument 390 | up to 147 px | 5 | snaps 147 px to the foot |
+| Refined 1280 | 154 px | 1 | the flicker: height 3354 then 2205 px, scrollTop 2600 then 1605, the first drawn row changes |
+| Instrument 1280 | 161 px | 1 | the flicker: height 3353 then 2204 px, scrollTop 2600 then 1612 |
+
+**A4.** The harness gained one opt-in hook (`AppFixture.onSessionSocket`, off by default; no existing case changes its
+routing): a case answers each session connect itself, told whether the connect resumes (`?since=`). A resuming connect gets
+no backlog and a fresh one a backlog, as the server does. The chat is opened, paged once, its edge brought to `expired` by
+a stubbed answer, left for another screen inside the app and returned to by history, with no reload. The return connects
+fresh (`opensFresh`). In all four views (Refined and Instrument, 390 and 1280 px): no frame draws a cached older row before
+the fresh backlog replaces them (no flash); no empty frame once rows are drawn; the reader ends at the foot (0 to 1 px from
+it); at 1280 the first drawn frame is already at rest. At 390 rows move 196 px (Refined) and 273 px (Instrument) over about
+five frames after the first drawn frame, and before it the scroller stands mounted with no rows for about four frames
+(about 65 ms).
+
+**A4 against a plain first open** (the coordinator's ask, mail 35942), the same hook and sampler, sampled from navigation
+for a first open and from the return for a reopen; every open ends 0 to 1 px from the foot:
+
+| View | Open | Frames with the scroller mounted and no rows | Frames to rest after the first drawn frame | Biggest move of a row drawn in two frames |
+|---|---|---|---|---|
+| Refined 390 | first | 4 | 2 | 618.5 px |
+| Refined 390 | reopen | 4 | 5 | 196.5 px |
+| Instrument 390 | first | 4 | 2 | 617.5 px |
+| Instrument 390 | reopen | 4 | 5 | 273.5 px |
+| Refined 1280 | first | 4 | 0 | 0 px |
+| Refined 1280 | reopen | 4 | 0 | 0 px |
+| Instrument 1280 | first | 4 | 0 | 0 px |
+| Instrument 1280 | reopen | 4 | 0 | 0 px |
+
+So the reopen is no worse than a first open: the same at 1280; at 390 three frames longer to rest, with rows moving a
+third as far. Pinned as invariants only: the reopen connects fresh, the fresh backlog's live rows are drawn, the edge no
+longer reads `expired`, and no cached older row is drawn; the first open draws rows and ends at the foot.
+
+**Mutants** (each applied alone, run against its file, restored):
+
+| Mutant | Red by |
+|---|---|
+| A1, the lead difference added after either answer | `hold-wiring`: "A1: a context reset, then another transcript with no rotation notice, moves no first index" |
+| A2a, the live-from index measured on the list before the mail fold | `chat-history`: "Refined/Instrument: a run of prompts across the boundary, then a live call: the call still reads as running" |
+| A2b, both leads forced to 0 at the call site | `hold-wiring`: "A2: a page under the reset row holds the reader's row" (the row moved 1200 px) |
+
+**Suites.** Through the runner, on this wave's code (eafe13d2da; the head adds only the notes). The **first full pwa
+run was red**: three census cases, from B2's stylesheet. The shape census's registered pair, the stretch row with the mail
+card's head, no longer clusters once the row wraps (a stale entry, and 12 clusters against 13), and the contrast census met
+`.tool-activity-asks`' own colour. Fixed by removing the stale entry and letting the question words take the row's own
+ink. (That run's process was then killed by the test slice's memory cap.) Then the whole pwa set in four parts: 156, 156,
+155 and 155 files (622 by vitest's own `Test Files` lines), 18,752 cases passed, 1 failed and 11 skipped. Eight files failed
+to run only for this worktree's missing server-package dependencies (seven could not import the server's scanner, one
+could not build the worker), and the one case, `settings-screen`'s release window, failed under load. After installing
+those dependencies, the nine files ran together, green: 689 cases. Every file under `pwa/browser` (123) in four parts of 30, 31,
+31 and 31: parts three and four green; parts one and two green but for one case each while the slice's memory cap killed
+processes (2 and 7 kills): `connect-sheet` (instrument 1280, the clock's fast-forward) and `tool-activity` (refined 1280,
+a page key, "the case measures nothing"). Each file then ran alone, green: 20 of 20 and 48 of 48. In all: 123 files, 4,400
+cases passed, 1 expected to fail, 52 skipped, none failed. On a scratch merge of this branch with `main` at 861cd77728
+(after #3370, the coordinator's heads-up 35952): the changed and neighbouring jsdom files, 11 files and 686 cases, and the
+two changed browser files, `chat-history` and `mail-rows`, 68 cases: all green. The merge probe against `main` was clean,
+so nothing was absorbed.
