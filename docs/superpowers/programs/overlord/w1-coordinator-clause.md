@@ -1,6 +1,6 @@
 # W1 coordinator clause (the Overlord clause): measurements and departures
 
-Task notes for `docs/superpowers/plans/2026-11-14-overlord-w1/w1-coordinator-clause.md`, Tasks 1 and 2. The
+Task notes for `docs/superpowers/plans/2026-11-25-overlord-w1-coordinator-clause.md`, Tasks 1 and 2. The
 coordinator folds them into the programme ledger.
 
 ## Measured
@@ -71,3 +71,6 @@ the next `## ` heading.
   clause 17's length and was replaced before any yes. The pin's packet carries the literal (no
   comment), `'twenty-four'` in `WORDS`, the count in the comment above `CONTRACT` and in the verbatim test's title, and
   clause 17's `toHaveLength(24)`.
+- **coord-clause-plan-dated-path** — the index names the plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`. A new
+  plan inside that folder fails the layout rule (the ledger guard and the review judge, `spec-misplaced`), so it is
+  `docs/superpowers/plans/2026-11-25-overlord-w1-coordinator-clause.md`.

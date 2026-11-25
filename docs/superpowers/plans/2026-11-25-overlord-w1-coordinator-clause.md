@@ -29,6 +29,8 @@ pin in `server/test/coordinator-skill.test.ts`, and one count word each in `READ
 
 **The index:** `docs/superpowers/plans/2026-11-14-overlord-w1.md`, question 2 and the row "The Overlord clause", lane
 G, last.
+The index names this plan `2026-11-14-overlord-w1/w1-coordinator-clause.md`; it sits at a dated path directly in
+`docs/superpowers/plans/`, where the ledger guard's layout arm and the review judge put a new plan.
 
 ## Open questions and rulings
 
@@ -135,6 +137,8 @@ The coordinator mints the numbers.
   shortening pull request was made.
 - **D-TBD-coord-clause-revision-word-unchanged**: `COORDINATOR_SKILL_REVISION`'s comment says a contract change bumps
   it; this piece leaves it, as #3119 and #2919 did (question 4).
+- **D-TBD-coord-clause-plan-dated-path**: the index names this plan inside `2026-11-14-overlord-w1/`; a new plan
+  there fails the layout rule (`spec-misplaced`), so it is `2026-11-25-overlord-w1-coordinator-clause.md`.
 
 ## Where things stand
 
