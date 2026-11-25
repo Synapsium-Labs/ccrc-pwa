@@ -83,8 +83,9 @@ export function overlordReadiness(f: ReadinessFacts, now: number): ReadinessAnsw
   if (f.subject.kind === 'measured' && f.subject.value === null) return answer('absent');
   // 2. off
   if (f.off.kind === 'measured' && f.off.value !== null) return answer('off', f.off.value);
-  // 3. unmeasured: the subject, the brakes, the registry or the body
-  for (const x of [f.subject, f.off, f.registry, f.body]) if (x.kind === 'unmeasured') return answer('unmeasured', x.why);
+  // 3. unmeasured: the subject, the registry, the brakes or the body. The registry is named before the brakes: a failed
+  //    listing is why `mail-disabled` could not be read, so `why` names the cause (`registry`, `boot`), not its echo.
+  for (const x of [f.subject, f.registry, f.off, f.body]) if (x.kind === 'unmeasured') return answer('unmeasured', x.why);
   const body = f.body;
   // 4. dead: a third restart in the hour, whatever the body and the generation say; or it measures dead and is not renewing
   if (f.restarts.kind === 'unmeasured') return answer('unmeasured', f.restarts.why);
@@ -197,6 +198,12 @@ function subjectOf(d: DesignationRead): ReadinessFacts['subject'] {
   if (d.kind === 'unmeasured') return unmeasured(`designation: ${d.why}`);
   if (d.kind === 'designated') return measured({ sessionId: d.sessionId, bound: true });
   return measured(d.row?.pending ? { sessionId: d.row.pending.sessionId, bound: false } : null);
+}
+
+/** The session the lane gathers for: the subject's id, or null for none or an unreadable designation. */
+export function readinessSubjectOf(d: DesignationRead): string | null {
+  const s = subjectOf(d);
+  return s.kind === 'measured' && s.value !== null ? s.value.sessionId : null;
 }
 
 /** The generation fact: renewing while a walk is in flight or not yet proven; a pending subject with no generation yet reads

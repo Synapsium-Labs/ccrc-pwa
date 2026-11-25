@@ -43,9 +43,11 @@ function reference(f: ReadinessFacts, now: number): Ans {
   if (f.subject.kind === 'measured' && f.subject.value === null) return A('absent');
   // 2. off
   if (f.off.kind === 'measured' && f.off.value !== null) return A('off', { why: f.off.value });
-  // 3. unmeasured: subject, off, registry or body
-  const doubt = [f.subject.kind === 'unmeasured' ? f.subject.why : null, f.off.kind === 'unmeasured' ? f.off.why : null,
-    f.registry.kind === 'unmeasured' ? f.registry.why : null, f.body.kind === 'unmeasured' ? f.body.why : null]
+  // 3. unmeasured: subject, registry, off or body (the registry before the brakes: a failed listing is why mail-disabled is
+  //    unread, so the why names the listing, as the plan's Table 2 and Task 3 say: "a failed listing writes unmeasured with why
+  //    registry")
+  const doubt = [f.subject.kind === 'unmeasured' ? f.subject.why : null, f.registry.kind === 'unmeasured' ? f.registry.why : null,
+    f.off.kind === 'unmeasured' ? f.off.why : null, f.body.kind === 'unmeasured' ? f.body.why : null]
     .find((w) => w !== null);
   if (doubt !== undefined) return A('unmeasured', { why: doubt });
   // 4. dead, in three clauses, and unmeasured where a clause needs an input it lacks
