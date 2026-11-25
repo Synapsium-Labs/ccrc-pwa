@@ -5,14 +5,15 @@
 // `secret-field.test.tsx`'s.
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { AccountAddBody, AccountsConnect, LaneWire, RosterWire } from '../../shared/api';
 import { newLaneConfigSuffix } from '../../shared/roster';
 import { PROVIDERS } from '../../shared/providers';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { ConnectSheet, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
+import { ConnectSheet, DOOR_REASON_MARK_MS, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { DOOR_PROVIDERS, defaultHue, methodChoices, onLedgerLine } from '../src/accounts/connectFlow';
 import {
-  DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
+  DOOR_COMMAND_LABEL, DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
   resultDone, stillUnknownAfterUnknown,
 } from '../src/fleet/accountWords';
 import { ApiError, api } from '../src/lib/api';
@@ -138,6 +139,63 @@ describe('the door (D-5522)', () => {
       fireEvent.click(door);
       expect(screen.queryByRole('dialog'), text).toBeNull();
       r.unmount();
+    }
+  });
+
+  it('a tap or Enter on a narrowed door brings its reason into view, marks it and announces it once (wave 180)', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    // jsdom lays nothing out: a spy on the reason itself stands in for scrolling it into view.
+    const scrolled = vi.fn();
+    try {
+      for (const desk of [false, true]) {
+        if (desk) stubWidth(1280);
+        show(null);
+        vi.useFakeTimers();
+        const r = render(<AccountsScreen />);
+        const door = screen.getByRole('button', { name: /Add account/ });
+        expect(door).toHaveAttribute('data-narrowed', 'true');
+        const box = document.getElementById(door.getAttribute('aria-describedby')!)!.closest('.acct-door-reason')!;
+        const live = box.querySelector('[role="status"]')!;
+        (box as HTMLElement).scrollIntoView = scrolled;
+        expect(box).not.toHaveAttribute('data-marked');
+        expect(live.textContent).toBe('');
+        // The copy line is the server's, and harmless alone.
+        expect(box.querySelector('.acct-fix-field')).toHaveTextContent('ccrc passwd');
+        expect(box.querySelector('.acct-fix-field')).toHaveAttribute('aria-label', DOOR_COMMAND_LABEL);
+        scrolled.mockClear();
+
+        fireEvent.click(door);
+        expect(scrolled, 'the reason is brought into view').toHaveBeenCalledTimes(1);
+        expect(box).toHaveAttribute('data-marked', 'true');
+        expect(live.children).toHaveLength(1);
+        expect(live.textContent).toBe(DOOR_NARROWED['gate-dark'].text);
+        const first = live.firstElementChild;
+        expect(screen.queryByRole('dialog'), 'a narrowed door opens nothing').toBeNull();
+        // A render that is not a tap announces nothing new.
+        act(() => useFleetStore.setState({ lanes: {} }));
+        expect(live.firstElementChild).toBe(first);
+        // The mark is for a moment.
+        act(() => { vi.advanceTimersByTime(DOOR_REASON_MARK_MS + 1); });
+        expect(box).not.toHaveAttribute('data-marked');
+        // A second tap: marked again, and announced again, once.
+        fireEvent.click(door);
+        expect(box).toHaveAttribute('data-marked', 'true');
+        expect(live.children).toHaveLength(1);
+        expect(live.firstElementChild).not.toBe(first);
+        vi.useRealTimers();
+
+        // Enter on the focused door does the same.
+        scrolled.mockClear();
+        door.focus();
+        await userEvent.keyboard('{Enter}');
+        expect(scrolled).toHaveBeenCalledTimes(1);
+        expect(box).toHaveAttribute('data-marked', 'true');
+        expect(screen.queryByRole('dialog')).toBeNull();
+        r.unmount();
+        vi.unstubAllGlobals();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 

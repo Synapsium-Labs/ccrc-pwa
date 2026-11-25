@@ -6,7 +6,9 @@
 // names, and nothing scrolls sideways (the page, or the sheet).
 //  - The door: exactly one, the lane list's last row on a phone (the skin's row height, 52px in Refined and 44px in
 //    Instrument) and the page header's action at ≥900; narrowed (a dark gate's answer, in a second context), it stays,
-//    aria-disabled, with its reason and its command beneath it.
+//    aria-disabled, with its reason and its command beneath it. Narrowed, it stands down (desktop-polish wave 180): the
+//    disabled ink, at ≥900 the subtle edge and no hover ground, its sentence at most two lines on a phone; a tap brings
+//    the reason into view and marks it for a moment, and opens nothing.
 //  - The sheet at 1280 and 1920 is the centred dialog (D-5933's desktop arm, measured here), and a bottom sheet below 900.
 //  - Name it: the hue swatches are one row of six, each at least 44px wide; the derived folder line is one mono line that
 //    ellipsises rather than wraps when the name is long.
@@ -27,6 +29,7 @@ import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { PROVIDERS } from '../../shared/providers';
+import { DOOR_COMMAND_LABEL, DOOR_NARROWED } from '../src/fleet/accountWords';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -141,19 +144,64 @@ describe('the Add account door and the connect sheet at every width and skin (D-
           const doors = [...document.querySelectorAll<HTMLElement>('.acct-door, .acct-door-action')];
           const door = doors[0]!;
           const reason = document.getElementById(door.getAttribute('aria-describedby') ?? '')!;
+          // A token's computed colour, read through a probe so the comparison is the engine's own.
+          const ink = (token: string): string => {
+            const probe = document.createElement('span');
+            probe.style.color = `var(${token})`;
+            document.body.append(probe);
+            const c = getComputedStyle(probe).color;
+            probe.remove();
+            return c;
+          };
+          // The sentence's lines: the distinct tops of its text's line boxes.
+          const range = document.createRange();
+          range.selectNodeContents(reason);
+          const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+          const field = document.querySelector<HTMLElement>('.acct-door-reason .acct-fix-field');
+          const cs = getComputedStyle(door);
           return {
             doors: doors.length,
             disabled: door.getAttribute('aria-disabled'),
             reason: reason?.textContent ?? '',
-            command: document.querySelector('.acct-door-reason .acct-fix-field')?.textContent ?? '',
+            command: field?.textContent ?? '',
+            commandLabel: field?.getAttribute('aria-label') ?? '',
+            more: document.querySelector('.acct-door-reason details > summary')?.textContent ?? '',
             below: reason.getBoundingClientRect().top >= door.getBoundingClientRect().bottom - 1,
+            color: cs.color, border: cs.borderTopColor, disabledInk: ink('--ink-disabled'), edgeSubtle: ink('--edge-subtle'),
+            liveInk: ink('--ink-primary'),
+            lines,
           };
         });
         expect(n.doors, 'one door, narrowed in place').toBe(1);
         expect(n.disabled).toBe('true');
-        expect(n.reason).toContain('Turn on sign-in for this PWA first');
-        expect(n.command).toBe('ccrc auth on');
+        expect(n.reason).toBe(DOOR_NARROWED['gate-dark'].text);
+        expect(n.command).toBe(DOOR_NARROWED['gate-dark'].fix);
+        expect(n.commandLabel).toBe(DOOR_COMMAND_LABEL);
+        expect(n.more).toBe(DOOR_NARROWED['gate-dark'].more!.summary);
         expect(n.below, 'the reason sits beneath the door').toBe(true);
+        // It stands down: the design system's disabled ink, never the live door's.
+        expect(n.color, 'the narrowed door is drawn in the disabled ink').toBe(n.disabledInk);
+        expect(n.color).not.toBe(n.liveInk);
+        if (desk) {
+          expect(n.border, 'at ≥900 its edge is the subtle one').toBe(n.edgeSubtle);
+          await dark.page.hover('.acct-door-action');
+          const ground = await dark.page.evaluate(() => getComputedStyle(document.querySelector('.acct-door-action')!).backgroundColor);
+          expect(ground, 'no hover ground on a narrowed door').toBe('rgba(0, 0, 0, 0)');
+        } else {
+          expect(n.lines, 'the sentence is at most two lines on a phone').toBeLessThanOrEqual(2);
+        }
+        // A tap brings the reason into view and marks it for a moment; it opens nothing.
+        await dark.page.evaluate(() => window.scrollTo(0, 0));
+        // `force`: Playwright waits for an `aria-disabled` element to become enabled, which a narrowed door never does. It
+        // is still a real click at the door's centre.
+        await dark.page.click('.acct-door, .acct-door-action', { force: true });
+        await dark.page.waitForSelector('.acct-door-reason[data-marked="true"]', { timeout: 5_000 });
+        await dark.page.waitForFunction(() => {
+          const r = document.querySelector('.acct-door-reason')!.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= innerHeight;
+        }, undefined, { timeout: 5_000 });
+        expect(await dark.page.locator('[data-frame="provider"]').count(), 'a narrowed door opens nothing').toBe(0);
+        await dark.page.waitForSelector('.acct-door-reason:not([data-marked])', { timeout: 5_000 });
         await step(dark.page, 'narrowed door');
         expect(dark.errors).toEqual([]);
       } finally {

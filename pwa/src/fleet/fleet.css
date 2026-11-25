@@ -4001,8 +4001,12 @@ button.proj-card-pool::before {
 /* — The Add account door and the connect sheet (accounts plan Task A18, D-5522, D-7740; spec §5, §12.1–§12.4) —
    The door is one per width: on a phone the lane list's last row, a `ListRow` at the skin's own row height (52px in
    Refined, 44px in Instrument, `--row-h`), the word and its meta on one line that wraps only between them; at ≥900 a
-   secondary button in the page header. Narrowed, it stays where it is in the secondary ink (a word that must still read,
-   so never the disabled ink, which no text pair clears), with its reason beneath. */
+   secondary button in the page header. Narrowed, it stays where it is and STANDS DOWN (desktop-polish wave 180): the
+   design system's disabled look, the ghost button's own `disabled:` stand-down (`--ink-disabled`, an `--edge-subtle`
+   border at ≥900), with no lift under the mouse and no press, so it no longer reads as the live buttons beside it. It
+   stays focusable and `aria-disabled`; WCAG 1.4.3 exempts an inactive control's ink, and the census registers it so
+   (design/audit.mjs). The reason beneath keeps the secondary ink, which every pair clears, and a tap or Enter on the
+   door brings it into view and marks it (`.acct-door-reason[data-marked]`). */
 .acct-door {
   flex-wrap: wrap;
   column-gap: var(--sp-3);
@@ -4019,8 +4023,47 @@ button.proj-card-pool::before {
 }
 .acct-door[data-narrowed='true'],
 .acct-door[data-narrowed='true'] .acct-door-meta,
-.acct-door-action[data-narrowed='true'] { color: var(--ink-secondary); cursor: default; }
-.acct-door-reason { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-door-action[data-narrowed='true'] { color: var(--ink-disabled); cursor: default; }
+.acct-door-action[data-narrowed='true'] { border-color: var(--edge-subtle); }
+.acct-door[data-narrowed='true']:hover,
+.acct-door[data-narrowed='true']:active,
+.acct-door-action[data-narrowed='true']:hover,
+.acct-door-action[data-narrowed='true']:active { background-color: transparent; transform: none; }
+.acct-door-reason {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-inline-start: var(--sp-2);
+  box-shadow: inset 2px 0 0 transparent;
+  transition: box-shadow var(--dur-fast) var(--curve-swift);
+}
+/* The mark a tap on the narrowed door leaves on its reason for a moment: a bar in the attention mark's colour at the
+   reason's start edge. It paints no ground, so the reason's ink is measured on the page as before. */
+.acct-door-reason[data-marked='true'] { box-shadow: inset 3px 0 0 var(--status-attention); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-door-reason { transition: none; }
+}
+/* The reason's longer half, how to fix it: closed by default, the compromise disclosure's row. Its words take the page's
+   own ink (no colour is set here), which the census measures on the page. */
+.acct-door-more { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-door-more > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+}
+.acct-door-more > ul {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-inline-start: var(--sp-4);
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
 /* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
 .acct-connect,
 .acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }

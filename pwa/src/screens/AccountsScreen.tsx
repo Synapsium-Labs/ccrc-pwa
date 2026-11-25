@@ -348,10 +348,15 @@ export function AccountsScreen(): ReactNode {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectGen, setConnectGen] = useState(0);
   const openConnect = (): void => { setConnectGen((g) => g + 1); setConnectOpen(true); };
+  // A tap or Enter on the narrowed door (desktop-polish wave 180): counted, and the reason answers each one.
+  const [doorCalled, setDoorCalled] = useState(0);
   const door = (
-    <AddAccountDoor desk={desk} narrowedBy={doorReason === null ? null : doorReasonId} onOpen={openConnect} />
+    <AddAccountDoor
+      desk={desk} narrowedBy={doorReason === null ? null : doorReasonId} onOpen={openConnect}
+      onNarrowedTap={() => setDoorCalled((n) => n + 1)}
+    />
   );
-  const reason = doorReason === null ? null : <DoorReason id={doorReasonId} text={doorReason.text} fix={'fix' in doorReason ? doorReason.fix : undefined} />;
+  const reason = doorReason === null ? null : <DoorReason id={doorReasonId} reason={doorReason} called={doorCalled} />;
 
   // Remove and Replace token (accounts plan Task A19, D-7742): the fold's two sheets, hosted here rather than on a card,
   // because a removed lane's card goes with it and its ledger must stay. Each is keyed per opening.

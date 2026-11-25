@@ -602,6 +602,10 @@ export const SELF_GROUNDED_EXEMPT = {
   // above are exempt for; this one only became visible when variants that
   // override `color` DIRECTLY started being measured (final2-gates F1), and it
   // is exempt for the same clause, not a new judgement.
+  // Desktop polish wave 180: the narrowed Add account door stands down in the ghost button's own disabled ink
+  // (--ink-disabled, the `disabled:` stand-down), an inactive control that stays focusable and aria-disabled, its reason
+  // beneath it in the secondary ink, which is measured. It was measured in the secondary ink until then.
+  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
@@ -1377,10 +1381,6 @@ export const INHERITED_GROUNDS = {
   '.acct-door-meta': {
     under: ['var(--bg-page)'],
     why: "the door's meta line (Anthropic · OpenAI · OpenRouter), inside the same row, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
-  },
-  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": {
-    under: ['var(--bg-page)'],
-    why: "the narrowed door in its disabled ink: the phone row in .accounts-list, or the header action in PageScaffold's head (bg-page, PAGE_HEAD), on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   '.acct-field > label, .acct-secret > label': {
     under: ['var(--bg-sheet)'],

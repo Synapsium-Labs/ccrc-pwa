@@ -378,19 +378,55 @@ export function connectBlock(connect: AccountsConnect): string | null {
 export const DOOR_WORD = 'Add account';
 export const DOOR_META = 'Anthropic · OpenAI · OpenRouter';
 
-/** Why the door narrows in place, other than offline (spec §5): each with its sentence and, when a command fixes it,
- *  the command. `waiting` is the screen before its first answer, which cannot yet say whether it may add. */
+/** Why the door narrows in place, other than offline (spec §5): each with its sentence, at most two lines at 390 px;
+ *  `more`, the longer half (how to fix it), behind a disclosure; and `fix`, the command to copy. A copied command is
+ *  one the CLI has (`pwa/test/offered-commands.test.ts` reads `ccd/ccrc`'s own table) and one that changes nothing run
+ *  alone, so a reader who runs only it cannot lock the console. `waiting` is the screen before its first answer, which
+ *  cannot yet say whether it may add.
+ *
+ *  THE TWO KINDS OF BOX (desktop-polish wave 180). Sign-in is turned on in two ways: a box reached from other devices
+ *  takes `ccrc expose`, which sets an https address and sign-in together; a box used only at localhost on itself is
+ *  armed by hand (README, "The session gate"), because no verb does it yet. The account gate accepts a loopback origin
+ *  (`server/src/accounts/gate.ts`), so https is not required there; sign-in is. {@link LOCAL_ARMING} names the hand
+ *  route in one place, so a verb can replace it later without touching the sentences around it. */
 export type DoorNarrowing = 'waiting' | 'gate-dark' | 'insecure-origin' | 'unsupported';
-export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: { readonly text: string; readonly fix?: string } } = {
+export interface DoorNarrowed {
+  readonly text: string;
+  readonly more?: { readonly summary: string; readonly lines: readonly string[] };
+  readonly fix?: string;
+}
+/** How a box used only at localhost turns sign-in on: by hand, as the README says, until a verb does it. */
+export const LOCAL_ARMING = 'turn it on by hand as the README\'s "The session gate" says, then restart the server';
+/** The copy field's name for a command the door offers: it runs where this console's server runs, which on a two-box
+ *  fleet is not the fleet host (the trouble card's commands run there). */
+export const DOOR_COMMAND_LABEL = "Command to run on this console's server";
+export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: DoorNarrowed } = {
   waiting: { text: 'Reading the fleet host before anything can be added.' },
   'gate-dark': {
-    text: "Turn on sign-in for this PWA first (ccrc auth on). Without it the server can't tell you from a session.",
-    fix: 'ccrc auth on',
+    text: "Sign-in is off, so accounts can't be added here; ccrc account add works in the fleet host's shell.",
+    more: {
+      summary: 'How to turn sign-in on',
+      lines: [
+        "First set a passphrase on this console's server: ccrc passwd. On its own it changes nothing.",
+        'Reached from other devices: then ccrc expose duckdns, byo or ip, which gives the box an https address and turns '
+          + 'sign-in on, and follow the steps it prints.',
+        `Used only at localhost on the box itself: then ${LOCAL_ARMING}, and open it at localhost.`,
+      ],
+    },
+    fix: 'ccrc passwd',
   },
   'insecure-origin': {
-    text: "Adding accounts needs an https origin. This server's origin is plain HTTP, so your session and this page could be "
-      + 'read or changed on the way. Fix: ccrc expose, which sets the https origin and sign-in together.',
-    fix: 'ccrc expose',
+    text: 'Adding accounts needs https or localhost: on this plain-HTTP origin your session could be read on the way.',
+    more: {
+      summary: 'How to fix it',
+      lines: [
+        "Reached from other devices: on this console's server, ccrc expose duckdns, byo or ip gives the box an https "
+          + 'address with sign-in. ccrc expose status shows what is set now.',
+        'Used only on the box itself: set its origin to localhost as the README\'s "The session gate" says, restart the '
+          + 'server, and open it at localhost.',
+      ],
+    },
+    fix: 'ccrc expose status',
   },
   unsupported: { text: "Needs a fleet update: the fleet host doesn't support adding accounts yet." },
 };

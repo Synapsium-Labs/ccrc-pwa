@@ -46,7 +46,7 @@ import type { ConnectMethod } from '../../../shared/providers';
 import type { Hue } from '../../../shared/roster';
 import { ApiError, api } from '../lib/api';
 import {
-  ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
+  ADD_LANE, ADD_REFUSED, DOOR_COMMAND_LABEL, DOOR_META, type DoorNarrowed, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
   ADD_AND_SIGN_IN, CHATGPT_MODELS, DISCARD_LANE, DONE, SIGN_IN_LEDGER, checkedLine, checkingLine, signInLedger,
   STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
@@ -600,12 +600,37 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   );
 }
 
-/** The door's reason, beneath it, and the command that fixes it when there is one. */
-export function DoorReason({ id, text, fix }: { id: string; text: string; fix?: string }): ReactNode {
+/** How long a tap on the narrowed door marks its reason (desktop-polish wave 180). */
+export const DOOR_REASON_MARK_MS = 1600;
+
+/**
+ * The door's reason, beneath it: the sentence, the longer half behind a disclosure when there is one, and the command
+ * to copy when one helps. A NARROWED DOOR IS NOT SILENT (desktop-polish wave 180): each tap or Enter on it bumps
+ * `called`, and the reason is brought into view, marked for {@link DOOR_REASON_MARK_MS} and its sentence announced once,
+ * politely, in a live region of its own (the door already names it by `aria-describedby` for a reader that focuses it).
+ */
+export function DoorReason({ id, reason, called = 0 }: { id: string; reason: DoorNarrowed; called?: number }): ReactNode {
+  const box = useRef<HTMLDivElement>(null);
+  const [marked, setMarked] = useState(false);
+  useEffect(() => {
+    if (called === 0) return undefined;
+    box.current?.scrollIntoView?.({ block: 'nearest' });
+    setMarked(true);
+    const t = setTimeout(() => setMarked(false), DOOR_REASON_MARK_MS);
+    return () => clearTimeout(t);
+  }, [called]);
   return (
-    <div className="acct-door-reason">
-      <p className="m-0" id={id}>{text}</p>
-      {fix !== undefined && <CopyCommand command={fix} />}
+    <div className="acct-door-reason" ref={box} data-marked={marked ? 'true' : undefined}>
+      <p className="m-0" id={id}>{reason.text}</p>
+      {reason.more !== undefined && (
+        <details className="acct-door-more">
+          <summary>{reason.more.summary}</summary>
+          <ul>{reason.more.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+        </details>
+      )}
+      {reason.fix !== undefined && <CopyCommand command={reason.fix} label={DOOR_COMMAND_LABEL} />}
+      {/* One node per tap, so each tap is announced once and a re-render announces nothing. */}
+      <p className="sr-only" role="status">{called > 0 && <span key={called}>{reason.text}</span>}</p>
     </div>
   );
 }
@@ -614,16 +639,20 @@ export function DoorReason({ id, text, fix }: { id: string; text: string; fix?: 
  * THE ADD ACCOUNT DOOR (D-5522; spec §5): one per width. On a phone (both skins) it is the lane list's last row, a
  * `ListRow` whose height is the skin's row (52px in Refined, 44px in Instrument) with the meta line beside the word; on
  * desktop it is a secondary button in the page's header. It NARROWS IN PLACE, never vanishes: `aria-disabled`, still
- * focusable, its reason named by `aria-describedby` and drawn beneath it. No palette command and no hint key.
+ * focusable, its reason named by `aria-describedby` and drawn beneath it. No palette command and no hint key. Narrowed,
+ * it stands down in the design system's disabled look (fleet.css), and a tap or Enter calls `onNarrowedTap`, which
+ * brings the reason forward (`DoorReason`'s `called`), never the sheet (desktop-polish wave 180).
  */
-export function AddAccountDoor({ desk, narrowedBy, onOpen }: {
+export function AddAccountDoor({ desk, narrowedBy, onOpen, onNarrowedTap }: {
   desk: boolean;
   /** The reason's element id when the door is narrowed, or `null` when it opens. */
   narrowedBy: string | null;
   onOpen: () => void;
+  /** A tap or Enter while narrowed. */
+  onNarrowedTap?: () => void;
 }): ReactNode {
   const narrowed = narrowedBy !== null;
-  const tap = (): void => { if (!narrowed) onOpen(); };
+  const tap = (): void => { if (narrowed) onNarrowedTap?.(); else onOpen(); };
   if (desk) {
     return (
       <Button
