@@ -25,6 +25,7 @@
 //   `markConsoleTab()` for a console (R4) ............ the same cases
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
 //   the gated witness exchange (Overlord W1) ......... "a Docs tab starts no witness exchange, and starts one once it is the console"
+//   the witness exchange's sign-in term .............. "on a console tab, sign-in lost stops the witness exchange …"
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -307,6 +308,33 @@ describe('the authority witness exchange', () => {
     stubWidth(true);
     await mount('/fleet');
     expect(witnessAsks()).toBe(1);
+  });
+
+  /** Lose sign-in, then regain it, letting the effects that follow each run. */
+  async function signOutAndIn(): Promise<{ out: number; back: number }> {
+    act(() => { raiseAuthLost('no-session'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(document.querySelector('.login-screen'), 'the sign-in screen').not.toBeNull();
+    const out = witnessAsks();
+    act(() => { clearAuthLost(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return { out, back: witnessAsks() };
+  }
+
+  it('on a console tab, sign-in lost stops the witness exchange and sign-in regained starts it again', async () => {
+    stubWidth(true);
+    await mount('/fleet');
+    expect(shell()).not.toHaveAttribute('data-tab');
+    expect(witnessAsks()).toBe(1);
+    expect(await signOutAndIn()).toEqual({ out: 1, back: 2 });
+  });
+
+  it('on a Docs tab, sign-in lost and regained starts no witness exchange', async () => {
+    stubWidth(true);
+    await mount(DOC);
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    expect(witnessAsks()).toBe(0);
+    expect(await signOutAndIn()).toEqual({ out: 0, back: 0 });
   });
 });
 
