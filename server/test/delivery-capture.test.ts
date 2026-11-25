@@ -92,8 +92,9 @@ describe('turnOf: what the model was asked for', () => {
     expect(turnOf(req('hello', { tools: [] }))).toBeNull();
     expect(turnOf({ model: 'm', messages: [{ role: 'user', content: 'hello' }] })).toBeNull();
   });
-  it('a tool result is not a turn', () => {
+  it('a tool result is not a turn, even with text beside it', () => {
     expect(turnOf(req([{ type: 'tool_result', tool_use_id: 't', content: 'x' }]))).toBeNull();
+    expect(turnOf(req([{ type: 'tool_result', tool_use_id: 't', content: 'x' }, { type: 'text', text: 'after the tool' }]))).toBeNull();
   });
   it('a request whose last message is the assistant\'s is not a turn', () => {
     expect(turnOf({ tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }] })).toBeNull();
@@ -202,16 +203,19 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     ['a case missing', (o) => { casesOf(o).pop(); }],
     ['cases out of order', (o) => { const c = casesOf(o); [c[0], c[1]] = [c[1]!, c[0]!]; }],
     ['a case repeated', (o) => { const c = casesOf(o); c[1] = c[0]!; }],
-    ['a verdict the counts cannot give', (o) => { casesOf(o)[0]!['verdict'] = 'duplicate'; }],
+    // Each mutation keeps the word the cases decide (a fault verdict makes the word fault), so only its own guard can refuse it.
+    ['a verdict the counts cannot give', (o) => { casesOf(o)[0]!['verdict'] = 'duplicate'; o['word'] = 'fault'; }],
     ['a divergence on an intact case', (o) => { casesOf(o)[0]!['divergence'] = { turn: 0, index: 1, expected: 'a', received: 'b' }; }],
     ['a send word off its shape', (o) => { casesOf(o)[0]!['send'] = 'OK!'; }],
     ['a context longer than its bound', (o) => {
       const c = casesOf(o)[0]!;
       Object.assign(c, { verdict: 'altered', divergence: { turn: 0, index: 0, expected: 'x'.repeat(81), received: 'y' } });
+      o['word'] = 'fault';
     }],
-    ['an altered case with no divergence', (o) => { casesOf(o)[0]!['verdict'] = 'altered'; }],
+    ['an altered case with no divergence', (o) => { casesOf(o)[0]!['verdict'] = 'altered'; o['word'] = 'fault'; }],
     ['a divergence naming a turn that never came', (o) => {
       Object.assign(casesOf(o)[0]!, { verdict: 'altered', divergence: { turn: 1, index: 0, expected: 'a', received: 'b' } });
+      o['word'] = 'fault';
     }],
     ['a count that is not a count', (o) => { casesOf(o)[0]!['sentChars'] = -1; }],
   ])('refuses %s', (_why, mutate) => {

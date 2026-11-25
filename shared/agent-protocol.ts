@@ -1364,7 +1364,9 @@ export interface TestboxCaptureReply {
  *  capture with no verdict, it would count against the trust lane's retry for that build (the capture owner's call 1135). */
 export function readTestboxCaptureReply(raw: unknown, build: string, recipe: CaptureRecipe = 'build-trust'): TestboxCaptureReply | null {
   if (recipe === 'delivery') {
-    if (!isObj(raw) || !Object.prototype.hasOwnProperty.call(raw, 'delivery')) return null;
+    // A reply with no `delivery` field does not echo the recipe: `d` is then undefined, which the two checks below refuse
+    // (on an answered reply the result's reader refuses it; on any other, it is not null).
+    if (!isObj(raw)) return null;
     const { delivery: d, ...rest } = raw;
     const base = readTestboxCaptureReply(rest, build);
     if (base === null || base.result !== null) return null;

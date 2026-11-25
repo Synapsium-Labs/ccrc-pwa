@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CAPTURE_SOCKET, captureTmuxDirName } from '../../shared/claudeBuildCapture.js';
 import { deliveryCaseText, deliveryExpected } from '../../shared/deliveryCapture.js';
 import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
-import { ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveCase, readDriveInput, type DirFacts } from '../src/inject/deliveryDrive.js';
+import { ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveCase, readDriveInput } from '../src/inject/deliveryDrive.js';
 import type { Runner } from '../src/exec.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -21,8 +21,7 @@ const ID = '0123456789abcdef0123456789abcdef';
 const CAPTURE = `/box/captures/${ID}`;
 const BASE = '/tmp';
 const TMUX = `${BASE}/${captureTmuxDirName(ID)}`;
-const DIR: DirFacts = { dir: true, link: false };
-const allDirs = (): DirFacts => DIR;
+const allDirs = (): boolean => true;
 
 describe('readDriveInput: refused before any tmux call', () => {
   const ok = { capture: CAPTURE, tmux: TMUX, case: 'c0' };
@@ -52,14 +51,11 @@ describe('readDriveInput: refused before any tmux call', () => {
     const r = readDriveInput(raw, allDirs, BASE);
     expect(r).toMatchObject({ ok: false, refusal });
   });
-  it.each<[string, (p: string) => DirFacts | null, string]>([
-    ['a scratch directory that is absent', (p) => (p === CAPTURE ? null : DIR), 'capture-dir'],
-    ['a scratch directory that is a link', (p) => (p === CAPTURE ? { dir: false, link: true } : DIR), 'capture-dir'],
-    ['a scratch directory that is a file', (p) => (p === CAPTURE ? { dir: false, link: false } : DIR), 'capture-dir'],
-    ['a tmux directory that is absent', (p) => (p === TMUX ? null : DIR), 'tmux-dir'],
-    ['a tmux directory that is a link', (p) => (p === TMUX ? { dir: false, link: true } : DIR), 'tmux-dir'],
-  ])('refuses %s', (_why, facts, refusal) => {
-    expect(readDriveInput({ capture: CAPTURE, tmux: TMUX, case: 'c0' }, facts, BASE)).toMatchObject({ ok: false, refusal });
+  it.each<[string, (p: string) => boolean, string]>([
+    ['a scratch directory that is not a real directory', (p) => p !== CAPTURE, 'capture-dir'],
+    ['a tmux directory that is not a real directory', (p) => p !== TMUX, 'tmux-dir'],
+  ])('refuses %s', (_why, isDir, refusal) => {
+    expect(readDriveInput({ capture: CAPTURE, tmux: TMUX, case: 'c0' }, isDir, BASE)).toMatchObject({ ok: false, refusal });
   });
   it('reads the real file system by default: a link at the scratch directory\'s name is refused', () => {
     const base = mkTmp('ccrc-delivery-drive-');

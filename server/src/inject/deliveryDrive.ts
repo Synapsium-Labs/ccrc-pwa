@@ -43,11 +43,10 @@ export type DriveRefusal = 'bad-input' | 'capture-dir' | 'tmux-dir' | 'case';
 /** A checked input: the capture's scratch directory, its tmux directory, and the case. */
 export interface DriveInput { readonly capture: string; readonly tmux: string; readonly case: DeliveryCaseId }
 
-/** What the driver reads of a directory, without following a link at it; `null` when it cannot be read. */
-export interface DirFacts { readonly dir: boolean; readonly link: boolean }
-
-export const dirFacts = (p: string): DirFacts | null => {
-  try { const s = lstatSync(p); return { dir: s.isDirectory(), link: s.isSymbolicLink() }; } catch { return null; }
+/** Whether `p` is a real directory, read without following a link at its name (`lstat`: a link, even to a directory, is
+ *  not one); `false` when it cannot be read. */
+export const realDir = (p: string): boolean => {
+  try { return lstatSync(p).isDirectory(); } catch { return false; }
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -57,7 +56,7 @@ const normalAbsolute = (p: string): boolean => path.isAbsolute(p) && path.normal
 
 /** THE input rule: `{capture, tmux, case}` and nothing else, each checked, or the refusal and why. `tmpBase` is this
  *  process's temporary directory, the parent the capture's tmux directory must have. */
-export function readDriveInput(raw: unknown, facts: (p: string) => DirFacts | null = dirFacts, tmpBase: string = os.tmpdir()):
+export function readDriveInput(raw: unknown, isDir: (p: string) => boolean = realDir, tmpBase: string = os.tmpdir()):
   { readonly ok: true; readonly input: DriveInput } | { readonly ok: false; readonly refusal: DriveRefusal; readonly detail: string } {
   const no = (refusal: DriveRefusal, detail: string) => ({ ok: false as const, refusal, detail });
   if (!isObj(raw) || Object.keys(raw).sort().join() !== 'capture,case,tmux') return no('bad-input', 'the input is not exactly {capture, tmux, case}');
@@ -68,13 +67,11 @@ export function readDriveInput(raw: unknown, facts: (p: string) => DirFacts | nu
   if (!normalAbsolute(capture) || !RUN_ID.test(id) || path.basename(path.dirname(capture)) !== 'captures') {
     return no('capture-dir', 'not a capture\'s scratch directory (<root>/captures/<capture id>)');
   }
-  const c = facts(capture);
-  if (c === null || !c.dir || c.link) return no('capture-dir', 'the capture\'s scratch directory is not a real directory');
+  if (!isDir(capture)) return no('capture-dir', 'the capture\'s scratch directory is not a real directory (absent, a file or a link)');
   if (!normalAbsolute(tmux) || tmux !== path.join(tmpBase, captureTmuxDirName(id))) {
     return no('tmux-dir', 'not this capture\'s own tmux directory (its capture id\'s, under this process\'s temporary directory)');
   }
-  const t = facts(tmux);
-  if (t === null || !t.dir || t.link) return no('tmux-dir', 'the capture\'s tmux directory is not a real directory');
+  if (!isDir(tmux)) return no('tmux-dir', 'the capture\'s tmux directory is not a real directory (absent, a file or a link)');
   return { ok: true, input: { capture, tmux, case: raw['case'] } };
 }
 
