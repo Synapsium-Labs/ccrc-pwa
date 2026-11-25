@@ -75,6 +75,9 @@ export interface CaptureRun {
 
 /** What the delivery recipe needs beyond a build-trust capture (Desktop polish wave 178). Absent: the runner answers a
  *  delivery capture with no verdict. */
+/** What a delivery capture asked with no part answers (the capture owner's call 1208, condition 1). */
+export const DELIVERY_NO_PART = 'a delivery capture was asked with no part: not run, no verdict';
+
 export interface CaptureDeliveryDeps {
   readonly driver: DeliveryDriver;
   /** The fleet's shipped tmux config (`ccd/tmux.conf` in the release tree), or null for none. */
@@ -139,9 +142,12 @@ export class CaptureRunner {
    *  submission at the frame, as a box that predates the recipe does (the capture owner's call 1148). */
   get delivers(): boolean { return this.d.delivery !== undefined; }
 
-  async run(captureId: string, build: string, recipe: CaptureRecipe = 'build-trust', part = 0): Promise<CaptureRun> {
+  /** `part` is the delivery recipe's, and has no default: a delivery capture asked with no part runs nothing and answers no
+   *  verdict, never part 0 (the capture owner's call 1208, condition 1). */
+  async run(captureId: string, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): Promise<CaptureRun> {
     const delivery = recipe === 'delivery' ? this.d.delivery : undefined;
     if (recipe === 'delivery' && delivery === undefined) return { result: null, delivery: null, detail: 'no delivery driver is wired to this runner' };
+    if (recipe === 'delivery' && part === undefined) return { result: null, delivery: null, detail: DELIVERY_NO_PART };
     const p = capturePaths(this.d.root, captureId, build, this.d.tmuxBase);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }));
     const now = this.d.now ?? Date.now;
@@ -154,17 +160,20 @@ export class CaptureRunner {
       const cdDir = path.join(work, path.basename(p.cdDir));
       writeFileSync(path.join(p.config, 'settings.json'), JSON.stringify(captureSettings(this.d.recorder)));
       writeFileSync(path.join(p.config, '.claude.json'), JSON.stringify(captureClaudeJson(work)));
-      const env = (port: number) => captureEnv(p, port, this.d.toolsPath());
+      // The delivery capture's environment, built ONCE (the tools directories are read fresh on each build, and a tool sync
+      // may move them between two): the build's pane and the driver's search path get the same value (call 1208, cond. 2).
+      let deliveryEnv: readonly (readonly [string, string])[] = [];
       try {
         if (delivery === undefined) {
           standIn = await this.d.standIn();
           launched = await this.d.launcher.start({
-            binary: p.buildFile, cwd: work, env: env(standIn.port), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
+            binary: p.buildFile, cwd: work, env: captureEnv(p, standIn.port, this.d.toolsPath()), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
           });
         } else {
           standIn = await this.d.standIn(deliveryStandInReply);
+          deliveryEnv = captureEnv(p, standIn.port, this.d.toolsPath());
           launched = await this.d.launcher.start({
-            binary: p.buildFile, cwd: work, env: env(standIn.port), socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
+            binary: p.buildFile, cwd: work, env: deliveryEnv, socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION,
             pane: DELIVERY_PANE, ...(delivery.tmuxConf === null ? {} : { tmuxConf: delivery.tmuxConf }),
           });
         }
@@ -176,10 +185,10 @@ export class CaptureRunner {
         // run, and nothing here reads or writes the build-trust verdict.
         const l = launched;
         const s = standIn;
-        const pathVar = env(s.port).find(([k]) => k === 'PATH')?.[1] ?? '';
+        const pathVar = deliveryEnv.find(([k]) => k === 'PATH')?.[1] ?? '';
         const out = await runDeliveryDrive({
           launched: l, life: () => lifeOf(l), requests: s.requests, records: () => this.recorded(p.recording).records,
-          input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part, driver: delivery.driver, settleMs: delivery.settleMs, quietMs: delivery.quietMs,
+          input: { capture: p.dir, tmux: p.tmux }, place: { path: pathVar, tmpBase: this.d.tmuxBase }, build, part: part!, driver: delivery.driver, settleMs: delivery.settleMs, quietMs: delivery.quietMs,
           stepTimeoutMs: this.d.stepTimeoutMs, exitTimeoutMs: this.d.exitTimeoutMs, pollMs: this.d.pollMs, sleep, now,
         });
         return { result: null, delivery: out.delivery, detail: out.detail };

@@ -66,7 +66,7 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     const call = t.tmuxCallMs + 2_000;
     const expected = t.setupMs + call
       + (t.stepMs + t.pollMs) + (2 * call + t.stepMs + t.pollMs)
-      + DELIVERY_PART_LARGEST * (t.deliveryDriveMs + 2_000 + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs)
+      + DELIVERY_PART_LARGEST * (t.deliveryDriveMs + t.deliveryKillGraceMs + 2_000 + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs)
       + (2 * call + t.stepMs + t.pollMs)
       + t.exitMs + t.pollMs
       + call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
@@ -75,7 +75,7 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
   it('grows with each case and each bound, so a longer case list or bound is seen', () => {
     const base = deliveryWorstCaseMs(CAPTURE_TIMINGS);
     expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_PART_LARGEST + 1)).toBeGreaterThan(base);
-    for (const k of ['deliveryDriveMs', 'deliverySettleMs', 'deliveryQuietMs'] as const) {
+    for (const k of ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs'] as const) {
       expect(deliveryWorstCaseMs({ ...CAPTURE_TIMINGS, [k]: CAPTURE_TIMINGS[k] + 1 }), k).toBe(base + DELIVERY_PART_LARGEST);
     }
   });
@@ -85,8 +85,8 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     expect(deliveryStartsLate(room, CAPTURE_TIMINGS)).toBe(false);
     expect(deliveryStartsLate(room + 1, CAPTURE_TIMINGS)).toBe(true);
   });
-  it('a delivery part\'s worst case is not build trust\'s (381.5 s against 399.5 s today), so it has its own late check', () => {
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBe(381_500);
+  it('a delivery part\'s worst case is not build trust\'s (385.5 s against 399.5 s today), so it has its own late check', () => {
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBe(385_500);
     expect(captureWorstCaseMs(CAPTURE_TIMINGS)).toBe(399_500);
   });
 });

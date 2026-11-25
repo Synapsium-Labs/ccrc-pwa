@@ -4,20 +4,22 @@
 // fake driver types each case's text into the fake build, so what is measured is the recipe: each case's window, the
 // verdicts, the word, the cut between a fault of the box and a result, the bounds, and the clean-up on every path. The
 // build-trust recipe is held unchanged beside it.
-import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readTestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { deliveryCaseText, deliveryExpected } from '../../shared/deliveryCapture.js';
 import { DELIVERY_PART_COUNT, deliveryParts, readDeliveryCaptureResult } from '../../shared/deliveryResult.js';
-import { captureBuildsDir, capturePaths, standInReply } from '../src/testbox/capture.js';
+import { CAPTURE_SOCKET, CAPTURE_TMUX_SESSION, captureBuildsDir, captureEnv, capturePaths, standInReply } from '../src/testbox/capture.js';
 import { DELIVERY_PANE, DELIVERY_REPLY_TEXT, deliveryStandInReply } from '../src/testbox/captureDelivery.js';
 import { nodeDeliveryDriver, readDriverAnswer, type DeliveryDriver, type DriverAnswer } from '../src/testbox/captureDeliveryRun.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
-import { CaptureRunner, tmuxLauncher, type CaptureLaunchSpec, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
+import { CAPTURE_SHELL, CAPTURE_START, CaptureRunner, DELIVERY_NO_PART, tmuxLauncher, type CaptureLaunchSpec, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
+import { boundedExec } from '../src/testbox/exec.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -136,7 +138,7 @@ describe('a delivery capture of a build that receives every prompt intact', () =
     const replies: unknown[] = [];
     const r = await runner(root, l.launcher, typingDriver(l.child), {
       standIn: (reply) => { replies.push(reply); return startStandIn(reply === undefined ? {} : { reply }); },
-    }).run('pane', GOOD, 'delivery');
+    }).run('pane', GOOD, 'delivery', 0);
     expect(r.delivery?.word).toBe('intact');
     expect(l.specs[0]!.pane).toEqual(DELIVERY_PANE);
     expect(replies).toEqual([deliveryStandInReply]);
@@ -146,7 +148,7 @@ describe('a delivery capture of a build that receives every prompt intact', () =
     const root = freshRoot();
     place(root, SIDE);
     const l = pipeLauncher();
-    const r = await runner(root, l.launcher, typingDriver(l.child)).run('side', SIDE, 'delivery');
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('side', SIDE, 'delivery', 0);
     expect(r.delivery?.word).toBe('intact');
     expect(r.delivery?.cases.every((c) => c.sideRequests >= 1)).toBe(true);
   }, 120_000);
@@ -157,7 +159,7 @@ describe('a delivery fault reads as a fault, never as a pass', () => {
     const root = freshRoot();
     place(root, DUPLICATES);
     const l = pipeLauncher();
-    const r = await runner(root, l.launcher, typingDriver(l.child)).run('dup', DUPLICATES, 'delivery');
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('dup', DUPLICATES, 'delivery', 0);
     expect(r.delivery?.word).toBe('fault');
     expect(r.delivery?.cases.every((c) => c.verdict === 'duplicate' && c.receivedChars.length === 2)).toBe(true);
     expect(gone(root, 'dup', DUPLICATES)).toBe(true);
@@ -167,7 +169,7 @@ describe('a delivery fault reads as a fault, never as a pass', () => {
     const root = freshRoot();
     place(root, SPLITS);
     const l = pipeLauncher();
-    const r = await runner(root, l.launcher, typingDriver(l.child)).run('split', SPLITS, 'delivery');
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('split', SPLITS, 'delivery', 0);
     const wrong = r.delivery!.cases.filter((c) => (deliveryExpected(c.id).includes('\n') ? c.verdict !== 'split' : c.verdict !== 'intact')).map((c) => `${c.id} ${c.verdict} ${c.receivedChars.length}`);
     expect(wrong).toEqual([]);
     expect(r.delivery?.word).toBe('fault');
@@ -185,7 +187,7 @@ describe('a delivery fault reads as a fault, never as a pass', () => {
     const root = freshRoot();
     place(root, TRUNCATES);
     const l = pipeLauncher();
-    const r = await runner(root, l.launcher, typingDriver(l.child)).run('cut', TRUNCATES, 'delivery');
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('cut', TRUNCATES, 'delivery', 0);
     const c0 = r.delivery!.cases.find((c) => c.id === 'c0')!;
     const c1 = r.delivery!.cases.find((c) => c.id === 'c1')!;
     expect(c0.verdict).toBe('intact');
@@ -198,7 +200,7 @@ describe('a delivery fault reads as a fault, never as a pass', () => {
     place(root, GOOD);
     const l = pipeLauncher();
     const silent: DeliveryDriver = { drive: async (input) => ({ kind: 'sent', send: input.case === 'c0' ? 'ok' : 'verify-failed' }) };
-    const r = await runner(root, l.launcher, silent).run('silent', GOOD, 'delivery');
+    const r = await runner(root, l.launcher, silent).run('silent', GOOD, 'delivery', 0);
     expect(r.delivery?.cases[0]).toMatchObject({ id: 'c0', verdict: 'false-confirmation', receivedChars: [] });
     expect(r.delivery?.cases[1]).toMatchObject({ id: 'c1', verdict: 'refused', send: 'verify-failed' });
     expect(r.delivery?.word).toBe('fault');
@@ -211,7 +213,7 @@ describe('a fault of the box is never a verdict, and the directories go on every
     place(root, GOOD);
     const l = pipeLauncher();
     const failing = typingDriver(l.child, (id) => (id === 'c1b' ? { kind: 'fault', detail: 'the driver could not start' } : { kind: 'sent', send: 'ok' }));
-    const r = await runner(root, l.launcher, failing).run('fail', GOOD, 'delivery');
+    const r = await runner(root, l.launcher, failing).run('fail', GOOD, 'delivery', 0);
     expect(r).toMatchObject({ result: null, delivery: null });
     expect(r.detail).toMatch(/case c1b: the driver could not start/);
     expect(gone(root, 'fail', GOOD)).toBe(true);
@@ -224,7 +226,7 @@ describe('a fault of the box is never a verdict, and the directories go on every
     const script = path.join(mkTmp('ccrc-capdel-hang-'), 'hang.mjs');
     writeFileSync(script, 'process.stdin.resume(); setInterval(() => {}, 1000);\n');
     const t0 = Date.now();
-    const r = await runner(root, l.launcher, nodeDeliveryDriver(process.execPath, script, 1_000)).run('hang', GOOD, 'delivery');
+    const r = await runner(root, l.launcher, nodeDeliveryDriver(process.execPath, script, 1_000, 1_000)).run('hang', GOOD, 'delivery', 0);
     expect(r.delivery).toBeNull();
     expect(r.detail).toMatch(/case c0: the driver did not answer within 1000 ms/);
     expect(Date.now() - t0).toBeLessThan(60_000);
@@ -235,7 +237,7 @@ describe('a fault of the box is never a verdict, and the directories go on every
     const root = freshRoot();
     place(root, DIES);
     const l = pipeLauncher();
-    const r = await runner(root, l.launcher, typingDriver(l.child)).run('dies', DIES, 'delivery');
+    const r = await runner(root, l.launcher, typingDriver(l.child)).run('dies', DIES, 'delivery', 0);
     expect(r.delivery).toBeNull();
     expect(r.detail).toMatch(/the build is gone before case c1/);
     expect(gone(root, 'dies', DIES)).toBe(true);
@@ -274,7 +276,7 @@ describe('a fault of the box is never a verdict, and the directories go on every
     place(root, GOOD);
     const l = pipeLauncher();
     const mute: CaptureLauncher = { start: async (spec) => ({ ...(await l.launcher.start({ ...spec, env: spec.env.filter(([k]) => k !== 'CLAUDE_CONFIG_DIR') })) }) };
-    const r = await runner(root, mute, typingDriver(l.child), { stepTimeoutMs: 1500 }).run('mute', GOOD, 'delivery');
+    const r = await runner(root, mute, typingDriver(l.child), { stepTimeoutMs: 1500 }).run('mute', GOOD, 'delivery', 0);
     expect(r.delivery).toBeNull();
     expect(r.detail).toMatch(/did not finish the step before the cases \(start\)/);
     expect(gone(root, 'mute', GOOD)).toBe(true);
@@ -286,10 +288,99 @@ describe('a fault of the box is never a verdict, and the directories go on every
     const l = pipeLauncher();
     expect(runner(root, l.launcher, null).delivers).toBe(false);
     expect(runner(root, l.launcher, typingDriver(l.child)).delivers).toBe(true);
-    const r = await runner(root, l.launcher, null).run('none', GOOD, 'delivery');
+    const r = await runner(root, l.launcher, null).run('none', GOOD, 'delivery', 0);
     expect(r).toEqual({ result: null, delivery: null, detail: 'no delivery driver is wired to this runner' });
     expect(l.specs).toEqual([]);
   });
+
+  it('a delivery capture asked with no part runs nothing and answers no verdict, never part 0 (call 1208, condition 1)', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const l = pipeLauncher();
+    const drives: string[] = [];
+    const r = await runner(root, l.launcher, { drive: async (input) => { drives.push(input.case); return { kind: 'sent', send: 'ok' }; } }).run('nopart', GOOD, 'delivery');
+    expect(r).toEqual({ result: null, delivery: null, detail: DELIVERY_NO_PART });
+    expect(l.specs).toEqual([]);
+    expect(drives).toEqual([]);
+  });
+
+  it('the capture\'s environment is built once: the pane and the driver\'s search path hold the same value, though the tools directories move between reads (call 1208, condition 2)', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    const l = pipeLauncher();
+    let reads = 0;
+    const toolsPath = (): string => (reads++ === 0 ? NODE_DIR : `/moved-by-a-sync:${NODE_DIR}`);
+    const inner = typingDriver(l.child);
+    const paths: string[] = [];
+    const driver: DeliveryDriver = { drive: async (input, where) => { paths.push(where.path); return inner.drive(input, where); } };
+    const r = await runner(root, l.launcher, driver, { toolsPath }).run('once', GOOD, 'delivery', 0);
+    expect(r.delivery).not.toBeNull();
+    expect(reads).toBe(1);
+    const panePath = new Map(l.specs[0]!.env).get('PATH');
+    expect(panePath).toContain(NODE_DIR);
+    expect(new Set(paths)).toEqual(new Set([panePath]));
+  });
+});
+
+// The delivery recipe's launch on a REAL tmux (the capture owner's call 1208, condition 3): the fleet's shipped config and
+// pane size, the pane started with no shell, and the build's environment the capture's. The same case runs under the
+// shipped config with lines added that name a default shell and a default command, so a later line in that file cannot
+// give the pane a shell. The suite's stub `tmux` is first on PATH, so the real binary is looked for by absolute path.
+const REAL_TMUX = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux', '/opt/homebrew/bin/tmux']
+  .find((f) => existsSync(f) && spawnSync(f, ['-V'], { encoding: 'utf8', timeout: 10_000, env: {} }).status === 0) ?? null;
+const SHIPPED_TMUX_CONF = fileURLToPath(new URL('../../ccd/tmux.conf', import.meta.url));
+
+describe('the delivery launch on a real tmux', () => {
+  it.skipIf(REAL_TMUX === null || !existsSync('/proc/self/environ'))('starts the build with no shell under the fleet config, and gives it the capture\'s environment, whatever the config adds', async (ctx) => {
+    const hostile = path.join(mkTmp('tconf-'), 'tmux.conf');
+    writeFileSync(hostile, `${readFileSync(SHIPPED_TMUX_CONF, 'utf8')}\nset -g default-shell /bin/sh\nset -g default-command "/bin/sh -c 'exec sleep 60'"\n`);
+    for (const conf of [SHIPPED_TMUX_CONF, hostile]) {
+      const root = freshRoot();
+      const sockDir = mkTmp('txd-');
+      const p = capturePaths(root, 'launch', GOOD, sockDir);
+      if (path.join(p.tmux, `tmux-${process.getuid?.() ?? 0}`, CAPTURE_SOCKET).length > 100) ctx.skip();
+      for (const d of [p.dir, p.tmux, p.work]) mkdirSync(d, { recursive: true, mode: 0o700 });
+      const binary = path.join(realpathSync(p.dir), 'build');
+      writeFileSync(binary, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 });
+      const env = captureEnv(p, 1, NODE_DIR);
+      let panePid: number | null = null;
+      const launcher = tmuxLauncher(REAL_TMUX!, 15_000, {
+        spawner: (vars, boundMs) => {
+          const e = boundedExec(vars, boundMs);
+          return async (file, args) => {
+            const out = await e(file, args);
+            if (args.includes('new-session') && /^[0-9]+$/.test(out.stdout.trim())) panePid = Number(out.stdout.trim());
+            return out;
+          };
+        },
+      });
+      const vars = Object.fromEntries(env);
+      try {
+        const l = await launcher.start({ binary, cwd: realpathSync(p.work), env, socket: CAPTURE_SOCKET, session: CAPTURE_TMUX_SESSION, pane: DELIVERY_PANE, tmuxConf: conf });
+        const shown = spawnSync(REAL_TMUX!, ['-L', CAPTURE_SOCKET, 'display-message', '-p', '-t', tmuxTarget(CAPTURE_TMUX_SESSION), '#{pane_start_command} #{pane_width}x#{pane_height}'], { timeout: 10_000, env: vars, encoding: 'utf8' });
+        expect(shown.status, shown.stderr).toBe(0);
+        // Exactly the two words, the fixed start program and the build's path, which tmux runs with no shell; the fleet's size.
+        expect(shown.stdout.trim(), conf).toBe(`${CAPTURE_START} ${binary} ${DELIVERY_PANE.cols}x${DELIVERY_PANE.rows}`);
+        // The pane's process once it has become the build: its environment holds every variable of the capture's, and the
+        // fixed shell as SHELL.
+        expect(panePid).not.toBeNull();
+        let seen: string[] | null = null;
+        for (let n = 0; n < 100 && seen === null; n++) {
+          try {
+            const exe = readlinkSync(`/proc/${panePid}/exe`);
+            if (exe !== realpathSync(REAL_TMUX!) && !exe.endsWith('/env')) seen = readFileSync(`/proc/${panePid}/environ`, 'utf8').split('\0').filter((x) => x !== '');
+          } catch { /* not yet */ }
+          if (seen === null) await new Promise((res) => { setTimeout(res, 100); });
+        }
+        expect(seen, 'the pane never became the build').not.toBeNull();
+        for (const [k, v] of env) expect(seen, `${k} in the build's environment (${conf})`).toContain(`${k}=${v}`);
+        expect(seen).toContain(`SHELL=${CAPTURE_SHELL}`);
+        await l.stop();
+      } finally {
+        spawnSync(REAL_TMUX!, ['-L', CAPTURE_SOCKET, 'kill-server'], { timeout: 10_000, env: vars });
+      }
+    }
+  }, 120_000);
 });
 
 describe('the build-trust recipe is unchanged beside it', () => {
@@ -346,7 +437,7 @@ describe('the driver child', () => {
     const seen = path.join(dir, 'seen.json');
     const script = path.join(dir, 'echo.cjs');
     writeFileSync(script, `let s = ''; process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => { require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ input: JSON.parse(s), env: process.env })); process.stdout.write('{"send":"ok"}'); });\n`);
-    const a = await nodeDeliveryDriver(process.execPath, script, 10_000).drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' }, { path: '/opt/tools/bin:/usr/bin', tmpBase: '/srv/svc-tmp' });
+    const a = await nodeDeliveryDriver(process.execPath, script, 10_000, 1_000).drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' }, { path: '/opt/tools/bin:/usr/bin', tmpBase: '/srv/svc-tmp' });
     expect(a).toEqual({ kind: 'sent', send: 'ok' });
     const got = JSON.parse(readFileSync(seen, 'utf8')) as { input: unknown; env: Record<string, string> };
     expect(got.input).toEqual({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c3' });

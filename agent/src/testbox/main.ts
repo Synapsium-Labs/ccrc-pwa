@@ -245,12 +245,12 @@ export const compiledDeliveryDriver = (): string => fileURLToPath(new URL('../..
 /** The fleet's tmux config in that release tree (`ccd/tmux.conf`), which the delivery recipe's pane starts with. */
 export const shippedTmuxConf = (): string => fileURLToPath(new URL('../../../../../ccd/tmux.conf', import.meta.url));
 
-/** The delivery recipe's wiring: the driver run by this process's node within `t`'s driver bound, and the fleet's tmux
+/** The delivery recipe's wiring: the driver run by this process's node within `t`'s driver bound and kill grace, and the fleet's tmux
  *  config when the tree holds it. A tree with no compiled driver wires none, so a delivery capture is refused at the frame
  *  (`service.ts#capture`). */
 export function deliveryWiring(t: CaptureTimings = CAPTURE_TIMINGS, driver: string = compiledDeliveryDriver(), conf: string = shippedTmuxConf()): DeliveryWiring | undefined {
   if (!existsSync(driver)) return undefined;
-  return { driver: nodeDeliveryDriver(process.execPath, driver, t.deliveryDriveMs), tmuxConf: existsSync(conf) ? conf : null };
+  return { driver: nodeDeliveryDriver(process.execPath, driver, t.deliveryDriveMs, t.deliveryKillGraceMs), tmuxConf: existsSync(conf) ? conf : null };
 }
 
 /** The capture runner (spec 2026-11-22 §2.3; gate G1): every bound it keeps from the one timing contract `t`, the launcher's

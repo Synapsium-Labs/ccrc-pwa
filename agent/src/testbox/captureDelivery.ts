@@ -65,15 +65,15 @@ export const turnEnded = (records: readonly CaptureRecord[]): boolean =>
 // ── the timings ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The worst case of one delivery capture under `t` (the one timing contract, its delivery bounds among it): the setup allowance and the start (one tmux call); the two
- *  steps before (the model switch's two calls), each with its wait and one poll's overrun; per case, the driver's bound
- *  plus the child's drain, the settle bound and the quiet period, each with one poll's overrun; the `/exit` step; the exit
+ *  steps before (the model switch's two calls), each with its wait and one poll's overrun; per case, the driver's bound,
+ *  its kill grace and the child's drain, the settle bound and the quiet period, each with one poll's overrun; the `/exit` step; the exit
  *  wait; and the teardown, as `capture.ts#captureWorstCaseMs` counts it. */
 export function deliveryWorstCaseMs(t: CaptureTimings, cases: number = DELIVERY_PART_LARGEST): number {
   const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
   const step = (s: CaptureStep): number => (s.type === null ? 0 : 2 * call) + t.stepMs + t.pollMs;
   const start = t.setupMs + call;
   const before = DELIVERY_STEPS_BEFORE.reduce((ms, s) => ms + step(s), 0);
-  const perCase = t.deliveryDriveMs + UPDATE_SPAWN_DRAIN_MS + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs;
+  const perCase = t.deliveryDriveMs + t.deliveryKillGraceMs + UPDATE_SPAWN_DRAIN_MS + t.deliverySettleMs + t.pollMs + t.deliveryQuietMs + t.pollMs;
   const exit = t.exitMs + t.pollMs;
   const teardown = call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
   return start + before + cases * perCase + step(DELIVERY_STEP_AFTER) + exit + teardown;

@@ -232,7 +232,7 @@ export function standInReply(body: unknown): StandInReply {
 //
 // ONE CONTRACT, READ BY EVERY BOUND OF A CAPTURE. The entry point builds the runner and the launcher from
 // `CAPTURE_TIMINGS` (`main.ts#captureRunnerFor`): the runner's step, exit and poll timeouts, its stop wait and the stand-in's
-// close bound, and the launcher's bound per tmux call, and the delivery recipe's driver, settle and quiet bounds
+// close bound, and the launcher's bound per tmux call, and the delivery recipe's driver, kill grace, settle and quiet bounds
 // (`captureDelivery.ts#deliveryWorstCaseMs`). The desk's late check reads the same object, for either recipe. `captureWorstCaseMs`
 // is the worst case of one capture by that runner, and `testbox-capture-deadline.test.ts` runs the composed runner on a
 // virtual clock, every tmux call at its bound, to hold that the runner never takes longer than it says.
@@ -262,6 +262,10 @@ export interface CaptureTimings {
    *  `sendPrompt` with its own echo, clear and submit budgets); past it the child is killed and the capture answers no
    *  verdict. */
   readonly deliveryDriveMs: number;
+  /** The delivery recipe's: how long the driver child's process group has between SIGTERM and SIGKILL once its bound has
+   *  passed (then one drain), so a case's driver can take its bound, this grace and the drain (the capture owner's call
+   *  1208). */
+  readonly deliveryKillGraceMs: number;
   /** The delivery recipe's: how long, after a case's send, its turn may take to end (a Stop recorded). */
   readonly deliverySettleMs: number;
   /** The delivery recipe's: how long a case's window stays open after its turn ended (or the settle bound passed), so a
@@ -272,7 +276,7 @@ export interface CaptureTimings {
 /** The contract. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
 export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
   stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, stopWaitMs: 5_000, standInCloseMs: 2_000, setupMs: 10_000, removeMs: 5_000,
-  deliveryDriveMs: 25_000, deliverySettleMs: 15_000, deliveryQuietMs: 2_000,
+  deliveryDriveMs: 25_000, deliveryKillGraceMs: 1_000, deliverySettleMs: 15_000, deliveryQuietMs: 2_000,
 });
 
 /** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */

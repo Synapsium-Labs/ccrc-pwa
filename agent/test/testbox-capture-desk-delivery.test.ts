@@ -60,6 +60,15 @@ describe('the desk with the delivery recipe', () => {
     expect(sink.frames.at(-1)).toMatchObject({ state: 'ended', delivery: RESULT, detail: null });
   });
 
+  it('a delivery submission that reaches the desk with no part is handed on with no part, never part 0 (call 1208, condition 1)', async () => {
+    const runner = new Runner(() => ({ result: null, delivery: null, detail: 'a delivery capture was asked with no part: not run, no verdict' }));
+    const d = desk(runner);
+    d.submit({ t: 'capture.submit', captureId: ID(6), build: BUILD, recipe: 'delivery' }, new Sink());
+    await d.settled();
+    expect(runner.asked).toEqual(['delivery']);
+    expect(runner.parts).toEqual([undefined]);
+  });
+
   it('a delivery capture with no verdict ends with delivery: null and the runner\'s detail', async () => {
     const d = desk(new Runner(() => ({ result: null, delivery: null, detail: 'the driver could not start' })));
     const sink = new Sink();

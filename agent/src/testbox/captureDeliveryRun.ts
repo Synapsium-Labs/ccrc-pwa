@@ -49,17 +49,16 @@ export function readDriverAnswer(code: number, stdout: string): DriverAnswer {
 
 /** The driver child's stdout cap: one short JSON line. */
 const DRIVER_OUTPUT_MAX = 4096;
-/** How long the child's group has between SIGTERM and SIGKILL at its bound. */
-const DRIVER_KILL_GRACE_MS = 1_000;
 
 /** The production driver: `node <script>` as its own process group, the input as JSON on stdin, the environment built
- *  from empty (`PATH`, `TMPDIR` and `LANG` only), within `boundMs` (`CaptureTimings.deliveryDriveMs`), then SIGTERM and SIGKILL. */
-export function nodeDeliveryDriver(node: string, script: string, boundMs: number): DeliveryDriver {
+ *  from empty (`PATH`, `TMPDIR` and `LANG` only), within `boundMs` (`CaptureTimings.deliveryDriveMs`), then SIGTERM, SIGKILL `graceMs` later
+ *  (`CaptureTimings.deliveryKillGraceMs`) and one drain. */
+export function nodeDeliveryDriver(node: string, script: string, boundMs: number, graceMs: number): DeliveryDriver {
   return {
     async drive(input, place) {
       const stdin = Buffer.from(JSON.stringify({ capture: input.capture, tmux: input.tmux, case: input.case }));
       const r = await boundedStdinSpawn({ spawn, signals: osConstants.signals }, node, [script], stdin, {
-        env: { PATH: place.path, TMPDIR: place.tmpBase, LANG: 'C.UTF-8' }, timeoutMs: boundMs, killGraceMs: DRIVER_KILL_GRACE_MS, maxOutputBytes: DRIVER_OUTPUT_MAX, drainMs: UPDATE_SPAWN_DRAIN_MS,
+        env: { PATH: place.path, TMPDIR: place.tmpBase, LANG: 'C.UTF-8' }, timeoutMs: boundMs, killGraceMs: graceMs, maxOutputBytes: DRIVER_OUTPUT_MAX, drainMs: UPDATE_SPAWN_DRAIN_MS,
       });
       if (r.kind === 'exited') return readDriverAnswer(r.code, r.stdout);
       return { kind: 'fault', detail: r.kind === 'timeout' ? `the driver did not answer within ${boundMs} ms` : r.kind === 'too-large' ? 'the driver said too much' : 'the driver could not start' };

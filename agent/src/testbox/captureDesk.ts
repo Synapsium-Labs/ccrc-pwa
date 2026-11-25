@@ -158,7 +158,7 @@ export class CaptureDesk {
       let run: CaptureRun;
       if (captureRecipeOf(h.f) === 'delivery') {
         // The delivery recipe (Desktop polish wave 178): its result rides `delivery`, never `result`.
-        try { run = await runner.run(captureId, h.f.build, 'delivery', h.f.part ?? 0); } catch { run = { result: null, delivery: null, detail: RUNNER_FAILED }; }
+        try { run = await runner.run(captureId, h.f.build, 'delivery', h.f.part); } catch { run = { result: null, delivery: null, detail: RUNNER_FAILED }; }
         const d = run.delivery ?? null;
         this.answer(h.f, h.sink, 'ended', d !== null ? { delivery: d } : { detail: run.detail ?? RUNNER_FAILED });
       } else {
