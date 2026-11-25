@@ -97,17 +97,21 @@ PermissionRequest hook it answers `allow`, so no human and no dialog is needed.
 ### 2.2 Where the build comes from: the fleet's own copy
 
 A build waits for capture only because a fleet session runs it, so the fleet box already holds that exact build in its
-versions directory. The runner never downloads it (slug `build-source-is-the-fleet`). The copy is a new `ccrc testbox-admin`
-sub, composed by the server before the job, in the repair sub's three phases (`ccd/ccrc-testbox-admin`'s `_tba_run_repair`):
+versions directory. The runner never downloads it (slug `build-source-is-the-fleet`). The copy is a new `ccrc
+testbox-admin` sub, `build-copy`, composed by the server before the job. As built (PR 2, `ccd/testbox-build-copy`), it
+is not run in the repair sub's recorded phases: it is a short act of its own under the verb's lock, a check on the fleet
+box and then one call to the test box, which hashes what arrived and installs it. No ledger row records it; the build's
+own row says what the copy came to.
 
-| Phase | On the fleet box | On the test box |
+| Step | On the fleet box | On the test box |
 |---|---|---|
 | verify | Reads the build file read-only: a regular file, not a link, under the size cap. Hashes it (SHA-256). | (nothing) |
 | copy | Streams the bytes through the admin lane's one way to the box (`_tba_ssh`) into a stage | Hashes what arrived; a mismatch removes the stage |
 | install | (nothing) | Moves the checked bytes to `<CCRC_TESTBOX_ROOT>/captures/builds/<version>`, read-only, owned by the service user |
 
-*Table 2. The copy. The fleet side never writes the versions directory or the launcher, and the test box side installs only
-under the test box's own root. No new egress and no new credential: the admin lane's paired key is the one Connect set up.*
+*Table 2. The copy. Its copy and install steps are one call to the box. The fleet side never writes the versions
+directory or the launcher, and the test box side installs only under the test box's own root. No new egress and no new
+credential: the admin lane's paired key is the one Connect set up.*
 
 **When the copy runs is decided in L1, never inside a transport.** The lane's decider in `shared/claudeBuildTrust.ts` reads
 what the last try came to and names the next act; the lane (L4) only carries it out, and no L3 adapter sequences two ops.
@@ -123,7 +127,10 @@ flowchart LR
   S -->|any other not-sent word| W[not sent, no attempt counted]
 ```
 *Figure 2. Copy only after a `build-absent` refusal. A build the box already holds is never copied again, which is the
-hash skip for free: the box answers `build-absent` only when it has no checked copy of that version.*
+hash skip for free. As built (PR 3b): the box answers `build-absent` when it holds no usable copy of that version, and the
+desk reads a build reached through a link, or one that holds a second name, as absent, so a capture never runs another
+version's bytes under this version's name. A copy is checked by hash when it is copied, not again at capture: a pass
+speaks for the bytes the box held when the build ran, and the builds store is not proof against the capture's own user.*
 
 A failed copy sent no job, so it counts no attempt and needs a not-sent word of its own. The record's words today are
 `no-test-box` and `no-runner`, behind a CHECK constraint on `claude_builds`, so PR 2 widens them by a table-rebuild
@@ -133,7 +140,8 @@ frame that never left the server and a fleet agent busy with another capture).
 ### 2.3 The scratch home and the guards
 
 Each capture runs in its own directory, `<CCRC_TESTBOX_ROOT>/captures/<captureId>/`, as a child of the test service, on
-its own tmux socket. Its environment is built from empty, the probe desk's rule (`agent/src/testbox/probes.ts#probeSpec`):
+its own tmux socket (its tmux directory alone sits outside that directory, below). Its environment is built from empty,
+the probe desk's rule (`agent/src/testbox/probes.ts#probeSpec`):
 
 | Name | Value |
 |---|---|
@@ -141,10 +149,16 @@ its own tmux socket. Its environment is built from empty, the probe desk's rule 
 | `CLAUDE_CONFIG_DIR` | `<capture>/config`, seeded with onboarding done, the capture folder trusted, every hook and the statusline set to the recorder |
 | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` | the stand-in on `127.0.0.1:<port>`, and a fixed placeholder |
 | `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1`, so the build fetches nothing and reports nothing |
-| `TMUX_TMPDIR` and the socket name | `<capture>/tmux` and `ccrc-capture`; never `default`, the fleet's own server |
-| `PATH`, `LANG` | the box's system path and tools, `C.UTF-8` |
+| `TMUX_TMPDIR` and the socket name | as built (PR 3b), a directory of its own under the test service's temporary directory, named by the capture id (`capture.ts#captureTmuxDir`), so the socket's path fits under any box root; and `ccrc-capture`, never `default`, the fleet's own server |
+| `TMPDIR` | `<capture>/tmp`, inside the scratch directory the runner removes |
+| `PATH`, `LANG`, `TERM` | the box's tools directories, then the system path; `C.UTF-8`; `xterm-256color` |
+| `CCRC_CAPTURE_RECORDING` | the recording file the recorder writes, `<capture>/recording.jsonl` |
+| `SHELL` (in the pane) | as built (PR 3b), one fixed, absolute system shell (`captureRunner.ts#CAPTURE_SHELL`), set as the capture's own tmux server's default shell, which tmux hands the pane; never the service user's shell and never a value from the caller's environment. A start whose fixed shell is not an executable file is refused before any tmux call, and answers no verdict |
 
-*Table 3. The capture's environment. No `TMUX`, `TMUX_PANE`, fleet `HOME` or account variable reaches it.*
+*Table 3. The capture's environment, as built (`capture.ts#captureEnv`, and `SHELL` from the capture's tmux server). No
+fleet `HOME`, fleet `TMUX` or account variable reaches it. Inside the pane, tmux adds its own marker variables (`TMUX`,
+`TMUX_PANE`), which name the capture's own private server, never the fleet's. The build starts with no shell between tmux
+and it: the pane's command is two words, which tmux runs directly.*
 
 The guards are the probe desk's, reused, not copied: the node's role must be the test box (`probeRole`), and every path the
 capture writes passes `writeRefusal` against the fleet accounts' config directories. The test service's egress rules apply
