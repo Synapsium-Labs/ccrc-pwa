@@ -213,8 +213,8 @@ async function waitAsked(s: Stream, n: number): Promise<void> {
   while (s.asked.length < n && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
   expect(s.asked.length, 'the page asked for no older page').toBeGreaterThanOrEqual(n);
 }
-async function open(view: AppView, all: () => Ev[], o: { older?: boolean } = {}) {
-  const app = await openApp(browser!, view, FIXTURE);
+async function open(view: AppView, all: () => Ev[], o: { older?: boolean; fixture?: AppFixture } = {}) {
+  const app = await openApp(browser!, view, o.fixture ?? FIXTURE);
   const s = await stream(app.ctx, all, o);
   await app.page.goto(`${server!.origin}/s/${SESSION.id}`);
   await app.page.waitForSelector('[data-row-key]', { timeout: 20_000 });
@@ -847,16 +847,25 @@ const figureLine = (f: ReturnType<typeof figures>, total: number): string =>
   + `at rest ${f.stableAt} frames after the first drawn; empty frames after drawn ${f.empties}; list gone again ${f.gone}; `
   + `biggest jump of a row drawn in two frames ${f.biggest.toFixed(1)} px; ends at scrollTop ${f.end.top} of ${f.end.height}, ${f.foot.toFixed(1)} px from the foot`;
 
+/** The fixture with the session idle: no working pulse trails the rows (fix round 1, F2). */
+const IDLE: AppFixture = { ...FIXTURE, fleetFrames: [{ type: 'fleet', sessions: [{ ...SESSION, bucket: 'idle' }] }] };
+
 describe('a list that is only the reset row and its divider (follow-up A3)', () => {
-  for (const view of [VIEWS.find((v) => v.width === 390 && v.skin === REFINED && v.theme === PHOSPHOR)!,
+  // The coordinator's ruling on fix round 1 (A3 (a)): the reader who presses Load older is un-pinned by the control, by
+  // design (`ChatList.tsx#loadFromControl`), so they end on the older rows they asked for, not at the foot, idle and busy.
+  // Before F1, busy, the working pulse was taken for a row in common: the rotation and the first page moved virtuoso's
+  // first index, and the hold's anchor was the pulse at the foot, which is the only reason that state ended at the foot.
+  const STATES = [['idle', IDLE], ['busy', FIXTURE]] as const;
+  for (const [state, fixture] of STATES) for (const view of [VIEWS.find((v) => v.width === 390 && v.skin === REFINED && v.theme === PHOSPHOR)!,
     VIEWS.find((v) => v.width === 1280 && v.skin === REFINED && v.theme === PHOSPHOR)!,
     VIEWS.find((v) => v.width === 390 && v.skin === INSTRUMENT && v.theme === PHOSPHOR)!,
     VIEWS.find((v) => v.width === 1280 && v.skin === INSTRUMENT && v.theme === PHOSPHOR)!]) {
-    it(`${named(view)}: the page that lands under it`, async () => {
+    it(`${named(view)}, ${state}: Load older, then the page the list asks by itself`, async () => {
       const first = transcript(2);
       const other = transcript(4, 'r');
       let serving = first;
-      const { ctx, page, errors, s } = await open(view, () => serving);
+      const tag = `${named(view)}, ${state}`;
+      const { ctx, page, errors, s } = await open(view, () => serving, { fixture });
       try {
         serving = other;
         s.send({ type: 'rotated', uuid: 'u-2' });
@@ -867,57 +876,85 @@ describe('a list that is only the reset row and its divider (follow-up A3)', () 
         });
         await page.waitForSelector('.chat-scroller [data-row-key^="local-"]', { state: 'attached', timeout: 10_000 });
         await page.waitForTimeout(800);
-        const keys = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.chat-scroller [data-row-key]')].map((r) => r.dataset.rowKey!));
+        const keysNow = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.chat-scroller [data-row-key]')].map((r) => r.dataset.rowKey!));
+        const keys = await keysNow();
         // The working pulse draws below the reset row while the session is busy: it is no transcript row.
-        expect(keys.every((k) => k.startsWith('local-') || k.startsWith('div-local-') || k === 'working'), `the list is more than the reset row: ${keys.join(' ')}`).toBe(true);
+        expect(keys.every((k) => k.startsWith('local-') || k.startsWith('div-local-') || (state === 'busy' && k === 'working')), `the list is more than the reset row: ${keys.join(' ')}`).toBe(true);
+        expect(keys.includes('working'), 'the working pulse is drawn exactly when the session is busy').toBe(state === 'busy');
         const resetKey = keys.find((k) => k.startsWith('local-'))!;
-        const was = { top: await topOf(page, resetKey), at: await scroller(page) };
+        /** Virtuoso's first index, read off any row it draws: its index with the first index (`data-item-index`) less its
+         *  place in the list (`data-index`). */
+        const firstIndex = () => page.evaluate(() => {
+          const r = document.querySelector<HTMLElement>('.chat-scroller [data-item-index][data-index]');
+          return r === null ? null : Number(r.dataset['itemIndex']) - Number(r.dataset['index']);
+        });
+        const lead = (k: string): boolean => k.startsWith('local-') || k.startsWith('div-local-');
+        // 1. Before the press: the list fits the view, its reader is at the foot and still pinned, so nothing asks a page
+        //    (`ChatList.tsx#nearTop` asks only for a reader who left the foot): scrollTop 0, the reset row whole in view.
+        const before = await scroller(page);
+        const resetTop = await topOf(page, resetKey);
+        const resetBottom = await page.evaluate((k) => {
+          const sc = document.querySelector<HTMLElement>('.chat-scroller')!;
+          return sc.querySelector<HTMLElement>(`[data-row-key="${CSS.escape(k)}"]`)!.getBoundingClientRect().bottom - sc.getBoundingClientRect().top;
+        }, resetKey);
+        expect(before.top, 'the short list was scrolled').toBe(0);
+        expect(resetTop, 'the reset row stood above the view before the press').toBeGreaterThanOrEqual(0);
+        expect(resetBottom, 'the reset row stood below the view before the press').toBeLessThanOrEqual(before.client);
+        expect(s.asked.length, 'a page was asked with no press').toBe(0);
+        const index0 = await firstIndex();
+        expect(index0, 'no row of the list was drawn').not.toBeNull();
+
+        // 2. The press, and the first page: no first index moved, no settle (the scroller stays at 0), its rows under the
+        //    reset row. The next page the list asks is held back until this is read.
         s.hold();
-        await startSampler(page);
         await page.locator('.older-edge-load').click();
         await waitAsked(s, 1);
         await page.waitForTimeout(150);
         s.release();
-        await page.waitForTimeout(1200);
+        s.hold();
+        await expect.poll(async () => (await keysNow()).some((k) => /^r[mut]/.test(k) || /activity-r/.test(k)), { timeout: 10_000, message: 'the first page drew no row' }).toBe(true);
+        await page.waitForTimeout(400);
+        const index1 = await firstIndex();
+        const at1 = await scroller(page);
+        const order = await keysNow();
+        report(`A3 ${tag}: first index ${index0} before the press, ${index1} after the first page; scrollTop ${at1.top} of ${at1.height}`);
+        expect(index1, 'the first page under the reset row moved virtuoso\'s first index').toBe(index0);
+        expect(at1.top, 'the first page started a settle: the scroller moved').toBe(0);
+        const firstPage = order.filter((k) => !lead(k) && k !== 'working');
+        expect(order.indexOf(resetKey), 'the first page\'s rows are not under the reset row').toBeLessThan(order.indexOf(firstPage[0]!));
+
+        // 3. The page the list asks by itself (the reader is un-pinned and near the top): a prepend above the first page's
+        //    rows, under the reset row. The row in view holds within the bound the other prepend cases use, and the two
+        //    pages are all that is asked.
+        await waitAsked(s, 2);
+        // At the join the time divider goes and the tool stretch takes the page's calls under a new key (wave 175, fix round
+        // 1, F2), so the row held is the first message row in view, which keeps its key.
+        const view1 = (await rowsInView(page)).filter((r) => /^rm\d+$/.test(r.key));
+        expect(view1.length, 'no row of the first page is in view').toBeGreaterThan(0);
+        const held = view1[0]!;
+        await startSampler(page);
+        s.release();
+        await page.waitForTimeout(1500);
         const frames = await stopSampler(page);
-        const grew = frames.findIndex((fr) => fr.height > was.at.height + 1);
-        expect(grew, 'the list never grew: the page did not land').toBeGreaterThan(0);
-        const from = Math.max(0, grew - 1);
-        const shown = frames.slice(from, from + 12);
-        for (const fr of shown) {
-          report(`A3 ${named(view)} frame ${fr.f}: scrollTop ${fr.top}, height ${fr.height}, client ${fr.client}, reset row at ${fr.at[resetKey] ?? 'out of view'}, ${fr.rows} rows, first ${fr.first}`);
-        }
-        const settled = frames.at(-1)!;
-        const moved = shown.map((fr) => fr.at[resetKey]).filter((v): v is number => v !== undefined);
-        report(`A3 ${named(view)}: reset row ${was.top?.toFixed(1)} before; ${moved.length === 0 ? 'out of view' : `${Math.min(...moved)}..${Math.max(...moved)}`} over the 12 frames from the page; at rest ${settled.at[resetKey] ?? 'out of view'}; scrollTop ${was.at.top} -> ${settled.top} of ${settled.height}; ${(settled.height - settled.top - settled.client).toFixed(1)} px from the foot`);
-        // Measured (printed above): the list was short, the reset row stood in view at the foot with the scroller at 0, and
-        // when the page landed the view followed the foot, the reset row left the view above, and a few frames later the
-        // view was set a row or two further to the foot again. Pinned: where the reader ends (at the foot, as a reader at the
-        // foot always does), and that the page drew; the reset row's leaving the view is printed, not asserted.
-        // The snap, printed: how far short of the foot the view stood after the page landed, for how many frames, and the last
-        // move to the foot.
-        const after0 = frames.slice(grew);
-        const short = after0.map((fr) => fr.height - fr.top - fr.client);
-        const lastShort = short.findLastIndex((v) => v > 2);
-        const shortFrames = short.filter((v) => v > 2).length;
-        const snap = lastShort >= 0 && lastShort + 1 < after0.length ? after0[lastShort + 1]!.top - after0[lastShort]!.top : 0;
-        report(`A3 ${named(view)}: short of the foot by up to ${Math.max(0, ...short).toFixed(0)} px in ${shortFrames} frames after the page landed (last short frame ${lastShort >= 0 ? after0[lastShort]!.f : 'none'}); final snap ${snap.toFixed(0)} px`);
-        for (let i = 1; i < after0.length; i += 1) {
-          if (after0[i]!.height < after0[i - 1]!.height - 1) {
-            report(`A3 ${named(view)}: height fell at frame ${after0[i]!.f}: ${after0[i - 1]!.height} -> ${after0[i]!.height}, scrollTop ${after0[i - 1]!.top} -> ${after0[i]!.top}, first row ${after0[i - 1]!.first} -> ${after0[i]!.first}`);
-          }
-        }
-        // At rest nothing moves: the list's settle waits SETTLE_FRAMES = 2 quiet frames (`ChatList.tsx`), so the last 8 of the
-        // sampled frames (the sampler ran 1.2 s, about 70 frames, after the page) are identical.
+        const heldAt = await topOf(page, held.key);
+        const index2 = await firstIndex();
+        report(`A3 ${tag}: the row in view ${held.key} at ${held.top.toFixed(1)} before the second page, ${heldAt?.toFixed(1) ?? 'not drawn'} after; first index ${index2}`);
+        expect(heldAt, `the row in view, ${held.key}, left the list`).not.toBeNull();
+        expect(Math.abs(heldAt! - held.top), `the row in view, ${held.key}, moved when the second page landed`).toBeLessThanOrEqual(1);
+        expect(s.asked.length, 'a chain of pages was asked').toBe(2);
+
+        // 4. At rest nothing moves for the settle's quiet frames (SETTLE_FRAMES = 2, `ChatList.tsx`; the last 8 of about
+        //    90 sampled), and the reader is on the first page's rows, not at the foot (its distance printed, not bound).
         const rest = frames.slice(-8);
         for (const fr of rest) {
           expect([fr.top, fr.height, fr.first, fr.last], `frame ${fr.f}: the list moved at rest`).toEqual([rest[0]!.top, rest[0]!.height, rest[0]!.first, rest[0]!.last]);
         }
-        expect(was.at.top, 'the short list was scrolled').toBe(0);
-        expect(was.top, 'the reset row stood outside the view before the page').toBeGreaterThanOrEqual(0);
-        expect(settled.height - settled.top - settled.client, 'the reader at the foot was left off it').toBeLessThanOrEqual(2);
-        const after = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.chat-scroller [data-row-key]')].map((r) => r.dataset.rowKey!));
-        expect(after.some((k) => /^r[mut]/.test(k) || /activity-r/.test(k)), 'the page drew no row of the new file').toBe(true);
+        const end = await scroller(page);
+        const inView = (await rowsInView(page)).map((r) => r.key);
+        const fromFoot = end.height - end.top - end.client;
+        report(`A3 ${tag}: at rest scrollTop ${end.top} of ${end.height}, ${fromFoot.toFixed(1)} px from the foot; in view ${inView.join(' ')}`);
+        expect(inView.filter((k) => firstPage.includes(k)).length, 'the reader is not on the first page\'s rows').toBeGreaterThan(0);
+        expect(fromFoot, 'the reader who asked for older rows was taken to the foot').toBeGreaterThan(2);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -934,9 +971,12 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
   for (const view of REOPEN) {
     it(`${named(view)}: the fresh backlog replaces the cached rows`, async () => {
       const all = transcript(6);
+      /** Three live rows more, in the fresh backlog of a reconnect. */
+      const LIVE = Array.from({ length: 3 }, (_, i) => ({ kind: 'assistant', uuid: `live${i}`, ts: '2026-11-21T08:00:00.000Z', text: `Live ${i}: ${'more words '.repeat(10)}` }));
       const connects: { n: number; resuming: boolean }[] = [];
       let ws1: WebSocketRoute | null = null;
       let answers: 'page' | 'expired' = 'page';
+      let pages = 0;
       let latest: WebSocketRoute | null = null;
       const fixture: AppFixture = {
         ...FIXTURE,
@@ -954,6 +994,7 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
               ws.send(JSON.stringify({ type: 'older-page', events: [], gap: false, for: m.continuation, end: 'expired' }));
               return;
             }
+            pages += 1;
             ws.send(JSON.stringify({
               type: 'older-page', events: all.slice(from, k), gap: false, for: m.continuation,
               ...(from === 0 ? { end: 'start' } : { end: 'more', continuation: `c-${from}` }),
@@ -962,8 +1003,7 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
           // A resuming connect is answered with no backlog (the server's resume); a fresh one with the newest PAGE events
           // and, this time, three live rows more.
           if (c.resuming) return;
-          const live = Array.from({ length: 3 }, (_, i) => ({ kind: 'assistant', uuid: `live${i}`, ts: '2026-11-21T08:00:00.000Z', text: `Live ${i}: ${'more words '.repeat(10)}` }));
-          const events = [...all, ...(c.n > 1 ? live : [])];
+          const events = [...all, ...(c.n > 1 ? LIVE : [])];
           const firstIx = Math.max(0, events.length - PAGE);
           ws.send(JSON.stringify({
             type: 'backlog', uuid: 'u-1', events: events.slice(firstIx), offset: c.n, file: '/w/t.jsonl', missing: false,
@@ -984,9 +1024,18 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
         report(`A4 ${named(view)} FIRST OPEN: ${figureLine(base, firstOpen.length)}`);
         expect(base.drawn, 'the first open drew no rows').toBeGreaterThanOrEqual(0);
         expect(base.foot, 'the first open did not end at the foot').toBeLessThanOrEqual(2);
-        // One page older, so the store holds older rows; then the edge reads expired.
+        // One page older, so the store holds older rows; then the edge reads expired. The precondition is asserted (fix round
+        // 1, F4): a page was answered, and a row older than the fresh backlog's first is drawn (the list draws 1200 px above
+        // the view, so the page's newest rows are), before the edge is switched.
+        // The fresh backlog's first message row: the first message event of the newest PAGE events, as the backlog is cut.
+        const freshFirst = all.slice(-PAGE).find((e) => e.kind === 'user' || e.kind === 'assistant')!.uuid as string;
+        const numOf = (k: string): number => Number(/^em(\d+)$/.exec(k)?.[1] ?? Number.POSITIVE_INFINITY);
+        const olderDrawn = () => page.evaluate((n) => [...document.querySelectorAll<HTMLElement>('.chat-scroller [data-row-key]')]
+          .map((r) => Number(/^em(\d+)$/.exec(r.dataset.rowKey!)?.[1] ?? Number.POSITIVE_INFINITY)).filter((k) => k < n).length, numOf(freshFirst));
+        expect(await olderDrawn(), 'a row older than the fresh backlog was drawn before any page').toBe(0);
         await scrollList(page, 40);
-        await expect.poll(() => page.locator('.chat-scroller [data-row-key="em' + '1"]').count().then(() => page.evaluate(() => document.querySelectorAll('.chat-scroller [data-row-key]').length)), { timeout: 10_000 }).toBeGreaterThan(0);
+        await expect.poll(() => pages, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+        await expect.poll(olderDrawn, { timeout: 10_000, message: 'no row of the page landed' }).toBeGreaterThan(0);
         await page.waitForTimeout(900);
         const held = await page.evaluate(() => (document.querySelector('.older-edge') as HTMLElement | null)?.dataset['older'] ?? null);
         report(`A4 ${named(view)}: after one page the edge reads ${held}`);
@@ -1015,12 +1064,14 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
         for (const fr of changes.slice(0, 14)) {
           report(`A4 ${named(view)} frame ${fr.f} (${fr.ms} ms): scrollTop ${fr.top} of ${fr.height}, ${fr.rows} rows, first ${fr.first}, last ${fr.last}`);
         }
-        // No frame draws a row older than the fresh backlog's own first message: the cached older rows are never drawn.
-        const freshFirst = all.slice(-PAGE).find((e) => e.kind === 'user' || e.kind === 'assistant')!.uuid as string;
-        const numOf = (k: string): number => Number(/^em(\d+)$/.exec(k)?.[1] ?? Number.POSITIVE_INFINITY);
+        // No frame draws a row older than the reopen's fresh backlog's own first message: the cached older rows are never
+        // drawn. That backlog is cut from the transcript with the live rows, so it starts three events after the first
+        // open's (fix round 1, M5: the bound was three rows early).
+        const reopenFirst = [...all, ...LIVE].slice(-PAGE).find((e) => e.kind === 'user' || e.kind === 'assistant')!.uuid as string;
+        expect(numOf(reopenFirst), 'the reopen\'s backlog starts where the first open\'s did').toBeGreaterThan(numOf(freshFirst));
         const oldest = Math.min(...frames.flatMap((fr) => Object.keys(fr.at)).map(numOf));
-        report(`A4 ${named(view)}: oldest message row drawn in any frame em${oldest} (the fresh backlog starts at ${freshFirst})`);
-        expect(oldest, 'a cached older row was drawn before the fresh backlog replaced it').toBeGreaterThanOrEqual(numOf(freshFirst));
+        report(`A4 ${named(view)}: oldest message row drawn in any frame em${oldest} (the fresh backlog starts at ${reopenFirst})`);
+        expect(oldest, 'a cached older row was drawn before the fresh backlog replaced it').toBeGreaterThanOrEqual(numOf(reopenFirst));
         report(`A4 ${named(view)} REOPEN: ${figureLine(fx, frames.length)}; last row ${fx.end.last}`);
         report(`A4 ${named(view)} REOPEN vs FIRST OPEN: frames to rest ${fx.stableAt} vs ${base.stableAt}; biggest row jump ${biggest.toFixed(1)} vs ${base.biggest.toFixed(1)} px; empty-mount frames ${fx.emptyBefore} vs ${base.emptyBefore}`);
         expect(drawn, 'the reopen drew no rows').toBeGreaterThanOrEqual(0);
