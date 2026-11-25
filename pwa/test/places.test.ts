@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DesignationState, HomeAnswer } from '../src/overlord/homePlace';
 import {
-  deskPlacesFor, FLEET_PLACE, OVERLORD_PLACE, PHONE_DOOR_FIT_PX, PHONE_DOOR_MIN_PX, phoneDoorsFit, placesFor, type Place,
+  deskPlacesFor, FLEET_PLACE, OVERLORD_PLACE, PHONE_DOOR_FIT_PX, PHONE_DOOR_MIN_PX, phoneDoorsFit, placesFor, refinedDeskPlaces,
+  type Place,
 } from '../src/lib/places';
 import { ROUTES } from '../src/lib/routes';
 
@@ -61,6 +62,18 @@ describe('deskPlacesFor (ruled F5, plan question 14)', () => {
   it('has no Fleet door while the rung is off or a first start failed: the home, and the wordmark, are the Fleet then', () => {
     expect(ids(deskPlacesFor(true, STATES.bound, HOME_RUNG_OFF))).toEqual(['overlord', ...DESK_TODAY]);
     expect(ids(deskPlacesFor(true, STATES['failed-start'], HOME_FAILED))).toEqual(['overlord', ...DESK_TODAY]);
+  });
+});
+
+describe('refinedDeskPlaces (the crowded bar leaves Flows off, operator ruling 2026-11-25)', () => {
+  const NO_FLOWS = DESK_TODAY.filter((id) => id !== 'flows');
+  it("leaves Flows off a crowded bar while the Overlord's door leads", () => {
+    expect(ids(refinedDeskPlaces(deskPlacesFor(true, STATES.bound, HOME_OVERLORD), false))).toEqual(['overlord', FLEET_PLACE, ...NO_FLOWS]);
+    expect(ids(refinedDeskPlaces(deskPlacesFor(true, STATES.bound, HOME_RUNG_OFF), false))).toEqual(['overlord', ...NO_FLOWS]);
+  });
+  it('keeps Flows on a roomy bar, and on a crowded one with no Overlord door', () => {
+    expect(ids(refinedDeskPlaces(deskPlacesFor(true, STATES.bound, HOME_OVERLORD), true))).toEqual(['overlord', FLEET_PLACE, ...DESK_TODAY]);
+    expect(ids(refinedDeskPlaces(deskPlacesFor(false, STATES.bound, HOME_NONE), false))).toEqual(DESK_TODAY);
   });
 });
 

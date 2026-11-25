@@ -17,7 +17,7 @@ import { FaceMark } from '../../face/FaceMark';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
-import { deskPlacesFor, FLEET_PLACE, type Place } from '../../lib/places';
+import { deskPlacesFor, FLEET_PLACE, refinedDeskPlaces, type Place } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES, topRouteOf } from '../../lib/routes';
 import { useMediaQuery } from '../../lib/useMediaQuery';
@@ -27,7 +27,8 @@ import { useDesignationState, useHome, useOverlordShown } from '../../stores/ove
  *  refined-bar.browser.test.ts: at 900 the line ran 105 px past its frame and at 1100 1 px, New session cut). A crowded bar names each tab
  *  by its place's short word where it has one ("Waiting", the phone bar's word) and draws New session as its "+" alone,
  *  named "New session", as Instrument's is (slug `refined-crowded-bar-sheds-words`). Five tabs are never crowded; Flows, a desk
- *  place (flows design 2026-11-19 §9), makes the desk six, which crowd too (measured: New session cut at 900 to 1000). */
+ *  place (flows design 2026-11-19 §9), makes the desk six, which crowd too (measured: New session cut at 900 to 1000). With the Overlord's tabs a crowded bar
+ *  leaves Flows off (`refinedDeskPlaces`): eight tabs cut New session even with the short words. */
 export const REF_ROOMY_QUERY = '(min-width: 1200px)';
 const ROOMY_TABS = 5;
 
@@ -58,8 +59,8 @@ export function AppBar(): ReactNode {
   // current on its own route, as before.
   const here = topRouteOf(path)?.id === FLEET_PLACE ? FLEET_PLACE : (matchRoute(path)?.route.id ?? null);
   const badges = useNavBadges();
-  const places = deskPlacesFor(useOverlordShown(), useDesignationState(), useHome());
   const roomy = useMediaQuery(REF_ROOMY_QUERY);
+  const places = refinedDeskPlaces(deskPlacesFor(useOverlordShown(), useDesignationState(), useHome()), roomy);
   const crowded = places.length > ROOMY_TABS && !roomy;
   return (
     <>

@@ -73,6 +73,17 @@ export function deskPlacesFor(shown: boolean, d: DesignationState, home: HomeAns
   return [rest[0], fleet, ...rest.slice(1)];
 }
 
+/** The place a crowded Refined desk bar leaves out while the Overlord's door is drawn. */
+export const FLOWS_PLACE = 'flows';
+
+/** The tabs Refined's desk bar draws from `deskPlacesFor`'s list: all of them, but Flows is left off while the Overlord's door
+ *  leads and the bar is not `roomy` (below `REF_ROOMY_QUERY`'s 1200 px). Eight tabs cut New session at 900 to 1000 even with the
+ *  short words (refined-bar.browser.test.ts), and the operator ruled Flows is the one to go (2026-11-25). Instrument's doors keep
+ *  it, and its URL and the palette's "Go to" still reach it. */
+export function refinedDeskPlaces(places: readonly Place[], roomy: boolean): readonly Place[] {
+  return roomy || places[0]?.id !== OVERLORD_PLACE.id ? places : places.filter((p) => p.id !== FLOWS_PLACE);
+}
+
 /** The tap minimum, in CSS pixels, of a phone bar door (WCAG 2.5.8's enhanced target, the console's `--tap-min`). */
 export const PHONE_DOOR_MIN_PX = 44;
 /** The width a phone bar door keeps when places are fitted: the tap minimum, raised to the measured width at which every

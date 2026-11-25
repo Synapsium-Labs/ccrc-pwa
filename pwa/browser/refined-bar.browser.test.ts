@@ -209,7 +209,10 @@ describe("Refined's app bar with the Overlord's and the Fleet's tabs", () => {
             waiting: document.querySelector('.ref-tabs [data-command="go-waiting"]')!.textContent,
           };
         });
-        expect(m.tabs).toEqual(['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-docs']);
+        // Under 1200 the crowded bar leaves Flows off (`refinedDeskPlaces`): eight tabs cut New session at 900 to 1000.
+        expect(m.tabs).toEqual(width < 1200
+          ? ['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs']
+          : ['go-overlord', 'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-docs']);
         expect(m.current, '/fleet marks exactly one tab').toEqual(['go-fleet']);
         expect(m.cut, 'nothing in the bar is cut').toEqual([]);
         expect(m.sideways, 'the page does not scroll sideways').toBeLessThanOrEqual(0);
