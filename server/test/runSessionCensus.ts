@@ -198,15 +198,13 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
   { file: 'server/src/coord/coordBall.ts', text: 'm.fromId === si.sessionId',
     why: "a mail row the coordinator under judgement sent itself (its newest wait: mail, D-8126): the mail ledger's sender, no run is read" },
   // Programme lifecycle W1 (R11, D-8993): the open path's claimant decision moved from the run row to the programme's
-  // coordinator binding (`openRunOwnership`), so `existing.claimedBy !== input.claimedBy` is gone and these four take its place.
-  { file: 'server/src/coord/store.ts', text: 'row.coordinator !== claimedBy',
-    why: "openRunOwnership (R11, D-8993): the programme row's bound coordinator against the opening claimant, inside the open path's transaction: which coordinator owns a PROGRAMME, no session is asked which run is its" },
-  { file: 'server/src/coord/store.ts', text: 'row.coordinator !== sessionId',
-    why: "claimsProgramme (D-8985, D-8993): the programme row's bound coordinator against the writing session, so an Idle programme keeps its owner: the programme binding, no session is asked which run is its" },
+  // coordinator binding (`openRunOwnershipOf`), so `existing.claimedBy !== input.claimedBy` is gone and these three take its place.
+  { file: 'server/src/coord/programmeLifecycleStore.ts', text: 'row.coordinator !== claimedBy',
+    why: "openRunOwnershipOf (R11, D-8993): the programme row's bound coordinator against the opening claimant, inside the open path's transaction: which coordinator owns a PROGRAMME, no session is asked which run is its" },
+  { file: 'server/src/coord/programmeLifecycleStore.ts', text: 'row.coordinator !== sessionId',
+    why: "coordinatesProgramme, which claimsProgramme delegates to (D-8985, D-8993): the programme row's bound coordinator against the writing session, so an Idle programme keeps its owner: the programme binding, no session is asked which run is its" },
   { file: 'server/src/coord/programmeLifecycleStore.ts', text: '`SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_',
-    why: "mayStartProgrammeInTx (R11, D-8993): whether a claimant holds an open run in a programme it does not own, naming that programme: a programme ownership refusal, no run is returned or bound" },
-  { file: 'server/src/coord/store.ts', text: '`SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.program != ? ` +`AND r.s',
-    why: "the reclaim heir's R11 check (rule 4, D-8993): whether the heir holds an open run in another programme it does not own, naming that programme: a programme ownership refusal, no run is returned or bound" },
+    why: "foreignOpenClaimOf (R11 rule 4, D-8993), asked by the start, the open and the reclaim heir: whether a claimant holds an open run in a programme it does not own, naming that programme: a programme ownership refusal, no run is returned or bound" },
   { file: 'server/src/coord/store.ts', text: '"SELECT CAST(id AS TEXT) AS idText, state FROM runs " +"WHERE program = ? AND wave = ? AND (waveOf IS ?) " +"AND claimed',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (the planned-run dup arm)" },
   { file: 'server/src/coord/store.ts', text: 'SELECT project FROM runs WHERE sessionId = ? ORDER BY id LIMIT 1',

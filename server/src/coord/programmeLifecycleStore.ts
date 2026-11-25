@@ -263,6 +263,16 @@ export function programmeOf(
   return r ?? null;
 }
 
+/** The oldest open run `session` claims in a programme it does not own, by programme; `except` (the programme being given to
+ *  it) does not count. R11 rule 4's one predicate: the start, the open and the reclaim heir all ask it. Null: none. */
+export function foreignOpenClaimOf(db: DatabaseSync, session: string, except: string | null): string | null {
+  const r = db.prepare(
+    `SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_SQL} ` +
+    'AND (? IS NULL OR r.program != ?) AND (p.coordinator IS NULL OR p.coordinator != ?) ORDER BY r.id LIMIT 1',
+  ).get(session, except, except, session) as { program: string } | undefined;
+  return r?.program ?? null;
+}
+
 /**
  * May this incarnation START a new programme it would own (spec §5's first-run row; R11 rules 3, 4 and 6)? Not while it
  * owns a live real programme, or claims an open run in one it does not own (`owns-another-programme`, naming it); and only
@@ -275,11 +285,8 @@ export function mayStartProgrammeInTx(
 ): { readonly ok: true } | { readonly ok: false; readonly kind: 'owns-another-programme' | 'not-your-programme'; readonly by: string } {
   const owned = ownedLiveProgrammeOf(db, session, uuid, null);
   if (owned !== null) return { ok: false, kind: 'owns-another-programme', by: owned };
-  const foreign = db.prepare(
-    `SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_SQL} ` +
-    'AND (p.coordinator IS NULL OR p.coordinator != ?) ORDER BY r.id LIMIT 1',
-  ).get(session, session) as { program: string } | undefined;
-  if (foreign !== undefined) return { ok: false, kind: 'owns-another-programme', by: foreign.program };
+  const foreign = foreignOpenClaimOf(db, session, null);
+  if (foreign !== null) return { ok: false, kind: 'owns-another-programme', by: foreign };
   const own = programmeOf(db, session, uuid);
   if (own !== null && own.placeholder === 'unfiled') return { ok: true };
   const joined = db.prepare(
@@ -450,4 +457,74 @@ function stepFourRule(
     return runFactsOf(db, slug).open > 0 ? { to: 'active', rule: 'ended-over-open-runs' } : { to: state, rule: 'auto-retire-kept' };
   }
   return null;
+}
+
+/** An open's ownership refusal, in `OpenRunResult`'s own codes. */
+export type OpenOwnershipRefusal =
+  | { refused: 'claimed-by-another' | 'owns-another-programme'; by: string }
+  | { refused: 'programme-paused' | 'programme-unknown' | 'programme-provisional' | 'not-your-programme'; by?: string }
+  | { refused: 'plan-closed'; by?: undefined };
+
+/**
+ * `CoordStore#openRun`'s ownership rungs (spec §5's dispatch and first-run rows; R11 rules 3, 4, 6 and 8), read inside its transaction.
+ * An existing programme takes a run only while it is real (`programme-provisional`), not ended (`plan-closed`, the
+ * existing code), not held (`programme-paused`), readable (`programme-unknown`), and only from its bound coordinator:
+ * another binding refuses `claimed-by-another` naming it, none refuses `not-your-programme` (a free programme is taken
+ * by a pick, a filing or a hand-over, never by a run). A new slug is opened only by a claimant that owns no live real
+ * programme and claims no open run in one it does not own (`owns-another-programme`, naming it), and that owns its
+ * unfiled placeholder or has never been joined (`not-your-programme`: "you own no programme now"). Null admits.
+ */
+export function openRunOwnershipOf(db: DatabaseSync, program: string, claimedBy: string, uuid: string | null): OpenOwnershipRefusal | null {
+  const row = programmeRowOf(db, program);
+  if (row !== null) {
+    if (row.placeholder !== null) return { refused: 'programme-provisional' };
+    if (isEnded(row.state)) return { refused: 'plan-closed' };
+    if (row.state === 'paused') return { refused: 'programme-paused' };
+    if (row.state !== 'active') return { refused: 'programme-unknown', by: row.state };
+    if (row.coordinator === null) return { refused: 'not-your-programme' };
+    const sameIncarnation = row.coordinatorUuid === null || uuid === null || row.coordinatorUuid === uuid;
+    if (row.coordinator !== claimedBy || !sameIncarnation) return { refused: 'claimed-by-another', by: row.coordinator };
+    return null;
+  }
+  const may = mayStartProgrammeInTx(db, claimedBy, uuid);
+  return may.ok ? null : { refused: may.kind, by: may.by };
+}
+
+/** Does this heir own another live real programme, or claim an open run in a programme other than `program` that it does not
+ *  own (R11 rule 4, D-8993)? Names it; null admits. Its unfiled placeholder does not count: `moveBindingInTx` withdraws it. */
+export function heirOwnsAnotherOf(db: DatabaseSync, to: string, toUuid: string | null, program: string): string | null {
+  return ownedLiveProgrammeOf(db, to, toUuid, program) ?? foreignOpenClaimOf(db, to, program);
+}
+
+/** The binding's half of a move between sessions (`to` null: a release), inside the transaction that moves the claims (D-8985).
+ *  The heir's unfiled placeholder is withdrawn first (its binding cleared), so the partial unique index never fires. An ended
+ *  programme is owned by nobody (R11 rule 1; W1 review, C4): its claims still move, so its open runs can be closed, but no
+ *  binding is written onto it. The heir rung is the caller's (`heirOwnsAnotherOf`), so a refusal here THROWS and rolls back. */
+export function moveBindingInTx(
+  db: DatabaseSync,
+  m: { readonly program: string; readonly from: string; readonly to: string | null; readonly toUuid: string | null;
+    readonly actor?: ProgrammeActor; readonly why?: string },
+  at: number,
+): void {
+  const row = programmeRowOf(db, m.program);
+  if (row === null || (m.to !== null && isEnded(row.state))) return;
+  const actor = m.actor ?? { kind: 'system' as const, id: 'unmeasured' };
+  const why = m.why ?? (m.to === null ? `released from ${m.from}` : `handed over from ${m.from}`);
+  if (m.to !== null) {
+    const own = programmeOf(db, m.to, m.toUuid);
+    if (own !== null && own.placeholder === 'unfiled' && own.slug !== m.program) {
+      fileInTx(db, own.slug, { kind: 'withdrawn' }, actor, `its coordinator was given ${m.program}`, at);
+    }
+  }
+  const bound = bindCoordinatorInTx(db, m.program, m.to === null ? null : { session: m.to, uuid: m.toUuid }, actor, why, at);
+  if (!bound.ok) throw new Error(`moveBindingInTx: ${bound.kind} ${bound.by} passed the heir rung`);
+}
+
+/** Is `sessionId` (this incarnation) the programme's bound coordinator (D-8985, D-8993)? The uuid is compared as the attribution
+ *  gate compares `claimedByUuid` (D-5298); a migration-seeded binding's null uuid, or an unattributed caller, compares the id
+ *  alone. An ended programme has no binding. */
+export function coordinatesProgramme(db: DatabaseSync, sessionId: string, program: string, uuid: string | null): boolean {
+  const row = programmeRowOf(db, program);
+  if (row === null || row.coordinator !== sessionId) return false;
+  return row.coordinatorUuid === null || uuid === null || row.coordinatorUuid === uuid;
 }
