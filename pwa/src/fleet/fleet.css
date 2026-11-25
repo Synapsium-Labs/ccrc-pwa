@@ -4025,10 +4025,12 @@ button.proj-card-pool::before {
 .acct-door[data-narrowed='true'] .acct-door-meta,
 .acct-door-action[data-narrowed='true'] { color: var(--ink-disabled); cursor: default; }
 .acct-door-action[data-narrowed='true'] { border-color: var(--edge-subtle); }
-.acct-door[data-narrowed='true']:hover,
 .acct-door[data-narrowed='true']:active,
-.acct-door-action[data-narrowed='true']:hover,
 .acct-door-action[data-narrowed='true']:active { background-color: transparent; transform: none; }
+@media (hover: hover) {
+  .acct-door[data-narrowed='true']:hover,
+  .acct-door-action[data-narrowed='true']:hover { background-color: transparent; }
+}
 .acct-door-reason {
   display: grid;
   gap: var(--sp-1);
@@ -4043,8 +4045,8 @@ button.proj-card-pool::before {
 @media (prefers-reduced-motion: reduce) {
   .acct-door-reason { transition: none; }
 }
-/* The reason's longer half, how to fix it: closed by default, the compromise disclosure's row. Its words take the page's
-   own ink (no colour is set here), which the census measures on the page. */
+/* The reason's longer half, how to fix it: closed by default, the compromise disclosure's row in the reason's own size,
+   in the page's own ink (no colour is set here). Its list is the compromise steps' own (`.acct-compromise-steps`). */
 .acct-door-more { display: grid; gap: var(--sp-1); min-width: 0; }
 .acct-door-more > summary {
   display: flex;
@@ -4054,15 +4056,6 @@ button.proj-card-pool::before {
   font-family: var(--family-ui);
   font-size: var(--fs-meta);
   font-weight: var(--weight-medium);
-}
-.acct-door-more > ul {
-  display: grid;
-  gap: var(--sp-1);
-  margin: 0;
-  padding-inline-start: var(--sp-4);
-  font-family: var(--family-ui);
-  font-size: var(--fs-meta);
-  overflow-wrap: anywhere;
 }
 /* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
 .acct-connect,

@@ -625,7 +625,7 @@ export function DoorReason({ id, reason, called = 0 }: { id: string; reason: Doo
       {reason.more !== undefined && (
         <details className="acct-door-more">
           <summary>{reason.more.summary}</summary>
-          <ul>{reason.more.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+          <ul className="acct-compromise-steps">{reason.more.lines.map((l) => <li key={l}>{l}</li>)}</ul>
         </details>
       )}
       {reason.fix !== undefined && <CopyCommand command={reason.fix} label={DOOR_COMMAND_LABEL} />}
