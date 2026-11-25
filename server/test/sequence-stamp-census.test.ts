@@ -79,19 +79,28 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
 };
 
 /** The operator message's after-commit path (call 1218, slug `message-lines-stamp-after-the-move`; review 3646 F8): the one helper
- *  that calls the writer for the kind, the functions that call it, and EVERY caller of the private store's move in server/src, each
- *  with how its line is written. A new caller of the move (a W2 citing door, say) goes red here until it takes a side. */
-const MESSAGE_STAMP_CALLERS = [STAMP_ACK, `${ML}#stampOperatorMessageLine`] as const;
-const MESSAGE_LINE_CALLERS = [`${ML}#moveOperatorMessage`, 'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt'] as const;
-export const MESSAGE_MOVERS: Readonly<Record<string, string>> = {
-  [`${ML}#moveOperatorMessage`]: 'the one combinator: the move, then its line when the state word changed, in one synchronous segment',
-  'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)',
+ *  that calls the writer for the kind, the functions that call it, and EVERY call of the private store's move in server/src, each
+ *  with how its line is written. Each list counts the calls in each symbol (review 3852 F1), so a new call of the move goes red
+ *  here until it takes a side, in a new function or beside a listed call in one already here (a W2 citing door written in the
+ *  inbox routes' registrar, say). The scanner names a call by its rightmost identifier: an alias of the function, a bracket access
+ *  (`store['moveMessage']`) or a `.call`/`.apply` spelling is not read as the call. */
+const MESSAGE_STAMP_CALLERS: Readonly<Record<string, number>> = { [STAMP_ACK]: 1, [`${ML}#stampOperatorMessageLine`]: 1 };
+const MESSAGE_LINE_CALLERS: Readonly<Record<string, number>> = {
+  [`${ML}#moveOperatorMessage`]: 1, 'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1,
 };
-/** Every caller of the combinator, in server/src (`server.ts#buildServer` composes the hook's pick-up port). */
-const COMBINATOR_CALLERS = [
-  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass', 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued',
-  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt', 'server/src/server.ts#buildServer',
-] as const;
+export const MESSAGE_MOVERS: Readonly<Record<string, { readonly calls: number; readonly how: string }>> = {
+  [`${ML}#moveOperatorMessage`]: { calls: 1, how: 'the one combinator: the move, then its line when the state word changed, in one synchronous segment' },
+  'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': { calls: 1, how: 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)' },
+};
+/** Every call of the combinator, in server/src, counted per symbol (`server.ts#buildServer` composes the hook's pick-up port; the
+ *  boot pass's three are its unsettle, queue and deliver arms). */
+const COMBINATOR_CALLERS: Readonly<Record<string, number>> = {
+  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 3, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
+  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1, 'server/src/server.ts#buildServer': 1,
+};
+/** A count record as the list `callersOf` answers: each `file#symbol` once per call. */
+const times = (counted: Readonly<Record<string, number>>): string[] =>
+  Object.entries(counted).flatMap(([ref, n]) => Array.from({ length: n }, () => ref)).sort();
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
 const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`] as const;
@@ -102,7 +111,8 @@ const split = (ref: string): [string, string] => { const i = ref.indexOf('#'); r
 const callsOf = (ref: string): string[] => { const [f, n] = split(ref); return callsIn(symbolOf(f, n)).map((c) => c.name ?? c.callee); };
 const SERVER_SRC = ALL.filter((f) => rel(f).startsWith('server/src/'));
 
-/** The innermost symbol of `file` around each call named `name`: `file#symbol`. */
+/** The innermost symbol of `file` around each call named `name`: `file#symbol`, once per call (a second call in the same symbol is a
+ *  second entry, review 3852 F1). */
 function callersOf(name: string): string[] {
   const out: string[] = [];
   for (const abs of SERVER_SRC) {
@@ -112,7 +122,7 @@ function callersOf(name: string): string[] {
       out.push(`${rel(abs)}#${around?.name ?? '(module)'}`);
     }
   }
-  return [...new Set(out)].sort();
+  return out.sort();
 }
 
 describe('the sequence stamp census (Overlord §10.4)', () => {
@@ -169,12 +179,12 @@ describe('the sequence stamp census (Overlord §10.4)', () => {
   });
 
   it('the message kind\'s one helper is called only by the acknowledgement and the line stamp, and those only by their listed callers', () => {
-    expect(callersOf(split(STAMP_MESSAGE)[1])).toEqual([...MESSAGE_STAMP_CALLERS].sort());
-    expect(callersOf('stampOperatorMessageLine')).toEqual([...MESSAGE_LINE_CALLERS].sort());
-    expect(callersOf('moveOperatorMessage')).toEqual([...COMBINATOR_CALLERS].sort());
+    expect(callersOf(split(STAMP_MESSAGE)[1])).toEqual(times(MESSAGE_STAMP_CALLERS));
+    expect(callersOf('stampOperatorMessageLine')).toEqual(times(MESSAGE_LINE_CALLERS));
+    expect(callersOf('moveOperatorMessage')).toEqual(times(COMBINATOR_CALLERS));
   });
 
   it('every caller of the private store\'s move in server/src is listed with how its line is written (review 3646 F8)', () => {
-    expect(callersOf('moveMessage')).toEqual(Object.keys(MESSAGE_MOVERS).sort());
+    expect(callersOf('moveMessage')).toEqual(times(Object.fromEntries(Object.entries(MESSAGE_MOVERS).map(([ref, m]) => [ref, m.calls]))));
   });
 });
