@@ -96,6 +96,10 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       [['delegation-adopt', '--state', 'on'], true],
       // The Overlord W1 ccd arms: the sleep markers' writer rides `['keep-awake','--session']` and starts under `bash -p`.
       [['keep-awake', '--session', 'x', '--state', 'on'], true],
+      // Native Docs parity X2 P2.3: the docs folder registry's verb rides `['docs-folder','--list']` (and `--add`, `--remove`)
+      // and starts under `bash -p`, as delegation-adopt does; its read verb `docs-folder-read` is ordinary.
+      [['docs-folder', '--list'], true],
+      [['docs-folder-read', '--label', 'a', '--op', 'tree'], false],
       // D-8666 (the delegation broker's Rider): the forbidden verbs the server composes through this op (the archive,
       // restore and reap routes) start under `bash -p` too, so an inherited `nocasematch` folds no case variant into one.
       // `ws-rm` and `ws-gc` are ungrantable here, and `roll` and `claude` have no grant: their rows are the server suite's.

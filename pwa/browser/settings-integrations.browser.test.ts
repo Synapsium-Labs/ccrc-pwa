@@ -1,7 +1,7 @@
 // Settings › Integrations (D-8932), in a real Chrome over the production build, at a phone, a laptop
 // and a wide screen, in both skins and both themes. `test/settings-integrations.test.tsx` holds the section's behaviour in
 // jsdom; this file holds what only an engine can say:
-//   * the page draws its three cards (Linear, Project linking, GitHub) in order, and nothing on it scrolls sideways;
+//   * the page draws its four cards (Linear, Project linking, GitHub, Docs folders) in order, and nothing on it scrolls sideways;
 //   * the read-only GitHub card's lines wrap inside the card, with no text cut short and no control in it;
 //   * the section's row on the Settings index is whole inside the index, at least a tap tall, and opens the page;
 //   * an old link to Security for Linear lands on Integrations: Security's pointer is drawn, wraps, and its link opens it.
@@ -77,7 +77,7 @@ const contained = (el: Element) => {
 
 describe('Settings › Integrations, per width, skin and theme (D-8932)', () => {
   for (const width of WIDTHS) {
-    it(`the page at ${width}px: three cards in order, the GitHub card read-only and whole, nothing scrolls sideways`, async () => {
+    it(`the page at ${width}px: four cards in order, the GitHub card read-only and whole, nothing scrolls sideways`, async () => {
       for (const skin of SKINS) for (const theme of THEMES) {
         const view: AppView = { skin, theme, width };
         const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
@@ -89,7 +89,7 @@ describe('Settings › Integrations, per width, skin and theme (D-8932)', () => 
           // Scoped to the section's page: at a desk the fleet column beside it has headings of its own.
           const settings = page.locator('.settings-page');
           expect(await settings.getByRole('heading', { level: 2 }).allTextContents(), `${at}: the page's heading`).toEqual(['Integrations']);
-          expect(await settings.getByRole('heading', { level: 3 }).allTextContents(), `${at}: the cards, in order`).toEqual(['Linear', 'Project linking', 'GitHub']);
+          expect(await settings.getByRole('heading', { level: 3 }).allTextContents(), `${at}: the cards, in order`).toEqual(['Linear', 'Project linking', 'GitHub', 'Docs folders']);
           const shots = process.env.CCRC_SHOTS;
           if (shots) await page.screenshot({ path: path.join(shots, `integrations-${skin}-${theme}-${width}.png`), fullPage: true });
 

@@ -82,7 +82,10 @@ import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
-import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import {
+  composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
+  registerDocsRefreshRoute,
+} from './docs/routes.js';
 import { registerReviewOpenRoute } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
@@ -2445,6 +2448,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     installDocsResponsePolicy(app);
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+    // The outside folders (X2 P2.3, spec 2026-11-18 §4.1 and §7): the reads never see the registry's writes, and both
+    // ask L1 with the sign-in state and whether the request carries a session; Add also takes the account gate.
+    const folderSignIn = (): 'armed' | 'dark' => (deps.cfg.authEnabled ? 'armed' : 'dark');
+    const folderSession = (req: FastifyRequest): boolean => { const d = sessionAuth(req); return d.allow && d.reason === 'session'; };
+    registerDocsFolderReadRoutes(app, docs.folderReaders, docs.lanes, { signIn: folderSignIn, hasSession: folderSession });
+    registerDocsFolderRegistryRoutes(app, docs.folderRegistries, docs.lanes,
+      { gate: accountGate, signIn: folderSignIn, hasSession: folderSession });
   });
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.

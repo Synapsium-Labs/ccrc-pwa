@@ -1852,6 +1852,7 @@ describe('every forbidden ccd verb starts protected at the installed direct entr
   it('the census reads the list: every head, ws-gc from ws-gc --prune among them', () => {
     expect(HEADS).toContain('ws-gc');
     expect(HEADS).toContain('ws-rm');
+    expect(HEADS, 'X2 P2.3: the docs folder registry verb is a head').toContain('docs-folder');
     expect(HEADS.length, 'one head per verb').toBe(FORBIDDEN_CCD_VERBS.length);
   });
 

@@ -27,23 +27,29 @@
 // here can recover a secret that cut split) and SEC-3 (an externally killed helper orphans git's process group; this
 // wave's lever is the runner budget invariant that `docs-budget.test.ts` holds, so the agent never kills ccd first).
 import { createHash } from 'node:crypto';
-import { CCD_ARGV, DOCS_SECTIONS_CAP, capSupported, ccdCan } from '../ccdargv.js';
+import { CCD_ARGV, DOCS_SECTIONS_CAP, capSupported, ccdCan, type DocsFolderRead } from '../ccdargv.js';
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
-  DOCS_CCD_FAILURES, docsFailureBlob, docsRefText, redactDocsText,
+  DOCS_CCD_FAILURES, docsFailureBlob, docsRefText, isDocsMtimeNs, redactDocsText,
   type DocFilePin, type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
   type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
-  DOCS_RANGE_MAX_BYTES, docsRangePinText, type DocsRangeFrameOk, type DocsRangePin, type DocsRangePreparedOk,
+  DOCS_RANGE_MAX_BYTES, docsRangePinText, type DocsRangeFrame, type DocsRangeFrameOk, type DocsRangePin, type DocsRangePrepared,
+  type DocsRangePreparedOk,
+  type DocsFolderAddOk, type DocsFolderFrameOk, type DocsFolderListOk, type DocsFolderPreparedOk, type DocsFolderRemoveOk,
+  type DocsFolderShowOk, type DocsFolderTreeOk,
 } from '../../../shared/docs.js';
 import {
-  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, docsRangeAnswerShape, rangeFrameJob, type DocsJob,
+  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, docsFolderAnswerShape, docsRangeAnswerShape, rangeFrameJob,
+  type DocsFolderFileAsk, type DocsFolderRangeTarget, type DocsJob,
   type DocsRangeFrameAsk,
   type DocsRangeTarget,
 } from './policy.js';
 import type {
-  DocsFetchRun, DocsFetcher, DocsLogRead, DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowAsk, DocsShowRead,
+  DocsFetchRun, DocsFetcher, DocsFolderAddRun, DocsFolderFrameRead, DocsFolderId, DocsFolderListRead, DocsFolderPrepareRead,
+  DocsFolderReader, DocsFolderRegistry, DocsFolderRemoveRun, DocsFolderShowRead, DocsFolderTreeRead, DocsLogRead,
+  DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowAsk, DocsShowRead,
 } from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
@@ -274,7 +280,7 @@ function ccdFailureBody(line: Readonly<Record<string, unknown>>): DocsFailureBod
 
 /** The content bytes a show answer encodes, decoded once: `text` as UTF-8, or `b64` as base64. An answer whose
  *  encoding names no field it carries is `malformed-answer {why:'schema'}`. */
-function decodeShowBytes(ans: DocsShowOk): { ok: true; bytes: Uint8Array } | DocsFailureBody {
+function decodeShowBytes(ans: Pick<DocsShowOk, 'encoding' | 'text' | 'b64'>): { ok: true; bytes: Uint8Array } | DocsFailureBody {
   if (ans.encoding === 'utf8' && typeof ans.text === 'string') return { ok: true, bytes: Buffer.from(ans.text, 'utf8') };
   if (ans.encoding === 'base64' && typeof ans.b64 === 'string') return { ok: true, bytes: Buffer.from(ans.b64, 'base64') };
   return fail('malformed-answer', { why: 'schema' });
@@ -283,6 +289,23 @@ function decodeShowBytes(ans: DocsShowOk): { ok: true; bytes: Uint8Array } | Doc
 /** Check 8's word: `malformed-answer` with the named `why`. */
 function showFault(why: 'integrity' | 'pin' | 'schema'): DocsFailureBody {
   return fail('malformed-answer', { why });
+}
+
+/**
+ * The integrity half of check 8, shared by a project's show and a folder's (one reader, never two copies): the bytes
+ * decoded once (`decodeShowBytes`: an encoding naming no field it carries is `{why:'schema'}`), then `{why:'integrity'}`
+ * for a base64 answer that is not canonical (its bytes re-encode to exactly `b64`), bytes that are not `size` long, or
+ * bytes whose sha256 is not `sha256`.
+ */
+function verifiedShowBytes(ans: Pick<DocsShowOk, 'encoding' | 'text' | 'b64' | 'size' | 'sha256'>):
+  { ok: true; bytes: Uint8Array } | DocsFailureBody {
+  const decoded = decodeShowBytes(ans);
+  if (!decoded.ok) return decoded;
+  const bytes = decoded.bytes;
+  if (ans.encoding === 'base64' && Buffer.from(bytes).toString('base64') !== ans.b64) return showFault('integrity');
+  if (bytes.length !== ans.size) return showFault('integrity');
+  if (createHash('sha256').update(bytes).digest('hex') !== ans.sha256) return showFault('integrity');
+  return { ok: true, bytes };
 }
 
 /**
@@ -296,12 +319,9 @@ function showFault(why: 'integrity' | 'pin' | 'schema'): DocsFailureBody {
  * - A committed answer's `onRef` is one of `ON_REF_WORDS`: absent or any other value is `{why:'schema'}`.
  */
 function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; bytes: Uint8Array } | DocsFailureBody {
-  const decoded = decodeShowBytes(ans);
-  if (!decoded.ok) return decoded;
-  const bytes = decoded.bytes;
-  if (ans.encoding === 'base64' && Buffer.from(bytes).toString('base64') !== ans.b64) return showFault('integrity');
-  if (bytes.length !== ans.size) return showFault('integrity');
-  if (createHash('sha256').update(bytes).digest('hex') !== ans.sha256) return showFault('integrity');
+  const verified = verifiedShowBytes(ans);
+  if (!verified.ok) return verified;
+  const bytes = verified.bytes;
   if (ans.source !== pin.kind || ans.section !== pin.section || ans.path !== pin.path) return showFault('pin');
   if (pin.kind === 'draft') {
     if (ans.branch !== pin.branch || ans.head !== pin.head || ans.fp !== pin.fp) return showFault('pin');
@@ -333,7 +353,7 @@ function rangeShapeFault(step: 'prepare' | 'frame', ans: unknown): DocsFailureBo
  * range (`{why:'integrity'}`). The browser checks the same digest again on its side; this is the server's own, so a
  * broken ccd is named here and not by every client.
  */
-function checkRangeFrame(ans: DocsRangeFrameOk, ask: DocsRangeFrameAsk): DocsRangeFrameOk | DocsFailureBody {
+function checkRangeFrame<T extends DocsRangeFrame>(ans: T, ask: DocsRangeFrameAsk): T | DocsFailureBody {
   if (rangeShapeFault('frame', ans) !== null) return ans;
   if (ans.snapshot !== ask.snapshot || ans.offset !== ask.offset) return showFault('pin');
   const bytes = Buffer.from(ans.bytesB64, 'base64');
@@ -349,7 +369,7 @@ function checkRangeFrame(ans: DocsRangeFrameOk, ask: DocsRangeFrameAsk): DocsRan
  * `blob` pin names neither (a git blob id is not the file's sha256, and the size is not in it). Any other answer is
  * `malformed-answer {why:'pin'}`, the word a show answer that is not the pin it was asked for gets.
  */
-function checkRangePrepared(ans: DocsRangePreparedOk, pin: DocsRangePin): DocsRangePreparedOk | DocsFailureBody {
+function checkRangePrepared<T extends DocsRangePrepared>(ans: T, pin: DocsRangePin): T | DocsFailureBody {
   if (rangeShapeFault('prepare', ans) !== null) return ans;
   if (pin.kind === 'fp' && ans.digest !== pin.sha) return showFault('pin');
   if (pin.kind === 'stat' && ans.size !== pin.size) return showFault('pin');
@@ -446,5 +466,137 @@ export function ccdDocsFetcher(deps: CcdDocsDeps): DocsFetcher {
   return {
     fetch: async (src, branch): Promise<DocsFetchRun> => settle(await fetchDocs(deps, src.project, branch), 'docs-fetch',
       LISTING_JOB, (line) => ({ ok: true, answer: line as unknown as DocsFetchOk })),
+  };
+}
+
+// ===== Outside folders (X2 P2.3; spec 4.1 and 7) =====
+// The same classification (`settle`: checks 1-9, then the one redactor) over the folder verbs. THE GATE comes first in each of
+// the two functions that build a folder argv, and `ccdCan` names the call's own row: a fleet without `DOCS_FOLDERS_CAP`, or one
+// that measured nothing, refuses before any exec, `unsupported` or `caps-unknown`. The server never sends a folder's path to
+// read (`docsFolderRead` takes a label), and no ok answer but `--list`'s carries one.
+
+/** A folder read call, one arm per argv shape `readFolder` builds. */
+type DocsFolderReadCall =
+  | { verb: 'docs-folder' }
+  | { verb: 'docs-folder-read'; label: string; read: DocsFolderRead };
+
+/** A folder registry write call: Add names the label and the path, Remove the label alone. */
+type DocsFolderWriteCall = { mode: 'add'; label: string; path: string } | { mode: 'remove'; label: string };
+
+/** The gated folder read executor: the gate (two answers, both decided before any exec), then the argv. */
+async function readFolder(deps: CcdDocsDeps, call: DocsFolderReadCall): Promise<DocsRan> {
+  const verbs = deps.fleetState?.ccdVerbs ?? null;
+  if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
+  if (!ccdCan(deps.fleetState, call.verb === 'docs-folder' ? 'docsFolderList' : 'docsFolderRead')) return fail('unsupported');
+  return {
+    ok: true,
+    res: await deps.runCcd(call.verb === 'docs-folder' ? CCD_ARGV.docsFolderList() : CCD_ARGV.docsFolderRead(call.label, call.read)),
+  };
+}
+
+/** The gated folder registry executor: the same two gate lines, then the argv of the write. */
+async function writeFolder(deps: CcdDocsDeps, call: DocsFolderWriteCall): Promise<DocsRan> {
+  const verbs = deps.fleetState?.ccdVerbs ?? null;
+  if (verbs === null || !verbs.includes('caps')) return fail('caps-unknown');
+  if (!ccdCan(deps.fleetState, call.mode === 'add' ? 'docsFolderAdd' : 'docsFolderRemove')) return fail('unsupported');
+  return {
+    ok: true,
+    res: await deps.runCcd(call.mode === 'add' ? CCD_ARGV.docsFolderAdd(call.label, call.path) : CCD_ARGV.docsFolderRemove(call.label)),
+  };
+}
+
+/** A folder answer that echoes another label than the one asked is not the answer to the ask: `malformed-answer
+ *  {why:'pin'}`, the word a show answer that is not the pin it was asked for gets. */
+function folderEcho(answer: { label: string }, asked: string): DocsFailureBody | null {
+  return answer.label === asked ? null : showFault('pin');
+}
+
+/**
+ * A folder show held to its ask (the folder analogue of check 8), in this order, the first fault winning:
+ * - the bytes and their integrity, `verifiedShowBytes`'s (the one reader a project's show shares);
+ * - a modified time outside `isDocsMtimeNs` is `{why:'schema'}`;
+ * - pins, `{why:'pin'}`: `source` is `folder`, the answer echoes the label, section and path asked, and `fp` equals `sha256`
+ *   and the fingerprint asked (a folder show reads a leaf only while its bytes hash to it).
+ */
+function checkFolderShow(ans: DocsFolderShowOk, id: DocsFolderId, ask: DocsFolderFileAsk):
+  { ok: true; bytes: Uint8Array } | DocsFailureBody {
+  const verified = verifiedShowBytes(ans);
+  if (!verified.ok) return verified;
+  if (typeof ans.mtimeNs !== 'string' || !isDocsMtimeNs(ans.mtimeNs)) return showFault('schema');
+  const bytes = verified.bytes;
+  if (ans.source !== 'folder' || ans.label !== id.label || ans.section !== ask.section || ans.path !== ask.path) return showFault('pin');
+  return ans.fp === ans.sha256 && ans.fp === ask.fp ? { ok: true, bytes } : showFault('pin');
+}
+
+/** The outside-folder reads over ccd. Bound to the node whose `CcdRunner` it holds. A listing answer is held to
+ *  `LISTING_JOB`, a show answer to its own `plan.job`, a prepare to `RANGE_PREPARE_JOB` and a frame to its length's. Each ok
+ *  answer is held to its shape (L1's `docsFolderAnswerShape`) or its ask before it leaves. */
+export function ccdDocsFolderReader(deps: CcdDocsDeps): DocsFolderReader {
+  return {
+    list: async (): Promise<DocsFolderListRead> => settle(await readFolder(deps, { verb: 'docs-folder' }), 'docs-folder',
+      LISTING_JOB, (line) => {
+        const shape = docsFolderAnswerShape('list', line);
+        return shape.ok ? { ok: true, answer: line as unknown as DocsFolderListOk } : shape;
+      }),
+    tree: async (src): Promise<DocsFolderTreeRead> => settle(
+      await readFolder(deps, { verb: 'docs-folder-read', label: src.label, read: { op: 'tree' } }), 'docs-folder-read',
+      LISTING_JOB, (line) => {
+        const shape = docsFolderAnswerShape('tree', line);
+        if (!shape.ok) return shape;
+        const answer = line as unknown as DocsFolderTreeOk;
+        return folderEcho(answer, src.label) ?? { ok: true, answer };
+      }),
+    show: async (src, ask, plan): Promise<DocsFolderShowRead> => settle(
+      await readFolder(deps, {
+        verb: 'docs-folder-read', label: src.label,
+        read: { op: 'show', section: ask.section, path: ask.path, fingerprint: ask.fp, maxBytes: plan.maxBytes },
+      }), 'docs-folder-read', plan.job, (line) => {
+        const answer = line as unknown as DocsFolderShowOk;
+        const shown = checkFolderShow(answer, src, ask);
+        return shown.ok ? { ok: true, answer, bytes: shown.bytes } : shown;
+      }),
+    // Both calls name the same verb through `readFolder`'s one gate, so each runs the `docsFolderRead` row's check.
+    range: {
+      prepare: async (src, target): Promise<DocsFolderPrepareRead> => settle(
+        await readFolder(deps, {
+          verb: 'docs-folder-read', label: src.label,
+          read: { op: 'prepare', section: target.section, path: target.path, pin: docsRangePinText(target.pin) },
+        }), 'docs-folder-read', RANGE_PREPARE_JOB, (line) => {
+          const checked = checkRangePrepared(line as unknown as DocsFolderPreparedOk, target.pin);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
+      frame: async (src, target: DocsFolderRangeTarget, frame): Promise<DocsFolderFrameRead> => settle(
+        await readFolder(deps, {
+          verb: 'docs-folder-read', label: src.label,
+          read: {
+            op: 'range', section: target.section, path: target.path, pin: docsRangePinText(target.pin),
+            snapshot: frame.snapshot, offset: frame.offset, length: frame.length,
+          },
+        }), 'docs-folder-read', rangeFrameJob(frame.length), (line) => {
+          const checked = checkRangeFrame(line as unknown as DocsFolderFrameOk, frame);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
+    },
+  };
+}
+
+/** The outside-folder registry over ccd: the two writes, built apart from the reads (as the fetcher is). Each answer is a
+ *  few hundred bytes, held to `LISTING_JOB`, and must echo the label asked. Neither carries a path. */
+export function ccdDocsFolderRegistry(deps: CcdDocsDeps): DocsFolderRegistry {
+  return {
+    add: async (_at, label, path): Promise<DocsFolderAddRun> => settle(await writeFolder(deps, { mode: 'add', label, path }),
+      'docs-folder', LISTING_JOB, (line) => {
+        const shape = docsFolderAnswerShape('add', line);
+        if (!shape.ok) return shape;
+        const answer = line as unknown as DocsFolderAddOk;
+        return folderEcho(answer, label) ?? { ok: true, answer };
+      }),
+    remove: async (_at, label): Promise<DocsFolderRemoveRun> => settle(await writeFolder(deps, { mode: 'remove', label }),
+      'docs-folder', LISTING_JOB, (line) => {
+        const shape = docsFolderAnswerShape('remove', line);
+        if (!shape.ok) return shape;
+        const answer = line as unknown as DocsFolderRemoveOk;
+        return folderEcho(answer, label) ?? { ok: true, answer };
+      }),
   };
 }

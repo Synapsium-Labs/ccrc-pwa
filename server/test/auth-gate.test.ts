@@ -397,7 +397,11 @@ describe('the scanner is looking at something', () => {
     // first.
     // 5 since the history route (docs W5b-1, rich-docs spec G4): `GET /api/docs/:project/history`, the same class.
     // 6 since the range route (X2 P1.3): `GET /api/docs/:project/range`, the same class.
-    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 6').toBe(6);
+    // 13 since the outside-folder doors (X2 P2.3, spec 2026-11-18 §7): `GET /api/docs-folders`, `GET /api/docs-folders/paths`,
+    // `POST /api/docs-folders`, `DELETE /api/docs-folders/:label` and `GET /api/docs-folders/:label/{tree,file,range}`, the
+    // same class on the docs plugin's own instance, so with no marker header they answer 403 `foreign-request` too. Past the
+    // marker, every read and the add refuse `auth-off` while sign-in is dark; the add takes the account gate's step-up.
+    expect(scanRoutes('docs/routes.ts').length, 'auth-gate: docs/routes.ts registers 13').toBe(13);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -811,7 +815,9 @@ describe('the scanner is looking at something', () => {
     // 316 since programme lifecycle W2's six in `coord/ledgersRoutes.ts` (three operator doors, session-gated and NOT EXEMPT; the
     // end proposal and the two session-or-token reads IN EXEMPT): the HTTP half 307 -> 313, the gated count 194 -> 197 (313 - 116),
     // the exempt-HTTP count 113 -> 116.
-    expect(ROUTES.length).toBe(316);
+    // 323 with the seven outside-folder doors (X2 P2.3), in `docs/routes.ts`, session-gated and NOT EXEMPT, no box token: the
+    // HTTP half 313 -> 320, the gated count 197 -> 204, the exempt-HTTP count stays 116.
+    expect(ROUTES.length).toBe(323);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1002,7 +1008,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 316 scanned + the static wildcard when the bundle is built.
+    // 323 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1815,7 +1821,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 313 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 320 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1879,7 +1885,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 313 HTTP routes, not the 116 exempt.
+          //    is not itself flag-aware — the assertion that covers all 320 HTTP routes, not the 116 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

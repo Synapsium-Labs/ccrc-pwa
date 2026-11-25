@@ -12,13 +12,18 @@
 // order on every read: the cache, then single-flight, then the read lane (refinement (k)). It quotes no failure word,
 // and every failure body it receives is sent as it came, never rebuilt. A log line is `console.warn('ccrc-server:
 // ...')`: the server runs `Fastify({ logger: false })`, so the request logger is a silent no-op.
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type {
-  DocPin, DocsFailureBody, DocsHistoryResponse, DocsProjectsResponse, DocsRangeFrameResponse, DocsRangePrepareResponse,
-  DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
+  DocPin, DocsFailureBody, DocsFolderAddResponse, DocsFolderRemoveResponse, DocsFolderTreeResponse, DocsFoldersLabelsResponse,
+  DocsFoldersPathsResponse, DocsHistoryResponse, DocsProjectsResponse, DocsRangeFrameResponse,
+  DocsRangePrepareResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
 } from '../../../shared/docs.js';
+import type { AccountGate } from '../accounts/gate.js';
+import { DOCS_FOLDERS_CAP } from '../ccdargv.js';
 import { docsCaches, type DocsCaches } from './cache.js';
-import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from './ccdsource.js';
+import {
+  ccdDocsFetcher, ccdDocsFolderReader, ccdDocsFolderRegistry, ccdDocsReader, type CcdDocsDeps,
+} from './ccdsource.js';
 import { sendDocsFailure } from './hooks.js';
 import {
   docsFetchLane, docsFlights, docsGenerations, docsReadLane, type DocsFetchLane, type DocsFlights, type DocsGenerations,
@@ -26,15 +31,20 @@ import {
 } from './lane.js';
 import {
   DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
-  docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsLogFlightKey, docsNodeKey,
+  docsCacheVerdict, docsFileReply, docsFolderFailureBody, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
+  docsFolderListFlightKey, docsFolderPathRows, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeBody,
+  docsFolderTreeFlightKey, docsIndexCacheable,
+  docsIndexFlightKey, docsKnownSize, docsLogDue, docsLogFlightKey, docsNodeKey,
   docsProjectKey, docsRangeAnswerShape, docsRangeFlightKey, docsRangePlan, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
-  docsShowPlan, docsStoredShow, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
-  parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
-  type DocsRefreshRequest,
+  docsShowPlan, docsStoredShow, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, folderGateRefusal, folderReadGate,
+  folderRemoveGate, parseDocsApiQuery, parseDocsFolderAddBody, parseDocsFolderLabel, parseDocsProjectParam,
+  parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsFolderFileReply, type DocsJob,
+  type DocsListedFile, type DocsRangeFrameAsk, type DocsRefreshHalf, type DocsRefreshRequest, type DocsSignIn,
 } from './policy.js';
 import type {
-  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsLogRead, DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowRead,
-  DocsSourceId, DocsTreeRead,
+  DocsFetchRun, DocsFetcher, DocsFolderFrameRead, DocsFolderId, DocsFolderListRead, DocsFolderPrepareRead, DocsFolderReader,
+  DocsFolderRegistry, DocsFolderShowRead, DocsFolderTreeRead, DocsIndexRead, DocsLogRead, DocsRangeFrameRead,
+  DocsRangePrepareRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
 } from './ports.js';
 
 /** One value per fleet node (section 3.12). `primary` is the node every request reads: the API carries no node key,
@@ -57,6 +67,9 @@ export interface DocsComposition {
   readers: DocsNodes<DocsReader>;
   fetchers: DocsNodes<DocsFetcher>;
   lanes: DocsNodes<DocsNodeLanes>;
+  /** The outside-folder reads (X2 P2.3), and, held apart as the fetchers are, the registry's two writes. */
+  folderReaders: DocsNodes<DocsFolderReader>;
+  folderRegistries: DocsNodes<DocsFolderRegistry>;
 }
 
 /** `nowMs`: the clock (default `Date.now`). `readLane`: builds the read lane (default `docsReadLane`); only the
@@ -81,6 +94,8 @@ export function composeDocs(source: CcdDocsDeps, opts: DocsComposeOptions = {}):
   return {
     readers: primaryOnly(ccdDocsReader(source)),
     fetchers: primaryOnly(ccdDocsFetcher(source)),
+    folderReaders: primaryOnly(ccdDocsFolderReader(source)),
+    folderRegistries: primaryOnly(ccdDocsFolderRegistry(source)),
     lanes: primaryOnly<DocsNodeLanes>({
       read: (opts.readLane ?? docsReadLane)(),
       fetch: docsFetchLane(),
@@ -210,7 +225,7 @@ function believeLog(got: DocsLogRead): DocsLogRead {
 
 /** An ok range prepare the adapter passed, believed only after `docsRangeAnswerShape` (X2 P1). A failure is handed back as
  *  it came. Nothing is cached: a snapshot lives in ccd's own cache, and the route answers `no-store` like every JSON. */
-function believeRangePrepare(got: DocsRangePrepareRead): DocsRangePrepareRead {
+function believeRangePrepare<T extends DocsRangePrepareRead | DocsFolderPrepareRead>(got: T): T | DocsFailureBody {
   if (!got.ok) return got;
   const shape = docsRangeAnswerShape('prepare', got.answer);
   if (!shape.ok) {
@@ -221,7 +236,7 @@ function believeRangePrepare(got: DocsRangePrepareRead): DocsRangePrepareRead {
 }
 
 /** An ok range frame the adapter passed, believed only after `docsRangeAnswerShape`. A failure is handed back as it came. */
-function believeRangeFrame(got: DocsRangeFrameRead): DocsRangeFrameRead {
+function believeRangeFrame<T extends DocsRangeFrameRead | DocsFolderFrameRead>(got: T): T | DocsFailureBody {
   if (!got.ok) return got;
   const shape = docsRangeAnswerShape('frame', got.answer);
   if (!shape.ok) {
@@ -229,6 +244,38 @@ function believeRangeFrame(got: DocsRangeFrameRead): DocsRangeFrameRead {
     return shape;
   }
   return got;
+}
+
+/** The two adapter calls of one range read: a project's or a folder's prepare, and its frame of an ask. */
+interface RangeCalls {
+  prepare: () => Promise<DocsRangePrepareRead | DocsFolderPrepareRead>;
+  frame: (ask: DocsRangeFrameAsk) => Promise<DocsRangeFrameRead | DocsFolderFrameRead>;
+}
+
+/**
+ * One range read (X2 P1, spec 4.3; the folder door shares it, P2.3): join the flight under `key`, book the read lane with
+ * the plan's `job`, call the adapter's prepare (`frame` is null) or its frame, believe the answer only after
+ * `docsRangeAnswerShape`, and send exactly the fields the PWA reads. Nothing is cached: a snapshot is ccd's own, and the
+ * answer is `no-store` like every JSON. `fail` sends a refusal: a project's as it came, a folder's through L1's filter.
+ */
+async function serveRange(at: DocsNodeLanes, reply: FastifyReply, key: string, job: DocsJob, frame: DocsRangeFrameAsk | null,
+  calls: RangeCalls, fail: (reply: FastifyReply, body: DocsFailureBody) => FastifyReply): Promise<FastifyReply> {
+  if (frame === null) {
+    const run = await at.flights.join(key, clientGone(reply),
+      (flight) => at.read.run(job, flight, async () => believeRangePrepare(await calls.prepare())));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return fail(reply, run.value);
+    const { snapshot, size, digest } = run.value.answer;
+    const prepared: DocsRangePrepareResponse = { ok: true, prepared: { snapshot, size, digest } };
+    return reply.send(prepared);
+  }
+  const run = await at.flights.join(key, clientGone(reply),
+    (flight) => at.read.run(job, flight, async () => believeRangeFrame(await calls.frame(frame))));
+  if (run.kind !== 'ran') return notRan(reply, run);
+  if (!run.value.ok) return fail(reply, run.value);
+  const { snapshot, offset, bytesB64, digest, total } = run.value.answer;
+  const framed: DocsRangeFrameResponse = { ok: true, frame: { snapshot, offset, bytesB64, digest, total } };
+  return reply.send(framed);
 }
 
 /**
@@ -250,7 +297,7 @@ function treeResponse(tree: DocsTreeOk): DocsTreeResponse {
 
 /** Send L1's file representation: a refusal as its failure body, JSON as it is (the response policy makes it
  *  `no-store`), raster bytes with L1's MIME type and `Cache-Control`, exactly those bytes. */
-function sendFile(reply: FastifyReply, out: DocsFileReply): FastifyReply {
+function sendFile(reply: FastifyReply, out: DocsFileReply | DocsFolderFileReply): FastifyReply {
   if (out.kind === 'refuse') return sendDocsFailure(reply, out.body);
   if (out.kind === 'json') return reply.send(out.body);
   return reply.code(200).type(out.mime).header('cache-control', out.cacheControl)
@@ -335,23 +382,10 @@ export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<
     if (!plan.ok) return sendDocsFailure(reply, plan);
     const { target, frame, job } = plan;
     const src: DocsSourceId = { node, project: p.project };
-    const key = docsRangeFlightKey(node, src.project, target, frame);
-    if (frame === null) {
-      const run = await at.flights.join(key, clientGone(reply),
-        (flight) => at.read.run(job, flight, async () => believeRangePrepare(await reader.range.prepare(src, target))));
-      if (run.kind !== 'ran') return notRan(reply, run);
-      if (!run.value.ok) return sendDocsFailure(reply, run.value);
-      const { snapshot, size, digest } = run.value.answer;
-      const prepared: DocsRangePrepareResponse = { ok: true, prepared: { snapshot, size, digest } };
-      return reply.send(prepared);
-    }
-    const run = await at.flights.join(key, clientGone(reply),
-      (flight) => at.read.run(job, flight, async () => believeRangeFrame(await reader.range.frame(src, target, frame))));
-    if (run.kind !== 'ran') return notRan(reply, run);
-    if (!run.value.ok) return sendDocsFailure(reply, run.value);
-    const { snapshot, offset, bytesB64, digest, total } = run.value.answer;
-    const framed: DocsRangeFrameResponse = { ok: true, frame: { snapshot, offset, bytesB64, digest, total } };
-    return reply.send(framed);
+    return serveRange(at, reply, docsRangeFlightKey(node, src.project, target, frame), job, frame, {
+      prepare: () => reader.range.prepare(src, target),
+      frame: (ask) => reader.range.frame(src, target, ask),
+    }, sendDocsFailure);
   });
 
   app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {
@@ -495,5 +529,231 @@ export function registerDocsRefreshRoute(app: FastifyInstance, readers: DocsNode
     const answer = docsRefreshAnswer(fetch, treeHalf(tree));
     if (answer.kind === 'refuse') return sendDocsFailure(reply, answer.body);
     return reply.send(answer.body);
+  });
+}
+
+// ===== X2 P2.3: the outside-folder doors (spec 4.1 and 7) =====
+
+/** What the folder READ doors need of the composition root: the sign-in state (`dark` or `armed`, read per request so a test
+ *  or a re-arm is seen) and whether a request carries a session. Readers only: this file imports no coordination module and
+ *  measures nothing itself. */
+export interface DocsFolderReadDeps {
+  signIn: () => DocsSignIn;
+  hasSession: (req: FastifyRequest) => boolean;
+}
+
+/** What the registry doors (Add and Remove) need: the same two, and the account gate the Add door asks, with its step-up. */
+export interface DocsFolderRegistryDeps extends DocsFolderReadDeps {
+  gate: AccountGate;
+}
+
+/** A refusal as a folder door sends it: L1's `docsFolderFailureBody` over the body, so only the word and the structured
+ *  fields leave, and no free text (`detail`, `stderrHead`, `cause`, ...) that could carry a path. */
+function sendFolderFailure(reply: FastifyReply, body: DocsFailureBody): FastifyReply {
+  return sendDocsFailure(reply, docsFolderFailureBody(body));
+}
+
+/** The `:label` parameter, read by L1's parser alone. */
+type FolderParams = Readonly<{ label?: unknown }>;
+type FolderFileRequest = Extract<DocsApiRequest, { route: 'folder-file' }>;
+type FolderRangeRequest = Extract<DocsApiRequest, { route: 'folder-range' }>;
+
+/** An ok folder tree is already held to its shape and its label by the adapter; nothing more is believed here. A folder show
+ *  the adapter passed, believed only after `docsAnswerShape` and `docsShowBound`, as a project show is. Log lines name the
+ *  label only, never a path. A failure is handed back as it came. */
+function believeFolderShow(label: string, job: DocsJob, got: DocsFolderShowRead): DocsFolderShowRead {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-folder-read', got.answer);
+  if (!shape.ok) {
+    console.warn(`ccrc-server: docs folder ${label} show answer failed its shape check`);
+    return shape;
+  }
+  const bound = docsShowBound(job, got.bytes);
+  if (!bound.ok) {
+    console.warn(`ccrc-server: docs folder ${label} show answer over the bound the server asked for`);
+    return bound;
+  }
+  return got;
+}
+
+/**
+ * The five outside-folder READ doors (X2 P2.3; spec 4.1 and 7), on the docs plugin's own instance, so the marker header check
+ * and the response policy apply. It takes the readers and the lanes and NO registry: no read handler has a write in scope
+ * (the type wall `docs-folder-routes.test.ts` pins, as row 49 pins `registerDocsReadRoutes`). Like every docs handler this
+ * one decides nothing: the label and the queries and the range plan are L1's, and the sign-in verdict is L1's
+ * `folderReadGate`, asked FIRST on every door (the two listings and the three folder reads), so a dark box or a request
+ * without a session is refused before any exec. NO answer, error body or log line carries a folder's absolute path but
+ * `GET /api/docs-folders/paths`: bodies are built from known fields (L1), refusals carry no free text, and log lines name
+ * the label only.
+ */
+export function registerDocsFolderReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsFolderReader>,
+  lanes: DocsNodes<DocsNodeLanes>, deps: DocsFolderReadDeps): void {
+  const node = readers.primary;
+  const folders = forNode(readers, node, 'folder reader');
+  const at = forNode(lanes, node, 'lanes');
+  const registryKey = docsFolderKey(node, '');
+
+  /** The folder read gate, asked first: `null` lets the door go on, otherwise the refusal is already sent. */
+  const refusedRead = (req: FastifyRequest, reply: FastifyReply): FastifyReply | null => {
+    const verdict = folderReadGate(deps.signIn(), deps.hasSession(req));
+    if (verdict === 'allow') return null;
+    return sendFolderFailure(reply, folderGateRefusal(verdict));
+  };
+
+  /** One listing of the registry, through its own flight and the read lane. */
+  const listed = async (reply: FastifyReply): Promise<Exclude<DocsLaneRun<DocsFolderListRead>, { kind: 'abandoned' }> | null> => {
+    const gen = at.gens.current(registryKey);
+    const run = await at.flights.join(docsFolderListFlightKey(node, gen), clientGone(reply),
+      (flight) => at.read.run(LISTING_JOB, flight, () => folders.list({ node })));
+    if (run.kind === 'abandoned') {
+      abandon(reply);
+      return null;
+    }
+    return run;
+  };
+
+  app.get('/api/docs-folders', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedRead(req, reply);
+    if (refused !== null) return refused;
+    const q = parseDocsApiQuery('folder-list', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const run = await listed(reply);
+    if (run === null) return reply;
+    if (run.kind === 'busy') return sendFolderFailure(reply, run.body);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    const body: DocsFoldersLabelsResponse = { ok: true, folders: docsFolderLabelRows(run.value.answer.folders) };
+    return reply.send(body);
+  });
+
+  // The ONE door whose answer carries an absolute path: Settings' Docs folders section, which names it by `docsApi`.
+  app.get('/api/docs-folders/paths', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedRead(req, reply);
+    if (refused !== null) return refused;
+    const q = parseDocsApiQuery('folder-list', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const run = await listed(reply);
+    if (run === null) return reply;
+    if (run.kind === 'busy') return sendFolderFailure(reply, run.body);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    const body: DocsFoldersPathsResponse = { ok: true, folders: docsFolderPathRows(run.value.answer.folders) };
+    return reply.send(body);
+  });
+
+  app.get('/api/docs-folders/:label/tree', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedRead(req, reply);
+    if (refused !== null) return refused;
+    const l = parseDocsFolderLabel((req.params as FolderParams).label);
+    if (!l.ok) return sendFolderFailure(reply, l);
+    const q = parseDocsApiQuery('folder-tree', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const id: DocsFolderId = { node, label: l.label };
+    const gen = at.gens.current(docsFolderKey(node, id.label));
+    const run = await at.flights.join(docsFolderTreeFlightKey(node, id.label, gen), clientGone(reply),
+      (flight) => at.read.run(LISTING_JOB, flight, (): Promise<DocsFolderTreeRead> => folders.tree(id)));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    const body: DocsFolderTreeResponse = { ok: true, tree: docsFolderTreeBody(run.value.answer) };
+    return reply.send(body);
+  });
+
+  app.get('/api/docs-folders/:label/file', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedRead(req, reply);
+    if (refused !== null) return refused;
+    const l = parseDocsFolderLabel((req.params as FolderParams).label);
+    if (!l.ok) return sendFolderFailure(reply, l);
+    const q = parseDocsApiQuery('folder-file', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const { ask } = q.req as FolderFileRequest;
+    const id: DocsFolderId = { node, label: l.label };
+    const plan = docsShowPlan(ask.path, undefined);
+    const gen = at.gens.current(docsFolderKey(node, id.label));
+    const run = await at.flights.join(docsFolderShowFlightKey(node, id.label, ask, plan.maxBytes, gen), clientGone(reply),
+      (flight) => at.read.run(plan.job, flight,
+        async () => believeFolderShow(id.label, plan.job, await folders.show(id, ask, { maxBytes: plan.maxBytes, job: plan.job }))));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    return sendFile(reply, docsFolderFileReply(run.value.answer, run.value.bytes));
+  });
+
+  app.get('/api/docs-folders/:label/range', { exposeHeadRoute: false }, async (req, reply) => {
+    const refused = refusedRead(req, reply);
+    if (refused !== null) return refused;
+    const l = parseDocsFolderLabel((req.params as FolderParams).label);
+    if (!l.ok) return sendFolderFailure(reply, l);
+    const q = parseDocsApiQuery('folder-range', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const plan = docsFolderRangePlan((q.req as FolderRangeRequest).query);
+    if (!plan.ok) return sendFolderFailure(reply, plan);
+    const { target, frame, job } = plan;
+    const id: DocsFolderId = { node, label: l.label };
+    const gen = at.gens.current(docsFolderKey(node, id.label));
+    return serveRange(at, reply, docsFolderRangeFlightKey(node, id.label, target, frame, gen), job, frame, {
+      prepare: () => folders.range.prepare(id, target),
+      frame: (ask) => folders.range.frame(id, target, ask),
+    }, sendFolderFailure);
+  });
+}
+
+/**
+ * The folder REGISTRY doors, Add and Remove (X2 P2.3; spec 4.1 and 7), registered apart from the reads: this function holds the
+ * registry and no reader, the read one holds the readers and no registry. Both run in the FETCH lane, keyed by the folder's
+ * generation key (`docsFolderKey`): one write per label at a time, two at once across labels, eight waiting, the wait
+ * bounded, as the refresh door's fetch is bounded (the one existing lane that bounds a ccd write; a lane of its own would be
+ * a second mechanism for the same job). Each write bumps its label's generation and the registry's after it settles,
+ * whatever the outcome (ok, refused, or a throw), so a read flight begun before a write is never joined by a read begun
+ * after it.
+ * - Add: a widening. The account gate first (dark, an insecure origin, no session, no cap, and the step-up, in its own
+ *   order), then the body through L1, then the verb. A refusal body never echoes the path.
+ * - Remove: a narrowing, so it works while sign-in is dark and asks no account gate; L1's `folderRemoveGate` still holds an
+ *   armed box to a session. The label check applies.
+ */
+export function registerDocsFolderRegistryRoutes(app: FastifyInstance, registries: DocsNodes<DocsFolderRegistry>,
+  lanes: DocsNodes<DocsNodeLanes>, deps: DocsFolderRegistryDeps): void {
+  const node = registries.primary;
+  const registry = forNode(registries, node, 'folder registry');
+  const at = forNode(lanes, node, 'lanes');
+  const registryKey = docsFolderKey(node, '');
+
+  /** One write of `label`'s registry entry in the fetch lane, its generations bumped when it settles. */
+  const written = <T>(reply: FastifyReply, label: string, write: () => Promise<T>): Promise<DocsLaneRun<T>> => {
+    const bump = (): void => {
+      at.gens.bump(docsFolderKey(node, label));
+      at.gens.bump(registryKey);
+    };
+    // Only the bump AFTER the write matters: a read begun while it runs may share an older flight (the two are concurrent),
+    // and every read begun after it settles must not.
+    return at.fetch.run(docsFolderKey(node, label), clientGone(reply), async () => {
+      try {
+        return await write();
+      } finally {
+        bump();
+      }
+    });
+  };
+
+  app.post('/api/docs-folders', async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: DOCS_FOLDERS_CAP, stepUp: true }).pass) return reply;
+    const body = parseDocsFolderAddBody(req.body);
+    if (!body.ok) return sendFolderFailure(reply, body);
+    const { label, path } = body.req;
+    const run = await written(reply, label, () => registry.add({ node }, label, path));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    const sent: DocsFolderAddResponse = { ok: true, label: run.value.answer.label };
+    return reply.send(sent);
+  });
+
+  app.delete('/api/docs-folders/:label', async (req, reply) => {
+    const gate = folderRemoveGate(deps.signIn(), deps.hasSession(req));
+    if (gate !== 'allow') return sendFolderFailure(reply, folderGateRefusal(gate));
+    const l = parseDocsFolderLabel((req.params as FolderParams).label);
+    if (!l.ok) return sendFolderFailure(reply, l);
+    const q = parseDocsApiQuery('folder-remove', req.query as DocsQuery);
+    if (!q.ok) return sendFolderFailure(reply, q);
+    const run = await written(reply, l.label, () => registry.remove({ node }, l.label));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendFolderFailure(reply, run.value);
+    const sent: DocsFolderRemoveResponse = { ok: true, label: run.value.answer.label, removed: true };
+    return reply.send(sent);
   });
 }
