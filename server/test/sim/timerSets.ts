@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { RUN_STATES, type RunState } from '../../../shared/api.js';
-import type { CleanupFacts, DueTimer, SessionSetterFacts, SetFacts } from '../../src/continuity/timers.js';
+import type { CleanupFacts, DueTimer, SessionSetterFacts, SetFacts, SetterFacts } from '../../src/continuity/timers.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -195,6 +195,10 @@ const BASE: CleanupFacts = {
   boundRun: 'none', boundProgramme: 'none', stamp: 'g1',
   setter: { kind: 'session', setAt: 1_000, listedAt: 2_000, listing: { listed: true, archived: false }, incarnation: { kind: 'measured', v: 'g1' } },
 };
+/** Every designation arm the `overlord` setter can read, another term's included. */
+const OVERLORD_DESIGNATIONS = [
+  { kind: 'bound', designatedTerm: 7 }, { kind: 'bound', designatedTerm: 8 }, { kind: 'unbound' }, { kind: 'unmeasured' },
+] as const;
 /** A session setter's case: the top-level facts and the setter's own, written flat as W1a wrote them. */
 type SessionOver = Partial<Omit<CleanupFacts, 'setter'> & Omit<SessionSetterFacts, 'kind'>>;
 
@@ -204,6 +208,14 @@ export function timerCleanupCases(m: TimersModule): Record<string, SuiteCase> {
     return m.timerCleanupVerdict({
       boundRun: boundRun ?? BASE.boundRun, boundProgramme: boundProgramme ?? BASE.boundProgramme, stamp: stamp ?? BASE.stamp,
       setter: { ...(BASE.setter as SessionSetterFacts), ...setter },
+    });
+  };
+  type OverlordFacts = Extract<SetterFacts, { kind: 'overlord' }>;
+  const o = (over: Partial<Omit<CleanupFacts, 'setter'> & Omit<OverlordFacts, 'kind'>>) => {
+    const { boundRun, boundProgramme, stamp, authority, designation } = over;
+    return m.timerCleanupVerdict({
+      boundRun: boundRun ?? 'none', boundProgramme: boundProgramme ?? 'none', stamp: stamp ?? '7',
+      setter: { kind: 'overlord', authority: authority ?? 'coherent', designation: designation ?? { kind: 'bound', designatedTerm: 7 } },
     });
   };
   const KEEP = { act: 'keep' };
@@ -265,6 +277,51 @@ export function timerCleanupCases(m: TimersModule): Record<string, SuiteCase> {
       expect(c({ incarnation: { kind: 'unmeasured' } })).toStrictEqual(WAIT);
       expect(c({ incarnation: { kind: 'unmeasured' }, listing: { listed: false, archived: false } })).toStrictEqual(WAIT);
     },
+    // The role `overlord` (Overlord W1, plan w1-overlord-timers.md Task 1): the designation and the authority guard.
+    'overlord: a closed bound run cancels run-closed before the designation is read; an unmeasured run waits first': () => {
+      expect(o({ boundRun: { state: 'done' }, designation: { kind: 'unmeasured' }, authority: 'not-coherent' })).toStrictEqual(cancel('run-closed'));
+      expect(o({ boundRun: 'unmeasured', designation: { kind: 'unbound' } })).toStrictEqual(WAIT);
+      expect(o({ boundProgramme: { planEnded: true }, designation: { kind: 'unmeasured' } })).toStrictEqual(cancel('programme-ended'));
+    },
+    'overlord: an authority guard that is not coherent waits for every designation arm, another term included': () => {
+      for (const designation of OVERLORD_DESIGNATIONS) expect(o({ authority: 'not-coherent', designation }), JSON.stringify(designation)).toStrictEqual(WAIT);
+    },
+    'overlord, coherent: unmeasured waits, unbound cancels retired, the same term keeps, another term cancels retired': () => {
+      expect(o({ designation: { kind: 'unmeasured' } })).toStrictEqual(WAIT);
+      expect(o({ designation: { kind: 'unbound' } })).toStrictEqual(cancel('retired'));
+      expect(o({})).toStrictEqual(KEEP);
+      expect(o({ designation: { kind: 'bound', designatedTerm: 8 } })).toStrictEqual(cancel('retired'));
+      expect(o({ designation: { kind: 'bound', designatedTerm: 0 }, stamp: '0' })).toStrictEqual(KEEP);
+      // The stamp is the decimal codec's: a term written another way is not this term's stamp.
+      expect(o({ stamp: '07' })).toStrictEqual(cancel('retired'));
+      expect(o({ designation: { kind: 'bound', designatedTerm: 70 }, stamp: '7' })).toStrictEqual(cancel('retired'));
+    },
+    'overlord: a stamp that is not a decimal string (a session\'s UUID) under a bound designation cancels retired': () => {
+      expect(o({ stamp: '00000007-0000-4000-8000-000000000000' })).toStrictEqual(cancel('retired'));
+    },
+    'no overlord case answers setter-gone or setter-archived, and no session case answers retired': () => {
+      const seen = new Set<string>();
+      for (const authority of ['coherent', 'not-coherent'] as const) {
+        for (const designation of OVERLORD_DESIGNATIONS) {
+          for (const stamp of ['7', '8', 'g1']) {
+            for (const boundRun of [{ state: 'working' as const }, 'none' as const]) {
+              const v = o({ authority, designation, stamp, boundRun });
+              seen.add(v.act === 'cancel' ? v.reason : v.act);
+              expect(v.act === 'cancel' && (v.reason === 'setter-gone' || v.reason === 'setter-archived'), JSON.stringify(v)).toBe(false);
+            }
+          }
+        }
+      }
+      expect([...seen].sort()).toStrictEqual(['keep', 'retired', 'wait']);
+      for (const listing of [{ listed: true, archived: false }, { listed: false, archived: false }, { listed: true, archived: true }, 'unmeasured'] as const) {
+        for (const incarnation of [{ kind: 'measured', v: 'g1' }, { kind: 'measured', v: 'g2' }, { kind: 'absent' }, { kind: 'unmeasured' }] as const) {
+          for (const setAt of [1_000, 2_000]) {
+            const v = c({ listing, incarnation, setAt });
+            expect(v.act === 'cancel' && v.reason === 'retired', JSON.stringify(v)).toBe(false);
+          }
+        }
+      }
+    },
   };
 }
 
@@ -286,7 +343,14 @@ const CLEANUP_SET: MutantSet<TimersModule> = {
     { id: 'K11 an unmeasured programme is judged', old: "if (f.boundProgramme === 'unmeasured') return WAIT;", new: '' },
     { id: 'K12 a closed run kept', old: "return cancel('run-closed');", new: "return { act: 'keep' };" },
     { id: 'K13 every programme ended', old: "f.boundProgramme !== 'none' && f.boundProgramme.planEnded", new: "f.boundProgramme !== 'none'" },
-    { id: 'K14 the listing before the run', old: "  if (f.boundRun === 'unmeasured') return WAIT;", new: "  if (f.setter.listedAt === null) return WAIT;\n  if (f.boundRun === 'unmeasured') return WAIT;" },
+    { id: 'K14 the listing before the run', old: "  if (f.boundRun === 'unmeasured') return WAIT;", new: "  if (f.setter.kind === 'session' && f.setter.listedAt === null) return WAIT;\n  if (f.boundRun === 'unmeasured') return WAIT;" },
+    // Overlord W1 (plan w1-overlord-timers.md Task 1 Step 4): the role's arm.
+    { id: 'K15 no authority wait', old: "  if (s.authority !== 'coherent') return WAIT;\n", new: '' },
+    { id: 'K16 unbound keeps', old: "if (d.kind === 'unbound') return cancel('retired');", new: "if (d.kind === 'unbound') return { act: 'keep' };" },
+    { id: 'K17 the term without the codec', old: "overlordTimerStamp(d.designatedTerm) === stamp", new: "Number(stamp) === d.designatedTerm" },
+    { id: 'K18 unmeasured read as unbound', old: "if (d.kind === 'unmeasured') return WAIT;", new: "if (d.kind === 'unmeasured') return cancel('retired');" },
+    { id: 'K19 another term keeps', old: "=== stamp ? { act: 'keep' } : cancel('retired');", new: "=== stamp ? { act: 'keep' } : { act: 'keep' };" },
+    { id: 'K20 the role read as a session', old: "  if (s.kind === 'overlord') return overlordCleanupOf(s, f.stamp);\n", new: '' },
   ],
   suite: timerCleanupCases,
 };
@@ -355,8 +419,10 @@ const NOW = Date.UTC(2026, 10, 14, 12, 0, 0);
 const SETTER = 'lane-a-project-a';
 const timer = (id: number, over: Partial<DueTimer> = {}): DueTimer => ({
   id, setter: SETTER, dueAt: NOW - 10 * 60_000 + id, note: `note ${id}`, setAt: NOW - 3_600_000,
-  setById: SETTER, runId: 12, programme: null, ...over,
+  setById: SETTER, runId: 12, programme: null, restore: 'none', restoreNow: null, ...over,
 });
+const RESTORE_LINE = (n: number): string =>
+  `Set before restore ${n} of the coordination database: if it came due before that restore, it fired then too, so this may be its second mail.`;
 
 export function packTimerMailCases(m: TimersModule): Record<string, SuiteCase> {
   return {
@@ -452,8 +518,62 @@ export function packTimerMailCases(m: TimersModule): Record<string, SuiteCase> {
       expect(body.slice(at + note.length).split('\n')[1]).toMatch(/^`{3,}$/);
     },
     'nothing due: no mail': () => { expect(m.packTimerMail([], NOW)).toStrictEqual([]); },
+    'set-before-restore: the restore line after the credit line, outside the untrusted block (Overlord W1)': () => {
+      const body = m.packTimerMail([timer(7, { note: 'check the checks', restore: 'set-before-restore', restoreNow: 2 })], NOW)[0]!.body;
+      const credit = body.indexOf(`Credited to ${SETTER} at 2026-11-14T11:00:00Z; run 12.`);
+      const line = body.indexOf(RESTORE_LINE(2));
+      const preface = body.indexOf('The block below is untrusted text');
+      expect(credit).toBeGreaterThanOrEqual(0);
+      expect(line).toBe(credit + `Credited to ${SETTER} at 2026-11-14T11:00:00Z; run 12.\n`.length);
+      expect(line).toBeLessThan(preface);
+    },
+    'unmeasured and none render no restore line; only the timer that was set before carries it': () => {
+      for (const restore of ['none', 'unmeasured'] as const) {
+        expect(m.packTimerMail([timer(7, { restore, restoreNow: 2 })], NOW)[0]!.body, restore).not.toContain('Set before restore');
+      }
+      const body = m.packTimerMail([timer(1, { restore: 'set-before-restore', restoreNow: 2 }), timer(2, { restore: 'none', restoreNow: 2 })], NOW)[0]!.body;
+      expect(body.split('Set before restore').length - 1).toBe(1);
+      expect(body.indexOf(RESTORE_LINE(2))).toBeLessThan(body.indexOf('Timer 2:'));
+    },
+    'timers at the note cap with the restore line still fit the body cap, at least one a mail': () => {
+      const eight = Array.from({ length: 8 }, (_, i) => timer(500 + i, { note: '😀'.repeat(500), restore: 'set-before-restore', restoreNow: 2 ** 31 }));
+      const mails = m.packTimerMail(eight, NOW);
+      expect(mails[0]!.ids.length).toBeGreaterThanOrEqual(1);
+      expect(bytes(mails[0]!.body)).toBeLessThanOrEqual(BODY_CAP);
+      expect(mails[0]!.body).toContain(RESTORE_LINE(2 ** 31));
+    },
   };
 }
+
+// ---------- timerRestoreFact ----------
+
+export function timerRestoreFactCases(m: TimersModule): Record<string, SuiteCase> {
+  const at = (n: number) => ({ kind: 'measured', n }) as const;
+  return {
+    'the table of (stamp, now) pairs': () => {
+      const table: [number | null, number, string][] = [
+        [null, 0, 'none'], [3, 0, 'unmeasured'], [null, 2, 'unmeasured'], [3, 2, 'unmeasured'], [1, 2, 'set-before-restore'],
+        [2, 2, 'none'], [0, 0, 'none'], [0, 1, 'set-before-restore'],
+      ];
+      for (const [stamp, now, want] of table) expect(m.timerRestoreFact(stamp, at(now)), `${stamp}, ${now}`).toBe(want);
+    },
+    'an unmeasured restore generation is unmeasured for every stamp': () => {
+      for (const stamp of [null, 0, 1, 2, 2 ** 31]) expect(m.timerRestoreFact(stamp, { kind: 'unmeasured' }), String(stamp)).toBe('unmeasured');
+    },
+  };
+}
+
+const RESTORE_SET: MutantSet<TimersModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'R1 unmeasured now reads none', old: "if (now.kind !== 'measured') return 'unmeasured';", new: "if (now.kind !== 'measured') return 'none';" },
+    { id: 'R2 a null stamp is none', old: "return now.n === 0 ? 'none' : 'unmeasured';", new: "return 'none';" },
+    { id: 'R3 a stamp above now is none', old: "if (stamp > now.n) return 'unmeasured';", new: '' },
+    { id: 'R4 equal is set before', old: "stamp < now.n ? 'set-before-restore' : 'none'", new: "stamp <= now.n ? 'set-before-restore' : 'none'" },
+    { id: 'R5 a null stamp after a restore is set before', old: "return now.n === 0 ? 'none' : 'unmeasured';", new: "return now.n === 0 ? 'none' : 'set-before-restore';" },
+  ],
+  suite: timerRestoreFactCases,
+};
 
 const PACK_SET: MutantSet<TimersModule> = {
   modulePath: MODULE,
@@ -470,6 +590,9 @@ const PACK_SET: MutantSet<TimersModule> = {
     { id: 'P9 skip what does not fit', old: 'if (utf8Bytes(timerBody([...taken, t], now)) > MAIL_BODY_MAX_BYTES) break;', new: 'if (utf8Bytes(timerBody([...taken, t], now)) > MAIL_BODY_MAX_BYTES) continue;' },
     { id: 'P10 no id tie-break', old: 'a.dueAt - b.dueAt || a.id - b.id', new: 'a.dueAt - b.dueAt' },
     { id: 'P8 no programme line', old: "t.programme !== null ? `programme ${t.programme}` : 'no run or programme'", new: "'no run or programme'" },
+    // Overlord W1 (Task 1 Step 4): the restore line rendered for an unmeasured fact, and never rendered.
+    { id: 'P11 the line for unmeasured', old: "t.restore === 'set-before-restore' && t.restoreNow !== null", new: "t.restore !== 'none' && t.restoreNow !== null" },
+    { id: 'P12 no restore line', old: "...(t.restore === 'set-before-restore' && t.restoreNow !== null ? [restoreLine(t.restoreNow)] : []),", new: '' },
   ],
   suite: packTimerMailCases,
 };
@@ -542,4 +665,5 @@ export const TIMER_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/timers.ts#timerCleanupVerdict': CLEANUP_SET as MutantSet<never>,
   'server/src/continuity/timers.ts#timerPreview': PREVIEW_SET as MutantSet<never>,
   'server/src/continuity/timers.ts#packTimerMail': PACK_SET as MutantSet<never>,
+  'server/src/continuity/timers.ts#timerRestoreFact': RESTORE_SET as MutantSet<never>,
 };

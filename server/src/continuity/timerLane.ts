@@ -189,7 +189,7 @@ function cancelledSince(coord: Pick<WatcherCoordPort, 'pendingTimers'>, ids: rea
 }
 
 const dueOf = (t: TimerRow): DueTimer => ({ id: t.id, setter: t.setter, dueAt: t.dueAt, note: t.note, setAt: t.setAt,
-  setById: t.setById, runId: t.runId, programme: t.programme });
+  setById: t.setById, runId: t.runId, programme: t.programme, restore: 'unmeasured', restoreNow: null });
 
 /** One whole pass, as the watcher's `timers` row runs it: the gather on the fleet's `.generation` reads, then the pass at
  *  the clock's wall time (§11.5: the lane takes `Clock` from the composition root). */

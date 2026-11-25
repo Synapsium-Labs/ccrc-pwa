@@ -1,7 +1,7 @@
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES, TERMINAL_RUN_STATES, type RunState } from '../../../shared/api.js';
 import {
-  TIMER_DUE_MAX_MS, TIMER_DUE_MIN_MS, TIMER_NOTE_MAX_CHARS, TIMER_PREVIEW_CHARS, TIMER_SETS_PER_HOUR,
-  type TimerCancelReason, type TimerState,
+  TIMER_DUE_MAX_MS, TIMER_DUE_MIN_MS, TIMER_NOTE_MAX_CHARS, TIMER_PREVIEW_CHARS, TIMER_SETS_PER_HOUR, overlordTimerStamp,
+  type TimerCancelReason, type TimerRestoreFact, type TimerState,
 } from '../../../shared/continuity-timers.js';
 import type { TimerRefusal } from '../../../shared/refusal.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
@@ -77,9 +77,16 @@ export function timerCancelVerdict(
   return 'ok';
 }
 
-/** What the timers lane read about a timer's setter, once a pass: a session's registry facts (W1a's), in its own arm of the
- *  union so a setter of another kind brings its own facts (slug setter-facts-are-a-union). */
+/** What the timers lane read about a timer's setter, once a pass: a session's registry facts (W1a's), or, for the role
+ *  `overlord`, the designation and the authority guard (Overlord W1, plan `w1-overlord-timers.md` Task 1). The lane builds
+ *  the `overlord` arm from their readers, so this file imports no designation or journal type. */
 export type SetterFacts = {
+  readonly kind: 'overlord';
+  /** The authority guard's state: `rolled-back` and `unmeasured` are both `not-coherent` (question 11). */
+  readonly authority: 'coherent' | 'not-coherent';
+  /** The designation: `bound` with its `designatedTerm`; `unbound` (no row, retired, or binding no session); `unmeasured`. */
+  readonly designation: { readonly kind: 'bound'; readonly designatedTerm: number } | { readonly kind: 'unbound' } | { readonly kind: 'unmeasured' };
+} | {
   readonly kind: 'session';
   /** When the timer was set, and when the tick's registry listing began (null: the tick has no listing). */
   readonly setAt: number;
@@ -122,12 +129,36 @@ export function timerCleanupVerdict(f: CleanupFacts): CleanupVerdict {
   if (f.boundProgramme === 'unmeasured') return WAIT;
   if (f.boundProgramme !== 'none' && f.boundProgramme.planEnded) return cancel('programme-ended');
   const s = f.setter;
+  if (s.kind === 'overlord') return overlordCleanupOf(s, f.stamp);
   if (s.listedAt === null || s.setAt >= s.listedAt) return WAIT;
   if (s.listing === 'unmeasured') return WAIT;
   if (s.listing.archived) return cancel('setter-archived');
   if (s.incarnation.kind === 'absent') return s.listing.listed ? WAIT : cancel('setter-gone');
   if (s.incarnation.kind === 'unmeasured') return WAIT;
   return s.incarnation.v === f.stamp ? { act: 'keep' } : cancel('setter-gone');
+}
+
+/** The `overlord` arm, after the run and programme rungs (question 11, F1): an authority guard that is not coherent waits,
+ *  whatever the designation reads, because a restored row is not yet the authority; an unmeasured designation waits; an
+ *  unbound one cancels `retired`; a bound one keeps only its own term's stamp (`overlordTimerStamp`), so another term, or a
+ *  stamp that was never this role's, cancels `retired`. It never answers `setter-gone` or `setter-archived`. */
+function overlordCleanupOf(s: Extract<SetterFacts, { kind: 'overlord' }>, stamp: string): CleanupVerdict {
+  if (s.authority !== 'coherent') return WAIT;
+  const d = s.designation;
+  if (d.kind === 'unmeasured') return WAIT;
+  if (d.kind === 'unbound') return cancel('retired');
+  return overlordTimerStamp(d.designatedTerm) === stamp ? { act: 'keep' } : cancel('retired');
+}
+
+/** The restore fact (question 5): `stamp` is the timer's `setRestoreGeneration` (null: not measured at the set), `now` the
+ *  restore generation read this pass. A null stamp is `none` only while no restore was ever confirmed (`now` a measured 0);
+ *  a stamp above `now` (a journal that came back older) is unmeasured, never `none`. */
+export function timerRestoreFact(stamp: number | null,
+  now: { readonly kind: 'measured'; readonly n: number } | { readonly kind: 'unmeasured' }): TimerRestoreFact {
+  if (now.kind !== 'measured') return 'unmeasured';
+  if (stamp === null) return now.n === 0 ? 'none' : 'unmeasured';
+  if (stamp > now.n) return 'unmeasured';
+  return stamp < now.n ? 'set-before-restore' : 'none';
 }
 
 const SPACE = /\s/u;
@@ -154,6 +185,9 @@ export function timerPreview(note: string): string {
 export interface DueTimer {
   readonly id: number; readonly setter: string; readonly dueAt: number; readonly note: string;
   readonly setAt: number; readonly setById: string; readonly runId: number | null; readonly programme: string | null;
+  /** Whether it was set before a confirmed restore (`timerRestoreFact`), and the restore generation read this pass (the
+   *  measured `n`, for the line; null when unmeasured). */
+  readonly restore: TimerRestoreFact; readonly restoreNow: number | null;
 }
 
 /** One timer mail: to `setter`, on `runId` (null: the run-less mail), firing exactly `ids`. */
@@ -169,12 +203,17 @@ export const TIMER_MAIL_OPENING =
 const NOTE_FULL_AT = 'in ccrc-api timer list';
 const MINUTE_MS = 60_000;
 
+/** The restore line (question 5): trusted text the server measured, outside the untrusted block, naming no part of a note. */
+const restoreLine = (n: number): string =>
+  `Set before restore ${n} of the coordination database: if it came due before that restore, it fired then too, so this may be its second mail.`;
+
 function timerLines(t: DueTimer, now: number): string {
   const late = Math.max(0, Math.floor((now - t.dueAt) / MINUTE_MS));
   const bound = t.runId !== null ? `run ${t.runId}` : t.programme !== null ? `programme ${t.programme}` : 'no run or programme';
   return [
     `Timer ${t.id}: due ${iso(t.dueAt)}, fired ${late} min late.`,
     `Credited to ${t.setById} at ${iso(t.setAt)}; ${bound}.`,
+    ...(t.restore === 'set-before-restore' && t.restoreNow !== null ? [restoreLine(t.restoreNow)] : []),
     untrustedBlock(t.note, UNTRUSTED_CAP_BYTES, NOTE_FULL_AT, CARD_TEXT_PREFACE),
   ].join('\n');
 }
