@@ -4653,6 +4653,33 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (day, door, word)
   ) WITHOUT ROWID;
   `,
+
+  // ── 129: user_version 128 -> 129 ──────────────────────────────────────────
+  // The Overlord's readiness word (spec §6.4, H20, C56, C57; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-readiness.md` Task 2): `overlord_readiness`, one row per change of word, stamped on `overlord_sequence` in its own
+  // transaction, with `pushedAt` on an episode's first `dead` row; and `overlord_readiness_items`, which operator item the lane
+  // raised for which cause and how it ended. ONE writer, `coord/overlordReadinessStore.ts`, called by the readiness lane alone.
+  // The word is checked by the writer against `READINESS_WORDS`, never by SQL, so a new word is a row of the map. NEW TABLES
+  // only: an older build opening a file at this entry's version takes rule 3 and never names them. The slot is the next free
+  // one by position on `main`; whoever lands second renumbers. RE-MEASURE the slot before merge (it must print 128 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_readiness (
+    id INTEGER PRIMARY KEY, sessionId TEXT, word TEXT NOT NULL, why TEXT, untilAt INTEGER, strandCause TEXT,
+    restartable INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
+    seq INTEGER,       -- the overlord_sequence line stamped in the same transaction
+    pushedAt INTEGER   -- set only on an episode's first dead row, in the transaction that writes it
+  );
+  CREATE INDEX overlord_readiness_at ON overlord_readiness (at);
+  CREATE TABLE overlord_readiness_items (
+    id INTEGER PRIMARY KEY, item TEXT NOT NULL CHECK (item IN ('stranded', 'count', 'hold')),
+    key TEXT NOT NULL, itemId INTEGER NOT NULL, raisedAt INTEGER NOT NULL, settledAt INTEGER,
+    closedBy TEXT CHECK (closedBy IN ('lane', 'operator'))
+  );
+  CREATE UNIQUE INDEX overlord_readiness_items_open ON overlord_readiness_items (item, key) WHERE settledAt IS NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

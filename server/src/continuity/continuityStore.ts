@@ -13,6 +13,7 @@ import {
   type ProbeGrade, type ProbeRoundKind, type RenewalTrigger, type StartRow, type TriggerClass,
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
+import { RESTART_OUTCOMES } from '../../../shared/overlord-readiness.js';
 import {
   TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerDoor, type TimerState,
 } from '../../../shared/continuity-timers.js';
@@ -396,6 +397,42 @@ export function liveGenerations(db: DatabaseSync): GenerationsRead {
       rows.push(r);
     }
     return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The identity's one live generation row, parsed alone (Overlord readiness, plan `w1-readiness.md` Task 2, fix round 1 F21):
+ *  `null` for none, the row, or `ok: false` for that row only, so another identity's unreadable row never hides this one. The
+ *  same columns and row parser as `liveGenerations`; the newest when the live-identity index would hold more than one. */
+export function liveGenerationOfIdentity(db: DatabaseSync, identity: string): { ok: true; row: GenRow | null } | { ok: false; detail: string } {
+  try {
+    const raw = stmt(db, `SELECT ${GEN_COLUMNS} FROM continuity_generations WHERE identity = ? AND state <> 'ended' ORDER BY id DESC LIMIT 1`)
+      .get(identity) as Record<string, unknown> | undefined;
+    if (raw === undefined) return { ok: true, row: null };
+    const r = genRowOf(raw);
+    return typeof r === 'string' ? { ok: false, detail: `continuity_generations row ${String(raw.id)}: ${r}` } : { ok: true, row: r };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** How many generations of `identity` were minted (started) at or after `sinceMs` whose predecessor in the same term ended with
+ *  an outcome `RESTART_OUTCOME_MAP` names `restart` (the readiness plan's question 3). Completed restarts only:
+ *  the one in progress is the decider's. A predecessor whose outcome is missing or a word this build does not know is
+ *  unreadable, never a zero. */
+export function restartsSince(db: DatabaseSync, identity: string, sinceMs: number):
+  { ok: true; count: number } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, 'SELECT p.id AS id, p.outcome AS outcome FROM continuity_generations g JOIN continuity_generations p '
+      + 'ON p.identity = g.identity AND p.term = g.term AND p.n = g.n - 1 WHERE g.identity = ? AND g.startReportedAt >= ?')
+      .all(identity, sinceMs) as { id: unknown; outcome: unknown }[];
+    let count = 0;
+    for (const r of rows) {
+      if (!isGenerationOutcome(r.outcome)) return { ok: false, detail: `continuity_generations row ${String(r.id)}: outcome unreadable` };
+      if (RESTART_OUTCOMES.includes(r.outcome)) count += 1;
+    }
+    return { ok: true, count };
   } catch (e) {
     return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
