@@ -13,7 +13,8 @@ the real server); the designated session sets, lists and cancels the role's time
 timers wait while the guard is not coherent or the designation is unmeasured, cancel `retired` once it binds no session or
 another term, and fire with a restore line when set before a confirmed restore. Their one mail keeps `overlord` on the row,
 goes to the bound session, and reaches the pane as one fixed line that waits until the live generation has read its card.
-Every refusal a timer door answers itself after its token is counted (M36). One migration.
+Every refusal a timer door answers itself after its token is counted (M36). One migration, number 128 on the merged tree
+(main took 127 through #3345; renumbered in the one merge of `main`).
 
 ## What was built, task by task
 
@@ -160,8 +161,20 @@ from that build's source.
 
 Nothing loses a timer silently beyond the ruled row, and nothing pushes for a session that does not exist.
 
-`v0.0.1466`: measured after this branch's merge of `main`, because that build already carries another programme's migration
-127 (#3345); see the section added at that merge.
+(The `v0.0.1428` fixture was written before the merge below, when this piece's migration was 127.)
+
+`v0.0.1466` (`1a0c40e691`), measured after this branch's merge of `main` (this piece's migration is 128 there, after #3345's
+127, which that build carries), the same method on a fresh fixture at version 128:
+
+1. **Queued `overlord` mail.** Selected by the delivery's session; the generic nudge; `MAIL_REPLAY_MAX_ATTEMPTS` 20, then a
+   park; `timer` in `MAIL_ROLE_IDS`, `overlord` not; the new-mail push record-only for a `timer` mail.
+2. **Readers of `mail.toId`.** As above: `mailQueuedSince` selects the delivery's `toId`.
+3. **Pending `overlord` timers.** Cancelled `setter-gone` on the first pass (measured).
+4. **The new column and table.** It boots ("coord.db is at schema 128, this build knows 127: reading it as-is and migrating
+   nothing") and reads the timer through its own column list.
+
+Both builds answer alike; nothing loses a timer silently beyond the ruled row, and nothing pushes for a session that does not
+exist.
 
 ## What starts acting on a box when this merges, and what stays inert
 
