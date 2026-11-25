@@ -263,7 +263,6 @@ The review found no defect in today's code: shadow raises nothing by any path, a
 
 ## The wiring merge (call 1240)
 
-One ordinary merge of main `4fa87d73f8` (see "Where main differed"), then one commit: I5's kept-line read wired at the
-composition root, its cases, and the two fixture fixes the merge needed. Each mutant in the by-hand table above was applied,
-its named cases run red, and the file restored with no diff.
-
+One ordinary merge of main `4fa87d73f8` (see "Where main differed"), then I5's kept-line read wired at the composition
+root, its cases, and the fixture updates the merge needed. Each mutant in the by-hand table above was applied, its named
+checks run red, and the file restored with no diff.
