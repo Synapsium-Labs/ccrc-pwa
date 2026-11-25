@@ -34,7 +34,7 @@ const programs = new Set<string>();
 const seed = (o: Seed = {}): number => {
   const program = o.program ?? 'programme-a';
   if (!programs.has(program)) {
-    // The programme's own state is deliberately wrong-able by a test: it is never read.
+    // The programme's own state: `active` (programme lifecycle W2 reads it for the row's lifecycle).
     coord.db.prepare("INSERT OR IGNORE INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, 'active')")
       .run(program, `Title of ${program}`, NOW - 60 * DAY);
     programs.add(program);
@@ -265,7 +265,13 @@ describe('GET /api/programmes', () => {
     watcher.runVerdicts.replace(new Map(), new Map([['programme-a', false]]));
     const { body } = await read();
     expect(row(body).coordinatorGone).toBe(false);
-    // A programme closed 8 days ago is past the Finished window and has no row.
-    expect(body.programmes.some((p) => p.slug === 'programme-b')).toBe(false);
+    // A programme whose runs closed 8 days ago is past the run window, so its row carries no run facts. Programme lifecycle W2
+    // (D-8992): it has not ENDED (stored `active`), so it is still listed, by its lifecycle, never folded away by the window.
+    const b = body.programmes.find((p) => p.slug === 'programme-b');
+    expect(b).toMatchObject({ currentWave: null, claimedBy: null, ending: null, lifecycle: 'open', coordinatorLine: 'no-coordinator' });
+    expect(b?.coordinatorGone).toBeUndefined();
+    // …and once it is decided ended, the window folds it away again.
+    coord.db.prepare("UPDATE programs SET state = 'done', planEnd = 'done' WHERE slug = 'programme-b'").run();
+    expect((await read()).body.programmes.some((p) => p.slug === 'programme-b')).toBe(false);
   });
 });

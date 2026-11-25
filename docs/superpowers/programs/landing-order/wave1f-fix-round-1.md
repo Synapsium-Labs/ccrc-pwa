@@ -40,7 +40,11 @@ argument. `readPlanBlobsAt(ref, keep)` lists and batch-reads the `.md` plans tha
 (which `plansAt` caches) calls it with `!LEGACY_PER_PLAN_LEDGERS.has(file)`. The characterization case calls
 `readPlanBlobsAt` with a frozen `Set` of today's three names, so its recorded count (962) and sha256 (`ec50384b…2433`)
 still describe exactly the bytes they described before. Because this changes the reader's shape, not only the case,
-it is the departure `plans-read-filter-param`.
+it is the departure `plans-read-filter-param` (D-9076).
+
+Since this round the case no longer guards the wiring from `readPlansAt` to the legacy list. Review run 3809 measured
+that another case does: with `readPlansAt`'s filter made to keep every file, the case that names the sub-211 collision
+set goes red (1 failed of 35).
 
 Measured, each through `ccrc test` on the test box, from `server/`, `test/deviation-refs.test.ts`:
 

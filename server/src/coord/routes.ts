@@ -68,6 +68,8 @@ import { capCountsWorkingArmed, capNow, sendBackCapCheck, workerReadings, type C
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
+import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
+import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { MAIL_DISABLED_MARKER } from './rundefs.js';
@@ -3575,7 +3577,9 @@ export function registerCoordRoutes(
       since = n;
     }
     try {
-      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+      // Programme lifecycle W2 (spec §15): the lifecycle fields, the bound sessions read once each.
+      return await programmesWithLifecycle(deps.coord, deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts()),
+        (s) => coordinatorReadingOf(deps.io, deps.cfg, s));
     } catch (err) {
       return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
     }

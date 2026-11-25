@@ -117,6 +117,7 @@ import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { attributionIdentity, consoleSubject } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
+import { coordinatorReadingOf } from './coord/programmeCoordinatorReading.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
@@ -292,6 +293,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/find', '/api/programmes', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // Programme lifecycle W2: a programme's story carries every act's why, written by the operator, a coordinator or the Overlord.
+  '/api/programmes/:slug/history',
   // The approval census's read (approvals PR 1): each row's summary is a prompt's command text, masked and redacted at
   // write; the hook masks the answer again with the masker's current fingerprints.
   '/api/approvals/census',
@@ -2899,6 +2902,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
     liveAsk, liveSpend: (sid) => (watcher === undefined ? { kind: 'not-ready' as const } : watcher.liveSpendReading(sid)),
+    // Programme lifecycle W2: the start naming a session and the hand-over run the reclaim ladder on the serialiser.
+    ...(deps.coord === undefined ? {} : { lifecycle: { reclaim: { coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads },
+      serial: coordRoutes.serial, readingOf: (s: string) => coordinatorReadingOf(deps.io, deps.cfg, s),
+      attribute: (id: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid') } }),
   });
 
   /**

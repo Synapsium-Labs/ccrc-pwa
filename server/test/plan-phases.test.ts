@@ -8,7 +8,7 @@ import * as policy from '../src/coord/planPolicy.js';
 import type { PhaseView, PlanView } from '../../shared/plan.js';
 import { PHASE_CASES } from './planPhasesCases.js';
 import {
-  buildCharacterizationPlans, charWorld, CHAR_TOKEN, openRun, planVerb, readCharacterizationPlans, ONE, SIX, type CharWorld,
+  buildCharacterizationPlans, charWorld, CHAR_TOKEN, closeAndConfirm, openRun, planVerb, readCharacterizationPlans, ONE, SIX, type CharWorld,
   CHAR_COORD_B,
 } from './helpers/planPhasesFixture.js';
 
@@ -226,7 +226,7 @@ describe('plan phase-ref (D17, F12)', () => {
   it('phase-ref refuses plan-closed after the plan ends', async () => {
     const x = await world();
     await planVerb(x, 'prog-a', '', PHASED);
-    expect((await planVerb(x, 'prog-a', '/close', { outcome: 'done' })).statusCode).toBe(200);
+    expect((await closeAndConfirm(x, 'prog-a')).statusCode).toBe(200);
     expect(refusal(await phaseRef(x, { op: 'add', phase: 'p3', ref: t('w2-t1') }))).toEqual([409, 'plan-closed']);
   });
 });

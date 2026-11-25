@@ -45,6 +45,15 @@ export async function charWorld(others: readonly string[] = [], opts: { landing?
 export const CHAR_COORD_B = `${CHAR_COORD}-b`;
 export const planVerb = (w: CharWorld, slug: string, sub: string, body: unknown, by: string = CHAR_COORD) =>
   w.app.inject({ method: 'POST', url: `/api/programmes/${slug}/plan${sub}?byId=${by}&byUuid=u-${by}`, headers, payload: body as never });
+/** Programme lifecycle W2 (D-8987): `plan close` proposes the end, with evidence, and the operator's confirm ends it. The
+ *  close's answer, after the confirm (asserted to succeed), for a test that needs the programme ended. */
+export async function closeAndConfirm(w: CharWorld, slug: string, outcome: 'done' | 'abandoned' = 'done', by: string = CHAR_COORD) {
+  const closed = await planVerb(w, slug, '/close', { outcome, evidence: ['the definition of done is met'], ...(outcome === 'abandoned' ? { why: 'dropped' } : {}) }, by);
+  if (closed.statusCode !== 200) return closed;
+  const confirmed = w.coord.confirmProgrammeEnd((closed.json() as { proposal: number }).proposal, { kind: 'operator', id: 'device:test' }, Date.now(), () => undefined);
+  if (!confirmed.ok) throw new Error(`the confirm of ${slug}'s end was refused: ${confirmed.why}`);
+  return closed;
+}
 export const openRun = (w: CharWorld, body: Record<string, unknown>) =>
   w.app.inject({ method: 'POST', url: '/api/runs', headers, payload: { claimedByUuid: `u-${CHAR_COORD}`, claimedBy: CHAR_COORD, ...body } });
 

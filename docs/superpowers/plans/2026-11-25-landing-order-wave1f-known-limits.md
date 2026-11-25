@@ -224,9 +224,15 @@ Review run 3793 read the wave's branch at `d7daacef34` (pull request #3380): no 
 - **The characterization case and the legacy list (F4).** The case's recorded count and hash passed through the legacy exclusion filter, a list that may only shrink. The fix round makes the case independent of that list.
 - **Built in the wave's first fix round:** the ten in three places, the exit code range, one contradicting comment removed, the harness budget comment made to agree with its note, the characterization case, and the four rows.
 
+After review run 3809, which read the fix round at `744f9cefaf`: four minor points, none in code; the wave merged as #3380 at `861cd77728`.
+
+- **Rows 1F-11 to 1F-14 have two spellings (F3).** The builder measured each with a mutation worded differently from the table above (for example, 1F-13 drops the word "own" where the table removes the sentence). The reviewer re-ran all four as the table words them: each red, 1 failed of 5, on the same pinned phrase. Both spellings stand; the task note records the builder's, and the table keeps its own.
+- **What the characterization case guards (F4).** Since the fix round it reads through `readPlanBlobsAt` with a frozen set, so it no longer guards the wiring from `readPlansAt` to the legacy list. Another case does: with that filter made to keep every file, the case that names the sub-211 collision set goes red (1 failed of 35).
+- **The reader's new argument is D-9076.**
+
 ## Deviations found
 
-Three numbers were issued for this plan on 2026-11-25. They are approved design, not as-built evidence. A worker reports execution departures by slug; the coordinator numbers and records them. Three more were issued the same day for the departures the build reported (D-9073 to D-9075); they are defined last.
+Three numbers were issued for this plan on 2026-11-25. They are approved design, not as-built evidence. A worker reports execution departures by slug; the coordinator numbers and records them. Three more were issued the same day for the departures the build reported (D-9073 to D-9075), and one for the departure its first fix round reported (D-9076); they are defined last.
 
 - **D-9066 (2026-11-25)** — `conflict-sync-probe-status`: the run-care reference's measure step prints the probe's own exit status as a `probe exit` line, and reads the branch tip from the pull request's head. D-9062 put the rev-parse in the same call as the probe, which made the call's exit status the rev-parse line's, so the test the section names ("the probe must exit 1") could not be read from the call it prescribed. Not yet implemented.
 - **D-9067 (2026-11-25)** — `queue-live-exit-code`: the liveness script exits 64 on a superseded group, and the workflow's step ends the job only on that code; any other failure of the script prints an `unmeasured` line and lets the job run. Wave 1d's step ran the script bare, so a script that could not run would have ended every long job of every queue group, and the fix for it would have had to land through that same queue. The step still ends a superseded group's job with exit 1 (D-9015 is unchanged). Not yet implemented.
@@ -237,3 +243,6 @@ Three numbers were issued for this plan on 2026-11-25. They are approved design,
   - A YAML block scalar runs on across a blank line, so a third script line after a blank one would have passed the plan's anchor. The built anchor is strictly stronger; the review measured it red on a third line, on a blank line then a third line, and green on a comment after the step.
 - **D-9075 (2026-11-25)** — `plans-characterization-fixed-commit`: the byte-for-byte characterization case of the plan read reads a fixed commit on `main`, where Task 4 Step 2 said `HEAD`.
   - With `HEAD`, the recorded count and sha256 would go stale each time a plan is added. The fixed commit is permanent on `main`; in a checkout too shallow to hold it the case fails and says so, it does not skip, and the server shards check out the full history.
+- **D-9076 (2026-11-25)** — `plans-read-filter-param`: the test-local plan read takes its exclusion filter as an argument, `readPlanBlobsAt(ref, keep)`, and `readPlansAt(ref)` calls it with the legacy list. Task 4 asked only for the characterization case; review run 3793 (F4) asked the case not to depend on a list that may shrink.
+  - The characterization case passes a frozen copy of today's three names, so its recorded count (962) and sha256 still describe the bytes they did. Every other caller reads through `readPlansAt`, unchanged.
+  - It changes the reader's shape, not only the case. The function is file-local to `deviation-refs.test.ts`, and nothing that ships reads it.
