@@ -5,8 +5,8 @@
 // (`programmeEdgePolicy.ts`), and acts through the store's one-transaction acts; it decides nothing itself.
 //
 // THE CREDENTIAL RULE (spec §14) is `doorCredential`'s table: pause and decline work while sign-in is dark and record actor
-// `unmeasured` with `flag-off`; the start takes the account gate; resume, end, reopen, repair, the hand-over and the
-// confirm take its step-up, so they refuse while sign-in is dark.
+// `unmeasured` with `flag-off`; the start takes the account gate; resume, end, reopen, repair, the hand-over, the
+// confirm and the apply of a decisions file (W3) take its step-up, so they refuse while sign-in is dark.
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { refuseReclaim, refuseRoute, refuseRun } from '../refuse.js';
 import { END_REQUEST_REFUSALS } from '../../../shared/refusal.js';
@@ -33,6 +33,8 @@ import {
 import type { AttributionRead } from './openRun.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import { withLifecycleFields } from './programmeLifecycleView.js';
+import { decisionsAnswer, entryPlan, entryRow, parseDecisions, repeatedSlugs } from './programmeDecisionsPolicy.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ProgrammesAnswer } from '../../../shared/api.js';
 
 /** What the operator's lifecycle doors need beyond the ledger operator deps: the reclaim ladder's ports (the start naming a
@@ -262,6 +264,42 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     });
   }
 
+  /** `POST /api/programmes/decisions {decisions: [{slug, to, why}], apply?}` (spec §13, R9; W3, D-8990): the operator's private
+   *  list. It previews unless `apply` is true, which takes the step-up. Each entry is measured, decided
+   *  (`programmeDecisionsPolicy.ts`, L1) and written through `decideInTx` in a transaction of its own, with actor kind
+   *  `backfill` and the file's why, with no await from the first read to the last write; an end tells the coordinator it
+   *  released. Equal targets write nothing, so a second apply writes no event. */
+  async function decisions(req: FastifyRequest, reply: FastifyReply) {
+    const b = isObject(req.body) ? req.body : null;
+    if (b === null) return bad(reply, 'the body is an object');
+    const apply = b['apply'] ?? false;
+    if (typeof apply !== 'boolean') return bad(reply, 'apply is a boolean');
+    const cred = apply ? credential(req, reply, 'apply-decisions') : null;
+    if (apply && cred === null) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const parsed = parseDecisions(b['decisions']);
+    if (!parsed.ok) return bad(reply, parsed.detail);
+    const repeated = repeatedSlugs(parsed.entries);
+    const now = deps.now();
+    const before = new Map(coord.programmeLifecycleRows().map((f) => [f.slug, f]));
+    const rows = parsed.entries.map((e) => {
+      const f = before.get(e.slug);
+      const facts = f === undefined ? null : { ...f, planEnd: coord.programmeLifecycleRow(e.slug)?.planEnd ?? null };
+      let plan = entryPlan(e, facts, { repeated: repeated.has(e.slug), reserved: e.slug === LINEAR_SYNC_PROGRAMME });
+      if (cred !== null && plan.kind === 'decide') {
+        const { to, event, why, detail } = plan;
+        const res = coord.decideProgramme({ slug: e.slug, to, edge: event, actor: { kind: 'backfill', id: cred.actor.id }, why, detail },
+          now, (released) => noProgrammeMail(coord, released, `${e.slug} ended (${to}): ${why}`));
+        if (!res.ok) plan = { kind: 'refused', code: 'programme-ended', detail: `it ended ${res.state}, recorded: a reopen comes first` };
+      }
+      return entryRow(e, plan, facts, cred !== null);
+    });
+    if (cred !== null && rows.some((r) => r.edge !== null)) deps.changed();
+    return reply.code(200).send(decisionsAnswer({ apply, entries: rows, after: coord.programmeLifecycleRows(),
+      reservedRow: coord.programmeLifecycleRow(LINEAR_SYNC_PROGRAMME) !== null }));
+  }
+
   /** The operator's confirm of an end proposal (`POST /api/items/:id/act` on an `end-programme` item, spec §5's confirm row):
    *  behind the step-up; refused while a run is open, the item left open; the released coordinator is told it owns nothing. */
   function confirm(req: FastifyRequest, reply: FastifyReply, item: ItemRow) {
@@ -397,7 +435,7 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
     return { ok: true };
   };
 
-  return { start, state, handOver, confirm, decline, history, sessionProgramme, lastRunEndActor, lastRunEndRefusal, endWithLastRun };
+  return { start, state, handOver, decisions, confirm, decline, history, sessionProgramme, lastRunEndActor, lastRunEndRefusal, endWithLastRun };
 }
 
 /** The proposal door's body (spec §8): `{byId, byUuid, outcome, why, evidence[]}`. */

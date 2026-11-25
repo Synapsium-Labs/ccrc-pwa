@@ -80,6 +80,7 @@ describe('doorCredential: spec §14, one table', () => {
     expect(OPERATOR_DOOR_CREDENTIALS).toEqual({
       pause: 'dark-ok', 'decline-end': 'dark-ok', start: 'gate',
       resume: 'step-up', end: 'step-up', reopen: 'step-up', repair: 'step-up', 'hand-over': 'step-up', 'confirm-end': 'step-up',
+      'apply-decisions': 'step-up',
     });
     for (const act of PROGRAMME_DOOR_ACTS) expect(doorCredential(act, 'operator')).toBe(OPERATOR_DOOR_CREDENTIALS[act]);
   });

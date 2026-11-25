@@ -673,7 +673,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), and the
   programme lifecycle's doors (W2, D-8987, D-8992, D-8993) `POST /api/programmes` (the start, behind the account gate),
   `POST /api/programmes/:slug/state` (pause works while sign-in is dark and records `flag-off`; resume, end, reopen and repair
-  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), consult no box token
+  take the step-up) and `POST /api/programmes/:slug/coordinator` (the hand-over, behind the step-up), and its backfill door
+  `POST /api/programmes/decisions` (W3, D-8990: previews the operator's private decisions file, and applies it behind the
+  step-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
