@@ -18,7 +18,7 @@ Run 3739, plan `docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.
 - `.github/workflows/ci.yml`: the step `queue group still live`, first in `deps`, `server-shard`, `server-typecheck`,
   `server-perf`, `mask-perf`, `test`, `pwa-shard`, `pwa-static`, `build-pwa`, `browser-pwa` and `node-floor`.
 
-## Departure: the step's condition in a job with a leg switch (`queue-live-leg-gate`, D-TBD)
+## Departure: the step's condition in a job with a leg switch (`queue-live-leg-gate`, D-9069)
 
 The plan gave one condition, `github.event_name == 'merge_group'`. In the six jobs that carry a `CCRC_LEG` switch
 (`test`, `pwa-shard`, `pwa-static`, `build-pwa`, `browser-pwa`, `node-floor`) the step's condition is

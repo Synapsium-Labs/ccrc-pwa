@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status: written by the coordinator on 2026-11-25. No implementation exists.** One small wave, one pull request. It builds only once wave 1d (#3365) is on `main`, because Task 3 edits lines that wave adds.
+**Status: written by the coordinator on 2026-11-25. No implementation exists.** One small wave, one pull request. It builds on `main` at or after `ba0b0f40`, wave 1d's merge (#3365), because Task 3 edits lines that wave added.
 
 **Goal:** Close the minor points the last reviews of waves 1c, 1d and 1e left open, and give two whole-tree scan cases the margin they lack, so that none of them removes a green pull request from the merge queue or lets a guard rot unseen.
 
