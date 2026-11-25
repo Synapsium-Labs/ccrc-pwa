@@ -2301,7 +2301,7 @@ button.metachip:active {
 .tool-activity-sep { flex: none; color: var(--ink-tertiary); }
 .tool-activity-calls { flex: 1000 1 0; font-variant-numeric: tabular-nums; }
 .tool-activity-state { flex: 1000 1 0; color: var(--status-busy-text); }
-.tool-activity-asks { flex: none; color: var(--status-attention-text); }
+.tool-activity-asks { flex: none; }
 .tool-activity-attention-count { display: inline-flex; flex: none; gap: var(--sp-1); }
 .tool-activity-flag {
   padding: 2px var(--sp-1);
