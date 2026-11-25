@@ -665,7 +665,7 @@ describe('POST /api/overlord/restart', () => {
     expect(r.body.count('keepAwake-on')).toBe(0);
     expect(r.host.delivered).toEqual([]);
     expect(view(r)).toMatchObject({ pending: null, stopsOwed: [newId], lastAttempt: { sessionId: newId, outcome: 'deadline-passed' } });
-    // A retry heals: the stop is drained again, then the bound body is started.
+    // Once the stop's cause is fixed, the next Restart drains it again and only then starts the bound body.
     r.body.stopAnswer = () => ({ ok: true, absent: false });
     r.body.reset();
     const again = await restart(r);
@@ -707,9 +707,25 @@ describe('POST /api/overlord/restart', () => {
       const res = await restart(r);
       expect(res.statusCode, fail).toBe(REFUSAL_STATUS.unavailable);
       expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+      expect(res.json().detail, fail).toContain(newId);
       expect(r.body.log).toEqual([]);
       expect(view(r)!.pending).toMatchObject({ sessionId: newId });
     }
+  });
+
+  it('past the deadline, a row that cannot be read again after the end answers 503 unavailable: the attempt stays ended, nothing is stopped or started', async () => {
+    const { r, newId } = await overdue();
+    const c = r.coord as unknown as { designationRead: () => unknown };
+    const real = c.designationRead.bind(r.coord);
+    let reads = 0;
+    c.designationRead = () => (++reads === 2 ? { kind: 'unmeasured', why: 'unreadable for the test' } : real());
+    const res = await restart(r);
+    expect(reads).toBe(2);
+    expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+    expect(r.body.log).toEqual([]);
+    c.designationRead = real;
+    expect(view(r)).toMatchObject({ pending: null, stopsOwed: [newId], lastAttempt: { sessionId: newId, outcome: 'deadline-passed' } });
   });
 
   it('past the deadline, a Restart the body refuses ends nothing: the attempt stays pending', async () => {

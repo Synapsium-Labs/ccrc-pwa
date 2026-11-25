@@ -496,8 +496,9 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   app.post('/api/overlord/restart', async (req, reply) => {
     const g = deps.gate(req, reply, { cap: null, stepUp: false });
     if (!g.pass) return reply;
-    // It acts on the Overlord's body, so the act is attributed through the identity port (gates B). Its only row write is ending
-    // an overdue attempt, through `failPending`, whose line carries the attempt's actor as that writer records it.
+    // It acts on the Overlord's body, so the act is attributed through the identity port (gates B). It writes the row in two ways
+    // only, each through the existing writer: it ends an overdue attempt through `failPending`, whose line carries the attempt's
+    // actor as that writer records it, and its drain clears each stop it carries out through `stopDone`.
     const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       const read = coord.designationRead();
