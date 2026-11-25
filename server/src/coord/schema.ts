@@ -4631,6 +4631,15 @@ export const MIGRATIONS: readonly string[] = [
   DROP TABLE m127_past;
   DROP TABLE m127_seeds;
   `,
+  // ── 128: user_version 127 -> 128 ──────────────────────────────────────────
+  // X2 P4.3: one console-wide Docs settings row. No seed: absence means empty.
+  `
+  CREATE TABLE docs_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

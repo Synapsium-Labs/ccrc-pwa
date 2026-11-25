@@ -46,9 +46,8 @@ const events = (db: DatabaseSync, slug: string) =>
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
 describe('migration 127: the programme lifecycle', () => {
-  it('is the last entry, and it is found', () => {
-    expect(LIFECYCLE).toBeGreaterThan(0);
-    expect(LIFECYCLE).toBe(MIGRATIONS.length - 1);
+  it('is found in the deployed slot after future migrations append', () => {
+    expect(LIFECYCLE).toBe(126);
   });
 
   it('step 4: a D-51 done over an open run becomes active; with no open run it is kept and recorded', () => {
