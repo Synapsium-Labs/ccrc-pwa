@@ -7,7 +7,8 @@
 //   - the tab's title names the document.
 // Below the desk width (fix round 1, L1): a tab whose first page was a Docs address stays a Docs tab, so a Docs tab
 // resized from 1280 to 640 and back keeps the same reader, opens no fleet socket and scrolls nothing sideways, and a Docs
-// address loaded first at 390 x 844 draws the reader alone with a link back that moves in place. A phone that moves to Docs
+// address loaded first at 390 x 844 draws the reader alone with no bar above its head and no link back (fix round 3): the
+// way back there is the reader's Back, which at the index moves the tab to the console in place. A phone that moves to Docs
 // inside the console keeps the console's Docs screen, as before: no tab bar, no link back. Every case prints its figures on
 // a `DOT-FIGURE` line.
 //

@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 
@@ -68,6 +68,22 @@ describe('a throwing DocsScreen keeps the shell (M4.B1, W5 half)', () => {
     act(() => { navigate('/docs/demo'); });
     expect(screen.queryByText(FALLBACK)).toBeNull();
     expect(screen.getByRole('heading', { name: 'docs (stand-in) /docs/demo' })).toBeInTheDocument();
+  });
+
+  // A Docs address loaded first is a Docs tab (desktop polish wave 174), whose tree in `App` has a boundary of its own
+  // around the reader. Asserted as a Docs tab first, so the case never depends on what an earlier case left in the tab's
+  // store (wave 177: the shared teardown now clears it).
+  it('in a Docs tab, a Docs address loaded first: its own boundary draws the fallback and the link back, the tab still a Docs tab', () => {
+    navigate('/docs/demo');
+    render(<App />);
+    const shell = document.querySelector('.app-shell') as HTMLElement;
+    expect(shell).toHaveAttribute('data-tab', 'docs');
+    expect(shell.querySelector('.shell-nav')).toBeNull();
+    expect(detail()).toContainElement(screen.getByText(FALLBACK));
+    expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.objectContaining({ message: 'docs screen broke' }));
+    // Below the desk width (the setup's `matchMedia` answers no) the link back moves in place, under its own word.
+    expect(within(detail()).getByRole('link', { name: 'Back to the console' })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('button', { name: 'Back to the fleet' })).toBeNull();
   });
 
   it('navigating away from Docs resets it too', { timeout: LAZY_CEILING_MS }, async () => {

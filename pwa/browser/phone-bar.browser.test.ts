@@ -151,6 +151,12 @@ async function open(skin: string, width: number, path: string, ready: string, in
   }
   await opened.page.goto(server!.origin + path);
   await opened.page.waitForSelector(ready, { timeout: 20_000 });
+  if (asConsole) {
+    // The harness's console mark guards itself (desktop polish wave 177): a page opened with it is the console, never a Docs
+    // tab, so a mark the harness stopped setting turns every console case here red at its opener.
+    const tab = await opened.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null);
+    expect(tab, `opened with the console mark, ${path} is the console`).toBeNull();
+  }
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   await opened.page.waitForTimeout(250); // the first paint's transitions settle
   return opened;
@@ -283,6 +289,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
         expect(got.tab, 'a Docs tab').toBe('docs');
         expect(got.bars, 'no bar of the console and no tab bar').toBe(0);
         expect(got.screenTop, `nothing above the Docs screen ${JSON.stringify(got)}`).toBe(0);
+        expect(got.headTop, `the reader's head is the top of the page ${JSON.stringify(got)}`).toBe(0);
         expect(got.sideways, 'sideways scroll').toBe(0);
         expect(errors).toEqual([]);
       } finally {
