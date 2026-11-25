@@ -210,3 +210,9 @@ message's delivery, pick-up or ack, a rung or latch change, or Confirm; PR A's g
 - Creation as `recorded` stamps no line.
 - Locally, the mutation floors' two `pwa/src/face/mood.ts` sets fail their baseline because this checkout's test-box copy has no
   `@ccrc/ui` package; they are not touched here.
+- The judge's `test-weakened` reasons (non-blocking) on the rebind, sequence-store and sequence suites are the ruled changes, not
+  a lost check: retention keeps one designation line where `main` kept two (call 1077), and the sequence's example of an unknown
+  kind moved from `ladder-rung`, now a real kind, to `grant`. Each changed case still goes red against its mutant (K1 to K4).
+- CI's first run on this PR found test fakes in suites this PR did not edit that no longer type-checked (the mail lane's port and
+  the move answer's `from`); the local type check had been narrowed to the edited test files when the memory cap killed the whole
+  one. The fix round re-ran it over every test file that imports a changed module.
