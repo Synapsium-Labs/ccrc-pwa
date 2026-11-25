@@ -232,6 +232,17 @@ describe('POST /api/overlord/rebind: the gate and the body', () => {
     expect(r.facts.oldAsked).toEqual([]);
   });
 
+  it('a refusing gate answers before a malformed body is parsed: the gate\'s word, never 400', async () => {
+    for (const mode of ['auth-off', 'step-up-required'] as const) {
+      const g = await rig();
+      g.gate.mode = mode;
+      const res = await rebind(g, { force: 'yes' });
+      expect(res.statusCode, mode).toBe(REFUSAL_STATUS[mode]);
+      expect(res.json()).toMatchObject({ ok: false, error: mode });
+      expect(g.body.log).toEqual([]);
+    }
+  });
+
   it('no body, {} and {force: false} are accepted (they reach the verdict: 404 with nothing bound)', async () => {
     const r = await rig({ bound: false });
     for (const payload of [undefined, {}, { force: false }, { force: true }]) {
@@ -596,6 +607,25 @@ describe('POST /api/overlord/restart', () => {
       expect(r.body.log, detail).toEqual([]);
       expect(r.host.delivered).toEqual([]);
       expect(snapshot(r)).toEqual(before);
+    }
+  });
+
+  it('409 overlord-attempt-pending while a rebind is pending, for an asleep and a gone old body, even after a forced stop', async () => {
+    for (const force of [false, true]) {
+      for (const state of [{ kind: 'asleep' }, { kind: 'gone', cause: 'stopped' }] as OverlordBodyState[]) {
+        const r = await rig();
+        expect((await rebind(r, { force })).statusCode).toBe(200);
+        r.body.reset(); r.host.delivered.length = 0;
+        r.facts.bodyState = state;
+        const before = snapshot(r);
+        const res = await restart(r);
+        expect(res.statusCode, `${force} ${state.kind}`).toBe(REFUSAL_STATUS['overlord-attempt-pending']);
+        expect(res.json()).toMatchObject({ ok: false, error: 'overlord-attempt-pending' });
+        // Nothing is ensured, kept awake or prompted: the old body is not started beside the pending one.
+        expect(r.body.ops()).toEqual([]);
+        expect(r.host.delivered).toEqual([]);
+        expect(snapshot(r)).toEqual(before);
+      }
     }
   });
 

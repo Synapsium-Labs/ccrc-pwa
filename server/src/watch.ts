@@ -2346,10 +2346,10 @@ export class FleetWatcher {
     return this.deadCoordinatorState;
   }
 
-  /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
-   *  does, the wake holds `unmeasured`. */
   /** Designation B: the designation's lane port, built by the composition root over the doors' store, body and settle step. */
   useOverlordLane(port: OverlordLanePort): void { this.overlordLane = port; }
+  /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
+   *  does, the wake holds `unmeasured`. */
   useInboxReadGate(gate: ReturnType<typeof overlordReadGate>): void {
     this.inboxReadGate = gate;
   }

@@ -231,7 +231,8 @@ export const LANE_ARM_TEXT = {
         + 'nothing is held, refused or renewed.',
       liveNote: 'A coordinator that is due renews: its mail is held, it writes a handover note, ccd starts it fresh in the '
         + 'same session, and it reads its card and answers its probes before its mail is released. One that cannot is '
-        + 'left working and raises an item.',
+        + 'left working and raises an item. Live also ends an Overlord start that never settles at its deadline, settles '
+        + 'a lost one again, and stops the Overlord bodies still owed a stop.',
       gate: null,
     },
     [LAUNCH_PROFILE_LANE]: {

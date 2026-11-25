@@ -224,14 +224,17 @@ export function overlordBodyOf(f: { readonly sessionId: string; readonly listedI
 }
 
 export type RestartVerdict =
-  | { readonly ok: true } | { readonly ok: false; readonly error: 'not-found' }
+  | { readonly ok: true } | { readonly ok: false; readonly error: 'not-found' } | { readonly ok: false; readonly error: 'overlord-attempt-pending' }
   | { readonly ok: false; readonly error: 'overlord-body-alive'; readonly detail: 'alive' | 'restarting' | 'unmeasured' };
 
 /** Restart the Overlord (C23): the resume path for a body that is asleep or gone. An `up` body has nothing to restart, a `down`
  *  one is being restarted by its supervisor (an `ensure` would only race it), and an `unmeasured` one is never acted on. No live
- *  binding is `not-found` (question 8). The door and readiness's `restartable` both ask this one decider. */
-export function restartVerdict(binding: { readonly sessionId: string } | null, body: OverlordBodyState): RestartVerdict {
+ *  binding is `not-found` (question 8). While an attempt is pending on the slot it refuses `overlord-attempt-pending`, whatever
+ *  the bound body reads (`restart-refuses-while-an-attempt-is-pending`): two Overlord bodies are never started side by side, and a
+ *  forced rebind's stop is not undone by one tap. The door and readiness's `restartable` both ask this one decider. */
+export function restartVerdict(binding: { readonly sessionId: string; readonly pending: boolean } | null, body: OverlordBodyState): RestartVerdict {
   if (binding === null) return { ok: false, error: 'not-found' };
+  if (binding.pending) return { ok: false, error: 'overlord-attempt-pending' };
   switch (body.kind) {
     case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };
     case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };

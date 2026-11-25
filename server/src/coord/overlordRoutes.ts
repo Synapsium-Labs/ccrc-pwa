@@ -474,7 +474,9 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     // `create` means a live binding stood (`rebindVerdict` refused every other row), so `oldId` is that binding's.
     const model = read.kind === 'designated' ? read.row.model : 'opus';
     // Only after every verdict refusal (review F7): a forced rebind stops the old body first; a stop that fails refuses and
-    // creates nothing, so a refused rebind never leaves the Overlord stopped.
+    // creates nothing, so neither a verdict refusal nor a failed stop leaves the Overlord stopped. A forced rebind that fails
+    // after its stop (the pending write, the create, or the attempt later) leaves the binding naming the stopped body, with
+    // nothing owing it: once the attempt has ended, Restart brings it back (`forced-rebind-may-leave-the-bound-body-stopped`).
     if (force) {
       const stopped = await body.stop(oldId!);
       if (!stopped.ok) return refuseRoute(reply, 'overlord-body-alive', { detail: `the forced stop failed: ${stopped.detail}` });
@@ -498,12 +500,13 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return deps.serial(async () => {
       const read = coord.designationRead();
       if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
-      const binding = read.kind === 'designated' ? { sessionId: read.sessionId } : null;
+      const binding = read.kind === 'designated' ? { sessionId: read.sessionId, pending: read.row.pending !== null } : null;
       const state = binding === null ? null : facts.body?.(binding.sessionId) ?? null;
       const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' });
       if (!v.ok) {
-        return v.error === 'not-found' ? refuseRoute(reply, 'not-found', { detail: 'no Overlord is bound, so there is nothing to restart' })
-          : refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
+        if (v.error === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord is bound, so there is nothing to restart' });
+        if (v.error === 'overlord-attempt-pending') return refuseRoute(reply, 'overlord-attempt-pending', { detail: 'an attempt is pending on the designation' });
+        return refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
       }
       const id = binding!.sessionId;
       console.warn(`ccrc-server: Restart the Overlord: ensuring ${id}, asked by ${actor.subject}`);
