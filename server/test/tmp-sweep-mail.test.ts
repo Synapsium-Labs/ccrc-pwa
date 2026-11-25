@@ -456,7 +456,9 @@ describe('runTmpSweepCensusLane', () => {
     const W2 = 'project-a-other-worker';
     const r = laneRig(json(census({ sessions: [overBudget(), { ...overBudget(), id: W2, uuid: 'd'.repeat(36) }] })));
     workerOfCoordinator(r.coord);
-    const opened = r.coord.openRun({ program: 'prog-b', title: 'prog-b', project: 'project-a', wave: 2, waveOf: 2, claimedBy: COORD });
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so its second worker's run is prog-a's
+    // wave 2, not the first run of another programme.
+    const opened = r.coord.openRun({ program: 'prog-a', title: 'prog-a', project: 'project-a', wave: 2, waveOf: 2, claimedBy: COORD });
     if (!('id' in opened)) throw new Error('openRun refused');
     r.coord.markDispatched(opened.id, W2, `${W2}-ws`, `ws/${W2}`, false, Date.now());
     await runTmpSweepCensusLane(r.deps, r.state, new Set([WORKER, COORD, W2]));

@@ -24,6 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeRunRefuseCode, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -5440,10 +5441,9 @@ export function isWorkItemState(v: unknown): v is WorkItemState {
  *  enum column, and this was one of the two it did not actually give one to.
  *  Closed here, on the READ side, rather than reproduced on the wire —
  *  `CoordStore.programs()` reads through `isProgramState`, never a cast. */
-export type ProgramState = 'active' | 'paused' | 'done' | 'abandoned' | 'unknown';
-const PROGRAM_STATES: readonly ProgramState[] = ['active', 'paused', 'done', 'abandoned', 'unknown'];
+export type ProgramState = ProgrammeStoredState;   // spelled once, in `shared/programmeLifecycle.ts` (W1 review, A7)
 export function isProgramState(v: unknown): v is ProgramState {
-  return typeof v === 'string' && (PROGRAM_STATES as readonly string[]).includes(v);
+  return typeof v === 'string' && (PROGRAMME_STORED_STATES as readonly string[]).includes(v);
 }
 
 /** An agent-to-agent message. `artifact` carries PATHS, NEVER PAYLOADS
@@ -6801,7 +6801,8 @@ export type RunRefuseCode =
   // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
   // into an epic with an open declared ticket no run holds must name one.
   // D-6096: `self-dispatch`, a plain dispatch of a run onto the session that claims it; bind it in place instead.
-  | 'ticket-required' | 'self-dispatch';
+  // Programme lifecycle W1 (D-8983, D-8993): the lifecycle's open refusals, spelled in `shared/programmeLifecycle.ts`.
+  | 'ticket-required' | 'self-dispatch' | ProgrammeRunRefuseCode;
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6814,7 +6815,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
-  'ticket-required': true, 'self-dispatch': true,
+  'ticket-required': true, 'self-dispatch': true, ...PROGRAMME_RUN_REFUSAL_MAP,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

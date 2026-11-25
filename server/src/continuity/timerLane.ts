@@ -118,7 +118,8 @@ export function timersPass(d: { coord: WatcherCoordPort; now: number; log: (line
   };
   const programmeOf = (slug: string | null): CleanupFacts['boundProgramme'] => {
     if (slug === null) return 'none';
-    try { return { planEnded: !coord.programmeLive(slug) }; } catch { return 'unmeasured'; }
+    // Programme lifecycle W1 (W1 review, C1): a DECIDED end only, never a D-51 end the migration kept for the operator.
+    try { return { planEnded: coord.programmeEndDecided(slug) }; } catch { return 'unmeasured'; }
   };
   const due: DueTimer[] = [];
   for (const t of facts.pending.ok ? facts.pending.rows : []) {

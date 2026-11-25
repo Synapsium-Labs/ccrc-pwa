@@ -861,7 +861,10 @@ describe('Build 7 nouns', () => {
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
       'advisorStore.ts',
       // The history of limits (Overlord W1 serviceability B): the sampler's SQL takes a handle by argument.
-      'limitSamplesStore.ts']);
+      'limitSamplesStore.ts',
+      // The programme lifecycle (W1, D-8983): `programmeLifecycleStore.ts` is the decision's, the binding's and the events' one
+      // writer, inside its caller's transaction; it names the handle by `import type`, and every function takes it as an argument.
+      'programmeLifecycleStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

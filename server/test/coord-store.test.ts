@@ -183,7 +183,8 @@ describe('CoordStore: runs', () => {
   it('measures the actual multi-digit generated id at the fresh-insert boundary', () => {
     const s = store();
     for (let wave = 1; wave <= 9; wave++) {
-      const decoy = openRun(s, { program: `decoy-${wave}`, title: 'Decoy', wave });
+      // Programme lifecycle W1 (R11): one coordinator per programme, so each decoy has its own claimant.
+      const decoy = openRun(s, { program: `decoy-${wave}`, title: 'Decoy', wave, claimedBy: `ccrc-pwa-decoy-${wave}` });
       expect(decoy).toMatchObject({ id: wave });
     }
     const wave = 22;
@@ -205,8 +206,8 @@ describe('CoordStore: runs', () => {
     const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
     const now = Date.now();
     s.db.prepare(
-      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
-    ).run(program, program, now, 'active', null);
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject, coordinator) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(program, program, now, 'active', null, 'ccrc-pwa-coordinator');
     s.db.prepare(
       'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -287,8 +288,8 @@ describe('CoordStore: runs', () => {
     const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
     const now = Date.now();
     s.db.prepare(
-      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
-    ).run('unsafe-reused-id', 'Unsafe reused id', now, 'active', null);
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject, coordinator) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('unsafe-reused-id', 'Unsafe reused id', now, 'active', null, 'ccrc-pwa-coordinator');
     s.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -1793,26 +1794,25 @@ describe('CoordStore: programs', () => {
     expect(s.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'unknown' }]);
   });
 
-  it('writes programs.state through a real setter, and unwedges resolveCoordinator once a finished program is retired (found in a later Task 3 review, D-26)', () => {
-    // Before this fix `programs.state` had no writer beyond `openRun`'s
-    // hardcoded 'active' at first open — so once a SECOND program opened,
-    // `soleActiveCoordinator()` (the shipped ingress's `toId:'coordinator'`
-    // resolution) died permanently: two 'active' rows is `ambiguous`, and
-    // nothing in the build could ever move the first one out of `active`,
-    // even after every one of its runs was done. This is the failure
-    // scenario, demonstrated at the store level, and its fix.
+  it('resolves run-less coordinator mail over the programme that SHOWS Active, and an Idle one stops counting (D-26, programme lifecycle W1)', () => {
+    // D-26's wedge (two `active` rows forever) is now answered by the derived lifecycle (D-8984, D-8985): a programme whose
+    // last run closed shows Idle, not Active, so it stops counting without any stored retirement (D-51 is gone).
     const s = store();
-    s.openRun({ program: 'p1', title: 'Program one', programmeTitle: 'Program one', project: 'ccrc-pwa',
-                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' });
+    const a = s.openRun({ program: 'p1', title: 'Program one', programmeTitle: 'Program one', project: 'ccrc-pwa',
+                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' }) as { id: number };
+    expect(s.soleActiveCoordinator()).toBeNull();                 // Open: nothing dispatched yet
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordA');
 
-    s.openRun({ program: 'p2', title: 'Program two', project: 'ccrc-pwa',
-                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' });
-    expect(s.soleActiveCoordinator()).toBeNull();          // two active programs: ambiguous
+    const b = s.openRun({ program: 'p2', title: 'Program two', project: 'ccrc-pwa',
+                wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' }) as { id: number };
+    expect(s.advance(b.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.soleActiveCoordinator()).toBeNull();          // two Active programmes: ambiguous
 
-    s.setProgramState('p1', 'done');
-    expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'done' });
-    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
+    expect(s.closeRun({ runId: a.id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: 'p1', viaClosing: true }))
+      .toMatchObject({ ok: true });
+    expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'active' });   // stored live: shows Idle
+    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordB');   // p2 is the sole Active programme
   });
 
   it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
@@ -2014,6 +2014,11 @@ describe('the disaster-recovery path (spec:82-85)', () => {
                   held: 'program:build6 wave:1/1' },
       prHistory: [],
     });
+    // Programme lifecycle W1 (R11 rule 8): `reconstruct` binds no coordinator, and a run never takes a free programme;
+    // the operator's hand-over (W2) gives it one. Here the binding is written as that hand-over would leave it.
+    expect(s.openRun({ program: 'build6', title: 'Recovered', project: 'ccrc-pwa',
+                       wave: 2, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' })).toMatchObject({ refused: 'not-your-programme' });
+    s.db.prepare("UPDATE programs SET coordinator = 'ccrc-pwa-coordinator' WHERE slug = 'build6'").run();
     const a = s.openRun({ program: 'build6', title: 'Recovered', project: 'ccrc-pwa',
                           wave: 2, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
     expect(a).toMatchObject({ program: 'build6' });
@@ -3515,8 +3520,10 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
   it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {
     const s = store();
     const ids = waves(s);
-    const other = (openRun(s, { program: 'sibling', wave: 1, waveOf: 1, claimedBy: DEAD }) as
+    const other = (openRun(s, { program: 'sibling', wave: 1, waveOf: 1, claimedBy: `${DEAD}-sibling` }) as
       { id: number }).id;
+    // Programme lifecycle W1 (R11): one session no longer opens a second programme; an older build's claim is written here.
+    s.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(DEAD, other);
 
     // MOVES.
     const mine = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
@@ -3666,8 +3673,10 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
   it('scopes the repoint to THIS program: a sibling program’s coordinator mail is untouched', () => {
     const s = store();
     const ids = waves(s);
-    const other = (openRun(s, { program: 'sibling', wave: 1, waveOf: 1, claimedBy: DEAD }) as
+    const other = (openRun(s, { program: 'sibling', wave: 1, waveOf: 1, claimedBy: `${DEAD}-sibling` }) as
       { id: number }).id;
+    // Programme lifecycle W1 (R11): one session no longer opens a second programme; an older build's claim is written here.
+    s.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(DEAD, other);
     const mine = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const theirs = queue(s, { toId: 'coordinator', runId: other }, DEAD);
 
@@ -3978,8 +3987,11 @@ describe('CoordStore.childReclaimCoordinatorClaims — the latest instant per id
   /** A run claimed by `by`, in a programme of its own. */
   const claimed = (s: CoordStore, by: string): { id: number; program: string } => {
     const program = `k3-prog-${++progN}`;
-    const r = openRun(s, { program, title: program, claimedBy: by });
+    // Programme lifecycle W1 (R11): one session opens one programme, so the run is opened by a claimant of its own and
+    // re-pointed at `by` as an older build's claims left it (the store's readers still see every claimed run).
+    const r = openRun(s, { program, title: program, claimedBy: `${by}-opener-${progN}` });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    s.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(by, r.id);
     return { id: r.id, program };
   };
   /** Abandon it (terminal), then — when given — pin its `closedAt` by direct SQL. */

@@ -536,12 +536,14 @@ describe('the pass: moves and closes', () => {
     expect(upd.input['statusId']).toBe(U(33));
   });
 
-  it('the last epic settling done with programs.state done ends the programme and completes the initiative', async () => {
+  it('a programme DECIDED done ends and completes the initiative; the last run closing alone ends nothing (programme lifecycle W1, D-8983)', async () => {
     const r = await rig({ ticket: false });
     const run = await runIt(r, epicRow(r, 'e1').id, 1);
     expect(r.coord.advance(run, 'dispatched', 'test').ok).toBe(true);
     expect(r.coord.closeRun({ runId: run, finalState: 'done', causedBy: 'test', handoffCommit: null, program: SLUG, viaClosing: true }).ok).toBe(true);
     r.plan.markCheckpointMet(epicRow(r, 'e1').checkpoints[0]!.id, { pr: 12 }, r.t.now);
+    expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('active');
+    r.coord.decideProgramme({ slug: SLUG, to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'operator' }, why: 'objective met' }, r.t.now);
     expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('done');
     await tick(r);
     expect(sentInput(r, 'initiativeCreate')['status']).toBe('Completed');
@@ -554,7 +556,7 @@ describe('the pass: moves and closes', () => {
     const run = await runIt(r, epicRow(r, 'e1').id, 1);
     expect(r.coord.advance(run, 'dispatched', 'test').ok).toBe(true);
     expect(r.coord.closeRun({ runId: run, finalState: 'done', causedBy: 'test', handoffCommit: null, program: SLUG, viaClosing: true }).ok).toBe(true);
-    expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('done');
+    expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('active');   // Idle (D-51 gone)
     expect(epicRow(r, 'e2').state).toBe('planned');
     r.plan.markSyncDue(SLUG, r.t.now);
     await tick(r);
@@ -565,14 +567,14 @@ describe('the pass: moves and closes', () => {
     expect(sent.some((a) => a.op === 'projectUpdate' && String(a.target) === String(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic' && b.localId === epicRow(r, 'e2').id)!.linearId))).toBe(false);
   });
 
-  it('the last run of wave 1 closes failed (programs.state abandoned), and nothing is canceled', async () => {
+  it('the last run of wave 1 closes failed (the programme stays live: D-51 gone), and nothing is canceled', async () => {
     const r = await rig({ epics: 'two', ticket: false });
     await tick(r);
     const from = r.asks.length;
     const run = await runIt(r, epicRow(r, 'e1').id, 1);
     expect(r.coord.advance(run, 'dispatched', 'test').ok).toBe(true);
     expect(r.coord.closeRun({ runId: run, finalState: 'failed', causedBy: 'test', handoffCommit: null, program: SLUG, viaClosing: true }).ok).toBe(true);
-    expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('abandoned');
+    expect((r.db.prepare('SELECT state FROM programs WHERE slug = ?').get(SLUG) as { state: string }).state).toBe('active');
     r.plan.markSyncDue(SLUG, r.t.now);
     await tick(r);
     const sent = r.asks.slice(from);

@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { COORD_SCHEMA_VERSION } from '../src/coord/schema.js';
+import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import type { LimitSample } from '../src/poolRunway.js';
 import { limitSamplePass } from '../src/limitSampler.js';
 import { parseRoster } from '../../shared/roster.js';
@@ -72,7 +72,14 @@ describe('the migration (the plan\'s F15)', () => {
     const first = openCoordDb(file);
     first.exec("CREATE TABLE kept_fixture (x TEXT); INSERT INTO kept_fixture VALUES ('kept')");
     first.exec('DROP TABLE limit_samples');
-    first.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION - 1}`);
+    // The programme lifecycle's migration (127, W1) landed after this one: undo it too, so the reopen replays both from
+    // the version before this one, which is this entry's slot.
+    first.exec(`DROP INDEX programs_one_per_coordinator; DROP TABLE programme_picks; DROP TABLE programme_events;
+      ALTER TABLE programs DROP COLUMN filedInto; ALTER TABLE programs DROP COLUMN placeholder; ALTER TABLE programs DROP COLUMN coordinatorSince;
+      ALTER TABLE programs DROP COLUMN coordinatorUuid; ALTER TABLE programs DROP COLUMN coordinator;`);
+    const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE limit_samples'));
+    expect(slot).toBe(COORD_SCHEMA_VERSION - 2);
+    first.exec(`PRAGMA user_version = ${slot}`);
     first.close();
     const db = openCoordDb(file);
     expect(versionOf(db)).toBe(COORD_SCHEMA_VERSION);

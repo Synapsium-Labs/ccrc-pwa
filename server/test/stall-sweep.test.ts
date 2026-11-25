@@ -214,7 +214,9 @@ const rig = async (over: Partial<Deps> = {}): Promise<{ h: Harness; coord: Coord
 };
 
 interface RunSeed {
-  program: string; worker?: string; dispatchedAt?: number;
+  /** `wave` (default 9): a second run of one programme takes another wave. Programme lifecycle W1 (R11): COORD owns at most
+   *  one live programme, so a test's second run is a run of the same programme, never of another. */
+  program: string; wave?: number; worker?: string; dispatchedAt?: number;
   workerMail?: { at: number; subject: string } | null; inbound?: { at: number } | null;
 }
 /** One dispatched work run. By default it carries S4's two mails: the worker's status at 21:17:43Z, and
@@ -223,7 +225,7 @@ const seedRun = (coord: CoordStore, o: RunSeed): number => {
   const worker = o.worker ?? WORKER;
   const dispatchedAt = o.dispatchedAt ?? DISPATCHED_AT;
   at(dispatchedAt);
-  const opened = coord.openRun({ program: o.program, title: o.program, project: 'demo', wave: 9, waveOf: 9, claimedBy: COORD });
+  const opened = coord.openRun({ program: o.program, title: o.program, project: 'demo', wave: o.wave ?? 9, waveOf: Math.max(9, o.wave ?? 9), claimedBy: COORD });
   if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
   coord.markDispatched(opened.id, worker, `${worker}-ws`, `ws/${worker}`, false, dispatchedAt);
   const adv = coord.advance(opened.id, 'dispatched', 'coordinator');
@@ -641,7 +643,7 @@ describe('sweepStalls: durability', () => {
     const { h, coord, w } = await rig();
     seedRegistry(h.home, OTHER_WORKER);
     seedRun(coord, { program: 'prog-a' });
-    seedRun(coord, { program: 'prog-b', worker: OTHER_WORKER });
+    seedRun(coord, { program: 'prog-a', wave: 10, worker: OTHER_WORKER });   // one programme per coordinator (R11)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const real = coord.currentAskFor.bind(coord);
     let thrown = false;
@@ -757,7 +759,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     const { coord, w } = await rig();
     // Run A (earlier) carries the worker's last mail; run B (later) carries the newest mail TO it.
     const runA = seedRun(coord, { program: 'prog-a', dispatchedAt: DISPATCHED_AT - 3_600_000, inbound: null });
-    const runB = seedRun(coord, { program: 'prog-b', workerMail: null });
+    const runB = seedRun(coord, { program: 'prog-a', wave: 10, workerMail: null });   // one programme per coordinator (R11)
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord).map((m) => m.runId)).toEqual([runB]);
@@ -968,7 +970,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
       const { coord, w } = await rig();
       const runId = seedRun(coord, { program: 'demo-program' });
       if (withPeer) {
-        const other = seedRun(coord, { program: 'prog-other', worker: OTHER_WORKER, workerMail: null, inbound: null });
+        const other = seedRun(coord, { program: 'demo-program', wave: 10, worker: OTHER_WORKER, workerMail: null, inbound: null });   // R11
         at(WORKER_MAIL_AT + 600_000);                 // newer than the worker's last run mail: it would move the key
         coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', body: 'b', artifacts: [] });
         coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: OTHER_WORKER, runId: other, kind: 'finding', subject: 'off-run', body: 'b', artifacts: [] });
@@ -2067,7 +2069,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     // left working, and its worker has been silent on it since S4's mails.
     const a = dispatchAt(coord, 'prog-a', DISPATCHED_AT - 3_600_000);
     advanceAt(coord, a, DISPATCHED_AT - 1_800_000, 'working');
-    const b = seedRun(coord, { program: 'prog-b' });
+    const b = seedRun(coord, { program: 'prog-a' });   // one programme per coordinator (R11): wave 9 beside A's wave 2
     advanceAt(coord, a, DISPATCHED_AT + 3_600_000, 'awaiting-review');
     advanceAt(coord, a, R1_AT - 1_800_000, 'working');
     await sweepAt(w, R1_AT, LIVE);
@@ -2078,7 +2080,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     const { h, coord, w } = await rig();
     seedRegistry(h.home, OTHER_WORKER);
     seedRun(coord, { program: 'prog-a' });
-    seedRun(coord, { program: 'prog-b', worker: OTHER_WORKER });
+    seedRun(coord, { program: 'prog-a', wave: 10, worker: OTHER_WORKER });   // one programme per coordinator (R11)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(coord, 'runEvents').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
     at(R1_AT);

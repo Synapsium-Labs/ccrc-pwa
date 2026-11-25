@@ -231,7 +231,7 @@ function cancelOf(coord: CoordStore, id: number, actor: 'setter-cancel' | 'opera
 /** The set door's bound key, measured once (slug bound-key-must-be-live): a run is the caller's own when it is among its
  *  open bindings, claimed or worked (`bindingsOf`), and a programme when it coordinates it and the plan has not ended. A
  *  binding read that fails or throws is `unmeasured`, never `not-own`: a box fault never reads as "not yours". */
-function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null; programme: string | null }): SetFacts['binding'] {
+function bindingOf(coord: CoordStore, id: string, uuid: string, bound: { runId: number | null; programme: string | null }): SetFacts['binding'] {
   try {
     if (bound.runId !== null) {
       const b = coord.bindingsOf(id);
@@ -239,7 +239,7 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
       if (!claimed.ok || !worked.ok) return 'unmeasured';
       return [...claimed.siblings, ...worked.siblings].some((r) => r.id === bound.runId) ? 'own' : 'not-own';
     }
-    if (bound.programme !== null) return coord.claimsProgramme(id, bound.programme) && coord.programmeLive(bound.programme) ? 'own' : 'not-own';
+    if (bound.programme !== null) return coord.claimsProgramme(id, bound.programme, uuid) && coord.programmeLive(bound.programme) ? 'own' : 'not-own';
     return 'none';
   } catch {
     return 'unmeasured';
@@ -566,7 +566,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
-    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, id, at);
+    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, { id, uuid }, at);
     const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
     if (part === 'anchor') {
@@ -691,7 +691,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       ? { key: closed?.key ?? { kind: 'run', id: revises! }, kind: closed?.kind ?? 'thread', waitsOn: '', next: '', revises, closes }
       : { key: key!, kind: kind as NoteInput['kind'], waitsOn, next, revises, closes };
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
-    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined)(input.key), id);
+    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, { id, uuid: b['byUuid'] as string }, deps.operatorModel?.() ?? undefined)(input.key), id);
     const live = coord.liveNotes(id);
     const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
@@ -737,7 +737,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     const live = coord.liveNotes(c.id);
     if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
-    const read = noteKeyReader(coord, c.id, deps.operatorModel?.() ?? undefined);
+    const read = noteKeyReader(coord, { id: c.id, uuid: c.b['byUuid'] as string }, deps.operatorModel?.() ?? undefined);
     const wire = live.notes.map((n) => ({
       id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
     }));
@@ -789,7 +789,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
     }
-    const read = noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined);
+    const read = noteKeyReader(coord, { id, uuid: b['byUuid'] as string }, deps.operatorModel?.() ?? undefined);
     const note: HandoverNote = { threads, cautions: cautions as string[], tone };
     const verdict = handoverVerdict(note, threads.map((t) => noteKeyFact(read(t.ref), id)));
     if (!verdict.ok) return refuseNote(reply, verdict.refusal);
@@ -843,7 +843,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const { role } = await sessionRoleRead({ coord, ...deps.cardRegistry }, fromId);
     // From here to the write, nothing awaits: the binding, the pending count and the rate are read with the verdict and the
     // write, so a run that closes while the role is read is refused, never stored bound (review 2052 F3).
-    const binding = bindingOf(coord, fromId, { runId: runId as number | null, programme: programme as string | null });
+    const binding = bindingOf(coord, fromId, fromUuid, { runId: runId as number | null, programme: programme as string | null });
     const now = deps.wall();
     const pending = coord.pendingTimersOf(fromId);
     let setsLastHour: number;

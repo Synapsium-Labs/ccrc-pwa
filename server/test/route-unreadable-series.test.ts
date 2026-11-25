@@ -40,7 +40,7 @@ describe('POST /api/runs/:id/route over an unreadable run series', () => {
     const fleetState = { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ROUTE_CAP, ACTOR_FLAGS_CAP] as string[] };
     app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, fleetState });
-    seedLegacyProgramme(coord.db, 'p', 'demo');
+    seedLegacyProgramme(coord.db, 'p', 'demo', 'coord');   // its coordinator, as its first run's mint binds it (programme lifecycle W1, R11)
     const headers = { 'x-ccrc-mail-token': TOKEN };
     const opened = (await app.inject({ method: 'POST', url: '/api/runs', headers, payload: {
       program: 'p', title: 't', project: 'demo', wave: 1, waveOf: 3, claimedBy: 'coord', homeProject: 'demo', claimedByUuid: 'u-coord' } })).json() as { id: number };

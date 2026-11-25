@@ -226,6 +226,9 @@ export interface OpenRunPlan {
   programmeTitle?: string;
   /** D-5298: accepted with no `claimedByUuid` before the switch-over. */
   unattributed: boolean;
+  /** The attributed claimant's uuid (D-5298), or null for an unattributed open: the incarnation the programme's binding
+   *  names and compares (programme lifecycle D-8985, D-8993). */
+  claimedByUuid: string | null;
   /** The claimant's measured registry project — the `claimantProject` gate's
    *  read, handed to `openRun`'s `coordProject` stamp so it is read once. */
   coordProject: string;
@@ -535,6 +538,7 @@ export async function openRunPreconditions(f: OpenRunFacts): Promise<OpenRunVerd
       ...(typeof b.sessionId === 'string' ? { sessionId: b.sessionId } : {}),
       ...(typeof b.programmeTitle === 'string' ? { programmeTitle: b.programmeTitle } : {}),
       unattributed: c.unattributed === true, coordProject: c.coordProject!,
+      claimedByUuid: typeof b.claimedByUuid === 'string' ? b.claimedByUuid : null,
       ticket: c.ticket ?? null,
     },
   };

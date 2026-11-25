@@ -1146,9 +1146,12 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
   /** A terminal run of `program`, WAVE 1, its own hold text — the open/dispatch
    *  claim — and the close-claim rendering `holdReason(program, 2, null, null)`
    *  the caller ordinarily plants as the row's `.hold` (the non-final close's
-   *  own claim, the shape `childReclaimHoldRead` matches most often). */
-  const terminalRun = (coord: CoordStore, program: string): number => {
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+   *  own claim, the shape `childReclaimHoldRead` matches most often).
+   *  Programme lifecycle W1 (R11): one coordinator owns one programme, and a
+   *  closed last run leaves its programme live, so a second programme's run is
+   *  claimed by a second coordinator (`claimedBy`). */
+  const terminalRun = (coord: CoordStore, program: string, claimedBy = 'demo-coord'): number => {
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     expect(coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
       program, viaClosing: false }).ok).toBe(true);
@@ -1278,7 +1281,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
   it('the marker no longer names this run — no release', async () => {
     const f = await rrig();
     const runId = terminalRun(f.coord, 'demo');
-    const other = terminalRun(f.coord, 'demo-other');
+    const other = terminalRun(f.coord, 'demo-other', 'demo-coord-other');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(other), hold: reason });   // re-bound to a different run since
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
@@ -1307,8 +1310,9 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
+    // R11: `demo-coord` owns `demo`, so the sibling's programme has its own coordinator.
     const sib = f.coord.openRun({ program: 'demo-other', title: 't', project: 'demo', wave: 1, waveOf: null,
-      claimedBy: 'demo-coord' });
+      claimedBy: 'demo-coord-other' });
     if (!('id' in sib)) throw new Error(`openRun sib refused: ${JSON.stringify(sib)}`);
     f.coord.markDispatched(sib.id, RID, RID, 'ws/quiet-basin', false);
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };

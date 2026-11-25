@@ -747,10 +747,11 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
   that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
-  wave N's** — close-first leaves zero open runs and the server retires the program, breaking
-  `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves
-  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
-  documented recovery for an already-retired program.
+  wave N's** — `toId:'coordinator'` mail that carries NO `runId` resolves only over a programme that shows Active
+  (`lifecycleOf`: an open run and a run ever dispatched), and the open `planned` run keeps it Active; close-first leaves
+  it Idle and such mail unresolvable until the next run is dispatched. Nothing retires a programme any more (programme
+  lifecycle W1, D-8983: D-51 is deleted; only a decision ends one). Mail naming a `runId` still resolves
+  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate).
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
   (`ccd/coordinator-skill/SKILL.md`); its twenty-four clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES

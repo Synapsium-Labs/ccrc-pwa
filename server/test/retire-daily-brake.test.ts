@@ -28,7 +28,8 @@ import { mkTmp } from './tmpHelpers.js';
  *  retirement every one of them counted against the rolling daily brake. */
 function seedClosedDispatches(coord: CoordStore, n: number, now: number): void {
   for (let i = 0; i < n; i++) {
-    const o = coord.openRun({ program: `old-${i}`, title: 't', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'c' });
+    // Programme lifecycle W1 (R11): one coordinator owns at most one live programme, so each old programme has its own.
+    const o = coord.openRun({ program: `old-${i}`, title: 't', project: 'demo', wave: 1, waveOf: 1, claimedBy: `c-old-${i}` });
     if (!('id' in o)) throw new Error(`fixture openRun refused: ${JSON.stringify(o)}`);
     coord.markDispatched(o.id, `demo-old-${i}`, `old-${i}`, `ws/old-${i}`, false, now - 3600_000);
     coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(o.id);

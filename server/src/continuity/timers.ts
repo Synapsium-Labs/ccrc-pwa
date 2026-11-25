@@ -101,8 +101,9 @@ export type CleanupVerdict =
 const WAIT: CleanupVerdict = { act: 'wait' };
 const cancel = (reason: TimerCancelReason): CleanupVerdict => ({ act: 'cancel', reason });
 
-/** The cleanup's order: the bound run (closed: `run-closed`), the bound programme (`planEnd` recorded:
- *  `programme-ended`; `done`, `abandoned` and `unknown` cancel nothing, because a programme between waves is not ended),
+/** The cleanup's order: the bound run (closed: `run-closed`), the bound programme (an end DECIDED, programme lifecycle
+ *  W1: `programme-ended`; an Idle programme, `paused`, `unknown` and a D-51 end the migration kept for the operator's
+ *  decision cancel nothing, because a programme between waves is not ended and a cancel is never undone),
  *  each `unmeasured` waiting before its rung; a timer set at or after the tick's listing began, or a tick with no listing,
  *  waits; an unmeasured listing waits; an archived row cancels `setter-archived`; an `absent` incarnation cancels
  *  `setter-gone` when the listing did not name the row and waits when it did (a row the listing saw but could not build,

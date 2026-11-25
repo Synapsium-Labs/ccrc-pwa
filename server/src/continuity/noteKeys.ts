@@ -17,12 +17,17 @@ export type NoteKeysMessages = Pick<OperatorModelStore, 'messageSessionOf'>;
  *  binding's own reader (`bindingsOf(caller).claimant()`, ARCH-62), each remembered for the reader's life (one request), so
  *  a card of 200 notes reads the caller's runs once. `messages` is absent on a server without the private store: a `message`
  *  key then reads `unmeasured`, never `absent`. */
-export function noteKeyReader(coord: NoteKeysCoord, caller: string, messages?: NoteKeysMessages): (key: NoteKey) => KeyReading {
+/** The caller's incarnation (programme lifecycle W1 review, S3): `claimsProgramme` compares the uuid with the programme's
+ *  binding, so a reused session id owns nothing. A bare id is an unattributed reader (a test), compared by the id alone. */
+export type NoteKeysCaller = string | { readonly id: string; readonly uuid: string | null };
+export function noteKeyReader(coord: NoteKeysCoord, who: NoteKeysCaller, messages?: NoteKeysMessages): (key: NoteKey) => KeyReading {
+  const caller = typeof who === 'string' ? who : who.id;
+  const callerUuid = typeof who === 'string' ? null : who.uuid;
   const claims = new Map<string, boolean | 'unmeasured'>();
   const claimsOf = (slug: string): boolean | 'unmeasured' => {
     let v = claims.get(slug);
     if (v === undefined) {
-      try { v = coord.claimsProgramme(caller, slug); } catch { v = 'unmeasured'; }
+      try { v = coord.claimsProgramme(caller, slug, callerUuid); } catch { v = 'unmeasured'; }
       claims.set(slug, v);
     }
     return v;

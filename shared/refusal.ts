@@ -689,7 +689,9 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'>;
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'
+  // Programme lifecycle W1 (D-8983, D-8993): the lifecycle's open refusals.
+  | 'programme-paused' | 'programme-unknown' | 'programme-provisional' | 'owns-another-programme' | 'not-your-programme'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -705,6 +707,9 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
   // Programme work map WM1 (D-8727): chosen, not measured — a new word, 409 like the plan's five.
   'ticket-required': 409,
+  // Programme lifecycle W1 (D-8983, D-8993): chosen, not measured — the family's 409.
+  'programme-paused': 409, 'programme-unknown': 409, 'programme-provisional': 409, 'owns-another-programme': 409,
+  'not-your-programme': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

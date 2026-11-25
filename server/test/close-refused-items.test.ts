@@ -41,10 +41,11 @@ async function rig(): Promise<Rig> {
   return { app, coord, home, calls: rec.calls as string[][], n: 0 };
 }
 
-/** One planned run of a programme of its own, claimed by the gone `lane-gone`, optionally with a worker session. */
+/** One planned run, claimed by the gone `lane-gone`, optionally with a worker session: the next wave of the claimant's one
+ *  programme (programme lifecycle W1, R11: one coordinator owns one programme). */
 function fixtureRun(r: Rig, withWorker: boolean, claimant = 'lane-gone'): number {
   r.n += 1;
-  const opened = r.coord.openRun({ program: `prog-${r.n}`, title: `Prog ${r.n}`, project: 'project-a', wave: 1, waveOf: 2, claimedBy: claimant });
+  const opened = r.coord.openRun({ program: `prog-${claimant}`, title: `Prog ${claimant}`, project: 'project-a', wave: r.n, waveOf: null, claimedBy: claimant });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   if (withWorker) r.coord.markDispatched(opened.id, 'worker-a', 'worker-a', 'ws/worker-a', false);
   return opened.id;
@@ -117,9 +118,10 @@ describe('the control pin: every item names a control that works', () => {
   });
 
   it('each Hand to a coordinator door is accepted by POST /api/runs/:id/reclaim under a gone claimant', async () => {
-    const r = await rig();
     let ran = 0;
     for (const [reason, who] of RAISING) {
+      // A rig per cell (programme lifecycle W1, R11): the reclaim gives heir-a the programme, and one coordinator owns one.
+      const r = await rig();
       const id = fixtureRun(r, false);
       const item = r.coord.itemById(raise(r, id, reason, who))!;
       if (!isCloseRefusedAction(item.action) || !item.action.doors.includes('hand-to-coordinator')) continue;
@@ -272,7 +274,8 @@ describe('Close this run, and the programme\'s end', () => {
     expect(stateOf(r, id)).toBe('failed');
     expect(r.coord.itemById(itemId)!.state).toBe('done');
     expect(detailOf(r, id)).toBe(`abandon:refused:${itemId} done elsewhere`);
-    expect(programme(), 'the close retired the programme as abandoned, and its plan stays open').toMatchObject({ state: 'abandoned', planEnd: null });
+    // Programme lifecycle W1 (D-8983): D-51 is gone, so the close ends nothing: the programme stays live (Idle), unended.
+    expect(programme(), 'the close leaves the programme live, and ends nothing').toMatchObject({ state: 'active', planEnd: null });
   });
 
   it('with programme done, the same act ends the programme done and closes its plan (the reason stays on the run)', async () => {
@@ -296,23 +299,26 @@ describe('Close this run, and the programme\'s end', () => {
     expect(programme()).toMatchObject({ state: 'abandoned', planEnd: 'abandoned' });
   });
 
-  // D-8558 review: `programs.state` is no lifecycle gate. The close retires it whenever the open-run count reaches 0 (D-51) and
-  // openRun never sets it back, so a programme whose next wave opened still reads `abandoned`; only its plan's end stops a run.
-  it('a programme the close retired, whose next wave is open, still offers Hand to a coordinator', async () => {
+  // Programme lifecycle W1 (D-8983; task 6, W1 review S5): the refused-close lane's "Hand to a coordinator" flips with the
+  // DECISION. The close of the last run ends nothing (D-51 is gone), so the programme stays live and the door stays; a
+  // decided end takes it away; a `planEnd` an older build wrote alone no longer ends anything (the boot re-measure puts it
+  // through the migration's rule).
+  it('Hand to a coordinator flips with the decision, not with the last close or planEnd alone', async () => {
     const r = await rig();
     const first = fixtureRun(r, false);
     const program = (r.coord.run(first) as { run: { program: string } }).run.program;
     const stateOfProgramme = () => (r.coord.db.prepare('SELECT state FROM programs WHERE slug = ?').get(program) as { state: string }).state;
     expect((await post(r, `/api/runs/${first}/abandon`)).statusCode).toBe(200);
-    expect(stateOfProgramme(), 'the close retired the programme (D-51)').toBe('abandoned');
+    expect(stateOfProgramme(), 'the close ends nothing (D-51 deleted)').toBe('active');
     const next = r.coord.openRun({ program, title: 'Wave 2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'lane-gone' });
     if (!('id' in next)) throw new Error(`fixture openRun refused: ${JSON.stringify(next)}`);
-    expect(stateOfProgramme(), 'opening a wave does not set it back').toBe('abandoned');
     expect(r.coord.programmeLive(program)).toBe(true);
     const action = r.coord.itemById(raise(r, next.id, 'warning-undelivered', 'gone'))!.action;
     expect(isCloseRefusedAction(action) && action.doors).toEqual(['close-run', 'hand-to-coordinator', 'end-programme']);
-    // The plan's end is what stops a run, and a programme with no row has none to take.
     r.coord.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = ?").run(program);
+    expect(r.coord.programmeLive(program), 'planEnd alone is no decision').toBe(true);
+    r.coord.db.prepare('UPDATE programs SET planEnd = NULL WHERE slug = ?').run(program);
+    r.coord.decideProgramme({ slug: program, to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'met' }, Date.now());
     expect(r.coord.programmeLive(program)).toBe(false);
     expect(r.coord.programmeLive('no-such-programme')).toBe(false);
   });

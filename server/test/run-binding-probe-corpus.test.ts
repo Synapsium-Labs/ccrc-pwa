@@ -49,9 +49,20 @@ class Fixture {
   readonly s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-corpus-'), '.ccrc', 'coord.db')));
   private readonly labels = new Map<number, string>();
   label = (id: number | null | undefined): string | null => (id === null || id === undefined ? null : this.labels.get(id) ?? `#${id}`);
-  /** A run planned by `claimedBy`, opened at `openedAt`. */
+  /** Each claimant's programme (named for its first run's label) and its last wave. */
+  private readonly owned = new Map<string, { program: string; wave: number }>();
+  /** A run planned by `claimedBy`, opened at `openedAt`. Programme lifecycle W1 (R11, D-8993): one coordinator owns one
+   *  programme, so a claimant's later run is the next WAVE of its own programme, never the first run of a second one. No
+   *  reader this corpus asks keys on the programme or the wave; a distinct wave keeps `openRun`'s dup arm from folding two
+   *  opens into one row, as a distinct programme did. A refused open throws, naming the refusal. */
   open(label: string, claimedBy: string | null, openedAt: number): number {
-    const id = (this.s.openRun({ program: `prog-${label}`, title: label, project: 'p', wave: 1, waveOf: null, claimedBy: claimedBy ?? 'nobody' }) as { id: number }).id;
+    const by = claimedBy ?? 'nobody';
+    const own = this.owned.get(by) ?? { program: `prog-${label}`, wave: 0 };
+    own.wave += 1;
+    this.owned.set(by, own);
+    const opened = this.s.openRun({ program: own.program, title: label, project: 'p', wave: own.wave, waveOf: null, claimedBy: by });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    const id = opened.id;
     this.s.db.prepare('UPDATE runs SET openedAt = ?, claimedBy = ?, coordProject = ? WHERE id = ?').run(openedAt, claimedBy, 'p', id);
     this.labels.set(id, label);
     return id;

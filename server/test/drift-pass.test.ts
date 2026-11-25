@@ -154,6 +154,14 @@ async function synced(r: Rig, migrate = true): Promise<Rig> {
   r.asks.length = 0;
   return r;
 }
+/** A programme with no coordinator. Programme lifecycle W1 (D-8985, R11): the plan's owner is the programme's binding, and the
+ *  plan put on a new slug bound its putter (OWNER), so the coordinator is released (the move with no heir), which leaves a live
+ *  programme nobody owns; `planBy` is cleared as before, so no fallback names the putter either. */
+const noCoordinator = (r: Rig): void => {
+  expect(r.coord.reclaimProgramme(SLUG, OWNER, null, r.t.now, null)).toMatchObject({ ok: true });
+  r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+  expect(r.plan.planOwnerOf(SLUG)).toBeNull();
+};
 const manage = (r: Rig, team: string, state = 'applied'): void => {
   r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)')
     .run(WS.a.id, team, state, T - 1000);
@@ -356,7 +364,7 @@ describe('the drift pass (D-8183)', () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
-    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    noCoordinator(r);
     r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
     const [it] = items(r);
     expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
@@ -374,7 +382,7 @@ describe('the drift pass (D-8183)', () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
-    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    noCoordinator(r);
     r.db.prepare("UPDATE project_linking SET teamWorkspace = ?, linearOwner = 'coord-b' WHERE project = 'project-a'").run(WS.a.id);
     r.db.prepare("INSERT INTO project_linking (rowid, project, teamKey, linearOwner) VALUES (0, 'project-b', 'AAA', 'coord-c')").run();
     const [item] = items(r);
@@ -397,7 +405,7 @@ describe('the drift pass (D-8183)', () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
-    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    noCoordinator(r);
     r.db.prepare("UPDATE project_linking SET teamWorkspace = ?, linearOwner = 'coord-b' WHERE project = 'project-a'").run(WS.a.id);
     r.db.prepare("INSERT INTO project_linking (rowid, project, teamKey, linearOwner) VALUES (0, 'project-b', 'AAA', 'coord-c')").run();
     const [item] = items(r);
@@ -441,7 +449,7 @@ describe('the drift pass (D-8183)', () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
-    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    noCoordinator(r);
     const [it] = items(r);
     const id = bindingOf(r, 'ticket').id;
     // none named and no coordinator to default to
@@ -719,7 +727,7 @@ describe('the drift pass (D-8183)', () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
-    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    noCoordinator(r);
     r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();       // A-7: Hand needs an owner to go to
     const [it] = items(r);
     expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id, measuredTeamRoutes(await readLinearStore(r.ccrcDir)))).toEqual({ ok: true });
