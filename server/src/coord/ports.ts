@@ -60,7 +60,7 @@ export interface FleetWatcherView {
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
-  | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
+  | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyLandingControl' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
   | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'approvalsUnfetchedLive' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
   | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'capMode' | 'caps' | 'capsCountedRuns' | 'capsUpdatedAt' | 'cardReadOfStart' | 'censusRowsIn' | 'censusRunSpans' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'

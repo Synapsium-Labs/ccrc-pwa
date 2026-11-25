@@ -1,6 +1,7 @@
 // Export's limits, its policy and its closed words (spec 2026-10-01 4.17; native Docs reader W5, Export). These are
 // limits on a saved file, not render limits, so they live here and not in `lib/markdownLimits.ts`; a PWA policy lives
-// in the PWA (spec 4.17 "CSP"). Each value is declared once here and imported wherever it is read. The sentences for
+// in the PWA (spec 4.17 "CSP"). Each value is declared once here and imported wherever it is read, except
+// `DOCS_EXPORT_MAX_BYTES`, declared in L0 `shared/docs.ts` (the server reads it too) and re-exported here. The sentences for
 // the two word types are `docsText.ts`'s (`EXPORT_MISSING_SENTENCE`, `EXPORT_PLAIN_SENTENCE`).
 //
 // Ring L1: constants and types only.
@@ -12,8 +13,9 @@ export const DOCS_EXPORT_CSP =
   "default-src 'none'; img-src data:; style-src 'unsafe-inline' data:; font-src data:; base-uri 'none'; form-action 'none'";
 
 /** The largest file Export saves (decision 4): 10 MiB of output. Images are inlined in document order while the file
- *  fits; the body is never cut (spec 4.17 "Size"). */
-export const DOCS_EXPORT_MAX_BYTES = 10485760;
+ *  fits; the body is never cut (spec 4.17 "Size"). Declared once in L0 `shared/docs.ts`, which the server reads too
+ *  (it is the draft-review snapshot cap); re-exported here so every PWA reader keeps its import. */
+export { DOCS_EXPORT_MAX_BYTES } from '../../../../shared/docs';
 
 /** How long Export waits for an image the page is still loading before that image becomes a placeholder (decision 3). */
 export const DOCS_EXPORT_IMAGE_WAIT_MS = 10000;

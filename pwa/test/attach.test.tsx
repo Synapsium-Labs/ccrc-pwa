@@ -9,7 +9,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { api, ApiError } from '../src/lib/api';
 import { AttachButton } from '@ccrc/ui';
 import { downscaleImage } from '../src/session/useAttachImage';
-import { CLIP_DOC_EXTS, CLIP_EXTS } from '../../shared/api';
 import { Composer } from '../src/session/Composer';
 
 afterEach(() => {
@@ -51,28 +50,18 @@ describe('AttachButton', () => {
     expect(fileInput()).toHaveAttribute('multiple');
   });
 
-  // The symptom this fixes was entirely in the OS picker: a bare `image/*`
-  // greyed out every PDF and .md, so the door existed and could not be walked
-  // through. Images stay a MIME pattern because that is what makes a phone
-  // open the gallery; documents go in as extensions because the type a phone
-  // reports for one is not something to gate on.
+  // The symptom the document wave fixed was entirely in the OS picker: a bare
+  // `image/*` greyed out every PDF and .md. Any file attaches now
+  // (2026-11-24), so the filter is gone altogether — no `accept` is what makes
+  // a phone offer the photo library, the camera and its files in one sheet.
   //
   // Rendered through the COMPOSER: `@ccrc/ui` may not take a value from
   // shared/, so the filter is the app's `ATTACH_ACCEPT`, handed to the button
   // as its `accept` prop — and the picker a user actually opens is the one the
-  // composer renders, so that is the one these two pin.
-  it('offers documents as well as images in the OS picker', () => {
+  // composer renders, so that is the one this pins.
+  it('offers every file in the OS picker: no filter at all', () => {
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
-    const accept = fileInput().getAttribute('accept') ?? '';
-    expect(accept).toContain('image/*');
-    for (const ext of CLIP_DOC_EXTS) expect(accept.split(','), ext).toContain(`.${ext}`);
-  });
-
-  it('offers nothing the upload route would refuse', () => {
-    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
-    const offered = (fileInput().getAttribute('accept') ?? '').split(',')
-      .filter((t) => t.startsWith('.')).map((t) => t.slice(1));
-    expect(offered.filter((e) => !CLIP_EXTS.includes(e))).toEqual([]);
+    expect(fileInput().hasAttribute('accept')).toBe(false);
   });
 
   it('clears the input value so re-picking the same file still fires change', () => {
@@ -288,17 +277,18 @@ describe('Composer drag-and-drop', () => {
     expect(upload.mock.calls[0]![1]).toBe(md);
   });
 
-  it('still ignores a dropped file of a kind nothing here admits', async () => {
+  // Any file attaches (2026-11-24): the drop that used to be ignored is a chip.
+  it('stages a dropped archive as a chip, uploaded as dropped', async () => {
     const upload = vi.spyOn(api, 'upload').mockResolvedValue(
-      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+      { path: '/p/clip-1-a1b2-bundle.zip', name: 'clip-1-a1b2-bundle.zip', bytes: 1 });
     const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
     const composer = composerEl(container);
+    const zip = new File(['x'], 'bundle.zip', { type: 'application/zip' });
 
-    fireEvent(composer, dragEvent('drop', {
-      files: [new File(['x'], 'bundle.zip', { type: 'application/zip' })],
-    }));
+    fireEvent(composer, dragEvent('drop', { files: [zip] }));
 
-    expect(upload).not.toHaveBeenCalled();
+    expect(await screen.findByText('bundle.zip')).toBeInTheDocument();
+    expect(upload.mock.calls[0]![1]).toBe(zip);
   });
 
   // Regression: a real `drop` event is never preceded by a `dragleave` on the
