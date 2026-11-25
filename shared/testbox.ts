@@ -12,7 +12,7 @@ import {
   CAPTURE_REFUSAL_MAP, CAPTURE_STATE_WORD_MAP, type CaptureAnswer, type CaptureSubmit,
 } from './claudeBuildCapture.js';
 import { readBuildCaptureResult } from './claudeBuildTrust.js';
-import { readDeliveryCaptureResult } from './deliveryResult.js';
+import { isDeliveryPart, readDeliveryCaptureResult } from './deliveryResult.js';
 import { isClaudeVersion } from './claudeVersion.js';
 import { utf8Bytes } from './utf8.js';
 
@@ -622,14 +622,16 @@ const build = (v: unknown, at: string): string => (isClaudeVersion(v) ? v : refu
 /** Whether a frame names the field at all (an additive field: absent and present are two shapes, each read exactly). */
 const names = (o: Obj, k: string): boolean => typeof o === 'object' && o !== null && Object.prototype.hasOwnProperty.call(o, k);
 
-/** A submission with no `recipe` is build trust; with one, it must be `delivery` (Desktop polish wave 178). */
+/** A submission with no `recipe` is build trust; with one, it must be `delivery` and carry its `part`, a part this side's
+ *  recipe has (Desktop polish wave 178; the capture owner's call 1148). A `part` without the recipe is an unnamed field. */
 function readCaptureSubmit(o: Obj): CaptureSubmit {
   const withRecipe = names(o, 'recipe');
-  const f = exact(o, 'capture.submit', withRecipe ? ['t', 'captureId', 'build', 'recipe'] : ['t', 'captureId', 'build']);
+  const f = exact(o, 'capture.submit', withRecipe ? ['t', 'captureId', 'build', 'recipe', 'part'] : ['t', 'captureId', 'build']);
   const base = { t: 'capture.submit' as const, captureId: runId(f.captureId, 'captureId'), build: build(f.build, 'build') };
   if (!withRecipe) return base;
   if (f.recipe !== 'delivery') refuse('recipe', 'not a capture recipe');
-  return { ...base, recipe: 'delivery' };
+  if (!isDeliveryPart(f.part)) refuse('part', 'not a part of the delivery recipe');
+  return { ...base, recipe: 'delivery', part: f.part as number };
 }
 
 /** The verdict inside an ended capture is read by the verdict's one reader (`readBuildCaptureResult`), for this frame's
@@ -652,7 +654,11 @@ function readCaptureAnswer(o: Obj): CaptureAnswer {
   if (state !== 'ended' && result !== null) refuse('result', `present on a ${state} capture`);
   const answer: CaptureAnswer = { t: 'capture.state', captureId: runId(f.captureId, 'captureId'), build: b, state, refusal, detail: textOrNull(f.detail, 'detail'), position, result };
   if (!withDelivery) return answer;
-  const delivery = f.delivery === null ? null : (readDeliveryCaptureResult(f.delivery, b) ?? refuse('delivery', 'not a delivery result for this build'));
+  // The frame names no submission, so the result is read for the part it carries; the agent's op holds that part to the
+  // one it submitted.
+  const part = typeof f.delivery === 'object' && f.delivery !== null ? (f.delivery as Obj)['part'] : undefined;
+  const delivery = f.delivery === null ? null
+    : ((isDeliveryPart(part) ? readDeliveryCaptureResult(f.delivery, b, part) : null) ?? refuse('delivery', 'not a delivery result for this build'));
   if (result !== null) refuse('result', 'present on a delivery capture');
   if (state !== 'ended' && delivery !== null) refuse('delivery', `present on a ${state} capture`);
   if (delivery !== null && f.detail !== null) refuse('detail', 'present beside a delivery result');

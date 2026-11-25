@@ -60,6 +60,9 @@ export interface CaptureSubmit {
   readonly build: string;
   /** Absent: build trust. Present only as `delivery` (see {@link CaptureRecipe}). */
   readonly recipe?: 'delivery';
+  /** Present exactly when `recipe` is: which part of the delivery cases this capture runs, an index into
+   *  `deliveryResult.ts#deliveryParts` (the capture owner's call 1148). Each part is a capture of its own. */
+  readonly part?: number;
 }
 
 /** The recipe a submission names: absence is build trust. */

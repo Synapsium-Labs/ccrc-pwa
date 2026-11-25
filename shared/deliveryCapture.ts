@@ -15,7 +15,7 @@
 // here reads or writes it, and a delivery result is never a `BuildCaptureResult`.
 import { composePrompt } from './api.js';
 import {
-  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, deliveryWord,
+  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_COUNT_MAX, DELIVERY_TURNS_MAX, deliveryParts, deliveryWord,
   type DeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult, type DeliveryCaseVerdict, type DeliveryDivergence, type DeliveryHookWitness,
 } from './deliveryResult.js';
 
@@ -153,16 +153,26 @@ export function deliveryCaseVerdict(expected: string, o: Pick<DeliveryObserved, 
   return o.turns.every((t) => t === expected) ? 'duplicate' : 'split';
 }
 
+/** A count as the result carries it: at most the reader's ceiling, so the producer never writes what the reader refuses
+ *  (the capture owner's call 1159). */
+const capped = (n: number): number => Math.min(n, DELIVERY_COUNT_MAX);
+
 /** One case's result from what the window held. The divergence is the first unequal turn's, or, with no turn at all,
- *  none. */
-export function deliveryCaseResult(id: DeliveryCaseId, o: DeliveryObserved): DeliveryCaseResult {
+ *  none. Only the first `DELIVERY_TURNS_MAX` turns are judged and reported (the reader's bound): a seventeenth unequal turn
+ *  then reads `duplicate` where the whole window would read `split`. Both are faults and the word is the same. Every count
+ *  is capped at the reader's ceiling, so a build that sends a turn longer than the ceiling still reads as its fault
+ *  verdict, never as an answer the reader refuses (which would hide the build's defect as the box's). The sent length and a
+ *  divergence's index need no cap: the first is a case's own text, and the second is at most the expected text's length,
+ *  and every case keeps both under the ceiling (pinned). */
+export function deliveryCaseResult(id: DeliveryCaseId, observed: DeliveryObserved): DeliveryCaseResult {
+  const o: DeliveryObserved = { ...observed, turns: observed.turns.slice(0, DELIVERY_TURNS_MAX) };
   const expected = deliveryExpected(id);
   const unequal = o.turns.findIndex((t) => t !== expected);
   const hook: DeliveryHookWitness = o.hookPrompts.length === 0 ? 'absent' : o.hookPrompts.every((p) => p === expected) ? 'equal' : 'unequal';
   return {
     id, verdict: deliveryCaseVerdict(expected, o), send: o.send, sentChars: cps(deliveryCaseText(id)),
-    receivedChars: o.turns.map(cps), divergence: unequal < 0 ? null : firstDivergence(expected, o.turns[unequal]!, unequal),
-    sideRequests: o.sideRequests, hook,
+    receivedChars: o.turns.map((t) => capped(cps(t))), divergence: unequal < 0 ? null : firstDivergence(expected, o.turns[unequal]!, unequal),
+    sideRequests: capped(o.sideRequests), hook,
   };
 }
 
@@ -196,15 +206,31 @@ function ruleFingerprint(): string {
   return JSON.stringify({ verdicts, divergences, turns: bodies.map(turnOf), composed, context: DELIVERY_CONTEXT });
 }
 
-/** The recipe's version: 16 hex characters computed from every case's sent and expected text, in order, and the rule's
- *  fingerprint. The lane measures a build again when no delivery result exists for it at this version. */
-export const DELIVERY_RECIPE_VERSION: string = ((): string => {
-  const text = JSON.stringify({ cases: DELIVERY_CASE_IDS.map((id) => [id, deliveryCaseText(id), deliveryExpected(id)]), rule: ruleFingerprint() });
+/** The recipe's version: 16 hex characters computed from every case's sent and expected text, in order, the split into
+ *  parts (so a row of one partition never joins a row of another), and the rule's fingerprint. The lane measures a build again when no delivery result exists for it at this version. */
+export function deliveryRecipeVersionOf(parts: readonly (readonly DeliveryCaseId[])[] = deliveryParts()): string {
+  const text = JSON.stringify({ cases: DELIVERY_CASE_IDS.map((id) => [id, deliveryCaseText(id), deliveryExpected(id)]), parts, rule: ruleFingerprint() });
   const hex = (n: number): string => n.toString(16).padStart(8, '0');
   return hex(fnv1a(text, 0x811c9dc5)) + hex(fnv1a(text, 0x9e3779b9));
-})();
+}
+export const DELIVERY_RECIPE_VERSION: string = deliveryRecipeVersionOf();
 
-/** The result from the cases the runner judged, at this recipe's version. */
-export function deliveryCaptureResult(build: string, cases: readonly DeliveryCaseResult[]): DeliveryCaptureResult {
-  return { recipe: 'delivery', version: DELIVERY_RECIPE_VERSION, build, word: deliveryWord(cases.map((c) => c.verdict)), cases };
+/** The result of one part from the cases the runner judged, at this recipe's version. */
+export function deliveryCaptureResult(build: string, part: number, cases: readonly DeliveryCaseResult[]): DeliveryCaptureResult {
+  return { recipe: 'delivery', version: DELIVERY_RECIPE_VERSION, build, part, word: deliveryWord(cases.map((c) => c.verdict)), cases };
+}
+
+/** How a read result stands against THIS side's recipe (the capture owner's call 1159). `current`: its version is this
+ *  recipe's and its cases are exactly this recipe's cases for its part, in order; the lane stores only these. `another-recipe`:
+ *  its version is not this side's, which is ordinary skew between a server and a box on different releases; the lane stores
+ *  no row and asks again at its hour, never as intact and never as a fault of the build. `contradiction`: the version IS
+ *  this side's and the cases are not this part's, which cannot happen without a defect, since the version covers the
+ *  split; the lane stores no row and writes one log line. */
+export type DeliveryCurrency = 'current' | 'another-recipe' | 'contradiction';
+export const DELIVERY_CURRENCY_MAP: Record<DeliveryCurrency, true> = { current: true, 'another-recipe': true, contradiction: true };
+
+export function deliveryResultCurrency(r: DeliveryCaptureResult): DeliveryCurrency {
+  if (r.version !== DELIVERY_RECIPE_VERSION) return 'another-recipe';
+  const want = deliveryParts()[r.part];
+  return want !== undefined && r.cases.length === want.length && r.cases.every((c, i) => c.id === want[i]) ? 'current' : 'contradiction';
 }

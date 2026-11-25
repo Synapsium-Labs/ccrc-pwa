@@ -139,6 +139,13 @@ session run a build on the test box on demand. Instead:
   with a trust capture or another part. The cases are spread evenly in their order. Today that is 4, 4 and 3. A change to
   a timing or to the case list re-derives the split, and the recipe version covers it, so rows from two partitions never
   join.
+- **Where the count lives** (call 1159). The derivation is the agent's (`captureDelivery.ts#deliveryPartCount`, from the
+  one timing object and the case list). The server's lane needs the count and cannot read the agent's timings, so
+  `shared/deliveryResult.ts#DELIVERY_PART_COUNT` writes it once, and a test holds it equal to the derivation. **Measured
+  red both ways:** the shared count set one more (4) and one fewer (2) each fails that test. **Searched:** nothing else in
+  `shared`, `server/src`, `agent/src` or `pwa/src` spells the count or a part's size; every other use derives from
+  `deliveryParts()`. The derivation checks trust with trust and a part with a part: a pair's time is a sum, so a mixed pair
+  never exceeds the larger same-kind pair, and the test still asserts all four pairings.
 - Each pass sends at most one capture, trust first. The lane names the first part, in order, of the newest trusted build
   that has no row at the current recipe version. A box fault spaces the next try by the lane's hour and never counts
   toward a build's trust fails.
@@ -147,9 +154,17 @@ session run a build on the test box on demand. Instead:
   agent. An older box, or a box without the driver wired, refuses the delivery submission at its frame reader, before
   anything runs, and closes that capture's own connection. The agent answers not-taken, and the lane records not-sent,
   with no attempt counted and a log line naming the cause. Not-taken never becomes a fault or a verdict.
-- **Version skew.** The result carries the recipe version and the ids of the cases it ran. The server stores it as current
-  only when both match its own recipe for that part; anything else is asked again at the lane's hour, and is never stored
-  as intact or as a build fault.
+- **Version skew** (calls 1148 and 1159). The result carries the recipe version and the ids of the cases it ran.
+  `deliveryResultCurrency` answers one of three words. `current`: the version and the part's cases are this side's; only
+  these are stored. `another-recipe`: another version, ordinary skew between releases; no row, asked again at the lane's
+  hour, never intact and never a build fault. `contradiction`: this side's version with cases that are not this part's,
+  which needs a defect since the version covers the split; no row, and one server log line.
+- **Bounds** (call 1145). The reader takes at most 16 turns a case and no count above 1,000,000. The producer writes
+  nothing the reader refuses. It judges and reports only the first 16 turns: a seventeenth unequal turn then reads
+  `duplicate` where the whole window would read `split`. Both are faults, and the word is the same. It also caps each
+  turn's length and the side-request count at the ceiling, so a build that sends an over-long turn still reads as its
+  fault verdict, not as an answer the box got wrong. A case's sent length and a divergence's index (at most the expected
+  length) need no cap: every case keeps both under the ceiling, and that is pinned.
 - The result rides the read that returns capture state today, written by the lane alone, into a table of its own; the
   trust table is untouched. A lost database heals by itself: with no row, the lane measures again.
 - **The join.** A build's delivery word is intact only when every part at the current version is intact. One faulted part
@@ -206,13 +221,15 @@ session run a build on the test box on demand. Instead:
 - **result-split-from-cases** (the Overlord's condition 3). The result and its reader travel in the capture contract's
   module graph, the front end's included; the case texts do not. **Measured:** the production PWA build at this branch
   contains no case text, generator or version code. Its JavaScript totals 8,333,992 bytes, against 8,347,026 at the base
-  09c8f5d502, with 179 assets each. The difference is chunking.
+  09c8f5d502, with 179 assets each. The difference is chunking. After the parts packet it still holds by construction:
+  the contract (`claudeBuildCapture.ts`, `testbox.ts`, `agent-protocol.ts`) imports only `deliveryResult.ts`, which
+  imports only `claudeVersion.ts`. The bundle is measured again at the final tip.
 - **redundant guards dropped.** The link checks on the driver's directories and the explicit field check on a delivery
   reply could not be shown red, since other checks already refuse those inputs. They were removed, not kept.
 
 ## 11. Mutation record
 
-52 mutants over two rounds, and three more for the tmux directory's owner rule (call 1145), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
+52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145) and 27 for the parts (rounds 3 to 5), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
@@ -229,3 +246,5 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 | frames | the recipe word; no trust verdict, no detail and no running result on a delivery capture; the result's reader | each refusal case |
 | result | recipe; build; version shape; case order; word; possible verdict; context bound; turn bound; divergence present or absent | each refusal case |
 | rule | duplicate; false confirmation; partial; tools offered; last message the user's; reminders; tool result even with text; CRLF; trim; divergence index; the four mode characters | the verdict, turn and composer cases |
+| parts (round 3) | submission part range and key; reader part range and echo; strict case order; at least one case; the turn and count bounds; the reply's part; the version over the split; currency's version, length and ids; the 16-turn cut; the even split; the part+part pair; the largest part | each refusal case, the split table and the derivation cases; the trust+part check survived as redundant and was removed |
+| parts (rounds 4 and 5) | the turn-length and side-request caps; each currency word; the shared count one more and one fewer | the over-long turn case; the three currency cases; the derivation's equality case |

@@ -4,11 +4,11 @@
 import { describe, expect, it } from 'vitest';
 import { TESTBOX_CAPTURE_DEADLINE_MS } from '../../shared/agent-protocol.js';
 import type { CaptureRecord } from '../../shared/claudeBuildCapture.js';
-import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
+import { DELIVERY_CASE_IDS, DELIVERY_PART_COUNT, deliveryParts } from '../../shared/deliveryResult.js';
 import { CAPTURE_DEADLINE_MARGIN_MS, CAPTURE_STEPS, CAPTURE_TIMINGS, captureWorstCaseMs, standInReply } from '../src/testbox/capture.js';
 import {
   DELIVERY_PANE, DELIVERY_REPLY_TEXT, DELIVERY_STEPS_BEFORE, DELIVERY_STEP_AFTER, DELIVERY_TIMINGS, deliveryStandInReply,
-  deliveryStartsLate, deliveryWorstCaseMs, observeWindow, turnEnded,
+  DELIVERY_PART_LARGEST, deliveryPartCount, deliveryStartsLate, deliveryWorstCaseMs, observeWindow, turnEnded,
 } from '../src/testbox/captureDelivery.js';
 
 const turn = (prompt: string): Record<string, unknown> => ({ tools: [{ name: 'Bash' }], messages: [{ role: 'user', content: prompt }] });
@@ -56,7 +56,7 @@ describe('observeWindow: one case\'s window', () => {
 });
 
 describe('the worst case, under the fleet agent\'s fixed wait', () => {
-  it('one delivery capture of every case fits the wait with the margin, as the deadline stands', () => {
+  it('one delivery capture of its largest part fits the wait with the margin, as the deadline stands', () => {
     const worst = deliveryWorstCaseMs(CAPTURE_TIMINGS);
     expect(worst + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
     expect(deliveryStartsLate(0, CAPTURE_TIMINGS)).toBe(false);
@@ -67,7 +67,7 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     const call = t.tmuxCallMs + 2_000;
     const expected = t.setupMs + call
       + (t.stepMs + t.pollMs) + (2 * call + t.stepMs + t.pollMs)
-      + DELIVERY_CASE_IDS.length * (d.driveMs + 2_000 + d.settleMs + t.pollMs + d.quietMs + t.pollMs)
+      + DELIVERY_PART_LARGEST * (d.driveMs + 2_000 + d.settleMs + t.pollMs + d.quietMs + t.pollMs)
       + (2 * call + t.stepMs + t.pollMs)
       + t.exitMs + t.pollMs
       + call + t.stopWaitMs + t.pollMs + t.standInCloseMs + t.removeMs;
@@ -75,8 +75,8 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
   });
   it('grows with each case and each bound, so a longer case list or bound is seen', () => {
     const base = deliveryWorstCaseMs(CAPTURE_TIMINGS);
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_TIMINGS, DELIVERY_CASE_IDS.length + 1)).toBeGreaterThan(base);
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, { ...DELIVERY_TIMINGS, settleMs: DELIVERY_TIMINGS.settleMs + 1 })).toBe(base + DELIVERY_CASE_IDS.length);
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_TIMINGS, DELIVERY_PART_LARGEST + 1)).toBeGreaterThan(base);
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS, { ...DELIVERY_TIMINGS, settleMs: DELIVERY_TIMINGS.settleMs + 1 })).toBe(base + DELIVERY_PART_LARGEST);
   });
   it('a capture that waited long enough to end past the wait does not start', () => {
     const worst = deliveryWorstCaseMs(CAPTURE_TIMINGS);
@@ -84,7 +84,34 @@ describe('the worst case, under the fleet agent\'s fixed wait', () => {
     expect(deliveryStartsLate(room, CAPTURE_TIMINGS)).toBe(false);
     expect(deliveryStartsLate(room + 1, CAPTURE_TIMINGS)).toBe(true);
   });
-  it('the delivery recipe takes longer than build trust, so it has its own late check', () => {
-    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBeGreaterThan(captureWorstCaseMs(CAPTURE_TIMINGS));
+  it('a delivery part\'s worst case is not build trust\'s (381.5 s against 399.5 s today), so it has its own late check', () => {
+    expect(deliveryWorstCaseMs(CAPTURE_TIMINGS)).toBe(381_500);
+    expect(captureWorstCaseMs(CAPTURE_TIMINGS)).toBe(399_500);
+  });
+});
+
+describe('the parts: their count derived from the pair bound, and the shared count held to it (call 1148)', () => {
+  const fits = (a: number, b: number): boolean => a + b + CAPTURE_DEADLINE_MARGIN_MS <= TESTBOX_CAPTURE_DEADLINE_MS;
+  const trust = captureWorstCaseMs(CAPTURE_TIMINGS);
+  const partMs = (k: number): number => deliveryWorstCaseMs(CAPTURE_TIMINGS, DELIVERY_TIMINGS, Math.ceil(DELIVERY_CASE_IDS.length / k));
+  it('the shared count is the derived one, under the timing contract and today\'s case list', () => {
+    expect(deliveryPartCount(CAPTURE_TIMINGS)).toBe(DELIVERY_PART_COUNT);
+    expect(DELIVERY_PART_LARGEST).toBe(Math.max(...deliveryParts().map((p) => p.length)));
+  });
+  it('at that count every pairing fits: trust then trust, trust then a part, a part then trust, a part then a part', () => {
+    const part = partMs(DELIVERY_PART_COUNT);
+    expect(part).toBe(deliveryWorstCaseMs(CAPTURE_TIMINGS));
+    for (const [a, b] of [[trust, trust], [trust, part], [part, trust], [part, part]] as const) expect(fits(a, b), `${a} + ${b}`).toBe(true);
+  });
+  it('one part fewer does not fit: the count is the smallest', () => {
+    const fewer = partMs(DELIVERY_PART_COUNT - 1);
+    expect(fits(trust, fewer) && fits(fewer, fewer)).toBe(false);
+  });
+  it('a longer case or a longer bound re-derives the count: more parts, never a pair past the wait', () => {
+    expect(deliveryPartCount(CAPTURE_TIMINGS, { ...DELIVERY_TIMINGS, settleMs: DELIVERY_TIMINGS.settleMs + 20_000 })).toBeGreaterThan(DELIVERY_PART_COUNT);
+    expect(deliveryPartCount(CAPTURE_TIMINGS, DELIVERY_TIMINGS, 30)).toBeGreaterThan(DELIVERY_PART_COUNT);
+  });
+  it('no count at all when even a one-case part cannot fit beside trust', () => {
+    expect(deliveryPartCount({ ...CAPTURE_TIMINGS, stepMs: 200_000 })).toBeNull();
   });
 });

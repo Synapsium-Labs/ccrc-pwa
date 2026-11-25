@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { readTestboxCaptureReply } from '../../shared/agent-protocol.js';
 import { CAPTURE_SOCKET, CAPTURE_TMUX_SESSION, captureRecipeOf, captureTmuxDirName } from '../../shared/claudeBuildCapture.js';
 import { deliveryCaptureResult, deliveryCaseResult, deliveryExpected } from '../../shared/deliveryCapture.js';
-import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
+import { DELIVERY_PART_COUNT, deliveryParts } from '../../shared/deliveryResult.js';
 import { RUN_ID, readTestboxFrame } from '../../shared/testbox.js';
 
 const BUILD = '2.1.320';
 const ID = '0123456789abcdef0123456789abcdef';
 const wire = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
-const RESULT = wire(deliveryCaptureResult(BUILD, DELIVERY_CASE_IDS.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] }))));
+const RESULT = wire(deliveryCaptureResult(BUILD, 1, deliveryParts()[1]!.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] }))));
 const TRUST = { build: BUILD, pass: true, cwd: true, output: 'verdict: pass' };
 const read = (frame: Record<string, unknown>) => readTestboxFrame(JSON.stringify(frame));
 const state = (over: Record<string, unknown> = {}): Record<string, unknown> =>
@@ -23,13 +23,25 @@ describe('the submission: absence is build trust, its one spelling', () => {
     expect(r).toEqual({ ok: true, value: { t: 'capture.submit', captureId: ID, build: BUILD } });
     expect(captureRecipeOf(r.ok ? (r.value as { recipe?: 'delivery' }) : {})).toBe('build-trust');
   });
-  it('a delivery submission carries its recipe', () => {
-    const r = read({ t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'delivery' });
-    expect(r).toEqual({ ok: true, value: { t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'delivery' } });
+  it('a delivery submission carries its recipe and its part', () => {
+    for (let part = 0; part < DELIVERY_PART_COUNT; part++) {
+      const r = read({ t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'delivery', part });
+      expect(r).toEqual({ ok: true, value: { t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'delivery', part } });
+    }
     expect(captureRecipeOf({ recipe: 'delivery' })).toBe('delivery');
   });
   it.each(['build-trust', 'trust', '', null, 1])('refuses the recipe %j: only delivery is ever spelled', (recipe) => {
-    expect(read({ t: 'capture.submit', captureId: ID, build: BUILD, recipe }).ok).toBe(false);
+    expect(read({ t: 'capture.submit', captureId: ID, build: BUILD, recipe, part: 0 }).ok).toBe(false);
+  });
+  it.each<[string, Record<string, unknown>]>([
+    ['the recipe without a part', { recipe: 'delivery' }],
+    ['a part without the recipe', { part: 0 }],
+    ['a part past the recipe\'s count', { recipe: 'delivery', part: DELIVERY_PART_COUNT }],
+    ['a negative part', { recipe: 'delivery', part: -1 }],
+    ['a part that is not an integer', { recipe: 'delivery', part: 0.5 }],
+    ['a part spelled as text', { recipe: 'delivery', part: '0' }],
+  ])('refuses %s', (_why, over) => {
+    expect(read({ t: 'capture.submit', captureId: ID, build: BUILD, ...over }).ok).toBe(false);
   });
 });
 
@@ -57,6 +69,7 @@ describe('the state frame: delivery on a delivery capture\'s frames only', () =>
     ['a detail beside a delivery result', state({ delivery: RESULT, detail: 'x' })],
     ['a delivery result for another build', state({ build: '2.1.321', delivery: RESULT })],
     ['a delivery result off its shape', state({ delivery: { ...(RESULT as object), word: 'fault' } })],
+    ['a delivery result for a part the recipe does not have', state({ delivery: { ...(RESULT as object), part: DELIVERY_PART_COUNT } })],
   ])('refuses %s', (_why, frame) => {
     expect(read(frame).ok).toBe(false);
   });
@@ -73,22 +86,27 @@ describe('the op\'s reply reader, in both directions (call 1135, condition 1)', 
     expect(readTestboxCaptureReply(reply({ result: TRUST, delivery: null }), BUILD, 'build-trust')).toBeNull();
   });
   it('a delivery request reads its result, echoing the recipe', () => {
-    const r = readTestboxCaptureReply(reply({ delivery: RESULT }), BUILD, 'delivery');
+    const r = readTestboxCaptureReply(reply({ delivery: RESULT }), BUILD, 'delivery', 1);
     expect(r?.delivery).toEqual(RESULT);
     expect(r?.result).toBeNull();
   });
   it('a delivery request\'s no-verdict and not-sent replies carry delivery: null', () => {
-    expect(readTestboxCaptureReply(reply({ delivery: null, detail: 'x' }), BUILD, 'delivery')).toMatchObject({ delivery: null });
-    expect(readTestboxCaptureReply({ outcome: 'unreachable', refusal: null, result: null, detail: 'x', delivery: null }, BUILD, 'delivery')).toMatchObject({ outcome: 'unreachable' });
+    expect(readTestboxCaptureReply(reply({ delivery: null, detail: 'x' }), BUILD, 'delivery', 1)).toMatchObject({ delivery: null });
+    expect(readTestboxCaptureReply({ outcome: 'unreachable', refusal: null, result: null, detail: 'x', delivery: null }, BUILD, 'delivery', 1)).toMatchObject({ outcome: 'unreachable' });
   });
   it.each<[string, Record<string, unknown>]>([
     ['no delivery field (an answer that does not echo the recipe)', reply()],
     ['a build-trust verdict', reply({ result: TRUST, delivery: null })],
     ['a result on an outcome that is not answered', { outcome: 'refused', refusal: 'no-runner', result: null, detail: 'x', delivery: RESULT }],
     ['a result off its shape', reply({ delivery: { ...(RESULT as object), recipe: 'build-trust' } })],
-    ['a result for another build', reply({ delivery: wire(deliveryCaptureResult('2.1.321', [])) })],
+    ['a result for another build', reply({ delivery: { ...(RESULT as object), build: '2.1.321' } })],
+    ['a result for another part than the one asked', reply({ delivery: { ...(RESULT as object), part: 0 } })],
   ])('a delivery request refuses %s', (_why, raw) => {
-    expect(readTestboxCaptureReply(raw, BUILD, 'delivery')).toBeNull();
+    expect(readTestboxCaptureReply(raw, BUILD, 'delivery', 1)).toBeNull();
+  });
+  it('a delivery request with no part has no answer, whatever the reply holds', () => {
+    expect(readTestboxCaptureReply(reply({ delivery: RESULT }), BUILD, 'delivery')).toBeNull();
+    expect(readTestboxCaptureReply(reply({ delivery: null }), BUILD, 'delivery')).toBeNull();
   });
 });
 

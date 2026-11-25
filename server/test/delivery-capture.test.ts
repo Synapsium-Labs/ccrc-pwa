@@ -6,10 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { composePrompt } from '../../shared/api.js';
 import {
   DELIVERY_CASE_RAW, DELIVERY_MODE_CHARS, DELIVERY_RECIPE_VERSION, composerOutput, deliveryCaptureResult, deliveryCaseResult,
-  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, firstDivergence, turnOf, type DeliveryObserved,
+  deliveryCaseText, deliveryCaseVerdict, deliveryExpected, deliveryRecipeVersionOf, deliveryResultCurrency, firstDivergence, turnOf,
+  type DeliveryObserved,
 } from '../../shared/deliveryCapture.js';
 import {
-  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_VERSION_SHAPE, deliveryWord, readDeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult,
+  DELIVERY_CASE_IDS, DELIVERY_CONTEXT, DELIVERY_COUNT_MAX, DELIVERY_PART_COUNT, DELIVERY_TURNS_MAX, DELIVERY_VERSION_SHAPE, deliveryParts,
+  deliveryWord, isDeliveryPart, readDeliveryCaptureResult, type DeliveryCaseId, type DeliveryCaseResult,
 } from '../../shared/deliveryResult.js';
 
 const BUILD = '2.1.320';
@@ -175,23 +177,75 @@ describe('the recipe\'s word', () => {
   });
 });
 
+describe('the parts: the cases split evenly in their order (the capture owner\'s call 1148)', () => {
+  it('today: three parts of 4, 4 and 3, in case order', () => {
+    expect(DELIVERY_PART_COUNT).toBe(3);
+    expect(deliveryParts()).toEqual([['c0', 'c1', 'c1b', 'c2a'], ['c2b', 'c3', 'c3b', 'c3c'], ['c4', 'c4b', 'c5']]);
+  });
+  it.each(Array.from({ length: DELIVERY_CASE_IDS.length }, (_, i) => i + 1))('over %i parts: every case once, in order, sizes within one, the larger first', (n) => {
+    const parts = deliveryParts(n);
+    expect(parts).toHaveLength(n);
+    expect(parts.flat()).toEqual(DELIVERY_CASE_IDS);
+    const sizes = parts.map((p) => p.length);
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    expect([...sizes].sort((a, b) => b - a)).toEqual(sizes);
+  });
+  it('a part index is an integer below the count', () => {
+    expect([0, 1, 2].every(isDeliveryPart)).toBe(true);
+    for (const v of [-1, 3, 1.5, '0', null, undefined]) expect(isDeliveryPart(v), String(v)).toBe(false);
+  });
+});
+
 describe('readDeliveryCaptureResult: the one reader', () => {
-  const allIntact = (): DeliveryCaseResult[] => DELIVERY_CASE_IDS.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [deliveryExpected(id)] }));
+  const intact = (id: DeliveryCaseId): DeliveryCaseResult => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [deliveryExpected(id)] });
+  const allIntact = (part = 0): DeliveryCaseResult[] => deliveryParts()[part]!.map(intact);
   const wire = (r: unknown): unknown => JSON.parse(JSON.stringify(r));
-  it('reads back a result over the wire', () => {
-    const r = deliveryCaptureResult(BUILD, allIntact());
-    expect(r.word).toBe('intact');
-    expect(readDeliveryCaptureResult(wire(r), BUILD)).toEqual(r);
+  it('reads back each part\'s result over the wire', () => {
+    for (const part of [0, 1, 2]) {
+      const r = deliveryCaptureResult(BUILD, part, allIntact(part));
+      expect(r.word).toBe('intact');
+      expect(readDeliveryCaptureResult(wire(r), BUILD, part)).toEqual(r);
+    }
   });
   it('reads back a faulty result, divergence and all', () => {
-    const cases = allIntact();
+    const cases = allIntact(1);
     const obs: DeliveryObserved = { send: 'ok', turns: [deliveryExpected('c3').replace('\t', '  ')], sideRequests: 1, hookPrompts: [] };
-    cases[5] = deliveryCaseResult('c3', obs);
-    const r = deliveryCaptureResult(BUILD, cases);
+    cases[1] = deliveryCaseResult('c3', obs);
+    const r = deliveryCaptureResult(BUILD, 1, cases);
     expect(r.word).toBe('fault');
-    expect(readDeliveryCaptureResult(wire(r), BUILD)).toEqual(r);
+    expect(readDeliveryCaptureResult(wire(r), BUILD, 1)).toEqual(r);
   });
-  const good = (): Record<string, unknown> => wire(deliveryCaptureResult(BUILD, allIntact())) as Record<string, unknown>;
+  it('reads a part whose cases are another split\'s (a box on another recipe): that is currency, not shape', () => {
+    const r = deliveryCaptureResult(BUILD, 0, DELIVERY_CASE_IDS.slice(0, 6).map(intact));
+    expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
+    expect(deliveryResultCurrency(r)).toBe('contradiction');
+  });
+  it('caps every count at the reader\'s ceiling: a turn longer than the ceiling still reads as its fault verdict', () => {
+    const huge = 'x'.repeat(DELIVERY_COUNT_MAX + 5);
+    const c = deliveryCaseResult('c0', { send: 'ok', turns: [huge], sideRequests: DELIVERY_COUNT_MAX + 9, hookPrompts: [] });
+    expect(c.verdict).toBe('altered');
+    expect(c.receivedChars).toEqual([DELIVERY_COUNT_MAX]);
+    expect(c.sideRequests).toBe(DELIVERY_COUNT_MAX);
+    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)]);
+    expect(r.word).toBe('fault');
+    expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
+  });
+  it('every case\'s sent and expected text is under the ceiling, so a divergence index (at most the expected length) is too', () => {
+    for (const id of DELIVERY_CASE_IDS) {
+      expect(cps(deliveryCaseText(id)), id).toBeLessThan(DELIVERY_COUNT_MAX);
+      expect(cps(deliveryExpected(id)), id).toBeLessThan(DELIVERY_COUNT_MAX);
+    }
+    const long = deliveryExpected('c5') + 'y'.repeat(DELIVERY_COUNT_MAX + 5);
+    expect(deliveryCaseResult('c5', { send: 'ok', turns: [long], sideRequests: 0, hookPrompts: [] }).divergence!.index).toBe(cps(deliveryExpected('c5')));
+  });
+  it('judges and reports at most the bound\'s turns, and the reader reads what it reports', () => {
+    const c = deliveryCaseResult('c0', { send: 'ok', turns: Array.from({ length: DELIVERY_TURNS_MAX + 4 }, () => deliveryExpected('c0')), sideRequests: 0, hookPrompts: [] });
+    expect(c.receivedChars).toHaveLength(DELIVERY_TURNS_MAX);
+    expect(c.verdict).toBe('duplicate');
+    const r = deliveryCaptureResult(BUILD, 0, [c, ...allIntact(0).slice(1)]);
+    expect(readDeliveryCaptureResult(wire(r), BUILD, 0)).toEqual(r);
+  });
+  const good = (): Record<string, unknown> => wire(deliveryCaptureResult(BUILD, 0, allIntact())) as Record<string, unknown>;
   const casesOf = (o: Record<string, unknown>): Record<string, unknown>[] => o['cases'] as Record<string, unknown>[];
   it.each<[string, (o: Record<string, unknown>) => void]>([
     ['another build', (o) => { o['build'] = '2.1.321'; }],
@@ -200,7 +254,15 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     ['no version', (o) => { delete o['version']; }],
     ['a field it does not name', (o) => { o['pass'] = true; }],
     ['a word the cases do not give', (o) => { o['word'] = 'fault'; }],
-    ['a case missing', (o) => { casesOf(o).pop(); }],
+    ['no case at all', (o) => { o['cases'] = []; }],
+    ['another part than the one asked', (o) => { o['part'] = 1; }],
+    ['no part', (o) => { delete o['part']; }],
+    ['a case id the recipe does not have', (o) => { casesOf(o)[0]!['id'] = 'c9'; }],
+    ['more turns than the bound', (o) => {
+      Object.assign(casesOf(o)[0]!, { verdict: 'duplicate', receivedChars: Array.from({ length: DELIVERY_TURNS_MAX + 1 }, () => 1) });
+      o['word'] = 'fault';
+    }],
+    ['a count past its ceiling', (o) => { casesOf(o)[0]!['sentChars'] = DELIVERY_COUNT_MAX + 1; }],
     ['cases out of order', (o) => { const c = casesOf(o); [c[0], c[1]] = [c[1]!, c[0]!]; }],
     ['a case repeated', (o) => { const c = casesOf(o); c[1] = c[0]!; }],
     // Each mutation keeps the word the cases decide (a fault verdict makes the word fault), so only its own guard can refuse it.
@@ -220,22 +282,49 @@ describe('readDeliveryCaptureResult: the one reader', () => {
     ['a count that is not a count', (o) => { casesOf(o)[0]!['sentChars'] = -1; }],
   ])('refuses %s', (_why, mutate) => {
     const o = good();
-    expect(readDeliveryCaptureResult(o, BUILD)).not.toBeNull();
+    expect(readDeliveryCaptureResult(o, BUILD, 0)).not.toBeNull();
     mutate(o);
-    expect(readDeliveryCaptureResult(o, BUILD)).toBeNull();
+    expect(readDeliveryCaptureResult(o, BUILD, 0)).toBeNull();
+  });
+  it('refuses a part the recipe does not have, even when the result echoes it', () => {
+    const o = good();
+    o['part'] = DELIVERY_PART_COUNT;
+    expect(readDeliveryCaptureResult(o, BUILD, DELIVERY_PART_COUNT)).toBeNull();
   });
   it('refuses a build that is not a Claude Code version, and anything that is not an object', () => {
-    const r = deliveryCaptureResult('nope', allIntact());
-    expect(readDeliveryCaptureResult(wire(r), 'nope')).toBeNull();
-    expect(readDeliveryCaptureResult(null, BUILD)).toBeNull();
-    expect(readDeliveryCaptureResult([], BUILD)).toBeNull();
+    const r = deliveryCaptureResult('nope', 0, allIntact());
+    expect(readDeliveryCaptureResult(wire(r), 'nope', 0)).toBeNull();
+    expect(readDeliveryCaptureResult(null, BUILD, 0)).toBeNull();
+    expect(readDeliveryCaptureResult([], BUILD, 0)).toBeNull();
+  });
+});
+
+describe('deliveryResultCurrency: a row at this side\'s recipe, as a word (calls 1148 and 1159, version skew)', () => {
+  const r = (part: number, ids: readonly DeliveryCaseId[]) => deliveryCaptureResult(BUILD, part, ids.map((id) => deliveryCaseResult(id, { send: 'ok', turns: [deliveryExpected(id)], sideRequests: 0, hookPrompts: [] })));
+  it('is current when the version and the part\'s cases are this recipe\'s', () => {
+    for (const part of [0, 1, 2]) expect(deliveryResultCurrency(r(part, deliveryParts()[part]!))).toBe('current');
+  });
+  it('is another recipe at another version, whatever its cases (ordinary skew)', () => {
+    expect(deliveryResultCurrency({ ...r(0, deliveryParts()[0]!), version: '0'.repeat(16) })).toBe('another-recipe');
+    expect(deliveryResultCurrency({ ...r(0, DELIVERY_CASE_IDS.slice(0, 6)), version: '0'.repeat(16) })).toBe('another-recipe');
+  });
+  it('is a contradiction at this version with another part\'s cases, fewer cases, or more', () => {
+    expect(deliveryResultCurrency(r(0, deliveryParts()[1]!))).toBe('contradiction');
+    expect(deliveryResultCurrency(r(0, deliveryParts()[0]!.slice(0, 3)))).toBe('contradiction');
+    expect(deliveryResultCurrency(r(2, [...deliveryParts()[2]!.slice(0, 2)]))).toBe('contradiction');
+    expect(deliveryResultCurrency(r(1, [...deliveryParts()[1]!, 'c4']))).toBe('contradiction');
   });
 });
 
 describe('the recipe\'s version: computed from the cases and the rule, never kept by hand', () => {
   it('is 16 hex characters, and the result carries it', () => {
     expect(DELIVERY_RECIPE_VERSION).toMatch(DELIVERY_VERSION_SHAPE);
-    expect(deliveryCaptureResult(BUILD, []).version).toBe(DELIVERY_RECIPE_VERSION);
+    expect(deliveryCaptureResult(BUILD, 0, []).version).toBe(DELIVERY_RECIPE_VERSION);
+  });
+  it('covers the split: another partition is another version', () => {
+    expect(deliveryRecipeVersionOf()).toBe(DELIVERY_RECIPE_VERSION);
+    expect(deliveryRecipeVersionOf(deliveryParts(2))).not.toBe(DELIVERY_RECIPE_VERSION);
+    expect(deliveryRecipeVersionOf(deliveryParts(4))).not.toBe(DELIVERY_RECIPE_VERSION);
   });
   it('is the same every time it is computed (a fresh module graph computes it again)', async () => {
     vi.resetModules();

@@ -1321,8 +1321,9 @@ export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'l
 
 /** ONE member of the `req` envelope. A frame with any other extra field is a malformed frame (`bad-request`). `recipe`
  *  (Desktop polish wave 178) is additive: absent is build trust; present, only `delivery`, which an agent that predates it
- *  refuses `bad-request` as it refuses any extra field. */
-export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string; recipe?: 'delivery' }
+ *  refuses `bad-request` as it refuses any extra field. `part` is present exactly with `recipe`: which part of the delivery
+ *  cases (`deliveryResult.ts#deliveryParts`, the capture owner's call 1148). */
+export interface TestboxCaptureReq { t: 'req'; id: number; op: 'testbox-capture'; build: string; recipe?: 'delivery'; part?: number }
 
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const TESTBOX_CAPTURE_OP = 'testbox-capture';
@@ -1361,8 +1362,9 @@ export interface TestboxCaptureReply {
  *  the four fields must be present; the verdict is read by the verdict's one reader. For a delivery request
  *  (`recipe: 'delivery'`) the reply must also carry `delivery`, read by its one reader, and no build-trust verdict. A
  *  build-trust request is read as before, save that a reply naming `delivery` is no answer to trust: read as a trust
- *  capture with no verdict, it would count against the trust lane's retry for that build (the capture owner's call 1135). */
-export function readTestboxCaptureReply(raw: unknown, build: string, recipe: CaptureRecipe = 'build-trust'): TestboxCaptureReply | null {
+ *  capture with no verdict, it would count against the trust lane's retry for that build (the capture owner's call 1135). A
+ *  delivery request names its `part`, and its result must echo it (call 1148); with no part there is no answer. */
+export function readTestboxCaptureReply(raw: unknown, build: string, recipe: CaptureRecipe = 'build-trust', part?: number): TestboxCaptureReply | null {
   if (recipe === 'delivery') {
     // A reply with no `delivery` field does not echo the recipe: `d` is then undefined, which the two checks below refuse
     // (on an answered reply the result's reader refuses it; on any other, it is not null).
@@ -1371,7 +1373,9 @@ export function readTestboxCaptureReply(raw: unknown, build: string, recipe: Cap
     const base = readTestboxCaptureReply(rest, build);
     if (base === null || base.result !== null) return null;
     if (base.outcome !== 'answered' && d !== null) return null;
-    const delivery = d === null ? null : readDeliveryCaptureResult(d, build);
+    // The result must echo the part asked (call 1148); a delivery request with no part has no answer.
+    if (part === undefined) return null;
+    const delivery = d === null ? null : readDeliveryCaptureResult(d, build, part);
     if (d !== null && delivery === null) return null;
     return { ...base, delivery };
   }

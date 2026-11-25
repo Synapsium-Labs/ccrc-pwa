@@ -16,6 +16,29 @@ export const DELIVERY_CASE_IDS: readonly DeliveryCaseId[] = Object.keys(DELIVERY
 export const isDeliveryCaseId = (v: unknown): v is DeliveryCaseId =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(DELIVERY_CASE_ID_MAP, v);
 
+/** How many parts the cases run in, each part a capture of its own (the capture owner's call 1148). DERIVED, not chosen:
+ *  `agent/src/testbox/captureDelivery.ts#deliveryPartCount` computes the smallest count whose largest part fits the pair
+ *  bound in every pairing, from the one timing object and this file's case list, and an agent test holds this
+ *  value equal to it, so a change to a timing or to the case list turns that test red until this value follows. It lives
+ *  here because the server's lane needs it and cannot read the agent's timing object. */
+export const DELIVERY_PART_COUNT = 3;
+
+/** The cases split evenly over `count` parts in their order: sizes differ by at most one, the larger parts first (4, 4, 3
+ *  today). */
+export function deliveryParts(count: number = DELIVERY_PART_COUNT, ids: readonly DeliveryCaseId[] = DELIVERY_CASE_IDS): readonly (readonly DeliveryCaseId[])[] {
+  const parts: DeliveryCaseId[][] = [];
+  let at = 0;
+  for (let i = 0; i < count; i++) {
+    const n = Math.floor(ids.length / count) + (i < ids.length % count ? 1 : 0);
+    parts.push(ids.slice(at, at + n));
+    at += n;
+  }
+  return parts;
+}
+
+/** A part index this side's recipe has: an integer from 0 to `DELIVERY_PART_COUNT - 1`. */
+export const isDeliveryPart = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < DELIVERY_PART_COUNT;
+
 /** One case's verdict. `intact`: one turn, equal. `refused`: the send refused and nothing reached the model (honest, not
  *  silent). The rest are faults: `duplicate` (two or more turns, each equal), `split` (two or more turns, not all equal),
  *  `altered` (one turn, unequal), `false-confirmation` (the send answered ok and no turn arrived), `partial` (the send
@@ -41,6 +64,11 @@ export const DELIVERY_HOOK_WITNESS_MAP: Record<DeliveryHookWitness, true> = { eq
 
 /** How many code points of context each side of a divergence keeps. */
 export const DELIVERY_CONTEXT = 40;
+
+/** The reader's bounds (the capture owner's call 1145): the turns one case's window may report, and every count's ceiling
+ *  (a length in code points or a request count). */
+export const DELIVERY_TURNS_MAX = 16;
+export const DELIVERY_COUNT_MAX = 1_000_000;
 
 /** The recipe version's shape: 16 lowercase hex characters (`deliveryCapture.ts#DELIVERY_RECIPE_VERSION`, computed). */
 export const DELIVERY_VERSION_SHAPE = /^[0-9a-f]{16}$/;
@@ -69,11 +97,14 @@ export interface DeliveryCaseResult {
 }
 
 /** A delivery capture's result: the recipe it echoes, the recipe's version (so the lane can tell a result of an older
- *  recipe), the build, the word and every case. Never a `BuildCaptureResult`, never a trust input. */
+ *  recipe), the build, the part it ran, the word and every case of that part. Never a `BuildCaptureResult`, never a trust
+ *  input. The case ids are the box's own copy of the part, so a box on another recipe can be told apart (the lane stores
+ *  a row as current only when the version and the ids are its own recipe's for that part). */
 export interface DeliveryCaptureResult {
   readonly recipe: 'delivery';
   readonly version: string;
   readonly build: string;
+  readonly part: number;
   readonly word: DeliveryWord;
   readonly cases: readonly DeliveryCaseResult[];
 }
@@ -87,7 +118,7 @@ export function deliveryWord(verdicts: readonly DeliveryCaseVerdict[]): Delivery
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const has = <T extends string>(map: Record<T, true>, v: unknown): v is T => typeof v === 'string' && Object.prototype.hasOwnProperty.call(map, v);
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= DELIVERY_COUNT_MAX;
 const keysAre = (o: Obj, keys: readonly string[]): boolean => Object.keys(o).sort().join() === [...keys].sort().join();
 const cps = (s: string): number => Array.from(s).length;
 const shortText = (v: unknown): v is string => typeof v === 'string' && cps(v) <= 2 * DELIVERY_CONTEXT;
@@ -106,7 +137,7 @@ function readCase(v: unknown): DeliveryCaseResult | null {
   const { id, verdict, send, sentChars, receivedChars, sideRequests, hook } = v;
   if (!isDeliveryCaseId(id) || !has(DELIVERY_CASE_VERDICT_MAP, verdict) || typeof send !== 'string' || !DELIVERY_SEND_WORD.test(send)) return null;
   if (!isCount(sentChars) || !isCount(sideRequests) || !has(DELIVERY_HOOK_WITNESS_MAP, hook)) return null;
-  if (!Array.isArray(receivedChars) || !receivedChars.every(isCount)) return null;
+  if (!Array.isArray(receivedChars) || receivedChars.length > DELIVERY_TURNS_MAX || !receivedChars.every(isCount)) return null;
   const divergence = readDivergence(v['divergence']);
   if (divergence === undefined) return null;
   // The verdict must be the rule's for the send word and the turn count it carries (equality aside, which the counts
@@ -122,21 +153,29 @@ function readCase(v: unknown): DeliveryCaseResult | null {
   return { id, verdict, send, sentChars, receivedChars: [...receivedChars], divergence, sideRequests, hook };
 }
 
-/** THE ONE READER of a delivery capture's result, for `build`: the recipe echoed, a version of its shape, every case once in
- *  `DELIVERY_CASE_IDS` order, each well formed, and the word the cases decide. `null`: not a delivery result for this
- *  build (another build or recipe, a field missing, mistyped or unnamed, a case missing, repeated or out of order, or a
- *  word the cases do not give). */
-export function readDeliveryCaptureResult(v: unknown, build: string): DeliveryCaptureResult | null {
-  if (!isObj(v) || !keysAre(v, ['recipe', 'version', 'build', 'word', 'cases'])) return null;
+/** THE ONE READER of a delivery capture's result, for `build` and the `part` asked: the recipe echoed, a version of its
+ *  shape, the part echoed, at least one case, each a known id once and in `DELIVERY_CASE_IDS` order, each well formed and
+ *  within the bounds, and the word the cases decide. `null`: not a delivery result for this build and part (another build,
+ *  part or recipe, a field missing, mistyped or unnamed, no case, a case unknown, repeated or out of order, a bound
+ *  passed, or a word the cases do not give). WHICH cases the part holds is not read here: a box on another recipe may
+ *  split them otherwise, and that is the lane's currency question (`deliveryCapture.ts#deliveryResultCurrency`), never a
+ *  malformed answer. */
+export function readDeliveryCaptureResult(v: unknown, build: string, part: number): DeliveryCaptureResult | null {
+  if (!isObj(v) || !keysAre(v, ['recipe', 'version', 'build', 'part', 'word', 'cases'])) return null;
   if (v['recipe'] !== 'delivery' || v['build'] !== build || !isClaudeVersion(build) || !has(DELIVERY_WORD_MAP, v['word'])) return null;
+  if (!isDeliveryPart(part) || v['part'] !== part) return null;
   if (typeof v['version'] !== 'string' || !DELIVERY_VERSION_SHAPE.test(v['version'])) return null;
-  if (!Array.isArray(v['cases']) || v['cases'].length !== DELIVERY_CASE_IDS.length) return null;
+  // Every id is known and strictly after the one before, so no list longer than the recipe's cases is ever read whole.
+  if (!Array.isArray(v['cases']) || v['cases'].length === 0) return null;
   const cases: DeliveryCaseResult[] = [];
-  for (const [i, raw] of (v['cases'] as unknown[]).entries()) {
+  let after = -1;
+  for (const raw of v['cases'] as unknown[]) {
     const c = readCase(raw);
-    if (c === null || c.id !== DELIVERY_CASE_IDS[i]) return null;
+    const at = c === null ? -1 : DELIVERY_CASE_IDS.indexOf(c.id);
+    if (c === null || at <= after) return null;
+    after = at;
     cases.push(c);
   }
   if (deliveryWord(cases.map((c) => c.verdict)) !== v['word']) return null;
-  return { recipe: 'delivery', version: v['version'], build, word: v['word'], cases };
+  return { recipe: 'delivery', version: v['version'], build, part, word: v['word'], cases };
 }
