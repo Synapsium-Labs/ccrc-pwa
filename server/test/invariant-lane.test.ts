@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
-import { InvariantMonitor, type InvariantMonitorDeps } from '../src/coord/invariantLane.js';
+import { InvariantMonitor, invariantMonitorOver, type InvariantMonitorDeps } from '../src/coord/invariantLane.js';
+import { CoordStore } from '../src/coord/store.js';
+import { LANE_ARM_LANES } from '../../shared/lane-arm.js';
 import { gatherInvariantInput } from '../src/coord/invariantFacts.js';
 import { findingCounts, openFindings, recordFinding, resolveFindings } from '../src/coord/invariantFindingsStore.js';
 import { INVARIANT_NAMES, type InvariantInput } from '../src/coord/invariants.js';
@@ -60,12 +62,12 @@ const invariantLatches = (db: DatabaseSync) => {
 
 interface Rig {
   db: DatabaseSync; monitor: InvariantMonitor; log: string[];
-  st: { armed: boolean; mono: number; wall: number; raises: number; refuseNext: number; gathers: number; gather: (() => InvariantInput) | null };
+  st: { armed: boolean; mono: number; wall: number; raises: number; refuseNext: number; failRecordNext: number; gathers: number; gather: (() => InvariantInput) | null };
 }
 const rig = (): Rig => {
   const db = openCoordDb(path.join(mkTmp('ccrc-invariant-lane-'), '.ccrc', 'coord.db'));
   opened.push(db);
-  const st: Rig['st'] = { armed: false, mono: 1000, wall: NOW, raises: 0, refuseNext: 0, gathers: 0, gather: null };
+  const st: Rig['st'] = { armed: false, mono: 1000, wall: NOW, raises: 0, refuseNext: 0, failRecordNext: 0, gathers: 0, gather: null };
   const log: string[] = [];
   let seq = 0;
   const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: ++seq } }) } as unknown as AuthorityAppender;
@@ -87,7 +89,10 @@ const rig = (): Rig => {
       });
     },
     open: (mode) => openFindings(db, mode),
-    record: (f, mode, live, at) => recordFinding(db, f, mode, live, at),
+    record: (f, mode, live, at) => {
+      if (st.failRecordNext > 0) { st.failRecordNext -= 1; return { ok: false, error: 'a fixture write failure' }; }
+      return recordFinding(db, f, mode, live, at);
+    },
     resolve: (ids, at) => resolveFindings(db, ids, at),
     raiseLatch: (detail) => {
       if (st.refuseNext > 0) { st.refuseNext -= 1; return { ok: false }; }
@@ -159,7 +164,7 @@ describe('InvariantMonitor', () => {
     expect(invariantLatches(r.db)).toHaveLength(1);
   });
 
-  it('a refused latch records no live finding and the next pass retries with the real raise', () => {
+  it('a refused latch records no live finding, and the very next pass retries with the real raise (no clock advance, review 3843 F8)', () => {
     const r = rig();
     r.st.armed = true;
     firedTimer(r.db, 'lane-a', true);
@@ -169,10 +174,44 @@ describe('InvariantMonitor', () => {
     expect(count(r.db, 'operator_items')).toBe(0);
     expect(invariantLatches(r.db)).toEqual([]);
     expect(r.log.some((l) => l.includes('latch was refused'))).toBe(true);
-    later(r);
+    r.monitor.pass(); // the same head, mode and clock: due only because the last pass failed
+    expect(r.st.gathers).toBe(2);
     expect(rows(r.db)).toHaveLength(1);
     expect(count(r.db, 'operator_items')).toBe(1);
     expect(invariantLatches(r.db)).toHaveLength(1);
+    r.monitor.pass(); // a pass that succeeded is remembered: nothing is due now
+    expect(r.st.gathers).toBe(2);
+  });
+
+  it('a latch raised with its record lost stands with no finding; the very next pass records the finding against it as standing (F8, F10)', () => {
+    const r = rig();
+    r.st.armed = true;
+    const t = firedTimer(r.db, 'lane-a', true);
+    r.st.failRecordNext = 1;
+    r.monitor.pass();
+    expect(invariantLatches(r.db)).toHaveLength(1);
+    expect(rows(r.db)).toEqual([]);
+    expect(count(r.db, 'operator_items')).toBe(0);
+    expect(r.log.some((l) => l.includes('recorded nothing for I17'))).toBe(true);
+    r.monitor.pass(); // no clock advance
+    expect(r.st.gathers).toBe(2);
+    const all = rows(r.db);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ subject: `timer:${t.id}`, mode: 'live', latched: 'standing' });
+    expect(count(r.db, 'operator_items')).toBe(1);
+    expect(invariantLatches(r.db)).toHaveLength(1);
+  });
+
+  it('a shadow record that failed is retried by the very next pass', () => {
+    const r = rig();
+    firedTimer(r.db, 'lane-a', true);
+    r.st.failRecordNext = 1;
+    r.monitor.pass();
+    expect(rows(r.db)).toEqual([]);
+    r.monitor.pass();
+    expect(r.st.gathers).toBe(2);
+    expect(rows(r.db)).toHaveLength(1);
+    expect(r.st.raises).toBe(0);
   });
 
   it('repaired: the next pass resolves the finding; broken again it is a new finding and a new item', () => {
@@ -289,6 +328,74 @@ describe('InvariantMonitor', () => {
     r.monitor.pass();
     const c = findingCounts(r.db);
     expect(c.kind === 'measured' && [c.value.shadow.total, c.value.live.total]).toEqual([1, 1]);
+  });
+});
+
+/** The production monitor, as `index.ts` builds it (`invariantMonitorOver`), over a migrated temp database and a stub journal: the
+ *  arming binding is the one read that keeps a merged box in shadow (review 3843 F1). */
+const overRig = () => {
+  const db = openCoordDb(path.join(mkTmp('ccrc-invariant-over-'), '.ccrc', 'coord.db'));
+  opened.push(db);
+  const coord = new CoordStore(db);
+  let seq = 0;
+  const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: ++seq } }) } as unknown as AuthorityAppender;
+  let keys = 0;
+  const monitor = invariantMonitorOver({
+    db, coord, journal, readJournal: () => ({ kind: 'absent' }), guardState: () => ({ kind: 'coherent' }),
+    designationBaseline: () => ({ kind: 'measured', value: null }),
+    clock: { wall: () => NOW, mono: () => 1000 }, entropy: { hex: (n: number) => String(++keys).padStart(n * 2, '0') }, log: () => {},
+  });
+  firedTimer(db, 'lane-a', true);
+  const setChoice = (lane: string, choice: string): void => {
+    db.prepare('INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES (?, ?, 1) ON CONFLICT(lane) DO UPDATE SET choice = excluded.choice').run(lane, choice);
+  };
+  const raisedNothing = (): void => {
+    expect(invariantLatches(db)).toEqual([]);
+    expect(count(db, 'operator_items')).toBe(0);
+    expect(rows(db)).toHaveLength(1);
+    expect(rows(db)[0]).toMatchObject({ mode: 'shadow', latched: null, itemId: null });
+  };
+  return { db, monitor, setChoice, raisedNothing };
+};
+
+describe('invariantMonitorOver: the arming binding over the real Shadow lanes row (review 3843 F1)', () => {
+  it('the seeded invariants row (shadow) raises nothing', () => {
+    const o = overRig();
+    expect(o.db.prepare('SELECT choice FROM lane_arm_settings WHERE lane = ?').get(INVARIANTS_LANE)).toEqual({ choice: 'shadow' });
+    o.monitor.pass();
+    o.raisedNothing();
+  });
+  it('every other lane set live, the invariants row still shadow: raises nothing', () => {
+    const o = overRig();
+    for (const lane of LANE_ARM_LANES) if (lane !== INVARIANTS_LANE) o.setChoice(lane, 'live');
+    o.monitor.pass();
+    o.raisedNothing();
+  });
+  it('a stored word this build cannot name raises nothing', () => {
+    const o = overRig();
+    o.setChoice(INVARIANTS_LANE, 'Live');
+    o.monitor.pass();
+    o.raisedNothing();
+  });
+  it('an absent row raises nothing', () => {
+    const o = overRig();
+    o.db.prepare('DELETE FROM lane_arm_settings WHERE lane = ?').run(INVARIANTS_LANE);
+    o.monitor.pass();
+    o.raisedNothing();
+  });
+  it('an unreadable row raises nothing', () => {
+    const o = overRig();
+    o.db.exec('ALTER TABLE lane_arm_settings RENAME TO lane_arm_settings_gone');
+    o.monitor.pass();
+    o.raisedNothing();
+  });
+  it('a live invariants row raises the latch and one blocking item', () => {
+    const o = overRig();
+    o.setChoice(INVARIANTS_LANE, 'live');
+    o.monitor.pass();
+    expect(invariantLatches(o.db)).toHaveLength(1);
+    expect(count(o.db, 'operator_items')).toBe(1);
+    expect(rows(o.db)[0]).toMatchObject({ mode: 'live', latched: 'raised' });
   });
 });
 

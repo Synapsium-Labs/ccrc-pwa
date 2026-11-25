@@ -7,8 +7,10 @@
 // SHADOW RAISES NOTHING. Until the Shadow lanes card's `invariants` row is Live (an unreadable row reads shadow), each new finding
 // is recorded with mode `shadow` and nothing else happens. Live, each new finding first raises the ladder's
 // `invariant-violation` latch (in its own transaction: `tx` does not nest), then records the row and its blocking item together.
-// A refused latch records no live finding, so the next pass retries; a crash between the two leaves a standing latch and no
-// finding, which the next pass records against the standing latch: never a live finding with no latch.
+// A refused latch records no live finding; a crash or a failed record between the two leaves a standing latch and no finding,
+// which the next pass records against the standing latch: never a live finding with no latch. A pass is remembered only when
+// every step of it succeeded (review 3843 F8): after a failed open read, resolve, raise or record, the next pass, a minute
+// later, gathers again and retries, rather than waiting for the head to move or the table cadence to pass.
 import { INVARIANT_NAMES, findingMoves, invariantPassDue, invariantVerdict, latchedOf, verdictWordChanges,
   type Finding, type InvariantInput, type InvariantName, type InvariantVerdict, type LastPass } from './invariants.js';
 import type { FindingLatched, FindingMode, OpenFindingRow } from './invariantFindingsStore.js';
@@ -73,26 +75,29 @@ export class InvariantMonitor {
     for (const c of verdictWordChanges(this.lastVerdicts?.verdicts ?? null, verdicts)) {
       d.log(`ccrc-server: invariant ${c.name} reads ${c.to} (was ${c.from ?? 'nothing'}), ${mode}`);
     }
-    this.lastPass = now;
     this.lastVerdicts = { at, mode, verdicts };
     const open = d.open(mode);
     if (open.kind === 'unmeasured') { d.log(`ccrc-server: the invariant monitor read no open findings: ${open.why}`); return; }
     const moves = findingMoves(verdicts, open.value);
     const resolved = d.resolve(moves.resolve, at);
-    if ('error' in resolved) d.log(`ccrc-server: the invariant monitor resolved nothing: ${resolved.error}`);
-    for (const f of moves.record) this.recordOne(f, mode, at, itemReach);
+    let done = true;
+    if ('error' in resolved) { done = false; d.log(`ccrc-server: the invariant monitor resolved nothing: ${resolved.error}`); }
+    for (const f of moves.record) if (!this.recordOne(f, mode, at, itemReach)) done = false;
+    if (done) this.lastPass = now;
   }
 
-  private recordOne(f: Finding, mode: FindingMode, at: number, itemReach: ItemReachOf | undefined): void {
+  /** Whether the finding was recorded. */
+  private recordOne(f: Finding, mode: FindingMode, at: number, itemReach: ItemReachOf | undefined): boolean {
     const d = this.deps;
     let live: { latched: FindingLatched; reach?: BoundOf } | null = null;
     if (mode === 'live') {
       const latched = latchedOf(d.raiseLatch(`${f.invariant} ${f.subject}: ${f.message}`));
-      if (latched === null) { d.log(`ccrc-server: the invariant monitor's latch was refused for ${f.invariant} ${f.subject}; the next pass retries`); return; }
+      if (latched === null) { d.log(`ccrc-server: the invariant monitor's latch was refused for ${f.invariant} ${f.subject}; the next pass retries`); return false; }
       live = itemReach === undefined ? { latched } : { latched, reach: itemReach({ title: `Invariant ${f.invariant} violated: ${f.subject}`, neededBy: 'blocking' }) };
     }
     const r = d.record(f, mode, live, at);
-    if (!r.ok) d.log(`ccrc-server: the invariant monitor recorded nothing for ${f.invariant} ${f.subject}: ${r.error}`);
+    if (!r.ok) d.log(`ccrc-server: the invariant monitor recorded nothing for ${f.invariant} ${f.subject}: ${r.error}; the next pass retries`);
+    return r.ok;
   }
 }
 
