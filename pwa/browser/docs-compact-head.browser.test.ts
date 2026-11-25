@@ -24,6 +24,12 @@
 // sideways, 915 x 412) keeping the 44 px floor; a frame mounted at a desk width keeps its own bar. Every case prints its
 // figures on a `PHH-FIGURE` or `L11-FIGURE` line for the plan's Results.
 //
+// Every case opens its leaf inside the console, as a console tab's reload does (`AppView.tab`): since desktop polish wave
+// 174 a Docs address loaded first in a fresh tab is a Docs tab, the reader alone (`isDocsTab`). A Docs tab's own cases
+// (`View.tab`) say the same of it: on a phone it draws exactly what the console draws, with no bar above the head; at a desk
+// a bar with the link back sits above the head, and the head, given the room the console's Docs pane has, draws the row
+// the console draws there (fix round 3).
+//
 // The figure is the iframe's top in the page plus the doc title's top inside the frame (Playwright's frame evaluation),
 // at the frame's scroll 0, once the reader is up ("Formatting…" gone, no fallback note) and both documents' fonts have
 // loaded. The title is the LOWEST `h1` reading TITLE, so a heading the reader may draw in its own bar never stands in for
@@ -159,13 +165,17 @@ interface View {
   readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean;
   /** `fine`: a mouse at any width (the context opens at a desk width, with no touch, and is then resized). */
   readonly pointer?: 'fine';
+  /** `docs`: the leaf loads first in a fresh tab, a Docs tab. Absent, it loads inside the console (`AppView.tab`). */
+  readonly tab?: 'docs';
 }
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks; a mouse when `pointer` is `fine`), its
  *  `/api/docs` answering `tree`. */
 async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentClass: 'markdown' | 'text' = 'markdown', doc = DOC): Promise<OpenedApp> {
   const opened = view.pointer === 'fine' ? Math.max(view.width, 900) : view.width;
-  const app = await openApp(browser!, { width: opened, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
+  const app = await openApp(browser!, {
+    width: opened, skin: view.skin, theme: 'light', touch: view.touch, ...(view.tab === 'docs' ? {} : { tab: 'console' as const }),
+  }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
   await answerDocs(app, tree, leaf, contentClass, doc);
   return app;
@@ -343,6 +353,26 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       expect(f.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
       expect(f.frameBar, 'the frame draws no bar of its own').toBe(false);
       expect(await page.locator('.docs-title').textContent(), "the title is the document's h1, not the file name").toContain(TITLE);
+    });
+  }, 120_000);
+
+  // A Docs tab (desktop polish wave 174, fix round 3): below the desk width it places no bar of its own, so a document a
+  // phone opens first draws exactly what the console draws, under the same bounds.
+  it.each([REFINED, INSTRUMENT])(`412 x 915, %s, a Docs tab: nothing above the Docs screen, the one bar, and the console's bounds`, async (skin) => {
+    await at({ ...PHONE, skin, tab: 'docs' }, async ({ page }) => {
+      await oneBar(page);
+      const f = await measure(page);
+      console.log(`L11-FIGURE ${skin} 412x915 docs-tab ${JSON.stringify(f)}`);
+      expect(await page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), 'a Docs tab').toBe('docs');
+      expect(await page.locator('header.shell-tab-bar').count(), 'no tab bar on a phone').toBe(0);
+      expect(f.head).toBe('one-bar');
+      expect(f.screenTop, 'nothing draws above the Docs screen').toBe(0);
+      expect(f.frameScroll, 'the frame is at its top').toBe(0);
+      expect(f.frameTop - f.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
+      if (skin === REFINED) {
+        expect(f.above, 'px above the title').toBeLessThanOrEqual(ONE_BAR_TITLE_MAX);
+        expect(f.frameBar, 'the frame draws no bar of its own').toBe(false);
+      }
     });
   }, 120_000);
 
@@ -1506,6 +1536,71 @@ describe('the desk head (desk-nav Part B)', () => {
       for (const c of r.controls) {
         expect(c.right - c.left, `${c.name} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
         expect(c.height, `${c.name} is a tap tall`).toBeGreaterThanOrEqual(TAP - 0.5);
+      }
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  // A Docs tab at a desk (desktop polish wave 174, fix round 3). The reader alone takes the window's width, so at 1280 its
+  // head has more room than the console's Docs pane gives it there, and the row draws what that room allows (`HeadRow`).
+  // It is the same head on the same rule: given the room the console's pane has at 1280 x 800, a Docs tab draws the very row
+  // the console draws there.
+  it.each([INSTRUMENT, REFINED])("the modified draft, %s, under a mouse: a Docs tab given the console's room at 1280 x 800 draws the console's row", async (skin) => {
+    const inConsole = await openRow({ width: 1280, height: 800, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+    let theirs: RowState;
+    let room: { pane: number; row: number };
+    try {
+      theirs = await rowState(inConsole.page);
+      room = await inConsole.page.evaluate(() => ({
+        pane: document.querySelector('.shell-detail')!.getBoundingClientRect().width,
+        row: document.querySelector('.docs-full > .docs-head-bar')!.getBoundingClientRect().width,
+      }));
+    } finally {
+      await inConsole.ctx.close();
+    }
+    const tab = await openRow({ width: Math.round(room.pane), height: 800, skin, pointer: 'fine', tab: 'docs' }, DRAFT_DEEP, 'main');
+    try {
+      expect(await tab.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), 'a Docs tab').toBe('docs');
+      const ours = await rowState(tab.page);
+      const row = await tab.page.evaluate(() => document.querySelector('.docs-full > .docs-head-bar')!.getBoundingClientRect().width);
+      console.log(`PHH-FIGURE ${skin} docs-tab console-room ${JSON.stringify({ room, row, words: ours.words, folded: ours.folded, seen: ours.seen })}`);
+      expect(Math.abs(row - room.row), `the same room for the row ${JSON.stringify({ room, row })}`).toBeLessThanOrEqual(1);
+      const shape = (r: RowState) => ({ words: r.words, folded: r.folded, nameWhole: r.nameWhole, actionsOnLine: r.actionsOnLine });
+      expect(shape(ours), "the console's row").toEqual(shape(theirs));
+      expect(tab.errors, 'no page error').toEqual([]);
+    } finally {
+      await tab.ctx.close();
+    }
+  }, 180_000);
+
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => (['a mouse', 'a coarse pointer'] as const).map((pointer) => [skin, pointer] as const)))('the modified draft at 1280 x 800, %s, a Docs tab under %s: the link back above the head, the head the window\'s width, one row, the whole name, every crumb, every control on the floor', async (skin, pointer) => {
+    const view: View = pointer === 'a mouse' ? { width: 1280, height: 800, skin, pointer: 'fine', tab: 'docs' } : { width: 1280, height: 800, skin, touch: true, tab: 'docs' };
+    const app = await openRow(view, DRAFT_DEEP, 'main');
+    try {
+      const got = await app.page.evaluate(() => {
+        const box = (sel: string) => { const b = document.querySelector(sel)?.getBoundingClientRect(); return b === undefined ? null : { top: b.top, bottom: b.bottom, left: b.left, right: b.right }; };
+        return { tab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null, bar: box('header.shell-tab-bar'), head: box('.docs-full'), pane: box('.shell-detail'), innerW: innerWidth };
+      });
+      const r = await rowState(app.page);
+      const f = await rowFigure(app.page);
+      console.log(`PHH-FIGURE ${skin} 1280x800 docs-tab ${pointer} ${JSON.stringify({ ...got, words: r.words, folded: r.folded, seen: r.seen, rowH: r.rowH })}`);
+      expect(got.tab, 'a Docs tab').toBe('docs');
+      expect(got.bar, 'the tab bar').not.toBeNull();
+      expect(got.head!.top, 'the head is under the bar').toBeGreaterThanOrEqual(got.bar!.bottom - 0.5);
+      expect(got.pane!.left, 'the pane is the window\'s width').toBeLessThanOrEqual(0.5);
+      expect(got.pane!.right, 'the pane is the window\'s width').toBeGreaterThanOrEqual(got.innerW - 0.5);
+      expect(r.nameWhole, "the page's whole name").toBe(true);
+      expect(r.folded, 'every crumb is drawn').toBe(false);
+      expect(r.actionsOnLine, 'one row').toBe(true);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+      if (pointer === 'a coarse pointer') {
+        expect(f.fine, 'a coarse pointer').toBe(false);
+        for (const c of f.controls) {
+          expect(c.right - c.left, `${c.name} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+          expect(c.height, `${c.name} is a tap tall`).toBeGreaterThanOrEqual(TAP - 0.5);
+        }
       }
       expect(app.errors, 'no page error').toEqual([]);
     } finally {

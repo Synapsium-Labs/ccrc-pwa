@@ -519,7 +519,7 @@ describe('measurement — C6 Step 0/4', () => {
   const MAX_SRCDOC_GROWTH = 191_736;
 
   async function openReaderOnce(skin: string, origin = server!.origin): Promise<{ openToReadyMs: number; srcdocChars: number }> {
-    const app = await openApp(browser!, { skin, theme: PHOSPHOR, width: 1280 }, fixture());
+    const app = await openApp(browser!, { skin, theme: PHOSPHOR, width: 1280, tab: 'console' }, fixture());
     try {
       await app.page.addInitScript(() => {
         const w = window as unknown as { __readerReadyAt: number; __readerSrcdocChars: number };

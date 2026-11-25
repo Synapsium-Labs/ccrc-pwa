@@ -1188,14 +1188,15 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ accounts: [], projected: null, roster: [] }),
         { status: 200, headers: { 'content-type': 'application/json' } })));
       render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
-      expect(screen.getByRole('button', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
+      // Links since desktop polish wave 174: the row an anchor wearing the ghost button, the item one wearing the list row.
+      expect(screen.getByRole('link', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
       cleanup();
       render(<SessionHeaderHost session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
         onOpenTerminal={() => {}} onBack={() => {}} onChangeModel={() => {}} onChangeEffort={() => {}}
         onMoveAccount={() => {}} onArchive={() => {}} onRestore={() => {}} onOpenHistory={() => {}}
         onReapWorkspace={() => {}} />);
       fireEvent.click(screen.getByRole('button', { name: 'More' }));
-      expect(screen.getByRole('button', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
+      expect(screen.getByRole('link', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
     });
   });
 });

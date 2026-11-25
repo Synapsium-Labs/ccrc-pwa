@@ -48,7 +48,7 @@ afterEach(() => {
 function viaSheet(session: FleetSession): { href: string; closedAt: string | null } {
   let closedAt: string | null = null;
   render(<SessionActionsSheet session={session} open onClose={() => { closedAt = here(); }} onReap={() => {}} />);
-  const row = document.querySelector<HTMLButtonElement>('.docs-session-row');
+  const row = document.querySelector<HTMLAnchorElement>('.docs-session-row');
   expect(row, 'the sheet has a Docs row').not.toBeNull();
   fireEvent.click(row!);
   const href = here();
@@ -61,7 +61,7 @@ function viaSheet(session: FleetSession): { href: string; closedAt: string | nul
 function viaMenu(session: FleetSession): string {
   render(<SessionHeaderHost {...headerProps(session)} />);
   fireEvent.click(screen.getByRole('button', { name: 'More' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Docs' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Docs' }));
   const href = here();
   cleanup();
   history.replaceState(null, '', '/');
@@ -116,11 +116,13 @@ describe('sessionBranchRef (chat reading Task L, D-8062)', () => {
 });
 
 describe('the actions sheet’s Docs row (spec 4.8, M4.L2)', () => {
-  it('is a btn-ghost row right after Restart, labelled with the branch', () => {
+  it('is a btn-ghost link right after Restart, labelled with the branch, at its real address', () => {
     render(<SessionActionsSheet session={s()} open onClose={() => {}} onReap={() => {}} />);
-    const row = screen.getByRole('button', { name: 'Docs on feat/renamed' });
+    const row = screen.getByRole('link', { name: 'Docs on feat/renamed' });
     expect(row).toHaveClass('btn-ghost', 'docs-session-row');
-    const buttons = [...document.querySelectorAll('.sess-sheet > button')];
+    expect(row).toHaveAttribute('href', '/docs/demo?ref=feat/renamed');
+    // The row is a link since desktop polish wave 174 (an anchor wearing the ghost button), among the sheet's buttons.
+    const buttons = [...document.querySelectorAll('.sess-sheet > button, .sess-sheet > a')];
     const restart = buttons.findIndex((b) => b.textContent === 'Restart session');
     expect(restart).toBeGreaterThanOrEqual(0);
     expect(buttons.indexOf(row)).toBe(restart + 1);
@@ -134,7 +136,7 @@ describe('the actions sheet’s Docs row (spec 4.8, M4.L2)', () => {
 
   it('says Docs, default branch for a session with no branch', () => {
     render(<SessionActionsSheet session={s({ branch: null })} open onClose={() => {}} onReap={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Docs, default branch' })).toHaveClass('docs-session-row');
+    expect(screen.getByRole('link', { name: 'Docs, default branch' })).toHaveClass('docs-session-row');
   });
 
   it('renders no row for a project outside the project grammar', () => {
@@ -148,21 +150,21 @@ describe('the session menu’s Docs item (spec 4.8, M4.L2)', () => {
   it('is a menu-item named Docs whose hint is the branch, or default', () => {
     render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    const item = screen.getByRole('button', { name: 'Docs' });
+    const item = screen.getByRole('link', { name: 'Docs' });
     expect(item).toHaveClass('menu-item', 'docs-menu-item');
     expect(item.querySelector('.menu-hint')?.textContent).toBe('feat/renamed');
     cleanup();
     render(<SessionHeaderHost {...headerProps(s({ branch: null }))} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(screen.getByRole('button', { name: 'Docs' }).querySelector('.menu-hint')?.textContent).toBe('default');
+    expect(screen.getByRole('link', { name: 'Docs' }).querySelector('.menu-hint')?.textContent).toBe('default');
   });
 
   it('closes the menu and navigates to exactly the href the builder made', () => {
     render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Docs' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Docs' }));
     expect(here()).toBe('/docs/demo?ref=feat/renamed');
-    expect(screen.queryByRole('button', { name: 'Docs' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Docs' })).toBeNull();
   });
 
   it('renders no item for a project outside the project grammar', () => {
@@ -203,7 +205,7 @@ describe('T13 review 5-3: the session menu lists Docs directly after History', (
     render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const history = screen.getByRole('button', { name: 'History' });
-    const docs = screen.getByRole('button', { name: 'Docs' });
+    const docs = screen.getByRole('link', { name: 'Docs' });
     expect(history.nextElementSibling).toBe(docs);
     expect(docs.parentElement).toBe(history.parentElement);
     const labels = [...(history.parentElement?.children ?? [])].map((n) => n.querySelector('.menu-label')?.textContent);

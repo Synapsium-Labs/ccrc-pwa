@@ -46,7 +46,7 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
   prepare?: (app: OpenedApp) => Promise<() => Promise<void>>, text = DOC): Promise<OpenedApp> {
   const size = Buffer.byteLength(text);
   const tree = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size } })] });
-  const app = await openApp(browser, { width: 1280, skin, theme }, { api: {}, fleetFrames: [] });
+  const app = await openApp(browser, { width: 1280, skin, theme, tab: 'console' }, { api: {}, fleetFrames: [] });
   await app.page.emulateMedia({ colorScheme: device });
   await app.ctx.addInitScript(({ colours, firstReady }) => {
     const isHost = window === window.top;

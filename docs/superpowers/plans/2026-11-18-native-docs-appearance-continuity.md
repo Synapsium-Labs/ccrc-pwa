@@ -1271,6 +1271,10 @@ On the restored package, the four drawn figures sat 3 996.70, 2 528.44, 1 060.17
 
 Each mutant was built separately from the exact producer checkout with matching generated asset manifests. The browser ran with a 4 096 process cap and the 900 s deadline; each exited 1 on its named assertion, not the deadline. The five installed enhancer variants and both manifests were restored and SHA-256 checked after each run. No producer source or release change is needed for these ordinary rows. The quiet gap row and AP-M31 have no timing verdict yet.
 
+#### Docs tab carry after #3289 (2026-11-25)
+
+Main's Docs tab cases and Wave C's per-skin console rows were retained as separate witnesses. The appearance and open-cost fixtures now mark that they open in the console, rather than letting a direct URL choose a standalone Docs tab. The checked tap-target mount fake survived the merge. Post-carry typecheck exited 0; the four scoped unit files passed 196 tests, and the four ordinary browser files passed 241 tests with one expected failure and 41 skips (rc 0). Both AP-5 modes and the task/queue redraw checks passed on the carried build. The eight unchanged corrected-library console BASE pairs had a 0 px maximum delta. The standalone 412 × 915 Docs tab draws one bar with frame at 48 px and title at 56 px in both skins. Those are Chromium fixture measurements, not F's phone-engine evidence.
+
 #### Corrected desktop timing, attempt 1 (D-9030)
 
 Start and end loads were not captured in the original command. The coordinator measured a load of 9 to 11 during the run. The old harness exited 1 on three ceilings before the validity rule was written; those assertion results are not acceptance verdicts. All eight rows are invalid on BASE spread alone (IQR here uses the seventh minus the third sorted sample). D-9018 therefore has no verdict in any row.
@@ -1286,7 +1290,7 @@ Start and end loads were not captured in the original command. The coordinator m
 | Mode-only, Refined, 2 | 134.8 → 134.9 | 1.001× | 27.3 | Not measured: reference not quiet |
 | Mode-only, Instrument, 2 | 203.4 → 192.9 | 0.948× | 122.4 | Not measured: reference not quiet |
 
-At the local build-ahead cut, no further paired attempt started below the D-9030 load threshold. Both hosted skins and both mode-only skins remain unmeasured in rounds 1 and 2. The AP-5 light and dark ceilings, the multi-figure redraw-gap ceiling, and the AP-M27 and AP-M31 delay controls also remain unmeasured; their ordinary counterparts are not timing evidence. A quiet retake and F's phone/pixel checks are separate from this local proof.
+At the local build-ahead cut, including the #3289 carry, no further paired attempt started below the D-9030 load threshold. The one-minute load after the final ordinary checks was 6.51. Both hosted skins and both mode-only skins remain unmeasured in rounds 1 and 2. The AP-5 light and dark ceilings, the multi-figure redraw-gap ceiling, and the AP-M27 and AP-M31 delay controls also remain unmeasured; their ordinary counterparts are not timing evidence. A quiet retake and F's phone/pixel checks are separate from this local proof.
 
 Raw samples, in open order, milliseconds displayed to a tenth; the harness log retains full precision:
 

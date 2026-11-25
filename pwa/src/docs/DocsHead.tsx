@@ -27,8 +27,8 @@ import {
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
 import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
-import { navigate } from '../lib/router';
 import { FLEET_PATH } from '../lib/routes';
+import { useFollowLink } from '../lib/useTabLink';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
@@ -1012,12 +1012,13 @@ function HeadRow(p: {
  *  the fleet: it is the `go-fleet` door there (W2 Task S5), and only there. */
 function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
   const up = docsUpHref(p.page);
+  const follow = useFollowLink();
   return (
     <button
       type="button"
       className="docs-back"
       aria-label={DOCS_HEAD_TEXT.back}
-      onClick={() => navigate(up)}
+      onClick={() => follow(up)}
       {...(up === FLEET_PATH ? doorMark('go-fleet') : {})}
     >
       ‹
