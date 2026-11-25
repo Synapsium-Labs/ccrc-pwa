@@ -358,7 +358,7 @@ Each row says where to read it, and whether a test holds it or the coordinator r
 | E6 | The card keeps every unsettled message's id under a full budget | Task 1's case | a test |
 | E7 | The count word is right in `CLAUDE.md` | `overlord-skill.test.ts` | a test |
 | E8 | The readiness word reads `absent` with nobody designated, and its lane is fresh | `GET /api/overlord/readiness` | the coordinator |
-| E9 | The invariant monitor's findings: none open, except the predicate the coordinator rules is known to read "differs" by design. On #3394's branch, I5's term arm reads `unmeasured` until its baseline read is wired, and I7 reads only under a coherent guard; the coordinator names the one it means and reads it first | the operator's invariants read (`GET /api/overlord/invariants`, sequence C) or the Shadow lanes card's `invariants` row | the coordinator |
+| E9 | The invariant monitor's findings: none open but I7's. I7 is the predicate known to read "differs" by design: by ruling (call 1286, after review 3843), it compares the term and the model class with the journal's for equality, not only the authority fields for width, so it can read "differs" where the spec's older row said only "not wider" (the spec's row is amended on #3403). Before the `invariants` row is set Live, the coordinator reads I7 in the shadow record and explains every "differs". I5 reads measured once its baseline read is wired (#3394) | the operator's invariants read (`GET /api/overlord/invariants`, sequence C) or the Shadow lanes card's `invariants` row | the coordinator |
 | E10 | The replay quiz baseline is recorded | the Shadow lanes card's quiz state (`LANE_ARM_QUIZ_STATES`: `recorded`) | the coordinator |
 | E11 | The `continuity` and `launch-profile` lanes are `live`, and the `anchor-slot` lane's state is what the W1a index requires | `GET /api/coord/lane-arm` | the coordinator |
 | E12 | Doctor's `overlord-mods` check passes on the fleet box | `ccrc doctor` | the coordinator |
@@ -630,8 +630,8 @@ readonly messages: Fact<readonly CardMessage[]> | null;
 ## The PR split
 
 One pull request, two tasks, lane C, last of all (the index). Its tests: the server tests vitest relates to the change,
-the guard suites, and the pwa suite whole (a `pwa/src` change). It changes no `docs/` file but this plan's (already
-merged), so it is not docs-only. The builder pushes once, after both tasks.
+the guard suites, and the pwa suite whole (a `pwa/src` change). It changes no `docs/` file but this plan's (merged
+before it), so it is not docs-only. The builder pushes once, after both tasks.
 
 ### Table 5. Growth, against `main` at `4fa87d73f8`
 
@@ -666,12 +666,17 @@ numbers.
   whose check now reads every row.
 - **`overlord-v1-waits-for-the-history-tool`** (question 8): the index's needs for this piece gain the history door
   tool.
+- **`plan-at-the-dated-path`**: the index names this plan `2026-11-14-overlord-w1/w1-overlord-v1.md`. It is
+  `2026-11-25-overlord-w1-overlord-v1.md`, directly in `docs/superpowers/plans/`, because the review judge refuses a new
+  plan in a subdirectory (`spec-misplaced`).
 - **`merge-waits-for-the-w1a-arming`** (question 12): the index puts the W1a arming before the first designation. This
   plan also puts it before the merge.
 
 ## Index changes, for the coordinator to fold
 
-- Table W1, row `overlord-v1`: the plan is `w1-overlord-v1.md` (written). Its needs gain the history door tool (ticket
+- Table W1, row `overlord-v1`: the plan is written, at `docs/superpowers/plans/2026-11-25-overlord-w1-overlord-v1.md`,
+  not `2026-11-14-overlord-w1/w1-overlord-v1.md`: the review judge's layout puts a new plan directly in
+  `docs/superpowers/plans/` under a dated name, as the Overlord clause's plan did. Its needs gain the history door tool (ticket
   `history-door-process-row`) and, if question 7 is ruled as recommended, chat B.
 - Question 33: add "Question 33's 'no separate server-side gate' is the operator's doors. The Overlord's own doors
   refuse `capability-missing` at step 2 until the word stands."
@@ -694,11 +699,12 @@ numbers.
 - The console's hiding is built (home A). This piece types its constant.
 - The card's unsettled list belongs to this piece (the private-store plan's question 15).
 - The `CLAUDE.md` bullet belongs to this piece (the skill plan's slug `overlord-skill-prose-in-readme-only`).
+- Entry row E9's predicate is I7 (the coordinator's ruling, call 1286).
+- The plan's dated top-level path (the judge's layout) and the judge's editorial bound on a one-file plan are accepted.
 
 **Waiting on the coordinator:**
 - Questions 1 to 12, each with its recommendation; questions 7 (chat B), 8 (the history tool) and 12 (the arming before
   the merge) change this piece's entry.
-- Which monitor predicate is "known to read differs by design" (entry row E9).
 - The index changes above.
 
 **Later:**
