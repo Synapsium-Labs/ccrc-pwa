@@ -125,7 +125,7 @@ export function toldNarrowed(s: RestoreStricter, told: { readonly operatorRung: 
 
 /** The server's epoch now (PR B's `authorityEpoch` total), read through the L4 module's port. */
 export type ConfirmEpochRead = { readonly kind: 'measured'; readonly n: number } | { readonly kind: 'unmeasured'; readonly why: string };
-/** The privacy journal's sequence now: `null` while the privacy head is not wired (`absent`, question 11). */
+/** The privacy journal's sequence now: `null` if unwired (`absent`, question 11) or wired but empty. */
 export type ConfirmPrivacyRead = { readonly kind: 'measured'; readonly sequence: number | null } | { readonly kind: 'unmeasured'; readonly why: string };
 /** The highest epoch and restore generation any witness answered with since boot; 0 and 0 when none has (question 13). It only
  *  raises Confirm's bound: it never proves that nothing higher was issued (`confirmRestorePlan`'s THE BOUND). */
@@ -133,8 +133,8 @@ export type ConfirmWitnessRead =
   | { readonly kind: 'measured'; readonly epoch: number; readonly restoreGeneration: number }
   | { readonly kind: 'unmeasured'; readonly why: string };
 
-/** The narrowing state a counting witness was told (PR B's tuple `told`, the coordinator's ruling `told-narrowings-survive-confirm`):
- *  the narrowest rung and latches over every counting witness that answered since boot, or `null` when none has. */
+/** The narrowing state a witness was told (PR B's tuple `told`, ruling `told-narrowings-survive-confirm`): the narrowest rung
+ *  and latches over consistent or rollback-detecting off-volume sources from any boot, or `null` when none qualifies. */
 export type ConfirmToldRead =
   | { readonly kind: 'measured'; readonly told: { readonly operatorRung: Rung | null; readonly latches: readonly OverlordLatchPair[] } | null }
   | { readonly kind: 'unmeasured'; readonly why: string };
@@ -207,7 +207,8 @@ export const CONFIRM_REFUSED = {
  * The residual of question 13 stands as it was: a whole-volume restore whose older journal agrees with its rows is bounded by
  * the witnesses that answered since boot.
  *
- * In a confirm, a told state a counting witness holds narrows the stricter rung and latches further (`toldNarrowed`).
+ * In a confirm, told state from a consistent or rollback-detecting off-volume source can narrow the stricter rung
+ * and latches further (`toldNarrowed`), even if the source holds a tuple from this boot.
  */
 export function confirmRestorePlan(f: ConfirmFacts): ConfirmPlan {
   if (f.guard.kind === 'unmeasured') return { kind: 'refuse', detail: CONFIRM_REFUSED.guard };

@@ -62,6 +62,8 @@ export interface AuthorityGuardPort {
   state(): AuthorityState;
   /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. */
   writerFailed(cause: AuthorityWriterFailure): void;
+  /** The writer's report after a successful append and head-row apply (never on `row-only` or a refusal). */
+  appended?(): void;
 }
 
 /** `appendInTx`'s answer. None is an HTTP refusal: a door maps them (X2's door mapping). */
@@ -319,6 +321,7 @@ export class OverlordAuthorityJournal {
           const rec = appended;
           if (rec === null) throw new Error('apply reached with no appended record');
           writeHeadRow(db, rec);
+          this.guard.appended?.();
           return { ok: true, kind: 'appended', record: rec, postAppendFailed: () => this.guard.writerFailed('trailing') };
         },
       }, phase);

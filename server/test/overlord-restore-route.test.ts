@@ -9,11 +9,23 @@ import { refuseRoute } from '../src/refuse.js';
 import { designationRead, retire, stopDone } from '../src/coord/overlordDesignationStore.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { GEN1, GEN2, NOW, OPERATOR, S1, S2, designateLive, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
+import { appendFileSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
+import { OverlordRestoreState } from '../src/coord/overlordRestoreState.js';
+import type { WitnessTuple } from '../../shared/authorityWitness.js';
+import { GEN1, GEN2, NOW, OPERATOR, S1, S2, designateLive, headRow, lastEntry, restoreRigHooks, rig, rung, type Rig } from './overlordRestoreRig.js';
 
 restoreRigHooks();
 
 const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
+const confirmRoute = (a: ReturnType<typeof app>) => a.inject({ method: 'POST', url: '/api/overlord/restore/confirm' });
+const witnessRoute = (a: ReturnType<typeof app>, held: WitnessTuple | null) => a.inject({ method: 'POST', url: '/api/overlord/witness', payload: { held } });
+async function offer(a: ReturnType<typeof app>): Promise<WitnessTuple> {
+  const res = await witnessRoute(a, null);
+  expect(res.statusCode).toBe(200);
+  return res.json<{ offer: WitnessTuple }>().offer;
+}
 
 type Gate = 'pass' | 'step-up-required' | 'auth-off';
 function app(r: Rig | null, gate: Gate, asks: unknown[], stops: string[] = []) {
@@ -31,7 +43,8 @@ function app(r: Rig | null, gate: Gate, asks: unknown[], stops: string[] = []) {
       keepAwake: async () => ({ ok: true, foreign: [] }), writeSet: async () => ({ ok: true }), clearProfile: async () => ({ ok: true }),
       stop: async (id: string) => { stops.push(id); return { ok: true, absent: false }; },
     },
-    restore: r === null ? undefined : r.state,
+    restore: r === null ? undefined : new OverlordRestoreState({ db: r.db, journal: r.journal, guard: r.guard, witness: r.exchange }),
+    exchange: r?.exchange,
     clock: { wall: () => 1_800_000_000_100 }, entropy: { hex: () => 'abcd', uuid: () => 'u' },
   } as unknown as OverlordRouteDeps);
   return a;
@@ -100,9 +113,7 @@ describe('POST /api/overlord/restore/confirm', () => {
   it('a malformed journal refuses journal-unreadable (503) with a fixed sentence, and writes nothing', async () => {
     const r = rig();
     designateLive(r, S1, GEN1);
-    const { appendFileSync } = await import('node:fs');
-    const path = (await import('node:path')).default;
-    appendFileSync(path.join(r.dir, 'overlord-authority.jsonl'), 'not a record\n');
+    appendFileSync(path.join(r.dir, OVERLORD_AUTHORITY_BASENAME), 'not a record\n');
     r.restart();
     const before = r.lines();
     const stops: string[] = [];
@@ -111,6 +122,82 @@ describe('POST /api/overlord/restore/confirm', () => {
     expect(res.json()).toMatchObject({ error: 'journal-unreadable', detail: expect.stringContaining('malformed') });
     expect(r.lines()).toEqual(before);
     expect(stops).toEqual([]);
+  });
+
+  it('keeps the narrowing told by a witness of a whole-volume rollback and raises the verified bound', async () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    expect(rung(r, 'chat', 'full')).toMatchObject({ ok: true, changed: true });
+    const restore = r.snapshot(true);
+    expect(rung(r, 'full', 'chat')).toMatchObject({ ok: true, changed: true });
+    const held = await offer(app(r, 'pass', []));
+    expect(held.told?.operatorRung).toBe('chat');
+    restore();
+    const a = app(r, 'pass', []);
+    expect((await witnessRoute(a, held)).json()).toMatchObject({ error: 'authority-rolled-back', cause: 'witness-epoch' });
+    expect(r.exchange.heldFor(held.authority!.sequence)).toBe('not-yet');
+    const res = await confirmRoute(a);
+    expect(res.statusCode).toBe(200);
+    expect.soft(res.json()).toMatchObject({ ok: true, changed: true, epochAtConfirm: held.epoch + 1 });
+    expect(lastEntry(r)).toMatchObject({ kind: 'authority-restore-confirmed', operatorRung: 'chat' });
+  });
+
+  it('withdraws boot confidence on Confirm, and a prior-boot witness at the new base lifts it only after restart', async () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const a = app(r, 'pass', []);
+    const t = await offer(a);
+    expect((await witnessRoute(a, { ...t, boot: 'prior-boot' })).statusCode).toBe(200);
+    expect(r.exchange.noWitnessSinceBoot()).toBe('lifted');
+    r.guard.writerFailed('trailing');
+    const res = await confirmRoute(a);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, changed: true, epochAtConfirm: t.epoch + 1 });
+    const current = await offer(a);
+    expect(current.base).toBeGreaterThan(t.base);
+    expect.soft(r.exchange.noWitnessSinceBoot()).toBe('standing');
+    expect((await witnessRoute(a, { ...current, boot: 'prior-boot' })).statusCode).toBe(200);
+    expect.soft(r.exchange.noWitnessSinceBoot()).toBe('standing');
+    r.restart();
+    expect((await witnessRoute(app(r, 'pass', []), current)).statusCode).toBe(200);
+    expect(r.exchange.noWitnessSinceBoot()).toBe('lifted');
+  });
+
+  it('refuses a readable malformed history and keeps its bytes even with a measured high witness', async () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const a = app(r, 'pass', []);
+    const t = await offer(a);
+    const held = { ...t, epoch: t.epoch + 10, terms: { ...t.terms, authority: t.terms.authority + 10 }, highestIds: { restoreGeneration: 9 } };
+    expect((await witnessRoute(a, held)).statusCode).toBe(503);
+    expect(r.exchange.highest()).toEqual({ kind: 'measured', epoch: held.epoch, restoreGeneration: 9 });
+    const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
+    appendFileSync(leaf, 'readable but not a record\n');
+    const bytes = readFileSync(leaf);
+    const head = headRow(r);
+    const res = await confirmRoute(a);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'journal-unreadable', detail: expect.stringContaining('malformed') });
+    expect(readFileSync(leaf)).toEqual(bytes);
+    expect(headRow(r)).toEqual(head);
+  });
+
+  it('leaves an unreadable history unmeasured rather than treating it as malformed or absent', async () => {
+    const r = rig();
+    designateLive(r, S1, GEN1);
+    const leaf = path.join(r.dir, OVERLORD_AUTHORITY_BASENAME);
+    const bytes = readFileSync(leaf);
+    const head = headRow(r);
+    r.unreadable = true;
+    r.guard.writerFailed('journal-unreadable');
+    const a = app(r, 'pass', []);
+    const res = await confirmRoute(a);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'journal-unreadable' });
+    expect(res.json().detail).not.toContain('malformed');
+    expect(r.guard.state()).toEqual({ kind: 'unmeasured', why: 'journal' });
+    expect(readFileSync(leaf)).toEqual(bytes);
+    expect(headRow(r)).toEqual(head);
   });
 
   it('the bodies a cleared binding names on either side have their owed stops drained once each, as the retire door drains one', async () => {

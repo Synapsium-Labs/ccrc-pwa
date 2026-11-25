@@ -22,7 +22,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { authorityFold } from './overlordAuthority.js';
 import { authorityCoherence, type AuthorityState } from './overlordAuthorityCoherence.js';
-import type { OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
+import type { AuthorityFileRead, OverlordAuthorityJournal } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import {
   CONFIRM_REFUSED, confirmRestorePlan, NARROWEST_RESTORE_SIDE,
@@ -34,40 +34,17 @@ import { rungRank, type Rung } from '../../../shared/overlord-ladder.js';
 import { liveGenerations } from '../continuity/continuityStore.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 
-/** What Confirm needs of the witness exchange (authority journal PR B): the server's epoch, the privacy head's sequence, the
- *  highest epoch and restore generation any witness answered with since boot, and the offer of the new tuple after a Confirm.
- *  L2, declared here by its consumer; PR B's exchange implements it, and until it lands `preWitnessFacts` stands in
- *  (`confirm-reads-the-witness-by-port`). */
+/** What Confirm needs of the witness exchange: the server's epoch, the privacy head's sequence, the highest epoch and
+ *  restore generation any witness answered with since boot, and the offer of the new tuple after a Confirm. */
 export interface RestoreWitnessFacts {
-  epoch(): ConfirmEpochRead;
+  /** Derive the epoch from the same file snapshot Confirm checks against its head row. This number alone proves no bound. */
+  epoch(file: AuthorityFileRead): ConfirmEpochRead;
   privacy(): ConfirmPrivacyRead;
   highest(): ConfirmWitnessRead;
-  /** The narrowest told state over the counting witnesses that answered since boot (`null`: none has). */
+  /** The narrowest told state over consistent or rollback-detecting off-volume witnesses (`null`: none). */
   told(): ConfirmToldRead;
-  /** After a Confirm commits: offer the new tuple to every witness at once. Never throws. */
+  /** After a Confirm commits: withdraw boot confidence and nudge the witness exchange. Never throws. */
   offerNow(): void;
-}
-
-/** The witness facts before the witness exchange exists (PR B): no witness has answered, so the highest is 0 and 0 (which only
- *  ever raises Confirm's bound, never proves one) and nothing was told; the privacy head is not wired (`absent`, question 11);
- *  and the server's epoch is question 7's formula over the authority journal's verified records alone, the last Confirm's
- *  `epochAtConfirm` plus the records after it (the sequence, with no Confirm). A torn tail is not a record, so it does not
- *  count (question 7: the heal never lowers the epoch); a malformed file reads `unmeasured`. PR B's `authorityEpoch` is the
- *  owner of that formula: whichever of PR B and this piece lands second replaces this adapter with PR B's in `index.ts`. */
-export function preWitnessFacts(journal: Pick<OverlordAuthorityJournal, 'readVerified'>): RestoreWitnessFacts {
-  return {
-    epoch: () => {
-      const f = journal.readVerified();
-      if (f.kind === 'absent') return { kind: 'measured', n: 0 };
-      if (f.kind !== 'records') return { kind: 'unmeasured', why: 'the authority journal cannot be folded' };
-      const lc = authorityFold(f.records).lastConfirm;
-      return { kind: 'measured', n: lc === null ? f.records.length : lc.epochAtConfirm + (f.records.length - lc.sequence) };
-    },
-    privacy: () => ({ kind: 'measured', sequence: null }),
-    highest: () => ({ kind: 'measured', epoch: 0, restoreGeneration: 0 }),
-    told: () => ({ kind: 'measured', told: null }),
-    offerNow: () => { /* no witness exchange yet */ },
-  };
 }
 
 export type ConfirmAnswer =
@@ -133,9 +110,10 @@ export class OverlordRestoreState {
     let answer: ConfirmAnswer;
     try {
       answer = tx(db, (): ConfirmAnswer => {
+        const file = journal.readVerified();
         const plan = confirmRestorePlan({
-          guard: guard.state(), file: journal.readVerified(), rows: journal.readRows(db), dbSide: rowsSide(db),
-          epoch: witness.epoch(), privacy: witness.privacy(), witnesses: witness.highest(), told: witness.told(), opKey,
+          guard: guard.state(), file, rows: journal.readRows(db), dbSide: rowsSide(db),
+          epoch: witness.epoch(file), privacy: witness.privacy(), witnesses: witness.highest(), told: witness.told(), opKey,
         });
         if (plan.kind === 'refuse') return { ok: false, refusal: 'journal-unreadable', detail: plan.detail };
         if (plan.kind === 'unchanged') return { ok: true, changed: false };

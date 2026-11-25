@@ -170,3 +170,68 @@ describe('remeasure() heals, then measures, as the boot step does (review F4)', 
     expect(g.state()).toEqual({ kind: 'unmeasured', why: 'rows' });
   });
 });
+
+describe('the witness-unmeasured input, the refusing hook and the appended report (Overlord W1 PR B, Task 6)', () => {
+  const coherent = (): OverlordAuthorityGuard => {
+    const g = new OverlordAuthorityGuard(measuring(() => COHERENT));
+    g.bootVerdict(COHERENT);
+    return g;
+  };
+  it('witnessUnmeasured moves a coherent guard to unmeasured with that why, and leaves any other state as it is', () => {
+    const g = coherent();
+    g.witnessUnmeasured('privacy-head');
+    expect(g.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+    g.witnessUnmeasured('journal');
+    expect(g.state()).toEqual({ kind: 'unmeasured', why: 'privacy-head' });
+    const r = coherent();
+    r.witnessRefused('witness-heads');
+    r.witnessUnmeasured('journal');
+    expect(r.state()).toEqual({ kind: 'rolled-back', cause: 'witness-heads' });
+  });
+  it('onRefusing is called once each time the state leaves coherent, and once for a non-coherent boot verdict', () => {
+    const g = coherent();
+    let n = 0;
+    g.onRefusing(() => { n++; });
+    g.witnessRefused('witness-epoch');
+    g.witnessRefused('witness-heads');
+    g.writerFailed('trailing');
+    expect(n).toBe(1);
+    g.confirmed();
+    g.writerFailed('rows-unreadable');
+    expect(n).toBe(2);
+    g.confirmed();
+    g.witnessUnmeasured('journal');
+    expect(n).toBe(3);
+    const b = new OverlordAuthorityGuard(measuring(() => COHERENT));
+    let m = 0;
+    b.onRefusing(() => { m++; });
+    b.bootVerdict({ kind: 'rolled-back', cause: 'behind' });
+    b.bootVerdict({ kind: 'rolled-back', cause: 'ahead' });
+    expect(m).toBe(1);
+    const c = new OverlordAuthorityGuard(measuring(() => COHERENT));
+    let k = 0;
+    c.onRefusing(() => { k++; });
+    c.bootVerdict(COHERENT);
+    expect(k).toBe(0);
+  });
+  it('a throwing listener never breaks the guard: its state stands and the other listeners run', () => {
+    const g = coherent();
+    let ran = 0;
+    g.onRefusing(() => { throw new Error('boom'); });
+    g.onRefusing(() => { ran++; });
+    g.witnessRefused('witness-epoch');
+    expect(g.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
+    expect(ran).toBe(1);
+  });
+  it('appended() defers its listeners past the caller\'s synchronous work, and a throwing one is caught', async () => {
+    const g = coherent();
+    const seen: string[] = [];
+    g.onAppended(() => { seen.push('listener'); throw new Error('boom'); });
+    g.onAppended(() => { seen.push('second'); });
+    g.appended();
+    seen.push('after-call');
+    expect(seen).toEqual(['after-call']);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(seen).toEqual(['after-call', 'listener', 'second']);
+  });
+});
