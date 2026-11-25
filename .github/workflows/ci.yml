@@ -642,7 +642,7 @@ jobs:
     # GitHub's 360 minutes before anyone learns it wedged. A fast pull
     # request's shards are packed to about four minutes each; a full run's,
     # the merge queue's among them, are not. A full merge-queue shard took from
-    # 15m47 to 29m24 on 2026-11-24 by runner, and one green shard was
+    # 15m47 to 29m53 on 2026-11-24 by runner, and one green shard was
     # cancelled at a 30-minute deadline a second after its tests passed, which
     # removed its entry from the queue. So 45 is about half as much again over
     # the slow case and still under the queue's own hour (D-9014). Pinned —
