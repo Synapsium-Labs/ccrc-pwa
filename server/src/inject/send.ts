@@ -245,8 +245,17 @@ const ECHO_NEEDLE = 24;
 // a parameterless reset `\e[m` is a close, as it is in ccd.
 const DIM_REOPEN = /\x1b\[0;(?:1;)?2(?:;[0-9;]*)?m/g;
 const DIM_SPAN = /\x1b\[(?:0;)?(?:1;)?2(?:;[0-9;]*)?m(?:\x1b\[(?!0[;m]|22[;m])[0-9][0-9;]*m|[^\x1b])*?\x1b\[(?:0[0-9;]*|22(?:;[0-9;]*)?)?m/g;
+// D-9077: THE CURSOR ON A HINT. A terminal nobody has ever focused draws Claude Code's own cursor, and on an empty box
+// that shows a hint the cursor cell IS the hint's first letter: inverse, not dim, then a reset that turns dim on for the
+// rest (`❯\u00a0\e[7mR\e[0;2mesend your message to try again\e[0m`, recorded on 2.1.332 after an API error). The strip
+// left that one letter, so an empty box read as the draft "R", which no key can stash or clear, and every mail to the
+// session failed `stash-failed`. The cursor joins the hint only where it is the row's FIRST cell and the very next code
+// turns dim on: a person's text is never dim, so a draft with the cursor on its first letter (`\e[7mr\e[0meal`), or one
+// letter alone (`\e[7mR\e[0m`), still reads as a draft.
+const HINT_CURSOR = /^((?:\x1b\[[0-9;]*m)*❯[\u00a0 ])\x1b\[7m([^\x1b])\x1b\[0;2m/u;
 /** A line with every dim run removed (SGR elsewhere left in place). */
-const undim = (line: string): string => line.replace(DIM_REOPEN, '\x1b[2m').replace(DIM_SPAN, '');
+const undim = (line: string): string =>
+  line.replace(HINT_CURSOR, '$1\x1b[2m$2').replace(DIM_REOPEN, '\x1b[2m').replace(DIM_SPAN, '');
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.
