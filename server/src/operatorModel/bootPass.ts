@@ -34,8 +34,9 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
   const c = { kept: 0, unsettled: 0, unjudged: 0, linked: 0, queued: 0, waiting: 0, delivered: 0, errors: 0 };
   const lines: string[] = [];
   const { operatorModel: store, coord } = deps;
-  // Each move's sequence line goes to the pass's own lines, like its other notes (call 1218).
-  const mover = { store, coordDb: coord.db, warn: (l: string): void => { lines.push(l); } };
+  // Each move's sequence line goes to the pass's own lines, like its other notes (call 1218). Those lines carry no `ccrc-server:`
+  // prefix (the boot prints each with one), so the message line's own prefix is taken off here (review 3852 F4).
+  const mover = { store, coordDb: coord.db, warn: (l: string): void => { lines.push(l.replace(/^ccrc-server: /, '')); } };
 
   const settled = store.settledRows();
   if (settled.kind === 'unmeasured') lines.push(`boot pass: settled rows unmeasured (${settled.why}); nothing re-derived`);
