@@ -890,7 +890,7 @@ The review found 6 important findings (F1 to F6) and 5 advisory ones (a0 to a4).
 
 ### Wave P2 (run 3656, 2026-11-24)
 
-Wave 44, ticket `x2-p2`, base `main` at `e0e8989c05` (P1 landed in #3102), with `main` absorbed by merge three times, after #3286, after #3289 and after #3348 landed. Issued block 9001 to 9003: D-9001 defined here (the `ccd/ccd` growth waiver); 9002 and 9003 returned unused.
+Wave 44, ticket `x2-p2`, base `main` at `e0e8989c05` (P1 landed in #3102), with `main` absorbed by merge five times, after #3286, after #3289, after #3348, after #3346 (fix round 1) and after #3370 (the land sync) landed. Issued block 9001 to 9003: D-9001 defined here (the `ccd/ccd` growth waiver); 9002 and 9003 returned unused.
 
 #### What was built, by task
 
@@ -952,7 +952,7 @@ Each row: the file's sha256 recorded, the one mutation made with the Edit tool, 
 - **One hook refusal, ruled (mail 34519):** a commit message named the doctor's remedy as the launcher plus its update verb, which the session hook's forbidden-verb arm matched as prose. Nothing ran; it was reported with the exact text from a file and re-run with the phrase reworded.
 - **Whole-tree guards the implementers did not run, caught by the first CI run on the pushed tip (ruled, mail 35348):** the briefs named the suites to run, and none named the guards that scan the whole tree. On the pwa side, `control-census` (hand-drawn buttons), `hook-class-collision` (a hand-drawn button wearing a design-system class), `literal-census` (one sentence in two files), `markup-census` (folder rows, the head bar and the svg leaf rendered twice) and `refusal-literal-ratchet` (a 33rd literal refusal branch). On the server side, `core-vocab` (the ccd script's path spelled in a test), `spawn-group-pin` (a timed spawn outside `spawnSyncGroup`), `secret-mask` (the folder GET doors neither masked nor exempt) and `consolidation-census` (two `runCcd(` sites with no ran row). All were fixed by reusing or extracting the existing owner (`RowButton`, `DirRow`, `OffRow`, `HeadBar`, `SvgImage`, the failure view, `docsAnswerFromError`, `CCD`, `spawnSyncGroup`) or by the guard's own table (the masker's exempt rows with their reasons, the census's ran rows); a pass-through wrapper that would have hidden the two `runCcd(` sites from the census was refused in review. Every pwa census and scan suite ran before the second push. Later briefs name the whole-tree guards of every package they touch.
 - **A claim slip, mine:** I let the console's implementer add cases to `pwa/test/docs-own-tab.test.tsx` without first claiming it; another run held it. Nothing was committed there: the cases moved to a file of their own, `pwa/test/docs-folders-tab.test.tsx`, and the held file was edited back until its diff against the last commit was empty.
-- **Main absorbed by merge three times:** on the coordinator's word when #3286 landed, before the doors were built on it (the route counts re-read there), and when #3289 landed, before the head and the tab title changed; and before the first push of the CI round, licensed by the merge probe, when #3348 (the Overlord's history door) and the runway read had moved the gate counts: the gate files were taken in turn with run 3726 and the counts re-derived on the merged tree (314 routes, 311 HTTP, 198 gated, 113 exempt; `docs/routes.ts` still 13).
+- **Main absorbed by merge three times in the build** (five in all; the fourth and fifth are under the fix round below): on the coordinator's word when #3286 landed, before the doors were built on it (the route counts re-read there), and when #3289 landed, before the head and the tab title changed; and before the first push of the CI round, licensed by the merge probe, when #3348 (the Overlord's history door) and the runway read had moved the gate counts: the gate files were taken in turn with run 3726 and the counts re-derived on the merged tree (314 routes, 311 HTTP, 198 gated, 113 exempt; `docs/routes.ts` still 13).
 - **The growth waiver's figure at the tip:** `ccd/ccd` and the ccd program row +914 net against the merge-base, under D-9001's 940; the review fix rounds added nothing to ccd.
 
 #### Not done here, and why
@@ -981,7 +981,7 @@ Review run 3783 read `b0e7227c45` with three lenses and a refuter on every findi
 
 - the stale rule moved into the pure policy module (`folderAskedAt`, `folderPathStale` in `folderPage.ts`), as the range re-list's rule already was, with rows;
 - a case for a move while a listing is on its way (the listing started before the move cannot call the path absent);
-- a page watch that the sentence is never drawn from the older listing;
+- a page watch over the body's added nodes, meant to show that the sentence is never drawn from the older listing. It cannot show that (review run 3816, R1): React reuses the one paragraph's text node, so a change of its text adds no node, and the observer reads the text when its callback runs, after every commit inside `act()` has happened. The case's own comment makes the same claim; the test file is left as it is in the land sync, and R1's case (record the old value of each text change, or the body text at each commit) is carried to the next parity wave;
 - the take-back unlinks the lock only while it is the directory's one name, so a registry another add wrote into keeps its lock;
 - a remove that wins a taken-back lock answers `unknown-folder`, its honest word;
 - a case for the `locked` guard (an add that made the directory but never won the lock takes nothing back);
@@ -1008,9 +1008,9 @@ Mutation rows measured in this round (each made with the Edit tool, run alone an
 | A2: the section chain's device check removed | `ccd-docs-folder-read`: the specs section listed three entries where `plans:b.md` alone is pinned |
 | A2: the shown path's device check removed | `ccd-docs-folder-read`: the show answered `ok` where `not-a-file` `other-device` is pinned |
 | F1: the in-flight listing counted (`folderAskedAt`'s +1 removed) | `docs-folders`: the move-while-listing case (the path called absent) and the pure row |
-| F1: the loading line while stale removed (`\|\| stale`) | **not red**, measured: with the guard removed, every DOM mutation recorded in jsdom shows the page going from the listing straight to the loading line, never the sentence; why was not established. The guard stays, since without it a real browser could paint the sentence for one frame; the page watch passes either way |
+| F1: the loading line while stale removed (`\|\| stale`) | **not red**, measured. The cause, from review run 3816 (R1, ruled Minor, call 1210): the page watch cannot see the sentence, because React reuses the paragraph's text node and the observer reads the text after every commit inside `act()` has happened. The guard is not dead code: without it the wrong sentence stands for two or more commits. No case reds on it today; the case that would is carried to the next parity wave |
 | A1: the take-back's one-name check removed | `ccd-docs-folder`: the refused add removed the lock of a registry holding `beta` (`['beta']` where `['.lock', 'beta']` is pinned) |
-| A1: the `locked` guard removed | `ccd-docs-folder`: the add that never won the lock took the lock file back |
+| A1: the `locked` guard removed | `ccd-docs-folder`: the add that never won the lock took back the lock file and the registry directory too, so the case reds because the directory is gone (its own listing of it raises inside the unit), not on its assertion (R5, review run 3816) |
 | A1: the remove's word under a taken-back lock | `ccd-docs-folder`: `unreadable` where `unknown-folder` is pinned |
 
 Process notes for this round:
@@ -1019,3 +1019,11 @@ Process notes for this round:
 - **One trailer slip, mine, before this round:** the merge commit of the CI round put a blank line between its `Ledger-Edit` line and the co-author line. Git reads only the last paragraph as trailers, so the ledger guard saw none and went red. An empty commit carrying the trailer followed (`b0e7227c45`), which made that round two pushes.
 - I made every edit and every run of this round myself; no implementer was used.
 - One edit of mine during a mutation removed a space beside the mutated text. The restore edit then did not match, which I caught by comparing hashes, and I edited the line back exactly (sha256 equal to the one recorded before).
+
+#### Re-review (review run 3816) and the land sync
+
+Review run 3816 read the fix round at `92749f7a63`: F1 closed in behaviour; A1, A2, A7, A8 closed; A4 closed as ruled. It re-derived the `ccd/ccd` growth (+925) and the gate counts independently, and they agree; nothing was dropped in the merge. The coordinator accepted the wave for landing with no second fix round.
+
+- **Main absorbed by merge twice more (R4):** the fourth, in fix round 1 and licensed by the merge probe, merged `b61cbe6f51` after #3346 (Rebind and Restart the Overlord) had moved the gate counts, with the gate files taken in turn from run 3744: 316 routes, 313 HTTP, 200 gated, 113 exempt (`92749f7a63`). The fifth, the land sync, on the coordinator's word once #3370 (the authority witness door) and #3375 had landed, merged `861cd77728`, which conflicted on the same two gate files, taken in turn from run 3726: 317 routes, 314 HTTP, 201 gated, 113 exempt (`01425f38fe`). `docs/routes.ts` stays at 13 throughout. Each merge commit resolves the counts and nothing else, and the gate, both censuses and the folder door suites read green on each merged tree.
+- **Carried to the next parity wave, bound (the coordinator's ruling):** R1's case, so that the loading-line guard has a row that reds; the folder labels re-read on the same retry as the projects read when capabilities are unknown (today an operator with folders sees no group and no hint until the next visit); the registry's answer to a missing directory at the lock open, worded the same as the unlinked case (R2); and a preview for folder rasters (A5), beside A3, as later hardening.
+- The land sync changed no code and no test after the review: the merge commit resolves the counts only, and this Results commit touches only the plan.
