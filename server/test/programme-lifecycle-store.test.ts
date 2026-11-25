@@ -180,6 +180,30 @@ describe('reclaimProgram: the binding moves with the claims (task 8)', () => {
     expect((s.db.prepare('SELECT claimedBy FROM runs WHERE id = ?').get(a) as { claimedBy: string }).claimedBy).toBe('lane-a-one');
   });
 
+  // Programme lifecycle W3: R11 rule 4's one exception (spec §13). Without it a session-in-several conflict's party is refused
+  // each of its programmes because of the other, so the operator could never give it the one it keeps.
+  it('a conflict\'s party is given a programme whose runs it holds by the hand-over door alone, and only while it owns none', () => {
+    const s = store();
+    for (const p of ['programme-a', 'programme-b', 'programme-c']) {
+      s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, 1, 'active')").run(p, p);
+    }
+    const run = (p: string, by: string): void => {
+      s.db.prepare("INSERT INTO runs (program, wave, project, state, claimedBy, openedAt, kind) VALUES (?, 1, 'project-a', 'working', ?, 1, 'work')").run(p, by);
+    };
+    run('programme-a', 'lane-a-one'); run('programme-b', 'lane-a-one'); run('programme-c', 'lane-a-two');
+    const give = (p: string, to: string, party: boolean) => s.reclaimProgramme(p, null, to, 10, 'project-a', { ...(party ? { party } : {}) });
+    // Every other caller keeps the rule: the reclaim, archive and stop doors.
+    expect(give('programme-a', 'lane-a-one', false)).toEqual({ ok: false, kind: 'owns-another-programme', by: 'programme-b' });
+    // Holding runs somewhere else is no claim on this one.
+    expect(give('programme-a', 'lane-a-two', true)).toEqual({ ok: false, kind: 'owns-another-programme', by: 'programme-c' });
+    expect(give('programme-a', 'lane-a-one', true)).toMatchObject({ ok: true });
+    expect(row(s, 'programme-a').coordinator).toBe('lane-a-one');
+    // It owns one now, so the other goes to somebody else; its runs there stay its own until it does.
+    expect(give('programme-b', 'lane-a-one', true)).toEqual({ ok: false, kind: 'owns-another-programme', by: 'programme-a' });
+    expect(row(s, 'programme-b').coordinator).toBeNull();
+    expect(give('programme-b', 'lane-a-three', true)).toMatchObject({ ok: true });
+  });
+
   it('a release clears the binding; the next coordinator\'s open is refused until a hand-over binds it', () => {
     const s = store();
     const a = idOf(open(s, 'programme-a', 'lane-a-one'));

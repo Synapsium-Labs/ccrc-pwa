@@ -245,7 +245,7 @@ export function programmeDoors(deps: ProgrammeDoorDeps) {
       // the move took is told, the bound coordinator and a migration conflict's party alike (spec §13: the operator's
       // hand-over is the consent a live claimant's displacement needs, as `displacing` is for the bound one).
       const r = await reclaimProgrammeTo({ ...ports.reclaim, coord }, slug, from, heir,
-        { ...(from === null ? {} : { displacing: from }), actor: cred.actor, why, onMoved: ({ holding }) => {
+        { ...(from === null ? {} : { displacing: from }), party: true, actor: cred.actor, why, onMoved: ({ holding }) => {
           if (from !== null && from !== heir) {
             mailTo(coord, from, `${slug} was handed to ${heir}`, `${slug} was handed to ${heir}: its runs are no longer yours. Why: ${why}. ${NO_PROGRAMME_SENTENCE}`);
           }
