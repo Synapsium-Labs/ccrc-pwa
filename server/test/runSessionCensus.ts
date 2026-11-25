@@ -205,6 +205,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "coordinatesProgramme, which claimsProgramme delegates to (D-8985, D-8993): the programme row's bound coordinator against the writing session, so an Idle programme keeps its owner: the programme binding, no session is asked which run is its" },
   { file: 'server/src/coord/programmeLifecycleStore.ts', text: '`SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_',
     why: "foreignOpenClaimOf (R11 rule 4, D-8993), asked by the start, the open and the reclaim heir: whether a claimant holds an open run in a programme it does not own, naming that programme: a programme ownership refusal, no run is returned or bound" },
+  { file: 'server/src/coord/programmeLifecycleActs.ts', text: '`SELECT 1 AS x FROM runs WHERE claimedBy = ? AND state NOT IN ${TERMINAL_SQL} LIMIT 1`',
+    why: "coordinatorsWithoutProgrammeOf (R11, W2): whether a coordinator that owns no programme still claims ANY open run, to leave it off the 'Coordinators with no programme' list: a yes/no read, no run is returned or bound" },
   { file: 'server/src/coord/store.ts', text: '"SELECT CAST(id AS TEXT) AS idText, state FROM runs " +"WHERE program = ? AND wave = ? AND (waveOf IS ?) " +"AND claimed',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (the planned-run dup arm)" },
   { file: 'server/src/coord/store.ts', text: 'SELECT project FROM runs WHERE sessionId = ? ORDER BY id LIMIT 1',
