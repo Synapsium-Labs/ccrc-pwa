@@ -10,7 +10,9 @@
 //
 // PR A wires two readings, both the Overlord's only: the fitted ceiling (`closedSpotProbes`, read once per model class per
 // pass) and the daily backstop (`backstopRead`, read once per pass). PR C wires the designation's two, the Overlord's only too
-// (`designationRead`, read once per pass): `termRaised` and `classChanged`. A field it does not answer keeps the lane's `W1`.
+// (`designationRead`, read once per pass): `termRaised` and `classChanged`. PR F wires `turns`, the Overlord's only: the private
+// store's count of the messages recorded since the generation's start (`messagesSince`), passed through. A field it does not
+// answer keeps the lane's `W1`, and so does `turns` on a box whose private store is not in the deps.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -22,6 +24,7 @@ import { familyClassOf } from '../../../shared/models.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { OperatorModelStore } from '../operatorModel/store.js';
 import { NO_LADDER_AUTHORITY } from '../coord/overlordAuthorityJournal.js';
 import { raiseLatch } from '../coord/overlordLadderRead.js';
 import { laneRaiser, type AuthorityAppender } from '../coord/overlordLadderStore.js';
@@ -44,6 +47,8 @@ export interface ReadingsDeps {
   /** The authority journal the ladder's writers append to (`NO_LADDER_AUTHORITY` when none is configured, as the ladder's own
    *  doors take it). */
   readonly overlordAuthority?: AuthorityAppender;
+  /** The Overlord's private store, for `turns` (`messagesSince`). Absent (no store open, a test): `turns` keeps its `W1`. */
+  readonly operatorModel?: Pick<OperatorModelStore, 'messagesSince'>;
   /** Where a failed read is logged, once per reading per pass. Absent: `console.warn`. */
   readonly log?: (line: string) => void;
 }
@@ -113,6 +118,8 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         });
         field(w1, 'termRaised', 'designation', () => termRaisedOf(designation ??= coord.designationRead(), g));
         field(w1, 'classChanged', 'designation', () => classChangedOf(designation ??= coord.designationRead(), g));
+        const store = deps.operatorModel;
+        if (store !== undefined) field(w1, 'turns', 'turns', () => store.messagesSince(g.startReportedAt));
         // PR E: door process B1's two readings, each only where the store hands its read (absent: the lane's `W1`).
         // Bound to the store: on the composition `coord` is the coordination store, whose reads are methods (review 3710 F1).
         const modelSwitchesOf = coord.modelSwitchesOf?.bind(coord);

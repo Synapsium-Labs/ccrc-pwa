@@ -66,6 +66,7 @@
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { RENEWAL_LANE_PERIOD_MS, RENEWAL_MODE_DEFAULT, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
+import { OVERLORD_OPERATOR_MARK } from '../../../shared/operatorMessages.js';
 import { familyClassOf } from '../../../shared/models.js';
 import { orgRelation } from '../../../shared/accountOrg.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
@@ -713,9 +714,9 @@ function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, iden
 
 /** `softRenewalMay`'s inputs from stored columns and measured readings (ruling R4, slug gather-in-the-act-lane): the observed
  *  times (`softTimesOf`), the soft renewals of the identity's line within the budget's window of observed time (the
- *  accumulator carries across mints), the hold table's drain, and, for a coordinator, the `operator-at-programme` mark of
- *  its programmes (`operatorQuietOf`; the hand-offs piece). A count that could not be read is not a count, so the decider
- *  waits `unmeasured`. */
+ *  accumulator carries across mints), the hold table's drain, and the operator's quiet (`operatorQuietOf`; the hand-offs piece):
+ *  a coordinator's programmes' marks, the Overlord's `@overlord` mark (renewal readings PR F). A count that could not be read
+ *  is not a count, so the decider waits `unmeasured`. */
 function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindingsOf'>, g: GenRow, r: GenReadings | undefined,
   overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly MarkReading[] | 'unmeasured'): SoftInputs {
   const inWindow = softRenewalsInWindowOf(coord, g);
@@ -725,7 +726,7 @@ function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindings
     hibernateHold: r?.drain ?? { held: true, reason: 'unmeasured' },
     readersRunning: g.role === 'coordinator' ? na : later('W1'),
     operatorQuietObservedMs: g.role === 'coordinator' ? operatorQuietOf(coordinatorProgrammes(coord, g.identity), marks)
-      : g.role === 'overlord' ? later('W1') : na,
+      : g.role === 'overlord' ? operatorQuietOf([OVERLORD_OPERATOR_MARK], marks) : na,
     placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
     ...r?.soft,
     mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),
