@@ -11,14 +11,14 @@ the named commit where it is stated, and the mail's two body entries in the run-
 
 ## Departures from the plan's snippet (for the coordinator to number or not)
 
-- `D-TBD-conflict-sync-text-flatten`: each file's whitespace is flattened to single spaces before
+- Departure, by slug `conflict-sync-text-flatten` (unnumbered): each file's whitespace is flattened to single spaces before
   matching. The README and the reference wrap their prose, and the README's bound
   (`one absorption of exactly the named commit per mail`) crosses a line break, so a raw match could
   never hold there.
-- `D-TBD-conflict-sync-text-hook-escape`: the hook writes the subject word inside a double-quoted bash
+- Departure, by slug `conflict-sync-text-hook-escape` (unnumbered): the hook writes the subject word inside a double-quoted bash
   string, as `` \`conflict-sync:\` ``, so the first case unescapes `` \` `` before it looks for the word.
   The printed advisory carries it bare, which `session-hook-sync-advisory.test.ts` holds.
-- `D-TBD-conflict-sync-text-no-diff`: the checks are boolean (`includes`, `match`) with a short message,
+- Departure, by slug `conflict-sync-text-no-diff` (unnumbered): the checks are boolean (`includes`, `match`) with a short message,
   never `toContain` or `toMatch` on the file. Measured: with the README still unchanged, a `toContain`
   miss made vitest diff the flattened README and the run went past ten minutes before it printed. The
   boolean form answers in milliseconds and names the file and the phrase it missed.
@@ -60,3 +60,26 @@ the clause, so the verbatim census reds. Green after each restore: the reader ru
   (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrctests.slice); exit 137`. The pull
   request's own run is the arbiter for both.
 - No full suite ran.
+
+## The pull request's first run, and what it found
+
+The first push (`e18c4b5516`) ran red in three server shards, for two causes, both this wave's own:
+
+- `dtbd` (`git grep over every tracked file finds none`): the task notes named their departures as
+  concrete placeholder tokens, which the guard refuses in any tracked file. The notes now name each
+  departure by its bare slug; the coordinator numbers them from the wave-done. `ci-shards`' two `times`
+  CLI cases were red only because their nested run includes `dtbd.test.ts`.
+- `skill-size-ratchet` (three cases): clause 16's plan text grew `ccd/worker-skill/SKILL.md` by 469 bytes,
+  to 36004, past its cap of 35559, and the ratchet lets a SKILL.md grow against main only by the bytes of
+  a NEW pinned clause, which this wave does not add. The worker skill may not carry a `references/`
+  directory, so the text could not move out. Departure, by slug `worker-skill-size-trim` (unnumbered): the
+  clause 2 note under `## Notes on the contract` (it restates clause 2, and the coordinator's dispatch
+  reference says the same) is removed, and the clause 5 note is cut to one sentence that keeps its reason.
+  No test pinned either. The file is now 35535 bytes, main's size exactly; the caps file is not touched
+  (an entry above its file's size is reported, never a failure, as four other skills' entries are on main).
+
+After the fix: `skill-size-ratchet`, `dtbd`, `ci-shards`, `worker-skill`, `conflict-sync-text` and
+`install-worker-skill`, 160 tests, green.
+
+The judge's check reads red on `rules-mixed` alone (skill and reference text beside other changes); the
+coordinator ruled before the wave that the pull request stays whole, because each pin moves with its text.

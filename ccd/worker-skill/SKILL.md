@@ -46,16 +46,8 @@ pin without looking like an edit — and keep double-quote characters out of a
 clause, where they would have to be escaped on the other side, except the
 `rm -rf "$X"` shape in clause 5 (D-5292), which the pin spells escaped.
 
-**Clause 2 is the one that decides whether this wave can close at all.** The
-ordinary per-PR convention elsewhere in this codebase — "cut a fresh
-`feat/<name>` branch from main" — is wrong inside a program workspace. `ccd`
-created this workspace on `ws/<slug>` and every re-measurement reads THAT
-branch's tip.
-
-**Clause 5 is not a style preference.** A question typed as prose into your
-pane renders as a session that has gone quiet; asked with the AskUserQuestion
-tool it becomes a structured ask the hook captures, read first by this
-session's parent if it answers in time. Free text reaches neither.
+**Clause 5 is not a style preference:** prose typed into your pane reads as a
+session gone quiet, and reaches neither parent nor operator.
 
 ## What you are
 

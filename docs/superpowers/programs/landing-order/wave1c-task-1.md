@@ -24,7 +24,7 @@ Implements D-9011 and D-9012.
 
 ## A departure from the plan's snippet (for the coordinator to number or not)
 
-`D-TBD-c16-case-reads-skill-line`: the plan's new case reads `CONTRACT[15]` only. Measured, that makes it
+Departure, by slug `c16-case-reads-skill-line` (unnumbered; the coordinator numbers it): the plan's new case reads `CONTRACT[15]` only. Measured, that makes it
 green as soon as the pin changes, before the skill does, so a mutation of the skill text alone (1C-01,
 1C-02, 1C-03) would never red it, which the mutation table predicts it does. The case now checks every
 assertion against both `CONTRACT[15]` and SKILL.md's own `16. ` line, the way the clause 9 case reads
