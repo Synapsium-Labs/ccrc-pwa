@@ -110,7 +110,7 @@ export function runBridgeDriver(
  *  - `body`: a JSON body (a string is sent as it is), for an error answer.
  *  - `holdHeadMs`: the request is read and NOTHING is written for this long, the head included: an upstream that
  *    accepted the connection and never answers. The answer then follows as scripted.
- *  - `drop`: the request is read and the connection closed with nothing written, so the client gets no answer. */
+ *  - `drop`: the connection is closed with nothing written (after `holdHeadMs`, when given), so no answer comes. */
 export type ResponsesAnswer = {
   status: number;
   headers?: Record<string, string | null>;
@@ -173,6 +173,10 @@ export async function fakeResponses(
     return out;
   };
   const answer = (res: ServerResponse, a: ResponsesAnswer): void => {
+    if (a.drop) {
+      res.destroy();
+      return;
+    }
     if (a.sse !== undefined) {
       res.writeHead(a.status, head({ 'content-type': 'text/event-stream' }, a.headers));
       if (typeof a.sse === 'string') {
@@ -230,8 +234,7 @@ export async function fakeResponses(
         return;
       }
       const a = queue.shift() ?? { status: 500, body: { error: { type: 'server_error', code: 'fake_responses_unscripted' } } };
-      if (a.drop) req.socket.destroy();
-      else if (a.holdHeadMs) later(a.holdHeadMs, () => { if (!res.destroyed) answer(res, a); });
+      if (a.holdHeadMs) later(a.holdHeadMs, () => { if (!res.destroyed) answer(res, a); });
       else answer(res, a);
     });
   });

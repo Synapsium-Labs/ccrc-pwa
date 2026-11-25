@@ -2891,6 +2891,37 @@ describe.skipIf(!PY)('a short upstream failure is absorbed before the commit poi
     }, { consts: { 'absorb.FIRST_S': 15, 'server.DRAIN_S': 0.3, 'server.DRAIN_WRITE_S': 3 } });
   });
 
+  it('what is not the upstream\'s failure is not recorded, and what is, is: a drain\'s cut, and a POST nobody waited for', async () => {
+    const silent: ResponsesAnswer = { status: 200, sse: { chunks: [created()], holdOpenMs: 3000 } };
+    await withBridge([silent], async ({ bridge, up, lane }) => {
+      const before = statusOf(lane);
+      const aP = send(bridge);
+      const t0 = Date.now();
+      while (up.requests.length === 0 && Date.now() - t0 < 4000) await sleep(25);
+      await sleep(200);
+      bridge.proc.kill('SIGTERM');
+      expect((await aP).status).toBe(503);
+      expect(await bridge.wait()).toEqual({ code: 0, signal: null });
+      expect(statusOf(lane), 'the bridge\'s own stop was recorded as an upstream failure').toBe(before);
+    }, { consts: { ...QUICK, 'server.DRAIN_S': 0.2, 'server.DRAIN_WRITE_S': 3 } });
+    const part: ResponsesAnswer = { status: 200, sse: created(1) + done(0, msgItem('msg_fx1', 'part 1')) + completed({}, { end_turn: false }) };
+    await withBridge([part, { status: 0, drop: true, holdHeadMs: 1500 }], async ({ bridge, up, lane }) => {
+      const payload = Buffer.from(JSON.stringify(messages()));
+      const req = httpRequest({ host: '127.0.0.1', port: bridge.port, path: '/v1/messages', method: 'POST', agent: false,
+        headers: { ...FROM_CC, 'x-api-key': bridge.key, 'content-type': 'application/json', 'content-length': String(payload.length) } }, (res) => { res.resume(); res.on('error', () => {}); });
+      req.on('error', () => { /* destroyed below */ });
+      req.end(payload);
+      const t0 = Date.now();
+      while (up.requests.length < 2 && Date.now() - t0 < 4000) await sleep(25);
+      req.destroy(); // the stream is committed and the second POST held: the next pings find the client gone
+      await statsWhen(lane, (d) => d.outcomes['client-gone'] === 1);
+      expect(statusOf(lane) ?? '').not.toContain('transport'); // the POST has not failed yet
+      const t1 = Date.now();
+      while (!(statusOf(lane) ?? '').includes('transport') && Date.now() - t1 < 4000) await sleep(25);
+      expect((JSON.parse(statusOf(lane)!) as Json).lastErrorCode).toBe('transport');
+    }, { consts: { ...QUICK, 'server.PING_S': 0.1 } });
+  });
+
   it('a request that is not Claude Code\'s, or a shim with no client-gone hook, is answered at once', async () => {
     await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
       const a = await call(bridge, '/v1/messages', { body: messages(), headers: { 'anthropic-beta': 'structured-outputs-2025-11-13' } });
