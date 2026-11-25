@@ -15,7 +15,7 @@ import type { SequenceLine } from './sequence.js';
 
 type Row = [kind: string, id: string, state: string];
 const seqOf = (rows: readonly Row[]): SequenceLine[] =>
-  rows.map(([kind, id, state], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor: 'lane' }));
+  rows.map(([kind, id, state], i) => ({ seq: i + 1, at: i * 1_000, kind, id, state, actor: 'lane', actorKind: 'server' as const, known: true }));
 const byName = (n: string) => TIMER_DAY_INVARIANTS.find((i) => i.name === n)!;
 const FILE = 'test/sim/timer-day.test.ts';
 /** 32 seeds in CI; CCRC_SIM=full runs 1,000. */
