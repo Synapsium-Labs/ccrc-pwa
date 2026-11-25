@@ -1483,7 +1483,9 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       sh('sha256sum', `printf 'stages-at-hash %s\\n' "$('${REAL['ls']}' -A '${tmp}' | wc -l)" >> '${log}'\nexec '${REAL['sha256sum']}' "$@"\n`);
       sh('rm', `if [ -z "\${TB_DROPPED-}" ]; then for a; do s=$a; done\n`
         + `  if [ -n "\${TB_PLANT-}" ] && [ -f "$s/b" ] && [ ! -L "$s/b" ]; then '${REAL['rm']}' -f -- "$s/b"; '${REAL['ln']}' -s '${victim}' "$s/b"; echo planted >> '${log}'; fi\n`
-        + `  if [ -n "\${TB_TAMPER-}" ] && [ -f "$s/b" ]; then printf 'TAMPERED\\n' >> "$s/b"; echo tampered >> '${log}'; fi\nfi\n`
+        + `  if [ -n "\${TB_TAMPER-}" ] && [ -f "$s/b" ]; then printf 'TAMPERED\\n' >> "$s/b"; echo tampered >> '${log}'; fi\n`
+        // Once only: the stage's removal on purpose, then a directory made again under the freed name, holding a file.
+        + `  if [ -n "\${TB_REMAKE-}" ] && [ -d "$s" ] && [ ! -e '${log}.remade' ]; then '${REAL['rm']}' "$@" || exit $?; '${REAL['mkdir']}' -- "$s"; printf 'O\\n' > "$s/other"; : > '${log}.remade'; echo remade >> '${log}'; exit 0; fi\nfi\n`
         + `exec '${REAL['rm']}' "$@"\n`);
       sh('cat', `if [ -z "\${TB_DROPPED-}" ]; then echo 'cat 0' >> '${log}'; [ -z "\${TB_FAIL_CAT-}" ] || exit 1; fi\nexec '${REAL['cat']}' "$@"\n`);
       sh('ls', 'for a; do p=$a; done\ncase "$p" in\n'
@@ -1704,9 +1706,11 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(handedOver(b)).toEqual([]);
     });
 
-    // Standing ready before the stage exists means the exit's clean-up runs on exits that come before any stage: it then
-    // removes nothing, and never a path the shell inherited under the stage's name.
-    it('P2: a stage that cannot be made exits with nothing removed, not even a path inherited under the stage\'s name', () => {
+    // Standing ready before the stage exists means the exit's clean-up runs on exits that come before any stage. The shell
+    // assigns the stage's name even when the tool that makes the stage fails, so this case holds the outcome (an inherited
+    // path untouched), not the clearing of the name before the clean-up stands, which only the text pin below can hold
+    // (review 3765 F6).
+    it('P2: a stage that cannot be made exits with nothing made, and a path inherited under the stage\'s name is untouched', () => {
       const b = box();
       const kept = join(b.h.home, 'elsewhere');
       mkdirSync(kept);
@@ -1718,9 +1722,23 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(readdirSync(b.tmp)).toEqual([]);
     });
 
+    // Review 3765 F1: once the stage is removed on purpose, its name is forgotten, so no later exit (here the hash refusal)
+    // removes anything under it, not even a directory another hand made again under the freed name.
+    it('P2: once the stage is removed on purpose, no later exit removes anything under its name', () => {
+      const b = box();
+      const r = runCopy(b, { sum: '0'.repeat(64), env: { TB_REMAKE: '1' } });
+      expect(shimLog(b), 'the directory was made again under the freed name').toContain('remade');
+      expect([r.rc, r.out]).toEqual([4, 'hash\n']);
+      const left = readdirSync(b.tmp);
+      expect(left).toHaveLength(1);
+      expect(readFileSync(join(b.tmp, left[0]!, 'other'), 'utf8'), 'what stands under the freed name is untouched').toBe('O\n');
+      expect(handedOver(b)).toEqual([]);
+    });
+
     // The one instant a fixture cannot reach: a termination after the clean-up stands and before the stage is asked for. There
-    // the clean-up must name no path at all, so the stage's name is cleared before the clean-up stands; pinned on the text.
-    it('P2: the stage\'s name is cleared before the clean-up stands, and the stage is made only once the shell stands ready', () => {
+    // the clean-up must name no path at all, so the stage's name is cleared before the clean-up stands; pinned on the text. And
+    // the name is forgotten as soon as the stage is removed on purpose (review 3765 F1), pinned on the text too.
+    it('P2: the stage\'s name is cleared before the clean-up stands, the stage is made only once the shell stands ready, and its name is forgotten once it is removed', () => {
       const prog = sh(fixture(), '. "$1"; printf %s "$TBA_BUILD_COPY_SH"', [VERB]).out;
       const at = (needle: string): number => { const i = prog.indexOf(needle); expect(i, needle).toBeGreaterThanOrEqual(0); return i; };
       const cleared = at('umask 077; s=; ');
@@ -1728,7 +1746,10 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       const termTrap = at(`trap 'exit 1' HUP INT TERM; `);
       const made = at('s=$(mktemp -d ');
       expect(prog.slice(0, cleared), 'no earlier use of the stage\'s name').not.toMatch(/\bs=|\$s\b|"\$s/);
-      expect([cleared < exitTrap, exitTrap < termTrap, termTrap < made]).toEqual([true, true, true]);
+      const removed = 'rm -rf -- "$s"; s=; ';
+      const forgotten = at(`${removed}h=$(sha256sum `);
+      expect(prog.slice(forgotten + removed.length), 'no use of the stage\'s name once it is forgotten').not.toMatch(/\$s\b|"\$s|\$\{s[}:#%-]/);
+      expect([cleared < exitTrap, exitTrap < termTrap, termTrap < made, made < forgotten]).toEqual([true, true, true, true]);
     });
 
     // P3: the hash that gates the install is of the very bytes handed over.
