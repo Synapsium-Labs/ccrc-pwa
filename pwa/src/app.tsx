@@ -141,8 +141,9 @@ export function App(): ReactNode {
   // With `CCRC_AUTH` off this can never be true: nothing on a dark box produces
   // an auth refusal, and `raiseAuthLostFrom` demands positive evidence of one.
   const { lost: authLost } = useAuthLost();
-  // The authority witness exchanges while signed in (lib/witness.ts); the sign-in screen stops it.
-  useEffect(() => (authLost ? undefined : startWitnessExchange()), [authLost]);
+  // The authority witness exchanges while signed in (lib/witness.ts); the sign-in screen stops it. A Docs tab is not the
+  // console and starts none (programme call 1060); a tab that stops being one starts it then.
+  useEffect(() => (authLost || docsTab ? undefined : startWitnessExchange()), [authLost, docsTab]);
   // The ladder's one source of routes (D-5466): a path outside the table is
   // the fleet's placeholder, never a screen the table does not name.
   const at = matchRoute(path);

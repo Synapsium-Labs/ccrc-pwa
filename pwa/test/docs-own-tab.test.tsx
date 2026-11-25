@@ -24,6 +24,7 @@
 //   `wasConsoleTab()` at the start (R4) .............. "a console reloaded on a Docs address is the console", and the release case
 //   `markConsoleTab()` for a console (R4) ............ the same cases
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
+//   the gated witness exchange (Overlord W1) ......... "a Docs tab starts no witness exchange, and starts one once it is the console"
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -283,6 +284,29 @@ describe('the console at a desk, for comparison', () => {
     expect(shell().querySelector('.shell-nav')).not.toBeNull();
     expect(sockets.length).toBeGreaterThan(0);
     expect(mounted.has('CommandLayer')).toBe(true);
+  });
+});
+
+// THE AUTHORITY WITNESS (Overlord W1 authority journal, programme call 1060): a Docs tab is not the console and starts no
+// witness exchange; a console tab does, and so does a tab that stops being a Docs tab.
+describe('the authority witness exchange', () => {
+  const witnessAsks = (): number => requests.map(pathOf).filter((p) => p === '/api/overlord/witness').length;
+
+  it('a Docs tab starts no witness exchange, and starts one once it is the console', async () => {
+    stubWidth(true);
+    await mount(DOC);
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    expect(witnessAsks()).toBe(0);
+    act(() => { navigate('/fleet'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(shell()).not.toHaveAttribute('data-tab');
+    expect(witnessAsks()).toBe(1);
+  });
+
+  it('a console tab starts the witness exchange at once', async () => {
+    stubWidth(true);
+    await mount('/fleet');
+    expect(witnessAsks()).toBe(1);
   });
 });
 
