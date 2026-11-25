@@ -6975,14 +6975,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY-FOUR dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these sixteen are
+# NOT reachable this way, and this set IS the boundary — TWENTY-FIVE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these seventeen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The sixteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The seventeen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.door/` (the Overlord's door process directory, ccd/lib/door.sh: a dotted DIRECTORY unreachable for `.reaped/`'s
 # reason; its per-id `<id>/` with the tool-server config and the delta cache is counted WITH it, removed by `_door_purge`);
 # `$REG/.inflight.lock` (the manifest's own slot, D-8362; no id is the dash-free `.inflight`);
@@ -7013,8 +7013,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
 # the test box switch, so only the transient copy carries a dot; `ccd scope-sweep-busy`'s
 # `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; `ccd delegation-adopt`'s
-# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last five ARE candidate glob matches when
+# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; the limit watchdog's `$REG/.provfail.$$.tmp` (D-9095), a fifth; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last six ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
