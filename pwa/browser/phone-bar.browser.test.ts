@@ -153,7 +153,8 @@ async function open(skin: string, width: number, path: string, ready: string, in
   await opened.page.waitForSelector(ready, { timeout: 20_000 });
   if (asConsole) {
     // The harness's console mark guards itself (desktop polish wave 177): a page opened with it is the console, never a Docs
-    // tab, so a mark the harness stopped setting turns every console case here red at its opener.
+    // tab. It runs only where the mark is asked for, the cases that load a Docs address (eight: both skins, 360 and 390,
+    // two cases each), so a mark the harness stopped setting turns those red at their opener.
     const tab = await opened.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null);
     expect(tab, `opened with the console mark, ${path} is the console`).toBeNull();
   }

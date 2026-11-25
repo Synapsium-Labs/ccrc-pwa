@@ -89,8 +89,9 @@ import { useFleetStore } from '../src/stores/fleet';
 //
 // `<App/>` keeps what its tab has been in the tab's session storage (`lib/tabMark.ts`: a console marks its tab), and
 // reads it once when it mounts. Across tests that is a leak: a case that mounts `<App/>` at a Docs address after a case
-// that mounted the console ran as the console, and alone as a Docs tab, the reader alone. Cleared here, every case
-// starts as a fresh tab does, with nothing kept.
+// that mounted the console ran as the console, and alone as a Docs tab, the reader alone. Cleared here, after every case,
+// so no case inherits another case's mark. It does not reach a file's own `beforeAll`: a file that mounts `<App/>` there
+// leaves its mark for that file's first case (three files do today, none at a Docs address).
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();

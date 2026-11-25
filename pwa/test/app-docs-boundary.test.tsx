@@ -60,9 +60,13 @@ describe('a throwing DocsScreen keeps the shell (M4.B1, W5 half)', () => {
     expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.objectContaining({ message: 'docs screen broke' }));
   });
 
+  // A Docs address loaded first is a Docs tab, so this is the Docs tab's own boundary resetting; the console's is pinned by
+  // the case after the next (wave 177: before the shared teardown cleared the tab's store, an earlier case's mark ran this
+  // one as the console).
   it('navigating to another Docs page resets the boundary, and the screen draws once it can', () => {
     navigate('/docs');
     render(<App />);
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-tab', 'docs');
     expect(screen.getByText(FALLBACK)).toBeInTheDocument();
     boom.on = false;
     act(() => { navigate('/docs/demo'); });
