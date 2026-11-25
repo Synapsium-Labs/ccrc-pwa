@@ -4,7 +4,7 @@
 // a fixture `coord.db`, the REAL read runner and a real `OperatorModelStore` on a fixture file, with a fake port. Fixture
 // names only; no agent, no history store and no live HOME is touched.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type LightMyRequestResponse } from 'fastify';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -31,10 +31,12 @@ import { OVERLORD_HISTORY_DEADLINE_MS } from '../../agent/src/historyOp.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER, WITNESS_KEY_HEADER } from '../../shared/continuity-door.js';
 import { OVERLORD_HISTORY_OP } from '../../shared/agent-protocol.js';
+import { SCOPE_FAMILIES_JSON_MAX } from '../../ccd/history/lib.mjs';
 import { SECRET_MASK_TOO_LARGE } from '../../shared/api.js';
 import type { ReadTurnState } from '../../shared/operatorMessages.js';
 import {
-  OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_REQUEST_MAX_BYTES, type OverlordHistoryAnswer, type OverlordHistoryRequest,
+  OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_REQUEST_MAX_BYTES, type OverlordHistoryAnswer, type OverlordHistoryRequest, readOverlordHistoryRequest,
+  readOverlordHistoryAnswer, OVERLORD_HISTORY_SCOPE_FAMILIES_MAX,
 } from '../../shared/overlordHistory.js';
 import { READ_CEILINGS } from '../../shared/overlordInbox.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -71,6 +73,28 @@ describe('historyDoorAnswer: every outcome of a history read has one home (Table
 });
 
 // ── the port's remote adapter ───────────────────────────────────────────────────────────────────────────────────────
+describe("the server's reader of the agent's answer bounds the whole answer (review 3730 F7)", () => {
+  const fam = (i: number) => ({ ccrc_id: `lane-a-project-${i}`, generation: `g-${i}`, first_seen_ms: i });
+  it("the scope's families are capped at lib's own cap (the scope counts the rest), a hand copy checked here", () => {
+    expect(OVERLORD_HISTORY_SCOPE_FAMILIES_MAX).toBe(SCOPE_FAMILIES_JSON_MAX);
+    const families = (n: number) => ({ ...ROWS, scope: { ...ROWS.scope, families: Array.from({ length: n }, (_, i) => fam(i)), families_total: n } });
+    expect(readOverlordHistoryAnswer(families(OVERLORD_HISTORY_SCOPE_FAMILIES_MAX))).not.toBe('off-shape');
+    expect(readOverlordHistoryAnswer(families(OVERLORD_HISTORY_SCOPE_FAMILIES_MAX + 1))).toBe('off-shape');
+  });
+  it("the scope's project is bounded like its id", () => {
+    expect(readOverlordHistoryAnswer({ ...ROWS, scope: { ...ROWS.scope, project: 'p'.repeat(512) } })).not.toBe('off-shape');
+    expect(readOverlordHistoryAnswer({ ...ROWS, scope: { ...ROWS.scope, project: 'p'.repeat(513) } })).toBe('off-shape');
+  });
+  it('items within their own bound are still off-shape when the whole answer is past it', () => {
+    const shell = Buffer.byteLength(JSON.stringify([{ trust: 'untrusted', text: '' }]));
+    const items = [{ trust: 'untrusted' as const, text: 'x'.repeat(OVERLORD_HISTORY_ANSWER_MAX_BYTES - shell) }];
+    expect(Buffer.byteLength(JSON.stringify(items))).toBe(OVERLORD_HISTORY_ANSWER_MAX_BYTES);
+    expect(readOverlordHistoryAnswer({ ...ROWS, items })).toBe('off-shape');
+    const fits = [{ trust: 'untrusted' as const, text: 'x'.repeat(OVERLORD_HISTORY_ANSWER_MAX_BYTES - 2_000) }];
+    expect(readOverlordHistoryAnswer({ ...ROWS, items: fits })).not.toBe('off-shape');
+  });
+});
+
 describe('createIo(client).overlordHistory: the port half of Table 2', () => {
   const REQ: OverlordHistoryRequest = { verb: 'search', target: { kind: 'all' }, agents: false, args: ['deploy'] };
   const fake = (onReq: (f: Record<string, unknown>, ms?: number, signal?: AbortSignal) => Promise<unknown>, ops: string[] | 'no-ready' = [OVERLORD_HISTORY_OP]) => {
@@ -179,7 +203,13 @@ interface RigOpts {
   /** The whole port, for local mode. */
   io?: Pick<FleetIO, 'overlordHistory'>;
   turn?: () => Promise<ReadTurnState>;
+  /** Gate facts to replace (a refusal driven through the real gate). */
+  gate?: Partial<OverlordGateDeps>;
+  /** Run after the real gate answers, before the handler goes on (a caller that leaves during the gate). */
+  afterGate?: (reply: FastifyReply) => void;
 }
+const gateOf = (g: ReturnType<typeof overlordGateRun>, after?: (reply: FastifyReply) => void): ReturnType<typeof overlordGateRun> =>
+  after === undefined ? g : (async (req, reply, key, who) => { const v = await g(req, reply, key, who); after(reply); return v; }) as ReturnType<typeof overlordGateRun>;
 const AGENT: HistoryLink = { connected: true, agentOps: [OVERLORD_HISTORY_OP] };
 async function rig(o: RigOpts = {}): Promise<Rig> {
   const { gen, key } = fresh();
@@ -204,6 +234,7 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
     recordFenceRefusal: (r) => { recordFenceRefusal(s.db, r); },
     serverWords: () => o.words ?? ['overlord-v1'],
     now: () => NOW,
+    ...o.gate,
   };
   const asked: OverlordHistoryRequest[] = [];
   const port = o.port ?? (async () => answer(ROWS));
@@ -211,7 +242,7 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
   const app = Fastify({ logger: false });
   apps.push(app);
   registerOverlordHistoryRoutes(app, {
-    mailToken: () => TOKEN, gate: overlordGateRun(gateDeps),
+    mailToken: () => TOKEN, gate: gateOf(overlordGateRun(gateDeps), o.afterGate),
     readRunner: runOverlordRead({ ledger: store, turn: o.turn ?? (async () => 'done'), now: () => NOW }),
     links: () => o.links ?? [AGENT], io,
   });
@@ -268,6 +299,39 @@ describe('the door: the token, the pair, then the gate, before anything is read'
     expect(r.lines()).toEqual([]);
   });
 
+  // The plan's other gate refusals, driven through the real gate on this route's own wiring (review 3730 F8).
+  it.each([
+    ['card-unread', 'an unread card', (): RigOpts => ({ gate: { cardRead: () => ({ ok: true, read: null }) } })],
+    ['overlord-off', "the operator's rung off", (): RigOpts => ({ gate: { ladder: () => ({ kind: 'read', rung: { rung: 'full', operatorRung: 'off', binding: [], readBy: [] } }) as never } })],
+  ] as const)('%s (%s) is refused before any agent is asked, and no line', async (word, _what, opts) => {
+    const r = await rig(opts());
+    const res = await history(r);
+    expect([res.statusCode, json(res)['error']], res.body).toEqual([REFUSAL_STATUS[word], word]);
+    expect(r.asked).toEqual([]);
+    expect(r.lines()).toEqual([]);
+  });
+
+  it('renewing (the generation draining) is refused before any agent is asked, and no line', async () => {
+    const r = await rig();
+    s.db.prepare("UPDATE continuity_generations SET state = 'draining' WHERE id = ?").run(r.gen.id);
+    const res = await history(r);
+    expect([res.statusCode, json(res)['error']], res.body).toEqual([REFUSAL_STATUS.renewing, 'renewing']);
+    expect(r.asked).toEqual([]);
+    expect(r.lines()).toEqual([]);
+  });
+
+  it('a caller that goes away during the gate starts no read: no agent is asked, no line, no ceiling (review 3730 F4)', async () => {
+    let handlerDone!: () => void;
+    const settled = new Promise<void>((res) => { handlerDone = res; });
+    const r = await rig({ afterGate: (reply) => { reply.raw.emit('close'); reply.raw.once('finish', () => handlerDone()); setTimeout(handlerDone, 2_000); } });
+    // The test client reads a closed response as destroyed; the handler goes on, and what it does next is measured.
+    await expect(history(r)).rejects.toThrow(/destroyed/);
+    await settled;
+    await new Promise((res) => setTimeout(res, 50));
+    expect(r.asked).toEqual([]);
+    expect(r.lines()).toEqual([]);
+  });
+
   it('a missing caller pair is 400 bad-request before the gate', async () => {
     const r = await rig();
     const res = await r.app.inject({ method: 'POST', url: '/api/overlord/history', headers: { ...HEADERS, ...r.act() }, payload: SEARCH });
@@ -307,18 +371,42 @@ describe('the door: the request', () => {
     expect(r.lines()).toEqual([]);
   });
 
-  it('a request at its bound with the longest pair the shape check takes still reaches the agent: the pair is outside the request\'s bound', async () => {
+  // Nine arguments (one past 1024 characters would be bad-args), filled so the TYPED request (agents and args present) is
+  // exactly `bytes` long: the form the agent reads, since the server sends the typed request.
+  const atBound = (bytes: number) => {
+    const empty = Buffer.byteLength(JSON.stringify({ verb: 'search', target: { kind: 'all' }, agents: false, args: Array.from({ length: 9 }, () => '') }));
+    const room = bytes - empty;
+    return { verb: 'search', target: { kind: 'all' }, agents: false, args: Array.from({ length: 9 }, (_, i) => 'y'.repeat(Math.floor(room / 9) + (i < room % 9 ? 1 : 0))) };
+  };
+
+  it('a request at its bound with the longest pair the shape check takes still reaches the agent, and the agent reads what the port is handed alike', async () => {
     const r = await rig();
-    // nine arguments (one past 1024 characters would be bad-args), filled so the request is exactly at its bound
-    const empty = Buffer.byteLength(JSON.stringify({ verb: 'search', target: { kind: 'all' }, args: Array.from({ length: 9 }, () => '') }));
-    const room = OVERLORD_HISTORY_REQUEST_MAX_BYTES - empty;
-    const args = Array.from({ length: 9 }, (_, i) => 'y'.repeat(Math.floor(room / 9) + (i < room % 9 ? 1 : 0)));
-    const parts = { verb: 'search', target: { kind: 'all' }, args };
+    const parts = atBound(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
     expect(Buffer.byteLength(JSON.stringify(parts))).toBe(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
     const res = await r.app.inject({ method: 'POST', url: '/api/overlord/history', headers: { ...HEADERS, ...r.act() },
       payload: { ...parts, byId: BODY, byUuid: 'u'.repeat(128) } });
     expect(res.statusCode, res.body.slice(0, 200)).toBe(200);
     expect(r.asked).toHaveLength(1);
+    // What the port is handed is what the server sends; the agent's own validator (the same reader) passes it at its bound.
+    expect(Buffer.byteLength(JSON.stringify(r.asked[0]))).toBe(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
+    expect(readOverlordHistoryRequest(r.asked[0])).toEqual({ ok: true, request: parts });
+  });
+
+  it('a request that leaves agents out is measured as typed, so the door refuses what the agent would (review 3730 F2)', async () => {
+    const r = await rig();
+    // The typed request is one byte past its bound; the body as sent, without `"agents":false,`, is under it.
+    const { agents: _a, ...sent } = atBound(OVERLORD_HISTORY_REQUEST_MAX_BYTES + 1);
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeLessThan(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
+    expect(readOverlordHistoryRequest({ ...sent, agents: false }), 'the agent').toEqual({ ok: false, refusal: 'oversize' });
+    const res = await history(r, sent);
+    expect(res.statusCode, res.body).toBe(400);
+    expect(json(res)).toEqual({ ok: false, error: 'bad-request', refusal: 'oversize' });
+    expect(r.asked).toEqual([]);
+    expect(r.lines()).toEqual([]);
+    // At the bound, the same request without agents passes, and the port is handed its typed form.
+    const { agents: _b, ...ok } = atBound(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
+    expect((await history(r, ok)).statusCode).toBe(200);
+    expect(Buffer.byteLength(JSON.stringify(r.asked[0]))).toBe(OVERLORD_HISTORY_REQUEST_MAX_BYTES);
   });
 
   it('the port is handed the request the reader read, without the caller pair; a project name holding a dot travels whole', async () => {

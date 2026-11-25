@@ -36,14 +36,20 @@ defined here: each departure has a slug, and the coordinator mints numbers.
   censuses, the auth-gate scanner, the fastify allowlist). The inbox file's `TOKEN_DETAIL`, `callerOf` and `overlordRow`
   are exported and reused rather than copied.
 - **`history-door-bound-allows-the-pair`**: the plan sets the route's `bodyLimit` to
-  `OVERLORD_HISTORY_REQUEST_MAX_BYTES`. The reader measures the request less the caller pair, as the agent measures the
-  frame less its envelope, so one request reads alike at the door and at the agent; the route bound is that bound plus
-  512 bytes for the pair. A body past the route bound is `oversize` 413, the word that status belongs to (the plan says
+  `OVERLORD_HISTORY_REQUEST_MAX_BYTES`. The reader measures the request less the caller pair, both as sent and as typed
+  (the defaults filled in, the target canonical), and the agent reads the typed request the server sends, so any request
+  the door passes on reads alike at the agent (fix round 1, review 3730 F2: before it, a request that left `agents` or
+  `args` out measured 10 to 15 bytes less at the door). The route bound is that bound plus 512 bytes for the pair. A body past the route bound is `oversize` 413, the word that status belongs to (the plan says
   `bad-request` 413; the inline-send ratchet refuses a word answered at another word's status); a body within it whose
   request is past the request bound is `bad-request` 400 with the reader's `oversize`.
 - **`history-request-read-after-the-gate`**: the request is read after the gate and before the read runner, as the
   inbox's message id is: a caller that is not the Overlord learns nothing of the grammar, and a refused request writes no
   line and spends no ceiling. The door's refusal carries the reader's closed word as `refusal`.
+- **`history-row-fenced`**: the plan's Task 5 says a read takes no step that binds write doors, but the history row is
+  fenced (`write: true`, `act: 'read'`), as the inbox plan's later ruling has every Overlord read fence (`w1-inbox.md`,
+  question 18) and as the read runner requires of a row that does not say `unfenced`. A request the reader refuses after
+  a pass has spent the act counter and the witness, as the inbox's `messages` and `acknowledge` do. The plan's lines that
+  still read unfenced are the coordinator's, on the ledger.
 - **`read-runner-answer-kind`**: Table 2's agent outcomes other than `rows` answer 200 and are not served lines (R8); the
   runner had only `rows` and `refuse`, so it gains `answer` and a refusal's `extra`. The inbox doors are unchanged.
 - **`history-line-outcome-words`**: a line's outcome word is the agent's outcome (`busy`, `deadline`, …), `rows` for a
@@ -54,10 +60,21 @@ defined here: each departure has a slug, and the coordinator mints numbers.
   assertion (`WRITE_ANSWER_EXEMPT` does not match, `answerMasked('POST', …)` is true) is in
   `overlord-history-door.test.ts`, beside a masker case over the door's own answer and the budget pin.
 - **`history-client-grammar-in-jq`**: the client's grammar is one jq program, each argument passed as its own `--arg`
-  (every jq since 1.6 reads that as a value, whatever it starts with). Residual: jq counts a string's length in code
-  points and the reader in UTF-16 units, so an argument of astral characters near 1024 passes the client and is refused
-  by the server. The head of the argv takes one target and one `--agents`; a second of either is read as an argument, so
+  (every jq since 1.6 reads that as a value, whatever it starts with). Where the two grammars differ (review 3730 F5):
+  jq counts a string's length in code points and the reader in UTF-16 units, so an argument of astral characters near
+  1024 passes the client and is refused by the server; jq writes the delete character as six bytes where the reader's
+  JSON writes one, so a request of many near the byte bound is refused by the client as `oversize` where the server
+  would take it (a corpus case pins it, with its `clientVerdict`); and an argument that is not valid UTF-8, which jq
+  would change to U+FFFD, is refused by the client as `bad-args` when `iconv` is on PATH, and is changed and sent when it
+  is not. The head of the argv takes one target and one `--agents`; a second of either is read as an argument, so
   the reader's own word judges it.
+
+## Known limits
+
+- **An abort does not reach the agent** (review 3730 F4). A caller that goes away during the gate starts no read (the
+  close listener is attached before the gate's awaits). A caller that goes away during the read ends the server's wait
+  only: no frame tells the agent, whose one history slot frees when its worker exits, at most its 20 s deadline, so the
+  next read may answer `busy` until then. An abandon frame would be a wire addition and is not this PR's.
 
 ## The masker budget (question 14)
 
@@ -84,6 +101,11 @@ Each guard was removed in place, its test file run, then restored:
 | the history file in the gate census | `overlord-gate-census.test.ts` (control) | the skipped gate is named |
 | `isOverlordHistoryKebab` (the coordination word scan) | `mail-routes.test.ts` | 1 failed |
 | the 413 through `refuseRoute` | `overlord-history-door.test.ts` | 1 failed |
+| the reader's typed-request bound (fix round 1, F2) | `overlord-history-door.test.ts` | 1 failed |
+| a caller gone before the read starts none (F4) | `overlord-history-door.test.ts` | 1 failed |
+| the answer reader's family cap, project bound and whole-answer bound (F7) | `overlord-history-door.test.ts` | 1 failed each |
+| the client's refusal of an argument that is not valid UTF-8 (F5) | `ccrc-api.test.ts` | 1 failed |
+| the read runner's closed `extra` (F6) | `overlord-read-runner.test.ts` | a type case: three `@ts-expect-error` lines the tests type check holds |
 
 Two bugs the corpus caught while it was written: jq's `inside` is a substring test on strings, so an empty or partial
 verb passed the client, and the bound case's pad argument was past 1024 characters.
@@ -116,7 +138,17 @@ on its own: 332 files, listed in the wave-done. Next time, run that set before t
   box-token census and the doors census (Authority B); `overlordInboxRoutes.ts` (three exports) and
   `sim/mutation-floors.json` (two rows) (Sequence A).
 
+## Fix round 1 (review 3730)
+
+The coordinator's call 1063 on review 3730's report (its close refused `stale-review`, the merge of main having moved the
+branch). F1: the client's no-pane case clears both pane variables at the call. F2, F4, F5, F6 and F7 as above. F8: the
+door test drives `card-unread`, `overlord-off` and `renewing` through the real gate on this route's own wiring, beside
+`not-the-overlord`, `capability-missing` and `stale-generation`. F3 (the door-process row) is not in this PR: see below.
+
 ## For the ledger
 
 - The plan's index changes and spec fixes for B1 stand as the plan lists them; the board (B2) is a later run.
 - No migration, no new ccd verb, no exec grant, no writing form of history, and none of the four history gate-code files.
+- The door-process row for `history` is owed, under the ticket `history-door-process-row` (review 3730 F3, the
+  coordinator's call 1063): the door process's read tool serves only unfenced views, the history row is fenced, and the
+  door-process plan expects readers to read history; that conflict between two plans is the coordinator's to settle.

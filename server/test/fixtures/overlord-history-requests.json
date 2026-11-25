@@ -1,5 +1,5 @@
 {
-  "about": "The shared corpus of the Overlord's history request (Overlord W1, PR B1; plan w1-board-history.md Task 5, ruled R7). Every case gets the same verdict from shared/overlordHistory.ts#readOverlordHistoryRequest and from ccd/ccrc-api's `overlord history` grammar, which refuses locally or sends (server/test/ccrc-api.test.ts). A case is canonical, so its argv round-trips: verb, then target, agents and args, in that key order, agents always present. An args item {\"$repeat\": c, \"times\": n} is n copies of c; {\"$pad\": c} is c repeated until the request is exactly `bytes` bytes of JSON. Fixture names only.",
+  "about": "The shared corpus of the Overlord's history request (Overlord W1, PR B1; plan w1-board-history.md Task 5, ruled R7). Every case gets the same verdict from shared/overlordHistory.ts#readOverlordHistoryRequest and from ccd/ccrc-api's `overlord history` grammar, which refuses locally or sends (server/test/ccrc-api.test.ts). A case is canonical, so its argv round-trips: verb, then target, agents and args, in that key order, agents always present. An args item {\"$repeat\": c, \"times\": n} is n copies of c; {\"$pad\": c} is c repeated until the request is exactly `bytes` bytes of JSON. A case whose `clientVerdict` is set is a known difference between the two grammars (review 3730 F5): the client's verdict is that word, and the server's reader's is `verdict`. Fixture names only.",
   "cases": [
     { "name": "search every project", "verdict": "ok",
       "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": ["deploy", "failed"] } },
@@ -76,6 +76,11 @@
     { "name": "a bare separator", "verdict": "separator",
       "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": ["a", "--", "b"] } },
     { "name": "a separator before a scope argument", "verdict": "separator",
-      "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": ["--", "--json"] } }
+      "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": ["--", "--json"] } },
+    { "name": "a delete character in a search word is sent as typed", "verdict": "ok",
+      "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": ["a\u007fb"] } },
+    { "name": "many delete characters: the server takes it, the client measures each as six bytes and refuses oversize (a known difference)",
+      "verdict": "ok", "clientVerdict": "oversize",
+      "request": { "verb": "search", "target": { "kind": "all" }, "agents": false, "args": [{ "$repeat": "\u007f", "times": 1024 }, { "$repeat": "\u007f", "times": 1024 }] } }
   ]
 }

@@ -263,6 +263,18 @@ describe('the other 200, and a refusal\'s own fields (Overlord W1, PR B1)', () =
     expect(lines(db).map((l) => [l.outcome, l.count])).toEqual([['no-agent', 0]]);
   });
 
+  it("a refusal's extra may not carry the answer's own ok, error or detail (review 3730 F6; the tests type check holds it)", () => {
+    const shapes: ReadComposed[] = [
+      // @ts-expect-error -- `ok` is the answer's own key
+      { kind: 'refuse', word: 'bad-request', extra: { ok: true }, scope: 'all', outcome: 'x' },
+      // @ts-expect-error -- `error` is the answer's own key
+      { kind: 'refuse', word: 'bad-request', extra: { error: 'other' }, scope: 'all', outcome: 'x' },
+      // @ts-expect-error -- `detail` rides its own field, never the extra
+      { kind: 'refuse', word: 'bad-request', extra: { detail: 'd' }, scope: 'all', outcome: 'x' },
+    ];
+    expect(shapes).toHaveLength(3);
+  });
+
   it('an answer whose line did not land sends nothing but write-failed', async () => {
     const { store } = storeOnFile();
     const r = await rig({ ledger: { servedReadsSince: store.servedReadsSince.bind(store), recordRead: () => ({ ok: false, error: 'refused', detail: 'x' }) as never },

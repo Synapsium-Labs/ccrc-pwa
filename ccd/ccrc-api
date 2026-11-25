@@ -724,8 +724,12 @@ parse_timer() {   # verb, then the verb's arguments
 # the target, the arguments' count and length, `--regex`, a bare `--`, a scope argument), and `server/test/ccrc-api.test.ts`
 # runs the shared corpus (server/test/fixtures/overlord-history-requests.json) through both, so they cannot drift. The request
 # is built and judged by one jq program; each argument rides its own `--arg`, which every jq since 1.6 reads as a value
-# whatever it starts with. jq counts a string's length in code points where the reader counts UTF-16 units, so an argument
-# of astral characters near the length bound passes here and is refused by the server; nothing else differs. The pane's
+# whatever it starts with. Where the two differ today (review 3730 F5; the corpus pins each it can spell): jq counts a
+# string's length in code points where the reader counts UTF-16 units, so an argument of astral characters near the length
+# bound passes here and is refused by the server; jq's `tojson` writes the delete character (U+007F) as six bytes where the
+# reader's JSON writes one, so a request of many such characters near the byte bound is refused here as `oversize` where
+# the server would take it; and an argument that is not valid UTF-8, which jq would change to U+FFFD, is refused here as
+# `bad-args` (it cannot reach the server as typed), when `iconv` is on PATH to tell. The pane's
 # pair goes LAST (review 2039 F7), and nothing else of it is taken: a flag that is not the grammar's is an argument.
 # Sets HISTORY_BODY, or refuses. NEVER call it inside $( ).
 OVERLORD_HISTORY_REQUEST_MAX_BYTES=8192   # shared/overlordHistory.ts, held equal by ccrc-api.test.ts
@@ -751,6 +755,12 @@ parse_overlord_history() {   # the verb, then the target, --agents and the verb'
     fi
   done
   command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'overlord history builds its body with jq, and jq is not on PATH; nothing was sent'
+  if command -v iconv >/dev/null 2>&1; then
+    for flag in "$@"; do
+      printf '%s' "$flag" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+        || refuse 'bad-args' 'overlord history: an argument is not valid UTF-8, and would not be sent as typed; nothing was sent'
+    done
+  fi
   for (( i = 1; i <= $#; i += 1 )); do named+=(--arg "a$i" "${!i}"); done
   verdict=$(jq -cn --arg verb "$verb" --arg kind "$kind" --arg name "$name" --argjson agents "$agents" --argjson n "$#" \
     --argjson maxBytes "$OVERLORD_HISTORY_REQUEST_MAX_BYTES" --argjson maxArgs "$OVERLORD_HISTORY_ARGS_MAX" \

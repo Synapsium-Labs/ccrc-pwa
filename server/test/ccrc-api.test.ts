@@ -2309,7 +2309,7 @@ describe('the Overlord inbox rows fill identity from the pane and send nothing e
 // grammar of one request, so the shared corpus runs through both readers and each case gets one verdict. The pane's pair goes
 // LAST, and a request the reader refuses is refused here, unsent, with the reader's own word.
 type CorpusArg = string | { $repeat: string; times: number } | { $list: string; times: number } | { $pad: string };
-interface CorpusCase { name: string; verdict: string; bytes?: number; request: { verb: string; target?: Record<string, string>; agents: boolean; args: CorpusArg[] } }
+interface CorpusCase { name: string; verdict: string; clientVerdict?: string; bytes?: number; request: { verb: string; target?: Record<string, string>; agents: boolean; args: CorpusArg[] } }
 const CORPUS = (JSON.parse(fs.readFileSync(path.join(root, 'server/test/fixtures/overlord-history-requests.json'), 'utf8')) as { cases: CorpusCase[] }).cases;
 /** A case's request, its compact args expanded: `$repeat` is one argument, `$list` that many, `$pad` fills to `bytes`. */
 function expandCase(c: CorpusCase): { verb: string; target?: Record<string, string>; agents: boolean; args: string[] } {
@@ -2363,7 +2363,9 @@ describe('overlord history: one request, two grammars (the shared corpus, ruled 
     expect(read.ok ? 'ok' : read.refusal, 'the server reader').toBe(c.verdict);
     plantPane('demo-ws', 'uuid-7');
     const r = await run(argvOf(req), undefined, pane);
-    if (c.verdict === 'ok') {
+    // A known difference (`clientVerdict`) pins what the client does today, beside the reader's verdict.
+    const client = c.clientVerdict ?? c.verdict;
+    if (client === 'ok') {
       expect(r.status, r.stdout + r.stderr).toBe(0);
       expect(seen).toHaveLength(1);
       expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/overlord/history', TOKEN]);
@@ -2373,7 +2375,7 @@ describe('overlord history: one request, two grammars (the shared corpus, ruled 
       expect(JSON.stringify(sent)).toBe(JSON.stringify(req));
       expect(readOverlordHistoryRequest(sent)).toEqual({ ok: true, request: { ...req, target: req.target } });
     } else {
-      expect([r.status, errorOf(r)], 'the client').toEqual([2, c.verdict]);
+      expect([r.status, errorOf(r)], 'the client').toEqual([2, client]);
       expect(seen).toEqual([]);
     }
   }, 30_000);
@@ -2382,7 +2384,19 @@ describe('overlord history: one request, two grammars (the shared corpus, ruled 
     plantPane('demo-ws', 'uuid-7');
     const r = await run(['overlord', 'history', 'search', '--all', '--json', '-'], '{"verb":"search"}', pane);
     expect([r.status, errorOf(r)]).toEqual([2, 'bad-args']);
-    expect((await run(['overlord', 'history', 'search', '--all', 'x'])).status).not.toBe(0);
+    // No pane: both pane variables cleared at the call, as the file's other no-pane cases do, so a run inside a fleet pane
+    // measures the fixture, not the runner's own terminal (review 3730 F1).
+    expect((await run(['overlord', 'history', 'search', '--all', 'x'], undefined, { TMUX_PANE: undefined, TMUX: undefined })).status).not.toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it('an argument that is not valid UTF-8 is refused bad-args here, unsent, not changed to U+FFFD and sent (review 3730 F5)', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    // Node writes argv as UTF-8, so the raw byte rides a driver script that passes it to the client.
+    const driver = path.join(home, 'history-non-utf8');
+    fs.writeFileSync(driver, `#!/bin/bash\nexec ${JSON.stringify(CCRC_API)} overlord history search --all $'x\\xffy'\n`, { mode: 0o755 });
+    const r = await runClient(home, [], undefined, pane, driver);
+    expect([r.status, errorOf(r)], r.stdout + r.stderr).toEqual([2, 'bad-args']);
     expect(seen).toEqual([]);
   });
 

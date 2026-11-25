@@ -32,10 +32,13 @@ export interface OverlordReadDeps {
 /** What a door's compose answers: rows to send, another 200 that hands no session text (the history door's `busy`,
  *  `deadline` and the rest: a line with its outcome word, never a served line, ruled R8), or a refusal word with its
  *  detail or its own closed fields (`extra`, spread after `detail`); either way its line's scope, count and outcome. */
+/** A refusal's own closed fields: named keys only, so none can be the answer's `ok`, `error` or `detail` (review 3730 F6).
+ *  A door that needs another field names it here. */
+export type ReadRefusalExtra = { readonly cause?: string; readonly refusal?: string };
 export type ReadComposed =
   | { readonly kind: 'rows'; readonly body: unknown; readonly scope: string; readonly count: number }
   | { readonly kind: 'answer'; readonly body: unknown; readonly scope: string; readonly outcome: string }
-  | { readonly kind: 'refuse'; readonly word: RouteRefusal; readonly detail?: string; readonly extra?: Readonly<Record<string, unknown>>;
+  | { readonly kind: 'refuse'; readonly word: RouteRefusal; readonly detail?: string; readonly extra?: ReadRefusalExtra;
       readonly scope: string; readonly outcome: string };
 
 export interface OverlordReadArgs {

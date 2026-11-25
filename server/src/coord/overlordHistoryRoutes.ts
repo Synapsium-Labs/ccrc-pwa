@@ -38,9 +38,9 @@ export interface OverlordHistoryRoutesDeps {
 }
 
 /** The route's byte bound: the request's own bound (`OVERLORD_HISTORY_REQUEST_MAX_BYTES`, which the reader measures on the
- *  request less the caller's pair, as the agent measures it on the frame less its envelope) plus room for the pair, so one
- *  request reads alike at the door and at the agent (slug `history-door-bound-allows-the-pair`). A larger body is `oversize`
- *  413 before anything is parsed. */
+ *  request less the caller's pair, both as sent and as typed, as the agent measures the typed request it is sent) plus room
+ *  for the pair, so one request reads alike at the door and at the agent (slug `history-door-bound-allows-the-pair`). A
+ *  larger body is `oversize` 413 before anything is parsed. */
 export const OVERLORD_HISTORY_BODY_LIMIT_BYTES = OVERLORD_HISTORY_REQUEST_MAX_BYTES + 512;
 
 /** The request, as the agent will be handed it: the body less the caller's pair. Anything that is not an object is passed on
@@ -72,6 +72,13 @@ export function registerOverlordHistoryRoutes(app: FastifyInstance, deps: Overlo
       return undefined;
     },
   }, async (req, reply) => {
+    // A caller that goes away aborts the read. The listener is attached before the gate's awaits, and a caller gone by the
+    // time the gate and the reader are done starts no read: no agent is asked, no line is written, no ceiling is spent
+    // (review 3730 F4). The abort ends the server's wait only: no frame tells the agent, whose one slot frees when its
+    // worker exits (at most its own 20 s deadline), so the next read may answer `busy` until then. An abandon frame would be
+    // a wire addition, and is not this door's.
+    const ac = new AbortController();
+    reply.raw.once('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
     const c = callerOf(req.body);
     if (!c.ok) return refuseRoute(reply, 'bad-request', { detail: 'byId and byUuid' });
     const g = await deps.gate(req, reply, 'history', { sessionId: c.id, uuid: c.uuid, uuidField: 'byUuid' });
@@ -81,9 +88,8 @@ export function registerOverlordHistoryRoutes(app: FastifyInstance, deps: Overlo
     if (!read.ok) return refuseRoute(reply, 'bad-request', { refusal: read.refusal });
     const request = read.request;
     const scope = overlordTargetId(request.target);
-    // A caller that goes away before the answer aborts the read (the port answers `lost`, and its line is still written).
-    const ac = new AbortController();
-    reply.raw.once('close', () => { if (!reply.raw.writableFinished) ac.abort(); });
+    if (ac.signal.aborted) return refuseRoute(reply, 'unavailable', { detail: 'the caller went away before the read' });
+    // From here, a caller that goes away aborts the port's wait: it answers `lost`, and its line is still written.
     return deps.readRunner(req, reply, {
       door: 'history', pass: g, row: overlordRow('history'),
       compose: async (): Promise<ReadComposed> => {
