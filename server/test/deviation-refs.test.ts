@@ -644,10 +644,12 @@ const DEFINITION_SHAPE = /^- \*\*D-(\d+)\.?\*\*/;
 
 /** The self-assigned era's wider net, over all three definition directories (the helper and the
  *  guard read them all): any line that OPENS with the number, as a heading (`# D-N`), a bold
- *  list item of any marker (`- `, `* `, `+ `, `1. `) or bare bold. Only for numbers at or above
- *  `SELF_ASSIGNED_ERA`: measured on main, this shape holds 727 unreadable lines below it (665 in
- *  plans, 34 in programs, 28 in specs), which the plans-only baseline above does not cover. */
-const SELF_ASSIGNED_SHAPE = /^(?:#{1,6} |[-*+] \*\*|\d+[.)] \*\*|\*\*)D-(\d+)(?!\.\d)\b/;
+ *  list item of any marker (`- `, `* `, `+ `, `1. `) or bare bold, at column 0 or after leading
+ *  whitespace, a table row's `| ` or a blockquote's `> ` (DEFINITION reads column 0 only, so those
+ *  must be rewritten as top-level lines). Only for numbers at or above `SELF_ASSIGNED_ERA`: measured
+ *  on main, this shape holds unreadable lines below it (727 at column 0: 665 in plans, 34 in programs,
+ *  28 in specs), which the plans-only baseline above does not cover. */
+const SELF_ASSIGNED_SHAPE = /^(?:[ \t]|[|>] )*(?:#{1,6} |[-*+] \*\*|\d+[.)] \*\*|\*\*)D-(\d+)(?!\.\d)\b/;
 
 /** Definition-shaped lines `DEFINITION` does not read, as `file -> numbers`, one
  *  number per line (so a number unreadable on two lines appears twice). */
@@ -839,8 +841,9 @@ describe('every self-assigned definition-shaped line, in plans, programs and spe
   it('no file under the three definition directories holds an unreadable line for a number >= 10000', () => {
     expect(selfAssignedUnread(readDefinitionFilesAt(ROOT, 'HEAD')),
       'a definition-shaped line DEFINITION (server/src/coord/ledger.ts) cannot read: neither the helper nor the ' +
-      'collision guard sees the number, so it can be handed out twice. Write it as `- **D-N** — subject` (an em ' +
-      'dash), or `- **D-N** (…)` or `- **D-N**: …`; a line that only cites the number must not open with it').toEqual([]);
+      'collision guard sees the number, so it can be handed out twice. Write it as a top-level line, at column 0 and ' +
+      'not indented, in a table row or in a blockquote: `- **D-N** — subject` (an em dash), or `- **D-N** (…)` or ' +
+      '`- **D-N**: …`; a line that only cites the number must not open with it').toEqual([]);
   });
 
   it('flags each unreadable shape, in a spec and a task note as in a plan', () => {
@@ -854,6 +857,15 @@ describe('every self-assigned definition-shaped line, in plans, programs and spe
       expect(one(line), line).toEqual([`docs/superpowers/specs/x.md: D-${n}`]);
       expect(one(line, 'docs/superpowers/programs/p/task.md'), line).toEqual([`docs/superpowers/programs/p/task.md: D-${n}`]);
     }
+    // Not a top-level line: indented, a table row or a blockquote. DEFINITION reads column 0 only.
+    for (const line of [
+      `  - **D-${n}** \u2014 nested under a bullet`, `\t- **D-${n}** \u2014 tab-indented`, `| **D-${n}** \u2014 a table row |`,
+      `> **D-${n}** \u2014 a blockquote`, `> - **D-${n}** \u2014 a quoted bullet`, `  ### D-${n} \u2014 an indented heading`,
+    ]) {
+      expect(one(line), line).toEqual([`docs/superpowers/specs/x.md: D-${n}`]);
+    }
+    expect(one(`| **D-${SELF_ASSIGNED_ERA - 1}** \u2014 a table row below the era |`)).toEqual([]);
+    expect(one(`  - cites **D-${n}** in passing`)).toEqual([]);
     expect(one(`- **D-${n}** \u2014 readable`)).toEqual([]);
     expect(one(`### D-${n} \u2014 readable heading`)).toEqual([]);
     expect(one(`- **D-${n}.1** a sub-number`)).toEqual([]);
