@@ -91,6 +91,11 @@ function skipToContent(e: MouseEvent<HTMLAnchorElement>): void {
   document.getElementById(CONTENT_ID)?.focus();
 }
 
+/** The parts a Docs tab places: none (`ShellFrameProps.alone`). */
+const NO_PARTS: Pick<SkinSet, 'Bar' | 'Banners' | 'Nav' | 'Inspector' | 'StatusBar' | 'PhoneNav'> = {
+  Bar: null, Banners: null, Nav: null, Inspector: null, StatusBar: null, PhoneNav: null,
+};
+
 export interface ShellFrameProps {
   set: SkinSet;
   /** `fleet` on the fleet route, `session` for anything shown in the detail pane (the phone swap, `shell.css`). */
@@ -104,9 +109,16 @@ export interface ShellFrameProps {
    *  stays beside an open session (desktop-polish PL9; spec 2026-10-31 §2, D23). A phone draws the fleet column whatever this
    *  says: its nav slot is the fleet's screen of the phone swap. */
   nav?: (fleet: ReactNode) => ReactNode;
+  /** A Docs tab's bar (desktop polish wave 174, `isDocsTab`). Given, the frame draws the reader alone: no part of the
+   *  set, so no bar, accounts strip, banner stack, fleet column, inspector, status bar or phone navigation is mounted, in
+   *  either skin, and at a desk this node in a `<header>` above the detail. Below the desk width there is no header: the
+   *  reader's own head is the top of the page, as in the console, so a phone keeps its one bar and the title's bound, and
+   *  the way back is the head's Back, which at the Docs index moves to the console in place (fix round 3). The detail is
+   *  the same keyed `<main>` at every width, and the skip link stays first. Absent, the frame is the console's. */
+  alone?: ReactNode;
 }
 
-export function ShellFrame({ set, view, detailRef, children, nav }: ShellFrameProps): ReactNode {
+export function ShellFrame({ set, view, detailRef, children, nav, alone }: ShellFrameProps): ReactNode {
   // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
   // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The status bar
   // is a desk part too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
@@ -115,7 +127,8 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
   // composer owns the bottom of the screen. Mounted, never CSS-hidden, like the desk parts.
   const { path } = useLocation();
   const phoneNav = !desk && phoneBarShown(path);
-  const { Bar, Banners, Nav, Inspector, StatusBar, PhoneNav } = set;
+  // A Docs tab places none of the set's parts (`alone`): each slot reads as a set without it.
+  const { Bar, Banners, Nav, Inspector, StatusBar, PhoneNav } = alone === undefined ? set : NO_PARTS;
   // The inspector is placed when the set has the part AND it is shown (width and the device's choice, T3e, D-6385).
   const inspectorShown = useInspectorShown();
   // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
@@ -136,14 +149,23 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
           has an Inspector part and it is shown, `none` when it does not or a person hid it (desktop polish T3e, D-6385).
           A skin's sheet keys its inspector track on it, so a set that places no inspector, or a hidden one, draws no
           empty column for one (Instrument's 320px third track at >=1600, which S12 fills). */}
+      {/* A Docs tab's frame carries no skin frame class: the skins' classes lay out the console's grid (a fleet column,
+          a bar, an inspector track), and the reader alone takes the whole width. `data-tab` selects its one-column grid
+          (`shell.css`); the skin's colours and type are the root's tokens, so the reader keeps its skin. */}
       <div
-        className={`app-shell ${set.frameClass}`}
+        className={alone === undefined ? `app-shell ${set.frameClass}` : 'app-shell'}
         data-view={view}
+        data-tab={alone === undefined ? undefined : 'docs'}
         data-inspector={Inspector !== null && inspectorShown ? 'placed' : 'none'}
       >
         <a key="skip" className="skip-link" href={`#${CONTENT_ID}`} onClick={skipToContent}>
           Skip to content
         </a>
+        {alone !== undefined && desk && (
+          <header key="tab-bar" className="shell-tab-bar">
+            {alone}
+          </header>
+        )}
         {Bar !== null && desk && (
           <header key="bar" className="shell-accounts">
             <Bar />

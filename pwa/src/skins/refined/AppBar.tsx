@@ -18,6 +18,7 @@ import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { deskPlacesFor, FLEET_PLACE, type Place } from '../../lib/places';
+import { PlaceDoor } from '../DoorLink';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES, topRouteOf } from '../../lib/routes';
 import { useMediaQuery } from '../../lib/useMediaQuery';
@@ -36,8 +37,10 @@ function Tab({ place, here, count, word, crowded }: { place: Place; here: boolea
   const shown = crowded ? place.short ?? route.title : route.title;
   const id = place.id;
   return (
-    <Door
-      {...commandDoor(`go-${id}`)}
+    // A place's door (`PlaceDoor`): its "Go to" command, or a link where the Docs tab rule opens a new tab (desktop polish
+    // wave 174).
+    <PlaceDoor
+      id={id}
       glyph={null}
       aria-label={count > 0 ? `${shown}, ${count} ${word}` : shown}
       aria-current={here ? 'page' : undefined}
@@ -46,7 +49,7 @@ function Tab({ place, here, count, word, crowded }: { place: Place; here: boolea
       {shown}
       {count > 0 && ' '}
       {count > 0 && <CountBadge>{badgePrint(count)}</CountBadge>}
-    </Door>
+    </PlaceDoor>
   );
 }
 

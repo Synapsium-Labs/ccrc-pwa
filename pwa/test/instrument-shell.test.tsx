@@ -294,6 +294,7 @@ vi.mock('../src/screens/DigestScreen', async (importOriginal) => {
 
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
+const { isDocsHref } = await import('../src/lib/docTab');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES, epicPath, upkeepPath } = await import('../src/lib/routes');
@@ -325,10 +326,14 @@ function stubWidth(desk: boolean): void {
   }));
 }
 
+/** The app at `at`, as a first load; a Docs page is reached inside the console instead, since a tab whose first page is a
+ *  Docs address is a Docs tab, with no bar (desktop polish wave 174, `docs-own-tab.test.tsx`). */
 function mount(at: string, sessions: FleetSession[] = [S, WS]): void {
   act(() => useFleetStore.setState({ conn: 'open', sessions }));
-  navigate(at);
+  const docs = isDocsHref(at);
+  navigate(docs ? '/fleet' : at);
   render(<App />);
+  if (docs) act(() => { navigate(at); });
 }
 
 /** The pane's loading line: what `app.tsx`'s Suspense draws while a lazy screen's chunk loads (and nothing else draws). */
@@ -426,7 +431,8 @@ describe('the desk doors, characterized', () => {
     for (const at of PATHS) {
       mount(at, countedFleet());
       expect(deskDoors().map((d) => d.getAttribute('aria-label')), at).toEqual([
-        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs', 'Settings',
+        // The Docs door is a link that opens a Docs tab at a desk, and its name says so (desktop polish wave 174).
+        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs, opens in a new tab', 'Settings',
       ]);
       cleanup();
     }
