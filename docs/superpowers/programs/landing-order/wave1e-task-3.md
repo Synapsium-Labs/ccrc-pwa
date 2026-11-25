@@ -96,3 +96,20 @@ One file per process, through `ccrc test -- ./node_modules/.bin/vitest run --max
 | `typecheck-tests` | `server/` | on the test box: `Cannot find module 'typescript'` from the box checkout's `pwa/package.json`, no tests run (the box's checkout has no pwa install). Alone with `ccrc test --local`: killed by the slice's memory cap, `ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 10 OOM kill(s) in ccrctests.slice); exit 1`, five cases red on `expected -1 to be +0` and the file lists of the killed compiles. The pull request's run is the arbiter. |
 
 No full suite ran locally.
+
+## After the absorb of `main` (round 3)
+
+Ledger pull request #3363 defined D-9055 on `main` (merge commit 1c625acc39ed1597c553c842cfec2d75e2210503). Before it,
+`deviation-refs` was red on this branch as expected: `floorFromScan over the real tracked tree …`, because
+`.github/workflows/ci.yml` named D-9055 above the ledger high-water D-9026. The branch absorbed `origin/main` once, with
+`git merge`, at that commit: no conflict, none of this wave's files changed on `main`, and no browser test file was
+added there, so `FILE_MS` still names every browser file.
+
+| suite | result after the absorb |
+|---|---|
+| `deviation-refs` | the D-9055 case green. One case, `is looking at two real trees, each with a real ledger in it`, timed out at 20 s on the test box (27.9 s) and again alone with `ccrc test --local` (55.6 s), both under the box's load: the timeout the brief names, not a scan finding |
+| `ci-pipeline`, `ci-merge-queue`, `oss-metadata`, `citations`, `anchors`, `docs-parity`, `topology-clean` | green: 132, 6, 29, 4, 9, 81 and 61 passed |
+| `single-definition/` whole | green, 44 files, 1,592 passed |
+| `browser-leg` | green, 22 passed |
+| pwa typecheck | green |
+| `typecheck-tests`, alone with `ccrc test --local` | killed again by the slice's memory cap (`6 OOM kill(s) in ccrctests.slice`); the pull request's run is the arbiter |
