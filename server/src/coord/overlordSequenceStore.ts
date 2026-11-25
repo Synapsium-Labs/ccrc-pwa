@@ -5,8 +5,9 @@
 // any prune deleted (absent: nothing was ever pruned).
 //
 // ONE WRITER PER FACT: `stampSequenceInTx` is the only inserter of a line, called INSIDE the transaction that writes the stamped
-// row, so a line and its row commit or roll back together. Inbox acknowledgement is the one exception (plan question 17):
-// the private store commits before its sequence line is written in a coordination transaction. `pruneSequenceThrough` is the
+// row, so a line and its row commit or roll back together. The operator message's lines are the one exception (plan question
+// 17, widened by call 1218): the private store commits each move before `stampMessageLine` writes its line in a coordination
+// transaction of its own. `pruneSequenceThrough` is the
 // only deleter and floor writer. The stamped writers are named in `server/test/sequence-stamp-census.test.ts`.
 //
 // LEGITIMATELY DIFFERENT from `feed_events` (§10.4 "Why not `feed_events`"): that table is pruned to 2,000 rows, carries titles
@@ -15,7 +16,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { ACTOR_KIND_MAP, type ActorKind } from '../../../shared/overlord-identity.js';
-import type { SequenceKind, SequenceWireLine } from '../../../shared/overlord-sequence.js';
+import { isSequenceKind, type SequenceKind, type SequenceWireLine } from '../../../shared/overlord-sequence.js';
+import type { MessageActor, MessageState } from '../../../shared/operatorMessages.js';
 import { LINE_REFUSALS, SEQUENCE_KEPT_KIND, keptDesignationLine, sequenceLineKnown, sequenceLineVerdict, type LineRefusal, type SequenceFacts } from './overlordSequence.js';
 
 /** The stamp's answer. It never throws: every caller checks it and writes no row on a refusal (by throwing inside its own
@@ -28,10 +30,11 @@ export type StampAnswer =
 export const STAMP_FAILURES = ['not-in-transaction', 'write-failed'] as const;
 export type StampFailure = (typeof STAMP_FAILURES)[number];
 
-/** Whether `tok` is one of the stamp's answer words. Each is a stamped writer's internal answer, logged or thrown, never a mail
- *  or run refusal; `mail-routes.test.ts`'s kebab scan admits them through this guard. */
+/** Whether `tok` is one of the stamp's answer words, or a sequence kind (a line's own word, written by its stamper). Each answer
+ *  word is a stamped writer's internal answer, logged or thrown, and a kind is a line's label: neither is ever a mail or run
+ *  refusal. `mail-routes.test.ts`'s kebab scan admits them through this guard. */
 export const isSequenceStampKebab = (tok: string): boolean =>
-  (STAMP_FAILURES as readonly string[]).includes(tok) || (LINE_REFUSALS as readonly string[]).includes(tok);
+  (STAMP_FAILURES as readonly string[]).includes(tok) || (LINE_REFUSALS as readonly string[]).includes(tok) || isSequenceKind(tok);
 
 /** One line to stamp. `at` is the time the stamped writer already takes, so a line never reads a clock of its own. */
 export interface SequenceLineInput {
@@ -61,18 +64,26 @@ export function stampSequenceInTx(db: DatabaseSync, line: SequenceLineInput): St
   }
 }
 
-/** The Inbox's text-free line, stamped only after its private settlement commits. A refusal rolls back this transaction only. */
-export function stampInboxAcknowledgement(db: DatabaseSync, id: number, at: number): StampAnswer {
+/** One operator message's line (call 1218, slug `message-lines-stamp-after-the-move`): stamped in a coordination transaction of its
+ *  own, after the private store's move commits, since no transaction spans the two files (plan question 17, widened from the
+ *  acknowledgement to every mover). Text-free: the id, the state the move reached, the move's actor word, the server's kind. A
+ *  refusal rolls back this transaction only. The one caller of the writer for the `message` kind. */
+export function stampMessageLine(db: DatabaseSync, m: { readonly id: number; readonly state: MessageState; readonly actor: MessageActor; readonly at: number }): StampAnswer {
   const refused: { answer?: Extract<StampAnswer, { ok: false }> } = {};
   try {
     return tx(db, () => {
-      const s = stampSequenceInTx(db, { kind: 'message', id: String(id), state: 'settled', actor: 'acknowledge', actorKind: 'server', at });
+      const s = stampSequenceInTx(db, { kind: 'message', id: String(m.id), state: m.state, actor: m.actor, actorKind: 'server', at: m.at });
       if (!s.ok) { refused.answer = s; throw new Error(s.detail); }
       return s;
     });
   } catch (e) {
     return refused.answer ?? { ok: false, error: 'write-failed', detail: errText(e) };
   }
+}
+
+/** The Inbox's text-free line, stamped only after its private settlement commits: `stampMessageLine`'s acknowledge case. */
+export function stampInboxAcknowledgement(db: DatabaseSync, id: number, at: number): StampAnswer {
+  return stampMessageLine(db, { id, state: 'settled', actor: 'acknowledge', at });
 }
 
 /** The columns the cursor read serves, by name, never `*`: a later column (W3's drill mark) is never served by accident. */

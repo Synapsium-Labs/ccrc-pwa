@@ -278,7 +278,7 @@ describe('moveMessage: the one writer, by Table 1', () => {
     const id = rowIn(f, 'settled');
     expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 60).ok).toBe(true);
     expect(rawRow(f, id)).toMatchObject({ state: 'recorded', settledAt: null, settledBy: null });
-    expect(f.store.moveMessage(id, 'settle', 'acknowledge', 70)).toEqual({ ok: true, value: { changed: true, state: 'settled' } });
+    expect(f.store.moveMessage(id, 'settle', 'acknowledge', 70)).toEqual({ ok: true, value: { changed: true, state: 'settled', from: 'recorded' } });
     expect(rawRow(f, id)).toMatchObject({ state: 'settled', settledAt: 70, settledBy: 'acknowledge' });
   });
 
@@ -287,16 +287,16 @@ describe('moveMessage: the one writer, by Table 1', () => {
     const id = idOf(record(f));
     f.store.moveMessage(id, 'deliver', 'mail-lane', 10);
     f.store.moveMessage(id, 'settle', 'acknowledge', 20);
-    expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 30)).toEqual({ ok: true, value: { changed: true, state: 'delivered' } });
+    expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 30)).toEqual({ ok: true, value: { changed: true, state: 'delivered', from: 'settled' } });
   });
 
   it('deliver on picked-up stamps deliveredAt and keeps the state', () => {
     const f = fixture();
     const id = idOf(record(f));
     f.store.moveMessage(id, 'pick-up', 'hook', 10);
-    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 20)).toEqual({ ok: true, value: { changed: true, state: 'picked-up' } });
+    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 20)).toEqual({ ok: true, value: { changed: true, state: 'picked-up', from: 'picked-up' } });
     expect(rawRow(f, id)).toMatchObject({ state: 'picked-up', pickedUpAt: 10, deliveredAt: 20 });
-    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 30)).toEqual({ ok: true, value: { changed: false, state: 'picked-up' } });
+    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 30)).toEqual({ ok: true, value: { changed: false, state: 'picked-up', from: 'picked-up' } });
     expect(rawRow(f, id)).toMatchObject({ deliveredAt: 20 });
   });
 

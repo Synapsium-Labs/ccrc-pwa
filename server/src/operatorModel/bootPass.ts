@@ -1,12 +1,14 @@
 // The Operator Model's boot pass (invariant I8; Overlord W1 private store plan, Task 6; context C11, ring L4). It re-derives
 // what a crash can leave wrong, once, after both stores open and before the watcher starts: a `settled` row no citation
 // proves (`bootSettlement`), and a recorded message whose nudge was never queued (`nudgeRecovery`). It decides nothing:
-// the deciders (`./messages.ts`) answer, and it acts through `moveMessage` (actor `boot-pass`) and `queueSystemMail`. It
+// the deciders (`./messages.ts`) answer, and it acts through `moveMessage` (actor `boot-pass`, with its sequence line,
+// `messageLine.ts`) and `queueSystemMail`. It
 // carries no message text: counts and ids only. Time is the injected clock.
 import { operatorMessageSubject, OPERATOR_MESSAGE_SENDER } from '../../../shared/operatorMessages.js';
 import type { CoordStore } from '../coord/store.js';
 import { bootSettlement, nudgeRecovery, type CitationRead } from './messages.js';
 import { queueOperatorNudge, type NudgeQueueCoord } from './nudgeQueue.js';
+import { moveOperatorMessage } from './messageLine.js';
 import type { OperatorModelStore } from './store.js';
 
 export interface BootPassCounts {
@@ -32,6 +34,8 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
   const c = { kept: 0, unsettled: 0, unjudged: 0, linked: 0, queued: 0, waiting: 0, delivered: 0, errors: 0 };
   const lines: string[] = [];
   const { operatorModel: store, coord } = deps;
+  // Each move's sequence line goes to the pass's own lines, like its other notes (call 1218).
+  const mover = { store, coordDb: coord.db, warn: (l: string): void => { lines.push(l); } };
 
   const settled = store.settledRows();
   if (settled.kind === 'unmeasured') lines.push(`boot pass: settled rows unmeasured (${settled.why}); nothing re-derived`);
@@ -41,7 +45,7 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
       const verdict = bootSettlement(row, cites);
       if (verdict === 'keep') { c.kept++; continue; }
       if (verdict === 'unjudged') { c.unjudged++; continue; }
-      const moved = store.moveMessage(row.id, 'unsettle', 'boot-pass', deps.now());
+      const moved = moveOperatorMessage(mover, row.id, 'unsettle', 'boot-pass', deps.now());
       if (moved.ok) c.unsettled++;
       else { c.unjudged++; lines.push(`boot pass: message ${row.id} not unsettled (${moved.error})`); }
     }
@@ -67,7 +71,7 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
           }
           c.queued++;
         } else c.linked++;
-        const moved = store.moveMessage(row.id, 'queue', 'boot-pass', deps.now());
+        const moved = moveOperatorMessage(mover, row.id, 'queue', 'boot-pass', deps.now());
         if (!moved.ok) lines.push(`boot pass: message ${row.id} not moved to queued (${moved.error})`);
       } catch (e) {
         c.errors++; lines.push(`boot pass: message ${row.id} not re-nudged (${e instanceof Error ? e.message : String(e)})`);
@@ -85,7 +89,7 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
         const owner = store.messageSessionOf(id);
         if (owner.kind === 'unmeasured' || owner.value === 'absent') { c.unjudged++; continue; }
         if (!coord.hasAckedMailWithSubject(OPERATOR_MESSAGE_SENDER, owner.value.sessionId, operatorMessageSubject(id))) continue;
-        const moved = store.moveMessage(id, 'deliver', 'boot-pass', deps.now());
+        const moved = moveOperatorMessage(mover, id, 'deliver', 'boot-pass', deps.now());
         if (moved.ok) c.delivered++; else lines.push(`boot pass: message ${id} not moved to delivered (${moved.error})`);
       } catch (e) {
         c.errors++; lines.push(`boot pass: message ${id} not delivered (${e instanceof Error ? e.message : String(e)})`);

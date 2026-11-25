@@ -14,6 +14,8 @@ const OM = 'server/src/operatorModel/store.ts';
 const LS = 'server/src/coord/overlordLadderStore.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
 const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
+const STAMP_MESSAGE = 'server/src/coord/overlordSequenceStore.ts#stampMessageLine';
+const ML = 'server/src/operatorModel/messageLine.ts';
 const RECORD_ACK = 'server/src/coord/store.ts#CoordStore.recordInboxAcknowledgement';
 const WRITER = 'stampSequenceInTx';
 
@@ -55,8 +57,8 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
     table: 'operator_messages',
     stampers: [],
     nothing: {
-      [`${OM}#OperatorModelStore.recordMessage`]: 'creation stays in the private store; PR B owns the settlement-mark and queue stamps (message-stamps-ride-pr-b)',
-      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db; PR A stamps the Inbox acknowledgement after commit, PR B owns the queue, delivery and settle stamps and the mover-caller census (message-stamps-ride-pr-b)',
+      [`${OM}#OperatorModelStore.recordMessage`]: 'creation as recorded stamps no line; a marked message, created settled, gets its settled line from the route right after the record commits (call 1218)',
+      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db: every move\'s line is stamped after its commit, by the movers listed in MESSAGE_MOVERS (call 1218)',
     },
     afterCommit: { route: INBOX, delegate: RECORD_ACK, stamp: STAMP_ACK },
   },
@@ -76,10 +78,26 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
   },
 };
 
+/** The operator message's after-commit path (call 1218, slug `message-lines-stamp-after-the-move`; review 3646 F8): the one helper
+ *  that calls the writer for the kind, the functions that call it, and EVERY caller of the private store's move in server/src, each
+ *  with how its line is written. A new caller of the move (a W2 citing door, say) goes red here until it takes a side. */
+const MESSAGE_STAMP_CALLERS = [STAMP_ACK, `${ML}#stampOperatorMessageLine`] as const;
+const MESSAGE_LINE_CALLERS = [`${ML}#moveOperatorMessage`, 'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt'] as const;
+export const MESSAGE_MOVERS: Readonly<Record<string, string>> = {
+  [`${ML}#moveOperatorMessage`]: 'the one combinator: the move, then its line when the state word changed, in one synchronous segment',
+  'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)',
+  'server/src/server.ts#buildServer': 'the hook\'s pick-up port: moves with no line until its peer packet lands (the continuity routes and server.ts are held by another run)',
+};
+/** Every caller of the combinator, in server/src. */
+const COMBINATOR_CALLERS = [
+  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass', 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued',
+  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt',
+] as const;
+
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
 const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`] as const;
 const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
-const STAMP_HELPERS = [...TX_STAMP_HELPERS, ...AFTER_COMMIT.map((row) => row.stamp)];
+const STAMP_HELPERS = [...TX_STAMP_HELPERS, STAMP_MESSAGE];
 
 const split = (ref: string): [string, string] => { const i = ref.indexOf('#'); return [ref.slice(0, i), ref.slice(i + 1)]; };
 const callsOf = (ref: string): string[] => { const [f, n] = split(ref); return callsIn(symbolOf(f, n)).map((c) => c.name ?? c.callee); };
@@ -149,5 +167,15 @@ describe('the sequence stamp census (Overlord §10.4)', () => {
       expect(callersOf(split(stamp)[1])).toEqual([delegate]);
       expect(callersOf(split(delegate)[1].split('.').at(-1)!)).toEqual([route]);
     }
+  });
+
+  it('the message kind\'s one helper is called only by the acknowledgement and the line stamp, and those only by their listed callers', () => {
+    expect(callersOf(split(STAMP_MESSAGE)[1])).toEqual([...MESSAGE_STAMP_CALLERS].sort());
+    expect(callersOf('stampOperatorMessageLine')).toEqual([...MESSAGE_LINE_CALLERS].sort());
+    expect(callersOf('moveOperatorMessage')).toEqual([...COMBINATOR_CALLERS].sort());
+  });
+
+  it('every caller of the private store\'s move in server/src is listed with how its line is written (review 3646 F8)', () => {
+    expect(callersOf('moveMessage')).toEqual(Object.keys(MESSAGE_MOVERS).sort());
   });
 });

@@ -9,6 +9,7 @@ import {
   designationBaseline, isSequenceStampKebab, pruneSequenceThrough, sequenceAfter, sequenceOldest, STAMP_FAILURES, stampSequenceInTx, type SequenceLineInput,
 } from '../src/coord/overlordSequenceStore.js';
 import { LINE_REFUSALS, sequencePage } from '../src/coord/overlordSequence.js';
+import { SEQUENCE_KINDS } from '../../shared/overlord-sequence.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 let template = '';
@@ -37,6 +38,10 @@ const count = (db: DatabaseSync): number => Number((db.prepare('SELECT count(*) 
 describe('sequence stamp refusal vocabulary', () => {
   it('admits every derived refusal word to the coordination census', () => {
     for (const word of [...LINE_REFUSALS, ...STAMP_FAILURES]) expect(isSequenceStampKebab(word), word).toBe(true);
+  });
+  it('admits each sequence kind, a line\'s own label, and no other look-alike', () => {
+    for (const kind of SEQUENCE_KINDS) expect(isSequenceStampKebab(kind), kind).toBe(true);
+    expect(isSequenceStampKebab('ladder-step')).toBe(false);
   });
   it('does not admit an unknown refusal word to the coordination census', () => {
     expect(isSequenceStampKebab('imaginary-sequence-refusal')).toBe(false);

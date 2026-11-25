@@ -1,19 +1,20 @@
 // The mail lane's operator-message branch, after the nudge was typed (Overlord W1 private store, Task 5; open question 3,
 // slug `message-nudge-rides-the-mail-lane`). Ring L4, context C11: it decides nothing. `FleetWatcher.sweepMail` calls it once
-// `markDelivered` landed, and it moves the message on the private store and acks the delivery, reading each answer as the
+// `markDelivered` landed, and it moves the message on the private store (with its sequence line, `messageLine.ts`) and acks the delivery, reading each answer as the
 // lane reads every write it makes: a refused write is logged, and nothing after it assumes it. The mail ack route calls
 // `settleAckedOperatorNudge` for a session's own ack of the same nudge (review 2627 F-1).
 import type { WatcherCoordPort } from '../coord/ports.js';
 import type { OperatorModelStore } from './store.js';
 import { isOperatorMessageMail, operatorMessageIdOf } from '../../../shared/operatorMessages.js';
 import { fixedLineReplayOf } from '../coord/envelope.js';
+import { moveOperatorMessage } from './messageLine.js';
 
 const BEFORE_DELIVERED: ReadonlySet<string> = new Set(['recorded', 'queued']);
 
 /** What the branch needs: the delivery writer's ack, the private store's one move (absent in a watcher with no store), the
  *  lane's clock reading and its log. */
 export interface NudgeLaneDeps {
-  readonly coord: Pick<WatcherCoordPort, 'markAcked'>;
+  readonly coord: Pick<WatcherCoordPort, 'markAcked' | 'db'>;
   readonly operatorModel: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf'> | undefined;
   readonly now: number;
   readonly warn: (line: string) => void;
@@ -72,7 +73,7 @@ export function settleNudge(
  *  while the lane's send is in flight (whose `markDelivered` is then refused as terminal), settles the row as the lane's own ack
  *  does, so a self-ack never leaves it `queued` until a boot. Called after an ack that landed; any other mail is left alone. */
 export function settleAckedOperatorNudge(
-  deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'mailOrigin'> }, mailId: number,
+  deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'mailOrigin' | 'db'> }, mailId: number,
 ): void {
   const origin = deps.coord.mailOrigin(mailId);
   if (origin === null || !isOperatorMessageMail(origin)) return;
@@ -80,7 +81,7 @@ export function settleAckedOperatorNudge(
 }
 
 /** The `deliver` move, made at once when `due`, else only while the row, read text-free, is still `recorded` or `queued`. */
-function deliverWhileQueued(deps: Omit<NudgeLaneDeps, 'coord'>, messageId: number, due: boolean): void {
+function deliverWhileQueued(deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'db'> }, messageId: number, due: boolean): void {
   const om = deps.operatorModel;
   if (om === undefined) return;
   if (!due) {
@@ -88,6 +89,6 @@ function deliverWhileQueued(deps: Omit<NudgeLaneDeps, 'coord'>, messageId: numbe
     if (state.kind === 'unmeasured') { deps.warn(`ccrc-server: mail ack: operator message ${messageId}: state unmeasured (${state.why})`); return; }
     if (!BEFORE_DELIVERED.has(state.value)) return;
   }
-  const moved = om.moveMessage(messageId, 'deliver', 'mail-lane', deps.now);
+  const moved = moveOperatorMessage({ store: om, coordDb: deps.coord.db, warn: deps.warn }, messageId, 'deliver', 'mail-lane', deps.now);
   if (!moved.ok) deps.warn(`ccrc-server: mail ack: operator message ${messageId}: deliver refused (${moved.error})`);
 }
