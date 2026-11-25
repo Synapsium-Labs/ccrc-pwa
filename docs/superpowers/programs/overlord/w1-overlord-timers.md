@@ -275,6 +275,24 @@ over the account limit), so `test (server)` reported failure.
 - **F5, A1 and A2** are the departure `refusal-counts-without-rowid`, the sentence under the older-build measurement, and the
   sentence under the floors table.
 
+## The merge of main 5b14086b57 (#3393, the provider-retry row)
+
+#3393 added a `provider-retry` row to the fixed-line table beside this piece's `timer` row. The merge kept both rows and
+both prompt forms, with no other edit. Four files conflicted (`envelope.ts`, the prompt forms fixture and its test, and the
+fixed-line mutant sets). One part of the resolution was forced by the types: the provider-retry row carries
+`waitsForCard: false`, because the field is required on every row.
+
+The table is first match, and the rows stand in main's order then this piece's: operator message, spot probe, inbox wake,
+provider retry, timer. Neither row can take the other's mail:
+- the provider-retry row matches only the operator sender's mail with a provider-retry subject;
+- the timer row matches only the timer sender's mail whose mail row names the role.
+
+So their order changes nothing. One case pins each direction (`fixedLineMailSets.ts`, "the provider-retry row and the timer
+row never take each other's mail"). After the merge:
+- every mutant quote of the fixed-line sets (T1 to T5, F20 to F24) still occurs once;
+- `mailPass` holds its cap;
+- main's last migration is still 127, so this one stays 128.
+
 ## Known limits
 
 - `firedTimersOf` carries no row cap: it is bounded by the term and the window, and the purge at 90 days.

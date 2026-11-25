@@ -95,6 +95,17 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
       }
     },
 
+    'the provider-retry row and the timer row never take each other\'s mail, whichever recipient the mail row names': () => {
+      const names = (x: { fromId: string; subject: string; mailToId?: string }) => m.FIXED_LINE_MAIL.filter((r) => r.matches(x)).map((r) => r.name);
+      const retry = providerRetrySubject(1_800_000_000_000);
+      // A provider-retry mail is the operator sender's: even addressed to the role, it is the provider-retry row's alone.
+      expect(names({ fromId: 'operator', subject: retry, mailToId: 'overlord' })).toStrictEqual(['provider-retry']);
+      // The timer sender's mail to the role is the timer row's alone, even under a provider-retry subject.
+      expect(names({ fromId: 'timer', subject: retry, mailToId: 'overlord' })).toStrictEqual(['timer']);
+      // And the timer sender's mail to a session, with that subject, is neither's: the generic nudge.
+      expect(names({ fromId: 'timer', subject: retry, mailToId: OVERLORD })).toStrictEqual([]);
+    },
+
     'the spot-probe row needs both the operator sender and its subject': () => {
       const spot = m.FIXED_LINE_MAIL.find((r) => r.name === 'spot-probe')!;
       expect(spot.matches({ fromId: 'operator', subject: SPOT_PROBE_SUBJECT })).toBe(true);
