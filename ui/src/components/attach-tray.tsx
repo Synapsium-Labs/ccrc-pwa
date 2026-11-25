@@ -36,9 +36,10 @@ export interface StagedImage {
 }
 
 /** The badge a document chip wears: its extension, upper-cased, or '?' for the
- *  shapes that have none. Never longer than the four characters the 72px box
- *  has room for — `CLIP_DOC_EXTS` holds nothing longer, and a stray one would
- *  be truncated by CSS rather than allowed to break the layout. */
+ *  shapes that have none. Any file attaches now, so an extension can run to
+ *  twelve characters (`CLIP_EXT_MAX`), more than the 72px box has room for: a
+ *  long one is clipped by CSS (`.attach-doc`'s `overflow: hidden`) rather than
+ *  allowed to break the layout, and the full name is in the strip below. */
 function extBadge(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot < 0 ? '?' : name.slice(dot + 1).toUpperCase();

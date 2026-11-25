@@ -113,7 +113,7 @@ const BASE_PICTURE: Readonly<Record<'phone' | 'desk', FleetPicture>> = {
       "go-inbox|Inbox, 1 waiting for you|",
       "go-runs|Runs|",
       "go-accounts|Accounts|",
-      "go-docs|Docs|",
+      "go-docs|Docs, opens in a new tab|", // a link at a desk since desktop polish wave 174
       "open-palette|Search and commands|",
       "go-settings|Settings|",
       "new-session|+New session|",

@@ -57,6 +57,7 @@ import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
 import type { IsolationReader } from './isolationFacts.js';
+import type { ReviewFs, ReviewStore } from './review/store.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -67,6 +68,8 @@ export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonl
 
 export interface Deps {
   cfg: CcrcConfig;
+  /** Draft review's fixture seam: hand in the open store or the filesystem with which to open it. */
+  review?: { store?: ReviewStore; fs?: ReviewFs };
   /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
   perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -306,6 +309,6 @@ export interface Deps {
 export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
   coord?: WatcherCoordPort;
   /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store; the inbox wake
-   *  reads its unsettled facts, text-free. */
-  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts'>;
+   *  reads its unsettled facts, text-free; the renewal readings count the messages since a start (`turns`). */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts' | 'messagesSince'>;
 };

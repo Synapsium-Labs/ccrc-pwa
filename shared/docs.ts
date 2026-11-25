@@ -111,6 +111,9 @@ export const DOCS_IMAGE_VIEW_MAX_SIDE = 16384;
 /** The prepare's copy-and-hash budget, apart from the draft hash budget: three times lab RANGE-L1's worst 64 MiB
  *  copy-and-hash on the fleet box (362 ms, 2026-11-19), floored at 10 s. */
 export const DOCS_RANGE_PREPARE_BUDGET_MS = 10000;
+/** The largest file Export saves (10 MiB of output) and, with it, the draft-review snapshot cap: a shared snapshot is
+ *  one Export file. It moved here from the PWA's export policy so the server can read it; the PWA re-exports it. */
+export const DOCS_EXPORT_MAX_BYTES = 10485760;
 
 // ---- (C) Value grammars (design section 2 (a)) -----------------------------------------------------------------
 //

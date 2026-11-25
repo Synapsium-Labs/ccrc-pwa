@@ -45,6 +45,7 @@ import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { api } from '../lib/api';
 import { inAppClick } from '../fleet/settingsText';
+import { useTabLink } from '../lib/useTabLink';
 import { openExternal } from '../lib/markdown';
 import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
@@ -346,11 +347,14 @@ const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
  *  Docs path through the console's own navigation. The split is made once per text and home (review 1466 F9). */
 function Linked({ text, homeProject, itemHref }: { text: string; homeProject: string | null; itemHref?: ((id: number) => string | null) | undefined }): ReactNode {
   const runs = useMemo(() => linkRuns(text, homeProject, itemHref), [text, homeProject, itemHref]);
+  // A console path moves within the app; a Docs path, at a desk, opens a Docs tab of its own (the Docs tab rule, desktop
+  // polish wave 174).
+  const link = useTabLink();
   return runs.map((r, i) => {
     if (r.kind === 'text') return <span key={i}>{r.text}</span>;
     return r.external
       ? <TextLink key={i} href={r.href} onClick={(e) => openExternal(e, r.href)}>{r.text}</TextLink>
-      : <TextLink key={i} href={r.href} onClick={inAppClick(r.href)}>{r.text}</TextLink>;
+      : <TextLink key={i} {...link(r.href)}>{r.text}</TextLink>;
   });
 }
 

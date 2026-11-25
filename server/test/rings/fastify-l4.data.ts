@@ -32,6 +32,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record), and the weekly unattended run's confirm, status and Live doors (run 3212)", since: '2026-11-17' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
+  'server/src/review/routes.ts': { reason: "the draft review read door's L4 HTTP delivery module", since: '2026-11-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },
   'server/src/linear/routes.ts': { reason: "the Linear connection's HTTP routes (the ticket-title preview read)", since: '2026-10-20' },
   'server/src/linear/proxyRoutes.ts': { reason: "the Linear proxy's box-token HTTP routes", since: '2026-11-02' },

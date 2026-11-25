@@ -199,3 +199,13 @@ export function modelSwitchesSinceStart(db: DatabaseSync, sessionId: string, sta
   const start = startReceivedAtOf(db, startId);
   return start.ok ? modelSwitchesSince(db, sessionId, start.value) : start;
 }
+
+/** The session's reader events received at or after its generation's start, with that floor (`since`), both by the SERVER's
+ *  clock, as `modelSwitchesSinceStart` reads the switches (renewal readings PR E: `readersRunning` takes the floor as the
+ *  generation's start). A start row that is missing or unreadable is a failed read, never an empty list. */
+export function readerEventsSinceStart(db: DatabaseSync, sessionId: string, startId: number): HookStoreRead<{ readonly since: number; readonly events: ReaderEvent[] }> {
+  const start = startReceivedAtOf(db, startId);
+  if (!start.ok) return start;
+  const events = readerEventsSince(db, sessionId, start.value);
+  return events.ok ? { ok: true, value: { since: start.value, events: events.value } } : events;
+}

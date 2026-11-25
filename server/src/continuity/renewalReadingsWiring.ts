@@ -10,7 +10,9 @@
 //
 // PR A wires two readings, both the Overlord's only: the fitted ceiling (`closedSpotProbes`, read once per model class per
 // pass) and the daily backstop (`backstopRead`, read once per pass). PR C wires the designation's two, the Overlord's only too
-// (`designationRead`, read once per pass): `termRaised` and `classChanged`. A field it does not answer keeps the lane's `W1`.
+// (`designationRead`, read once per pass): `termRaised` and `classChanged`. PR F wires `turns`, the Overlord's only: the private
+// store's count of the messages recorded since the generation's start (`messagesSince`), passed through. A field it does not
+// answer keeps the lane's `W1`, and so does `turns` on a box whose private store is not in the deps.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -22,21 +24,31 @@ import { familyClassOf } from '../../../shared/models.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { OperatorModelStore } from '../operatorModel/store.js';
 import { NO_LADDER_AUTHORITY } from '../coord/overlordAuthorityJournal.js';
 import { raiseLatch } from '../coord/overlordLadderRead.js';
 import { laneRaiser, type AuthorityAppender } from '../coord/overlordLadderStore.js';
 import type { GenRow } from './continuityStore.js';
 import { usageReading, type GenReadings } from './generationsLane.js';
 import { backstopDueOf, classChangedOf, fittedCeilingOf, termRaisedOf, type SpotsRead, type W1Inputs } from './renewalReadings.js';
+import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
+import type { Reading } from './renewalDue.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
-export type ReadingsCoord = Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch'>;
+export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch'> {
+  /** PR E: door process B1's two reads, optional so that a store without them (a test, the simulator, an older wiring)
+   *  leaves `modelDrift` and `readersRunning` at the lane's `W1`. */
+  readonly modelSwitchesOf?: WatcherCoordPort['modelSwitchesOf'];
+  readonly readerEventsOf?: WatcherCoordPort['readerEventsOf'];
+}
 
 export interface ReadingsDeps {
   readonly time: { readonly clock: Pick<Clock, 'wall'>; readonly entropy: Pick<Entropy, 'hex'> };
   /** The authority journal the ladder's writers append to (`NO_LADDER_AUTHORITY` when none is configured, as the ladder's own
    *  doors take it). */
   readonly overlordAuthority?: AuthorityAppender;
+  /** The Overlord's private store, for `turns` (`messagesSince`). Absent (no store open, a test): `turns` keeps its `W1`. */
+  readonly operatorModel?: Pick<OperatorModelStore, 'messagesSince'>;
   /** Where a failed read is logged, once per reading per pass. Absent: `console.warn`. */
   readonly log?: (line: string) => void;
 }
@@ -73,9 +85,22 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     }
   };
 
+  /** The soft `readersRunning` (PR E), read and mapped inside its own catch, as `field` reads a W1 field (F17). */
+  let readersLogged = false;
+  const readers = (read: () => Reading<number>): Reading<number> => {
+    try { return read(); } catch (e) {
+      if (!readersLogged) {
+        readersLogged = true;
+        log(`ccrc-server: generations: the readers read failed, so readersRunning reads unmeasured this pass: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return { kind: 'unmeasured', why: 'readers read failed' };
+    }
+  };
+
   return {
     w1: async (g, base) => {
       const w1: Partial<W1Inputs> = {};
+      let soft: GenReadings['soft'];
       if (g.role === 'overlord') {
         field(w1, 'fittedCeilingTokens', 'fitted ceiling', () => {
           const cls = g.model === null ? null : familyClassOf(g.model);
@@ -93,8 +118,17 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         });
         field(w1, 'termRaised', 'designation', () => termRaisedOf(designation ??= coord.designationRead(), g));
         field(w1, 'classChanged', 'designation', () => classChangedOf(designation ??= coord.designationRead(), g));
+        const store = deps.operatorModel;
+        if (store !== undefined) field(w1, 'turns', 'turns', () => store.messagesSince(g.startReportedAt));
+        // PR E: door process B1's two readings, each only where the store hands its read (absent: the lane's `W1`).
+        // Bound to the store: on the composition `coord` is the coordination store, whose reads are methods (review 3710 F1).
+        const modelSwitchesOf = coord.modelSwitchesOf?.bind(coord);
+        const readerEventsOf = coord.readerEventsOf?.bind(coord);
+        if (modelSwitchesOf !== undefined) field(w1, 'modelDrift', 'model drift', () => modelDriftReadingOf({
+          startModel: g.model, startReportedAt: g.startReportedAt, switches: modelSwitchesOf(g.sessionId, g.startId), usage: base.usage }));
+        if (readerEventsOf !== undefined) soft = { readersRunning: readers(() => readersRunningReadingOf(readerEventsOf(g.sessionId, g.startId), deps.time.clock.wall())) };
       }
-      return { w1 };
+      return soft === undefined ? { w1 } : { w1, soft };
     },
     latch: (cause, detail) => {
       const r = raiseLatch({ coord, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: deps.time.clock, entropy: deps.time.entropy },

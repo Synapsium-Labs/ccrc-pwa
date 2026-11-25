@@ -69,8 +69,10 @@ export type LandingWrite =
   | { kind: 'pinned'; entry: LandingEntry; created: boolean }
   | { kind: 'ejected'; entry: LandingEntry };
 
-/** The project's two booleans (spec §5.5 Data): the line is paused while either is set. `CoordStore.readLanding`
- *  answers this. */
+/** The project's two booleans (spec §5.5 Data): the line is paused while either is set, with ONE exception since
+ *  Amendment A (D-8625): `mainRedHold` alone does not pause the dependency-eligible fixesMain head `landingOrder` already
+ *  selected. `operatorPaused` always pauses, and neither flag is a merge-check verdict. `CoordStore.readLanding` answers
+ *  this; `mainRedHold` is a measured fact kept by `CoordStore.applyLandingControl`, never inferred here. */
 export interface LandingLineFlags { operatorPaused: boolean; mainRedHold: boolean }
 
 /** Why the line is paused, each word naming the flag that sets it. The order of the keys is the order of `by`. */
@@ -81,7 +83,9 @@ export const LANDING_PAUSE_BYS = Object.keys(LANDING_PAUSE_BY) as LandingPauseBy
 /** The decider's answer (`coord/landingLine.ts#landingOrder`). `order` is every `pinned` entry in the order they may
  *  land, a blocked remainder last. Not paused: `head` is the entry that may land next, or `null` when the line is
  *  empty or every entry waits on an `ejected` or `unknown` target or on a cycle. Paused: `by` names the flags, and
- *  there is no head. */
+ *  there is no head. Amendment A (D-8625): with `mainRedHold` alone, a selected head that has `fixesMain` is NOT paused,
+ *  so `mainRedHold: true` can sit beside `paused: false` and a fixesMain head; an ordinary head, an `operatorPaused`
+ *  line and a recovery hold are unchanged. */
 export type LandingOrder =
   | { paused: false; order: LandingEntry[]; head: LandingEntry | null; held?: LandingHold }
   | { paused: true; by: LandingPauseBy[]; order: LandingEntry[]; held?: LandingHold };
@@ -89,8 +93,30 @@ export type LandingOrder =
  *  measured. Not a pause: neither flag is touched. */
 export interface LandingHold { reason: 'landing-recovery-unresolved'; subjectIds: number[] }
 
+/** Why a binding is held (wave 5i): the first gate of `coord/landingLine.ts#landingBindingOf` that did not pass. */
+export type LandingBindingReason =
+  | 'opt-in-unknown' | 'paused' | 'recovery' | 'projection-unreadable' | 'empty-or-blocked' | 'probe-unmeasured'
+  | 'health-unmeasured' | 'base-mismatch' | 'head-mismatch' | 'composition-not-clean' | 'main-red';
+/** The runtime list of `LandingBindingReason`, derived from its `Record` (a new member is a compile error here). */
+export const LANDING_BINDING_REASON_MAP: Record<LandingBindingReason, true> = {
+  'opt-in-unknown': true, paused: true, recovery: true, 'projection-unreadable': true, 'empty-or-blocked': true,
+  'probe-unmeasured': true, 'health-unmeasured': true, 'base-mismatch': true, 'head-mismatch': true,
+  'composition-not-clean': true, 'main-red': true,
+};
+export const LANDING_BINDING_REASONS = Object.keys(LANDING_BINDING_REASON_MAP) as LandingBindingReason[];
+/** The binding head of an opted-in project (wave 5i), decided from current database facts and one measured control
+ *  bundle, never stored. `inert`: the producer's marker is proven absent. `held`: a gate failed; `entryId` is the selected
+ *  head's entry when one exists. `ready`: the selected head's exact PR and pinned sha were measured against `baseSha`. */
+export type LandingBinding =
+  | { mode: 'inert' }
+  | { mode: 'held'; reason: LandingBindingReason; entryId: number | null }
+  | { mode: 'ready'; entryId: number; pr: number; pinnedSha: string; baseSha: string; landerAt: string; probeAt: string;
+    healthAt: string; fixesMain: boolean };
+
 /** GET /api/landing's answer, flat beside ok. */
 export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder;
+  /** Absent from an older server: not reported, never "inert". */
+  binding?: LandingBinding;
   /** Absent from an older peer: not reported, never "complete". */
   recovery?: LandingRecovery;
   /** Which entries `entries` holds (wave 5h): `open` the ones still in the line, `pr` one PR's entry in any state.
@@ -154,12 +180,22 @@ export const LANDING_INFRASTRUCTURE_CODE_MAP: Record<LandingInfrastructureCode, 
   'landing-db-apply': true, 'landing-db-commit': true, 'landing-fenced': true, 'landing-projection-unreadable': true,
 };
 export const LANDING_INFRASTRUCTURE_CODES = Object.keys(LANDING_INFRASTRUCTURE_CODE_MAP) as LandingInfrastructureCode[];
-export interface LandingInfrastructureFailure {
-  error: LandingInfrastructureCode;
+/** The failures of the line's boundary entrances (the journal, the database connection, the fence): what a replay or a
+ *  restart can clear. The ONLY arm that may stand in `landingFence`, so `'repair'` cannot enter it. */
+export interface LandingBoundaryFailure {
+  error: Exclude<LandingInfrastructureCode, 'landing-projection-unreadable'>;
   recovery: 'replay' | 'restart';
   mayApply?: true;
   invalid?: { reason: LandingJournalInvalidReason; record: number | null };
 }
+/** A row of the line that does not read (wave 5i, D-8627): the data is damaged, so neither a replay nor a restart clears
+ *  it. `repair` names the row's own data: the terminal repair of a retired PR (`coord/landingEntry.ts`) or an operator's
+ *  edit. It is never a fence word and never a promise that anything repairs itself. */
+export interface LandingProjectionFailure {
+  error: 'landing-projection-unreadable';
+  recovery: 'repair';
+}
+export type LandingInfrastructureFailure = LandingBoundaryFailure | LandingProjectionFailure;
 export type LandingMutationCode =
   | 'landing-entry-exists' | 'landing-entry-missing'
   | 'landing-after-missing' | 'landing-after-cross-project'

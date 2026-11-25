@@ -5,9 +5,11 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
-import { landingEntryFactsOfRow, landingEntryOfRow } from '../src/coord/landingEntry.js';
+import { decideLandingWrite, landingEntryFactsOfRow, landingEntryOfRow } from '../src/coord/landingEntry.js';
+import type { LandingProjectionRead } from '../src/coord/landingEntry.js';
+import type { LandingEntry } from '../../shared/landingLine.js';
 import { landingOrder } from '../src/coord/landingLine.js';
-import type { LandingEjectionKind } from '../../shared/landingLine.js';
+import type { LandingEjectionKind, LandingEntryState } from '../../shared/landingLine.js';
 import { mergingAtDetail } from '../../shared/landing.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { landingFactsOf, landingStoreOver } from './landingFixture.js';
@@ -299,8 +301,9 @@ describe('oversized INTEGERs through the store (landing order wave 5f, setReadBi
     expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state: 'unknown' })]);
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
       .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'unknown' } });
+    // fix round 2 (R1): the row is owned and stored pinned, so the retreat is refused (it used to be kept) and moves nothing
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
-      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'unknown' } });
+      .toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'repair' });
     expect(dump()).toBe(before);
   });
 });
@@ -448,7 +451,7 @@ describe('stale episode-head quarantine and bounded verified re-pin (landing ord
     const orderBefore = landingOrder(factsBefore.entries, factsBefore.flags);
     const eventsBefore = rawCount('run_events');
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
-      .toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'restart' });
+      .toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'repair' });
     expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
     expect(rawCount('run_events')).toBe(eventsBefore);
     expect(raw()).toEqual(before);
@@ -547,5 +550,72 @@ describe('the ejection count is bounded at the safe-integer ceiling (landing ord
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
       .toMatchObject({ ok: true, landing: { kind: 'ejected', entry: { state: 'ejected', ejections: Number.MAX_SAFE_INTEGER } } });
     expect(rawEjections()).toBe(String(Number.MAX_SAFE_INTEGER));
+  });
+});
+
+describe('decideLandingWrite: the owned-pin projection check and the closed-row re-pin gate (wave 5i, M16 and M25)', () => {
+  const REPAIR = { act: 'refuse', failure: { ok: false, error: 'landing-projection-unreadable', recovery: 'repair' } } as const;
+  const readable: LandingProjectionRead = { kind: 'readable', quarantine: null };
+  const unreadable: LandingProjectionRead = { kind: 'unreadable' };
+  const row = (over: Partial<LandingEntry> = {}): LandingEntry => ({ id: 3, project: P, pr: 7, pinnedSha: HEAD, handoffCommit: HC, runId: 5,
+    state: 'pinned', baseSha: null, ejectionKind: null, ejections: 1, afterIds: [], fixesMain: false, setBy: 'coordinator', pinnedAt: 10, ...over });
+  const retreat = (f: { current: LandingEntry | null; projection: LandingProjectionRead | null; head?: string; from?: 'merging' | 'working'; runId?: number }) =>
+    decideLandingWrite({ landing: { kind: 'retreat', ejection: { base: BASE, kind: 'new-head' } }, from: f.from ?? 'merging', runId: f.runId ?? 5,
+      current: f.current, projection: f.projection, episode: { pr: 7, head: f.head ?? HEAD }, storedState: f.current?.state ?? null });
+  it('an owned, pinned entry at the episode head over an unreadable projection refuses, bare or named, before any ejection', () => {
+    expect(retreat({ current: row(), projection: unreadable })).toEqual(REPAIR);
+    expect(retreat({ current: row(), projection: null })).toEqual(REPAIR);
+    expect(decideLandingWrite({ landing: { kind: 'retreat', ejection: null }, from: 'merging', runId: 5, current: row(), projection: unreadable,
+      episode: { pr: 7, head: HEAD }, storedState: 'pinned' })).toEqual(REPAIR);
+  });
+  it('the same entry over a readable projection is the ejection it always was (the positive control)', () => {
+    expect(retreat({ current: row(), projection: readable })).toMatchObject({ act: 'eject', id: 3, ejections: 2 });
+  });
+  it('a stale head still refuses over an unreadable projection and quarantines over a readable one', () => {
+    expect(retreat({ current: row(), projection: unreadable, head: HEAD2 })).toEqual(REPAIR);
+    expect(retreat({ current: row(), projection: readable, head: HEAD2 })).toEqual({ act: 'quarantine', id: 3 });
+  });
+  it('an entry the retreat does not own, a row that is not pinned, no entry and a plain advance are not newly refused', () => {
+    expect(retreat({ current: row({ runId: 6 }), projection: unreadable })).toEqual({ act: 'none', write: { kind: 'kept', state: 'pinned' } });
+    expect(retreat({ current: row({ state: 'ejected' }), projection: unreadable })).toEqual({ act: 'none', write: { kind: 'kept', state: 'ejected' } });
+    expect(retreat({ current: null, projection: null })).toEqual({ act: 'none', write: { kind: 'no-entry' } });
+    expect(decideLandingWrite({ landing: { kind: 'plain' }, from: 'merging', runId: 5, current: row(), projection: unreadable, episode: null, storedState: 'pinned' }))
+      .toEqual({ act: 'none', write: { kind: 'none' } });
+  });
+  // Fix round 2, R1: the ownership and pinned tests read the STORED word (the display state folds a damaged row to `unknown`).
+  const stored = (current: LandingEntry | null, projection: LandingProjectionRead | null, storedState: LandingEntryState | 'unrecognised' | null,
+    head: string = HEAD, ejection: { base: string; kind: LandingEjectionKind } | null = { base: BASE, kind: 'new-head' }) =>
+    decideLandingWrite({ landing: { kind: 'retreat', ejection }, from: 'merging', runId: 5, current, projection,
+      episode: { pr: 7, head }, storedState });
+  it('R1: an owned row stored pinned that displays unknown over an unreadable projection refuses, bare or named, equal or stale head', () => {
+    const shown = row({ state: 'unknown' });
+    for (const head of [HEAD, HEAD2]) for (const ejection of [null, { base: BASE, kind: 'new-head' as const }]) {
+      expect(stored(shown, unreadable, 'pinned', head, ejection)).toEqual(REPAIR);
+      expect(stored(shown, null, 'pinned', head, ejection)).toEqual(REPAIR);
+    }
+  });
+  it('R1: the same row unowned, or stored in any other word or with no record, keeps today\'s answer', () => {
+    const kept = { act: 'none', write: { kind: 'kept', state: 'unknown' } };
+    expect(stored(row({ state: 'unknown', runId: 6 }), unreadable, 'pinned')).toEqual(kept);
+    expect(stored(row({ state: 'unknown', runId: null }), unreadable, 'pinned')).toEqual(kept);
+    for (const word of ['landed', 'closed', 'withdrawn', 'ejected', 'unknown', 'unrecognised', null] as const) {
+      expect(stored(row({ state: 'unknown' }), unreadable, word), String(word)).toEqual(kept);
+    }
+  });
+  it('R1: a readable owned row stored pinned keeps the eject and quarantine branches', () => {
+    expect(stored(row(), readable, 'pinned')).toMatchObject({ act: 'eject', id: 3, ejections: 2 });
+    expect(stored(row(), readable, 'pinned', HEAD2)).toEqual({ act: 'quarantine', id: 3 });
+  });
+  const pinAgain = (current: LandingEntry | null, projection: LandingProjectionRead | null) =>
+    decideLandingWrite({ landing: { kind: 'pin', head: HEAD2, pr: 7, mode: 'off', handoffCommit: HC }, from: 'awaiting-review', runId: 5,
+      current, projection, episode: null, storedState: current?.state ?? null });
+  it('a closed row re-pins only over a readable, unquarantined projection', () => {
+    expect(pinAgain(row({ state: 'closed' }), readable)).toEqual({ act: 'repin', id: 3 });
+    for (const projection of [unreadable, null, { kind: 'readable', quarantine: 'stale-episode-head' } as LandingProjectionRead]) {
+      expect(pinAgain(row({ state: 'closed' }), projection)).toEqual({ act: 'none', write: { kind: 'kept', state: 'closed' } });
+    }
+  });
+  it('a pinned and an ejected row re-pin as before, whatever their projection says (the gate is the closed row\'s alone)', () => {
+    for (const state of ['pinned', 'ejected'] as const) expect(pinAgain(row({ state }), unreadable)).toEqual({ act: 'repin', id: 3 });
   });
 });

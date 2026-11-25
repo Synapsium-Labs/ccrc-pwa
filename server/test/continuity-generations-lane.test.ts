@@ -1507,7 +1507,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
       '../../../shared/accountOrg.js',
       // Renewal readings PR C: the mint's stamp and the latch's decider (L1). The latch itself is a port the wiring binds.
-      './renewalReadings.js'];
+      './renewalReadings.js',
+      // Renewal readings PR F: the `@overlord` mark's key (L0, imports nothing), read through `operatorQuietOf`.
+      '../../../shared/operatorMessages.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());

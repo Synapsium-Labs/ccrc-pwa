@@ -5,10 +5,11 @@
 import type { CoordStore } from '../coord/store.js';
 import type { GenerationState } from '../../../shared/continuity.js';
 import { markProgrammesOf } from './operatorMark.js';
+import { designationFactFrom, designationFactOf } from '../roleOf.js';
 import { sessionLiveGeneration } from './continuityStore.js';
 
 /** The store members the hand-offs read and write, declared by this consumer. */
-export type PromptHandoffsCoord = Pick<CoordStore, 'liveGenerations' | 'bindingsOf' | 'putOperatorMark'>;
+export type PromptHandoffsCoord = Pick<CoordStore, 'liveGenerations' | 'bindingsOf' | 'putOperatorMark' | 'designationRead'>;
 
 /** The session's live generation's `state` (never `shadowState`: ruling R1), or null when it has none. A read that fails is
  *  null too: the route then types as it did before this piece, the only behaviour it had, rather than refusing every prompt
@@ -20,16 +21,18 @@ export function liveStateOf(coord: PromptHandoffsCoord, sessionId: string): Gene
 }
 
 /** After a prompt was typed: the mark of every programme the session coordinates or serves moves to `now` (the route owns
- *  `at`; the generations lane owns its `quiet`). A session with no programme writes none, and one whose runs could not be read
- *  writes none and says so: a mark is never written from a guess. */
+ *  `at`; the generations lane owns its `quiet`), and the Overlord's for the designated session. The prompt route, the terminal
+ *  drawer's input and the submit route each call it (renewal readings E). A session with no programme writes none, and one whose
+ *  runs or designation could not be read writes none and says so: a mark is never written from a guess. */
 export function markOperatorPrompt(coord: PromptHandoffsCoord, sessionId: string, now: number, log: (line: string) => void): number {
   let programmes: readonly string[] | 'unmeasured';
   try {
     const b = coord.bindingsOf(sessionId);
-    programmes = markProgrammesOf(b.claimant(), b.worker());
+    const fact = designationFactFrom(coord.designationRead());
+    programmes = markProgrammesOf(b.claimant(), b.worker(), fact === 'unmeasured' ? 'unmeasured' : designationFactOf(sessionId, fact) === 'live');
   } catch { programmes = 'unmeasured'; }
   if (programmes === 'unmeasured') {
-    log(`ccrc-server: prompt ${sessionId}: its runs could not be read, so no operator-at-programme mark was written`);
+    log(`ccrc-server: prompt ${sessionId}: its runs or the designation could not be read, so no operator-at-programme mark was written`);
     return 0;
   }
   let wrote = 0;

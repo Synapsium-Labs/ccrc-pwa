@@ -38,6 +38,7 @@ const DESK_PLACES = deskPlacesFor(false, NONE, HOME_NONE);
 const DESK_DOORS = deskDoorsFor(DESK_PLACES);
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
+const { isDocsHref } = await import('../src/lib/docTab');
 
 /** Every width query answered against one viewport width. */
 function atWidth(width: number): void {
@@ -61,9 +62,13 @@ const DESK_TABS = ['go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs'
 const phoneBar = (): HTMLElement | null => document.querySelector<HTMLElement>('nav.shell-phone-nav');
 const doorsOf = (el: Element): string[] => [...el.querySelectorAll('[data-command]')].map((d) => d.getAttribute('data-command')!);
 
+/** The app loaded at `path`, as a first load. A Docs page is reached inside the console instead: a tab whose first page is a
+ *  Docs address is a Docs tab, which draws no phone bar (desktop polish wave 174; `docs-own-tab.test.tsx`). */
 function mount(path: string): void {
-  act(() => { navigate(path); });
+  const docs = isDocsHref(path);
+  act(() => { navigate(docs ? '/fleet' : path); });
   render(<App />);
+  if (docs) act(() => { navigate(path); });
   act(() => useFleetStore.setState({ conn: 'open', sessions: [SESSION], fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
 }
 
