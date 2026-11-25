@@ -446,6 +446,19 @@ describe('the driver child', () => {
     // The runner's tmux base is the child's temporary directory, the one parent the driver accepts (wave 178 departure).
     expect(got.env['TMPDIR']).toBe('/srv/svc-tmp');
   });
+
+  it('a child that ignores TERM at its bound is killed its grace later, not sooner: the grace the worst case counts is taken (call 1208)', async () => {
+    const dir = mkTmp('ccrc-capdel-term-');
+    const script = path.join(dir, 'stubborn.cjs');
+    writeFileSync(script, `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n`);
+    const bound = 300;
+    const grace = 700;
+    const t0 = Date.now();
+    const a = await nodeDeliveryDriver(process.execPath, script, bound, grace).drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c0' }, { path: '/usr/bin:/bin', tmpBase: dir });
+    const took = Date.now() - t0;
+    expect(a).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/did not answer within 300 ms/) });
+    expect(took).toBeGreaterThanOrEqual(bound + grace);
+  }, 20_000);
 });
 
 describe('the op\'s reader reads a delivery reply only as one', () => {
