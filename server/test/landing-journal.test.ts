@@ -194,6 +194,29 @@ describe('the journal parser (shared contract §3)', () => {
   });
 });
 
+// Landing order wave 5j-a, Task 1 (D-9045): the operator's two door records. The characterization cases were green on the
+// baseline parser before the union was split; the two that named a door kind answered `kind` there, the old parser's
+// answer, kept here as a comment because it is what a server older than 5j-a says on such a journal: `{ok:false,
+// reason:'kind', record:2}` for a `withdraw` after an entry, and `{ok:false, reason:'kind', record:1}` for a lone `pause`.
+const withdraw = (seq: number, id: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, seq, at: 1000 + seq, setBy: 'operator', subject: sub(id), kind: 'withdraw', actor: 'flag-off', ...over,
+});
+const pause = (seq: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, seq, at: 1000 + seq, setBy: 'operator', kind: 'pause', project: 'proj-a', paused: true, actor: 'flag-off', ...over,
+});
+
+describe('the door record kinds (wave 5j-a, D-9045)', () => {
+  it('characterization: an entry and an order parse to exactly the objects they were', () => {
+    const recs = [entry(1, 1), entry(2, 2), order(3, 2, [sub(1)], true), order(4, 1, [], false)];
+    expect(parseLandingJournal(text(...recs))).toEqual({ ok: true, records: recs, lastSeq: 4 });
+  });
+
+  it('characterization: the baseline parser refuses a door kind as kind', () => {
+    expect(parseLandingJournal(text(entry(1, 1), withdraw(2, 1)))).toEqual(bad('kind', 2));
+    expect(parseLandingJournal(text(pause(1)))).toEqual(bad('kind', 1));
+  });
+});
+
 // ---------------------------------------------------------------- the adapter
 
 interface Fx { dir: string; leaf: string }
