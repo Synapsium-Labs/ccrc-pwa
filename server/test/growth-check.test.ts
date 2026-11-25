@@ -1275,12 +1275,16 @@ describe('growthCheck: in a merge-queue group an entry is measured against its p
     // Outside CI and without GROWTH_CHECK the armed rows skip, as before.
     expect(armedBase({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: b }, dir)).toEqual({ skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' });
   });
-});
 
-/** The base, or why the growth rows cannot measure: `armedBase`, which the stacked-entry case runs too (D-9016). */
-function resolveBase(): { base: string; from: 'queue-parent' | 'merge-base' } | { skip: string } {
-  return armedBase(process.env, ROOT);
-}
+  it('the armed rows take their base from armedBase, read from this file as text (review 3762 F1)', () => {
+    // A text pin, on purpose: the line runs once, at module load, from the real environment, so no case can run it
+    // again under another one. It holds the line against a replacement by a plain merge-base read, which the
+    // stacked-entry case above would not see. A whole line, so the needle in this case does not count itself.
+    const LINE = 'const resolved = armedBase(process.env, ROOT);';
+    const own = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n');
+    expect(own.filter((l) => l === LINE), 'growth-check.test.ts resolves its base once, through armedBase').toHaveLength(1);
+  });
+});
 
 /** The names `node:module` exports that load no module (D-8563: ring.ts reads `builtinModules`). */
 const LOADS_NOTHING: ReadonlySet<string> = new Set(['builtinModules', 'isBuiltin']);
@@ -1327,7 +1331,8 @@ function importClosure(roots: readonly string[]): { modules: string[]; unfollowa
 const AGED = agedWaivers(waiverItemsAtHead());
 console.log(`growth-check: waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): ${agedLine(AGED)}`);
 
-const resolved = resolveBase();
+/** The base, or why the growth rows cannot measure: `armedBase`, which the stacked-entry case runs too (D-9016). */
+const resolved = armedBase(process.env, ROOT);
 const measured = 'base' in resolved
   ? (() => {
       const head = gitRead(['rev-parse', 'HEAD'], ROOT).trim();

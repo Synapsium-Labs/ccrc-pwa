@@ -80,6 +80,9 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       // X2 P1: the listed modified time. A plain decimal run that unrelated ccd code already spells, so it is pinned by
       // DEF alone, as the commit and fingerprint bodies are; docs-parity.test.ts holds ccd's copy to it from P1.2.
       'DOCS_MTIME_NS_RE_BODY',
+      // X2 P2.3: the outside-folder label. Pinned by DEF and by its body's text (below): no other file of the four roots
+      // may spell the grammar, since the server's L1 and the PWA both read `DOCS_FOLDER_LABEL_RE`.
+      'DOCS_FOLDER_LABEL_RE_BODY',
     ];
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     /** [what, fingerprint, the files that may hold it, a planted copy it must see, a near miss it must not]. */
@@ -92,6 +95,8 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
         "new RegExp('^(?:refs/heads/|refs/remotes/origin/)')", "s.startsWith('refs/heads/')"],
       ['max-bytes', new RegExp(esc('[1-9][0-9]{0,7}')), ['shared/docs.ts'],
         'const N = /^[1-9][0-9]{0,7}$/;', 'const N = /^[0-9]+$/;'],
+      ['folder label', new RegExp(esc('[a-z0-9][a-z0-9-]{0,31}')), ['shared/docs.ts'],
+        'const L = /^[a-z0-9][a-z0-9-]{0,31}$/;', 'const L = /^[a-z0-9-]+$/;'],
       ['rel path', new RegExp(esc('(?!/)(?!.*/$)(?!.*//)')), ['shared/docs.ts'],
         'const X = String.raw`(?!/)(?!.*/$)(?!.*//)`;', "const X = '(?!/)';"],
       ['section map', /(['"`])docs\/product-design\1/, ['shared/docs.ts'],

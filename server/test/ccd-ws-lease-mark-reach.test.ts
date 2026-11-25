@@ -85,6 +85,12 @@ const SHAPES: ReadonlyArray<readonly [string, readonly string[], ShapeClass]> = 
   // The Overlord W1 ccd arms (plan Task 3): the sleep markers' one writer, protected as delegation-adopt is.
   ['keep-awake alone', ['keep-awake'], 'both'],
   ['keep-awake on', ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on'], 'both'],
+  // X2 P2.3 (native-docs-parity spec section 7, M11.65): the docs folder registry's verb, the whole verb, protected as
+  // delegation-adopt is: the server's act, never a session's.
+  ['docs-folder alone', ['docs-folder'], 'both'],
+  ['docs-folder --list', ['docs-folder', '--list'], 'both'],
+  ['docs-folder --add', ['docs-folder', '--add', 'a', '--path', '/p'], 'both'],
+  ['docs-folder --remove', ['docs-folder', '--remove', 'a'], 'both'],
   // D-8666: every verb of FORBIDDEN_CCD_VERBS the launcher did not yet protect, with any tail. Each shape here is one the
   // REAL body may run unprivileged in the fixture HOME (the body half below runs it): a usage refusal or the read-only
   // listing. `roll` and `claude` are no body verb yet (D-8667).
@@ -137,6 +143,8 @@ describe('the launcher protects every shape; the body refuses the `both` class o
     expect(echoed().flags.includes('p')).toBe(true);
     expect(direct(['Keep-Awake', '--session', 'x', '--state', 'on'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
     expect(echoed().flags.includes('p')).toBe(true);
+    expect(direct(['DOCS-FOLDER', '--list'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
+    expect(echoed().flags.includes('p')).toBe(true);
     // D-8666: a case variant of each verb the launcher newly protects, an ASCII one and one with a non-ASCII character
     // (which the matcher reads as any one character, so no locale's fold escapes it).
     for (const argv of [['WS-RM', 'demo-x'], ['Ws-Reap', '--expect', 'x'], ['WS-GC'], ['ws-gc', '--prune'], ['WS-GC', '--PRUNE'],
@@ -148,12 +156,47 @@ describe('the launcher protects every shape; the body refuses the `both` class o
     }
     for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit'],
       ['delegation-adoptx'], ['caps', 'delegation-adopt'], ['keep-awakex'], ['caps', 'keep-awake'],
+      ['docs-folderx'], ['caps', 'docs-folder'],
       // D-8666's controls: a longer or shorter word, or the verb in a later position, stays ordinary.
       ['ws-rmx'], ['ws-r'], ['caps', 'ws-rm'], ['ws-gcx'], ['ws-archived'], ['ws-restores'], ['rolls'], ['rol'], ['claudex'],
       ['claude-x'], ['caps', 'roll'], ['caps', 'claude']]) {
       expect(direct(argv).code).toBe(0);
       expect(echoed().flags.includes('p'), argv.join(' ')).toBe(false);
     }
+  }, 60_000);
+});
+
+// X2 P2.3 (native-docs-parity spec section 7, M11.65): the docs folder registry's verb is the server's act, whole, never a
+// session's. The launcher starts every form under `-p` (the SHAPES rows above and below), and the body's own entry guard
+// refuses an unprivileged start of every form: dropping `docs-folder` from that guard reds the first case here. The read verb
+// beside it, which sessions do run, is no protected word, and the verb's listing still answers through the real launcher.
+describe('docs-folder through the direct entry (X2 P2.3)', () => {
+  it('direct entry: docs-folder in any form refuses entry-unprivileged outside the installed direct entry', () => {
+    for (const argv of [['docs-folder'], ['docs-folder', '--list'], ['docs-folder', '--add', 'a', '--path', '/p'], ['docs-folder', '--remove', 'a']]) {
+      const b = bash([], argv);
+      expect(b.code, `${argv.join(' ')}: ${b.stderr.slice(0, 300)}`).toBe(125);
+      expect(b.stderr, argv.join(' ')).toContain('refused (entry-unprivileged)');
+    }
+  }, 60_000);
+
+  it('direct entry: docs-folder-read stays ordinary', () => {
+    de = installDirectEntry(h.home, { body: ECHO_BODY });
+    for (const argv of [['docs-folder-read'], ['docs-folder-read', '--label', 'a', '--op', 'tree']]) {
+      expect(direct(argv).code, argv.join(' ')).toBe(0);
+      expect(echoed().argv, argv.join(' ')).toEqual(argv);
+      expect(echoed().flags.includes('p'), `${argv.join(' ')}: flags ${echoed().flags}`).toBe(false);
+    }
+  }, 60_000);
+
+  it('direct entry: docs-folder --list answers through the installed direct entry, on the real body', () => {
+    de = installDirectEntry(h.home);
+    const r = direct(['docs-folder', '--list']);
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines, 'one JSON line').toHaveLength(1);
+    const ans = JSON.parse(lines[0] as string) as { ok?: unknown; folders?: unknown };
+    expect(ans.ok).toBe(true);
+    expect(Array.isArray(ans.folders)).toBe(true);
   }, 60_000);
 });
 

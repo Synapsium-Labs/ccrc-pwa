@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, harnessBin, type CcdHarness } from './ccdWsHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 /** One ccd (or helper) run: its exit code and both streams, never trimmed. */
 export interface DocsRun { code: number; stdout: string; stderr: string }
@@ -43,6 +44,20 @@ export function runCcdDocs(
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }),
   });
   const failed = r.error === undefined ? '' : `\n[runCcdDocs] ${String(r.error)}`;
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` };
+}
+
+/** `runCcdDocs` for a protected verb (X2 P2.3: `docs-folder`, which ccd's body guard refuses `entry-unprivileged` unless
+ *  it starts under Bash in privileged mode): the same fixture HOME and the same three poisons, started `bash -p` as the
+ *  installed direct entry starts it, so no startup file or exported function reaches it. */
+export function runCcdDocsEntry(
+  h: CcdHarness, args: readonly string[], env: NodeJS.ProcessEnv = {}, cwd: string = h.home,
+): DocsRun {
+  const r = spawnSyncGroup('bash', ['-p', CCD, ...args], {
+    cwd, encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }),
+  });
+  const failed = r.error === undefined ? '' : `\n[runCcdDocsEntry] ${String(r.error)}`;
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}${failed}` };
 }
 

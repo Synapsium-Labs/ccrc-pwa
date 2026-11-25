@@ -21,8 +21,8 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  DOCS_CLASS_CAP, contentClass, docListPinKey, docsApi, docsPageUrl, entryView, githubBlobUrl,
-  type DocListPin, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
+  DOCS_CLASS_CAP, contentClass, docListPinKey, docsApi, docsPageUrl, entryView, githubBlobUrl, isDocsFolderLocation,
+  type DocListPin, type DocPin, type DocsFolderLocation, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
@@ -30,16 +30,17 @@ import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { FLEET_PATH } from '../lib/routes';
 import { useFollowLink } from '../lib/useTabLink';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
-import { Icon, useNow, type IconName } from '@ccrc/ui';
+import { Button, Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
-  DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
+  DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
 } from './docsText';
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
+import { folderActions, folderTruthLine } from './folderPage';
 import { copyText, shareTargetFor, type ShareOpened } from './share';
 import { ShareSheet } from './ShareSheet';
 import { docMarkdownSource } from './DocMarkdown';
@@ -72,7 +73,17 @@ function notOkSentence(answer: DocsNotOk): string {
 /** Where back goes (spec 4.4: "up one level"): a leaf or a directory to its parent directory or its section, a
  *  section to its project, a project to the index, the index to the fleet (`FLEET_PATH`). The page's ref is kept; `view` is
  *  dropped. */
-export function docsUpHref(page: DocsPageLocation): string {
+export function docsUpHref(page: DocsPageLocation | DocsFolderLocation): string {
+  if (isDocsFolderLocation(page)) {
+    // An outside folder (X2 P2.4): a leaf or a directory to its parent directory or its section, a section to the folder's
+    // root, the root to the index.
+    if (page.kind === 'folder') return docsPageUrl({ kind: 'index' });
+    if (page.kind === 'folder-section') return docsPageUrl({ kind: 'folder', label: page.label });
+    const cut = page.path.lastIndexOf('/');
+    return docsPageUrl(cut < 0
+      ? { kind: 'folder-section', label: page.label, section: page.section }
+      : { kind: 'folder-path', label: page.label, section: page.section, path: page.path.slice(0, cut), dirSlash: true });
+  }
   switch (page.kind) {
     case 'index':
       return FLEET_PATH;
@@ -93,7 +104,32 @@ export function docsUpHref(page: DocsPageLocation): string {
 export interface DocsCrumb { readonly label: string; readonly href: string }
 
 /** The crumbs from the index down to `page`, each keeping the page's ref (refinement (q)). */
-export function docsCrumbs(page: DocsPageLocation): DocsCrumb[] {
+export function docsCrumbs(page: DocsPageLocation | DocsFolderLocation): DocsCrumb[] {
+  if (isDocsFolderLocation(page)) {
+    // An outside folder (X2 P2.4): Docs, the folder as `~label`, its section, then each directory of the path.
+    const folderCrumbs: DocsCrumb[] = [
+      { label: DOCS_HEAD_TEXT.index, href: docsPageUrl({ kind: 'index' }) },
+      { label: '~' + page.label, href: docsPageUrl({ kind: 'folder', label: page.label }) },
+    ];
+    if (page.kind === 'folder') return folderCrumbs;
+    folderCrumbs.push({
+      label: SECTION_LABEL[page.section],
+      href: docsPageUrl({ kind: 'folder-section', label: page.label, section: page.section }),
+    });
+    if (page.kind === 'folder-section') return folderCrumbs;
+    const names = page.path.split('/');
+    names.forEach((label, i) => {
+      const last = i === names.length - 1;
+      folderCrumbs.push({
+        label,
+        href: docsPageUrl({
+          kind: 'folder-path', label: page.label, section: page.section, path: names.slice(0, i + 1).join('/'),
+          dirSlash: last ? page.dirSlash : true,
+        }),
+      });
+    });
+    return folderCrumbs;
+  }
   const crumbs: DocsCrumb[] = [{ label: DOCS_HEAD_TEXT.index, href: docsPageUrl(docsLocation(page, { kind: 'index' })) }];
   if (page.kind === 'index') return crumbs;
   crumbs.push({ label: page.project, href: docsPageUrl(docsLocation(page, { kind: 'project' })) });
@@ -481,7 +517,11 @@ function FreshChip(p: { readonly chip: ReturnType<typeof freshnessChip>; readonl
 function TruthLine(p: {
   readonly page: TreePage; readonly visit: DocsVisit; readonly tree: DocsTreeOk; readonly receivedAt: number;
   readonly now: number;
+} | {
+  /** An outside folder's page (X2 P2.4): no ref, commit or freshness, only "Not in a repository" and the file's time. */
+  readonly folder: { readonly mtimeNs: string | null };
 }): ReactNode {
+  if ('folder' in p) return <p className="docs-truth" data-truth="folder">{folderTruthLine(p.folder.mtimeNs)}</p>;
   const { page, visit, tree } = p;
   const ref = tree.ref;
   const withRelation = ref.via === 'local' || ref.via === 'origin' || ref.via === 'qualified';
@@ -698,7 +738,35 @@ function ShareAction(p: {
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
  *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
  *  row (desk-nav Part B, D-8101): GitHub, Share, Export and Open committed version each an icon beside its words. */
-function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
+function Actions(p: (ActionInputs & { readonly form: FullHeadForm }) | {
+  /** An outside folder's page (X2 P2.4): every action is off, each with its reason (`folderActions()`'s table). */
+  readonly off: readonly FolderOffAction[];
+}): ReactNode {
+  if ('off' in p) return <OffActions off={p.off} />;
+  return <ProjectActions {...p} />;
+}
+
+/** One action that is off on this page, with the sentence that says why. */
+type FolderOffAction = ReturnType<typeof folderActions>[number];
+
+/** The actions of a page where none applies: each is a disabled control naming its reason beside it, so the head says what
+ *  is missing and why rather than leaving it out. */
+function OffActions(p: { readonly off: readonly FolderOffAction[] }): ReactNode {
+  return (
+    <ul className="docs-actions docs-folder-actions">
+      {p.off.map((a) => (
+        <li key={a.action}>
+          <Button variant="ghost" className="docs-off-action" disabled aria-describedby={'docs-off-' + a.action} data-action={a.action}>
+            {DOCS_FOLDER_TEXT.actionLabel[a.action]}
+          </Button>{' '}
+          <small id={'docs-off-' + a.action} className="docs-action-off">{a.reason}</small>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ProjectActions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
   const head = useHeadActions(p);
   return <ActionsRow {...p} head={head} />;
 }
@@ -773,9 +841,49 @@ function useHeadActions(p: ActionInputs): HeadActions {
   return { target, showsDraft, onVersion, share, exported, committedHref };
 }
 
-/** The Docs header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
+/** The Docs header, ONE head for both families of page. A project page (`page` a `DocsPageLocation`, with its visit and tree)
+ *  draws `ProjectHead`; an outside folder's page (X2 P2.4, a `DocsFolderLocation` with `folderTime`) draws `FolderHead`,
+ *  which shares the back button, the crumbs, the truth line and the actions row with it. They are two components so a page
+ *  that moves from one family to the other remounts, never changing a component's hooks. */
+export function DocsHead(p: ProjectHeadProps | {
+  readonly page: DocsFolderLocation;
+  /** The modified time of the file read, a decimal nanosecond string; `null`: none (a listing, bytes not read yet, a failed
+   *  or range read), and the truth line says its first clause alone. */
+  readonly folderTime: string | null;
+}): ReactNode {
+  if ('folderTime' in p) return <FolderHead page={p.page} mtimeNs={p.folderTime} />;
+  return <ProjectHead {...p} />;
+}
+
+/** The stacked heads' one line: back, then the crumbs. The project head's stacked form and an outside folder's head draw it. */
+function HeadBar(p: { readonly page: DocsPageLocation | DocsFolderLocation; readonly crumbs: readonly DocsCrumb[] }): ReactNode {
+  return (
+    <div className="docs-head-bar">
+      <BackButton page={p.page} />
+      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+    </div>
+  );
+}
+
+/** An outside folder's head: back, the crumbs (the folder as `~label`), the truth line ("Not in a repository" and the file's
+ *  time), and the five actions, all off with their reasons. A folder has no export, reader bar, Aa menu, plain view or Page
+ *  details (they read a repository's file, its reader frame and its pin), so none is drawn. */
+function FolderHead(p: { readonly page: DocsFolderLocation; readonly mtimeNs: string | null }): ReactNode {
+  const crumbs = docsCrumbs(p.page);
+  return (
+    <header className="docs-head docs-folder-head" data-folder={p.page.label}>
+      <HeadBar page={p.page} crumbs={crumbs} />
+      <TruthLine folder={{ mtimeNs: p.mtimeNs }} />
+      <Actions off={folderActions()} />
+    </header>
+  );
+}
+
+type ProjectHeadProps = Parameters<typeof ProjectHead>[0];
+
+/** The project page's header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
  *  no project), so the header is back and the crumbs only (spec 4.7: a tree failure keeps the crumbs). */
-export function DocsHead(p: {
+function ProjectHead(p: {
   readonly page: DocsPageLocation; readonly visit: DocsVisit; readonly tree: DocsTreeOk | null;
   /** The pin a raster leaf's own image settled at (`DocsScreen`'s); absent or `null`, none has. */
   readonly leafImage?: DocPin | null;
@@ -865,10 +973,7 @@ export function DocsHead(p: {
   if (fullHeadFormFor(compactWidth) === 'stacked') {
     return (
       <header className="docs-head">
-        <div className="docs-head-bar">
-          <BackButton page={page} />
-          <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-        </div>
+        <HeadBar page={page} crumbs={crumbs} />
         {listed !== null && (
           <>
             <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
@@ -1010,7 +1115,7 @@ function HeadRow(p: {
 
 /** Back (spec 4.4: up one level, never `history.back()`), the one control both headers draw. The index's up door goes to
  *  the fleet: it is the `go-fleet` door there (W2 Task S5), and only there. */
-function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
+function BackButton(p: { readonly page: DocsPageLocation | DocsFolderLocation }): ReactNode {
   const up = docsUpHref(p.page);
   const follow = useFollowLink();
   return (

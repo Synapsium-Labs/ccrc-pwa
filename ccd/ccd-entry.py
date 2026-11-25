@@ -37,6 +37,8 @@
 #     measure of a leased tree; it writes nothing, and starts protected as its writer does)
 #   delegation-adopt <any tail>                   — likewise (delegation broker wave 5 PR8b, D-8112: the server's raise or
 #     lower of the adoption switch, the one writer of $REG/delegation-adopt)
+#   docs-folder <any tail>                        — likewise (native Docs parity X2 P2.3: the server's list, add and remove
+#     of the docs folder registry, $REG/docs-folders, its one writer; `docs-folder-read` is another verb and stays ordinary)
 #   keep-awake <any tail>                         — likewise (the Overlord W1 ccd arms: the server's set or clear of one
 #     session's two sleep markers, their one writer in the tree)
 #   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
@@ -180,7 +182,7 @@ PROTECTED_START_ONLY = ('ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore',
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt', 'docs-folder')):
         return True
     if argv[:1] and any(folds_to(argv[0], verb) for verb in PROTECTED_START_ONLY):
         return True

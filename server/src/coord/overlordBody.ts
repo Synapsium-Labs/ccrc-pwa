@@ -19,7 +19,7 @@ import {
 } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import { cutShort } from '../lifecycle.js';
-import { parsePoolAnswer } from '../poolrule.js';
+import { parsePoolAnswer, type PoolAnswerRead } from '../poolrule.js';
 import { classifyProjectAddFailure } from '../projectAdd.js';
 import type { SessionRecord, SingleRead } from '../registry.js';
 import type { CcdResult, RunCcd } from './ports.js';
@@ -76,16 +76,9 @@ export function withoutClaudeCode(run: RunCcd, env: NodeJS.ProcessEnv = process.
 }
 
 export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
-  const run = withoutClaudeCode(deps.runCcd, deps.env);
   const state = () => deps.fleetState();
   const refuse = (detail: string): { ok: false; detail: string } => ({ ok: false, detail });
-
-  /** One ccd call that cannot throw: a rejecting runner is a call that did not run. */
-  async function ran(argv: CcdArgv): Promise<CcdResult> {
-    try { return await run(argv); } catch (e) {
-      return { ran: false, ok: false, stdout: '', stderr: '', killed: 'unmeasured', signal: 'unmeasured', reason: 'transport', detail: messageOf(e) };
-    }
-  }
+  const ran = bodyRunner(deps.runCcd, deps.env);
 
   async function ensureProject(): Promise<BodyAnswer> {
     if (!ccdCan(state(), 'projectAddEmpty')) return refuse('the deployed ccd has no project-add');
@@ -162,11 +155,7 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
    *  is what D-6790 refuses `fable` on, and this is the operator's door, never that one. */
   const writeClass = (id: string, cls: OverlordModelClass): Promise<BodyAnswer> => setRoute(id, { class: cls });
 
-  async function poolAnswer(id: string): ReturnType<OverlordBody['poolAnswer']> {
-    if (!ccdCan(state(), 'poolAnswer') || !isRegistryId(id)) return { kind: 'not-run' };
-    const res = await ran(CCD_ARGV.poolAnswer(id));
-    return parsePoolAnswer({ ran: res.ran, code: res.ran ? (res.exitCode ?? (res.ok ? 0 : 1)) : 1, stdout: res.stdout });
-  }
+  const poolAnswer = (id: string): ReturnType<OverlordBody['poolAnswer']> => ccdPoolAnswer(ran, state(), id);
 
   async function keepAwake(id: string, which: 'on' | 'off'): Promise<KeepAwakeAnswer> {
     if (!isRegistryId(id)) return refuse('the session id is not a registry id');
@@ -200,6 +189,30 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
   }
 
   return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, ensure, stop };
+}
+
+/** A ccd runner whose calls cannot throw (`bodyRunner`). */
+export type BodyRan = (argv: CcdArgv) => Promise<CcdResult>;
+
+/** The one `ccd pool-answer --session <id>` composer (pool set B1's read, `CCD_ARGV.poolAnswer`): the body's probe and the renewal
+ *  readings' wiring (`continuity/renewalReadingsWiring.ts`, W1 renewal readings PR D) each call it with their own runner. It asks
+ *  the capability first, never composes an id the registry refuses, and reads the runner's answer `ran` first through
+ *  `parsePoolAnswer`. `ran` must not throw (`bodyRunner`). */
+export async function ccdPoolAnswer(ran: BodyRan, state: Pick<FleetState, 'ccdVerbs'> | undefined, id: string): Promise<PoolAnswerRead> {
+  if (!ccdCan(state, 'poolAnswer') || !isRegistryId(id)) return { kind: 'not-run' };
+  const res = await ran(CCD_ARGV.poolAnswer(id));
+  return parsePoolAnswer({ ran: res.ran, code: res.ran ? (res.exitCode ?? (res.ok ? 0 : 1)) : 1, stdout: res.stdout });
+}
+
+/** The body's runner, and `ccdPoolAnswer`'s outside it: the server's runner with no `CLAUDECODE` (`withoutClaudeCode`), whose
+ *  calls cannot throw: a rejecting runner is a call that did not run. */
+export function bodyRunner(runCcd: RunCcd, env?: NodeJS.ProcessEnv): BodyRan {
+  const run = withoutClaudeCode(runCcd, env);
+  return async (argv) => {
+    try { return await run(argv); } catch (e) {
+      return { ran: false, ok: false, stdout: '', stderr: '', killed: 'unmeasured', signal: 'unmeasured', reason: 'transport', detail: messageOf(e) };
+    }
+  };
 }
 
 // ── stopCreated ───────────────────────────────────────────────────────────────────────────────────────────────────────

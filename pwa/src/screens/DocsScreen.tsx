@@ -9,7 +9,7 @@
 // also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
+  DOCS_PAGE_PREFIX, docsPageUrl, isDocsFolderLocation, parseDocsPage, parseDocsRef,
   type DocPin, type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
@@ -21,6 +21,7 @@ import { DocsLeaf } from '../docs/DocsLeaf';
 import { lazyMountReader, type ReaderDeps } from '../docs/ReaderFrame';
 import { loadReaderImages } from '../docs/reader/images';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
+import { FolderPage } from '../docs/FolderPages';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { createExportAssets } from '../docs/export/exportAssets';
 import { ExportBodyContext, type ExportBody } from '../docs/exportBody';
@@ -28,6 +29,7 @@ import { ReaderBarContext, type ReaderBar, type ReaderBarSlot } from '../docs/re
 import { readerChromeFor } from '../docs/reader/policy';
 import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsLocation } from '../docs/docsLinks';
+import { folderIndexSlot, type DocsFolderLoaders, type FolderIndexSlot } from '../docs/folderPage';
 import {
   DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, failureSentence, fillSentence, slotSentence,
 } from '../docs/docsText';
@@ -47,6 +49,7 @@ import '../docs/docs.css';
  *  renders: a new `loaders` would reload every image on the page (`DocsAssetContext`'s contract). */
 const DEFAULT_DOCS_LOADERS: DocsLoaders = api.docs;
 const DEFAULT_DOCS_PARSER: MarkdownParser = (src, o) => docsRunner.parse(src, o);
+const DEFAULT_DOCS_FOLDERS: DocsFolderLoaders = api.docs.folders;
 /** The rich reader's defaults: the runner's render job, the lazily loaded mount, and the page's image loader. The
  *  screen takes them only where a `Worker` exists (the render job needs one); without it a Markdown leaf is the plain
  *  view, exactly as before the reader. */
@@ -166,14 +169,19 @@ export function DocsScreen(p: {
   path: string; search: string; loaders?: DocsLoaders; parser?: MarkdownParser;
   /** The rich reader's deps. Absent: the default where this browser has a `Worker`, else none. `null`: none. */
   reader?: ReaderDeps | null;
+  /** The outside folders' loaders (X2 P2.4): the labels read the index makes and every folder page's reads. */
+  folders?: DocsFolderLoaders;
 }): ReactNode {
   const {
     path, search, loaders = DEFAULT_DOCS_LOADERS, parser = DEFAULT_DOCS_PARSER,
-    reader = typeof Worker === 'function' ? DEFAULT_READER : null,
+    reader = typeof Worker === 'function' ? DEFAULT_READER : null, folders = DEFAULT_DOCS_FOLDERS,
   } = p;
   const here = path + search;
   const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);
-  const page = parsed.ok ? parsed.loc : null;
+  // An outside folder's page (X2 P2.4) is no project page: it has its own head and reads through the folder loaders, so
+  // the visit, the banners and `DocsHead` see `null` there, exactly as they do for a page that did not parse.
+  const folderPage = parsed.ok && isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
+  const page = parsed.ok && !isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
   const visit = useDocsVisit(page, loaders);
 
   // The image queue and the drafted-asset count, one each per visit, stable across renders (DocsAssetContext).
@@ -241,6 +249,16 @@ export function DocsScreen(p: {
     if (isIndex && index === null) loadIndex();
   }, [isIndex, index, loadIndex]);
   useEffect(() => onAuthRegained(() => setIndex((s) => (s?.s === 'auth' ? null : s))), []);
+  // The outside folders' labels (X2 P2.4): one read per visit of the index, after a sign-in again when it was refused. It is
+  // the ONLY folder read the index makes (the paths door is Settings'), and a refusal is one quiet line, never a banner.
+  const [folderIdx, setFolderIdx] = useState<FolderIndexSlot | null>(null);
+  useEffect(() => {
+    if (!isIndex || folderIdx !== null) return undefined;
+    let live = true;
+    void folders.labels().then((a) => { if (live) setFolderIdx(folderIndexSlot(a)); }, () => undefined);
+    return () => { live = false; };
+  }, [isIndex, folderIdx, folders]);
+  useEffect(() => onAuthRegained(() => setFolderIdx((s) => (s?.s === 'quiet' ? null : s))), []);
   // An auto-class word (`docs-busy` and its kind) is read once more after its wait, like the tree's and the file's
   // (`useDocsVisit`): once per visit, and only if the index is still that same failure when the wait ends. The second
   // failure shows Retry. The timer ends with the page or the screen.
@@ -302,9 +320,12 @@ export function DocsScreen(p: {
         <DocsPageLink className="docs-hint-link" href={DOCS_PAGE_PREFIX}>{DOCS_VIEW_TEXT.indexLink}</DocsPageLink>
       </div>
     );
+  } else if (folderPage !== null) {
+    // Keyed by the label: another folder is another read, with its own slot.
+    body = <FolderPage key={folderPage.label} loc={folderPage} folders={folders} parser={parser} />;
   } else if (page === null || page.kind === 'index') {
     if (index === null || index.s === 'loading') body = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
-    else if (index.s === 'ok') body = <DocsIndexView answer={index.answer} />;
+    else if (index.s === 'ok') body = <DocsIndexView answer={index.answer} folders={folderIdx} />;
     else body = <DocsFailureView answer={index} onRetry={() => { setIndex(null); }} />;
   } else {
     const slot = visit.tree;

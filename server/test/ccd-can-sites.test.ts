@@ -24,15 +24,15 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import {
-  CCD_ARGV, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP,
-  ccdCan,
+  CCD_ARGV, COLLECT_CAP, DOCS_CAP, DOCS_FOLDERS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP,
+  ROUTE_APPLY_CAP, ccdCan,
 } from '../src/ccdargv.js';
 import { expireArchived, learnExpiry } from '../src/coord/expireArchived.js';
 import {
   CHILD_RECLAIM_FEED_QUIET_NONE, reclaimChild, type ChildReclaimDeps, type ChildReclaimOutcome,
 } from '../src/coord/childReclaim.js';
 import { collectLaneCaps, collectTempRoot, learnCollect } from '../src/coord/collectTempRoot.js';
-import { ccdDocsFetcher, ccdDocsReader } from '../src/docs/ccdsource.js';
+import { ccdDocsFetcher, ccdDocsFolderReader, ccdDocsFolderRegistry, ccdDocsReader } from '../src/docs/ccdsource.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -346,6 +346,50 @@ describe('the docs verbs (D-5866, Step 1)', () => {
       await d.reader.range.frame({ node: 'n', project: 'demo' }, RANGE_TARGET, RANGE_FRAME);
       expect(d.sent).toEqual(['docs-show-range', 'docs-show-range']);
     });
+  // docs-folder and docs-folder-read (X2 P2.3): the adapter's folder reads and registry writes gate on the four `docsFolder*`
+  // rows (`DOCS_FOLDERS_CAP`), each refusing on no evidence: a list without `docs-folders-v1`, an empty one or none sends
+  // nothing, and the answer is the same word the docs reads give (`unsupported`, or `caps-unknown` with no `caps` verb).
+  const FOLDERS = (v: Verbs) => {
+    const sent: string[] = [];
+    const deps = { fleetState: stateOf(v), runCcd: async (argv: readonly string[]) => { sent.push(argv[0]!); return { ran: true, ok: false, stdout: '', stderr: '' }; } };
+    return { sent, reader: ccdDocsFolderReader(deps as never), registry: ccdDocsFolderRegistry(deps as never) };
+  };
+  const NODE = { node: 'n' };
+  const FOLDER = { node: 'n', label: 'notes' };
+  const FOLDER_TARGET = { section: 'specs', path: 'a.md', pin: { kind: 'fp', sha: 'c'.repeat(64) } } as const;
+  const FOLDER_ASK = { section: 'specs', path: 'a.md', fp: 'c'.repeat(64) } as const;
+  const FOLDER_SHOW = { maxBytes: 1, job: { raw: 1, wire: 1 } };
+  it.each(FOUR(DOCS_FOLDERS_CAP).filter(([, v]) => !(v !== null && v.includes(DOCS_FOLDERS_CAP))))(
+    'the folder verbs over %s are unsupported, with zero execs', async (_what, v) => {
+      const d = FOLDERS(v);
+      const want = { ok: false, failure: v !== null && v.includes('caps') ? 'unsupported' : 'caps-unknown' };
+      expect(await d.reader.list(NODE as never)).toEqual(want);
+      expect(await d.reader.tree(FOLDER)).toEqual(want);
+      expect(await d.reader.show(FOLDER, FOLDER_ASK, FOLDER_SHOW)).toEqual(want);
+      expect(await d.reader.range.prepare(FOLDER, FOLDER_TARGET)).toEqual(want);
+      expect(await d.reader.range.frame(FOLDER, FOLDER_TARGET, { snapshot: 'e'.repeat(32), offset: 0, length: 1 })).toEqual(want);
+      expect(await d.registry.add(NODE, 'notes', '/a')).toEqual(want);
+      expect(await d.registry.remove(NODE, 'notes')).toEqual(want);
+      expect(d.sent).toEqual([]);
+    });
+  it.each(FOUR(DOCS_FOLDERS_CAP).filter(([, v]) => v !== null && v.includes(DOCS_FOLDERS_CAP)))(
+    'the folder verbs over %s exec once per call', async (_what, v) => {
+      const d = FOLDERS(v);
+      await d.reader.list(NODE as never);
+      await d.reader.tree(FOLDER);
+      await d.reader.show(FOLDER, FOLDER_ASK, FOLDER_SHOW);
+      await d.reader.range.prepare(FOLDER, FOLDER_TARGET);
+      await d.reader.range.frame(FOLDER, FOLDER_TARGET, { snapshot: 'e'.repeat(32), offset: 0, length: 1 });
+      await d.registry.add(NODE, 'notes', '/a');
+      await d.registry.remove(NODE, 'notes');
+      expect(d.sent).toEqual(['docs-folder', 'docs-folder-read', 'docs-folder-read', 'docs-folder-read', 'docs-folder-read', 'docs-folder', 'docs-folder']);
+    });
+  it('the folder verbs ask their own row: the docs token alone is not the folder token', async () => {
+    const d = FOLDERS(['caps', DOCS_CAP, DOCS_RANGE_CAP, DOCS_LOG_CAP, 'docs-folder', 'docs-folder-read']);
+    await d.reader.tree(FOLDER);
+    await d.registry.remove(NODE, 'notes');
+    expect(d.sent).toEqual([]);
+  });
   it('the four docs verb names without docs-v1 are not the token', async () => {
     const d = docs(['caps', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch']);
     await d.reader.index('n' as never);

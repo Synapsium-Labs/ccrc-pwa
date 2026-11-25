@@ -306,6 +306,28 @@ describe('who may roll, install or select a build (D-5696)', () => {
   });
 });
 
+// X2 P2.3 (docs reader, native-docs-parity spec §7): `ccd docs-folder` is the server's act on the docs folder registry
+// (the one writer of the project's folder entries), never a session's, so the whole verb is forbidden in every form:
+// the list, the add and the remove alike. It is matched as a word, so the read verb beside it (`docs-folder-read`) is not.
+describe('the docs folder registry verb is no session\'s (X2 P2.3)', () => {
+  it('approval guard: docs-folder in every form is forbidden on a session\'s prompt, docs-folder-read is not', () => {
+    for (const c of [
+      'ccd docs-folder', 'ccd docs-folder --list', 'ccd docs-folder --add a --path /p', 'ccd docs-folder --remove a',
+      'ccd --json docs-folder --list', '~/.local/bin/ccd docs-folder --list', '/opt/x/ccd docs-folder --remove a',
+      'cd x && ccd docs-folder --add a --path /p', 'true; ccd docs-folder', 'echo | ccd docs-folder --list',
+      "'ccd' docs-folder --list", 'env FOO=1 ccd docs-folder --list',
+    ]) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+    // A variable-held `ccd` is no word the classifier reads as `ccd` (every verb's rule is the same): it stays the
+    // default `escalate`, never `ordinary`; the session hook's deny, which normalises it, is the wall (see its suite).
+    expect(bash('P=ccd; $P docs-folder --list')).toBe('escalate');
+    for (const c of ['ccd docs-folder-read --label a --op tree', 'ccd docs-folder-read', '~/.local/bin/ccd docs-folder-read --label a --op tree']) {
+      expect(bash(c), c).not.toBe('forbidden');
+    }
+  });
+});
+
 // D-5936 (spec 2026-10-20 §4.5): the workflow control verb is the operator's. The classifier forbids any Bash or MCP
 // request naming its path, in every spelling a shell builds it in; the auth gate is the wall for any other tool.
 describe('the workflow control verb is operator-only (D-5936)', () => {

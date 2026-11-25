@@ -284,6 +284,8 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/programmes/:slug/spec': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/programmes/:slug/modifications': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/programmes/:slug/modifications/merged': ['programme-ownership', 'attribution, then `claimsProgramme`'],
+  // Programme lifecycle W2: the Overlord's body is never bound (`overlordClaimant` at an open, `heirLadder` at every other door).
+  'POST /api/programmes/:slug/end-proposal': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/calls': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/remaining': ['programme-ownership', 'attribution, then `claimsProgramme` (measured; after the plan)'],
   'POST /api/leases/:lease/retain': ['lease-ownership', '`decideRetain` refuses `not-lease-parent`'],

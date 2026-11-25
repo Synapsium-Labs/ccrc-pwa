@@ -80,6 +80,9 @@ const ID_BUILDERS = {
   poolAnswer: 'no-id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
   docsShowRange: 'no-id',
+  // X2 P2: the outside-folder builders take a folder label (the server checks `DOCS_FOLDER_LABEL_RE` before any exec, and ccd
+  // checks it again) and a path or a pin, never a registry id.
+  docsFolderList: 'no-id', docsFolderAdd: 'no-id', docsFolderRemove: 'no-id', docsFolderRead: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {
@@ -569,6 +572,9 @@ const GATE_FILES = [
   'coord/archiveDoor.ts',
   // coord/overlordBody.ts (Overlord W1 designation A): `setRoute` and `keepAwake` vet their id with the predicate before composing.
   'coord/overlordBody.ts',
+  // coord/programmeLifecycleRoutes.ts (programme lifecycle W2): the start's coordinator, the hand-over's heir and a session read's id
+  // are vetted by the predicate before any registry read; it composes no argv.
+  'coord/programmeLifecycleRoutes.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

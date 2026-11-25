@@ -203,6 +203,38 @@
       },
       "_pane_box_draft": "",
       "_pane_box_read": "absent"
+    },
+    "placeholder-error-hint-cursor.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
+    },
+    "placeholder-error-hint-unfocused.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
+    },
+    "draft-cursor-start.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "real human text"
+      },
+      "_pane_box_draft": "real human text",
+      "_pane_box_read": "draft"
+    },
+    "draft-one-char-cursor.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "R"
+      },
+      "_pane_box_draft": "R",
+      "_pane_box_read": "draft"
     }
   }
 }

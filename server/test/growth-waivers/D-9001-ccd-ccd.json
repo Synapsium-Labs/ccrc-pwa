@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 940,
+  "d": "D-9001",
+  "reason": "X2 P2 (D-9001): the outside-folder verbs in the docs helper. `docs-folder` (P2.1) owns the folder registry's one writer, the label and path grammars, and admission by descriptors from `/` with the protected directories compared by device and inode; `docs-folder-read` (P2.2) owns the walker over the six section directories below the held folder descriptor, its leaf checks, and the folder's show, prepare and frame reads. Spec 2026-11-18 section 4.1 puts admission, the registry and the folder reads beside the files, in ccd, the one component that names the disk layout, and the server never sends a path to read; measured +914 net code lines against the merge-base e0e8989c05, maxDelta 940",
+  "added": "2026-11-24",
+  "createdAt": "2026-11-24"
+}
