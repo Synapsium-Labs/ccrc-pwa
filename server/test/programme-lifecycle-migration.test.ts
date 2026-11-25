@@ -1,4 +1,4 @@
-// Programme lifecycle W1, task 3: migration 125 (spec §13), from the previous version's fixture. Neutral slugs only.
+// Programme lifecycle W1, task 3: migration 127 (spec §13), from the previous version's fixture. Neutral slugs only.
 import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -45,7 +45,7 @@ const events = (db: DatabaseSync, slug: string) =>
       session: string | null; sessionUuid: string | null; detail: string | null }[];
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
-describe('migration 125: the programme lifecycle', () => {
+describe('migration 127: the programme lifecycle', () => {
   it('is the last entry, and it is found', () => {
     expect(LIFECYCLE).toBeGreaterThan(0);
     expect(LIFECYCLE).toBe(MIGRATIONS.length - 1);
