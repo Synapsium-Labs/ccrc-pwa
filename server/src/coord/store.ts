@@ -5804,6 +5804,10 @@ export class CoordStore {
   timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
   setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
   purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
+  firedTimersOf(setter: string, stamp: string, since: number): timers.TimersRead { return timers.firedTimersOf(this.db, setter, stamp, since); }
+  recordTimerRefusal(r: timers.TimerRefusalCount): { ok: boolean } { return timers.recordTimerRefusal(this.db, r); }
+  timerRefusalCounts(sinceDay: string): timers.TimerRefusalCountsRead { return timers.timerRefusalCounts(this.db, sinceDay); }
+  purgeTimerRefusals(beforeDay: string): { removed: number } { return timers.purgeTimerRefusals(this.db, beforeDay); }
   /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
    *  the door and the card's gatherer make. */
   appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
@@ -7589,9 +7593,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; toId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, toId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; toId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 

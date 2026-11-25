@@ -95,7 +95,7 @@ export function timerDay(): Scenario<TimerDayEdge> {
           const stamp = r.stamp!;
           if (set || born) {
             const runBound = id === WORKER && !runClosed;
-            const t = store.insertTimer({ setter: id, setterIncarnation: stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
+            const t = store.insertTimer({ setRestoreGeneration: null, setter: id, setterIncarnation: stamp, setById: id, setByUuid: 'u', role: 'worker', note: 'n',
               runId: runBound ? runId : null, programme: id === COORD ? 'prog-a' : null, setAt: wall(), dueAt: wall() + due });
             if (t.ok) { stampOfTimer.set(t.id, stamp); line('set', `t${t.id}`, `setter=${id};stamp=${stamp}`, 'door'); }
           }

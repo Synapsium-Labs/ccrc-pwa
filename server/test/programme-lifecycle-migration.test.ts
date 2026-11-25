@@ -46,9 +46,10 @@ const events = (db: DatabaseSync, slug: string) =>
 const rule = (e: { detail: string | null }) => (e.detail === null ? null : (JSON.parse(e.detail) as { rule?: string }).rule ?? null);
 
 describe('migration 127: the programme lifecycle', () => {
-  it('is the last entry, and it is found', () => {
+  it('is found, and the one entry after it is the Overlord\'s timers (128)', () => {
     expect(LIFECYCLE).toBeGreaterThan(0);
-    expect(LIFECYCLE).toBe(MIGRATIONS.length - 1);
+    expect(LIFECYCLE).toBe(MIGRATIONS.length - 2);
+    expect(MIGRATIONS[LIFECYCLE + 1]).toContain('CREATE TABLE continuity_timer_refusals');
   });
 
   it('step 4: a D-51 done over an open run becomes active; with no open run it is kept and recorded', () => {

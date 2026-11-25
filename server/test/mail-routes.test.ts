@@ -543,6 +543,21 @@ describe("POST /api/mail — the 'worker' role", () => {
     expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
   });
 
+  it("refuses the Overlord's identity word as a recipient by rule, with a registry row named overlord and without (Overlord W1, the timers)", async () => {
+    for (const planted of [true, false]) {
+      const home = mkTmp('ccrc-mail-');
+      seed(home, 'demo-quiet-mesa');
+      if (planted) seed(home, 'overlord');
+      const w = await withMail(home); app = w.app;
+      const res = await send(app, { ...GOOD, toId: 'overlord', runId: null });
+      expect(res.statusCode, String(planted)).toBe(404);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+      expect((res.json() as { detail: string }).detail).toContain("the Overlord's role takes no mail in W1");
+      expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+      await app.close(); app = undefined;
+    }
+  });
+
   it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');

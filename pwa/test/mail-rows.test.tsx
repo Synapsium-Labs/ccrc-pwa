@@ -33,7 +33,7 @@ afterEach(cleanup);
  *  `server/test/mail-prompt-forms.test.ts` (a console test reads `server/test/fixtures/`, never server source). */
 const FORMS = JSON.parse(readFileSync(
   path.join(import.meta.dirname, '..', '..', 'server', 'test', 'fixtures', 'mail-prompt-forms.json'), 'utf8',
-)) as { self: string; forms: Record<'generic' | 'operatorMessage' | 'inboxWake' | 'inboxWakeLapsed' | 'inboxWakeUnreadable' | 'spotProbe', string> };
+)) as { self: string; forms: Record<'generic' | 'operatorMessage' | 'inboxWake' | 'inboxWakeLapsed' | 'inboxWakeUnreadable' | 'spotProbe' | 'timerFired' | 'timerFiredUncounted', string> };
 const SELF = FORMS.self;
 /** The generic nudge to this session. */
 const renderMailNudge = (_self: string): string => FORMS.forms.generic;
@@ -73,7 +73,7 @@ const kinds = (items: readonly { kind: string }[]): string[] => items.map((i) =>
 
 // ---- 1. the head match ----------------------------------------------------------------------------------------------
 /** Every form the server types today, from its own renderers: the generic nudge, the operator-message nudge, the
- *  inbox wake (with a count, a lapse, and the codec's refusal) and the spot-probe notice. */
+ *  inbox wake (with a count, a lapse, and the codec's refusal), the spot-probe notice and the Overlord's timer line. */
 const SERVER_FORMS: [string, string][] = [
   ['the generic nudge', FORMS.forms.generic],
   ['the operator-message nudge', FORMS.forms.operatorMessage],
@@ -81,6 +81,8 @@ const SERVER_FORMS: [string, string][] = [
   ['the inbox wake, lapsed', FORMS.forms.inboxWakeLapsed],
   ['the inbox wake, unreadable body', FORMS.forms.inboxWakeUnreadable],
   ['the spot-probe notice', FORMS.forms.spotProbe],
+  ['the Overlord\'s timer line', FORMS.forms.timerFired],
+  ['the Overlord\'s timer line, no count', FORMS.forms.timerFiredUncounted],
 ];
 const HEAD = INJECTED_PROMPTS['mail-nudge'].text;
 /** What a person might type: it mentions the prompt, quotes it lower down, pastes it after other words, or starts with
