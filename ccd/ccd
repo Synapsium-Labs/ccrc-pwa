@@ -33265,6 +33265,25 @@ _provfail_pass() {   # now -> each lane's mark set or cleared from every row's t
   done
 }
 
+_lane_provider_to() {   # var lane -> var = anthropic | codex | lane:<lane>: `server/src/coord/providerOutage.ts#outageProviderOf`'s rule over the roster's arrays
+  if _is_anthropic_backend "$2"; then printf -v "$1" '%s' anthropic
+  elif _is_codex_backend "$2"; then printf -v "$1" '%s' codex; else printf -v "$1" '%s' "lane:$2"; fi
+}
+
+_provider_move_rank_to() {   # var cand cur first marked goods -> rc 0 and var = 0 proved | 1 another provider | 2 unproved, same provider; rc 1 and var empty = never
+  # A PROVIDER MOVE'S ORDER, AND ITS REFUSALS (wave 3b's; nothing calls it yet). PURE over its arguments and the roster's arrays:
+  # `first` is the episode's first failure, `marked` the marked lanes, `goods` `<lane>=<newest good Stop>` words, one clock for
+  # both. Never the lane it is on, a marked lane, or a lane of a provider with two marked lanes. Pools, class, room and the
+  # operator's holds are the caller's, before this and unchanged.
+  local __p __q __m __n=0 __r=2
+  printf -v "$1" ''; _lane_provider_to __p "$2"
+  for __m in $5; do _lane_provider_to __q "$__m"; [[ "$__m" != "$2" ]] || return 1; [[ "$__q" != "$__p" ]] || __n=$(( __n + 1 )); done
+  [[ "$2" != "$3" ]] && (( __n < 2 )) || return 1
+  _lane_provider_to __q "$3"; [[ "$__q" == "$__p" ]] || __r=1
+  for __m in $6; do if [[ "${__m%%=*}" == "$2" ]] && (( ${__m##*=} > $4 )); then __r=0; fi; done
+  printf -v "$1" '%s' "$__r"
+}
+
 cmd_limit_watchdog() {   # (no args) — one pass over every live session; exits 0 unless the registry is unreadable
   [[ $# -eq 0 ]] || die "usage: ccd limit-watchdog"
   local n="" f id now t0=$SECONDS

@@ -513,3 +513,60 @@ describe('the operator\'s own verbs never read the mark (ruling 2026-10-19)', ()
     expect(target()).toBe('');
   });
 });
+
+// ── wave 3b's predicate: pure, and called by nothing yet ────────────────────
+
+describe('_provider_move_rank_to: which lanes a provider move may take, and in what order', () => {
+  /** `claude*` are the fixture roster's Anthropic lanes, `gpt` its Codex lane. */
+  const rank = (cand: string, o: { cur?: string; first?: number; marked?: string; goods?: string } = {}): string =>
+    h.sh(`r=unset; _provider_move_rank_to r ${cand} ${o.cur ?? 'claude'} ${o.first ?? 1000} '${o.marked ?? ''}' '${o.goods ?? ''}' && echo "$r" || echo "never[$r]"`);
+
+  it('0: a lane with a good Stop newer than the episode\'s first failure, on either provider', () => {
+    expect(rank('claude-a', { goods: 'claude-a=1001' })).toBe('0');
+    expect(rank('gpt', { goods: 'claude-a=5 gpt=1001' })).toBe('0');
+  });
+
+  it('1: a lane on another provider', () => {
+    expect(rank('gpt')).toBe('1');
+    expect(rank('claude-a', { cur: 'gpt' })).toBe('1');
+  });
+
+  it('2: an unproved lane on the same provider, an old good Stop included', () => {
+    expect(rank('claude-a')).toBe('2');
+    expect(rank('claude-a', { goods: 'claude-a=1000' })).toBe('2');
+    expect(rank('claude-a', { goods: 'claude-b=1001' })).toBe('2');
+  });
+
+  it('never: the lane it is on, a marked lane, any lane of a provider with two marked lanes', () => {
+    expect(rank('claude', { goods: 'claude=1001' })).toBe('never[]');
+    expect(rank('claude-a', { marked: 'claude-a', goods: 'claude-a=1001' })).toBe('never[]');
+    expect(rank('claude-d', { marked: 'claude claude-a', goods: 'claude-d=1001' })).toBe('never[]');
+  });
+
+  it('a provider with one marked lane is not failing, and another provider\'s marks do not count against this one', () => {
+    expect(rank('claude-a', { marked: 'claude' })).toBe('2');
+    expect(rank('gpt', { marked: 'claude claude-a' })).toBe('1');
+    expect(rank('claude-a', { cur: 'gpt', marked: 'gpt claude' })).toBe('1');
+  });
+
+  it('a lane outside both arrays is a provider of its own', () => {
+    const own = (cand: string, o: Parameters<typeof rank>[1] = {}): string => h.sh(`CCRC_CODEX_BACKEND=(); CCRC_ANTHROPIC_BACKEND=(claude claude-a)
+      r=unset; _provider_move_rank_to r ${cand} ${o.cur ?? 'claude-b'} 1000 '${o.marked ?? ''}' '' && echo "$r" || echo "never[$r]"`);
+    expect(own('claude-d')).toBe('1');
+    expect(own('claude-d', { marked: 'gpt claude-b' })).toBe('1');
+    expect(own('claude-a', { cur: 'claude' })).toBe('2');
+  });
+
+  it('two Codex lanes are one provider', () => {
+    expect(h.sh(`CCRC_CODEX_BACKEND=(gpt claude-d); CCRC_ANTHROPIC_BACKEND=(claude claude-a)
+      _provider_move_rank_to r claude-d gpt 1000 '' '' && echo "$r"`)).toBe('2');
+  });
+
+  it('nothing calls it, and it reads no file (wave 3a moves nobody)', () => {
+    const src = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect([...src.matchAll(/\b_provider_move_rank_to\b/g)]).toHaveLength(1);
+    const open = src.indexOf('\n_provider_move_rank_to() {');
+    const body = src.slice(open, src.indexOf('\n}\n', open)).replace(/^.*\n.*\n/, '');   // without the header and its comment
+    expect(body).not.toMatch(/\$REG|\$HOME|[<>]{1,2} ?"|\$\((?!\()/);
+  });
+});
