@@ -17,7 +17,7 @@ export interface MailPromptLineProps {
   readonly title: string;
   /** "3 times" for a run, else null. */
   readonly count: string | null;
-  /** "14:02", or "14:02–14:40" for a run. */
+  /** "14:02", or "14:02 to 14:40" for a run: the words the label speaks, so the shown words are in the name. */
   readonly time: string;
   /** The spoken name: what the line is, how many and when. Whether it is open is the button's `aria-expanded`. */
   readonly label: string;
@@ -41,8 +41,10 @@ export function MailPromptLine({ title, count, time, label, open, onToggle, chil
       >
         <span className="mail-prompt-chev" aria-hidden="true">▸</span>
         <span className="mail-prompt-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
-        <span className="mail-prompt-title">{title}</span>
-        {count !== null && <span className="mail-prompt-count">{count}</span>}
+        {/* The spaces draw nothing in the flex line, but they keep each part a word of its own in the text a voice user
+            says, so the shown words stay a run of the spoken name (WCAG 2.5.3, axe's label-content-name-mismatch). */}
+        <span className="mail-prompt-title">{title}</span>{' '}
+        {count !== null && <><span className="mail-prompt-count">{count}</span>{' '}</>}
         <span className="mail-prompt-time">{time}</span>
       </button>
       {open && <div className="mail-prompt-body" id={bodyId}>{children}</div>}

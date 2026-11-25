@@ -114,7 +114,8 @@ export interface PromptWords {
   readonly title: string;
   /** "3 times" for a run, else null. */
   readonly count: string | null;
-  /** "14:02", or "14:02–14:40" for a run whose ends differ. */
+  /** "14:02", or "14:02 to 14:40" for a run whose ends differ: the words the label speaks, so a voice user who says
+   *  what the line shows names it (WCAG 2.5.3). */
   readonly time: string;
   /** The spoken name: "Mail arrived, 14:02", "Mail arrived 3 times, 14:02 to 14:40". */
   readonly label: string;
@@ -128,10 +129,9 @@ export function promptWords(prompts: readonly MailPromptItem[]): PromptWords {
   const first = prompts[0] === undefined ? '' : timeOf(prompts[0].event.ts);
   const last = prompts[n - 1] === undefined ? '' : timeOf(prompts[n - 1]!.event.ts);
   const span = n > 1 && first !== last;
-  const time = span ? `${first}–${last}` : first;
+  const time = span ? `${first} to ${last}` : first;
   const count = n > 1 ? `${n} times` : null;
-  const spokenTime = span ? `${first} to ${last}` : first;
-  const label = [count === null ? PROMPT_TITLE : `${PROMPT_TITLE} ${count}`, spokenTime].filter((w) => w !== '').join(', ');
+  const label = [count === null ? PROMPT_TITLE : `${PROMPT_TITLE} ${count}`, time].filter((w) => w !== '').join(', ');
   return { title: PROMPT_TITLE, count, time, label };
 }
 

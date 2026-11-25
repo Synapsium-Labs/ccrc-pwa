@@ -24,6 +24,7 @@ import type { SkinSet } from '../src/skins/types';
 import { activityWords, foldToolActivity, type ToolActivityItem } from '../src/session/toolActivity';
 import { expansionMemo } from '../src/session/transcriptRow';
 import { sameTranscriptItem } from '../src/session/sameRow';
+import { namesWithoutTheirLabel } from './labelInName';
 
 afterEach(cleanup);
 
@@ -153,7 +154,7 @@ describe('a fetched card: closed by default, today\'s card whole when open', () 
     render(<ChatListInner id={SELF} events={fetchMail({ artifacts: ['/x/a.md'] }, 7)} pending={[]} />);
     const head = screen.getByRole('button', { name: 'Mail from coordinator: wave-brief, status, 10:07' });
     expect(head).toHaveAttribute('aria-expanded', 'false');
-    expect(head.textContent).toBe('▸coordinatorwave-briefstatus10:07');
+    expect(head.textContent).toBe('▸coordinator wave-brief status 10:07');
     // Nothing of the card's inside is drawn while it is closed.
     for (const sel of ['.mail-card-from', '.mail-card-meta', '.mail-card-artifact', '.mail-card-body']) {
       expect(document.querySelector(sel), sel).toBeNull();
@@ -333,7 +334,7 @@ describe('runs: prompts with nothing a person would read between them are one li
     const run = items[1] as Extract<ChatItem, { kind: 'mail-prompts' }>;
     expect(promptsOf(run)).toHaveLength(3);
     expect(promptWords(promptsOf(run))).toEqual({
-      title: 'Mail arrived', count: '3 times', time: '10:01–10:04', label: 'Mail arrived 3 times, 10:01 to 10:04',
+      title: 'Mail arrived', count: '3 times', time: '10:01 to 10:04', label: 'Mail arrived 3 times, 10:01 to 10:04',
     });
     expect(shapeOf(run)).toEqual({ bucket: 'mail-line', lines: 1 });
   });
@@ -436,6 +437,27 @@ describe('the keyboard and the spoken names', () => {
       expect(document.activeElement).toBe(b);
       expect(b.tabIndex).toBe(0);
     }
+  });
+
+  // WCAG 2.5.3 as storybook-a11y's axe measures it (label-content-name-mismatch): the words a line shows are an
+  // unbroken run of its spoken name, so a voice user who says what they see reaches it. Adjacent spans with no space
+  // between them read as one word, and a run's range must say the same word ("to") it speaks.
+  it.each(SETS)('%s: every mail line, closed and open, single and a run, holds the words it shows in its name', (_n, set) => {
+    const NUDGE = renderMailNudge(SELF);
+    const events = [
+      user(NUDGE, 1), user(NUDGE, 2), user(NUDGE, 4), say('Reading.', 5),
+      user(NUDGE, 6), say('Fetching.', 7), ...fetchMail({ subject: 'which base should wave 3 absorb?' }, 8),
+    ];
+    const { container } = render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
+    expect(screen.getAllByRole('button', { name: /^Mail / })).toHaveLength(2); // the run and the single prompt
+    expect(namesWithoutTheirLabel(container), 'closed').toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: /Tool activity/ })); // the fetch's stretch: its card, closed
+    const lines = screen.getAllByRole('button', { name: /^Mail / });
+    expect(lines).toHaveLength(3);
+    expect(namesWithoutTheirLabel(container), 'the card closed').toEqual([]);
+    for (const b of lines) fireEvent.click(b);
+    expect(lines.map((b) => b.getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true']);
+    expect(namesWithoutTheirLabel(container), 'open').toEqual([]);
   });
 });
 

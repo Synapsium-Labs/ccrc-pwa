@@ -13,7 +13,7 @@ person, and the fetched mail card. Now, in both skins:
 - a fetched card is one closed line, `▸ ✉ sender  subject  KIND  14:02`, and opens to today's card, whole;
 - a fetched card sits inside the tool stretch of the fetch that produced it, and the stretch's row says how many it holds
   (`Tool activity · 3 calls · 1 message · …`);
-- prompts with nothing a person would read between them are one line with a count (`Mail arrived 3 times, 14:01–14:04`),
+- prompts with nothing a person would read between them are one line with a count (`Mail arrived 3 times, 14:01 to 14:04`),
   opening to their own lines.
 
 On a 30-wake coordinator transcript the mail rows took **24611px before and 3869px after at 390px**, and about
@@ -67,7 +67,7 @@ words, starts with a space, drops the full stop, says "mails", changes case or r
 | A prompt the reader opened, then a second arrives | The run opens, and the first prompt inside it stays open (`openOf` reads the first member's choice) | "Stays open across live rows arriving" |
 | The open state's home | The list's existing `ExpansionMemo`, now recording a choice in either direction (`choice`), keyed by row key | One owner of "what the reader opened", already outliving the virtual list's unmounting; a reload starts fresh |
 | The card's head words | Sender, subject, kind, time; spoken as "Mail from X: subject, kind, 14:02" | The brief's list; the run label and the recipient stay in the open card |
-| The prompt line's words | "Mail arrived", "N times", the time or the first–last range; spoken as "Mail arrived 3 times, 14:01 to 14:04" | Says what it is, how many and when; `aria-expanded` says whether it is open |
+| The prompt line's words | "Mail arrived", "N times", the time or the range "first to last", shown and spoken alike ("Mail arrived 3 times, 14:01 to 14:04"), so the shown words are in the name (WCAG 2.5.3) | Says what it is, how many and when; `aria-expanded` says whether it is open |
 | Height bucket | A new `mail-line` bucket for every closed line; an open-by-default card stays in `mail`, priced with its head line | A closed line is a fixed-height row; mixing it into `mail` would skew that bucket's per-line model |
 
 ## 4. With the tool stretches (measured)
@@ -79,7 +79,7 @@ rows; now 30. The A2 pin still holds for every card that is not a fetch's result
 
 ## 5. Tests
 
-`pwa/test/mail-rows.test.tsx` (51 cases), `pwa/browser/mail-rows.browser.test.ts` (12 cases, Chrome), and pins updated in
+`pwa/test/mail-rows.test.tsx` (53 cases), `pwa/browser/mail-rows.browser.test.ts` (12 cases, Chrome), and pins updated in
 `mail-card.test.tsx` (the closed card is opened before its inside is read; its one control is its own disclosure, closed and
 open, with no word of acking, replying or answering), `chat-scroll.test.tsx` (the open card's price gains its head line; a
 closed card is one `mail-line`) and `tool-activity.test.tsx` (the words gain `messages`).
@@ -104,6 +104,19 @@ one killed by the jsdom suites (`mail-rows`, `tool-activity`, `mail-card`, `chat
 first (the recogniser's own user-turn check, which the builder's call site made redundant) and is now killed by a direct
 pin. The Chrome "row above" case was red on the first build (the paragraph moved 5 lines) and is green with the rule in
 section 3.
+
+**Label in name (after the first push).** The pull request's `storybook-a11y` leg was red on the new stories: axe's
+`label-content-name-mismatch` on every mail line (6 stories). The parts of a line are adjacent spans with no space between
+them, so the words it shows ran together ("coordinatorwave-brief"), and a run's range showed "14:02–14:40" while its name
+said "14:02 to 14:40". So the words a voice user reads off the line were not an unbroken run of its spoken name. Fixed in
+`ui`: a space between the parts (a flex line draws none), and a run's range reads "14:02 to 14:40" on screen as well. The
+guard, red first with that failure and green after, is the jsdom case "every mail line, closed and open, single and a run,
+holds the words it shows in its name" in both skins, through the repo's own measure of the rule (`labelInName.ts`,
+`namesWithoutTheirLabel`).
+Then Storybook's own axe run, as CI runs it (a static build served by `vite preview`, `test-storybook`), over the two
+mail story files in each skin: Refined 12 of 12 stories passed, Instrument 12 of 12. The runner's pinned Chromium build
+is not installed on this box, so it ran on the Chromium the console's browser suite uses, through a temporary browsers
+folder in the session's temp root.
 
 | Guard | Mutant(s) |
 |---|---|
@@ -162,6 +175,5 @@ entry's own index (wave 175 changed this on its branch).
 ## 9. Unmeasured
 
 - The light palette in Chrome (Phosphor only was run); the stylesheet uses the same tokens in both.
-- Storybook's accessibility leg over the new stories (it runs in CI, not here).
 - A real coordinator transcript from the fleet (the fixture is synthetic, with neutral names).
 - Screen-reader speech itself: the accessible names and `aria-expanded` are pinned, not listened to.

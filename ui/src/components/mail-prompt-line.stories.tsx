@@ -34,14 +34,14 @@ export const Open: Story = { args: { open: true } };
 
 /** A run of prompts with nothing a person would read between them, closed. CHECK the count and the time range. */
 export const Run: Story = {
-  args: { count: '3 times', time: '14:02–14:40', label: 'Mail arrived 3 times, 14:02 to 14:40' },
+  args: { count: '3 times', time: '14:02 to 14:40', label: 'Mail arrived 3 times, 14:02 to 14:40' },
 };
 
 /** The run, open: its own lines, each closed. */
 export const RunOpen: Story = {
   args: {
     count: '3 times',
-    time: '14:02–14:40',
+    time: '14:02 to 14:40',
     label: 'Mail arrived 3 times, 14:02 to 14:40',
     open: true,
     children: ['14:02', '14:20', '14:40'].map((t) => (

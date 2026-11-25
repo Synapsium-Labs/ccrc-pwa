@@ -135,10 +135,12 @@ export function MailCard({ envelope, fold }: { envelope: MailEnvelope; fold?: Ma
       >
         <span className="mail-card-chev" aria-hidden="true">▸</span>
         <span className={GLYPH} aria-hidden="true"><Icon name="mail" /></span>
-        <span className="mail-card-line-sender">{envelope.fromId}</span>
-        <span className="mail-card-line-subject">{envelope.subject}</span>
+        {/* The spaces draw nothing in the flex line, but they keep each part a word of its own in the text a voice user
+            says, so the shown words stay a run of the spoken name (WCAG 2.5.3, axe's label-content-name-mismatch). */}
+        <span className="mail-card-line-sender">{envelope.fromId}</span>{' '}
+        <span className="mail-card-line-subject">{envelope.subject}</span>{' '}
         <span className="mail-card-kind">{envelope.kind}</span>
-        {time !== null && <span className="mail-card-time">{time}</span>}
+        {time !== null && <>{' '}<span className="mail-card-time">{time}</span></>}
       </button>
       {open && (
         <div className="mail-card-open" id={bodyId}>
