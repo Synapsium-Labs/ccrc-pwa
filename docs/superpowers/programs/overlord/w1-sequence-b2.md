@@ -90,6 +90,11 @@ coordinator folds it in. No deviation number was allocated: departures are recor
   branch's failure message (main's was the base's); in `server/test/single-definition/core-vocab.test.ts`, main's
   `programmeLifecycleActs.ts` and this branch's four files in `HANDLE_HOLDERS`. Main added no migration, so 128 stands
   until the timers piece lands.
+- One clash git did not mark: main's programme lifecycle W2 (#3353) also added `ledgersStore.ts#raiseItemCheckedInTx`, so
+  the merged file defined it twice and no module importing it parsed. A commit of its own after the merge keeps one
+  definition: this branch's, which takes main's four arguments plus an optional reach and throws when no transaction is
+  open. Main's one caller, `programmeLifecycleActs.ts#proposeEndInTx`, runs inside `CoordStore`'s `tx()`, and the
+  lifecycle's suites ran green on the result.
 
 ## Departures, by slug
 
