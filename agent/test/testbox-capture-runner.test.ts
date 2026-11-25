@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CAPTURE_STEPS, CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv, captureWrites, staleCaptureDirs } from '../src/testbox/capture.js';
 import { recorderPath } from '../src/testbox/captureRecord.js';
-import { CAPTURE_START, CaptureRunner, capturePaneCommand, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
+import { CAPTURE_SHELL, CAPTURE_START, CaptureRunner, capturePaneCommand, executableFile, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
+import { boundedExec } from '../src/testbox/exec.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-claude-build.mjs');
@@ -254,13 +255,34 @@ describe('the tmux launcher', () => {
     expect(made.status, made.stderr).toBe(0);
     await new Promise((r) => setTimeout(r, 1000));
     expect(spawnSync(REAL_TMUX!, ['-L', 'nol', 'has-session', '-t', '=p'], { timeout: 10_000, env: probeVars }).status, 'a one-word pane under the refusing shell ended').not.toBe(0);
-    const real = tmuxLauncher(REAL_TMUX!);
-    const refusing: CaptureLauncher = { start: (spec) => real.start({ ...spec, env: [...spec.env, ['SHELL', refuser]] }) };
+    // The pane's process is read from the creating call, so the case can read the `SHELL` the pane was given (call 1047).
+    let panePid: number | null = null;
+    const real = tmuxLauncher(REAL_TMUX!, 15_000, {
+      spawner: (vars, boundMs) => {
+        const e = boundedExec(vars, boundMs);
+        return async (file, args) => {
+          const r = await e(file, args);
+          if (args.includes('new-session') && /^[0-9]+$/.test(r.stdout.trim())) panePid = Number(r.stdout.trim());
+          return r;
+        };
+      },
+    });
+    let paneShell: string | null = null;
+    const refusing: CaptureLauncher = {
+      start: async (spec) => {
+        const b = await real.start({ ...spec, env: [...spec.env, ['SHELL', refuser]] });
+        const environ = panePid === null ? null : path.join('/proc', String(panePid), 'environ');
+        if (environ !== null && existsSync(environ)) paneShell = readFileSync(environ, 'utf8').split('\0').find((l) => l.startsWith('SHELL='))?.slice(6) ?? 'unset';
+        return b;
+      },
+    };
     try {
       place(root, GOOD);
       const r = await runner(root, { launcher: refusing, tmuxBase: sockDir, stepTimeoutMs: 15_000, exitTimeoutMs: 10_000 }).run('nol', GOOD);
       expect(r.detail).toBeNull();
       expect(r.result).toMatchObject({ pass: true, cwd: true });
+      // Where the kernel lists a process's environment, the pane was given the fixed shell, not the refusing one.
+      if (existsSync('/proc/self/environ')) expect(paneShell, 'the pane\'s SHELL').toBe(CAPTURE_SHELL);
     } finally {
       spawnSync(REAL_TMUX!, ['-L', 'ccrc-capture', 'kill-server'], { timeout: 10_000, env: { TMUX_TMPDIR: path.join(sockDir, 'ccrc-capture-nol') } });
       spawnSync(REAL_TMUX!, ['-L', 'nol', 'kill-server'], { timeout: 10_000, env: probeVars });
@@ -441,8 +463,9 @@ describe('the sweep of stale capture directories (review 3226 F10)', () => {
 // under the service's temporary directory. A fake spawner stands in for tmux and a fake signal call for the kernel.
 describe('the tmux launcher reads the build, not its terminal server (review 3623)', () => {
   interface Seen { readonly calls: string[][]; readonly signals: [number, NodeJS.Signals | 0][] }
-  const fake = (o: { pidOut?: string; newSession?: number; signal?: (pid: number, sig: NodeJS.Signals | 0) => void } = {}) => {
+  const fake = (o: { pidOut?: string; newSession?: number; signal?: (pid: number, sig: NodeJS.Signals | 0) => void; shellUsable?: (f: string) => boolean } = {}) => {
     const seen: Seen = { calls: [], signals: [] };
+    const asked: string[] = [];
     const launcher = tmuxLauncher('tmux', 5000, {
       spawner: () => async (_file, args) => {
         seen.calls.push([...args]);
@@ -450,8 +473,9 @@ describe('the tmux launcher reads the build, not its terminal server (review 362
         return { status: made ? (o.newSession ?? 0) : 0, stdout: made ? (o.pidOut ?? '4242\n') : '', stderr: '', killed: false };
       },
       signal: (pid, sig) => { seen.signals.push([pid, sig]); o.signal?.(pid, sig); },
+      shellUsable: (f) => { asked.push(f); return (o.shellUsable ?? (() => true))(f); },
     });
-    return { launcher, seen };
+    return { launcher, seen, asked };
   };
   const SPEC = { binary: "/srv/box/captures/builds/it's 2.1.100", cwd: '/w', env: [['PATH', '/usr/bin']] as const, socket: 'ccrc-capture', session: 'capture' };
 
@@ -463,6 +487,31 @@ describe('the tmux launcher reads the build, not its terminal server (review 362
     expect(made.slice(made.indexOf('-c'))).toEqual(['-c', '/w', CAPTURE_START, SPEC.binary]);
     expect(CAPTURE_START).toBe('/usr/bin/env');
     expect(capturePaneCommand(SPEC.binary)).toEqual([CAPTURE_START, SPEC.binary]);
+  });
+
+  // Programme call 1047: the build sees one fixed, absolute system shell as `SHELL`, the capture's own tmux server's default
+  // shell, set in the creating call before the session; never the service user's, never one from the caller's environment.
+  it('sets the capture server\'s default shell to the fixed system shell, in the creating call, before the session', async () => {
+    const { launcher, seen, asked } = fake();
+    await launcher.start({ ...SPEC, env: [...SPEC.env, ['SHELL', '/caller/shell']] });
+    const made = seen.calls[0]!;
+    expect(made.slice(made.indexOf('-f'), made.indexOf('new-session'))).toEqual(['-f', '/dev/null', 'set-option', '-g', 'default-shell', CAPTURE_SHELL, ';']);
+    expect(CAPTURE_SHELL).toBe('/bin/bash');
+    expect(made).not.toContain('/caller/shell');
+    expect(asked).toEqual([CAPTURE_SHELL]);
+  });
+
+  it('refuses the start before any tmux call when the fixed shell is not an executable file, never as a verdict', async () => {
+    const { launcher, seen } = fake({ shellUsable: () => false });
+    await expect(launcher.start(SPEC)).rejects.toThrow(/the capture's shell \/bin\/bash is not an executable file/);
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('reads an executable file as usable, and a missing path, a directory or a file that cannot be run as not', () => {
+    const d = mkTmp('ccrc-capshell-');
+    const run = path.join(d, 'run'); writeFileSync(run, '#!/bin/sh\n', { mode: 0o755 });
+    const plain = path.join(d, 'plain'); writeFileSync(plain, 'x', { mode: 0o644 });
+    expect([executableFile(run), executableFile(plain), executableFile(d), executableFile(path.join(d, 'none'))]).toEqual([true, false, false, false]);
   });
 
   // The coordinator's requirement with the cure (call 1003): a pane can never start the fixed program alone, which would print

@@ -20,7 +20,7 @@
 // THE CLEANUP (F10): after `stop`, the runner waits, bounded, until the build is gone before it removes the directories,
 // so nothing is still writing in them; the build's life is read from its own processes, never from its terminal server
 // (review 3623). A removal's own failure is logged and never replaces the answer.
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readCaptureRecords, replayCapture, type CaptureRecord } from '../../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../../shared/claudeBuildTrust.js';
@@ -194,6 +194,8 @@ export interface TmuxLauncherSeams {
   readonly spawner?: (env: Readonly<Record<string, string>>, boundMs: number) => Exec;
   /** `process.kill`; a negative pid names a process group. */
   readonly signal?: (pid: number, sig: NodeJS.Signals | 0) => void;
+  /** Whether the capture's shell is an executable file (default {@link executableFile}). */
+  readonly shellUsable?: (file: string) => boolean;
 }
 
 /** The life of a process group, from a probe with signal 0: `ESRCH` is gone, `EPERM` is a group that exists, and any
@@ -211,6 +213,23 @@ export function groupLife(signal: (pid: number, sig: 0) => void, pgid: number): 
  *  program, then the build's absolute path, is two words: it replaces itself with the build, so no interpreter reads the
  *  build's name and the pane's process is the build. */
 export const CAPTURE_START = '/usr/bin/env';
+
+/** The shell the build sees as `SHELL` (programme call 1047): one fixed, absolute system shell its tool step can use, set
+ *  as the capture's own tmux server's default shell, which tmux hands the pane as `SHELL` whatever the caller's environment
+ *  or the service user's entry says (measured: with neither, the pane sees the service user's login-refusing shell). The
+ *  pane still starts with no shell between tmux and the build. */
+export const CAPTURE_SHELL = '/bin/bash';
+
+/** Whether `file` is an executable regular file (L3, read at each start). */
+export function executableFile(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** The pane's command, built in this one place: {@link CAPTURE_START}, then `binary` as a word of its own. A pane can never
  *  start the fixed program alone (alone, it would print the pane's whole environment into what the capture records), so
@@ -234,6 +253,7 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncher
   return {
     async start(spec) {
       const command = capturePaneCommand(spec.binary);
+      if (!(seams.shellUsable ?? executableFile)(CAPTURE_SHELL)) throw new Error(`the capture's shell ${CAPTURE_SHELL} is not an executable file on this box`);
       const exec = (seams.spawner ?? boundedExec)(Object.fromEntries(spec.env), boundMs);
       const base = ['-L', spec.socket];
       const call = async (args: readonly string[]): Promise<{ readonly status: number; readonly stdout: string; readonly stderr: string }> => {
@@ -243,7 +263,9 @@ export function tmuxLauncher(tmux: string, boundMs = 15_000, seams: TmuxLauncher
       // The session is created and addressed in ccrc's one spelling (`shared/tmux-target.ts`): its name, then the anchored
       // target, so no `-t` can prefix-match another session even on this private server.
       const made = await call([
-        '-f', '/dev/null', 'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', '200', '-y', '50',
+        // The server's default shell is set first, in the same call, so the pane sees it as `SHELL` (call 1047).
+        '-f', '/dev/null', 'set-option', '-g', 'default-shell', CAPTURE_SHELL, ';',
+        'new-session', '-d', '-P', '-F', '#{pane_pid}', '-s', tmuxName(spec.session), '-x', '200', '-y', '50',
         '-c', spec.cwd, ...command,
       ]);
       const pid = made.status === 0 && /^[1-9][0-9]*$/.test(made.stdout.trim()) ? Number(made.stdout.trim()) : null;
