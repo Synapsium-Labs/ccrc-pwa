@@ -18,7 +18,7 @@ import { useFrameSet } from '../skins/frame';
 import type { SkinSet } from '../skins/types';
 import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
-import { buildChatItems, type ChatItem } from './chatItems';
+import { buildChatItems, fromNoFile, type ChatItem } from './chatItems';
 import { MailRow } from './MailRow';
 import { NO_CHOICE, foldMailRows, openOf, underRow, type Choice } from './mailRows';
 import {
@@ -461,7 +461,9 @@ const NEAR_TOP_SCREENS = 1.5;
 /** Wave 175: how many frames with no scroll and no height report of virtuoso's own make a prepend settled. */
 const SETTLE_FRAMES = 2;
 
-const keyOf = (item: TranscriptItem): string => item.key;
+/** A row's key as `prependShift` reads it: none for a row from no transcript file (`fromNoFile`), which is never a row in
+ *  common (wave 179, fix round 1, F1). */
+const shiftKeyOf = (item: TranscriptItem): string | null => (fromNoFile(item) ? null : item.key);
 
 /** Fix round 1, F1: tell `wrote` where each of the list's own instant writes of `el` left it (virtuoso moves its scroller
  *  only through the element's `scrollTo` and `scrollBy`), or null for a smooth one, whose steps land wherever its easing
@@ -1127,8 +1129,9 @@ function ChatScroller({
     const top = was.length > lw && items.length > ln && was[lw]!.key !== items[ln]!.key;
     // The lead difference is added to a FOUND shift only: no row in common is a new list, which moves no index (wave 179,
     // A1: a context reset, then another file with no reset row, moved the index by -2 on a list nothing was put before).
+    // The working pulse and a pending send are never that row (fix round 1, F1): they outlive a change of file.
     const found = top
-      ? prependShift(was.slice(lw).map(keyOf), items.slice(ln).map(keyOf), anchor.current[0]?.key ?? null)
+      ? prependShift(was.slice(lw).map(shiftKeyOf), items.slice(ln).map(shiftKeyOf), anchor.current[0]?.key ?? null)
       : null;
     const shift = found === null ? 0 : found + ln - lw;
     // A stretch an older page's calls joined (fix round 1, F2): its open state follows it, and the hold reads its new key.

@@ -101,6 +101,13 @@ describe('prependShift: how far the rows moved, by key', () => {
     expect(prependShift(['a'], [], 'a')).toBeNull();
   });
 
+  it('wave 179, fix round 1, F1: a row with no key (from no transcript file) is never the row in common', () => {
+    // The working pulse and a pending send outlive a change of file; the list hands them in as null.
+    expect(prependShift(['a', 'b', null], ['x', 'y', null], 'a')).toBeNull();
+    expect(prependShift([null, 'a'], [null, 'x', 'a'], null)).toBe(1);
+    expect(prependShift(['p', 'a', null], ['a', null], 'a')).toBe(-1);
+  });
+
   it('rows taken from the top move it the other way', () => {
     expect(prependShift(['o1', 'o2', 'a', 'b'], ['a', 'b'], 'a')).toBe(-2);
   });
