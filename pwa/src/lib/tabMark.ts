@@ -12,6 +12,8 @@ import { readKey, tabStorage, writeKey } from './storage';
 /** The tab's mark: its key and its one value. */
 const TAB_KEY = 'ccrc-tab';
 const CONSOLE = 'console';
+/** The mark as data, for a harness that opens a page as a console tab's reload would (`browser/app.ts`'s `tab`). */
+export const CONSOLE_TAB_MARK = { key: TAB_KEY, value: CONSOLE } as const;
 
 /** Whether this tab has been the console before this load. */
 export function wasConsoleTab(): boolean {

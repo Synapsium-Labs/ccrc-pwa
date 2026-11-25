@@ -169,15 +169,29 @@ for (const width of [1280, 390]) {
       }
     });
 
+    // At a desk a document opens in its own tab, the reader alone (desktop polish wave 174): the case follows that tab, and
+    // the chat stays where it was. On a phone it opens in place, as before.
     it('a document path opens the Docs reader at the session\'s branch', async () => {
       const { ctx, page } = await openChat(width);
       try {
         const a = link(page, 'docs/superpowers/specs/2026-11-06-x-design.md');
         expect(await a.getAttribute('href')).toBe('/docs/project-a/specs/2026-11-06-x-design.md?ref=ws/one');
         await a.scrollIntoViewIfNeeded();
-        await a.click();
-        await page.waitForFunction(() => location.pathname.startsWith('/docs/'), undefined, { timeout: 20_000 });
-        expect(await here(page)).toBe('/docs/project-a/specs/2026-11-06-x-design.md?ref=ws/one');
+        if (width >= 900) {
+          const [tab] = await Promise.all([ctx.waitForEvent('page', { timeout: 20_000 }), a.click()]);
+          await tab.waitForLoadState('domcontentloaded');
+          await tab.locator('.docs-screen').waitFor({ timeout: 20_000 });
+          expect(await here(tab), 'the new tab is at the document, at the session\'s branch').toBe('/docs/project-a/specs/2026-11-06-x-design.md?ref=ws/one');
+          expect(await tab.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), 'a Docs tab').toBe('docs');
+          expect(await tab.evaluate(() => window.opener === null), 'with no opener').toBe(true);
+          expect(await here(page), 'the chat stays on the session').toBe(`/s/${SESSION.id}`);
+          expect(ctx.pages(), 'one tab opened').toHaveLength(2);
+        } else {
+          await a.click();
+          await page.waitForFunction(() => location.pathname.startsWith('/docs/'), undefined, { timeout: 20_000 });
+          expect(await here(page)).toBe('/docs/project-a/specs/2026-11-06-x-design.md?ref=ws/one');
+          expect(ctx.pages(), 'no tab opened').toHaveLength(1);
+        }
       } finally {
         await ctx.close();
       }
