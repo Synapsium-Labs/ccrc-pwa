@@ -273,7 +273,7 @@ describe('the mail rows of a long coordinator transcript (desktop polish wave 17
       try {
         // The last wake's question card is the newest mail row, open by default under its closed stretch. Below it, a
         // long reply the reader is reading. Newer mail arrives at the foot: the question card is no longer the newest,
-        // but the reader has seen it open, so it stays open (`MailRows.tsx#useOpen`). Letting it close moved the
+        // but the reader has seen it open, so it stays open (`MailRow.tsx#useOpen`). Letting it close moved the
         // paragraph in view by the card's height in every view (measured before the rule: 5 lines up), because the
         // list does not hold the reader's place over a change that comes with a new item at the end.
         const events = coordinatorTranscript();

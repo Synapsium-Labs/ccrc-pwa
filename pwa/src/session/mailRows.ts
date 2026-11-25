@@ -3,7 +3,7 @@
 //
 // WHAT IT DECIDES, AND NOTHING ELSE. Which user turn is the mail lane's own prompt (`isMailPrompt`); which fetched card
 // opens by default (`opensByDefault`); and which prompts read as one run (`foldMailRows`, by `SAYS_NOTHING`). What the
-// rows say is `promptWords` and `cardTime`. Drawing them is `MailRows.tsx`'s, and the design system's `MailCard` and
+// rows say is `promptWords` and `cardTime`. Drawing them is `MailRow.tsx`'s, and the design system's `MailCard` and
 // `MailPromptLine`. Nothing here changes what the server types, what makes a card, or the order of anything.
 //
 // L1: pure, no I/O, no React.
@@ -38,7 +38,7 @@ export function asksOf(envelope: MailEnvelope, self: string): boolean {
 /** Whether a mail card opens by default: it asks something of the session shown (`asksOf`) AND it is the newest mail
  *  row of the chat, so the question waiting now is never hidden behind a tap, and an older one (answered or
  *  superseded by later mail) opens closed like every other card. One the reader has already seen open by default stays
- *  open for the view (`MailRows.tsx#useOpen`). */
+ *  open for the view (`MailRow.tsx#useOpen`). */
 export function opensByDefault(envelope: MailEnvelope, self: string, newest: boolean): boolean {
   return newest && asksOf(envelope, self);
 }
@@ -143,7 +143,7 @@ export function cardTime(item: MailItem): string | null {
 }
 
 /** The card a closed tool-activity row draws under it, or none: the first of its cards that opens by default, or that
- *  has a recorded choice (the reader opened or closed it, or it was drawn open by default once, `MailRows.tsx`). A card
+ *  has a recorded choice (the reader opened or closed it, or it was drawn open by default once, `MailRow.tsx`). A card
  *  stays where it was drawn for the rest of the view: when newer mail arrives below, the default moves on, and a card
  *  that left the space under its row then would move every row below it while the list cannot hold the reader's place
  *  (a change that comes with a new item at the end is the foot's, `footFollow.ts#heightMove`). With no choice recorded,

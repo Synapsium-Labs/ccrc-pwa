@@ -42,6 +42,10 @@ import type { MailEnvelope } from '../../../shared/api';
 import { Well } from '../primitives/well';
 import './mail-card.css';
 
+/** The mail glyph's classes, on the card's sender row and on its head line. self-center: a block svg has no baseline in a
+ *  baseline row (D-5100). */
+const GLYPH = 'mail-card-glyph self-center';
+
 /** `run 5 · build4 wave 4/4`, with each clause independently optional —
  *  mirroring `renderEnvelope`'s own three conditionals. Returns null when
  *  there is no run at all, so the card renders no row rather than an empty
@@ -78,8 +82,7 @@ function CardRows({ envelope }: { envelope: MailEnvelope }): ReactNode {
   return (
     <>
       <p className="mail-card-from">
-        {/* self-center: a block svg has no baseline in this baseline row (D-5100). */}
-        <span className="mail-card-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
+        <span className={GLYPH} aria-hidden="true"><Icon name="mail" /></span>
         <span className="mail-card-sender">{envelope.fromId}</span>
         <span className="mail-card-arrow" aria-hidden="true">→</span>
         <span className="mail-card-recipient">{envelope.toId}</span>
@@ -131,10 +134,10 @@ export function MailCard({ envelope, fold }: { envelope: MailEnvelope; fold?: Ma
         onClick={onToggle}
       >
         <span className="mail-card-chev" aria-hidden="true">▸</span>
-        <span className="mail-card-glyph self-center" aria-hidden="true"><Icon name="mail" /></span>
+        <span className={GLYPH} aria-hidden="true"><Icon name="mail" /></span>
         <span className="mail-card-line-sender">{envelope.fromId}</span>
         <span className="mail-card-line-subject">{envelope.subject}</span>
-        <span className="mail-card-line-kind">{envelope.kind}</span>
+        <span className="mail-card-kind">{envelope.kind}</span>
         {time !== null && <span className="mail-card-time">{time}</span>}
       </button>
       {open && (

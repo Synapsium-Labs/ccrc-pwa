@@ -26,7 +26,7 @@ On a 30-wake coordinator transcript the mail rows took **24611px before and 3869
 | The recogniser, the run rule, the open-by-default rule, the run fold, the words | `pwa/src/session/mailRows.ts` | L1 |
 | The two new item kinds (`mail-prompt`, `mail-prompts`) and the card's `opens` | `pwa/src/session/chatItems.ts` | L1 |
 | A fetched card joins its stretch; the row's message count | `pwa/src/session/toolActivity.ts`, `ToolActivityRow.tsx` | L1, L4 |
-| The rows, drawing the open state from the list's memo | `pwa/src/session/MailRows.tsx` | L4 |
+| The rows, drawing the open state from the list's memo | `pwa/src/session/MailRow.tsx` | L4 |
 | The memo keeps a choice in either direction (`choice`) | `pwa/src/session/transcriptRow.tsx` | L4 |
 | The row barrier compares the new lists | `pwa/src/session/sameRow.ts` | L1 |
 | The `mail-line` height bucket | `pwa/src/session/itemHeight.ts` | L1 |
@@ -59,7 +59,7 @@ words, starts with a space, drops the full stop, says "mails", changes case or r
 | Dividers in a run | A divider between two members goes inside the run (drawn in the opened list); one after the last member stays outside | Keeps every time visible where it was |
 | Which cards join a stretch | Only a card from the live lane (its event is a `tool_result`, the session's own fetch), and only when a stretch is open before it. A legacy typed card is a user turn, a prompt, and still ends one | "Belongs with the fetch that produced it" |
 | A card that opens by default inside a closed stretch | Drawn under the closed row, as the stretch's first attention entry is | Otherwise the question would be hidden behind the stretch's tap |
-| **A card drawn open by default, then newer mail arrives** | **It stays open for the rest of the view**, and stays under its row (`MailRows.tsx#useOpen`, `mailRows.ts#surfacedOf`). A card never drawn open while it was the newest opens closed | Measured in Chrome before the rule: letting it close moved the paragraph the reader was reading by the card's height (5 lines) in all four views. The list's hold skips a height change that comes with a new item at the end (`footFollow.ts#heightMove`, `newItem`), and that code is out of bounds for this wave |
+| **A card drawn open by default, then newer mail arrives** | **It stays open for the rest of the view**, and stays under its row (`MailRow.tsx#useOpen`, `mailRows.ts#surfacedOf`). A card never drawn open while it was the newest opens closed | Measured in Chrome before the rule: letting it close moved the paragraph the reader was reading by the card's height (5 lines) in all four views. The list's hold skips a height change that comes with a new item at the end (`footFollow.ts#heightMove`, `newItem`), and that code is out of bounds for this wave |
 | A prompt the reader opened, then a second arrives | The run opens, and the first prompt inside it stays open (`openOf` reads the first member's choice) | "Stays open across live rows arriving" |
 | The open state's home | The list's existing `ExpansionMemo`, now recording a choice in either direction (`choice`), keyed by row key | One owner of "what the reader opened", already outliving the virtual list's unmounting; a reload starts fresh |
 | The card's head words | Sender, subject, kind, time; spoken as "Mail from X: subject, kind, 14:02" | The brief's list; the run label and the recipient stay in the open card |

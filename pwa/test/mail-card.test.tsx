@@ -116,7 +116,7 @@ describe('MailCard', () => {
     })]} pending={[]} />);
     openCards();
 
-    expect(textOf('.mail-card-kind')).toEqual(['status']);
+    expect(textOf('.mail-card-meta .mail-card-kind')).toEqual(['status']);
     expect(textOf('.mail-card-subject')).toEqual(['wave-brief']);
     const run = document.querySelector('.mail-card-run')?.textContent ?? '';
     expect(run).toContain('5');

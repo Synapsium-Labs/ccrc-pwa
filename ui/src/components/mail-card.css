@@ -69,7 +69,9 @@
     color: var(--ink-primary);
     overflow-wrap: anywhere;
   }
-  .mail-card .mail-card-run {
+  /* The run, and the head line's time: one small mono figure. */
+  .mail-card .mail-card-run,
+  .mail-card .mail-card-time {
     flex: none;
     font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
     font-variant-numeric: tabular-nums;
@@ -141,20 +143,8 @@
     color: var(--ink-primary);
   }
   .mail-card .mail-card-line-subject { flex: 1 1 auto; color: var(--ink-primary); }
-  .mail-card .mail-card-line-kind {
-    flex: none;
-    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
-    text-transform: uppercase;
-    letter-spacing: var(--ls-caps-sm);
-    color: var(--ink-tertiary);
-  }
-  .mail-card .mail-card-time {
-    flex: none;
-    margin-left: auto;
-    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
-    font-variant-numeric: tabular-nums;
-    color: var(--ink-tertiary);
-  }
+  /* The kind word is the card's own `.mail-card-kind`; the time is `.mail-card-run`'s figure, pushed to the end. */
+  .mail-card .mail-card-time { margin-left: auto; }
   .mail-card .mail-card-open {
     display: grid;
     gap: var(--sp-2);

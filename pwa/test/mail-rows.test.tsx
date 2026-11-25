@@ -12,7 +12,7 @@ import { renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordI
 import { renderEnvelope, renderMailNudge, renderOperatorMessageNudge } from '../../server/src/coord/envelope';
 import { ChatListInner, shapeOf } from '../src/session/ChatList';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
-import { MailRow } from '../src/session/MailRows';
+import { MailRow } from '../src/session/MailRow';
 import {
   SAYS_NOTHING, asksOf, foldMailRows, isMailPrompt, opensByDefault, openOf, promptWords, promptsOf,
 } from '../src/session/mailRows';

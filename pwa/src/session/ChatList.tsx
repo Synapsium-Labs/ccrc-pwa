@@ -19,7 +19,7 @@ import type { SkinSet } from '../skins/types';
 import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
 import { buildChatItems, type ChatItem } from './chatItems';
-import { MailRow } from './MailRows';
+import { MailRow } from './MailRow';
 import { foldMailRows } from './mailRows';
 import {
   FALLBACK_ITEM_HEIGHT, NOMINAL_MEASURES, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
