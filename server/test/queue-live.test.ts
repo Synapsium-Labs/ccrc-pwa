@@ -114,22 +114,27 @@ describe('queue-live: the workflow asks it first in every long job of a queue ru
     'pwa-static', 'build-pwa', 'browser-pwa', 'node-floor'];
   const STEP = 'queue group still live';
 
-  it('every listed job carries the step first, under the merge_group condition, and no other job carries it', () => {
+  it('every listed job carries the step first, whole, under the merge_group condition, and no other job carries it', () => {
     const wf = parse(readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')) as {
-      jobs: Record<string, { steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }> }>;
+      jobs: Record<string, { env?: Record<string, string>; steps?: Array<Record<string, unknown>> }>;
     };
+    const run = [
+      `gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }`,
+      'node "$RUNNER_TEMP/queue-live.mjs"', '',
+    ].join('\n');
     for (const id of LONG_JOBS) {
-      const first = wf.jobs[id]?.steps?.[0];
-      expect(first?.name, `${id}'s first step`).toBe(STEP);
-      expect(first?.if, `${id}'s ${STEP} condition`).toBe("github.event_name == 'merge_group'");
-      expect(first?.env?.GH_TOKEN, `${id}'s ${STEP} token`).toBe('${{ github.token }}');
-      expect(first?.run, `${id}'s ${STEP} fetches the script from the default branch`)
-        .toContain(`gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }`);
-      expect(first?.run).toContain('node "$RUNNER_TEMP/queue-live.mjs"');
+      // A job with a leg switch skips every step on a refresh or a rebuild (ci-pipeline.test.ts), this one included.
+      const cond = wf.jobs[id]?.env?.CCRC_LEG === undefined
+        ? "github.event_name == 'merge_group'" : "env.CCRC_LEG == 'run' && github.event_name == 'merge_group'";
+      expect(wf.jobs[id]?.steps?.[0], `${id}'s first step`)
+        .toEqual({ name: STEP, if: cond, env: { GH_TOKEN: '${{ github.token }}' }, run });
     }
     for (const [id, j] of Object.entries(wf.jobs)) {
       if (LONG_JOBS.includes(id)) continue;
       expect((j.steps ?? []).some((s) => s.name === STEP), `${id} carries ${STEP} but is not on the list`).toBe(false);
+    }
+    for (const id of LONG_JOBS) {
+      expect((wf.jobs[id]?.steps ?? []).filter((s) => s.name === STEP), `${id} carries ${STEP} more than once`).toHaveLength(1);
     }
   });
 });
