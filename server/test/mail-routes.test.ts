@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isOverlordRefusal, isReviewRoundsRefusal } from '../../shared/refusal.js';
 import { isOtherLaneKebab } from '../src/coord/otherLanes.js';
-import { PROGRAMME_MIGRATION_RULES, PROGRAMME_STORE_REFUSALS } from '../../shared/programmeLifecycle.js';
+import { PROGRAMME_MIGRATION_RULES, PROGRAMME_STORE_REFUSALS, isProgrammeDoorWord } from '../../shared/programmeLifecycle.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
 import { isLinkingRefusal } from '../../shared/linking.js';
@@ -45,6 +45,8 @@ import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shar
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
 import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
+import { isWitnessKebab } from '../src/coord/overlordAuthorityWitness.js';
+import { isWitnessLinkKebab } from '../src/coord/overlordAuthorityWitnessLink.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
@@ -1119,6 +1121,11 @@ describe('the rejection table is total, in both directions', () => {
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
+        // THE AUTHORITY WITNESS (Overlord W1 authority journal, Task 6): `coord/overlordAuthorityWitness.ts` names where a witness lives
+        // (`'other-host'`), its verdict (`'no-witness'`) and whether a narrowing is held (`'not-yet'`); its link adapter names its
+        // answers (`'predates-op'`). A word rides a verdict or an adapter's answer, never a `refused` or `reject.code`. Admitted through
+        // each file's own exported guard, derived from its typed tables, never NOT_CODES.
+        || isWitnessKebab(tok) || isWitnessLinkKebab(tok)
         || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
         // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on
         // the standing rule `enter-ignored` above states. `coord/delegation-projection.ts` spells the frame's liveness, row groups,
@@ -1350,7 +1357,11 @@ describe('the rejection table is total, in both directions', () => {
         // Admitted through L0's list, `PROGRAMME_MIGRATION_RULES`, never NOT_CODES.
         || (PROGRAMME_MIGRATION_RULES as readonly string[]).includes(tok)
         // Its store's own refusal words (W1 review), typed results answered or rolled back on: L0's `PROGRAMME_STORE_REFUSALS`.
-        || (PROGRAMME_STORE_REFUSALS as readonly string[]).includes(tok),
+        || (PROGRAMME_STORE_REFUSALS as readonly string[]).includes(tok)
+        // THE PROGRAMME LIFECYCLE'S DOORS (W2): `coord/programmeEdgePolicy.ts`, `programmeLifecycleActs.ts` and
+        // `programmeLifecycleRoutes.ts` name the doors' refusals, the event words, the door acts and credentials, the
+        // coordinator lines, the conflict kinds and why a coordinator owns nothing. Admitted through L0's guard, never NOT_CODES.
+        || isProgrammeDoorWord(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
     }
   });

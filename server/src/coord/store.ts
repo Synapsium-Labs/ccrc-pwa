@@ -18,6 +18,7 @@ import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvis
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
 import * as lifecycle from './programmeLifecycleStore.js';
+import * as acts from './programmeLifecycleActs.js';
 import { endRecorded, isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -29,6 +30,7 @@ import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFa
 import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
 import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
+import { applyLandingDoorRecordTx } from './landingDoorsTx.js';
 import type { LandingControlApplyResult } from './landingNext.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
@@ -820,6 +822,9 @@ export interface ReclaimMoveOpts {
   readonly toUuid?: string | null;
   readonly actor?: lifecycle.ProgrammeActor;
   readonly why?: string;
+  /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
+   *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
+  readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
 }
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
@@ -2206,6 +2211,8 @@ export class CoordStore {
           const attached = planStore.attachTicketInTx(this.db, id, input.ticket, now);
           if (!attached.ok) throw new OpenRunPlanRefused(attached.refused);
         }
+        // Programme lifecycle W2 (spec §8): a run opened withdraws the programme's open end proposal, in this transaction.
+        acts.settleEndProposalInTx(this.db, input.program, `run ${id} opened`, now);
         return {
           id,
           program: input.program,
@@ -2443,13 +2450,15 @@ export class CoordStore {
    * claimed. `unknown-programme` when there is no such row; `no-claimant` when `from` is not its bound coordinator, so a
    * stale caller never moves a programme somebody else now owns.
    */
-  reclaimProgramme(slug: string, from: string, to: string | null, at: number, coordProject: string | null,
+  reclaimProgramme(slug: string, from: string | null, to: string | null, at: number, coordProject: string | null,
     opts: ReclaimMoveOpts = {}): ReclaimProgramResult | { ok: false; kind: 'unknown-programme' } {
     return tx(this.db, () => {
       const row = lifecycle.programmeRowOf(this.db, slug);
       if (row === null) return { ok: false as const, kind: 'unknown-programme' as const };
+      // W2: the hand-over door passes the binding it read (null for none), so a stale door never moves a programme it
+      // did not see; rung 2 is otherwise skipped there (spec §3's ladder table).
       if (row.coordinator !== from) return { ok: false as const, kind: 'no-claimant' as const };
-      return this.reclaimProgrammeInTx(slug, from, to, at, coordProject, opts);
+      return this.reclaimProgrammeInTx(slug, from ?? '', to, at, coordProject, opts);
     });
   }
 
@@ -2481,12 +2490,12 @@ export class CoordStore {
       // guard reads the lowest claimed id with no state predicate, so a terminal row left naming the released session
       // would refuse the coordinator that picks the programme up.
       const moved = (to === null
-        ? this.db.prepare('SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
+        ? this.db.prepare('SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
           .all(run.program)
         : this.db.prepare(
-          'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
+          'SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
           'AND claimedBy != ? ORDER BY id',
-        ).all(run.program, to)) as { id: number; claimedBy: string }[];
+        ).all(run.program, to)) as { id: number; claimedBy: string; state: string }[];
       // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
       // They are two facts about the same coordinator — who holds the chair,
       // and which card that chair's workers render on — and rewriting only the
@@ -2547,6 +2556,10 @@ export class CoordStore {
         // would still name the corpse, the guard would miss it, and the heir
         // would be handed two copies of one report.
         this.requeueAbandonedMail({ role: 'coordinator', program: run.program }, to, displaced);
+      }
+      if (opts.onMoved !== undefined) {
+        const terminal: readonly string[] = TERMINAL_RUN_STATES;
+        opts.onMoved({ holding: [...new Set(moved.filter((m) => !terminal.includes(m.state)).map((m) => m.claimedBy))] });
       }
       return {
         ok: true as const, program: run.program,
@@ -3819,25 +3832,33 @@ export class CoordStore {
   }
 
   /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
-   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim. */
+   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim.
+   *  The operator's door records (wave 5j, D-9045, D-9046): a `withdraw` is a mention and never touches `landing_authority`,
+   *  since a withdrawal writes no order; a `pause` names no subject. Their statements are `applyLandingDoorRecordTx`'s. */
   private applyLandingRecord(r: LandingJournalRecord): void {
-    const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
-      'observedSeq = excluded.observedSeq');
-    const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
-    [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
-      s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
-    this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
-      'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
-      .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+    if (r.kind !== 'pause') {
+      const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
+        'observedSeq = excluded.observedSeq');
+      const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
+      [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
+        s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
+      if (r.kind !== 'withdraw') {
+        this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
+          'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
+          .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+      }
+    }
+    if (r.kind === 'pause' || r.kind === 'withdraw') applyLandingDoorRecordTx(this.db, r);
     this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
   }
 
   /**
    * The ONLY in-process reopen of the landing fence (shared contract §6): needs a provably clean connection, validates the
    * WHOLE history, checks the cursor and any missing history, confirms the exact snapshot is durable (even at an equal
-   * cursor), then applies only the suffix and the cursor in ONE transaction. It never writes a projection or a witness,
-   * never notices. Any failure keeps the fence; there is no retry timer.
+   * cursor), then applies only the suffix and the cursor in ONE transaction. It writes one projection column word, the
+   * operator's `withdrawn` (with its `detail` and the cleared marker, `landingDoorsTx.ts`, D-9046), and no pin, landed
+   * state, association or witness, and it never notices. Any failure keeps the fence; there is no retry timer.
    */
   replayLandingJournal(): LandingJournalReplay {
     const log = this.landing.landingJournal;
@@ -5613,7 +5634,27 @@ export class CoordStore {
   programmeLifecycleRow(slug: string): lifecycle.ProgrammeLifecycleRow | null { return lifecycle.programmeRowOf(this.db, slug); }
   programmeOf(session: string, uuid: string | null): { slug: string; placeholder: string | null } | null { return lifecycle.programmeOf(this.db, session, uuid); }
   /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). */
-  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number): lifecycle.DecideResult { return tx(this.db, () => lifecycle.decideInTx(this.db, input, now)); }
+  /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). `onReleased` (W2) runs
+   *  inside it with the coordinator an end released, so its mail is queued with the end or not at all. */
+  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number, onReleased?: (session: string) => void): lifecycle.DecideResult {
+    return tx(this.db, () => { const d = lifecycle.decideInTx(this.db, input, now); if (d.ok && d.released !== null) onReleased?.(d.released); return d; });
+  }
+  /** Programme lifecycle W2's acts and reads (`programmeLifecycleActs.ts`), each act in one transaction with its mail. */
+  startProgramme(input: Parameters<typeof acts.startNamedInTx>[1], now: number): ReturnType<typeof acts.startNamedInTx> { return tx(this.db, () => acts.startNamedInTx(this.db, input, now)); }
+  openEndProposalOf(slug: string): ItemRow | null { return lifecycle.openEndProposalOf(this.db, slug); }
+  proposeProgrammeEnd(input: Parameters<typeof acts.proposeEndInTx>[1], now: number): number { return tx(this.db, () => acts.proposeEndInTx(this.db, input, now)); }
+  confirmProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, now: number, mail: (r: Extract<acts.ConfirmEndResult, { ok: true }>) => void): acts.ConfirmEndResult {
+    return tx(this.db, () => { const r = acts.confirmEndInTx(this.db, itemId, actor, now); if (r.ok) mail(r); return r; });
+  }
+  declineProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number, dark: Readonly<Record<string, unknown>>,
+    mail: (r: { slug: string; coordinator: string | null }) => void): ReturnType<typeof acts.declineEndInTx> {
+    return tx(this.db, () => { const r = acts.declineEndInTx(this.db, itemId, actor, why, now, dark); if (r.ok) mail(r); return r; });
+  }
+  withdrawProgrammeEnd(item: ItemRow, by: string, now: number): boolean { return tx(this.db, () => acts.withdrawEndInTx(this.db, item, by, now)); }
+  programmeHistory(slug: string): ReturnType<typeof acts.historyOf> { return acts.historyOf(this.db, slug); }
+  programmeOpenRunIds(slug: string): number[] { return acts.openRunIdsOf(this.db, slug); }
+  programmeLifecycleRows(): ReturnType<typeof acts.lifecycleRowsOf> { return acts.lifecycleRowsOf(this.db); }
+  coordinatorsWithoutProgramme(): ReturnType<typeof acts.coordinatorsWithoutProgrammeOf> { return acts.coordinatorsWithoutProgrammeOf(this.db); }
   remeasureProgrammesAtBoot(now: number): lifecycle.RemeasureReport { return tx(this.db, () => lifecycle.remeasureAtBootInTx(this.db, now)); }
 
   // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.

@@ -17,6 +17,8 @@ import { createLandingJournal } from '../src/coord/landingJournal.js';
 import { landingOrder } from '../src/coord/landingLine.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { CONTROL_HEAD_SHA, CONTROL_NOW, controlRead, landingStoreOver } from './landingFixture.js';
 import type { FleetWatcher } from '../src/watch.js';
 import type { LandingControlRead } from '../src/coord/radar.js';
@@ -76,11 +78,14 @@ describe('GET /api/landing', () => {
   });
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  it('refuses 401 without the box token, and answers nothing of the line', async () => {
+  // Wave 5j-a (D-9048), inverted: this case read "refuses 401 without the box token, and answers nothing of the line", on
+  // a box whose sign-in is dark (`testDeps`). The read is now a dual-credential read in the `GET /api/feed` shape, so a dark
+  // box answers it with no credential, like every dual-credential read; the armed cells are in the describe below.
+  it('answers 200 with no credential on a dark box', async () => {
     seedEntry(db, A);
     const res = await read(app!, '?project=project-a', {});
-    expect(res.statusCode).toBe(401);
-    expect(res.body).not.toContain('a'.repeat(40));
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as LandingLineView).entries.map((e) => e.pr)).toEqual([11]);
   });
 
   it('refuses 400 bad-request without ?project=, and with a blank one', async () => {
@@ -281,6 +286,18 @@ describe('GET /api/landing: the binding', () => {
     expect((await bindingOf()).order).toMatchObject({ paused: false, head: null });
   });
 
+  it('order.waits names a head held behind a withdrawn target, by entry id and PR (5j-a, D-9047), and is absent otherwise', async () => {
+    db.prepare("INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, state, setBy, pinnedAt) VALUES (5, 'project-a', 50, ?, ?, 'withdrawn', 'operator', 1)")
+      .run('f'.repeat(40), 'f'.repeat(40));
+    seedEntry(db, { ...H, afterIds: [5] });
+    const held = (await bindingOf()).order;
+    expect(held).toMatchObject({ paused: false, head: null, waits: [{ entryId: 1, reason: 'withdrawn', on: [{ entryId: 5, pr: 50 }] }] });
+    db.prepare("UPDATE landing_entries SET state = 'landed' WHERE id = 5").run();
+    const met = (await bindingOf()).order;
+    expect(met).toMatchObject({ paused: false, head: { id: 1, pr: 7 } });
+    expect('waits' in met).toBe(false);
+  });
+
   it('?pr= still returns that PR\'s entry, while readiness and order are computed over the whole project', async () => {
     seedEntry(db, H); seedEntry(db, NEXT);
     const body = await bindingOf('?project=project-a&pr=12');
@@ -334,5 +351,87 @@ describe('GET /api/landing: the binding', () => {
     expect((db.prepare('SELECT total_changes() AS n').get() as { n: number }).n).toBe(before);
     expect((db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(0);
     expect((db.prepare('SELECT mainRedHold AS h FROM landing_projects').get() as { h: number }).h).toBe(1);
+  });
+});
+
+// Landing order wave 5j-a (D-9048): with sign-in armed, the read takes a live session OR the box token, the `GET /api/feed`
+// shape, and authenticates before `501 not-configured`. A real login gives the session; every body is read to its end.
+describe('GET /api/landing with sign-in armed (5j-a, D-9048)', () => {
+  const PASSPHRASE = 'correct horse battery staple';
+  const FAST: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const armed = async (over: Partial<Deps> = {}, seed?: (db: DatabaseSync) => void): Promise<FastifyInstance> => {
+    const home = mkTmp('ccrc-landing-read-armed-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST, 1)}\n`, { mode: 0o600 });
+    const dbPath = path.join(home, '.ccrc', 'coord.db');
+    const db = openCoordDb(dbPath);
+    seed?.(db);
+    const coord = landingStoreOver(db, dbPath);
+    const base = testDeps(home);
+    return buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, mailToken: TOKEN, coord, ...over });
+  };
+  const login = async (a: FastifyInstance): Promise<string> => {
+    const res = await a.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE } });
+    expect(res.statusCode, res.body).toBe(204);
+    const set = res.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    return line.slice(0, line.indexOf(';'));
+  };
+
+  it('a session and no token: 200', async () => {
+    app = await armed();
+    const res = await read(app, '?project=project-a', { cookie: await login(app) });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, project: 'project-a' });
+  });
+
+  it('a token and no session: 200', async () => {
+    app = await armed();
+    const res = await read(app, '?project=project-a', tok);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, project: 'project-a' });
+  });
+
+  it('neither: 401 with the gate verdict, before 501 when coordination is absent', async () => {
+    for (const over of [{}, { coord: undefined }] as Partial<Deps>[]) {
+      app = await armed(over);
+      const res = await read(app, '?project=project-a', {});
+      expect(res.statusCode, res.body).toBe(401);
+      const body = res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({ ok: false, error: 'unauthenticated' });
+      expect(typeof body.verdict).toBe('string');
+      expect(body.detail).toBe('GET /api/landing takes a session cookie OR the box token (x-ccrc-mail-token); ccrc-api reads it cookieless from the fleet host');
+      await app.close(); app = undefined;
+    }
+  });
+
+  // Fix round 1, R3: the dark case this wave inverted asserted that the 401 answers nothing of the line, with an entry in
+  // it. That assertion comes back here, armed: one entry is seeded, a credentialed read of the same app shows it (so the
+  // negative below is not vacuous), and the 401 carries no part of it.
+  it('neither, with an entry in the line: the 401 answers nothing of the line', async () => {
+    const E: LandingEntry = { id: 1, project: 'project-a', pr: 11, pinnedSha: 'a'.repeat(40), handoffCommit: 'b'.repeat(40), runId: null,
+      state: 'pinned', baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false,
+      setBy: 'lane-a-project-a', pinnedAt: 1_000 };
+    app = await armed({}, (db) => seedEntry(db, E));
+    const shown = await read(app, '?project=project-a', tok);
+    expect(shown.statusCode, shown.body).toBe(200);
+    expect((shown.json() as LandingLineView).entries.map((e) => e.pr)).toEqual([11]);
+    expect(shown.body).toContain('a'.repeat(40));
+    const res = await read(app, '?project=project-a', {});
+    expect(res.statusCode, res.body).toBe(401);
+    expect(Object.keys(res.json() as Record<string, unknown>).sort()).toEqual(['detail', 'error', 'ok', 'verdict']);
+    for (const part of ['a'.repeat(40), 'b'.repeat(40), 'lane-a-project-a', '"entries"', '"order"', '"pr"']) {
+      expect(res.body, part).not.toContain(part);
+    }
+  });
+
+  it('a wrong token and no session: 401', async () => {
+    app = await armed();
+    const res = await read(app, '?project=project-a', { 'x-ccrc-mail-token': 'e'.repeat(64) });
+    expect(res.statusCode, res.body).toBe(401);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
   });
 });

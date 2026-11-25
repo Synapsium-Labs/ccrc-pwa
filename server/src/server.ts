@@ -114,6 +114,7 @@ import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { attributionIdentity, consoleSubject } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
+import { coordinatorReadingOf } from './coord/programmeCoordinatorReading.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
@@ -289,6 +290,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/find', '/api/programmes', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // Programme lifecycle W2: a programme's story carries every act's why, written by the operator, a coordinator or the Overlord.
+  '/api/programmes/:slug/history',
   // The approval census's read (approvals PR 1): each row's summary is a prompt's command text, masked and redacted at
   // write; the hook masks the answer again with the masker's current fingerprints.
   '/api/approvals/census',
@@ -2261,7 +2264,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); } }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2449,7 +2452,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
-    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
@@ -2889,6 +2892,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
     liveAsk, liveSpend: (sid) => (watcher === undefined ? { kind: 'not-ready' as const } : watcher.liveSpendReading(sid)),
+    // Programme lifecycle W2: the start naming a session and the hand-over run the reclaim ladder on the serialiser.
+    ...(deps.coord === undefined ? {} : { lifecycle: { reclaim: { coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads },
+      serial: coordRoutes.serial, readingOf: (s: string) => coordinatorReadingOf(deps.io, deps.cfg, s),
+      attribute: (id: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid') } }),
   });
 
   /**

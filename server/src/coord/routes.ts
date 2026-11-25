@@ -68,6 +68,8 @@ import { capCountsWorkingArmed, capNow, sendBackCapCheck, workerReadings, type C
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
+import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
+import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { MAIL_DISABLED_MARKER } from './rundefs.js';
@@ -3575,7 +3577,9 @@ export function registerCoordRoutes(
       since = n;
     }
     try {
-      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+      // Programme lifecycle W2 (spec §15): the lifecycle fields, the bound sessions read once each.
+      return await programmesWithLifecycle(deps.coord, deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts()),
+        (s) => coordinatorReadingOf(deps.io, deps.cfg, s));
     } catch (err) {
       return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
     }
@@ -4526,14 +4530,25 @@ export function registerCoordRoutes(
   /**
    * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
    * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
-   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
-   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * enqueues. Since landing order wave 5j-a (D-9048) it takes a live session OR the box token, the `GET /api/feed`
+   * arrangement, checked before `501 not-configured`, and it opens on a dark box like every dual-credential read: the
+   * console reads it with a session and `ccrc-api landing show` cookieless. It has no attribution to check, and
+   * `?project=` is per-project and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`. `binding` (wave 5i) is decided on this read from the current facts and the watcher's
    * latest control snapshot, never stored; the top-level `mainRedHold` is the hold as recomputed on this read from that snapshot, not the stored flag. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
    */
   app.get('/api/landing', async (req, reply) => {
+    // EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the `GET /api/feed` shape: authenticate before
+    // `not-configured`, preserving the global gate's information boundary on an armed box.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session'
+        && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/landing') !== 'ok') {
+        return refuseRoute(reply, 'unauthenticated', { verdict: session.verdict, detail: 'GET /api/landing takes a session cookie OR the box token ' +
+          `(${MAIL_TOKEN_HEADER}); ccrc-api reads it cookieless from the fleet host` });
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
     const query = parseLandingReadQuery(req.query);
     if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
     const { project, pr } = query;

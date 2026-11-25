@@ -260,7 +260,7 @@ const PLAN_DOORS: ReadonlyArray<readonly [name: string, suffix: string, body: (n
   ['tickets/move', '/tickets/move', () => ({ ticket: 't1', epic: 'e2' })],
   ['epics/drop', '/epics/drop', () => ({ epic: 'e2', why: 'out of scope' })],
   ['phases/refs', '/phases/refs', () => ({ op: 'add', phase: 'p1', ref: { kind: 'epic', key: 'e1' } })],
-  ['close', '/close', () => ({ outcome: 'abandoned', why: 'superseded' })],
+  ['close', '/close', () => ({ outcome: 'abandoned', why: 'superseded', evidence: ['nothing is left to do'] })],
 ];
 const planSend = (w: { app: World['app'] }, slug: string, suffix: string, body: unknown, who_: { byId: string; byUuid: string }) =>
   w.app.inject({ method: 'POST', url: `/api/programmes/${slug}/plan${suffix}?byId=${who_.byId}&byUuid=${who_.byUuid}`, headers: TOK, payload: body as never });

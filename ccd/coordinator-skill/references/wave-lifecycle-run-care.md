@@ -61,23 +61,29 @@ names a base.
 **Measure first.** After one `git fetch origin`, in one call:
 
 ```bash
+tip=$(gh pr view <pr> --json headRefOid --jq .headRefOid)
 git merge-tree --write-tree --name-only --no-messages \
-  <the branch tip> origin/main
+  "$tip" origin/main; rc=$?
 git rev-parse origin/main
+echo "probe exit $rc"
 ```
 
-The probe must exit 1 with a tree id on its first line, then the conflicted
-paths. Exit 0, or any other answer (exit 1 with no tree id is a ref git could
-not resolve), sends nothing. The probe prints a tree id, never a commit; the
-`git rev-parse origin/main` line prints the commit it measured, and that commit
-is the base.
+The tip is the pull request's head as GitHub reads it, the commit the worker
+pushed. The probe's own exit status is the `probe exit` line, since the call's
+own status is the last command's. It must read `probe exit 1` with a tree id on
+the output's first line, then the conflicted paths. `probe exit 0`, or any other
+answer (exit 1 with no tree id is a ref git could not resolve), sends nothing.
+The probe prints a tree id, never a commit; the `git rev-parse origin/main` line
+prints the commit that was measured, and that commit is the base.
 
 **The mail.** `"$API" mail send --json -` to the worker's session id, with the
 run's `runId`, `kind` `status`, subject `conflict-sync: #<pr>`, and a body of
 two entries, one to a line, and nothing else: `base: <sha>`, the `origin/main`
 commit of that same call, copied from the rev-parse output and never typed (a
 tree id there leaves the worker's own probe unmeasured, and the mail licenses
-nothing), then `paths: <the conflicted paths>`, space-separated.
+nothing), then `paths: <the conflicted paths>`, space-separated. The paths are
+for the reader: the worker's own probe is what measures, so a path with a space
+in it needs no quoting.
 
 ```bash
 "$API" mail send --json - <<JSON

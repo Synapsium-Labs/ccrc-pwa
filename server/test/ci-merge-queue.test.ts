@@ -143,18 +143,22 @@ const QUEUE_AGENT_ASK_LINES = [
   '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
   '        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"',
 ];
-/** The step's script, exactly its two lines (review F4): the fetch from the default branch, then the run. */
+/** The step's script, exactly its two lines (review F4): the fetch from the default branch, then the run, which ends
+ *  the job only on the script's superseded code, 64, and lets it run on any other failure (D-9067). */
 const QUEUE_LIVE_RUN = [
   `gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }`,
-  'node "$RUNNER_TEMP/queue-live.mjs"',
+  'node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }',
 ];
 /** The queue's liveness step (D-9015, landing-order wave 1d), first in each long job, whole: its `if:` is the one line
  *  that names the event, and its body can only END the job with exit 1, read by nothing because its group is gone, so
- *  it never skips a required step to success. `queue-live.test.ts` pins the step whole and its list of jobs. */
+ *  it never skips a required step to success. `queue-live.test.ts` pins the step whole and its list of jobs. The match
+ *  ends at the script's last line: the next line, after any blank ones (a block scalar runs on across them), is not a
+ *  deeper script line, so a third line is never set aside with the step (review 3762 F2). */
 const QUEUE_LIVE_STEP = new RegExp(String.raw`^ {6}# D-9015 \(landing-order wave 1d\)[^\n]*\n(?: {6}#[^\n]*\n)*`
   + String.raw` {6}- name: queue group still live\n {8}if: (?:env\.CCRC_LEG == 'run' && )?github\.event_name == 'merge_group'\n`
   + String.raw` {8}env:\n {10}GH_TOKEN: \$\{\{ github\.token \}\}\n {8}run: \|\n`
-  + QUEUE_LIVE_RUN.map((l) => `          ${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`).join(''), 'gm');
+  + QUEUE_LIVE_RUN.map((l) => `          ${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`).join('')
+  + String.raw`(?!(?:[ \t]*\n)* {10})`, 'gm');
 /** The queue's base handed to the server shards' test step (D-9016): an env value the growth check reads, gating nothing. */
 const QUEUE_BASE_ENV_LINE = '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}';
 
@@ -246,6 +250,26 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     expect(liveSteps.sort(), 'the queue liveness step, whole, once per long required job')
       .toEqual(['browser-pwa', 'build-pwa', 'deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-shard', 'server-typecheck', 'test']);
     expect(shardBase, 'server-shard hands the growth check the queue base once').toBe(1);
+  });
+
+  it('hands the queue base to the step that runs the server suite, and to no other step of server-shard (review 3762 F1)', () => {
+    // The growth check reads QUEUE_BASE from its own process environment (growth-check.test.ts resolves it through
+    // armedBase), so the line counts only on the step that runs vitest. Steps are read the way ci-pipeline.test.ts's
+    // `steps` reads them: from one six-space `- ` line to the next. A renamed or split step reds here with its reason.
+    const block = jobs(ci()).get('server-shard') ?? [];
+    const stepsOf: string[][] = [];
+    for (const l of block) {
+      if (/^ {6}- /.test(l)) stepsOf.push([l]);
+      else if (stepsOf.length && !/^ {6}#/.test(l)) stepsOf[stepsOf.length - 1]!.push(l);
+    }
+    expect(stepsOf.length, 'parsed no steps of server-shard').toBeGreaterThan(0);
+    const holders = stepsOf.filter((st) => st.includes(QUEUE_BASE_ENV_LINE));
+    expect(holders.length, 'server-shard carries the queue base on exactly one step').toBe(1);
+    const step = holders[0]!;
+    expect(step[0], 'the step that carries the queue base is no longer the one named Test').toBe('      - name: Test');
+    const script = step.slice(step.indexOf('        run: |') + 1).join('\n');
+    expect(step.includes('        run: |') && /\.\/node_modules\/\.bin\/vitest run /.test(script),
+      'the step that carries the queue base does not run the server suite with vitest').toBe(true);
   });
 
   it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {

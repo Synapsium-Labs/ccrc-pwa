@@ -24,7 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
-import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeRunRefuseCode, type ProgrammeStoredState } from './programmeLifecycle.js';
+import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -7277,7 +7277,7 @@ export interface ProgrammeEnding {
 
 /** One programme of `GET /api/programmes` (D-8075, spec §11.6). `stuck` and `pendingClose` are absent before the stuck
  *  pass has run; `coordinatorGone` is absent when the server has no reading (A60). */
-export interface ProgrammeRow {
+export interface ProgrammeRow extends ProgrammeLifecycleFields {   // programme lifecycle W2: the lifecycle fields (spec §15)
   slug: string;
   title: string;
   currentWave: number | null;
@@ -7293,7 +7293,7 @@ export interface ProgrammeRow {
 }
 
 /** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
-export interface ProgrammesAnswer {
+export interface ProgrammesAnswer extends ProgrammesLifecycleAnswer {
   ok: true;
   programmes: ProgrammeRow[];
   closedToday: { operator: number; sweep: number; coordinator: number };
@@ -14073,14 +14073,14 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' three. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' four. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
    // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
    '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
    '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.cc-sessions/.door/**'];
-export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**', '~/.ccrc/authority-witness.json'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
 export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];

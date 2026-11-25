@@ -172,6 +172,16 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/.cc-sessions/.doorstep' })).toBeUndefined();
   });
 
+  it('the list refuses an edit of the authority witness file, and never a read of it (Overlord W1 authority journal, Task 6)', () => {
+    expect(ACCOUNT_WRITE_DIRS).toContain('~/.ccrc/authority-witness.json');
+    expect(ACCOUNT_DENY_RULES).toContain('Edit(~/.ccrc/authority-witness.json)');
+    expect(ACCOUNT_DENY_RULES).not.toContain('Read(~/.ccrc/authority-witness.json)');
+    for (const tool of ['Edit', 'Write', 'MultiEdit']) {
+      expect(anyRule(tool, { file_path: '~/.ccrc/authority-witness.json' }), tool).toBe('Edit(~/.ccrc/authority-witness.json)');
+    }
+    expect(anyRule('Read', { file_path: '~/.ccrc/authority-witness.json' })).toBeUndefined();
+  });
+
   it('the list refuses a write of the roster and its mirror and a direct run of the verb script, and never a read of them (F2)', () => {
     expect(ACCOUNT_ROSTER_FILES).toEqual(['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh']);
     for (const f of ACCOUNT_ROSTER_FILES) {
