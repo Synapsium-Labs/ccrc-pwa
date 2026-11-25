@@ -784,7 +784,7 @@ interface Frame {
 }
 /** Sample the list in every animation frame, in the page, until `stopSampler`. A frame with no scroller (another screen
  *  is up) is recorded with `rows: -1`. Drawn rows are the ones the scroller holds, in view or in overscan. */
-const startSampler = (page: Page) => page.evaluate(() => {
+const samplerBody = (): void => {
   const w = window as unknown as { __frames: unknown[]; __stop: boolean };
   w.__frames = []; w.__stop = false;
   const t0 = performance.now();
@@ -807,6 +807,15 @@ const startSampler = (page: Page) => page.evaluate(() => {
     if (!w.__stop) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+};
+const startSampler = (page: Page) => page.evaluate(samplerBody);
+/** The frames sampled so far, and start the record again (a sampler installed with `addInitScript(samplerBody)` runs from
+ *  the page's first frame, so a first open is sampled from navigation). */
+const takeFrames = (page: Page) => page.evaluate(() => {
+  const w = window as unknown as { __frames: unknown[] };
+  const out = w.__frames as Frame[];
+  w.__frames = [];
+  return out;
 });
 const stopSampler = (page: Page) => page.evaluate(() => {
   const w = window as unknown as { __frames: unknown[]; __stop: boolean };
@@ -816,6 +825,27 @@ const stopSampler = (page: Page) => page.evaluate(() => {
 /** The largest move, between two frames, of a row drawn in both (px from the scroller's top). */
 const jumpBetween = (a: Frame, b: Frame): number =>
   Math.max(0, ...Object.keys(b.at).filter((k) => k in a.at).map((k) => Math.abs(b.at[k]! - a.at[k]!)));
+
+/** What a sampled open looks like from the first frame that draws rows to rest (follow-up A4). */
+function figures(frames: Frame[]) {
+  const drawn = frames.findIndex((fr) => fr.rows > 0);
+  const emptyBefore = frames.slice(0, Math.max(0, drawn)).filter((fr) => fr.rows === 0).length;
+  const empties = frames.filter((fr, i) => i > drawn && drawn >= 0 && fr.rows === 0).length;
+  const gone = frames.findIndex((fr, i) => i > drawn && drawn >= 0 && fr.rows === -1) >= 0;
+  const run = frames.slice(Math.max(0, drawn));
+  const same = (a: Frame, b: Frame): boolean => a.top === b.top && a.height === b.height && a.first === b.first && a.last === b.last;
+  let stableAt = 0;
+  for (let i = run.length - 1; i > 0; i -= 1) { if (!same(run[i]!, run[i - 1]!)) { stableAt = i; break; } }
+  let biggest = 0;
+  for (let i = 1; i < run.length; i += 1) biggest = Math.max(biggest, jumpBetween(run[i - 1]!, run[i]!));
+  const changes = run.filter((fr, i) => i === 0 || !same(fr, run[i - 1]!));
+  const end = frames.at(-1)!;
+  return { drawn, emptyBefore, empties, gone, run, stableAt, biggest, changes, end, foot: end.height - end.top - end.client };
+}
+const figureLine = (f: ReturnType<typeof figures>, total: number): string =>
+  `first drawn frame ${f.drawn} of ${total}; scroller mounted with no row for ${f.emptyBefore} frames before it; ${f.changes.length} frames changed; `
+  + `at rest ${f.stableAt} frames after the first drawn; empty frames after drawn ${f.empties}; list gone again ${f.gone}; `
+  + `biggest jump of a row drawn in two frames ${f.biggest.toFixed(1)} px; ends at scrollTop ${f.end.top} of ${f.end.height}, ${f.foot.toFixed(1)} px from the foot`;
 
 describe('a list that is only the reset row and its divider (follow-up A3)', () => {
   for (const view of [VIEWS.find((v) => v.width === 390 && v.skin === REFINED && v.theme === PHOSPHOR)!,
@@ -864,6 +894,25 @@ describe('a list that is only the reset row and its divider (follow-up A3)', () 
         // when the page landed the view followed the foot, the reset row left the view above, and a few frames later the
         // view was set a row or two further to the foot again. Pinned: where the reader ends (at the foot, as a reader at the
         // foot always does), and that the page drew; the reset row's leaving the view is printed, not asserted.
+        // The snap, printed: how far short of the foot the view stood after the page landed, for how many frames, and the last
+        // move to the foot.
+        const after0 = frames.slice(grew);
+        const short = after0.map((fr) => fr.height - fr.top - fr.client);
+        const lastShort = short.findLastIndex((v) => v > 2);
+        const shortFrames = short.filter((v) => v > 2).length;
+        const snap = lastShort >= 0 && lastShort + 1 < after0.length ? after0[lastShort + 1]!.top - after0[lastShort]!.top : 0;
+        report(`A3 ${named(view)}: short of the foot by up to ${Math.max(0, ...short).toFixed(0)} px in ${shortFrames} frames after the page landed (last short frame ${lastShort >= 0 ? after0[lastShort]!.f : 'none'}); final snap ${snap.toFixed(0)} px`);
+        for (let i = 1; i < after0.length; i += 1) {
+          if (after0[i]!.height < after0[i - 1]!.height - 1) {
+            report(`A3 ${named(view)}: height fell at frame ${after0[i]!.f}: ${after0[i - 1]!.height} -> ${after0[i]!.height}, scrollTop ${after0[i - 1]!.top} -> ${after0[i]!.top}, first row ${after0[i - 1]!.first} -> ${after0[i]!.first}`);
+          }
+        }
+        // At rest nothing moves: the list's settle waits SETTLE_FRAMES = 2 quiet frames (`ChatList.tsx`), so the last 8 of the
+        // sampled frames (the sampler ran 1.2 s, about 70 frames, after the page) are identical.
+        const rest = frames.slice(-8);
+        for (const fr of rest) {
+          expect([fr.top, fr.height, fr.first, fr.last], `frame ${fr.f}: the list moved at rest`).toEqual([rest[0]!.top, rest[0]!.height, rest[0]!.first, rest[0]!.last]);
+        }
         expect(was.at.top, 'the short list was scrolled').toBe(0);
         expect(was.top, 'the reset row stood outside the view before the page').toBeGreaterThanOrEqual(0);
         expect(settled.height - settled.top - settled.client, 'the reader at the foot was left off it').toBeLessThanOrEqual(2);
@@ -925,10 +974,16 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
       const app = await openApp(browser!, view, fixture);
       const { ctx, page, errors } = app;
       await ctx.route('**/api/sessions/*/clip/**', async (route) => { await route.fulfill({ status: 200, contentType: 'image/png', body: PICTURE }); });
+      await ctx.addInitScript(samplerBody); // sampled from navigation: the plain first open is the baseline
       try {
         await page.goto(`${server!.origin}/s/${SESSION.id}`);
         await page.waitForSelector('[data-row-key]', { timeout: 20_000 });
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(1500);
+        const firstOpen = await takeFrames(page);
+        const base = figures(firstOpen);
+        report(`A4 ${named(view)} FIRST OPEN: ${figureLine(base, firstOpen.length)}`);
+        expect(base.drawn, 'the first open drew no rows').toBeGreaterThanOrEqual(0);
+        expect(base.foot, 'the first open did not end at the foot').toBeLessThanOrEqual(2);
         // One page older, so the store holds older rows; then the edge reads expired.
         await scrollList(page, 40);
         await expect.poll(() => page.locator('.chat-scroller [data-row-key="em' + '1"]').count().then(() => page.evaluate(() => document.querySelectorAll('.chat-scroller [data-row-key]').length)), { timeout: 10_000 }).toBeGreaterThan(0);
@@ -946,7 +1001,7 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
         await page.waitForFunction(() => document.querySelector('.chat-scroller') === null, undefined, { timeout: 10_000 });
         await page.waitForTimeout(500);
         answers = 'page';
-        await startSampler(page);
+        await takeFrames(page); // the record starts again: from here to the end is the reopen
         await page.evaluate(() => { history.back(); });
         await page.waitForSelector('.chat-scroller [data-row-key]', { state: 'attached', timeout: 10_000 });
         await page.waitForTimeout(1800);
@@ -955,34 +1010,21 @@ describe('reopening a chat whose older edge reads expired (follow-up A4)', () =>
         const reopen = connects.at(-1)!;
         report(`A4 ${named(view)}: connects ${connects.map((c) => `#${c.n} ${c.resuming ? 'resuming' : 'fresh'}`).join(', ')}`);
         expect(reopen.resuming, 'the reopen resumed: its older edge was not expired').toBe(false);
-        // The frames from the first one that draws rows.
-        const drawn = frames.findIndex((fr) => fr.rows > 0);
-        const empties = frames.filter((fr, i) => i > drawn && drawn >= 0 && fr.rows === 0).length;
-        // Frames before the first drawn one: the other screen (no scroller), or a list mounted with no row in view.
-        const emptyBefore = frames.slice(0, Math.max(0, drawn)).filter((fr) => fr.rows === 0).length;
-        const gone = frames.findIndex((fr, i) => i > drawn && drawn >= 0 && fr.rows === -1);
-        const run = frames.slice(Math.max(0, drawn));
-        let stableAt = run.length - 1;
-        for (let i = run.length - 1; i > 0; i -= 1) {
-          if (run[i]!.top !== run[i - 1]!.top || run[i]!.height !== run[i - 1]!.height || run[i]!.first !== run[i - 1]!.first || run[i]!.last !== run[i - 1]!.last) { stableAt = i; break; }
-          stableAt = i - 1;
-        }
-        let biggest = 0;
-        for (let i = 1; i < run.length; i += 1) biggest = Math.max(biggest, jumpBetween(run[i - 1]!, run[i]!));
-        const changes = run.filter((fr, i) => i === 0 || fr.first !== run[i - 1]!.first || fr.last !== run[i - 1]!.last || fr.top !== run[i - 1]!.top || fr.height !== run[i - 1]!.height);
+        const fx = figures(frames);
+        const { drawn, run, changes, biggest } = fx;
         for (const fr of changes.slice(0, 14)) {
           report(`A4 ${named(view)} frame ${fr.f} (${fr.ms} ms): scrollTop ${fr.top} of ${fr.height}, ${fr.rows} rows, first ${fr.first}, last ${fr.last}`);
         }
-        const end = frames.at(-1)!;
         // No frame draws a row older than the fresh backlog's own first message: the cached older rows are never drawn.
         const freshFirst = all.slice(-PAGE).find((e) => e.kind === 'user' || e.kind === 'assistant')!.uuid as string;
         const numOf = (k: string): number => Number(/^em(\d+)$/.exec(k)?.[1] ?? Number.POSITIVE_INFINITY);
         const oldest = Math.min(...frames.flatMap((fr) => Object.keys(fr.at)).map(numOf));
         report(`A4 ${named(view)}: oldest message row drawn in any frame em${oldest} (the fresh backlog starts at ${freshFirst})`);
         expect(oldest, 'a cached older row was drawn before the fresh backlog replaced it').toBeGreaterThanOrEqual(numOf(freshFirst));
-        report(`A4 ${named(view)}: first drawn frame ${drawn} of ${frames.length}; ${changes.length} frames changed; stable from frame ${run[stableAt]?.f} (${stableAt} frames after the first drawn); `
-          + `empty frames after drawn ${empties}, list mounted with no row before it ${emptyBefore}; list gone again ${gone >= 0}; biggest jump of a row drawn in two frames ${biggest.toFixed(1)} px; `
-          + `ends at scrollTop ${end.top} of ${end.height}, ${(end.height - end.top - end.client).toFixed(1)} px from the foot; last row ${end.last}`);
+        report(`A4 ${named(view)} REOPEN: ${figureLine(fx, frames.length)}; last row ${fx.end.last}`);
+        report(`A4 ${named(view)} REOPEN vs FIRST OPEN: frames to rest ${fx.stableAt} vs ${base.stableAt}; biggest row jump ${biggest.toFixed(1)} vs ${base.biggest.toFixed(1)} px; empty-mount frames ${fx.emptyBefore} vs ${base.emptyBefore}`);
+        expect(drawn, 'the reopen drew no rows').toBeGreaterThanOrEqual(0);
+        expect(fx.foot, 'the reopen did not end at the foot').toBeLessThanOrEqual(2);
         // The invariants: the fresh backlog's rows are drawn (its live rows), the edge no longer reads expired.
         await page.waitForSelector('.chat-scroller [data-row-key="live2"]', { state: 'attached', timeout: 10_000 });
         expect(await page.locator('.older-edge[data-older="expired"]').count(), 'the edge still reads expired after the fresh backlog').toBe(0);
