@@ -63,7 +63,7 @@ drain cuts the stream or the client closes (`Hooks.client_gone`, the shim's own 
 no retry), and nothing is posted for either. An absorbed failure is counted in the parity row's `absorbed` and has its
 own row in the request record (`reqrecord.ABSORBED`); it is no outcome, `stats.request` does not count the retry again,
 and it is not recorded in the status file, so a failure that passed never reads as the lane's last error; the failure
-that is answered is recorded, whether the bounds ran out or the client left. What is counted per POST or per upstream
+that ended the attempts is recorded, whether the bounds ran out or the client left. What is counted per POST or per upstream
 answer still is, once for each attempt: `parity_effort` and the markers each POST carried, the header names, a page's
 log line and a recording (never a parity response: an attempt whose terminal arrived is not tried again).
 
@@ -73,8 +73,8 @@ through `_observe`): the parity counts above are read from that object, and so i
 `reqrecord.RequestRecord` once the bridge has decided what it did with the answer (its outcome word, the one the stats
 file counts for it). A row is written only while the lane directory holds the operator's `reqrecord.REQUESTS_MARKER`;
 every POST that got an HTTP answer has one (the 401 before its retry, the fallback's 400, an absorbed failure, an error
-answered to the client, a stream that broke), and so does one that got none (`status` null). The record never raises into a request
-and never changes the client's answer or the wire.
+answered to the client, a stream that broke), and so does one that got none (`status` null). The record never raises
+into a request and never changes the client's answer or the wire.
 
 THE IDLE FLUSH (D-8624). Each answer's handler flushes the stats file, which writes at most every `stats.FLUSH_S`; then
 it re-arms one timer (`_IdleFlush`) that flushes again once the bridge has been idle for FLUSH_S, so a run's figures
@@ -1051,9 +1051,9 @@ class _Request:
         responses is not silence. Its exception is raised here; the wait ends when `fn` returns, which its own
         bounds limit (CONNECT_TIMEOUT_S, IDLE_TIMEOUT_S, the library's), or when the stream is closed (the client went
         away, or the drain cut it): then `the bridge stopped` is raised at once, and the helper drops its answer when
-        it comes, recording a POST's failure first (nobody else will). An upstream connection it gets is closed there explicitly; under CPython the reference count would
-        close it too once the helper returns, so the close is stated rather than guarded (no case can tell the two
-        apart)."""
+        it comes, recording a POST's failure first (nobody else will). An upstream connection it gets is closed there
+        explicitly; under CPython the reference count would close it too once the helper returns, so the close is
+        stated rather than guarded (no case can tell the two apart)."""
         if not out.committed or out.buffered:
             return fn(*args, **kwargs)
         box = {}  # type: Dict[str, object]
@@ -1099,7 +1099,8 @@ class _Request:
 
     def _one_response(self, turn: inbound.NeutralRequest, reading: object,
                       out: stream.AnthropicStream) -> object:
-        """One upstream response: (reducer, terminal, reading) for a reply, or the BridgeError to answer."""
+        """One upstream response: (reducer, terminal, reading) for a reply, or the BridgeError to answer, recorded. The
+        one place a failed attempt is tried again, refreshed for, sent without its markers, or recorded."""
         st = self.state
         lib = self.lib
         counted = True
