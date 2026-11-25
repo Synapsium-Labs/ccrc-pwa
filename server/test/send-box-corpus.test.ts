@@ -35,6 +35,11 @@
  * /model picker and its footerless `Switch model?` dialog drawn OVER a bare `❯` box and the statusline. Their marker
  * row is that bare box row, so this column reads `{box: 'present', draft: ''}`, and `_pane_box_read` reads `absent`
  * off the dialog's cursor row (`_pane_box_dialog`).
+ * D-9077: RECORDED 2026-11-25 from Claude Code 2.1.332, tmux 3.7c, 220x50, against a local server answering 529 to every
+ * request (work dir scrubbed as above), in a pane no client ever focused: `placeholder-error-hint-cursor` (the hint after
+ * the failed turn, its first letter under the drawn cursor), `placeholder-error-hint-unfocused` (the same pane after a
+ * focus-out: no cursor, all dim), `draft-cursor-start` and `draft-one-char-cursor` (typed text with the cursor on its first
+ * letter: still a person's draft).
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -70,7 +75,7 @@ describe('the box reader corpus (D-5910)', () => {
       it(n, () => {
         // The capture really does show the hint (its visible text, SGR removed: a mid-run reset splits the raw
         // bytes), so an empty read is the strip at work, not an empty row.
-        expect(capture(n).replace(/\x1b\[[0-9;]*m/g, '')).toContain('Try "edit <filepath> to..."');
+        expect(capture(n).replace(/\x1b\[[0-9;]*m/g, '')).toContain(n.includes('error-hint') ? 'Resend your message to try again' : 'Try "edit <filepath> to..."');
         expect(draftOfMeasured(capture(n))).toEqual({ box: 'present', draft: '' });
       });
     }
@@ -78,7 +83,7 @@ describe('the box reader corpus (D-5910)', () => {
 
   it('each draft capture reads its own text', () => {
     const drafts = [...names('draft-'), 'stranded-clear.ansi'];
-    expect(drafts.length).toBe(5);
+    expect(drafts.length).toBe(7);
     for (const n of drafts) {
       const want = VERDICTS[n]!.draftOfMeasured;
       expect(want.box === 'present' && want.draft !== '', n).toBe(true);

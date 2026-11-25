@@ -74,7 +74,8 @@ OVERFLOW_PHRASE = "context window"
 AUTH_DEAD_WORDS = frozenset({
     "needs-signin", "not-logged-in", "config-error", "foreign-family", "credential-unusable", "auth-endpoint-refused",
 })
-# Transient: 503 with no `x-should-retry`, so Claude Code retries twice.
+# Transient: 503 with no `x-should-retry`, so Claude Code retries twice. The bridge itself never retries these (absorb.py
+# is asked only about an upstream answer, never about the library's).
 AUTH_TRANSIENT_WORDS = frozenset({"refresh-failed", "auth-lock-busy"})
 # Not a library word: the bridge raises it itself when CCRC_CODEX_AUTH_LIB does not load.
 AUTH_LIBRARY_ABSENT = "auth-library-absent"
@@ -172,6 +173,12 @@ def request_id_of(headers: object) -> Optional[str]:
         if value is not None:
             return value if REQUEST_ID_RE.fullmatch(value) else None
     return None
+
+
+def retry_after_of(headers: object) -> Optional[str]:
+    """The upstream `retry-after` as delta-seconds (RETRY_AFTER_RE); None when absent or of any other shape."""
+    raw = _header(headers, "retry-after")
+    return raw.strip() if raw is not None and RETRY_AFTER_RE.fullmatch(raw.strip()) else None
 
 
 def _number(value: object) -> Optional[float]:
@@ -273,8 +280,7 @@ def classify_http(status: int, body: bytes, headers: Mapping[str, str], *, now: 
     err = _error_object(obj)
     code, etype = _names(err)
     rid = request_id_of(headers)
-    raw_retry = _header(headers, "retry-after")
-    retry_after = raw_retry.strip() if raw_retry is not None and RETRY_AFTER_RE.fullmatch(raw_retry.strip()) else None
+    retry_after = retry_after_of(headers)
     shown = code if code is not None else etype
     row = _by_code(code, etype, err, rid, now, retry_after)
     if row is not None:
