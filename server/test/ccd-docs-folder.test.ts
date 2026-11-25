@@ -620,6 +620,73 @@ describe('docs-folder: what a refusal leaves behind (X2 P2.1)', () => {
     expect(got).toEqual(['absent', ['.lock', 'beta']]);
   });
 
+  // Review 3783 A1. A refused first add takes back its lock file and directory; it must do so while it still holds the
+  // lock, and a call that waited on that lock must not write under a name that is gone. Both halves are made without a
+  // race: the first by asking, at the take-back's own unlink, whether the lock is still held (a second open file
+  // description's non-blocking flock); the second by taking the lock's name away at the moment the waiter wins it.
+  it('folder add: a refused first add takes back its lock file while it still holds the lock', () => {
+    const got = unitJson<[string | null, boolean[], boolean]>(h.home, [
+      ctxPy(),
+      'import fcntl',
+      'calls = [0]',
+      'def fake(ctx, path, cfg):',
+      '    calls[0] += 1',
+      '    if calls[0] == 1:',
+      '        return os.open("/", os.O_RDONLY), None',
+      '    raise H.Fail("absent")',
+      'H.folder_admit = fake',
+      'held = []',
+      'real_unlink = os.unlink',
+      'def unlink(p, dir_fd=None):',
+      "    if p == '.lock':",
+      '        fd = os.open(p, os.O_RDONLY, dir_fd=dir_fd)',
+      '        try:',
+      '            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)',
+      '            held.append(False)',
+      '        except OSError:',
+      '            held.append(True)',
+      '        finally:',
+      '            os.close(fd)',
+      '    return real_unlink(p, dir_fd=dir_fd)',
+      'os.unlink = unlink',
+      "a = H.FolderArgs('add', 'alpha', '/zq/dir', [])",
+      'word = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word = f.word',
+      'os.unlink = real_unlink',
+      "out([word, held, os.path.exists(home + '/.cc-sessions/docs-folders')])",
+    ].join('\n'));
+    expect(got).toEqual(['absent', [true], false]);
+  });
+
+  it('folder add: an add that wins a lock whose name was taken back refuses registry-busy and writes nothing', () => {
+    expect(add('beta', mkdir('zqfix', 'beta'))).toMatchObject({ ok: true });
+    const got = unitJson<[string | null, unknown, string[]]>(h.home, [
+      ctxPy(),
+      'import fcntl',
+      'H.folder_admit = lambda ctx, path, cfg: (os.open("/", os.O_RDONLY), None)',
+      'real_flock = fcntl.flock',
+      'gone = [False]',
+      'def flock(fd, op):',
+      '    real_flock(fd, op)',
+      '    if op & fcntl.LOCK_EX and not gone[0]:',
+      '        gone[0] = True',
+      "        os.unlink(home + '/.cc-sessions/docs-folders/.lock')",
+      'fcntl.flock = flock',
+      "a = H.FolderArgs('add', 'alpha', '/zq/dir', [])",
+      'word = ctx_ = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word, ctx_ = f.word, f.ctx',
+      'fcntl.flock = real_flock',
+      "out([word, ctx_, sorted(os.listdir(home + '/.cc-sessions/docs-folders'))])",
+    ].join('\n'));
+    expect(got).toEqual(['unreadable', { reason: 'registry-busy' }, ['beta']]);
+  });
+
   it('folder add: a FIFO planted at docs-folders/.lock refuses unreadable at once and never hangs', () => {
     fs.mkdirSync(registryDir(), { mode: 0o700 });
     execFileSync('mkfifo', [path.join(registryDir(), '.lock')]);

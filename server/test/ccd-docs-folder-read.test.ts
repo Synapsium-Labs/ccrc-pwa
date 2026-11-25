@@ -607,6 +607,32 @@ describe('docs-folder-read: the tree and its wall (X2 P2.2)', () => {
     expect(fs.existsSync(cacheDir()), 'the refused prepare made no cache').toBe(false);
   });
 
+  it('folder read: a section\'s own directory, or a directory of a shown path, on another device is never descended', () => {
+    // Review 3783 A2. The fstat swap reports another device for one directory: the specs section's own directory in the
+    // tree (that section then lists nothing; the others still list), and `specs/mnt` for a show of a file below it.
+    const root = mkFolder('zqsecdev', { specs: { 'a.md': 'A\n', 'mnt/x.md': 'x\n' }, plans: { 'b.md': 'B\n' } });
+    expect(addFolder('alpha', root)).toMatchObject({ ok: true });
+    const fp = sha('x\n');
+    const run = (dir: string, argv: string): [string, unknown] => unitJson<[string, unknown]>(h.home, [
+      ctxPy(),
+      `target = os.stat(${JSON.stringify(dir)}).st_ino`,
+      `dev = os.stat(${JSON.stringify(dir)}).st_dev + 1`,
+      fakeFstatPy('target', '{"st_dev": dev}'),
+      `a = H.read_args("docs-folder-read", ${argv})`,
+      'try:',
+      "    out(['ok', H.verb_folder_read(ctx, a)])",
+      'except H.Fail as f:',
+      '    out([f.word, f.ctx])',
+    ].join('\n'));
+    const t = run(secPath(root, 'specs'), "['0', '--label', 'alpha', '--op', 'tree']");
+    expect(t[0]).toBe('ok');
+    expect(entriesOf(t[1] as Answer).map((e) => `${e.section}:${e.path}`)).toEqual(['plans:b.md']);
+    expect(show('alpha', 'specs', 'mnt/x.md', fp), 'CONTROL: unswapped, the file is read').toMatchObject({ ok: true });
+    const s = run(secPath(root, 'specs', 'mnt'),
+      `['0', '--label', 'alpha', '--op', 'show', '--section', 'specs', '--path', 'mnt/x.md', '--fingerprint', ${JSON.stringify(fp)}, '--max-bytes', '1000']`);
+    expect(s).toEqual(['not-a-file', { kind: 'other-device' }]);
+  });
+
   it('folder read: a section deeper than 16 levels is unlisted too-deep, never opened', () => {
     const deep = Array.from({ length: 16 }, (_, i) => `d${i}`).join('/');
     const root = mkFolder('zqproj', { specs: { 'a.md': 'A\n', [`${deep}/x.md`]: 'x\n' } });
