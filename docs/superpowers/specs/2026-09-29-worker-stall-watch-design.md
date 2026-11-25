@@ -515,6 +515,9 @@ nothing on Stop. The one `jq` call at the payload parse (~2767) becomes one prog
 `{v:1, sessionId, state:'working'|'done'|'failed', event, at, turnAt, stopAt, bg, bgKinds, bgIds, err, restartAt,
 lostBg, lostKinds, lostIds}`
 
+(Amended: two additive fields follow them, `crons` (D-5242) and `failAts`, the epochs of the last eight consecutive provider
+failures, D-TBD-provider-retry-count.)
+
 - Every write rewrites the whole line and carries forward every field it does not set.
 - A payload with a non-empty top-level `agent_id` never touches the marker. Only main-thread events write it, and they
   run in sequence, so the shared file's lost-update race cannot happen here.
@@ -631,8 +634,12 @@ All wave-2 arms are gated by `stall-watch-w2-live` as well as the markers in §4
 | **mail stuck** | run workers and coordinators | a delivery addressed to them (on the run, or run-less) still undelivered 1.2 h after its recipient's main loop went idle (live `idle`/`shell`, or a current marker `done`), whatever its gate; or whose `lastGate` has read `registry-unmeasurable` continuously for 1.2 h (now − `gateSince`). `lastError` is never read: it is sticky text that outlives the transient it records (2445, 2463, 2464, 1778) | push, once per deliveryId | p90 mail-to-first-read 1.22 h over 1,206 worker mails. No measured census case survives waves 1–2's gate changes; the arm is a backstop whose rate the shadow measures |
 
 **`STOP_FAILURE_ERRORS`** is one total `Record` in `stall.ts` over StopFailure's documented values:
-- **retry:** `server_error`, `overloaded`, `max_output_tokens`, `unknown` — a `failed:` self-mail at 10 min; a second
+- **retry:** `max_output_tokens`, `unknown` — a `failed:` self-mail at 10 min; a second
   failure within `FAILED_REPEAT_MS` (2 h) goes to the coordinator.
+- **provider** (amended 2026-11-25, D-TBD-provider-retry-armed; the operator's ruling of that day): `server_error`,
+  `overloaded` — not this arm's. The provider-failure ladder (`coord/providerRetry.ts`, plan
+  `2026-11-25-provider-retry.md`) nudges any live session itself at 1, 4 and 15 min, tells no coordinator, and is armed by
+  its own rule rather than by `stall-watch-w2-live` (D-3605). The table now lives in `coord/stopFailure.ts`.
 - **account:** `rate_limit`, `billing_error`, `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`
   (listed by the binary only behind a feature gate), `verification_required`, `cloud_credential_error` — hold; the
   limit, swap and authdead machinery owns them.

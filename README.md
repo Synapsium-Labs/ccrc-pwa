@@ -6197,7 +6197,8 @@ next before the turn ends.
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token),
+and it keeps the times of the last consecutive provider failures (`failAts`).
 Every SessionStart but a `clear` or `compact` records the restart, and its lost
 lists name only what that restart cut short: the background tasks the last
 `done` turn left running. The lane reads the marker, the raw hookstate and the
@@ -6242,9 +6243,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
   read less the 2 h repeat window), so a repeat is never re-read as a first
   failure.
-  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
-    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
-    goes to the coordinator.
+  - A provider error (`server_error`, `overloaded`) is not this arm's: the
+    provider-failure ladder below owns it, and no coordinator is told.
+  - A retry-class error (`max_output_tokens`, `unknown`) draws a `failed:` mail
+    to the session, and a second within 2 h goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
   - Those two reach the operator as a `⚠ failed` push instead when the failing
@@ -6253,6 +6255,31 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
+
+**The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
+the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
+whose turn ended on a provider error is told to continue by itself: a worker, a
+reviewer, a coordinator, the designated Overlord, or a session of the
+operator's own. One mail to the session, typed as one line (`Your turn ended on
+a provider error; continue where you stopped.`), falls due 1 minute after the
+first consecutive failure, 4 after the second and 15 after the third and every
+later one. One that started no turn is repeated 15 minutes after it landed, and
+two are never out at once. What is owed is the marker's `failAts`, which a real
+Stop and a `clear` empty and a restart carries, so a restart that relabels the
+marker `done` silences nothing; the 22 h cutoff does not apply. It does not
+nudge a running turn, an open dialog or question, a session with no pane, one
+that is stopped, hibernated or archived, one held by a usage limit, or anything
+it could not measure. A person's unsent text in the box is refused, not stashed:
+nothing is typed, and the mail waits for the box. A queued nudge the session has
+moved past is taken back. No coordinator is asked to mend a provider, and a
+worker that owes a retry holds the quiet ladder, so none is mailed `stall:`
+about it. When three sessions owe a retry on one provider (the Anthropic lanes,
+the Codex lanes, or any other lane by itself) within 10 minutes, one notice with
+no session goes to the operator, and one record-only row says when none has owed
+one for 10 minutes; the standing outages are kept in
+`~/.ccrc/provider-outages.json`, so a restart repeats no notice. It ships armed
+and has no marker of its own: `stall-watch-disabled`, a level of Off or Log only
+chosen in Settings, and `mail-disabled` each stop it.
 
 The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
 pushed, and they move neither the quiet clock nor the episode. With a current
