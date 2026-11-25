@@ -114,7 +114,9 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         field(w1, 'termRaised', 'designation', () => termRaisedOf(designation ??= coord.designationRead(), g));
         field(w1, 'classChanged', 'designation', () => classChangedOf(designation ??= coord.designationRead(), g));
         // PR E: door process B1's two readings, each only where the store hands its read (absent: the lane's `W1`).
-        const { modelSwitchesOf, readerEventsOf } = coord;
+        // Bound to the store: on the composition `coord` is the coordination store, whose reads are methods (review 3710 F1).
+        const modelSwitchesOf = coord.modelSwitchesOf?.bind(coord);
+        const readerEventsOf = coord.readerEventsOf?.bind(coord);
         if (modelSwitchesOf !== undefined) field(w1, 'modelDrift', 'model drift', () => modelDriftReadingOf({
           startModel: g.model, startReportedAt: g.startReportedAt, switches: modelSwitchesOf(g.sessionId, g.startId), usage: base.usage }));
         if (readerEventsOf !== undefined) soft = { readersRunning: readers(() => readersRunningReadingOf(readerEventsOf(g.sessionId, g.startId), deps.time.clock.wall())) };

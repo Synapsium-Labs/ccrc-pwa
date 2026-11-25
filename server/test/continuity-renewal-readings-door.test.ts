@@ -2,8 +2,12 @@
 // `readersRunning`, from door process B1's functions passed through unchanged. The L1 mappers' cases are written once in
 // `sim/renewalReadingDoorSets.ts` and run here against the real module (the floors run them against each mutant); then the
 // store's reader-events read by the start row, the wiring, and the two decisions they reach (`renewalDue`, `softRenewalMay`).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import * as readings from '../src/continuity/renewalReadings.js';
 import { modelDriftInputCases, modelDriftReadingCases, readersRunningReadingCases } from './sim/renewalReadingDoorSets.js';
 import { insertHookReport, readerEventsSinceStart, modelSwitchesSinceStart } from '../src/continuity/hookReportStore.js';
@@ -15,6 +19,8 @@ import { renewalDue } from '../src/continuity/renewalDue.js';
 import { softRenewalMay } from '../src/continuity/softRenewal.js';
 import { renewalBase, softBase } from './sim/renewalDeciderSets.js';
 import { READER_STALE_MS } from '../../shared/continuity-reports.js';
+
+afterEach(removeTmpFixtures);
 
 describe('modelDriftInputOf', () => { for (const [n, fn] of Object.entries(modelDriftInputCases(readings))) it(n, fn); });
 describe('modelDriftReadingOf', () => { for (const [n, fn] of Object.entries(modelDriftReadingCases(readings))) it(n, fn); });
@@ -145,6 +151,23 @@ describe('renewalReadingsOf (PR E: the door process\'s readings)', () => {
     expect(r.soft).toEqual({ readersRunning: { kind: 'unmeasured', why: 'readers read failed' } });
     expect(r.w1?.modelDrift).toEqual({ kind: 'measured', value: false });
     expect(logs.filter((l) => l.includes('readers read failed'))).toHaveLength(1);
+  });
+
+  // Fix round 1 (review 3710 F1, F2): the composition hands the wiring the coordination store itself, whose reads are methods
+  // that need their object. A port of stand-in arrow functions survives being taken off its object; the real store does not.
+  it('over a real coordination store on a fixture database, both readings measure and nothing is logged', async () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-rr-door-'), '.ccrc', 'coord.db')));
+    const started = s.insertStart({ sessionId: S, reportId: 'r-door-1', uuid: '11111111-2222-3333-4444-555555555555', source: 'resume',
+      model: 'claude-opus-5-5', rowIncarnation: null, reportedAt: START, receivedAt: START });
+    if (!started.ok) throw new Error('start not recorded');
+    expect(insertHookReport(s.db, S, { kind: 'model-switch', how: 'switched', from: null, to: 'claude-fable-5-2', at: START + 1 }, START + 1).ok).toBe(true);
+    expect(insertHookReport(s.db, S, { kind: 'reader-start', agentId: 'a1', agentType: null, at: START + 2 }, NOW - 60_000).ok).toBe(true);
+    const logs: string[] = [];
+    const coord: ReadingsCoord = s;
+    const r = await renewalReadingsOf(deps(logs), coord, []).w1(gen({ startId: started.id }), base());
+    expect(r.w1?.modelDrift).toEqual({ kind: 'measured', value: true });
+    expect(r.soft).toEqual({ readersRunning: { kind: 'measured', value: 1 } });
+    expect(logs).toEqual([]);
   });
 
   it('the readers are counted at the pass\'s wall clock: a start older than READER_STALE_MS with no stop is unmeasured', async () => {
