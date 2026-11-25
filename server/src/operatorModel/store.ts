@@ -186,7 +186,7 @@ export class OperatorModelStore {
    *  id is refused. `changed` is false when the move was accepted and wrote no new value; `from` is the state it moved from, so a
    *  caller can tell a moved state word from a stamp (the sequence's message line, `messageLine.ts`). */
   moveMessage(id: number, event: MessageEvent, actor: MessageActor, at: number):
-    StoreWrite<{ readonly changed: boolean; readonly state: MessageState; readonly from: MessageState }> {
+    StoreWrite<{ readonly changed: boolean; readonly state: MessageState; readonly from: MessageState | 'unknown' }> {
     if (!isCount(at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
     try {

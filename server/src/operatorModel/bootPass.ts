@@ -1,4 +1,4 @@
-// The Operator Model's boot pass (invariant I8; Overlord W1 private store plan, Task 6; context C11, ring L4). It re-derives
+// The Operator Model's boot pass. Ring L4, context C11 (invariant I8; Overlord W1 private store plan, Task 6). It re-derives
 // what a crash can leave wrong, once, after both stores open and before the watcher starts: a `settled` row no citation
 // proves (`bootSettlement`), and a recorded message whose nudge was never queued (`nudgeRecovery`). It decides nothing:
 // the deciders (`./messages.ts`) answer, and it acts through `moveMessage` (actor `boot-pass`, with its sequence line,

@@ -1,6 +1,6 @@
 // An operator message's move and its sequence line (Overlord §10.4; sequence PR B1, call 1218, slug
-// `message-lines-stamp-after-the-move`). Context C11, the way `nudgeQueue.ts` is an act over two stores: it decides nothing of its
-// own. `moveOperatorMessage` is the private store's one move, then, in the same synchronous segment (no `await` can fall between
+// `message-lines-stamp-after-the-move`). Ring L4, context C11: an act over two stores, as `nudgeLane.ts` is, deciding nothing of
+// its own. `moveOperatorMessage` is the private store's one move, then, in the same synchronous segment (no `await` can fall between
 // them), the line `stampMessageLine` writes in a coordination transaction of its own, only when the move changed the state word.
 // Every mover goes through it: the prompt route, the mail lane and a session's own ack of its nudge, the boot pass and the hook's
 // pick-up; the acknowledge door keeps its own after-commit stamp and answer (`overlordInboxRoutes.ts`).
