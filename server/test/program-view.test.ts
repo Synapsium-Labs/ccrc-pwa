@@ -3,9 +3,9 @@
 // The pilot splits the file into four modules by pure moves (`.github/ci/file-split.mjs`, D-8636). A scanner that reads
 // the file's text would go red when its code moves, or, worse, stay green while reading less code. So every scan of
 // the file reads its program instead (`scan/programView.ts`): the file plus the destination modules that exist, or the
-// one member that declares a name. These rows pin the view itself, and the 104 top-level names the file declares on
-// the day of the pin: each one keeps exactly one home in the program, and each exported one stays exported there. A
-// feature that adds a declaration does not red this; one that removes a declaration updates the list in its own PR.
+// one member that declares a name. These rows pin the view itself and the retained names from the original file:
+// each keeps exactly one home in the program, and each exported one stays exported there. A feature that adds a
+// declaration does not red this; one that removes a declaration from the program updates the list in its own PR.
 import { describe, it, expect } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,10 +19,11 @@ import { mkTmp } from './tmpHelpers.js';
 const SRC = 'server/src/coord/delegation-checkpoint.ts';
 const DESTS = ['server/src/coord/delegation-recovery.ts', 'server/src/coord/delegation-durability.ts', 'server/src/coord/delegation-db-projection.ts'];
 
-/** The 104 top-level names `delegation-checkpoint.ts` declares on the pin's base, by the module the pilot moves each to
- *  (the plan's Tasks 3 to 6). A `*` marks the 58 the file exports. */
+/** The 103 original top-level names still in the program, grouped by the pilot's destinations (Tasks 3 to 6).
+ *  A `*` marks the 58 original exports. S2 (D-8874) moved `maxInstant` out to `delegation-model.ts`,
+ *  which is not a pilot destination. The delegation end-rules guard pins that helper's single home. */
 const NAMES: Readonly<Record<string, readonly string[]>> = {
-  // Task 6: what stays, the codec, projectability and the builder (59)
+  // Task 6: what stays, the codec, projectability and the builder (58)
   stays: [
     'DELEGATION_CHECKPOINT_FILE*', 'COORDINATION_RESTORE_MARKER_FILE*', 'DELEGATION_RESTORE_IN_PROGRESS*',
     'DelegationCheckpointErrorCode*', 'DelegationCheckpointError*', 'refuse', 'isRecord', 'isMember', 'Fields',
@@ -31,7 +32,7 @@ const NAMES: Readonly<Record<string, readonly string[]>> = {
     'readCheckpoint', 'UTF8', 'encodeDelegationCheckpoint*', 'decodeDelegationCheckpoint*', 'unprojectable',
     'LEASE_CLOCKS', 'assertDelegationCheckpointProjectable*', 'DelegationLeaseEntryFact*', 'DelegationLeaseRecordFact*',
     'assertLeaseJournalProof*', 'validateDelegationCheckpoint*', 'DelegationNamedUpstream*', 'workflowLaunchRunId*',
-    'namedAgentsOf*', 'DelegationActivityCandidate*', 'DelegationBashCallFact*', 'maxInstant', 'minInstant', 'DueEntry',
+    'namedAgentsOf*', 'DelegationActivityCandidate*', 'DelegationBashCallFact*', 'minInstant', 'DueEntry',
     'dueLess', 'duePush', 'duePop', 'bashListingOf*', 'delegationRecordNaming*', 'sessionKeyOf', 'cursorKeyOf',
     'intervalKeyOf', 'byCodeUnits', 'sortedBy', 'sortedMap', 'mergeDelegationObservationInterval*', 'leaseRowOfEntry',
     'DelegationMetaOpenResult*', 'DelegationWorkflowLaunchFact', 'sameActivity', 'DelegationCheckpointBuilder*',
@@ -124,9 +125,9 @@ describe('the program view (D-8641)', () => {
     expect(declaringFile(SRC, 'b', root), 'a nested binding is not a top-level declaration').toBe(DESTS[1]);
   });
 
-  it('the characterization: each of the 104 names has exactly one home in the program, and each of the 58 exported stays exported there', () => {
-    expect(ALL).toHaveLength(104);
-    expect(new Set(ALL.map(nameOf)).size).toBe(104);
+  it('the characterization: each of the 103 retained names has exactly one home in the program, and each of the 58 exported stays exported there', () => {
+    expect(ALL).toHaveLength(103);
+    expect(new Set(ALL.map(nameOf)).size).toBe(103);
     expect(ALL.filter((n) => n.endsWith('*'))).toHaveLength(58);
     const members = programMembers(SRC);
     const homeless: string[] = [];

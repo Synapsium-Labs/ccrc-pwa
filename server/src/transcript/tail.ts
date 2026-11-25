@@ -1,14 +1,30 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { helperFactsOf, parseTranscriptLine, type HelperFact } from './parse.js';
 import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
+import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 
 // Read at most the last 1 MB of a transcript for the backlog, not the whole
 // file. Transcripts reach tens of MB (project-d was 17.9 MB for the last 50
 // events); reading them whole through the agent RPC ballooned the agent's RSS
 // to ~1.9 GB and stalled its event loop. 1 MB comfortably covers BACKLOG_N=50
-// events even at large (multi-KB) line sizes.
-const BACKLOG_TAIL_BYTES = 1024 * 1024;
+// events even at large (multi-KB) line sizes. Since wave 171 it is read as four bounded byte reads of the agent link's
+// read cap, so every read can carry the identity of the file it read (`MeasuredByteRangeRead`'s `ident`).
+const BACKLOG_TAIL_BYTES = 4 * READ_FROM_MAX_BYTES;
+
+/** The boundary witness's most bytes: a bounded run of the file beginning at the anchor, hashed (desktop polish wave 171). */
+export const WITNESS_MAX_BYTES = 4096;
+
+/** What an older page is bound to (desktop polish wave 171): present on a backlog only when ALL of it was measured. `ident`
+ *  is the one identity token every read of the window carried (server-internal: never sent to a browser); `anchor` is the
+ *  byte offset where the oldest record the backlog covers begins, a proven record start (offset 0, or the byte before it
+ *  is a newline the window read); `witness` hashes the `len` bytes beginning at the anchor (sha256, hex). */
+export interface OlderBinding {
+  ident: string;
+  anchor: number;
+  witness: { len: number; sha256: string };
+}
 
 /**
  * What `readBacklog` answers. THREE facts, not one:
@@ -37,44 +53,148 @@ export interface BacklogRead {
   scanEnd?: number;
   /** The partial line the window began inside, which the backlog drops and the scan joins to its head; absent at offset 0. */
   cut?: string;
+  /** Desktop polish wave 171: what an older page may bind to. Absent when any of it was not measured. */
+  older?: OlderBinding;
 }
 
+const decoder = new TextDecoder();
+
 /**
- * Return the last `lastN` events plus the end-of-file byte offset (where a
- * tailer should resume), reading only the file's tail, and say whether the
- * answer rests on a completed measurement.
+ * Return the last `lastN` events plus the byte offset a tailer should resume at, reading only the file's tail, and say
+ * whether the answer rests on a completed measurement.
+ *
+ * THE SEAM (desktop polish wave 171). The window is framed in BYTES into whole records (a record is a line that ends in a
+ * newline the window read). The backlog begins at a record start: the record holding the oldest of the last `lastN` events
+ * is emitted whole, so the backlog may exceed `lastN` by the rest of that one record. An unterminated last line is not a
+ * record: it is neither parsed nor counted, and the offset is held at the end of the last whole record, so the tailer
+ * delivers that line whole once its newline lands (the coordinator's ruling on run 3609's ask). A window with no newline
+ * at all after a non-zero start lies wholly inside one record; it frames nothing and its offset stays the file's size, as
+ * before.
  */
 export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
-  const st = await io.statMeasured(file);
-  if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
-  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
-  const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
-  const res = await io.readFileFromMeasured(file, start);
-  if (!res.ok) {
-    // Absent HERE is a real race — the file was stat'd and then unlinked — and
-    // it is a MEASUREMENT, so it reports as missing-and-measured. Unreadable
-    // is the opposite: the file is still there and its bytes never came, so
-    // `missing` stays false and `measured` goes false, which is what stops the
-    // PWA rendering an empty chat over a transcript nobody could read — the
-    // empty-backlog-with-a-real-offset defect this replaced (D-1403).
-    const absent = res.reason === 'absent';
-    return { events: [], offset: st.size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: st.size }) };
+  // Reads of one window that carry two different identity tokens are not one file (review 3643 F2): the window is read
+  // once more from a fresh stat, and a second split is unmeasured, never a spliced window answered as measured.
+  for (let attempt = 1; ; attempt += 1) {
+    const st = await io.statMeasured(file);
+    if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
+    if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true, scanEnd: 0 };
+    const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
+    const w = await readWindow(io, file, start, st.size);
+    if (w.kind === 'decoded') return decodedBacklog(io, file, start, st.size, lastN);
+    if (w.kind === 'failed') return unreadBacklog(w.absent, st.size);
+    if (w.kind === 'split' && attempt < 2) continue;
+    if (w.kind === 'split') {
+      // The offset the tailer starts at comes from a stat of the file as it stands after the split, never the first one's.
+      const now = await io.statMeasured(file);
+      if (!now.ok) return { events: [], offset: 0, missing: true, measured: now.reason === 'absent' };
+      return unreadBacklog(false, now.size);
+    }
+    return frameBacklog(w.bytes, w.ident, start, st.size, lastN);
   }
+}
+
+/** The answer when the window's bytes never came. Absent HERE is a real race — the file was stat'd and then unlinked —
+ *  and it is a MEASUREMENT, so it reports as missing-and-measured. Unreadable is the opposite: the file is still there
+ *  and its bytes never came, so `missing` stays false and `measured` goes false, which is what stops the PWA rendering an
+ *  empty chat over a transcript nobody could read — the empty-backlog-with-a-real-offset defect this replaced (D-1403). */
+const unreadBacklog = (absent: boolean, size: number): BacklogRead =>
+  ({ events: [], offset: size, missing: absent, measured: absent, ...(absent ? {} : { scanEnd: size }) });
+
+type Window =
+  | { kind: 'ok'; bytes: Uint8Array; ident: string | null }
+  | { kind: 'split' }
+  | { kind: 'decoded' }
+  | { kind: 'failed'; absent: boolean };
+
+/** The window `[start, size)` as bounded byte reads of the agent link's read cap, issued together: the ranges are known
+ *  once the size is, so the window costs one round trip after the stat, as main's one read did (review 3643 A5). `ident`
+ *  is the one token every read carried, or `null` when any carried none. A read the byte reader could not answer
+ *  (`unreadable`: an agent that predates the byte field among the causes, review 3643 F1) asks main's read (`decoded`); a
+ *  read that answered fewer bytes than it was owed is unreadable. */
+async function readWindow(io: FleetIO, file: string, start: number, size: number): Promise<Window> {
+  const ranges: Array<[number, number]> = [];
+  for (let at = start; at < size; at += READ_FROM_MAX_BYTES) ranges.push([at, Math.min(READ_FROM_MAX_BYTES, size - at)]);
+  const answers = await Promise.all(ranges.map(([at, want]) => io.readFileFromBytesMeasured(file, at, want)));
+  if (answers.some((r) => !r.ok && r.reason === 'absent')) return { kind: 'failed', absent: true };
+  if (answers.some((r) => !r.ok)) return { kind: 'decoded' };
+  const bytes = new Uint8Array(size - start);
+  const tokens = new Set<string>();
+  let unmarked = false;
+  for (const [n, r] of answers.entries()) {
+    if (!r.ok || r.bytes.length !== ranges[n]![1]) return { kind: 'failed', absent: false };
+    bytes.set(r.bytes, ranges[n]![0] - start);
+    if (r.ident === undefined) unmarked = true;
+    else tokens.add(r.ident);
+  }
+  if (tokens.size > 1) return { kind: 'split' };
+  return { kind: 'ok', bytes, ident: unmarked || tokens.size === 0 ? null : [...tokens][0]! };
+}
+
+/** Main's backlog, for a window the byte reader could not answer (review 3643 F1): one decoded read from `start`, framed as
+ *  main frames it (the last `lastN` events of the whole lines after the partial head, the offset the read's size), and
+ *  no paging. Its own failure is the window's: a file that really is unreadable stays unreadable. */
+async function decodedBacklog(io: FleetIO, file: string, start: number, size: number, lastN: number): Promise<BacklogRead> {
+  const res = await io.readFileFromMeasured(file, start);
+  if (!res.ok) return unreadBacklog(res.reason === 'absent', size);
   let text = res.data;
   let cut: string | undefined;
-  // A non-zero start almost certainly lands mid-line — drop the partial head so
-  // we never hand half a JSON object to the parser (the start scan parses it, joined to its head).
   if (start > 0) {
     const nl = text.indexOf('\n');
     cut = nl >= 0 ? text.slice(0, nl) : text;
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   const lines = text.split('\n').filter((l) => l.trim() !== '');
-  const events = lines.flatMap(parseTranscriptLine);
   const helpers = lines.flatMap(helperFactsOf);
   return {
-    events: events.slice(-lastN), offset: res.size, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
-    scanEnd: start, ...(cut !== undefined ? { cut } : {}),
+    events: lines.flatMap(parseTranscriptLine).slice(-lastN), offset: res.size, missing: false, measured: true,
+    ...(helpers.length > 0 ? { helpers } : {}), scanEnd: start, ...(cut !== undefined ? { cut } : {}),
+  };
+}
+
+/** The window's bytes framed into whole records (THE SEAM, above), and what an older page may bind to. */
+function frameBacklog(bytes: Uint8Array, ident: string | null, start: number, size: number, lastN: number): BacklogRead {
+  // A non-zero start almost certainly lands mid-line — drop the partial head so
+  // we never hand half a JSON object to the parser (the start scan parses it, joined to its head).
+  let head = 0;
+  let cut: string | undefined;
+  if (start > 0) {
+    const nl = bytes.indexOf(0x0a);
+    head = nl >= 0 ? nl + 1 : bytes.length;
+    cut = decoder.decode(bytes.subarray(0, nl >= 0 ? nl : bytes.length));
+  }
+  const last = bytes.lastIndexOf(0x0a);
+  /** Whole records are [head, recordsEnd): everything after the window's last newline is unterminated. */
+  const recordsEnd = last + 1 >= head ? last + 1 : head;
+  const offset = start > 0 && last < 0 ? size : start + recordsEnd;
+
+  const records: { at: number; line: string; events: ChatEvent[] }[] = [];
+  for (let from = head; from < recordsEnd;) {
+    const nl = bytes.indexOf(0x0a, from);
+    const line = decoder.decode(bytes.subarray(from, nl));
+    if (line.trim() !== '') records.push({ at: from, line, events: parseTranscriptLine(line) });
+    from = nl + 1;
+  }
+  const helpers = records.flatMap((r) => helperFactsOf(r.line));
+
+  // The seam: walk back from the newest record until `lastN` events are covered; that record is emitted whole.
+  let k = records.length;
+  let count = 0;
+  while (k > 0 && count < lastN) { k -= 1; count += records[k]!.events.length; }
+  const covered = count >= lastN ? records.slice(k) : records;
+  const events = covered.flatMap((r) => r.events);
+  // The anchor: the oldest covered record's start, or, when the window's whole records hold fewer than `lastN` events,
+  // the first whole record's start (`head`). No whole record (the window lies inside one record): no anchor.
+  const anchorAt = count >= lastN && covered.length > 0 ? covered[0]!.at : head;
+  const older = typeof ident === 'string' && anchorAt < recordsEnd
+    ? (() => {
+      const len = Math.min(WITNESS_MAX_BYTES, recordsEnd - anchorAt);
+      const sha256 = createHash('sha256').update(bytes.subarray(anchorAt, anchorAt + len)).digest('hex');
+      return { ident, anchor: start + anchorAt, witness: { len, sha256 } };
+    })()
+    : undefined;
+  return {
+    events, offset, missing: false, measured: true, ...(helpers.length > 0 ? { helpers } : {}),
+    scanEnd: start, ...(cut !== undefined ? { cut } : {}), ...(older !== undefined ? { older } : {}),
   };
 }
 
@@ -167,7 +287,9 @@ export class TranscriptTailer extends EventEmitter {
     const helpers = lines.flatMap(helperFactsOf);
     if (helpers.length > 0) this.emit('helpers', helpers);
     const events = lines.flatMap(parseTranscriptLine);
-    if (events.length > 0) this.emit('events', events, this.offset);
+    // The offset a client resumes at is the end of the last whole line, never inside the line held in the carry, so a
+    // resume delivers that line whole (review 3643 A2; the backlog's offset keeps the same rule, wave 171).
+    if (events.length > 0) this.emit('events', events, this.offset - this.carry.byteLength);
   }
 
   private onReset(_size: number): void {

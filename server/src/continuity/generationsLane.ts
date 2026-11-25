@@ -102,7 +102,9 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
-import type { W1Inputs } from './renewalReadings.js';
+import { designatedClassAtMint, probesFailedTwiceOf, type W1Inputs } from './renewalReadings.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import {
   actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
   standingActs, type ItemAbout, type ItemStanding, type PermitWait, type RenewalAct,
@@ -185,6 +187,10 @@ export interface GenerationsDeps {
    *  the caller across passes, never a decision's durable state (review 2063 F4). One key per kind, so a stalled compaction
    *  try and a spot try never overwrite each other (review 2068 F4). */
   readonly emptyTries: EmptyTries;
+  /** The ladder's one latch raise (`renewalReadingsWiring.ts` binds `overlordLadderRead.ts#raiseLatch`), asked for the
+   *  `probes-failed-twice` row on a live Overlord step (`probesFailedTwiceOf`). The cap is the cause row's, never the lane's.
+   *  Absent: nothing is raised. Its answer is checked; a refusal or a throw is logged, never thrown. */
+  readonly latch?: (cause: LadderLatchCause, detail: string) => { readonly ok: true } | { readonly ok: false; readonly why: string };
 }
 
 /** The empty-try memo: by generation id, then by round kind, the `emptyTryKey` of the newest try that had no question. */
@@ -274,13 +280,34 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const retract: string[] = [];
   const recorded: string[] = [];
   const waits: Partial<Record<PermitWait, number>> = {};
+  // The `probes-failed-twice` latch (Table 7.5a; renewal readings Task 6): the ladder's one raise, so a standing latch answers
+  // `changed: false`. A refusal or a throw is logged and the pass goes on.
+  function latchProbes(gen: GenRow): void {
+    if (deps.latch === undefined) return;
+    try {
+      const r = deps.latch('probes-failed-twice', `generation ${gen.n} of the Overlord degraded after two failed probe rounds`);
+      if (!r.ok) deps.log(`ccrc-server: generations: the probes-failed-twice latch was refused for generation ${gen.id} (${r.why})`);
+    } catch (e) {
+      deps.log(`ccrc-server: generations: the probes-failed-twice latch failed for generation ${gen.id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
   const onStep = (gen: GenRow, from: GenerationStateOf, step: GenStep, event: GenEvent, about?: ItemAbout): void => {
+    // The pre-step row holds both the walk's written column and the probe count that `degrade` resets (review 2183 F8).
+    const { column } = effectiveGeneration(gen, live);
+    if (probesFailedTwiceOf({ role: gen.role, from, event, view: gen, next: step.next.state, column })) latchProbes(gen);
     if (live) { for (const act of actsOfStep(step.actions, from, event, about)) planned.push({ target: targetOf(gen), act }); return; }
     const line = shadowLine(gen, from, step, event);
     recorded.push(line);
     deps.log(line);
   };
+  // A step whose line the sequence refused is not written, told apart from a compare-and-set miss: one line each (Overlord
+  // §10.4; sequence plan review F11). Every step of this pass goes through it.
+  const stepper: Pick<GenerationsCoord, 'stepGeneration'> = { stepGeneration: (id, ...rest) => {
+    const w = coord.stepGeneration(id, ...rest);
+    if (!w.changed && w.why === 'stamp-refused') deps.log(`ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`);
+    return w;
+  } };
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
   const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
@@ -339,8 +366,10 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   // for the renewal permit then reads undecided, so a coordinator's renewal holds as a role change.
   let designation: DesignationFact | 'unmeasured';
   let designationWhy = 'the designation could not be read';
+  let designationRead: DesignationRead = { kind: 'unmeasured', why: designationWhy };
   try {
     const read = coord.designationRead();
+    designationRead = read;
     designation = designationFactFrom(read);
     if (read.kind === 'unmeasured') designationWhy = read.why;
   } catch (e) { designation = 'unmeasured'; designationWhy = e instanceof Error ? e.message : String(e); }
@@ -376,6 +405,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         identity: identityFor(s.sessionId), sessionId: s.sessionId, role: v.role,
         term: identityFor(s.sessionId) === 'overlord' && fact.kind === 'row' ? fact.term : GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
         startId: s.id, startReportedAt: s.reportedAt, resumed: v.resumed, model: s.model, lane: v.lane, host: null,
+        designatedClass: designatedClassAtMint(designationRead, identityFor(s.sessionId)),
         outcome: v.outcome, mono: clock.mono(), proc: deps.proc, now,
       });
 
@@ -453,7 +483,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    cardRead += applyFedEvents(coord, feed.events, live, now, onStep, D.generationStep);
+    cardRead += applyFedEvents(stepper, feed.events, live, now, onStep, D.generationStep);
   }
 
   // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
@@ -509,7 +539,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, new Map(tried).set(s.open.kind, key)); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
-    probesFed += applyFedEvents(coord, events, live, now, onStep, D.generationStep);
+    probesFed += applyFedEvents(stepper, events, live, now, onStep, D.generationStep);
     for (const id of [...deps.emptyTries.keys()]) if (!forProbes.rows.some((g) => g.id === id)) deps.emptyTries.delete(id);
   }
 
@@ -596,7 +626,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const from = effectiveGeneration(g, live).state;
       const step = D.generationStep(genViewOf(g, live), e);
       if (!step.changed) continue;
-      if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
+      if (!stepper.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
       const again = coord.liveGenerations();
       const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
       // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4): live only, since

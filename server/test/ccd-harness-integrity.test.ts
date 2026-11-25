@@ -100,6 +100,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-harness-integrity.test.ts': ['_method', '_nope', '_tmpl'],
   'ccd-split-pin.test.ts': ['_load'],
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
+  // A wrapper the suite defines so `_ws_reclaim_contained` runs the fork and prints its globals.
+  'ccd-collect-device-gone.test.ts': ['_t'],
   'ccd-die-containment.test.ts': ['_c', '_f', '_g', '_leaf', '_middle', '_top', '_v'],
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
   // The loader-globals census's fixture function: it plants every write form of the loader's globals in a tmp ccd/ccd.

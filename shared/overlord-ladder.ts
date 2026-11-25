@@ -66,6 +66,10 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'server-words' }, notice: 'none',
     spec: 'the operator\'s rung is above the highest rung whose word the server holds (the W2 route plan, RV8)',
   },
+  'shared-user': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: '`server-isolation` is `shared-user` or `unmeasured` (Table 7.5a, §7.4)',
+  },
   // Serviceability PR B (plan w1-serviceability.md Task 7): an unmeasured line caps by this table's rule (ruled F3).
   'load-past-95': {
     kind: 'condition', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
@@ -74,6 +78,16 @@ export const LADDER_CAUSE_MAP = {
   'unwitnessed-third': {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
     spec: 'the third unwitnessed write in a day (Table 7.5a)',
+  },
+  // Raised by the renewal readings (plan w1-renewal-readings.md Task 6) on a live Overlord step from `probing` to `degraded`.
+  'probes-failed-twice': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'probes failed twice after a renewal (Table 7.5a)',
+  },
+  // W1 sandbox B: no cap; the gate order's step 6 reads it (§11.2) and refuses every door but card, probe and note.
+  'launch-profile-unengaged': {
+    kind: 'condition', effect: { kind: 'read-by', reader: 'launch-profile-unmet' }, notice: 'none',
+    spec: 'the launch profile is not engaged (Table 7.5a, §3.6 H4)',
   },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;

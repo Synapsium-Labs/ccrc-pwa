@@ -4,7 +4,7 @@
 //
 // - THE PATHS of one capture, all under `<CCRC_TESTBOX_ROOT>/captures/`: the build's bytes in `builds/<version>` (placed by
 //   the admin lane's copy, spec §2.2), and per capture a scratch directory with its home, config directory, tmux
-//   directory, work folder and recording. The build runs from the builds store directly; nothing is placed in the home.
+//   directory, temporary directory, work folder and recording. The build runs from the builds store directly; nothing is placed in the home.
 // - THE SEEDED CONFIG: onboarding done, the work folder trusted, every hook ccrc installs and the statusline pointed at
 //   the recorder.
 // - THE ENVIRONMENT, built from empty (the probe desk's rule): the stand-in model's address and a placeholder token, the
@@ -12,7 +12,9 @@
 // - THE DRIVE: the keys typed at each step and the events that must be recorded before the next.
 // - THE STAND-IN'S REPLIES: one rule per request, keyed on what the request carries, never on a model.
 import path from 'node:path';
-import { CAPTURE_EVENTS } from '../../../shared/claudeBuildCapture.js';
+import { TESTBOX_CAPTURE_DEADLINE_MS, UPDATE_SPAWN_DRAIN_MS } from '../../../shared/agent-protocol.js';
+import { CAPTURE_EVENTS, CAPTURE_WRITE_COMMAND } from '../../../shared/claudeBuildCapture.js';
+import { compareClaudeVersions, isClaudeVersion } from '../../../shared/claudeVersion.js';
 import type { HookEvent } from '../../../shared/hook-events.js';
 import { SYSTEM_PATH } from './spec.js';
 
@@ -35,6 +37,8 @@ export interface CapturePaths {
   readonly home: string;
   readonly config: string;
   readonly tmux: string;
+  /** The build's `TMPDIR`: its temporary files stay inside the scratch directory the runner removes. */
+  readonly tmp: string;
   /** The folder the build starts in, trusted in the seeded config. */
   readonly work: string;
   /** `<work>/sub`: a PermissionRequest raised after the drive's `cd` must name it as its `cwd`. */
@@ -43,20 +47,32 @@ export interface CapturePaths {
   readonly recording: string;
 }
 
+/** `<root>/captures`: the builds store and every capture's scratch directory. */
+export const captureDirsRoot = (root: string): string => path.join(root, 'captures');
+
 /** The builds store, `<root>/captures/builds`. */
-export const captureBuildsDir = (root: string): string => path.join(root, 'captures', 'builds');
+export const captureBuildsDir = (root: string): string => path.join(captureDirsRoot(root), 'builds');
 
 export function capturePaths(root: string, captureId: string, build: string): CapturePaths {
-  const dir = path.join(root, 'captures', captureId);
+  const dir = path.join(captureDirsRoot(root), captureId);
   const work = path.join(dir, 'work');
   return {
     buildFile: path.join(captureBuildsDir(root), build), dir, home: path.join(dir, 'home'), config: path.join(dir, 'config'),
-    tmux: path.join(dir, 'tmux'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
+    tmux: path.join(dir, 'tmux'), tmp: path.join(dir, 'tmp'), work, cdDir: path.join(work, CAPTURE_CD_DIR), recording: path.join(dir, 'recording.jsonl'),
   };
 }
 
 /** Every path the runner writes, for the write guard (`probes.ts#writeRefusal`). */
-export const captureWrites = (p: CapturePaths): readonly string[] => [p.dir, p.home, p.config, p.tmux, p.work, p.cdDir, p.recording];
+export const captureWrites = (p: CapturePaths): readonly string[] => [p.dir, p.home, p.config, p.tmux, p.tmp, p.work, p.cdDir, p.recording];
+
+/** The 32 lowercase hex characters of a capture id: the grammar of `shared/claudeBuildCapture.ts#CaptureSubmit`'s
+ *  `captureId`, which the frame reader holds in `shared/testbox.ts` (not exported there). */
+const CAPTURE_ID = /^[0-9a-f]{32}$/;
+
+/** Which entries of `<root>/captures/` are stale capture directories at the service's start: a capture id, never the
+ *  builds store or any other name. The runner removes its own directory at the end, so one found at start is the
+ *  leftover of a service that died mid-capture. The act (the removals) is `main.ts#sweepStaleCaptures`'s. */
+export const staleCaptureDirs = (names: readonly string[]): string[] => names.filter((n) => CAPTURE_ID.test(n));
 
 // ── the seeded config ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -94,7 +110,7 @@ export function captureEnv(p: CapturePaths, standInPort: number, toolsPath: stri
   return [
     ['PATH', toolsPath === null || toolsPath === '' ? SYSTEM_PATH : `${toolsPath}:${SYSTEM_PATH}`],
     ['LANG', 'C.UTF-8'], ['TERM', 'xterm-256color'], ['HOME', p.home], ['CLAUDE_CONFIG_DIR', p.config],
-    ['TMUX_TMPDIR', p.tmux], ['ANTHROPIC_BASE_URL', `http://127.0.0.1:${standInPort}`], ['ANTHROPIC_AUTH_TOKEN', CAPTURE_TOKEN],
+    ['TMUX_TMPDIR', p.tmux], ['TMPDIR', p.tmp], ['ANTHROPIC_BASE_URL', `http://127.0.0.1:${standInPort}`], ['ANTHROPIC_AUTH_TOKEN', CAPTURE_TOKEN],
     ['DISABLE_AUTOUPDATER', '1'], ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '1'], ['CCRC_CAPTURE_RECORDING', p.recording],
   ];
 }
@@ -114,6 +130,7 @@ export interface CaptureStep { readonly type: string | null; readonly waitFor: r
 /** The drive (spec Table 1). The build's start raises SessionStart; `/exit` ends it with SessionEnd. */
 export const CAPTURE_STEPS: readonly CaptureStep[] = Object.freeze([
   { type: null, waitFor: ['SessionStart'] },
+  { type: '/model haiku', waitFor: ['PreModelSwitch', 'PostModelSwitch'] },   // before any turn, so no cache dialog (W0-12); door process B2
   { type: CAPTURE_MARK.one, waitFor: ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Stop'] },
   { type: CAPTURE_MARK.two, waitFor: ['SubagentStart', 'SubagentStop', 'Stop'] },
   { type: '/compact', waitFor: ['PreCompact', 'PostCompact'] },
@@ -130,8 +147,8 @@ export function stepDone(step: CaptureStep, events: readonly string[]): boolean 
 
 /** The first tool call's command: moves the shell into {@link CAPTURE_CD_DIR}. */
 export const CAPTURE_CD_COMMAND = `cd ${CAPTURE_CD_DIR}`;
-/** The second: writes a file, so it raises a permission prompt, after the shell moved. */
-export const CAPTURE_WRITE_COMMAND = 'touch ccrc-capture-mark';
+// The second, the write that raises the permission prompt after the shell moved, is `CAPTURE_WRITE_COMMAND`, in
+// `shared/claudeBuildCapture.ts` beside the replay that reads it (review 3226 F5).
 
 /** What the stand-in answers one request with. `tool`: one tool call; `text`: a text reply; `error`: an HTTP error the
  *  build does not retry (400, `invalid_request_error`), which ends the turn with StopFailure. */
@@ -193,4 +210,98 @@ export function standInReply(body: unknown): StandInReply {
     return { kind: 'error', status: 400, message: 'ccrc capture stand-in: this request is refused on purpose' };
   }
   return { kind: 'text', text: text.includes(CAPTURE_MARK.subagent) ? 'ok' : 'ccrc capture summary' };
+}
+
+// ── the timing target (review 3226 F8; review 3316 F1, A3) ───────────────────────────────────────────────────────
+//
+// A TARGET, NOT YET THE RUNNER'S. Nothing passes these values to `captureRunner.ts#CaptureRunner` or `#tmuxLauncher`
+// yet: the runner is unwired until PR 3b, its step, exit and poll timeouts are deps nothing sets in production, and
+// `tmuxLauncher`'s bound defaults to 15 s, not the target below. The only production reader today is the desk's late
+// check, `captureStartsLate`. PR 3b's acceptance gate binds them (task note `capture-runner-pr3.md`): the desk and the
+// launched runner read one timing contract, and a test through the production composition goes red when the launched
+// capture, with its queue wait, its teardown and door B2's step, no longer fits `TESTBOX_CAPTURE_DEADLINE_MS`.
+
+/** The target for each part of one capture. The fleet agent waits `TESTBOX_CAPTURE_DEADLINE_MS` for the verdict and then
+ *  closes its connection, so a verdict sent after that is lost; the target is chosen so that two captures, one waiting
+ *  behind the other, fit that deadline under {@link captureWorstCaseMs} (pinned by `testbox-capture-deadline.test.ts`). */
+export interface CaptureTimings {
+  /** The target for the runner's `stepTimeoutMs`: how long one step may take to raise its events. */
+  readonly stepMs: number;
+  /** The target for the runner's `exitTimeoutMs`: how long the build may take to exit after the last step. */
+  readonly exitMs: number;
+  /** The target for the runner's `pollMs`: the recording's poll. */
+  readonly pollMs: number;
+  /** The target bound of one tmux call, for PR 3b to pass as `tmuxLauncher`'s `boundMs` (whose default is 15 s). A call
+   *  answers within its bound plus the bounded spawner's drain (`exec.ts#boundedExec`, `UPDATE_SPAWN_DRAIN_MS`). */
+  readonly tmuxCallMs: number;
+  /** An ALLOWANCE, not a bound: the scratch directory, the seeded config and the stand-in's start, which nothing bounds. */
+  readonly setupMs: number;
+}
+
+/** The target. A step of the drive against the stand-in takes seconds; 35 s each leaves room on a slow box. */
+export const CAPTURE_TIMINGS: CaptureTimings = Object.freeze({
+  stepMs: 35_000, exitMs: 30_000, pollMs: 500, tmuxCallMs: 5_000, setupMs: 10_000,
+});
+
+/** The slack kept beside the worst case: the frames' travel and the clocks of two processes. */
+export const CAPTURE_DEADLINE_MARGIN_MS = 30_000;
+
+/** The worst case of ONE capture by the runner as it stands on main (`captureRunner.ts#CaptureRunner`), if it were run
+ *  under the target `t`, each tmux call counted at its bound plus the drain: the start (one call, after the setup
+ *  allowance); each typed step's two calls (the text, then Enter); each step's wait, which can overrun by one poll; the
+ *  exit wait, which can overrun by one call and one poll; and the stop (one call).
+ *
+ *  WHAT IT DOES NOT BOUND: the setup is an allowance, not a bound; the stand-in's close and the scratch directory's
+ *  removal are not counted at all, and a hung stand-in can outlast both; and any teardown or liveness call a later
+ *  runner adds (PR 2's stop wait among them) is not counted until PR 3b's gate counts the runner it wires. */
+export function captureWorstCaseMs(t: CaptureTimings, steps: readonly CaptureStep[] = CAPTURE_STEPS): number {
+  const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
+  const start = t.setupMs + call;
+  const drive = steps.reduce((ms, s) => ms + (s.type === null ? 0 : 2 * call) + t.stepMs + t.pollMs, 0);
+  const exit = t.exitMs + call + t.pollMs;
+  const stop = call;
+  return start + drive + exit + stop;
+}
+
+/** What a capture that started too late to answer in time is told: no verdict, and why. */
+export const CAPTURE_LATE_DETAIL = 'the capture waited in the queue too long to finish before the fleet agent stops waiting: not run, no verdict';
+
+/** Whether a capture that has waited `waitedMs` since its submission must not start, by the TARGET: its worst case under
+ *  {@link CAPTURE_TIMINGS} and the margin would end past the fleet agent's deadline, so its verdict would be lost. The
+ *  desk ends it with {@link CAPTURE_LATE_DETAIL}. Until PR 3b binds the runner to the target, this is the target's worst
+ *  case, not a measured bound on the runner. */
+export function captureStartsLate(waitedMs: number, t: CaptureTimings = CAPTURE_TIMINGS, deadlineMs: number = TESTBOX_CAPTURE_DEADLINE_MS): boolean {
+  return waitedMs + captureWorstCaseMs(t) + CAPTURE_DEADLINE_MARGIN_MS > deadlineMs;
+}
+
+// ── the tmux socket (review 3226 F8) ─────────────────────────────────────────────────────────────────────────────
+
+/** The longest unix socket path the capture uses, in bytes: under macOS's 104 and Linux's 108 with the terminating byte. */
+export const CAPTURE_SOCKET_PATH_MAX = 103;
+
+/** The capture's tmux directory (its `TMUX_TMPDIR`): a directory of its own under `base`, the service's temporary
+ *  directory (`/tmp`, private to the unit), named by the whole capture id. Under `<CCRC_TESTBOX_ROOT>/captures/<id>` a long
+ *  root made every socket path too long and every capture fail to start. */
+export const captureTmuxDir = (base: string, captureId: string): string => path.join(base, `ccrc-capture-${captureId}`);
+
+/** Where tmux puts the capture server's socket: `<TMUX_TMPDIR>/tmux-<uid>/<-L name>`. */
+export const captureSocketPath = (base: string, captureId: string, uid: number): string =>
+  path.join(captureTmuxDir(base, captureId), `tmux-${uid}`, CAPTURE_SOCKET);
+
+/** Whether every capture's socket path under `base` fits {@link CAPTURE_SOCKET_PATH_MAX} for `uid` (every id is 32
+ *  characters, so one stands for all). When it does not, the service wires no runner, so the box answers `no-runner`. */
+export function captureSocketFits(base: string, uid: number): boolean {
+  return new TextEncoder().encode(captureSocketPath(base, '0'.repeat(32), uid)).length <= CAPTURE_SOCKET_PATH_MAX;
+}
+
+// ── the builds store (review 3226 F8) ────────────────────────────────────────────────────────────────────────────
+
+/** How many builds `captures/builds/` keeps beyond those a capture still needs: the newest, which the lane captures first. */
+export const CAPTURE_BUILDS_KEPT = 3;
+
+/** Which entries of `captures/builds/` to remove: every build past the `kept` newest (by version order), except a build in
+ *  `inUse` (a capture queued or running). A name that is not a build (the copy's stage, anything else) is never one. A
+ *  pruned build the lane captures again is copied again after the box's `build-absent`. */
+export function buildsToPrune(names: readonly string[], inUse: readonly string[], kept: number = CAPTURE_BUILDS_KEPT): string[] {
+  return names.filter((n) => isClaudeVersion(n)).sort((a, b) => compareClaudeVersions(b, a)).slice(kept).filter((b) => !inUse.includes(b));
 }

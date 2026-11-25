@@ -1,7 +1,8 @@
 // The Models sheet at a phone, a laptop and a wide desk (model-class-advance wave R4, Task 20 as re-planned), in a real
 // Chrome over the production build: opened from a Codex lane's fold on the Accounts screen at 360x740, 1280x800 and
-// 1920x1080, with a read that has every class drawn (a held class, a revertable one, an empty one, a pending intent and a
-// model label long enough that no phone row holds it on one line). At each size nothing scrolls sideways (the page, or the
+// 1920x1080, with a read that has every class drawn (a held class, two revertable ones, an empty one, a pending intent and a
+// model label long enough that no phone row holds it on one line), carrying the proof that the fleet box ends a revert's hold
+// by itself, so Revert is the one control drawn (no Hold, no Release: revert-holds-until-newer, D-8757). At each size nothing scrolls sideways (the page, or the
 // sheet), nothing a card holds leaves the card, and every control is visible, inside the sheet and at least 44px tall.
 //
 // F14: it also measures the layout (two cards to a row from 900, one column below), a refusal note and a note that the act
@@ -37,6 +38,7 @@ const MODELS = {
   ok: true, lane: 'lane-a',
   models: {
     kind: 'read',
+    revertHoldEnds: true,
     classes: {
       haiku: { model: 'model-6-alpha', label: 'Model Alpha 6', efforts: null },
       sonnet: { model: 'model-6-beta', label: 'Model Beta 6', efforts: null },
@@ -48,7 +50,7 @@ const MODELS = {
       pending: { how: 'hand', class: 'sonnet', from: 'model-6-beta', to: 'model-6.1-beta', emptied: [], at: '2026-11-18T08:00:00Z' },
       classes: {
         haiku: classAdv({ hold: { at: '2026-11-18T08:00:00Z', by: 'hand' } }),
-        sonnet: classAdv(),
+        sonnet: classAdv({ previous: { model: 'model-5-beta', effort: null }, revertable: true }),
         opus: classAdv({
           previous: { model: 'vendor/model-opus-tier-6-with-an-unbroken-identifier-that-is-long', effort: 'high' }, revertable: true,
           lastMove: { at: '2026-11-17T09:00:00Z', how: 'advance', from: 'vendor/model-opus-tier-6-with-an-unbroken-identifier-that-is-long', to: 'vendor/model-opus-tier-7', ok: true, canary: 'passed' },
@@ -146,7 +148,7 @@ async function openSheet(browser: Browser, origin: string, view: (typeof VIEWS)[
   const opened = await openApp(browser, { width: view.size.width, skin: view.skin, theme: view.theme }, fixture);
   const { page } = opened;
   await page.setViewportSize(view.size);
-  await page.goto(`${origin}/`);
+  await page.goto(`${origin}/fleet`);
   await page.evaluate(() => {
     history.pushState(null, '', '/accounts');
     dispatchEvent(new PopStateEvent('popstate'));
@@ -173,10 +175,9 @@ describe('the Models sheet at a phone, a laptop and a wide desk', () => {
         expect(m.pageOverflow, `${at}: no horizontal page scroll`).toBeLessThanOrEqual(0);
         expect(m.sheetOverflow, `${at}: nothing scrolls sideways in the sheet`).toBeLessThanOrEqual(1);
         expect(m.escapes, `${at}: nothing leaves its card`).toEqual([]);
-        // Hold on sonnet and opus, Release on haiku and fable, Revert on opus: five controls, all drawn and tappable.
-        expect(m.controls.sort(), at).toEqual([
-          'Hold the opus class', 'Hold the sonnet class', 'Release the fable class', 'Release the haiku class', 'Revert the opus class',
-        ]);
+        // Revert on sonnet and opus, the two classes with something on record to put back; the held haiku and fable carry
+        // no control, and nothing is a Hold or a Release: two controls, both drawn and tappable.
+        expect(m.controls.sort(), at).toEqual(['Revert the opus class', 'Revert the sonnet class']);
         expect(m.badControls, `${at}: every control visible, inside the sheet and 44px to 64px tall`).toEqual([]);
         // LAYOUT: two cards to a row from 900 wide, one column below.
         const [c0, c1, c2, c3] = m.cards as [Geometry['cards'][number], Geometry['cards'][number], Geometry['cards'][number], Geometry['cards'][number]];
@@ -203,9 +204,11 @@ describe('the Models sheet at a phone, a laptop and a wide desk', () => {
             body: JSON.stringify(refused ? { ok: false, error: 'lane-act-refused', verbCode: 'settings-unwritable' } : { ok: false, error: 'outcome-unknown', cause: 'timeout' }),
           });
         });
-        await page.getByRole('button', { name: 'Hold the sonnet class' }).click();
+        await page.getByRole('button', { name: 'Revert the sonnet class' }).click();
+        await page.getByRole('dialog', { name: /Revert the sonnet class\?/ }).getByRole('button', { name: 'Put back and hold' }).click();
         await page.waitForSelector('[data-testid="models-note-sonnet"][data-kind="refused"]', { timeout: 10_000 });
-        await page.getByRole('button', { name: 'Hold the opus class' }).click();
+        await page.getByRole('button', { name: 'Revert the opus class' }).click();
+        await page.getByRole('dialog', { name: /Revert the opus class\?/ }).getByRole('button', { name: 'Put back and hold' }).click();
         await page.waitForSelector('[data-testid="models-note-opus"][data-kind="unknown"]', { timeout: 10_000 });
         const withNotes = await page.evaluate(measure);
         expect(withNotes.escapes, `${at}: the notes wrap inside their cards`).toEqual([]);

@@ -563,7 +563,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-basin/ }));
-    await waitFor(() => expect(location.pathname).toBe('/'));
+    await waitFor(() => expect(location.pathname).toBe('/fleet'));
     // Both halves of the one-liner, not just navigate('/'): a mutant that
     // drops `setReapOpen(false)` alone would still pass the path check above
     // — this render has no router shell to unmount the screen for it, so the

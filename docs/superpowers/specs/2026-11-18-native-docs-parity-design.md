@@ -209,7 +209,7 @@ flowchart TB
 | The control | (a) A Layout row in ccrc's Page details sheet; (b) in the library's Aa menu | (a): the Aa menu's ownership is X1's, and a layout change remounts the frame, which the host does. |
 
 - **Names.** `default` (AB), `classic`, `editorial` (A), `review` (B), `guided` (C). `?variant=` accepts the standalone reader's names (`AB`, `A`, `B`, `C`, `classic`) and maps them; an unknown name opens the default, as in the standalone reader.
-- **State.** Each layout's own state goes through the bridge's `store.set` under the reader prefix, in the existing per-doc fields: `review` adds none, and `guided` keeps its layers in the `folds` field, so a fold set in one layout shows in another for the same document, and each layout ignores an entry it cannot read (amended 2026-11-22; D-8881). The 1 MiB budget and eviction are unchanged.
+- **State.** Each layout's own state goes through the bridge's `store.set` under the reader prefix, in the existing per-doc fields: `review` adds none, and `guided` keeps its layers in the `folds` field, so a fold set in one layout shows in another for the same document, and each layout ignores an entry it cannot read; a document with nothing folded reads as unvisited, the default layout's own fold write keeps only its own entries, and `guided`'s reader-wide layers choice lives in the existing UI preference (amended 2026-11-22; D-8881). The 1 MiB budget and eviction are unchanged.
 - **Appearance.** Every layout follows ccrc's appearance while hosted, through the appearance slots and pairs as X1's merged contract defines them, and passes the contrast pairs gate (§6). A layout brings its own structure, never its own palette.
 - **Phone, laptop, wide.** Every layout must keep ccrc's one-bar, tap and desktop-fit budgets at 412×915, 1280×800 and 1920×1080. A layout that cannot is fixed in the library before it ships; none is shipped as "desktop only".
 - **Departure.** Rich-docs §3.3 says the library ships only the default layout. That sentence predates your #1418 ruling (2026-10-25, layout variants kept), which the amended §6 row carries ("every kept variant"); the leaf plan defines the reconciliation as D-8762. §3.3 is superseded by it once wave P5 implements it, and P5 amends §3.3's text then.
@@ -626,6 +626,23 @@ flowchart LR
   P6 --> P5
 ```
 *Figure 7. Wave order. P1 to P4 touch no reader host file, except P2.4's truth line in `DocsHead.tsx`, serialised with X1 by claim, and need nothing from the library. P6 waits for X1's host wave, because both edit the reader host files. P5 waits for library 1.2.0 and comes last.*
+
+**Amended 2026-11-24 (wave 41, run 3605; D-8974, D-8975, D-8976).** Your priority of 2026-11-24 puts Reader Mode first. Reader mode needs only §4.7's Back places from P5, so that task (P5.3) runs as a wave of its own, PH, straight after X1's wave C re-pins the console to library 1.2.0. The library's package is now named `@synapsium-labs/pinax-lib`. Reader mode follows PH, and then P6 and the rest of P5. P5.1, which brings the layouts, also brings reader mode's rule for them. The leaf plans carry the detail: this spec's plan and the reader-mode plan, each in its § Amendment 2026-11-24.
+
+```mermaid
+flowchart LR
+  P1["P1 range reads<br/>and large files"] --> P2["P2 outside folders"]
+  P1 --> P3["P3 PDF frame"]
+  P2 --> P3
+  P2 --> P4["P4 listings, refs,<br/>docs settings store"]
+  L["Library 1.2.0 published"] --> WC["X1 wave C: re-pin<br/>to pinax-lib 1.2.0"]
+  WC --> PH["PH: Back places<br/>(P5.3 alone)"]
+  PH --> XR["Reader mode (XR)"]
+  XR --> P6["P6 print stage 1<br/>and the page loader"]
+  P4 --> P6
+  P6 --> P5["P5 less P5.3: layouts with<br/>reader mode's layout rule,<br/>tracker links, flags,<br/>print stage 2"]
+```
+*Figure 7a. Wave order from 2026-11-24. Start at P1 on the left, or at the library's release. Back places (PH) moves ahead of P6 to run straight after wave C, and reader mode follows it. P6 and the rest of P5 come after reader mode, still in that order, because they edit the same reader host files. P2 to P4 are unchanged.*
 
 ## 10. Testing and proof
 

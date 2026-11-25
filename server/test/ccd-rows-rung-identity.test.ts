@@ -662,12 +662,20 @@ describe.skipIf(!LINUX)('parity: the walk’s mount point arm answers what `_ws_
   });
 });
 
-describe('the mount table has exactly three readers, all through its one seam (R13)', () => {
+describe('the mount table has exactly four readers, all through its one seam (R13)', () => {
   // The third is the collector's box-move release (cleanup un-wedge, Task R4), which asks the rows rung's own `D`
-  // parser through `_ws_reclaim_idwalk`, never a parser of its own.
-  it('three readers: the call graph’s callers of `_ws_collect_mountinfo` are `_ws_collect_mounts_clear`, the collector’s box-move release and the rows rung', () => {
+  // parser through `_ws_reclaim_idwalk`, never a parser of its own. The fourth is the one owner of "a recorded device
+  // is gone from this box" (`_ws_collect_dev_gone`, D-8948), which asks that same `D` request.
+  it('four readers: the call graph’s callers of `_ws_collect_mountinfo` are `_ws_collect_mounts_clear`, the collector’s box-move release, the gone-device proof and the rows rung', () => {
     const callers = ccdCallGraph().filter((e) => e.callee === '_ws_collect_mountinfo').map((e) => e.caller).sort();
-    expect(callers).toEqual(['_ws_collect_mounts_clear', '_ws_collect_moved_host', '_ws_reclaim_workdir_shared']);
+    expect(callers).toEqual(['_ws_collect_dev_gone', '_ws_collect_mounts_clear', '_ws_collect_moved_host', '_ws_reclaim_workdir_shared']);
+  });
+
+  it('the gone-device proof has one caller, the composer the two absence arms ask, and the block listing one reader', () => {
+    const callersOf = (fn: string): string[] => ccdCallGraph().filter((e) => e.callee === fn).map((e) => e.caller).sort();
+    expect(callersOf('_ws_collect_dev_gone')).toEqual(['_ws_collect_absence_dev']);
+    expect(callersOf('_ws_collect_absence_dev')).toEqual(['_ws_collect_eval', '_ws_collect_resume_eval']);
+    expect(callersOf('_ws_collect_sysblock')).toEqual(['_ws_collect_dev_gone']);
   });
 
   it('one literal: /proc/self/mountinfo stands in ccd’s code only in the seam and in `_carry_py`’s own CCD_MOUNTINFO reader', () => {

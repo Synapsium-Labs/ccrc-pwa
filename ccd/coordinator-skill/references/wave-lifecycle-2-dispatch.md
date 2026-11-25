@@ -14,7 +14,7 @@ with the run now `dispatched`, or a refusal:
 |---|---|---|
 | `paused` | the dispatch's pause check refused, for one of two causes: `$REG/coordinator-paused` exists (the operator's pause), or the registry could not be listed (a fault) | read the cause: whether `$REG/coordinator-paused` exists is a read you may make. **Present:** the operator's pause, kept for dispatch (class O1) and reported in the turn's text, never retried (clause 4): no dispatch, no in-place bind and no self-work on new waves, while non-dispatch work continues — landing already-reviewed PRs, reviews and docs. **Absent:** the registry was unlistable, a fault, not the operator's pause: reported as one non-blocking `do` item, never a retry (clause 4). Never touch the file |
 | `mail-disabled` | `$REG/mail-disabled` exists | the operator's kill switch (class O1): touch nothing, park the threads that need mail and work the rest |
-| `cap-concurrency` | `maxConcurrentWorkers` is full | stop, name the cap, wait |
+| `cap-concurrency` | the run cap is full: `running` runs against `limit`, the cap the server derives from the fleet host's memory and cores, or the operator's own number while one stands | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | park the thread, and never retry blindly: a retry can bind a second workspace. The dead-dispatch pass binds the returned child when exactly one `.child` marker names the run, or abandons the dead dispatch, and mails you either way, but only when the operator has armed its Settings switch, and a coordinator cannot read that switch. So raise one non-blocking `do` item at once naming the run and saying the pass may be off, since no mail may come; close the item when the mail comes. On that mail re-read `runs list`: a bound run goes on; an abandoned one is opened again and dispatched with an explicit `slug`, since a named spawn binds only `<project>-<slug>` |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn — at the gate, or at the act: the server reads the live file again just before the `/clear`, and a refusal there can leave this run's own hold and route arming in place, which the next dispatch rewrites (D-5238) | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, back off three times over about 15 minutes (class P3), then raise an end request for the run (a `planned` run cannot be closed from here: its only edges are `dispatched` and `failed`), park the thread, and open the wave fresh without `sessionId` once the run reads abandoned, the same path as `project-mismatch` below. If it stays refused it is a block of class P4 (record it with `wakeOn: update`): a file on the fleet host needs a human, and this refusal will stand until it is readable |
@@ -372,6 +372,18 @@ about 2.8 runs to about 2.1. A push before the round is complete is right only t
 to another session, or before a stop that could lose the work. A brief that
 asks for a push per task, per commit or per green test contradicts this
 sentence, and the sentence wins.
+
+**A third sentence goes in every brief that may open a PR: "open your PR as
+a draft (`gh pr create --draft`) and leave it a draft; never mark it ready
+for review."** (Owner ruling 2026-11-24, D-8997; worker clause 16 says it
+too, for the branch sentence's reason.) An unattended lander lands every
+green, non-draft PR whose author holds the maintainer role or higher on its
+repository, and the fleet's PRs are such PRs, so a PR still under review must
+be a draft. CI runs on a draft as on any PR (D-9000), so the review still
+reads green checks. This session marks the PR ready (`gh pr ready <pr>`) only
+once its review passes, immediately before the advance to `merging` (§4); the
+session hook refuses a worker `gh pr ready` and a `gh pr create` without
+`--draft` (D-8998).
 
 **The workspace's name is frozen for the life of the claim.** This is a fact
 the fleet did not previously guarantee, not a correction to anything above:

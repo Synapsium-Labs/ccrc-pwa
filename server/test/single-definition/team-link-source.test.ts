@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ccrcRoot, rel, sources } from './helpers.js';
+import { ALL, ccrcRoot, rel, sources, stallCode } from './helpers.js';
 
 const STORE = 'server/src/coord/linkingStore.ts';
 const SCHEMA = 'server/src/coord/schema.ts';
@@ -57,6 +57,14 @@ export function directReads(files: ReadonlyArray<{ rel: string; text: string }>)
 
 const read = (abs: string): { rel: string; text: string } => ({ rel: rel(abs), text: readFileSync(abs, 'utf8') });
 const SHARED_AND_SERVER = [...sources(path.join(ccrcRoot, 'shared')), ...sources(path.join(ccrcRoot, 'server/src'))].map(read);
+
+describe('each team door refusal vocabulary is declared once (D-8808, D-8809)', () => {
+  it.each(['TEAM_SUGGEST_REFUSALS', 'TEAM_CONFIRM_REFUSALS'])('%s is declared only in shared/linking.ts', (name) => {
+    const declaration = new RegExp(`\\b(?:const|let|var)\\s+${name}\\b`, 'g');
+    const holders = ALL.flatMap((file) => [...stallCode(file).matchAll(declaration)].map(() => rel(file)));
+    expect(holders).toEqual(['shared/linking.ts']);
+  });
+});
 
 describe('the team link source has one reader (D-8809)', () => {
   it('CONTROL: the scans read something, and the store holds the reader and names the column', () => {

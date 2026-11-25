@@ -21,6 +21,8 @@ const HOOK_EVENT_MAP = {
   PreCompact: 'a compaction is about to run',
   PostCompact: 'a compaction finished',
   SessionEnd: 'the session ended or was cleared',
+  PreModelSwitch: 'the model is about to change: report-only, never refused (door process B2, ruled F11)',
+  PostModelSwitch: 'the model changed: one model-switch report (door process B2)',
 } as const;
 
 export type HookEvent = keyof typeof HOOK_EVENT_MAP;

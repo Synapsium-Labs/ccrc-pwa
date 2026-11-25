@@ -25,15 +25,16 @@ import { Button, Skeleton, TextInput } from '@ccrc/ui';
 import { parityArmable, parityCurrentOf, TESTBOX_ADMIN_PHASES, TESTBOX_BOX_KEYS, TESTBOX_REPO_ROWS_MAX, fitsTestboxShape, isBoxAddress, isLoginUser, isPrivateNetworkAddress, isSshPort,
   type TestboxAdminFields, type TestboxAdminStatus, type TestboxAdminSub, type TestboxPhasedSub } from '../../../shared/testbox-admin';
 import type { TestboxAdminResult, TestboxEventRow } from '../../../shared/api';
-import { parseRepoRow } from '../../../shared/testbox';
+import { isTestboxName } from '../../../shared/testbox';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { ApiError } from '../lib/api';
 import { testboxRouteText } from '../lib/refusalWords';
 import { ResultLine, SETTINGS_AMBER_NOTE, useResultLine } from './settingsText';
 import {
-  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_DEFAULT_RUNNER, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
-  codeSentence, isIpLiteral, isPublicIpLiteral, ledgerChangeLine, listenFor, listenHostOf, phaseTime, phaseWord, settingLabel, shapeSentence, stepOf, type TestboxStepSeen,
+  BOX_SETTING_DEFAULTS, BOX_SETTING_FAMILIES, FROM_MISMATCH, TESTBOX_FAMILY_FOLD, GIT_HOST_BASE, TESTBOX_CONNECT_TEXT, TESTBOX_LISTEN_KEY, actWord, boxSettingStart, checkWord,
+  blankRepoDraft, codeSentence, isIpLiteral, isPublicIpLiteral, ledgerChangeLine, listenFor, listenHostOf, phaseTime, phaseWord, repoDraftProblems, repoRowOf,
+  settingLabel, shapeSentence, stepOf, type TestboxRepoDraft, type TestboxStepSeen,
 } from './testboxAdminWords';
 import { useTestboxAdmin } from './useTestboxAdmin';
 import { loadProjects } from './useProjectRows';
@@ -42,9 +43,6 @@ const T = TESTBOX_CONNECT_TEXT;
 /** A test box act's step-up is learned from the route's refusal, the way the Linear card learns it. */
 const ASSUME_FRESH = Infinity;
 const PRIMARY_REPO_ROWS = 1;
-const REPO_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const REPO_URL = /^(?:https|ssh):\/\/[^\s@/]+(?:@[^\s/]+)?\/[^\s]+$/;
-const COMMAND_HEAD = /^[^\s]+(?: [^\s]+)*$/;
 const utcMinute = (at: number): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 type Band = 'phone' | 'laptop' | 'wide';
@@ -72,31 +70,8 @@ export function connReady(c: Conn): boolean {
     && (source === '' || isIpLiteral(source));
 }
 
-interface RepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
-const blankRepo = (): RepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_RUNNER });
-
 /** A repository the fleet already knows: its name and the fetch URL the card offers. */
 interface Offer { readonly name: string; readonly fetchUrl: string }
-
-/** The row's JSON object for one draft, with the mirror under the box's root. */
-function rowOf(d: RepoDraft, root: string): Record<string, unknown> {
-  const inputs = d.inputs.trim() === '' ? [`${d.pkg}/package.json`, `${d.pkg}/package-lock.json`] : d.inputs.trim().split(/\s+/);
-  return {
-    name: d.name, fetchUrl: d.fetchUrl, mirrorPath: `${root.replace(/\/+$/, '')}/mirrors/${d.name}.git`,
-    packages: [{ name: d.pkg, installInputs: inputs, commands: [d.command] }], buildOutputs: [], systemTools: [],
-  };
-}
-
-/** What is wrong with one repository draft, by field; empty for a row that parses. */
-function repoProblems(d: RepoDraft, root: string): Partial<Record<keyof RepoDraft | 'row', string>> {
-  const out: Partial<Record<keyof RepoDraft | 'row', string>> = {};
-  if (!REPO_NAME.test(d.name)) out.name = T.badRepoName;
-  if (!REPO_URL.test(d.fetchUrl)) out.fetchUrl = T.badRepoUrl;
-  if (!REPO_NAME.test(d.pkg)) out.pkg = T.badRepoName;
-  if (!COMMAND_HEAD.test(d.command)) out.command = T.badRepoWord;
-  if (Object.keys(out).length === 0 && !parseRepoRow(JSON.stringify(rowOf(d, root))).ok) out.row = T.badRepoRow;
-  return out;
-}
 
 /** The settings the install sends: every non-blank value that is not its default, and the listen address, which is always sent. */
 function settingsToSend(values: Readonly<Record<string, string>>): Record<string, string> {
@@ -171,7 +146,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
   const [checks, setChecks] = useState<NonNullable<TestboxAdminResult['checks']> | null>(null);
   const [checking, setChecking] = useState(false);
   const [values, setValues] = useState<Record<string, string>>(() => boxSettingStart());
-  const [repos, setRepos] = useState<RepoDraft[]>(() => Array.from({ length: PRIMARY_REPO_ROWS }, blankRepo));
+  const [repos, setRepos] = useState<TestboxRepoDraft[]>(() => Array.from({ length: PRIMARY_REPO_ROWS }, blankRepoDraft));
   const [offers, setOffers] = useState<readonly Offer[]>([]);
   const [copied, setCopied] = useState<'no' | 'yes' | 'failed'>('no');
   // "Show the access line again" opened the connection form on step 2 (an address is recorded that this card no longer holds).
@@ -210,7 +185,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
         if (p.repo?.state !== 'named') continue;
         const slug = p.repo.slug;
         const name = slug.slice(slug.lastIndexOf('/') + 1).toLowerCase();
-        if (REPO_NAME.test(name) && !found.has(slug)) found.set(slug, { name, fetchUrl: `${GIT_HOST_BASE}${slug}` });
+        if (isTestboxName(name) && !found.has(slug)) found.set(slug, { name, fetchUrl: `${GIT_HOST_BASE}${slug}` });
       }
       setOffers([...found.values()]);
     }, () => undefined);
@@ -297,7 +272,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
   };
 
   const install = async (): Promise<void> => {
-    const rows = repos.map((d) => rowOf(d, values.CCRC_TESTBOX_ROOT ?? ''));
+    const rows = repos.map((d) => repoRowOf(d, values.CCRC_TESTBOX_ROOT ?? ''));
     const r = await run('connect', { settings: settingsToSend(values), repos: rows });
     if (r === null) return;
     // The install has started: the address typed in step 1 has done its work and is forgotten.
@@ -415,7 +390,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
       }
       case 4: {
         const root = values.CCRC_TESTBOX_ROOT ?? '';
-        const problems = repos.map((d) => repoProblems(d, root));
+        const problems = repos.map((d) => repoDraftProblems(d, root));
         const valid = TESTBOX_BOX_KEYS.every((k) => settingProblem(k, values[k] ?? '') === null)
           && repos.length >= 1 && problems.every((p) => Object.keys(p).length === 0);
         return (
@@ -435,12 +410,13 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
             ))}
             <p className="settings-note">{T.repositoriesLabel}</p>
             <p className="settings-note">{T.repositoriesHint}</p>
+            <p className="settings-note">{T.repoFieldsHint}</p>
             {offers.length > 0 && (
               <div className="testbox-offers" data-testbox="offers" aria-label={T.offered}>
                 {offers.map((o) => (
                   <Button key={o.fetchUrl} variant="ghost" size={actionSize} onClick={() => setRepos((cur) => {
                     const at = cur.findIndex((d) => d.name === '' && d.fetchUrl === '');
-                    const next = { ...blankRepo(), name: o.name, fetchUrl: o.fetchUrl };
+                    const next = { ...blankRepoDraft(), name: o.name, fetchUrl: o.fetchUrl };
                     if (at >= 0) return cur.map((d, i) => (i === at ? { ...d, name: o.name, fetchUrl: o.fetchUrl } : d));
                     return cur.length < TESTBOX_REPO_ROWS_MAX ? [...cur, next] : cur;
                   })}>
@@ -459,7 +435,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, fetchUrl: v } : x)))} />
                   <Field label={T.repoPackage} value={d.pkg} error={d.pkg === '' ? null : problems[i]?.pkg ?? null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, pkg: v } : x)))} />
-                  <Field label={T.repoInputs} value={d.inputs} placeholder={d.pkg === '' ? '' : `${d.pkg}/package.json ${d.pkg}/package-lock.json`} error={null}
+                  <Field label={T.repoInputs} value={d.inputs} error={null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, inputs: v } : x)))} />
                   <Field label={T.repoCommand} value={d.command} error={d.command === '' ? null : problems[i]?.command ?? null}
                     onChange={(v) => setRepos((cur) => cur.map((x, j) => (j === i ? { ...x, command: v } : x)))} />
@@ -471,7 +447,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
               </fieldset>
             ))}
             {repos.length < TESTBOX_REPO_ROWS_MAX && (
-              <Button variant="ghost" size={actionSize} onClick={() => setRepos((cur) => [...cur, blankRepo()])}>{T.addRepo}</Button>
+              <Button variant="ghost" size={actionSize} onClick={() => setRepos((cur) => [...cur, blankRepoDraft()])}>{T.addRepo}</Button>
             )}
             {repos.length === 0 && <p className={SETTINGS_AMBER_NOTE}>{T.needRepo}</p>}
             <Button variant="primary" size={actionSize} disabled={!valid} onClick={() => setSeen((s) => ({ ...s, settings: true }))} data-testbox="settings-next">{T.next}</Button>
@@ -518,6 +494,7 @@ export function TestBoxConnect({ band, onChanged, stepUpDeps, runningPollMs, beg
             {record !== null && !running && (
               <ul className="testbox-checks" data-testbox="parity-record">
                 <li>{T.parityPrs(record.prs.length)}</li>
+                {record.files !== undefined && <li>{T.parityFiles(record.files)}</li>}
                 {record.fixtures.map((x) => <li key={x.name}>{T.fixtureWord(x.name, x.result)}</li>)}
               </ul>
             )}

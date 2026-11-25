@@ -52,7 +52,7 @@ STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # independently as this branch's Task 5). The pairing is now a mechanism, not a
 # convention — install-session-hooks.test.ts derives the expected set from the
 # hook's own case block and fails on any divergence.
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd"]'
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd","PreModelSwitch","PostModelSwitch"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
@@ -187,6 +187,10 @@ _child_deny_json() {
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
   for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt roll claude; do
+    for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  # The child-scope verbs (D-8978, `CHILD_SCOPE_DENY_CCD_VERBS` in shared/api.ts): no SAFETY verb, but no child's either.
+  for v in ws-add; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for v in update rollback rollout; do

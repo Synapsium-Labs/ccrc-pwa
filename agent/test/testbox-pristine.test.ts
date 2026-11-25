@@ -21,8 +21,8 @@ import { boundedExec, SHORT_BOUND_MS } from '../src/testbox/exec.js';
 import { registryFor } from '../src/testbox/main.js';
 import { gitEnv, realGit, runTreeFiles, type MirrorOps } from '../src/testbox/mirror.js';
 import {
-  adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, installKey, nodeChanged, pristineLists, pristineSettings, retryDelay, seen,
-  type InstallInput,
+  adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, installKey, LIFECYCLE_INPUTS_MAX, lifecycleInputPaths, nodeChanged,
+  pristineLists, pristineSettings, retryDelay, seen, type InstallInput,
 } from '../src/testbox/pristine.js';
 import { distFor, integrityMatches, parseRegistryPath, registrySettings, startRegistry, type RunningRegistry } from '../src/testbox/registry.js';
 import { CLONE_ARGV, INSTALL_ARGV, installStep } from '../src/testbox/runs.js';
@@ -68,6 +68,7 @@ printf '%s\\t%s\\n' "$PWD" "$*" >> '${log}'
 [ "$1" = ci ] || exit 2
 [ -f package-lock.json ] || exit 3
 if grep -q fail-pristine package-lock.json && [[ $PWD == */install/run/* ]]; then echo 'npm ERR! fixture install failure' >&2; exit 1; fi
+[ -d scripts ] && printf '%s\\t%s\\n' "$PWD" "$(cd scripts && ls | tr '\\n' ' ')" >> '${log}.scripts'
 mkdir -p node_modules/.bin node_modules/dep
 cp '${vitest}' node_modules/.bin/vitest
 chmod 755 node_modules/.bin/vitest
@@ -224,6 +225,10 @@ interface Box {
   node: { v: string };
   npmCalls: () => string[];
   cpCalls: () => string[];
+  /** The files under \`scripts/\` each \`npm ci\` saw, by directory (D-8966). */
+  npmScripts: () => string[];
+  /** The service's notes (D-8966). */
+  logs: string[];
 }
 
 const roots: string[] = [];
@@ -267,18 +272,24 @@ function makeBox(): Box {
   });
   const clock = { now: Date.UTC(2026, 9, 29, 12, 0, 0) };
   const node = { v: '22.11.0' };
-  // The run's tree is the template as it stands when the run is prepared (the mirror read is its own row, below).
-  const inputs = async (_m: string, _id: string, paths: readonly string[]): Promise<InstallInput[]> =>
-    paths.map((p) => ({ path: p, bytes: readFileSync(path.join(template, p)) }));
+  // The run's tree is the template as it stands when the run is prepared (the mirror read is its own row, below): an
+  // optional path that is no file there is skipped, as `runTreeFiles` skips it.
+  const inputs = async (_m: string, _id: string, paths: readonly string[], optional: readonly string[] = []): Promise<InstallInput[]> =>
+    [...paths, ...optional.filter((p) => existsSync(path.join(template, p)) && lstatSync(path.join(template, p)).isFile())]
+      .map((p) => ({ path: p, bytes: readFileSync(path.join(template, p)) }));
+  const logs: string[] = [];
   const service = (): TestboxService => new TestboxService({
     settings: s, rows: [ROW(root)], sys: mgr, probe: async () => ({ ok: true }), mirror: NO_MIRROR, now: () => clock.now,
     chrome: path.join(s.toolsDir, 'current', 'chrome'), release: 'v1.2.3', serviceVersion: '1.2.3',
     tools: () => ({ node: node.v, npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' }),
-    pristine: { settings: PS, inputs, node: () => node.v, platform: 'linux-x64' },
+    pristine: { settings: PS, inputs, node: () => node.v, platform: 'linux-x64' }, log: (l) => logs.push(l),
   });
   const svc = service();
   const lines = (f: string): string[] => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : []);
-  return { root, template, svc, restart: service, mgr, clock, node, npmCalls: () => lines(npmLog), cpCalls: () => lines(path.join(root, 'cp.log')) };
+  return {
+    root, template, svc, restart: service, mgr, clock, node, npmCalls: () => lines(npmLog), cpCalls: () => lines(path.join(root, 'cp.log')),
+    npmScripts: () => lines(`${npmLog}.scripts`), logs,
+  };
 }
 
 async function runOne(box: Box, over: Partial<RunSubmit> = {}): Promise<{ summary: RunSummary; sink: Sink; id: string }> {
@@ -422,6 +433,66 @@ describe('pristine.ts: the install key, the states, the backoff, the keep and a 
   it('the settings come from the printer\'s lines, and a missing key refuses with its name', () => {
     expect(PS.retryMs.length).toBeGreaterThan(1);
     expect(() => pristineSettings(new Map(), durationMs)).toThrow(/CCRC_TESTBOX_PRISTINE_RETRY/);
+  });
+});
+
+describe('pristine.ts#lifecycleInputPaths: the files a package\'s install scripts run are install inputs (D-8966)', () => {
+  const DECLARED = ['server/package.json', 'server/package-lock.json'];
+  const manifest = (scripts: unknown): Uint8Array => Buffer.from(JSON.stringify({ name: 'server', scripts }));
+  const derive = (scripts: unknown): ReturnType<typeof lifecycleInputPaths> => lifecycleInputPaths('server', manifest(scripts), DECLARED);
+
+  it('a postinstall that runs scripts/x.mjs names server/scripts/x.mjs', () => {
+    expect(derive({ postinstall: 'node scripts/x.mjs' })).toEqual({ paths: ['server/scripts/x.mjs'], notes: [] });
+  });
+
+  it('all four hooks npm ci runs, and only those; ./ dropped; the operators split words; de-duplicated and sorted', () => {
+    expect(derive({
+      preinstall: 'node ./scripts/b.mjs', install: 'node-gyp rebuild && node scripts/a.cjs', postinstall: 'node scripts/b.mjs; sh tools/c.sh || true',
+      prepare: 'tsc -p tsconfig.build.json | cat', test: 'node scripts/never.mjs', postprepare: 'node scripts/never2.mjs',
+    }).paths).toEqual(['server/scripts/a.cjs', 'server/scripts/b.mjs', 'server/tools/c.sh', 'server/tsconfig.build.json']);
+  });
+
+  it('a declared input is not named twice', () => {
+    expect(derive({ postinstall: 'node scripts/x.mjs package-lock.json' }).paths).toEqual(['server/scripts/x.mjs']);
+  });
+
+  it('a glob, an absolute path, a .. path, a flag, an assignment or a bare word adds nothing', () => {
+    for (const script of [
+      'node scripts/*.mjs', 'node scripts/x?.mjs', 'node scripts/[ab].mjs', 'node scripts/{a,b}.mjs', 'node /usr/lib/x.mjs', 'node ../shared/x.mjs',
+      'node scripts/../x.mjs', 'node scripts//x.mjs', 'node scripts/./x.mjs', 'node --require=scripts/x.cjs', 'X=scripts/x.mjs node', 'husky install',
+      'node ~/x.mjs', 'node .', 'node ..',
+    ]) expect(derive({ postinstall: script }), script).toEqual({ paths: [], notes: [] });
+  });
+
+  it('a script it cannot parse adds nothing and says so; so does a manifest it cannot read', () => {
+    for (const script of ['node "scripts/x.mjs"', "node 'scripts/x.mjs'", 'node $DIR/x.mjs', 'node `pwd`/x.mjs', 'node scripts\\x.mjs',
+      'node scripts/x.mjs > out.log', 'node scripts/x.mjs < in.txt', '(node scripts/x.mjs)', 'node scripts/x.mjs &', 'node scripts/x.mjs\nnode scripts/y.mjs']) {
+      const r = derive({ postinstall: script });
+      expect(r.paths, script).toEqual([]);
+      expect(r.notes, script).toEqual(['server/package.json: scripts.postinstall uses quoting, expansion or redirection this reader does not follow; it adds no install input']);
+    }
+    expect(derive({ postinstall: 7 }).notes).toEqual(['server/package.json: scripts.postinstall is not a string; it adds no install input']);
+    expect(derive(['node scripts/x.mjs']).notes).toEqual(['server/package.json: scripts is not an object; no lifecycle script adds an install input']);
+    expect(lifecycleInputPaths('server', Buffer.from('{'), DECLARED)).toEqual({ paths: [], notes: ['server/package.json is not JSON; no lifecycle script adds an install input'] });
+    expect(lifecycleInputPaths('server', Buffer.from('[]'), DECLARED).notes).toEqual(['server/package.json is not an object; no lifecycle script adds an install input']);
+    expect(lifecycleInputPaths('server', null, ['server/package-lock.json']).notes).toEqual(['the row\'s install inputs do not name server/package.json; no lifecycle script adds an install input']);
+    // One unreadable hook leaves the others read.
+    expect(derive({ preinstall: 'node "a.mjs"', postinstall: 'node scripts/x.mjs' }).paths).toEqual(['server/scripts/x.mjs']);
+    // No scripts, or none of the four, is nothing to say.
+    expect(lifecycleInputPaths('server', Buffer.from('{"name":"server"}'), DECLARED)).toEqual({ paths: [], notes: [] });
+  });
+
+  it('at most LIFECYCLE_INPUTS_MAX paths, the first in the scripts\' order, and the cut is said', () => {
+    const many = Array.from({ length: LIFECYCLE_INPUTS_MAX + 4 }, (_, i) => `scripts/f${String(i).padStart(2, '0')}.mjs`);
+    const r = derive({ postinstall: `node ${many.join(' ')}` });
+    expect(r.paths).toEqual(many.slice(0, LIFECYCLE_INPUTS_MAX).map((p) => `server/${p}`));
+    expect(r.notes).toEqual([`server/package.json: its lifecycle scripts name ${LIFECYCLE_INPUTS_MAX + 4} paths; the first ${LIFECYCLE_INPUTS_MAX} are kept`]);
+  });
+
+  it('the real repository\'s server package derives server/scripts/fix-node-pty-helper.mjs, a file in the tree', () => {
+    const real = lifecycleInputPaths('server', readFileSync(path.join(REPO, 'server', 'package.json')), DECLARED);
+    expect(real).toEqual({ paths: ['server/scripts/fix-node-pty-helper.mjs'], notes: [] });
+    expect(lstatSync(path.join(REPO, real.paths[0]!)).isFile()).toBe(true);
   });
 });
 
@@ -617,6 +688,47 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
   }, ROW_TIMEOUT_MS);
 });
 
+describe('D-8966: a package\'s lifecycle scripts reach its install key and its pristine build', () => {
+  const withScript = (box: Box, body: string): void => {
+    writeFileSync(path.join(box.template, 'server', 'package.json'), JSON.stringify({ name: 'server', scripts: { postinstall: 'node scripts/x.mjs scripts/absent.mjs' } }));
+    mkdirSync(path.join(box.template, 'server', 'scripts'), { recursive: true });
+    writeFileSync(path.join(box.template, 'server', 'scripts', 'x.mjs'), body);
+  };
+  const keyWith = (box: Box): string => installKey([
+    ...ROW(box.root).packages[0]!.installInputs.map((p) => ({ path: p, bytes: readFileSync(path.join(box.template, p)) })),
+    { path: 'server/scripts/x.mjs', bytes: readFileSync(path.join(box.template, 'server', 'scripts', 'x.mjs')) },
+  ], box.node.v, 'linux-x64');
+
+  it('the script is in the key and in the built tree, a missing one is not, and a change to it changes the key', async () => {
+    const box = makeBox();
+    withScript(box, 'console.log("one");\n');
+    await box.svc.start();
+    const key = keyWith(box);
+    expect(key).not.toBe(keyOf(box));
+    expect((await runOne(box)).summary.exit).toBe(0);
+    expect(box.svc.status().pristine).toEqual([{ repository: 'project-a', package: 'server', key }]);
+    // The install unit's npm ci saw scripts/x.mjs laid out beside the lockfile, and nothing for the missing path.
+    expect(box.npmScripts().filter(inInstall).map((l) => l.split('\t')[1])).toEqual(['x.mjs ']);
+    expect(box.logs).toEqual([]);
+
+    writeFileSync(path.join(box.template, 'server', 'scripts', 'x.mjs'), 'console.log("two");\n');
+    const changed = keyWith(box);
+    expect(changed).not.toBe(key);
+    expect((await runOne(box)).summary.exit).toBe(0);
+    expect(box.svc.status().pristine.map((p) => p.key)).toEqual([key, changed]);
+  }, ROW_TIMEOUT_MS);
+
+  it('a script it cannot parse leaves the key as the row declares it, and is noted once', async () => {
+    const box = makeBox();
+    writeFileSync(path.join(box.template, 'server', 'package.json'), JSON.stringify({ name: 'server', scripts: { postinstall: 'node "scripts/x.mjs"' } }));
+    await box.svc.start();
+    await runOne(box);
+    await runOne(box);
+    expect(box.svc.status().pristine).toEqual([{ repository: 'project-a', package: 'server', key: keyOf(box) }]);
+    expect(box.logs).toEqual(['ccrc-testbox: project-a: server/package.json: scripts.postinstall uses quoting, expansion or redirection this reader does not follow; it adds no install input']);
+  }, ROW_TIMEOUT_MS);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 // The install inputs at a run's tree, read from a fixture mirror.
 // ---------------------------------------------------------------------------------------------------------------
@@ -678,6 +790,39 @@ describe('mirror.ts#runTreeFiles: the inputs at the run\'s tree', () => {
     expect(await runTreeFiles(g, mirror, a, ['server/latin1.json']), 'a non-UTF-8 blob').toBeNull();
     const ok = await runTreeFiles(g, mirror, a, ['server/empty.json', 'server/package.json']);
     expect(ok?.map((x) => Buffer.from(x.bytes).toString('utf8'))).toEqual(['', '{"name":"server"}\n']);
+  });
+  it('D-8966: an optional path is read when it is a regular file there and skipped otherwise; the declared ones still fail closed', async () => {
+    const root = mkTmp('ccrc-tb-pristine-git-');
+    const work = path.join(root, 'work');
+    mkdirSync(path.join(work, 'server', 'scripts', 'dir.mjs'), { recursive: true });
+    git(root, 'init', '-q', work);
+    writeFileSync(path.join(work, 'server', 'package.json'), '{"name":"server"}\n');
+    writeFileSync(path.join(work, 'server', 'scripts', 'x.mjs'), 'x\n');
+    writeFileSync(path.join(work, 'server', 'scripts', 'run.sh'), 'run\n', { mode: 0o755 });
+    writeFileSync(path.join(work, 'server', 'scripts', 'dir.mjs', 'inner'), 'inner\n');
+    writeFileSync(path.join(work, 'server', 'scripts', 'big.mjs'), Buffer.alloc(2 * 1024 * 1024, 0x61));
+    writeFileSync(path.join(work, 'server', 'scripts', 'star*.mjs'), 'star\n');
+    symlinkSync('x.mjs', path.join(work, 'server', 'scripts', 'link.mjs'));
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'head');
+    const head = git(work, 'rev-parse', 'HEAD');
+    const mirror = path.join(root, 'mirror.git');
+    git(root, 'clone', '-q', '--bare', work, mirror);
+    const a = runId();
+    git(mirror, 'update-ref', `refs/ccrc-test/${a}/head`, head);
+    const g = realGit(boundedExec({ ...gitEnv(root), PATH: process.env.PATH ?? '' }, SHORT_BOUND_MS));
+    const read = async (paths: string[], optional: string[]): Promise<[string, string][] | null> =>
+      (await runTreeFiles(g, mirror, a, paths, optional))?.map((x) => [x.path, Buffer.from(x.bytes).toString('utf8')]) ?? null;
+    expect(await read(['server/package.json'], ['server/scripts/x.mjs', 'server/scripts/run.sh'])).toEqual([
+      ['server/package.json', '{"name":"server"}\n'], ['server/scripts/x.mjs', 'x\n'], ['server/scripts/run.sh', 'run\n'],
+    ]);
+    expect(await read([], ['server/scripts/absent.mjs', 'server/scripts/dir.mjs', 'server/scripts/link.mjs', 'server/scripts', 'server/scripts/x.mjs']),
+      'absent, a directory and a link are skipped').toEqual([['server/scripts/x.mjs', 'x\n']]);
+    // A pathspec is literal: `star*.mjs` names that one file, never what the star would match.
+    expect(await read([], ['server/scripts/*.mjs'])).toEqual([]);
+    expect(await read([], ['server/scripts/star*.mjs'])).toEqual([['server/scripts/star*.mjs', 'star\n']]);
+    expect(await read([], ['server/scripts/big.mjs']), 'a file it cannot read byte-exact fails the set').toBeNull();
+    expect(await read(['server/absent.json'], ['server/scripts/x.mjs']), 'a declared path still fails closed').toBeNull();
   });
 });
 

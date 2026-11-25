@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { RUNG_CELLS } from '../../shared/overlord-ladder.js';
-import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
+import { TEAM_CONFIRM_REFUSALS, type TeamConfirmRefusal } from '../../shared/linking.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/overlord-skill');
@@ -415,30 +415,51 @@ describe('the Overlord skill: the team candidate (D-8809)', () => {
     for (const w of ['`rung-below`', 'Project linking card', 'decision brief', 'never by another route']) expect(p).toContain(w);
   });
 
-  // Keyed on the parsed calls and symbols (`scan/symbols.ts`), never on the file's text (ARCH-06's counting rule).
-  it("gives the confirm route's refusals", () => {
-    const calls = callsIn(symbolOf('server/src/linking/routes.ts', 'registerLinkingRoutes'));
-    const confirm = calls.filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === '/api/linking/confirm');
-    expect(confirm, 'registerLinkingRoutes registers the confirm route once').toHaveLength(1);
-    const refusals = calls.filter((c) => c.start > confirm[0]!.start && c.end <= confirm[0]!.end && c.name === 'refuseRoute');
-    const words = new Set(refusals.flatMap((c) => (c.args[1]?.kind === 'string' ? [c.args[1].text] : [])));
-    // A word the pin cannot resolve fails it rather than being skipped (review 3253 A1): only `pair.error` is read.
-    expect(refusals.filter((c) => c.args[1]?.kind !== 'string' && c.args[1]?.text !== 'pair.error').map((c) => c.args[1]?.text),
-      'a refuseRoute in the confirm route whose word the pin cannot read').toEqual([]);
-    // `pair.error` is `teamPairVerdict`'s word: the ones its declared return type names.
-    if (refusals.some((c) => c.args[1]?.text === 'pair.error')) {
-      const pairType = /error: ((?:'[a-z-]+'(?: \| )?)+)/.exec(sourceOfSymbol('server/src/linking/policy.ts', 'teamPairVerdict'));
-      expect(pairType, 'teamPairVerdict declares no error words').toBeTruthy();
-      for (const m of pairType![1]!.matchAll(/'([a-z-]+)'/g)) words.add(m[1]!);
-    }
-    // The token and the body's shape are the door process's to get right: the Overlord never sends either.
-    for (const w of ['unauthenticated', 'bad-request']) words.delete(w);
-    expect([...words].sort(), 'the confirm route answers a refusal the paragraph does not name, or lost one')
-      .toEqual(['no-project', 'team-ambiguous', 'team-set', 'team-unknown', 'unavailable', 'write-failed']);
+  // The confirm door's words are its one vocabulary, `TEAM_CONFIRM_REFUSALS` (`w8-linking-measurement-record`), which
+  // `linking-door-refusals.test.ts` holds equal to what the handler answers, read from its parsed calls (ARCH-06's counting
+  // rule). The body's shape is the door process's to get right, so the Overlord never meets `bad-request`; the box token's
+  // `unauthenticated` and the gate's words are not the door's own.
+  const notTheOverlords: readonly TeamConfirmRefusal[] = ['bad-request'];
+  const ownWords = (): string[] => TEAM_CONFIRM_REFUSALS.filter((w) => !notTheOverlords.includes(w));
+  /** Each refusal the paragraph lists after the gate, `word` to the text before the next one, flattened. */
+  const listedRemedies = (): Map<string, string> => {
     const p = paragraph();
-    for (const w of words) expect(p, `the paragraph omits \`${w}\``).toContain(`\`${w}\``);
-    // And the other way (review 3253 A2): each refusal the paragraph lists, a word followed by a colon, is one the door answers.
-    const listed = [...p.slice(p.indexOf("the door's own refusals")).matchAll(/`([a-z-]+)`:/g)].map((m) => m[1]!);
-    expect(listed.sort(), "the paragraph lists a refusal the door does not answer, or misses one").toEqual([...words].sort());
+    const after = p.slice(p.indexOf("the door's own refusals are these."));
+    const starts = [...after.matchAll(/`([a-z-]+)`: /g)];
+    const words = starts.map((m) => m[1]);
+    expect(words, 'the paragraph lists a refusal more than once').toEqual([...new Set(words)]);
+    return new Map(starts.map((m, i) => [m[1]!, after.slice(m.index! + m[0].length, starts[i + 1]?.index ?? after.length).trim()]));
+  };
+
+  it("lists exactly the confirm door's refusal words, from its one vocabulary (w8-linking-measurement-record)", () => {
+    for (const w of notTheOverlords) expect(TEAM_CONFIRM_REFUSALS as readonly string[], `${w} is not a confirm refusal any more`).toContain(w);
+    const listed = [...listedRemedies().keys()];
+    expect(listed.filter((w) => !ownWords().includes(w)), 'the paragraph lists a refusal the door does not answer').toEqual([]);
+    expect(ownWords().filter((w) => !listed.includes(w)), 'the door answers a refusal the paragraph does not list').toEqual([]);
+  });
+
+  it('gives each refusal word its remedy, word for word (w8-linking-measurement-record)', () => {
+    expect(Object.keys(CONFIRM_REMEDIES).sort(), 'a remedy pin for a word the door does not answer, or none for one it does')
+      .toEqual([...ownWords()].sort());
+    const listed = listedRemedies();
+    for (const w of ownWords()) expect(listed.get(w), `the remedy of \`${w}\``).toBe(CONFIRM_REMEDIES[w as keyof typeof CONFIRM_REMEDIES]);
   });
 });
+
+/** The remedy the team candidate paragraph gives each of the confirm door's refusal words the Overlord meets, word for word.
+ *  Typed by the door's vocabulary: a word added to `TEAM_CONFIRM_REFUSALS` fails the typecheck here until it has a remedy. */
+const CONFIRM_REMEDIES: Readonly<Record<Exclude<TeamConfirmRefusal, 'bad-request'>, string>> = {
+  'team-set': 'the project has a key or the operator decided it, so drop the candidate.',
+  'team-unknown': 'its detail says which of two causes. Either the pair is not a current candidate, so there is nothing to '
+    + 'confirm and you drop it; or the workspace the pair depends on was read and does not hold it now, and the candidate stays '
+    + 'on the card, so leave it for the operator, name it in your brief, and do not retry it in a loop.',
+  // w8-suggest-workspace-id (D-8808, D-8809; review 3482 F1, F6): the confirm door's detail lists the holders by id, up to eight.
+  'team-ambiguous': 'more than one workspace holds the key and the candidate names none of them, so leave it for the operator and '
+    + 'name in your brief the workspaces its detail lists (up to eight, and a count of the rest).',
+  'no-project': 'the server has no such project, so drop it.',
+  'unavailable': 'the Linear store, or a workspace the pair depends on, could not be read, so try once more on a later turn, '
+    + 'then tell the operator.',
+  'not-configured': 'no Linear workspace is connected, so do not retry: leave the candidate for the operator and tell them in '
+    + 'your brief that no workspace is connected.',
+  'write-failed': 'the store write failed, so bring it to the operator.',
+};

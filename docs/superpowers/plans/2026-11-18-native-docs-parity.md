@@ -12,6 +12,8 @@
 
 **Status:** 2026-11-18, X2 design wave (run 2632). No implementation is claimed by this document. Run ids and deviation blocks for P1 to P6 are issued when each opens.
 
+**Amended 2026-11-24** (wave 41, run 3605): P5.3 runs first, as wave PH, after X1's wave C and before reader mode, and P5.1 takes reader mode's layout rule. See § Amendment 2026-11-24 under the waves table.
+
 ## Global Constraints
 
 - Reader frame sandbox exactly `allow-scripts`; shell CSP meta exactly `frame-src 'none'`; no parent-DOM access by any frame; no extra message channel; no window `message` listener anywhere in `pwa/src`; never `allow-modals`.
@@ -49,6 +51,17 @@
 | P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/lib/historyPlaces.ts` (new), `pwa/src/lib/popstate.ts` (new, the one `popstate` dispatcher), `pwa/src/lib/router.ts` and `pwa/src/lib/swupdate.ts` (their listeners through it), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), `pwa/src/lib/printAllow.ts` (its lists re-taken from the print mode's conformance output), `pwa/src/lib/trackerLinkJob.ts` (new), `pwa/src/lib/{readerRenderJob,markdownWorker,markdownRunner,readerLimits}.ts` (the `tracker-links` job, `docsRunner`, its budget), `pwa/test/{markdown-purity,markdown-worker-built,markdown-runner}.test.ts`, `server/test/single-definition/docs-ring.test.ts`, rich-docs spec §3.3 and §4.4 |
 
 Every wave ends with the common acceptance cycle of the completion plan (exact-tip CI and CodeQL, privacy scan, review run).
+
+### Amendment 2026-11-24: Back places first, for Reader Mode (wave 41, run 3605)
+
+The operator's priority of 2026-11-24 puts Reader Mode first. Reader mode (`2026-11-20-native-docs-reader-mode.md`) needs one task of this plan, P5.3, and nothing from P2, P4, P6 or the rest of P5. That plan's § Amendment 2026-11-24 §1 traces this. So this plan's order changes as follows, under D-8974 and D-8975, both defined in that plan. Where this section and the rest of the plan differ, the task bodies and mutation rows below included, this section governs.
+
+- **The library pin is wave C's (D-8976, defined in X1's plan).** X1's wave C re-pins the console to `@synapsium-labs/pinax-lib` 1.2.0, the library's new package name. It replaces the Global Constraint and the Tech Stack line that name `@synapsium-labs/docserver` 1.1.0 "until P5 adopts the next release". P5.1 no longer edits `pwa/package.json` or its lock.
+- **Wave PH, P5.3 alone, right after wave C.** It runs Steps 0 to 6 as written, with mutation rows M11.27, M11.28, M11.29, M11.30, M11.49, M11.57, M11.63, M11.64 and M11.73, and the programme ledger's P5.3 carries. From P5's row it takes `pwa/src/docs/reader/bridge.ts` (pass `onPlace`, take `onHash`'s second argument) and `pwa/test/reader-bridge.test.ts`. The places need the frame's `place` op and `hash {push, from}`, which exist only from the 1.2.0 release, so PH waits for wave C and no longer for P6.
+- **Wave XR, reader mode, after PH**, then **P6** and **P5 less P5.3**, in that order. P6 and P5 claim `ReaderFrame.tsx`, `reader/{bridge,policy}.ts`, `DocsHead.tsx` and `docs.css` after XR has merged. "P6 before P5" stands for what remains of P5: its reason was these shared files.
+- **P5.1 also takes reader mode's layout rule** (D-8975), because it brings the layouts. That covers the measurement of the remount into `default` (its time against lab E4's 1.4 s, and the one bar's budgets after the return), `READER_LAYOUT_RULE`, `readerModeOffered`'s `layout` and `rule` inputs, `readerModeLayoutNote`, the remount into `default` and back with `READER_REMOUNT_QUIET_MS` and no opening hash, the note beside the Layout row, the reader-mode plan's rows X6.22, X6.23, X6.59, X6.60 and X6.70 with their tests, device row FS-9, and AR-X6's layout clause. P5.1 also plans a same-document remount made while reader mode is on in the default layout, whatever the stored layout pref. P5.1's Files gain `pwa/src/docs/reader/readerMode.ts`, `pwa/src/docs/useReaderMode.ts` and the reader-mode tests those rows name.
+- **P2, P3 and P4** keep their order and may run beside wave C, PH and XR: they touch no reader host file, except P2.4's truth line in `DocsHead.tsx`, which is serialised by claim. They share two other files with wave C, each serialised by claim: `pwa/package.json` and its lock (P3.1) and `server/test/docs-parity.test.ts` (P2.1).
+- AR-1 to AR-6 are unchanged. AR-2 is run after P5.1 as before, and the reader-mode plan's AR-X6 layout clause is run with it.
 
 ## Acceptance rows (one to one with Task 17's matrix)
 
@@ -475,9 +488,13 @@ Each row ships with the task that owns it; the row is red when the guard is remo
   - **Why.** The bootstrap stands at 32 740 of its 32 768 bytes, and its budget is never raised. A field named per layout would add to the bootstrap's field list, and LX6 is still to land in the same library line. Folds are per-doc reading state, so one shared field is the same fact in every layout.
   - **What a reader sees.** A section folded, or a layer closed, in one layout shows the same way in another layout for the same document.
   - **The library's pins:**
-    - each layout reads the shared field safely whatever another layout wrote: an unknown or out-of-range entry is ignored, never thrown and never rewritten;
+    - each layout reads the shared field safely whatever another layout wrote: an unknown or out-of-range entry is ignored, never thrown and never rewritten by a read;
     - a mutation row for each direction (guided to default, default to guided) reds when that tolerance is removed;
     - `review` adds no state of its own.
+  - **Its limits, stated (amended 2026-11-22, review run 3292).** Making the shared field fully two-way would change the default layout's code, whose bytes stay identical to landing A's, so these are stated, not fixed:
+    1. A document with nothing folded reads as unvisited. The default layout deletes the field when nothing is folded, so on the next visit `guided` applies its own first-visit layers (all folded for a long document, or when its layers choice is `guided`). A row pins it.
+    2. The default layout's own fold write (a fold, a reveal or `beforematch`) keeps only its own entries, so it drops entries only `guided` has; `guided`'s write keeps the entries it does not own (narrowed 2026-11-22, review run 3336).
+    3. `guided`'s reader-wide layers choice lives in the existing UI preference (`pref:ui`, key `layers`), and adds no field.
   - **What changes here:** §6's State line is amended in place.
   - The coordinator ruled it on 2026-11-22 (early). Issued to run 3249 in its block 8881 to 8883; 8882 and 8883 are unspent so far.
 

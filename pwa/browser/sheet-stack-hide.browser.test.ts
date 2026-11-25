@@ -151,7 +151,7 @@ describe('Session actions, Swap account, its confirm, Cancel (Task C40, review 2
     it(`${view.skin}, ${view.width}px: only the sheet under the closing confirm is announced; nothing the page hid is lifted`, async () => {
       const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(`${server!.origin}/`);
+        await page.goto(`${server!.origin}/fleet`);
         // The session's card (Refined) or status group (Instrument) is drawn folded: unfold it to reach the row.
         await page.locator('button[aria-expanded="false"]', { hasText: '▸' }).first().click();
         const actions = page.getByRole('button', { name: /^Actions for / }).first();
@@ -274,7 +274,7 @@ describe('the command palette\'s hand-off to a sheet (Task C40, review 2334 F1; 
       it(`${view.skin}, ${view.width}px, ${variant}: Show shortcuts from the palette, then Escape: the page is announced as the sheet closes; nothing the page hid is lifted`, async () => {
         const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
         try {
-          await page.goto(`${server!.origin}/`);
+          await page.goto(`${server!.origin}/fleet`);
           await page.getByRole('button', { name: /^Settings/ }).first().waitFor();
           // An element the page hid itself at the body's level, beside the app root the palette marks.
           await page.evaluate(() => {

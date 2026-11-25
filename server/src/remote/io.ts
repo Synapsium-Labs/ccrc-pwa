@@ -6,7 +6,7 @@ import {
 } from '../../../shared/agent-protocol.js';
 import { buildTestboxAdminArgv, testboxAdminIsLong } from '../../../shared/testbox-admin.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
-import { readHeadroomBytes, readHostPsi } from '../../../shared/pressure.js';
+import { readHeadroomBytes, readHostMachine, readHostPsi } from '../../../shared/pressure.js';
 import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { ModelClass } from '../../../shared/models.js';
@@ -53,6 +53,9 @@ function decodeCanonicalBase64(text: string): Uint8Array | null {
   const bytes = Buffer.from(text, 'base64');
   return bytes.toString('base64') === text ? new Uint8Array(bytes) : null;
 }
+
+/** A bounded read's `ident` as the agent writes it (`agent/src/fileops.ts#readIdentOf`, a sha256 in hex). */
+const READ_IDENT = /^[0-9a-f]{64}$/;
 
 /** The `readdir` answer's names, exactly as `readdirMeasured` has always read them (one reader; the times arm reuses it). */
 function readdirAnswer(res: unknown): { read: MeasuredDirectoryRead } {
@@ -142,12 +145,16 @@ export function createIo(client: FleetClient): FleetIO {
      *  EXACTLY `min(maxBytes, size - offset)`; a size below `offset` makes that
      *  negative and fails the same test, which is how a regression reads. Every
      *  other shape, and every refusal, timeout or disconnect, is `unreadable`;
-     *  `absent` is the agent's own `data: null, absent: true` and nothing else. */
+     *  `absent` is the agent's own `data: null, absent: true` and nothing else.
+     *  `ident` is this field's ONE reader: kept only as 64 lowercase hex
+     *  characters on an answer that carries bytes, so an older agent's silence,
+     *  a malformed token and any token on an empty answer all read as
+     *  unmeasured (no `ident`), never as a token, and never fail the bytes. */
     async readFileFromBytesMeasured(path, offset, maxBytes, timeoutMs, signal) {
       if (!isReadFromRange(offset, maxBytes)) return { ok: false, reason: 'unreadable' };
       try {
         const res = await client.request({ t: 'req', op: 'readFrom', path, offset, maxBytes }, timeoutMs, signal);
-        const r = res as { data?: unknown; dataB64?: unknown; size?: unknown; absent?: unknown } | null;
+        const r = res as { data?: unknown; dataB64?: unknown; size?: unknown; absent?: unknown; ident?: unknown } | null;
         if (r === null || typeof r !== 'object') return { ok: false, reason: 'unreadable' };
         if (typeof r.dataB64 === 'string') {
           const bytes = decodeCanonicalBase64(r.dataB64);
@@ -156,7 +163,9 @@ export function createIo(client: FleetClient): FleetIO {
             return { ok: false, reason: 'unreadable' };
           }
           if (bytes.length !== Math.min(maxBytes, size - offset)) return { ok: false, reason: 'unreadable' };
-          return { ok: true, bytes, size };
+          // An empty success (EOF) never carries identity, whatever the peer sent: the local adapter's EOF answers none.
+          const ident = bytes.length > 0 && typeof r.ident === 'string' && READ_IDENT.test(r.ident) ? r.ident : undefined;
+          return ident === undefined ? { ok: true, bytes, size } : { ok: true, bytes, size, ident };
         }
         if (r.data === null && r.absent === true) return { ok: false, reason: 'absent' };
         return { ok: false, reason: 'unreadable' };
@@ -286,16 +295,26 @@ export function createIo(client: FleetClient): FleetIO {
 
     /** The agent's `pressure` op (#1170). An agent whose `ready.ops` does not name it is never sent it: `unsupported`,
      *  never a stall. Anything the link or the agent failed, or a reply in no shape `readHostPsi` knows, is
-     *  `unanswered`: the evidence the decider classifies a stall by. */
+     *  `unanswered`: the evidence the decider classifies a stall by.
+     *
+     *  D-8920: the machine's size rides the same reply, read by its one reader and kept on the member
+     *  with no PSI too. WHY there is no size is kept apart, because the remedies differ (an adapter keeps every
+     *  distinction it receives): no ready frame yet, or a request the link or the agent failed, is `no-reading` (it
+     *  clears by itself); a ready frame whose ops do not name the op, or a reply with no `machine` key, is
+     *  `agent-older` (update the agent); a `machine` that is `null` or no size is `read-failed`. */
     async pressureMeasured() {
-      if (!(client.state.agentOps ?? []).includes(PRESSURE_OP)) return { ok: false, reason: 'unsupported' };
+      const ops = client.state.agentOps;
+      if (!(ops ?? []).includes(PRESSURE_OP)) {
+        return { ok: false, reason: 'unsupported', machine: { kind: 'unmeasured', why: ops === undefined ? 'no-reading' : 'agent-older' } };
+      }
       try {
         const reply = await client.request({ t: 'req', op: PRESSURE_OP });
         const psi = readHostPsi(reply);
         // D-8122: the slice's headroom rides beside the PSI; an older agent's reply has none, which reads as null.
-        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi, headroomBytes: readHeadroomBytes(reply) };
+        const machine = readHostMachine(reply);
+        return psi === null ? { ok: false, reason: 'unanswered', machine } : { ok: true, psi, headroomBytes: readHeadroomBytes(reply), machine };
       } catch {
-        return { ok: false, reason: 'unanswered' };
+        return { ok: false, reason: 'unanswered', machine: { kind: 'unmeasured', why: 'no-reading' } };
       }
     },
 

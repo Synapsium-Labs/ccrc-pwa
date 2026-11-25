@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
-import { connectToAgent, TOKEN } from './remoteHelpers.js';
+import { TEST_PEER_SEAMS, connectToAgent, TOKEN } from './remoteHelpers.js';
 
 type PeerMode =
   | 'silent-upgrade'   // accept TCP, read the upgrade request, never answer
@@ -324,6 +324,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
       // gives the retries (30 ms backoff, growing to 100 ms) time to print a second line, which they must not.
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       fleet = connectFleet({
+        peerSeams: TEST_PEER_SEAMS,
         url: 'not-a-url', token: 'unused', reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
       });
       await sleep(500);
@@ -379,6 +380,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     peer = await linkPeer(() => 'close-hello', () => ({ code, reason }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
       connectTimeoutMs: 5000,
     });
@@ -421,6 +423,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     peer = await linkPeer((n) => (n < 3 ? 'close-hello' : 'ready'), () => ({ code: 4401, reason: 'unauthorized' }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     fleet = connectFleet({
+      peerSeams: TEST_PEER_SEAMS,
       url: `ws://127.0.0.1:${peer.port}`, token, reconnectMinMs: 30, reconnectMaxMs: 100, heartbeatMs: 60_000,
       connectTimeoutMs: 5000,
     });
@@ -447,6 +450,7 @@ describe('W27: the link to the fleet agent cannot wait forever before ready (D-6
     try {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       fleet = connectFleet({
+        peerSeams: TEST_PEER_SEAMS,
         url: `ws://127.0.0.1:${raw.port}`, token: randomBytes(32).toString('hex'), reconnectMinMs: 5000,
         reconnectMaxMs: 5000, heartbeatMs: 60_000, connectTimeoutMs: 3000,
       });

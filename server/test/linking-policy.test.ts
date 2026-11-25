@@ -4,10 +4,10 @@ import { describe, it, expect } from 'vitest';
 import {
   withoutTrackerIds, slugForTicket,
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue, workspaceAfterWrite,
-  parseTeamConfirm, confirmedCandidate, overlordLinkCallBody, writeReadsStore, confirmedWorkspaceName, suggesterVerdict,
+  parseTeamConfirm, confirmedCandidate, teamPairVerdict, measuredPairRoute, overlordLinkCallBody, writeReadsStore, confirmedWorkspaceName, suggesterVerdict,
 } from '../src/linking/policy.js';
 import { claimsOpenRunOf, roleFactsOf, roleOf } from '../src/roleOf.js';
-import { routeProjectTeam, type LinearRouteSlot } from '../src/linear/route.js';
+import { routeProjectTeam, type LinearRouteSlot, type TeamRoutes } from '../src/linear/route.js';
 import { WS_SLUG_MAX } from '../../shared/slug.js';
 import type { ProjectLinkingWire, TeamCandidateWire } from '../../shared/linking.js';
 
@@ -336,5 +336,78 @@ describe('parseTeamConfirm, confirmedCandidate and overlordLinkCallBody (D-8809)
     expect(body.why.length).toBeLessThanOrEqual(300);
     expect(body.why.endsWith('…')).toBe(true);
     expect(body.options).toHaveLength(2);
+  });
+});
+
+// D-8808, D-8809: the pair's verdict over the measured route.
+describe('teamPairVerdict', () => {
+  const slot = (id: string, teams: string[]): LinearRouteSlot => ({ ref: { source: 'file', id }, workspaceId: id, urlKey: null, teamKeys: teams });
+  it('answers the one holder, and each refusal its own word with a fixed detail, at either door (the team-ambiguous one, its holders: below)', () => {
+    for (const door of ['suggest', 'confirm'] as const) {
+      expect(teamPairVerdict({ kind: 'slot', slot: slot('ws-a', ['AAA']) }, door)).toEqual({ ok: true, workspaceId: 'ws-a' });
+      expect(teamPairVerdict({ kind: 'unmeasured' }, door)).toEqual({ ok: false, error: 'unavailable', detail: 'a Linear workspace the pair depends on could not be read' });
+      expect(teamPairVerdict({ kind: 'refused', word: 'not-configured' }, door)).toEqual({ ok: false, error: 'not-configured', detail: 'no Linear workspace is connected' });
+      for (const word of ['team-unknown', 'workspace-unknown', 'workspace-required'] as const) {
+        expect(teamPairVerdict({ kind: 'refused', word }, door), `${door} ${word}`)
+          .toEqual({ ok: false, error: 'team-unknown', detail: 'the pair is not held in the connected Linear workspaces now' });
+      }
+    }
+  });
+});
+
+describe('teamPairVerdict: the team-ambiguous detail names each holding workspace by id (D-8808, D-8809)', () => {
+  const W = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const ambiguous = (holders: Array<{ workspaceId: string; urlKey: string | null }>, door: 'suggest' | 'confirm' = 'suggest') =>
+    teamPairVerdict({ kind: 'refused', word: 'team-ambiguous', candidates: [], holders }, door);
+  const PREFIX = 'more than one connected Linear workspace holds the key; send one of these as workspace: ';
+  // Review 3482 F1: on the confirm door the word comes only from a candidate stored with no workspace, which no resend can name,
+  // so its detail lists the holders and tells the caller to do nothing the door refuses.
+  const CONFIRM_PREFIX = 'more than one connected Linear workspace holds the key, and the candidate names none of them: ';
+  it('the confirm door lists the same holders, with the same bound and tail, and never the suggest door\'s instruction (review 3482 F1)', () => {
+    expect(ambiguous([{ workspaceId: W(1), urlKey: 'ws-a' }, { workspaceId: W(2), urlKey: null }], 'confirm'))
+      .toEqual({ ok: false, error: 'team-ambiguous', detail: `${CONFIRM_PREFIX}${W(1)} (ws-a), ${W(2)}` });
+    const nine = Array.from({ length: 9 }, (_, i) => ({ workspaceId: W(i + 1), urlKey: null }));
+    const confirm = ambiguous(nine, 'confirm');
+    expect(confirm).toEqual({ ok: false, error: 'team-ambiguous', detail: `${CONFIRM_PREFIX}${nine.slice(0, 8).map((h) => h.workspaceId).join(', ')}, and 1 more` });
+    expect(confirm.ok === false && confirm.detail).not.toMatch(/send/);
+  });
+  it('two holders: the id with its URL key, or the bare id when it has none', () => {
+    expect(ambiguous([{ workspaceId: W(1), urlKey: 'ws-a' }, { workspaceId: W(2), urlKey: null }]))
+      .toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${W(1)} (ws-a), ${W(2)}` });
+  });
+  it('a URL key is Linear\'s data: cleaned, and bare when it cleans to nothing', () => {
+    expect(ambiguous([{ workspaceId: W(1), urlKey: '  ws-a\u202e\n ' }, { workspaceId: W(2), urlKey: ' \u200b\u202e\n ' }]))
+      .toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${W(1)} (ws-a), ${W(2)}` });
+  });
+  it('at most 8 holders are named, and the rest are counted', () => {
+    const nine = Array.from({ length: 9 }, (_, i) => ({ workspaceId: W(i + 1), urlKey: null }));
+    const eight = nine.slice(0, 8);
+    expect(ambiguous(nine)).toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${eight.map((h) => h.workspaceId).join(', ')}, and 1 more` });
+    expect(ambiguous(eight)).toEqual({ ok: false, error: 'team-ambiguous', detail: `${PREFIX}${eight.map((h) => h.workspaceId).join(', ')}` });
+  });
+});
+
+describe('measuredPairRoute', () => {
+  const slot = (id: string, teams: string[]): LinearRouteSlot => ({ ref: { source: 'file', id }, workspaceId: id, urlKey: null, teamKeys: teams });
+  const routes = (over: Partial<TeamRoutes> = {}): TeamRoutes => ({ slots: [slot('ws-a', ['AAA'])], unreadableWorkspaces: new Set(), unreadableLegacy: false, ...over });
+  it('a store not listed is unmeasured', () => {
+    expect(measuredPairRoute(null)('AAA', null)).toBe('unmeasured');
+    expect(measuredPairRoute(null)('AAA', 'ws-a')).toBe('unmeasured');
+  });
+  it('a readable store answers the route; a refusal stays a refusal', () => {
+    expect(measuredPairRoute(routes())('AAA', null)).toMatchObject({ kind: 'slot', slot: { workspaceId: 'ws-a' } });
+    expect(measuredPairRoute(routes())('ZZZ', null)).toEqual({ kind: 'refused', word: 'team-unknown' });
+    expect(measuredPairRoute(routes({ slots: [] }))('AAA', null)).toEqual({ kind: 'refused', word: 'not-configured' });
+  });
+  it('an unreadable slot the answer depends on is unmeasured: a pin needs only its own, an unpinned key any', () => {
+    const r = routes({ unreadableWorkspaces: new Set(['ws-c']) });
+    expect(measuredPairRoute(r)('AAA', 'ws-c')).toBe('unmeasured');
+    expect(measuredPairRoute(r)('AAA', 'ws-a')).toMatchObject({ kind: 'slot' });
+    expect(measuredPairRoute(r)('AAA', null)).toBe('unmeasured');
+    expect(measuredPairRoute(routes({ unreadableLegacy: true }))('AAA', null)).toBe('unmeasured');
+  });
+  it('two readable holders stay ambiguous beside an unreadable slot', () => {
+    const r = routes({ slots: [slot('ws-a', ['AAA']), slot('ws-b', ['AAA'])], unreadableWorkspaces: new Set(['ws-c']) });
+    expect(measuredPairRoute(r)('AAA', null)).toMatchObject({ kind: 'refused', word: 'team-ambiguous' });
   });
 });

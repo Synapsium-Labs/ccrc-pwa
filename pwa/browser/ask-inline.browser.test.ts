@@ -36,7 +36,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -721,11 +721,41 @@ const CALL = {
   input: JSON.stringify({ questions: [{ question: 'Which cache should the service use?', header: 'Cache', multiSelect: false,
     options: [{ label: 'Redis' }, { label: 'In-process' }] }] }),
 };
+/** The live call for `frames`: the one asking the live question's own words (the hook envelope's questions, else the
+ *  pane's transcript copy), so the transcript ties the wait to it (desktop polish wave 168, review 3478 F2: a call is
+ *  singled out only when the live wait identifies it, by its words). A fixture whose wait names no call (an unreadable or
+ *  unparsed menu, an approval) keeps `CALL`, and its wait is raised from the tool-activity row's wait line instead. */
+const callFor = (frames: object[]): object => {
+  const asked = frames.find((f) => (f as { type?: string }).type === 'ask') as { ask?: { questions?: unknown[] } } | undefined;
+  const pane = frames.find((f) => (f as { type?: string }).type === 'dialog') as { dialog?: { ask?: { question?: string } } } | undefined;
+  const words = pane?.dialog?.ask?.question;
+  const questions = asked?.ask?.questions ?? (words === undefined ? null : [{ question: words, options: [] }]);
+  return questions === null ? CALL : { ...CALL, input: JSON.stringify({ questions }) };
+};
 /** `frames` (fixture 1's, with the forty-line question, unless a case names another) with that call in the backlog. */
 const WITH_CALL = (frames: object[] = FRAMES()): object[] =>
   frames.map((f) => ((f as { type?: string }).type === 'backlog'
-    ? { ...BACKLOG, events: [...BACKLOG.events, CALL] }
+    ? { ...BACKLOG, events: [...BACKLOG.events, callFor(frames)] }
     : f));
+/** The transcript's one control for the live wait at the desk: "Go to question" on the card of the call the wait
+ *  identifies, else "Go to the prompt" on the tool-activity row's wait line (review 3478 F2); both raise the inline card.
+ *  Each case pins the ONE place its fixture is designed to put it (review 3607 A1), so a control that moved fails. */
+type Place = 'card' | 'wait line';
+const AT: Record<Place, { sel: string; word: string }> = {
+  card: { sel: '.tool-ask .ask-state button', word: 'Go to question' },
+  'wait line': { sel: '.tool-activity-wait .tool-activity-answer', word: 'Go to the prompt' },
+};
+/** Where `frames` puts the control: on the card when the call in the transcript asks the live question's words
+ *  (`callFor`), else on the wait line (an unreadable or unparsed menu, an approval: `CALL`, which asks nothing live). */
+const placeOf = (frames: object[]): Place => (callFor(frames) === CALL ? 'wait line' : 'card');
+/** The control at `place`, by its own word. */
+const goToAt = (page: Page, place: Place) => page.locator(AT[place].sel, { hasText: AT[place].word });
+/** The control is at `place`, once, and nowhere else. */
+async function onlyAt(page: Page, place: Place, why = ''): Promise<void> {
+  const other: Place = place === 'card' ? 'wait line' : 'card';
+  expect(await goToAt(page, place).count(), `the control is not on the ${place}${why}`).toBe(1);
+  expect(await goToAt(page, other).count(), `a control on the ${other}${why}`).toBe(0);
+}
 
 // R64 F5: the transcript's live ask card offers "Go to question" at the desk. It raises the mounted inline card (the
 // existing raise path): the card scrolls into view and its first option takes focus. The transcript here holds the live
@@ -747,8 +777,8 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
-      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
-      expect(await button.count(), 'premise: the transcript card offers Go to question').toBe(1);
+      await onlyAt(opened.page, 'card');
+      const button = goToAt(opened.page, 'card');
       expect(await opened.page.locator('.tool-ask .ask-state', { hasText: 'waiting for you, below' }).count(), 'beside the word').toBe(1);
 
       // Premise: nothing of the card is focused, and every scroller the layout has is at the far end from the options.
@@ -904,7 +934,8 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
         await opened.page.waitForTimeout(100);
       }
       const before = await opened.page.evaluate(STAND, CARD);
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await onlyAt(opened.page, placeOf(frames));
+      await goToAt(opened.page, placeOf(frames)).click();
       await opened.page.waitForTimeout(300);
       // A script focus that follows a mouse click is not `:focus-visible`, so no ring is drawn yet. A modifier alone does
       // nothing to the card (no digit, arrow or Escape), and makes Chrome match `:focus-visible` on the focused option, so
@@ -1010,7 +1041,8 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
       expect(answers.length, 'premise: one answer is in flight').toBe(1);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
+      await onlyAt(opened.page, 'card');
+      await goToAt(opened.page, 'card').click();
       await opened.page.waitForTimeout(300);
       const after = await opened.page.evaluate((card) => {
         const el = document.querySelector<HTMLElement>(card)!;
@@ -1113,8 +1145,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
         await opened.page.waitForSelector(`${CARD} .opt-wait`, { timeout: 10_000 });
       }
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      const button = opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' });
-      expect(await button.count(), `premise: the transcript card offers Go to question (fixture ${n})`).toBe(1);
+      await onlyAt(opened.page, placeOf(framesOf(n)), ` (fixture ${n})`);
+      const button = goToAt(opened.page, placeOf(framesOf(n)));
       if (o.how === 'key') {
         await button.focus();
         await opened.page.keyboard.press('Enter');
@@ -1192,7 +1224,8 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).focus();
+      await onlyAt(opened.page, 'card');
+      await goToAt(opened.page, 'card').focus();
       await opened.page.keyboard.press('Enter');
       await opened.page.waitForTimeout(300);
       const got = await opened.page.evaluate((card) => {
@@ -1668,7 +1701,13 @@ const AGED_FRAMES = (): object[] => [
   ...askFixture(2).frames,
 ];
 const DESK_VIEW: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
-const GTQ = '.tool-ask .ask-state button';
+/** Where the aged fixture puts the transcript's one control (review 3607 A1): on the card while the pane's question is
+ *  `CALL`'s own one question (question 1), on the wait line once the pane moves on to a question the call does not ask
+ *  (question 2, or the other aged ask). This hand-off is the FIXTURE's: `CALL` asks one question where a real call asks
+ *  all three, and a transcript copy carries one question, so on the real transcript path the counts never match (a
+ *  multi-question ask is never singled out from a transcript copy) and the wait line carries the control throughout. */
+const AGED_FIRST: Place = 'card';
+const AGED_LATER: Place = 'wait line';
 const Q2_TEXT = HOOK_QUESTIONS[1]!.question;
 
 /** An opened desk page over aged fixture 2, with the page-side request control and logs installed. */
@@ -1957,7 +1996,8 @@ describe('a screen change this client did not send fences the card in real Chrom
       await a.page.keyboard.press('2');
       await a.page.waitForTimeout(300);
       expect((await a.snap()).posts, 'a digit after Tab sends nothing').toBe(0);
-      await a.page.focus(GTQ);
+      await onlyAt(a.page, AGED_LATER, ' (the other aged ask)');
+      await goToAt(a.page, AGED_LATER).focus();
       await a.page.keyboard.press('Enter');
       await a.page.waitForTimeout(300);
       await a.page.keyboard.press('2');
@@ -1979,7 +2019,8 @@ describe('re-entry in real Chrome (R105, R106)', () => {
   it('Go to question with nothing in flight unlocks, draws the focus ring, and a digit then answers once', async () => {
     await withAged(async (a) => {
       await a.answered();
-      await a.page.focus(GTQ);
+      await onlyAt(a.page, AGED_LATER, ' (question 2)');
+      await goToAt(a.page, AGED_LATER).focus();
       await a.page.keyboard.press('Enter'); // the keyboard activation, so the ring is a :focus-visible one
       await a.page.waitForTimeout(300);
       const s = await a.snap();
@@ -2015,15 +2056,16 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.focusFirst(true);
         await a.page.keyboard.press('1');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(1);
+        await onlyAt(a.page, AGED_FIRST, ' (question 1)');
         await a.mark();
-        await a.page.evaluate(async (w) => {
+        await a.page.evaluate(async ({ w, sel, word }) => {
           const probe = window as unknown as Probe;
-          const b = [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((x) => x.textContent === 'Go to question')!;
+          const b = [...document.querySelectorAll<HTMLButtonElement>(sel)].find((x) => x.textContent === word)!;
           b.click();
           if (w === 'next microtask') await Promise.resolve();
           if (w === 'one frame') await new Promise((r) => requestAnimationFrame(() => r(null)));
           probe.__reply();
-        }, when);
+        }, { w: when, ...AT[AGED_FIRST] });
         await a.page.getByText(Q2_TEXT).first().waitFor({ timeout: 10_000 });
         await a.page.waitForTimeout(400);
         const s = await a.snap();
@@ -2031,7 +2073,8 @@ describe('re-entry in real Chrome (R105, R106)', () => {
         await a.page.keyboard.press('2');
         await a.page.waitForTimeout(300);
         expect(await a.posts(), 'a digit sends nothing').toBe(1);
-        await a.page.locator(GTQ, { hasText: 'Go to question' }).click();
+        await onlyAt(a.page, AGED_LATER, ' (question 2)');
+        await goToAt(a.page, AGED_LATER).click();
         await a.page.waitForTimeout(300);
         await a.page.keyboard.press('2');
         await expect.poll(() => a.posts(), { timeout: 10_000 }).toBe(2);
@@ -2175,6 +2218,9 @@ describe('a tapped row answers through the question family\'s door on a question
 // W7 C7g (D-7185, D-7485) read `GET /health` when the sheet mounted to choose the door, and these rows held a tap's POST
 // issued at once, never behind a stalled re-read. Since C7p (D-7194, D-7540) there is one door and no read: whatever
 // `/health` does (it stalls, or it fails), the sheet never reads it, and the tap's POST goes at once to the family's door.
+// The app itself reads `/health` once at start, before any sheet: the Overlord store's capability read (Overlord W1 home, the
+// console's one reader of the caps). So the sheet's reads are counted from the moment it is drawn, and the start read is held
+// to one.
 describe('a tap\'s answer is issued at once on the family\'s door, and /health is never read (W7 C7p)', () => {
   const HOLD_VIEWS: AppView[] = [
     { skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: REFINED, theme: PHOSPHOR, width: 1280 },
@@ -2208,12 +2254,14 @@ describe('a tap\'s answer is issued at once on the family\'s door, and /health i
           await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
           const option = view.width >= 1280 ? `${CARD} button.opt` : '.sheet-panel button.opt';
           await opened.page.waitForSelector(option, { timeout: 30_000 });
+          const atSheet = healthReads;
+          expect(atSheet, "the app's one read at start, the Overlord store's capability read").toBeLessThanOrEqual(1);
           await opened.page.waitForTimeout(800);
           await opened.page.locator(option).nth(1).click();
           await expect.poll(() => family.length, { timeout: 3_000, interval: 50 }).toBe(1);
           expect(JSON.parse(family[0]!), 'the second row answers option 2, on the family\'s door').toMatchObject({ kind: 'dialog', optionIndex: 2 });
           expect(old, 'nothing goes to the old door').toEqual([]);
-          expect(healthReads, 'the sheet reads no /health').toBe(0);
+          expect(healthReads - atSheet, 'the sheet reads no /health').toBe(0);
           expect(opened.errors).toEqual([]);
         } finally {
           await opened.ctx.close();

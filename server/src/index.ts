@@ -13,6 +13,8 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { codeRootOf, measureServerFacts, realPeerSeams } from './isolationFacts.js';
+import { wireIsolation } from './isolationLog.js';
 import { bootPushOutbox } from './pushSender.js';
 import { responseStampNow } from './responses/stamp.js';
 import { PerfRecorder } from './perf/recorder.js';
@@ -26,6 +28,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { OverlordRestoreState, preWitnessFacts } from './coord/overlordRestoreState.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -69,12 +72,14 @@ import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
 import { testboxCaptureTransport } from './testboxCapture.js';
+import { testboxBuildCopy } from './testboxBuildCopy.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const cfg = loadConfig();
 
@@ -173,6 +178,12 @@ const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuar
 const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
   overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
+// Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`): one
+// instance over the same `coord.db`, journal and guard. Its witness facts are `preWitnessFacts` until the witness exchange
+// (authority journal B) lands; whichever of the two lands second puts B's exchange here.
+const overlordRestore = new OverlordRestoreState({
+  db: coordDb, journal: overlordAuthority, guard: overlordAuthorityGuard, witness: preWitnessFacts(overlordAuthority),
+});
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -235,7 +246,7 @@ if (cfg.fleetMode === 'remote') {
     console.error('ccrc-server: CCRC_FLEET=remote requires CCRC_AGENT_URL and CCRC_AGENT_TOKEN');
     process.exit(1);
   }
-  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms) });
+  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms), peerSeams: realPeerSeams() });
   fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
@@ -324,6 +335,12 @@ if (cfg.fleetMode === 'remote') {
   };
 }
 
+// The isolation word (Overlord W1, §7.4, H28): the server's own facts measured once, here, over every path it holds; the
+// reader reads them with the live fleet state on each call. The log holder logs the reading at boot and after each change
+// of the link, by word and cause only.
+deps.isolation = wireIsolation(cfg.fleetMode, measureServerFacts(cfg, codeRootOf(fileURLToPath(import.meta.url))),
+  cfg.agentToken, cfg.fleetMode === 'remote' ? fleetClient : null, (line) => console.warn(line));
+
 // Loaded before anything that could touch it (the watcher's first tick can
 // fire a push the instant it starts) — a load racing a record would let a
 // freshly-minted epoch silently supersede the one events were just recorded
@@ -381,6 +398,8 @@ deps.testboxAudit = testboxAudit;
 deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
 // D-8289: the capture queue's transport, over the fleet connection's `testbox-capture` op (build capture runner spec §2.5).
 deps.buildCapture = testboxCaptureTransport(() => deps.io);
+// Spec §2.2: the copy the lane asks for after a `build-absent`, over the same one admin lane arm.
+deps.buildCopy = testboxBuildCopy(() => deps.testboxAdmin);
 // The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
 // both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
 const linearJournal = new LinearJournal(coord.db);
@@ -511,7 +530,7 @@ const masker = new SecretMasker({
   },
 });
 deps.masker = masker;
-deps.responseStamp = () => responseStampNow(responseBoot);
+deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 push?.setMasker(masker);
 deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
@@ -524,6 +543,7 @@ setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now(
 
 deps.overlordAuthority = overlordAuthority;
 deps.overlordAuthorityGuard = overlordAuthorityGuard;
+deps.overlordRestore = overlordRestore;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

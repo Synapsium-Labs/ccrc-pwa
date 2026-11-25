@@ -19,6 +19,7 @@ import {
   canonicalDelegationJson,
   deriveDelegationLineageId,
   emptyDelegationCheckpoint,
+  encodeDelegationNaturalKey,
   formatDelegationInstant,
   isLowerHex64,
   leaseSourceKindOfActivity,
@@ -80,6 +81,9 @@ import {
 } from './delegation-lease-state.js';
 import { COORDINATION_RESTORE_MARKER_FILE, DELEGATION_RESTORE_IN_PROGRESS, DELEGATION_CHECKPOINT_FILE, DelegationCheckpointBuilder, refuse, readCursor, readInterval, sessionKeyOf, type DelegationMetaOpenResult, delegationRecordNaming, isMember, encodeDelegationCheckpoint, decodeDelegationCheckpoint, type DelegationCheckpointErrorCode } from './delegation-checkpoint.js';
 import { type DelegationRecoveryReport, DelegationRecovery, type DelegationRecoveryFailure, DelegationEvidenceIndex, type DelegationOwnFailureCode } from './delegation-recovery.js';
+import { DELEGATION_BACKFILL_FILE, DELEGATION_BACKFILL_SCAN_MS, decodeBackfillList, encodeBackfillList, planDelegationBackfill, type DelegationBackfillParent } from './delegation-backfill.js';
+import { taskReportKey } from './delegation-end-basis.js';
+import type { DelegationBackfillReport } from '../../../shared/delegationBackfill.js';
 import { type DelegationProjectionPort, type DelegationProjectionRepairReport, DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, deleteEventsInGaps, DELEGATION_EVENTS_DELETE_CHUNK } from './delegation-db-projection.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -206,6 +210,12 @@ export interface DelegationApplyOutcome {
   durable: boolean;
   projection: DeepReadonly<{ status: 'projected' | 'unprojected' | 'failed'; error?: string }>;
 }
+
+/** Session helpers S2 (D-8874): the pass's answer. `ok: false` is the count refusal: the pass was asked to close a count it would not close
+ *  now, and wrote nothing. `applied` is null when it closed nothing (a second run, or nothing qualifying), and then nothing was written. */
+export type DelegationBackfillPassOutcome =
+  | { ok: true; closed: number; report: DelegationBackfillReport; applied: DelegationApplyOutcome | null }
+  | { ok: false; report: DelegationBackfillReport };
 
 /** Why `createLease` declined to create a lease. */
 export type DelegationLeaseRefusalReason = 'canonical-path-held' | 'unmeasured-request' | 'unmeasured-activity' | 'source-kind-mismatch' | 'zero-delta-call';
@@ -826,6 +836,98 @@ export class DelegationDurability {
       const box = { retired: 0 };
       const applied = await this.commitLocked({ items: [], mutate: (b) => { box.retired = b.retireZeroDeltaBash(); }, force: false });
       return { retired: box.retired, applied };
+    });
+  }
+
+  // ── Session helpers S2 (D-8874; spec 2026-11-19 §7.2): the one-time pass over the broker's old open records ──────────────────────
+  // Three entries, each inside the queue on a ready applier, deciding on the durable checkpoint (`delegation-backfill.ts`, L1) with the
+  // registry facts the route measured. The dry run writes nothing. The pass, like D-6268's zero-delta retire, is one `commitLocked` whose
+  // `mutate` runs the builder's `closeByBackfill`; the undo runs `reopenBackfill` the same way. Neither appends to the journal, whose
+  // grammar does not change, so a rebuild from the journal alone reopens what the pass closed; the pass's list, written before its commit
+  // and never removed, then bounds the re-run (review 2900 F2).
+
+  /** The pass's list: the ids the first pass closed, or null before any pass. One that does not read refuses (`change-refused`), never
+   *  reads as empty or absent: either would let a re-run choose again. */
+  private async readBackfillList(): Promise<ReadonlySet<string> | null> {
+    const file = path.join(this.deps.dir, DELEGATION_BACKFILL_FILE);
+    const bytes = await this.port.readFile(file);
+    if (bytes === null) return null;
+    const got = decodeBackfillList(bytes);
+    if (!got.ok) refuse('change-refused', `${file} cannot be used (${got.detail}): nothing was closed or reopened; the operator mends or removes it`);
+    return got.ids;
+  }
+
+  /** The list, written whole and durable BEFORE the pass's commit (temp file, fsync, rename, directory fsync): a death between the two
+   *  leaves ids listed and not closed, which the re-run closes; never ids closed and not listed. */
+  private async writeBackfillList(at: string, ids: readonly string[]): Promise<void> {
+    const file = path.join(this.deps.dir, DELEGATION_BACKFILL_FILE);
+    const temp = `${file}.tmp`;
+    const bytes = encodeBackfillList(at, ids);
+    const handle = await this.port.createTemp(temp);
+    try {
+      const n = await handle.write(bytes);
+      if (n !== bytes.length) throw new DelegationJournalError('short-write', `wrote ${n} of ${bytes.length} bytes of ${file}`);
+      await handle.sync();
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+    await this.port.rename(temp, file);
+    await this.port.fsyncDir(this.deps.dir);
+  }
+
+  /** Review 3026 F4: the natural keys (encoded) of every Agent final task notification the retained set holds, read OUTSIDE the queue (the
+   *  coordinator's condition: nothing the watcher applies waits for it) and cut at `DELEGATION_BACKFILL_SCAN_MS` by the injected clock. Read
+   *  only, through the applier's one reader of the retained set (`retainedRecords`): the journal is append-only and a compaction replaces it by rename, so the read sees one retained
+   *  set or refuses; a read that refuses or is cut answers `complete: false`, and the count is then unmeasured, never partial. */
+  private async retainedTaskReportKeys(): Promise<{ keys: Set<string>; complete: boolean }> {
+    const keys = new Set<string>();
+    const deadline = this.deps.now() + DELEGATION_BACKFILL_SCAN_MS;
+    try {
+      for await (const record of this.retainedRecords()) {
+        if (this.deps.now() > deadline) return { keys, complete: false };
+        const entry = record.entry;
+        if (entry.kind !== 'evidence-accepted') continue;
+        const key = taskReportKey(entry.event);
+        if (key !== null) keys.add(encodeDelegationNaturalKey(key));
+      }
+    } catch { return { keys, complete: false }; }
+    return { keys, complete: true };
+  }
+
+  /** The dry run (spec §7.2, condition 4): the report the pass would act on now, with the F4 count from the retained journal, read first
+   *  and outside the queue. Inside it only the list is read and the plan decided on the checkpoint. Writes nothing. */
+  async backfillDryRun(nowMs: number, parents: ReadonlyMap<string, DelegationBackfillParent>): Promise<DelegationBackfillReport> {
+    const reported = await this.retainedTaskReportKeys();
+    return this.enqueue(async () => {
+      this.requireReady();
+      const listed = await this.readBackfillList();
+      return planDelegationBackfill({ checkpoint: this.current.checkpoint as DelegationCheckpointV1, nowMs, parents, listed, reported }).report;
+    });
+  }
+
+  /** The pass. It closes only when `closes` is the count it would close now (the dry run's), and records the ids first, on its first run. */
+  backfillPass(nowMs: number, parents: ReadonlyMap<string, DelegationBackfillParent>, closes: number): Promise<DelegationBackfillPassOutcome> {
+    return this.enqueue(async (): Promise<DelegationBackfillPassOutcome> => {
+      this.requireReady();
+      const listed = await this.readBackfillList();
+      const plan = planDelegationBackfill({ checkpoint: this.current.checkpoint as DelegationCheckpointV1, nowMs, parents, listed, reported: null });
+      if (plan.report.closes !== closes) return { ok: false, report: plan.report };
+      if (plan.close.length === 0) return { ok: true, closed: 0, report: plan.report, applied: null };   // idempotent: nothing written
+      if (listed === null) await this.writeBackfillList(formatDelegationInstant(nowMs), plan.close);
+      const box = { closed: 0 };
+      const applied = await this.commitLocked({ items: [], mutate: (b) => { box.closed = b.closeByBackfill(plan.close); }, force: false, rowsChanged: true });
+      return { ok: true, closed: box.closed, report: plan.report, applied };
+    });
+  }
+
+  /** The undo: every record the pass closed, open again. The list stays, so the pass stays one-time. Nothing to reopen writes nothing. */
+  backfillUndo(): Promise<{ reopened: number; applied: DelegationApplyOutcome | null }> {
+    return this.enqueue(async () => {
+      this.requireReady();
+      if (!this.current.checkpoint.activities.some((a) => a.endBasis === 'backfill-unmeasured')) return { reopened: 0, applied: null };
+      const box = { reopened: 0 };
+      const applied = await this.commitLocked({ items: [], mutate: (b) => { box.reopened = b.reopenBackfill(); }, force: false, rowsChanged: true });
+      return { reopened: box.reopened, applied };
     });
   }
 

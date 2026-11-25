@@ -63,6 +63,13 @@ describe('an expanded Bash card shows its command and output in palette hues on 
         })));
         await page.goto(`${server!.origin}/s/${SESSION.id}`);
         await page.waitForSelector('.chat-item', { timeout: 20_000 });
+        // Since desktop polish wave 168 a stretch of tool calls sits in one closed tool-activity row: open those first,
+        // then Refined's run groups inside them.
+        const stretches = page.locator('.tool-activity-row');
+        for (let i = 0; i < await stretches.count(); i += 1) {
+          const row = stretches.nth(i);
+          if (await row.getAttribute('aria-expanded') !== 'true') await row.click();
+        }
         const groups = page.locator('.ref-tool-group-row');
         for (let i = 0; i < await groups.count(); i += 1) {
           const group = groups.nth(i);

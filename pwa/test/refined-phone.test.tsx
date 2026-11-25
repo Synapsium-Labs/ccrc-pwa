@@ -73,13 +73,15 @@ const lane = (wrapper: string, five: number | null, seven: number | null): Accou
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   setSkin(REFINED);
+  // The Fleet's own path (Overlord W1 home): `/` is the home now, which lands on the Fleet only once its reads settle.
+  act(() => { navigate('/fleet'); });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  act(() => { navigate('/'); });
+  act(() => { navigate('/fleet'); });
   act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
   setSkin(REFINED);
 });

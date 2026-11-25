@@ -226,7 +226,9 @@ export type TestboxToolVersions = { readonly [K in TestboxTool]: string };
 const ROW_DEPTH: Readonly<Record<TestboxTool, number>> = { node: 2, npm: 1, tmux: 1, git: 1, python3: 2, chrome: 1 };
 
 const VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
-const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
+/** A tool version as the frames carry one (`22.11.0`, `3.3a`), the shape's one definition: the frame readers below and
+ *  the box's reader of its own measured versions (`agent/src/testbox/tools.ts#parseMeasuredTools`) both ask it. */
+export const isVersion = (s: unknown): s is string => typeof s === 'string' && s.length <= 64 && VERSION.test(s);
 
 /** One tool's difference, in the fallback's words `<name> <local> vs <remote>`. */
 export interface TestboxVersionDiff { readonly tool: TestboxTool; readonly local: string; readonly remote: string }
@@ -439,7 +441,17 @@ function word<K extends string>(map: Record<K, true>, v: unknown, at: string): K
 const RUN_ID = /^[0-9a-f]{32}$/;
 const runId = (v: unknown, at: string): string => (typeof v === 'string' && RUN_ID.test(v) ? v : refuse(at, 'not 32 lowercase hex characters'));
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const name = (v: unknown, at: string): string => (typeof v === 'string' && NAME.test(v) ? v : refuse(at, 'not a lowercase name'));
+/** Whether a value is a repository or package name a row takes: lowercase letters, digits, `.`, `_` and `-`, at most 64, not
+ *  starting with a punctuation mark. The one spelling of that shape in TypeScript; its readers import it (D-9009). */
+export const isTestboxName = (v: unknown): v is string => typeof v === 'string' && NAME.test(v);
+const name = (v: unknown, at: string): string => (isTestboxName(v) ? v : refuse(at, 'not a lowercase name'));
+/** Whether a program word (a run's `argv[0]`, a command head's first word) is a vitest runner: its last path segment, trailing
+ *  slashes aside, is `vitest`. The box gives only such a run the reporter and worker flags (`agent/src/testbox/spec.ts#buildRunSpec`),
+ *  and parity runs a row's first package's first head with them, so the connect card refuses any other head there (D-9009). */
+export const isVitestProgram = (word: string): boolean => {
+  const w = word.replace(/\/+$/, '');
+  return w.slice(w.lastIndexOf('/') + 1) === 'vitest';
+};
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const version = (v: unknown, at: string): string => (isVersion(v) ? v : refuse(at, 'not a version'));
@@ -545,6 +557,11 @@ function readProbes(v: unknown): TestboxProbes {
 }
 
 function readStatusAnswer(o: Obj): StatusAnswer {
+  // D-8912 (spec 2026-11-22-test-box-managed-node-design.md §5, the wire rule): this reader, like every reader of this
+  // family, refuses a whole answer for one field it does not name, so a released fleet agent refuses any answer that
+  // gains one. Nothing new rides the status answer: a managed box's measured tool versions are the VALUES of `tools`,
+  // and its node files, its drain and its ready fact are files on the box (`agent/src/testbox/boxFiles.ts`), never a
+  // field here. `agent/test/testbox-managed-node.test.ts` pins the released key set.
   // D-8290: `probes` is the one optional field: an older box, and a box that takes no probes, sends none.
   const withProbes = Object.prototype.hasOwnProperty.call(o, 'probes');
   const f = exact(o, 'status', withProbes ? [...STATUS_KEYS, 'probes'] : STATUS_KEYS);
@@ -650,7 +667,8 @@ export function readTestboxFrame(json: string): Read<TestboxFrame> {
 export interface TestboxRepoPackage {
   readonly name: string;
   /** The files whose sha256 is the package's install key (its `package.json` and `package-lock.json`, plus any the
-   *  row adds), relative to the repository root. */
+   *  row adds), relative to the repository root. The box adds the files the package's own lifecycle scripts run, so
+   *  the row never lists them (D-8966, `agent/src/testbox/pristine.ts#lifecycleInputPaths`). */
   readonly installInputs: readonly string[];
   /** The command heads the box runs in this package (spec §2.5). */
   readonly commands: readonly string[];

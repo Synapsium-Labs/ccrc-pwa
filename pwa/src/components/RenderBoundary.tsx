@@ -23,6 +23,7 @@ import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { ScreenLoadError } from '../lib/lazyScreen';
 import { navigate } from '../lib/router';
+import { FLEET_PATH } from '../lib/routes';
 import '../styles/shell.css';
 
 export interface RenderBoundaryProps {
@@ -99,7 +100,7 @@ export function ScreenFallback({ error, reload = () => location.reload() }: { er
           Reload
         </Button>
       )}
-      <Button variant="primary" onClick={() => navigate('/')}>
+      <Button variant="primary" onClick={() => navigate(FLEET_PATH)}>
         Back to the fleet
       </Button>
     </div>

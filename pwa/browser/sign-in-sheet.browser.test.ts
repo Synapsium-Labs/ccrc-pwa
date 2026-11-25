@@ -132,7 +132,7 @@ describe('Mint and Sign in at every width and skin (D-7849)', () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await signInRoutes(ctx);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
 

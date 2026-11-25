@@ -154,9 +154,14 @@ const CENSUS: readonly Row[] = [
       + 'session (ccd forget refuses it, D-5423); the notes word '
       + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
       + 'wrapper notes speak of a live pane only' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 2, stances: ['consults', 'true-of-pane'],
     why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
-      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
+      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp. The second hit is '
+      + '`rowWithCoordinator` (desktop polish wave 173), the one reader of a row\'s held question. Its gone-pane read is '
+      + 'belt and braces: a gone pane\'s bucket is cleanup, archived or dead, so its row word is never `working` and the '
+      + 'word test beside it already answers no held question; the guard says the same of the pane (nothing is live to '
+      + 'answer). A sleeper\'s row word is `asleep`, so it never reads `with coordinator`, is never busy and never makes '
+      + 'its coordinator read waiting on workers: a coordinator whose workers sleep has nothing running for it' },
   { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
     why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
       + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },

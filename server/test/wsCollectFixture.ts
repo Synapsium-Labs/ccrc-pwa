@@ -98,6 +98,33 @@ export const MOUNTS_SEAM = '_ws_collect_mountinfo() { printf \'%s\' "$HOME/mount
 export function realMounts(h: PrHarness): void {
   fs.writeFileSync(path.join(h.home, 'mountinfo'), fs.readFileSync('/proc/self/mountinfo'));
 }
+/** The block-device listing at `$HOME/sysblock` (see `blockListing`): what the gone-device proof asks in place of
+ *  `/sys/dev/block` (`_ws_collect_sysblock`). */
+export const SYSBLOCK_SEAM = '_ws_collect_sysblock() { printf \'%s\' "$HOME/sysblock"; };';
+/** Linux's `makedev`: the decimal `st_dev` a witness or a record spells for `major:minor`. */
+export const makedev = (major: number, minor: number): bigint =>
+  BigInt(minor & 0xff) | (BigInt(major & 0xfff) << 8n) | (BigInt(minor & ~0xff) << 12n) | (BigInt(major & ~0xfff) << 32n);
+/** `major:minor` of a decimal `st_dev` in Linux's (glibc's) layout, as `/sys/dev/block` names an entry. */
+export const majMin = (dev: bigint): string =>
+  `${((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn)}:${(dev & 0xffn) | ((dev >> 12n) & 0xffffff00n)}`;
+/** The entry a sound listing must show: the device `~/.cc-tmp` stands on, or, that device being of major 0 (which
+ *  `/sys/dev/block` never lists), one neutral block device. `~/.cc-tmp` must exist. */
+export const controlEntry = (h: PrHarness): string => {
+  const mm = majMin(fs.statSync(ccTmp(h), { bigint: true }).dev);
+  return mm.startsWith('0:') ? '259:0' : mm;
+};
+/** Plants `$HOME/sysblock` as a box's block-device listing: the control entry, and `entries`, each a dangling link (the
+ *  kernel's are links). Returns its path. */
+export function blockListing(h: PrHarness, entries: string[] = []): string {
+  const dir = path.join(h.home, 'sysblock');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const e of [controlEntry(h), ...entries]) {
+    if (fs.lstatSync(path.join(dir, e), { throwIfNoEntry: false }) === undefined) {
+      fs.symlinkSync(`../../devices/fixture/${e}`, path.join(dir, e));
+    }
+  }
+  return dir;
+}
 
 /** A REAL process started from inside a seam, DOUBLE-FORKED so its parent is not the verb's shell: the in-use probe
  *  never counts a child of ccd's own process (`_ws_path_users`, "WHAT IS NOT A USER"). It closes the verb's reap-lock

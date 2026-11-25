@@ -216,8 +216,9 @@ export interface ToolGroupItem {
   sentence: string;
 }
 
-/** What a transcript renders once runs are folded. */
-export type TranscriptItem = ChatItem | ToolGroupItem;
+/** What `groupToolRun` hands back: plain items, and runs folded into groups. A transcript renders these and the
+ *  tool-activity rows above them (`toolActivity.ts#TranscriptItem`). */
+export type RunItem = ChatItem | ToolGroupItem;
 
 /** Never folded: an ask (a question for the reader), a failed entry and a
  *  live one. Each ends the run it would join, and stands alone. */
@@ -260,8 +261,8 @@ function groupSentence(entries: ToolItem[]): string {
 
 /** Fold each run of consecutive foldable tool entries into one group. Every
  *  other item passes through untouched, in order. */
-export function groupToolRun(items: readonly ChatItem[]): TranscriptItem[] {
-  const out: TranscriptItem[] = [];
+export function groupToolRun(items: readonly ChatItem[]): RunItem[] {
+  const out: RunItem[] = [];
   let run: ToolItem[] = [];
   const close = (): void => {
     const first = run[0];

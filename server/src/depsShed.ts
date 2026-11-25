@@ -66,8 +66,28 @@ export const DEPS_SHED_ACTOR = 'sweep:deps-shed';
 export const DEPS_SHED_RETRY_MS = 60 * 60_000;
 /** The ceiling of that doubling: a row that keeps refusing is asked at most once a day for the rest of its sleep. */
 export const DEPS_SHED_RETRY_MAX_MS = 24 * 60 * 60_000;
+/** EVERY word the box refuses a shed with (`_ws_shed_refused <word>`, `ccd/lib/disk-retention.sh`; a test holds the keys
+ *  equal to that text in both directions), and what it says of the row (D-8955):
+ *  - `final`: true for the whole sleep, so the arm does not ask that row again until it sleeps anew;
+ *  - `not-now`: the row is not one to shed now (awake, asleep too briefly, its run still going, not a child, archived, gone,
+ *    the operator's own checkout, or reclamation paused): nothing waits on the lane for it;
+ *  - `blocked`: dependencies stand to be shed and the box could not remove them (unread, in use, another verb's lock). */
+const DEPS_SHED_REFUSAL_CLASS_TABLE = {
+  'nothing-to-shed': 'final', 'already-shed': 'final',
+  'not-asleep': 'not-now', 'asleep-too-recently': 'not-now', 'run-open': 'not-now', 'not-a-child': 'not-now',
+  archived: 'not-now', 'no-such-session': 'not-now', 'not-a-workspace': 'not-now', paused: 'not-now',
+  unmeasured: 'blocked', 'in-use': 'blocked', 'in-progress': 'blocked',
+} as const satisfies Readonly<Record<string, 'final' | 'not-now' | 'blocked'>>;
+export type DepsShedRefusal = keyof typeof DEPS_SHED_REFUSAL_CLASS_TABLE;
+export const DEPS_SHED_REFUSAL_WORDS: readonly DepsShedRefusal[] = Object.keys(DEPS_SHED_REFUSAL_CLASS_TABLE) as DepsShedRefusal[];
 /** The box's refusals that stay true for the whole sleep: the arm does not ask that row again until it sleeps anew. */
-export const DEPS_SHED_FINAL_REFUSALS: readonly string[] = ['nothing-to-shed', 'already-shed'];
+export const DEPS_SHED_FINAL_REFUSALS: readonly string[] = DEPS_SHED_REFUSAL_WORDS.filter((w) => DEPS_SHED_REFUSAL_CLASS_TABLE[w] === 'final');
+/** Does this refusal leave dependencies standing that the box could not shed? A word this build does not know does: it is
+ *  told, never taken for nothing to do. */
+export function depsShedRefusalBlocks(word: string | null): boolean {
+  return word === null || !Object.hasOwn(DEPS_SHED_REFUSAL_CLASS_TABLE, word)
+    || DEPS_SHED_REFUSAL_CLASS_TABLE[word as DepsShedRefusal] === 'blocked';
+}
 
 /** The deployment defaults (D-7278): every threshold is config, read once by `loadConfig` (`depsShedConfigOf`). */
 export const DEPS_SHED_AFTER_HOURS_DEFAULT = 24;

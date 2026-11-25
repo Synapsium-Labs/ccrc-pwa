@@ -1,0 +1,428 @@
+# Chat readability, part 1: one collapsed row per stretch of tool activity (desktop polish wave 168, run 3422)
+
+The design note for wave 168, goals modification 98 (the operator, 2026-11-22). Written by its worker for the coordinator to
+fold into the ledger. Part 2, loading older turns on scroll-up, is a later wave and is not started here. Each claim says
+whether it was **measured** (read on the tree, or in a test run by this wave) or **inferred**.
+
+## In short
+
+In a tool-heavy session the transcript was mostly tool rows: Refined folded only consecutive eligible calls
+(`groupToolRun`), and a failed call, a live call or an ask ended each fold, so one turn still showed many groups;
+Instrument folded nothing. Now every contiguous **stretch** of tool calls within a turn reads as ONE collapsed line, in
+both skins: `▸ Tool activity · 5 calls · running · 1 failed · Ran npm`. Assistant prose stays visible between the lines, in
+order. Opened, a row shows exactly what the transcript showed before. Anything the reader must act on is surfaced on the
+collapsed row, never only inside.
+
+## 1. Per stretch, not per turn
+
+| Option | What it does to chronology | Ruled |
+|---|---|---|
+| One disclosure per turn | Prose stays outside (the brief), so the one row must stand above prose that followed some of its calls, or below prose that preceded them: either reorders the turn | Rejected |
+| **One disclosure per contiguous tool stretch within a turn** | Every item keeps its place; a turn of `prose, tools, prose, tools` reads as `prose, row, prose, row` | **Chosen** |
+
+A stretch is a maximal run of consecutive tool entries. Anything that is not a tool entry ends it and stays visible:
+assistant prose, a user prompt, a mail card (a fetched mail is something the reader reads), a background-task card, a
+timestamp divider, a system row, a pending send and the working pulse. A user prompt always ends one, so a stretch never
+spans two turns.
+
+## 2. What the row shows
+
+| Part | Source | Notes |
+|---|---|---|
+| `Tool activity · N calls` | `activityWords` (`pwa/src/session/toolActivity.ts`) | `1 call` / `N calls` |
+| `running` | `live`: the session is working (the list's `busy`), the stretch is in the CURRENT turn (after the last user prompt), and any of its calls has no result (parallel calls finish out of order) | A resultless call of an earlier turn never reads as running |
+| Flags (`waiting on you`, `1 question`, `1 failed`) | `waiting`, then `attention` counted per kind, in that order | Tinted; they never shrink |
+| The newest call's summary | `toolSummary(last).sentence` | Gives way first on a narrow column |
+| The wait line (`waiting for you` and the answer control) | `waiting`, on the current turn's newest row only | Open or closed |
+| The first attention entry, under the closed line | `attention[0]`, drawn by the shared item renderer | Its own card, with its own controls |
+
+**What wants the reader is the current turn's** (review 3450's fix round). The turn the session is in starts after the
+last user prompt; nothing before it runs, waits or holds a live control.
+
+**The fold reads what KIND of wait is live** (review 3478 F2; the worker's reading of the ruling, said in the round's
+mail before the push). The screen hands the list `liveWaitOf(askSource(...))`:
+`none`; `question`, Claude's own structured question with its words; or `other`, every kind that names no call (an
+approval, a menu, the ask's review screen, an ask the pane shows unreadably, a terminal-only menu). Nothing the session
+receives carries a call id, so a question's words are the only way a source identifies a call.
+
+- **A failed call** (its result is an error), in any turn: counted, and its card drawn under the closed row.
+- **The question asked now**: the wait is a `question`, and exactly one `AskUserQuestion` of the current turn with no
+  result asks exactly those questions, in that order (its input read by the card's own parser, `askQuestions`, now
+  exported by the design system). Its card carries Answer into the actual sheet, closed (drawn under the row) and open
+  (in the body); it leads the failures.
+- **The identification rule, in plain words** (accepted by the coordinator in this round): nothing the session receives
+  carries a call id, so the transcript ties a live question to a call by its words alone. The live question's whole text
+  (each question, trimmed of surrounding spaces, in order) must equal the questions of exactly one open ask of the
+  current turn; a prefix or a partial match is no match. Every other outcome gives the wait line alone and no control on
+  any card: words no open ask asks (`Pick one` against `Pick one?`), two open asks with the same words, and words asked
+  only by an ask of an earlier turn (each pinned, in both skins, closed and opened).
+- **No other card offers a control for the wait** (review 3478 F1). Inside a tool-activity row only the entry the fold
+  singled out gets the pending state (`rowScope`, `ChatList.tsx#TranscriptRowView`), so an opened row draws no second
+  Answer: a stale ask of an earlier turn, a second open ask, or an open ask while an approval is the live wait, reads
+  `unanswered` with no control, opened or closed (**measured** in jsdom in both skins by counting the Answer controls on
+  screen: exactly one; it was 2 and 3 on b9094fd707).
+- **A live wait no card is identified as**: an `other` wait, or a `question` whose words match no open ask of the current
+  turn or more than one. It is the current turn's newest row's `waiting`, and no question is counted against a call for
+  it: a `waiting on you` flag and a line of the row's own, `waiting for you` with the transcript's control (`Answer`, or
+  `Go to the prompt` with the answer surface below the transcript at a desk), drawn open or closed, sending nothing (the
+  tool card's ONE CONTROL rule). With no tool entry in the current turn yet (a live wait right after a new prompt, before
+  its first call), no row is `waiting` and the transcript draws NO control for the wait (review 3607 F5, read in the
+  code). The header does not carry it: it offers no raise, and only the transcript's control raises the sheet again
+  (`SessionScreen.tsx`'s `onAnswer` bumps the raise; `DialogSheet.tsx`). So on a phone, a reader who dismissed the sheet
+  in that state has no way back to it in the app until a new question arrives (inferred from the code, not measured).
+  For a menu or an approval this is as on main, where only an ask card had a control. The one narrow case where main had
+  a control and this branch has none: a live question whose matching ask sits only in an earlier turn, with no tool entry
+  in the current turn yet (main put Answer on that card; here no card is singled out and no row waits). It is rare,
+  because an open ask holds the session's input.
+- One live wait is drawn once: the question's card, or the wait line, never both, and never a card beside either.
+- **Nothing of an earlier turn reads as running** (review 3478 F4). A stretch before the last prompt is `past`, and its
+  calls are drawn `settled`: a call with no result shows no breathing dot, no clock and, opened, `no result recorded`
+  (the tool card's new `settled` prop). A current turn's resultless call still runs as before, including after the
+  session stops working (an interrupt, or a result that never arrives): opened, it keeps the breathing dot, the ticking
+  clock and `running…`, while its row no longer says running (review 3607 A6, a known limit, section 7).
+
+A failed call and an open question no longer end a stretch (they ended a `groupToolRun` fold, and still do inside an
+opened row): they sit inside it in order.
+
+## 3. Expansion and scroll
+
+- Collapsed by default. The open choice lives in the list (`ExpansionMemo`, held in state by `useExpansionMemo`,
+  `transcriptRow.tsx`), keyed by the row's key, `activity-<first entry's key>`, which does not move while the stretch
+  grows. It outlives virtuoso unmounting the row and ends with the session view (a fresh memo when the session id changes).
+- Nothing opens a row on its own: calls arriving in a closed stretch change its words, not its state.
+- An append into the newest stretch adds no list item, so no index virtuoso was handed moves (**measured** in jsdom by the
+  keys and scroll calls the list was handed, and in Chrome by the row in view and the scroll position, below).
+- **A height change no new item explains** (review 3450 F5, review 3478 F5 and F6) is decided by the pure `heightMove`
+  (`pwa/src/session/footFollow.ts`) and acted on by the list's `onHeight`:
+  - `foot`: the reader was at the foot of the list as it stood before the change (within the pill's band, **measured**
+    from the scroller, and the list's own flag agreeing), so the list goes back to it. An append adds no item, so
+    `followOutput` never fired: a failure card surfacing under a closed live row had left a reader at the foot 50px above
+    it, inside the pill's band, where no pill showed (measured in Chrome before review 3450's fix).
+  - `hold`: the reader was anywhere else, so the row crossing the top of their view is put back where they last saw it.
+    Virtuoso did not move the view for a row above it that grew: a failure card surfacing under a closed row 258px above
+    the reader moved everything they were reading down by its 50px (**measured** in Chrome on b9094fd707, both skins, 390
+    and 1280). Its bounds, the coordinator's:
+    - it acts only on rows wholly above the top of the view (a row below, or the row crossing the top changing at its
+      foot, moves nothing it holds);
+    - never while the list is MOVING, for any reason, as the scroller itself reports it (review 3607 F1, replacing review
+      3478's input-event bound): a scroll event within `MOVE_SETTLE_MS` (200ms) before the change, or any scroll event
+      between the change and the frame the hold compares in. The scroll event the hold's own write owes is not counted
+      (the list keeps where its write left the scroller and sets aside the one scroll event that lands there). A hold
+      skipped because the list was moving is right, not a miss: a write then ends a smooth scroll and sets the reader back
+      by their own movement;
+    - never for a change that came with an item added or removed at either end of the list (the item count and the
+      first and last keys, compared at each change): appends are the foot follow's, items added at the top the
+      older-history work's, which will own that anchor;
+    - it anchors by the row's KEY (`data-row-key` on each list row), never its index, so a regrouped list cannot make it
+      hold another row;
+    - one correction per change: the row's place is read a frame after each scroll (the list lays out the rows a
+      scroll brings into reach after the scroll event, and moved them 1.5-2.5px then, measured), and the hold compares
+      that place with where the row stands a frame after the change, after any correction of the list's own or the
+      browser's, so a change already put back is put back by nothing more. After a hold the place it put back stays the
+      baseline (review 3607 A3), so what it could not put back (under a pixel, a rounded position) is put back with the
+      next change instead of becoming the new zero.
+  - `none`: the reader caused the change by opening or closing a disclosure in the list (anything with `aria-expanded`: a
+    tool-activity row, a run group, a card), timed by a click listener on the scroller, within `TAP_SETTLE_MS` (600ms).
+    Nothing moves: the header they tapped stays where it was, and what opened grows downward under it, as every
+    disclosure did before the fold. On b9094fd707 opening a stretch taller than the view at the foot threw the tapped
+    header 1875-2218px up out of view (**measured**).
+- **Measured after this round, in Chrome, both skins, 390 and 1280** (`browser/tool-activity.browser.test.ts`): opening
+  a 1879-2266px stretch at the foot leaves its header at the same pixel; an opened live row that grows at the foot (Refined
+  +52px, Instrument +216px) and a surfaced failure card (+50px) leave the reader 0-1px from the foot; a reader 499-535px
+  above the foot keeps the row in view at the same place (within 1px) while the list grows 106-162px below them, and is
+  not taken to the foot; a row wholly above the reader that grows by 50px, or shrinks by 105-127px (its surfaced
+  question no longer asked), moves the card in view by at most 1px; and with a correction of the list's own applied first
+  (a resize observer on the row above that puts the view back at once), the view moves by 1px, not by twice the 50px.
+- **Review 3607's round: the hold is bounded by the list's own movement** (F1, F3). Review 3478's round bounded it by
+  input events on the scroller (a wheel, a touch, a scroll key, a held pointer, within 300ms). The reviewer read, and
+  this round measured, that this missed every movement no input event on the scroller announces, and that the compare
+  then mixed two scroll positions. Measured in Chrome on cbe58fd03a, both skins, 390 and 1280, with a row 258px above the
+  reader growing by 50px while the list moves: a smooth scroll started in code (as Jump to latest's is) was ended
+  161-352px short of its target by the hold's write, and a scroll made frame by frame in code, with no input event,
+  was set back 12px, one frame of the reader's own movement (the eight cases red; green now: the smooth scroll reaches
+  its target, the frame-by-frame scroll ends exactly where it was driven).
+  - **Which bound, and why.** The coordinator named two: bound the hold by what the scroller reports, or keep the scroll
+    offset with the anchor and subtract the reader's movement. The first alone meets every case, so this round uses it
+    alone. The second would still write the scroller during a smooth scroll (it corrects the size change), which ends
+    the scroll, and it would count a correction the list already made a second time: in the "already corrected" case
+    the list's own scroll puts the row back, and the offset formula would add that scroll again.
+  - **What it covers.** Any movement the scroller reports with a scroll event: a touch fling after the finger lifts, a
+    smooth scroll (Jump to latest's, `followOutput`'s, one made in code), a scrollbar drag that moves, scroll keys, the
+    foot follow's own move, virtuoso's corrections. **Measured in Chrome:** a smooth scroll in code, a page key with
+    focus on the list, and a scroll made frame by frame in code with no input event, each with the row above growing
+    partway through.
+  - **What is not measured.** A real touch fling (headless Chrome makes none; the frame-by-frame scroll stands in for
+    its momentum), and a scrollbar drag. A finger or a drag held still on the list moves nothing and reports nothing, so
+    a change then is held, by design (review 3478's held-pointer bound is gone with the input listeners). Scroll keys with
+    focus on the page body: in this app they move the list by 0px in Chrome (measured, both skins, both widths), because
+    keys scroll from the focused element upward and the list is not an ancestor of the body; so a key reaches the list
+    only with focus on it or inside it. This replaces the sentence this note carried after review 3478, which claimed
+    the touch, scrollbar-drag and scroll-key bound in full.
+  - **Both halves of the bound are needed** (measured by mutation, section 5): during continuous movement in Chrome,
+    either half alone keeps every case green (a moving list keeps reporting scrolls between the change and the
+    compare); with both cut, all twelve moving cases are red, the page key among them. In jsdom, a list that stopped
+    50ms before the change needs the first half, and a scroll between the change and the compare needs the second.
+- **A tap just after a live append (review 3607 F2), a known limit.** Measured in Chrome with a probe (not committed, as
+  ruled): with the newest stretch taller than the view at the foot, a call arriving in it, and the reader's tap opening
+  it 40-94ms later (a timer in the page), the tapped header was thrown 1875-2762px up out of view in 35 of 40 taps (10
+  per view, both skins, 390 and 1280; Refined 7 and 9 of 10, Instrument 9 and 10 of 10). An earlier probe, its taps
+  timed from the test runner (gaps 58-277ms), moved the header in 4 of 20 taps, all at gaps of 58-98ms; none of the 10
+  taps at 100ms or more moved it. The reviewer traced the cause in
+  virtuoso 4.18.20: a render with an unchanged item count arms a 100ms window in which a size increase that leaves the
+  foot makes virtuoso scroll to the end itself, past the follow's answer. Main follows to the foot on every such open
+  (the coordinator's reading in review 3607's ruling, not re-measured here), so the branch is no worse than main there.
+  The fix goes to the chat screen wave that reworks anchoring.
+- **Correcting what this note claimed after review 3450** (review 3478 F5-F7): the mid-list case then proved nothing grew
+  while the reader was mid-list (the growing row was likely not mounted), and Refined's "opened row changes size" case
+  measured a 54px shrink, which a browser clamps at the foot with no follow at all, so it stayed green with the follow
+  deleted (the reviewer's measurement). "Red before the foot follow" held for Instrument's opened case and the closed
+  failure case only. The cases are now signed and guarded: the Refined opened row grows, the mid-list case asserts the
+  list's height changed, and each is shown red by a mutant below.
+
+## 4. Rings and the skin contract
+
+| Piece | Ring | Where |
+|---|---|---|
+| `foldToolActivity`, `activityWords`, `waitWord`, `waitControlWord` | L1, pure | `pwa/src/session/toolActivity.ts`, beside `toolSummary.ts` |
+| `RunItem` (what `groupToolRun` returns) | L1 type | `toolSummary.ts` |
+| `TranscriptItem`, widened with the activity row | L1 type | `toolActivity.ts`, so the two L1 modules import one way (`toolActivity` reads `toolSummary`, never the reverse) |
+| `SkinSet.toolActivity: 'stretches' \| 'none'` | data | `pwa/src/skins/types.ts`; both sets say `'stretches'` |
+| `transcriptOf`, the one place both folds are applied, before virtuoso | L4 | `ChatList.tsx` |
+| `ToolActivityRow`, shared by both skins | L4 | `pwa/src/session/ToolActivityRow.tsx`; Refined's row part draws it for a `tool-activity` item, the frame draws it where a set has no row part (Instrument) |
+| `renderRow`, `expansion`, `answer` on the row context | L4 | `transcriptRow.tsx`: an opened row draws its rows back through the set's own row part, so Refined's groups are its own |
+| The row barrier compares an activity row element by element | L1 | `sameRow.ts` |
+| A height bucket of its own, `activity` (one line, a line for the wait, and the surfaced card's lines) | L1 | `itemHeight.ts`, `ChatList.tsx#shapeOf` |
+| `heightMove`, `holdShift`: what the list does on a height change | L1, pure | `pwa/src/session/footFollow.ts` (review 3478 A8) |
+| `onHeight`, the anchor read on scroll, the tap timing: measuring and acting | L4 | `ChatList.tsx`, beside the settle re-pin it shares the pinned flag with |
+| `liveWaitOf`, `waitKey`, `waitOf`, `rowScope` | L1, pure | `toolActivity.ts`; the screen computes the wait once (`SessionScreen.tsx`, from `askSource`, the one decider) |
+| `ToolCard`'s `settled`, `NO_RESULT_WORD`, `askQuestions` exported | design system | `ui/src/components/tool-card.tsx`: the card's one parser of an ask's questions, read by the fold rather than copied |
+
+The existing `'tool-runs'` path is extended, not forked: `groupToolRun` is unchanged and runs inside each row. No server
+change.
+
+## 5. Tests
+
+| Guard | File | Basis |
+|---|---|---|
+| One row per stretch over a 14-turn fixture (prose and tools mixed, a failed call, an answered question, a stale unanswered ask, the question asked now); the unfolded list is `buildChatItems`' list exactly; prose never inside | `pwa/test/tool-activity.test.tsx` | Measured |
+| The question asked now surfaced and leading failures, never a stale one; no card named for an approval, parallel calls (out-of-order results, running while an earlier call lacks its result), an all-answered turn or two open asks, the wait on the newest current row only; a new prompt before its first call leaves the last turn quiet; running only while busy; key stable; inner grouping per skin | same | Measured |
+| Both skins: closed rows, the surfaced cards, the question's Answer closed and open (drawn once), the wait line and its control closed and open, `Go to the prompt` below, gone with no wait and after a new prompt; expansion kept across unmount and remount and forgotten on another session; an append into an open row keeps it open and shows the calls; an append into a closed one moves no key and scrolls nothing; the foot follow and its measured guard; the spoken name, `aria-controls`, the wait line priced | same | Measured, 49 cases green after review 3478's round |
+| The row barrier: a freshly built row over the same events is the same row; a changed live state, wait, surfaced entry, call, open question or inner grouping is a new row | `pwa/test/same-row.test.ts` | Measured, 12 green (with review 3478's `past` case) |
+| The run fold itself, with the activity fold off | `pwa/test/transcript-rows.test.tsx` | Measured, 8 green |
+| Chrome, both skins, both palettes, 390 and 1280: one line, failed surfaced, no loose cards, append while scrolled up moves nothing, opened row holds the column, open state survives scrolling away and back | `pwa/browser/tool-activity.browser.test.ts` | Measured locally, 8 green |
+| Chrome, both skins, both palettes, 360 and 390: a running row with `waiting on you` and `1 failed` and its wait line, no overflow of the row or the column, neither flag cut (both flags 20-90px inside the row's edge, measured) | same | Measured locally, 8 green |
+| Chrome, both skins, 390 and 1280: the live row changing size opened, a failure surfacing closed, and the same while the reader is mid-list (the numbers in section 3) | same | Measured locally, 4 green; see section 3 for what review 3478 corrected |
+| Refined's opened groups hold the column, with the activity rows opened first | `pwa/browser/tool-group-fit.browser.test.ts` | Measured locally, 16 green |
+| Checks that expand a tool card or read an answered question's chip, now opening the stretch's activity row first: the well colour check (red in all 16 views after round 1, which no CI run had caught) and the wheel checks' `openCard` and `reveal` (`browser/wheel.ts`) | `tool-well-colour`, `wheel-chain`, `wheel-chain-well`, `wheel-chain-chip` | Measured locally: 16, 40, 508 (12 skipped), 16 green |
+
+**The browser shards of a pull request skip their tests** (a fast pull request leaves them to the merge queue), so every
+Chrome count above was run on the worker's box, through the fleet test slice, against the production build; the merge
+queue runs them again.
+
+**Red first, measured by mutation.** The new test file was written after the decider, so its red is shown by mutants, not
+by commit order: 23 hand-applied mutants (each applied, `tool-activity.test.tsx` run, the file restored) were all killed:
+failed, question and approval not surfaced; approval without a live dialog; a failed call ending the stretch; the key
+following the newest entry; every resultless stretch running; running while idle; failures leading blocking entries; no
+run grouping inside; the expansion not remembered; open by default; nothing surfaced while collapsed; no approval control;
+a live stretch opening itself; `ChatList` not folding; a fresh memo every render; the memo kept across a session change;
+the row priced without its card; the approval line not priced; no `activity` bucket; `aria-controls` naming a missing
+body; the row's words running together. One mutant first survived (the memo kept across a session change); the case that
+kills it was added in the review round. Review 3450's fix round replaced the fold's live and wait rules, so the mutants
+on the lines it rewrote were re-made against the new code: 24 more, all killed (`tool-activity.test.tsx` and
+`same-row.test.ts`): a stale ask read as asked now; the first of two open asks named; the turn never starting; running
+ignoring the turn, needing the newest call to be resultless, or running while idle; every current row waiting, or every
+row from the newest call's; a named question also waiting; failures leading the question; a failure not surfaced; no
+waiting flag; the wait line only while closed; no wait control; the card drawn twice when open; the wait line not priced;
+the barrier's activity arm deleted, or skipping `live`, `waiting`, `attention` or `inner`; no foot follow; the follow
+without the measured foot; the follow for a reader who scrolled up. Two first survived: an equivalent one (the wait's
+turn check, which no stretch can fail because none spans a prompt, so the check was removed) and the barrier skipping
+`attention` and `inner`, which two cases added to `same-row.test.ts` now kill.
+
+**Review.** One per-task review (Sonnet) found nothing breaking a requirement and five low findings, all taken: running
+only while the session works; the memo held in state rather than `useMemo`; the approval line priced; `aria-controls` only
+while the body exists, and the spoken name word by word; and the type-only import cycle between the two L1 modules
+removed.
+
+**Review 3478's round** (the coordinator's rulings of 2026-11-24): F1 and F4 in scope, F2 fixed (not a limit), F5 the
+follow ignores a reader's tap, A8 the decision pure. New and changed cases, each shown red on b9094fd707 first, by test or
+by mutant, except A3's, which has no demonstrated red (its row says why):
+
+| Guard | File | Basis |
+|---|---|---|
+| F3: opening the stale ask's row, then every row, with the question asked now live: exactly one Answer on screen; two open asks, the wait `other` or naming one: exactly one, closed and opened | `tool-activity.test.tsx`, both skins | Red on the tip (2 and 3 controls); green |
+| F2: an open ask while an approval is the live wait: no question counted, one control, on the wait line, none on the ask card, closed and opened | same | Red on the tip; green |
+| F4: an opened earlier turn's resultless call: no breathing dot, no clock, `no result recorded`; the current turn's still runs | same | Red on the tip; green |
+| The wait kind: every `askSource` kind mapped; the key tells words apart; a call matched by every question, in order, and not by fewer | same | Green; mutants below |
+| A2: a divider, a mail card, a task card, a system row and a pending send each end a stretch | same | Green on the tip too (it held by construction); pinned now |
+| The barrier: a row whose turn ended (`past`) is a new row | `same-row.test.ts` | Green; mutant below |
+| `heightMove` and `holdShift` | `foot-follow.test.ts` | New module; mutants below |
+| F5: opening a stretch taller than the view at the foot leaves the tapped header where it was (within 1px) | `tool-activity.browser.test.ts`, both skins, 390 and 1280 | Red on the tip (1875-2218px); green |
+| F6: the mid-list case asserts the list grew while the reader was 499-535px up; a row wholly above the reader that grows, grows with the list's own correction applied first, or shrinks moves nothing they read (12 cases) | same | The growth red on the tip (50px); green |
+| The question rule's three other outcomes: no match (a prefix), two equal asks, a match only in an earlier turn: the wait line alone, one control, closed and opened | `tool-activity.test.tsx`, both skins | Green |
+| The hold's bounds: held finger or drag, the reader's own input, a new item at an end; the foot follow not bounded by them | `foot-follow.test.ts` | Green; mutants below. Superseded by review 3607's round: the input bound is replaced by the list's own movement |
+| F7: Refined's opened row grows at the foot, `> 0` | same | Green; red with the foot move removed (mutant below) |
+| A3: the wait control at 360 and 390, both skins, both palettes: inside the column, uncut, 44px against the 44px tap minimum, reached by Tab from the row with a visible ring and the name `Answer` (measured with the approval's sheet closed: at a phone's width the sheet opens over the transcript, which the app hides from assistive technology behind it) | same | Green; no demonstrated red: its one mutant (the control without `FOCUS_RING`) survived as equivalent (below). Only the `Answer` wording was measured; the desk's `Go to the prompt` was not measured at a phone's width |
+
+Mutants of this round, all killed: any wait naming the one open ask; a question naming any open ask, words unread; words
+matched without their count, or in any order; every card in a row given the pending state; a past row's calls not
+settled; no stretch past; the card ignoring `settled`, or keeping its clock; the barrier skipping `past`; a tap not the
+reader's; nothing held; the foot without the measure; the foot for a reader who left; rounding taken as a move; the wait
+keyed by its kind only; a structured question naming no call; the list folding by `askPending` alone; the wait line drawn
+beside a named question; a held finger or drag ignored; a new item at an end ignored; the reader's own input ignored; the
+bounds stopping the foot follow too (23, `tool-activity.test.tsx`, `same-row.test.ts`, `foot-follow.test.ts`; the bound
+mutants were of the decider only, and nothing guarded the list's wiring of them, review 3607 F7). One first survived
+(words matched without their count); the case of a call asking fewer questions than the wait kills it. In Chrome
+(`tool-activity.browser.test.ts`, each mutant built into its own production bundle): no move to the foot (the four
+"opened, calls arrive" cases red, Refined at 1280 among them, which the shrink had let through before); a tap not the
+reader's, and no tap seen (the four F5 cases red); the hold putting nothing back (the eight grow and shrink cases red);
+the anchor read in the scroll event rather than a frame after (the four shrink cases red, 2-3px); the change put back
+again over a correction already made (the four "already corrected" cases red). Two survived, both equivalent.
+Measuring the row's content rather than its wrapper changed nothing once the anchor is read a frame after a scroll, so
+that code is gone and the list measures the wrapper. The wait control without its `FOCUS_RING` class still draws the same
+2px solid ring, from base.css's `:focus-visible` rule, so A3's ring check (solid, at least 2px, never the browser's
+default) stays green; the class stays, as on every control of the transcript.
+
+**What else this round changed in the tests.** `ask-inline.browser.test.ts` drew its live ask call with fixed words
+(`Which cache should the service use?`) beside a live question in other words, an unreadable or unparsed menu, or an
+approval: under F2 no such call is identified, so its card no longer offers "Go to question", and 32 of the file's cases
+went red in the first browser run of this round. The fixture now gives the call the live question's own words (the hook
+envelope's questions, else the pane's transcript copy), and the cases whose wait names no call raise it from the wait
+line's "Go to the prompt", the same raise. No assertion was dropped: the R64 case also pins that the card carries "Go to
+question" when its words are the live ones. The first full unit run of the round was red too: the dot's class string,
+written as a conditional, read as a new hook class to the two design-system boundary censuses; it is the original
+template again.
+
+**Browser evidence, review 3478's round, local Chrome over the production build** (the pull request's browser shards skip their
+tests; the merge queue runs them): `tool-activity` 36; `ask-inline` 500 (12 skipped); `wheel-chain`, `wheel-chain-well`,
+`wheel-chain-chip`, `frame-cost`, `inspector-hide`, `refined-phone`, `tool-group-fit`, `tool-well-colour` and
+`compaction-fold` 182 (1 expected fail, 40 skipped); `ask-surface`, `instrument-desk`, `chat-width`, `chat-links`,
+`chat-colour`, `row-fit`, `sheet-stack-hide`, `helpers-rail`, `session-header` and `session-panel-words` 396. All green on
+the pushed code. No jump or oscillation in any of them.
+
+**Review 3607's round** (the coordinator's rulings of 2026-11-24: F1 and F7 fixed, F3 the note, F2, F4 and F5 known
+limits, A1, A3, A5, A8 and A9 fixed, A2, A4, A6, A7 and A10 limits). New and changed cases:
+
+| Guard | File | Basis |
+|---|---|---|
+| F1: the row above grows while the list moves: a smooth scroll in code reaches its target, a page key with focus on the list lands where the same key lands unhindered, a scroll made frame by frame in code with no input event ends where it was driven (12 cases) | `tool-activity.browser.test.ts`, both skins, 390 and 1280 | The smooth scroll (161-352px short) and the frame-by-frame scroll (12px back) red on cbe58fd03a; the page key green there (review 3478's key listener sat on the scroller), kept as the guard of the new bound; all green now |
+| F1: a static reader with a row above that grows, grows with the list's own correction first, or shrinks, still held (the 12 F6 cases) | same | Green on cbe58fd03a and now: the round keeps them |
+| F7: the list's wiring of each bound: a static reader held (and the hold's own write not taken for movement); nothing held after a scroll the scroller reported with no input event, or a scroll between the change and the compare; nothing held for a change that came with an item at an end, or for a tap; the baseline kept after a hold (two changes of 0.6px put back together) | `pwa/test/hold-wiring.test.tsx` (new, 7 cases; the stand-in list draws its rows inside the scroller it hands over, over a height model) | The scroller-reported scroll, the scroll between the change and the compare, and the baseline red on cbe58fd03a; every bound's deletion red (below) |
+| The decider: `sinceMove` and `MOVE_SETTLE_MS` replace the input bound; `holdShift` puts nothing back when the list moved | `foot-follow.test.ts` | Green |
+| A5: the mid-list case's growth is signed (`> 0`) | `tool-activity.browser.test.ts` | Green |
+| A9: the settled call's word is read from the exported `NO_RESULT_WORD` | `tool-activity.test.tsx` | Green |
+| A1: every `ask-inline` case pins the one place its fixture puts the control, the card's `Go to question` or the wait line's `Go to the prompt`, and asserts none at the other | `ask-inline.browser.test.ts` | Green (below) |
+
+**F7, each bound's wiring cut in `ChatList.tsx`, `hold-wiring.test.tsx` run, the file restored; all seven red:** the
+movement not fed to the decider (`sinceMove: null`): red, nothing held after a reported scroll; the scroll not recorded:
+red, the same case and the scroll between the change and the compare; the hold's own write counted as movement: red,
+the static case and the case after a hold; no re-check at the compare: red, the scroll between the change and the
+compare; the baseline re-read after a hold: red, the sub-pixel case; `newItem: false`: red, the item at an end;
+`sinceTap: null`: red, the tap. In Chrome, over the twelve moving cases: the decision's half cut alone, all green; the
+compare's half cut alone, all green; both cut, all twelve red (section 3 says why both halves stay).
+
+**A1 in detail.** The R64 F5, R69 F3 (the raise reveals the focused option), R69 F7 (an answer in flight) and R77 F2
+(the focus indicator, over fixtures 1, 3, 5 and 7) cases, and the aged R105, R106 and R115 cases, each assert the control
+is at its fixture's place once and nowhere else, then use it there. Fixture 1, whose call asks the live words, puts it on
+the card; fixtures 3, 5 and 7, whose wait names no call (an unreadable menu, an unparsed menu, an approval), on the wait
+line. The aged cases hand it from the card (question 1) to the wait
+line (question 2, or the other aged ask). That hand-off is the fixture's own and cannot occur on the real transcript
+path: the fixture's call asks one question where a real call asks all three, and a transcript copy carries one question
+only, so a real multi-question ask is never singled out from a transcript copy and its wait line carries the control
+throughout (section 7). Said in a comment in the file too.
+
+**Browser evidence, review 3607's round, local Chrome over the production build:** `tool-activity` 48 (the 36 before,
+and the 12 moving cases); `ask-inline` 500 (12 skipped), every case pinned to its control's place; `wheel-chain`,
+`wheel-chain-well`, `wheel-chain-chip`, `frame-cost`, `inspector-hide`, `refined-phone`, `tool-group-fit`,
+`tool-well-colour` and `compaction-fold` 182 (1 expected fail, 40 skipped); `ask-surface`, `instrument-desk`,
+`chat-width`, `chat-links`, `chat-colour`, `row-fit`, `sheet-stack-hide`, `helpers-rail`, `session-header` and
+`session-panel-words` 396. All green on the code pushed in this round. The markup, control, role, literal, fixture,
+shape and colour censuses, both design-system boundaries, the ink tiers and the audit refusals are green.
+
+**Not measured** (the header promises each claim's basis; these are the ones no test or run of this wave measured):
+- a real touch fling, a scrollbar drag, and a finger held still on the list during a change (headless Chrome makes
+  none);
+- the zero-control state of section 2 (a live wait before the current turn has any tool entry), and that the header
+  offers no raise there: read in the code;
+- the desk's `Go to the prompt` wait control at a phone's width (only `Answer` was measured there);
+- whether every `aria-expanded` click in the list (any card's disclosure, not only a row's) turning the foot follow off
+  for 600ms can leave the list's own at-foot flag stale; and a slow device where a stretch measures after the 600ms tap
+  window, so later frames are treated as untapped (both raised in review 3607 and not examined further);
+- a disclosure opened in code, not by a click, is not recognised as a tap (a keyboard activation fires a click and is);
+- main's behaviour for F2's open after an arrival (the coordinator's reading).
+
+**Review 3450** (three Opus lenses, Sonnet refuters) confirmed seven findings; the fix round took them all as the
+coordinator ruled: F1, F2, F3 and F6 by the current-turn rules and the wait line above; F4 by the row's details giving way
+to its flags (title, then count and state, cut with an ellipsis; the flags and the wait control never shrink), measured
+at 360; F5 by the foot follow, measured; F7 by the barrier's cases. Advisories A3, A5 and A7 are covered by the cases
+above; A1 and A6 are gone with the new rules; A4 is carried as a limit (section 7), and A2, carried then, is pinned since review 3478's round.
+
+**Census registrations** (measured green): the seven new colour rules are grounded on `--bg-page` in `pwa/design/audit.mjs`
+(the `.msg-plain-note` reasoning); the two type roles in `role-census.test.ts`; the two buttons in `control-census.test.ts`.
+
+## 6. Screenshots (described)
+
+Taken in Chrome over the production build, over the browser test's fixture (24 turns, the last stretch with a failed call):
+
+- Refined, dark, 1280: the transcript reads as prose turns with one mono line between them, `▸ Tool activity · 3 calls
+  Edited a23.ts`; the last line carries an amber `1 failed` flag, and the failed `Bash npm test` card sits under it.
+- Instrument, light, 390: the same rhythm on a phone; every line fits the column with its flag and summary.
+- Refined, light, 390, the last row opened: the chevron turns, the row's summary is cut with an ellipsis, and the opened
+  body shows Refined's `Read last.ts` group and the failed card one step in from the row.
+
+## 7. Known limits
+
+- A user message absorbed mid-turn (typed while the session works) starts the current turn as far as the transcript can
+  tell, so a call still running from before it reads as not running until its result arrives.
+- A live wait no card is identified as is said on the current turn's newest row, not on a call. With no tool entry in
+  the current turn yet, the transcript draws no control for it, and the header offers no raise (review 3607 F5, section
+  2): a reader who dismissed the sheet on a phone has no way back to it in the app until a new question arrives. As on
+  main for a menu or an approval; against main, the one case lost is a live question whose matching ask sits only in an
+  earlier turn, with no tool entry in the current turn yet (main put Answer on that card).
+- In the fallback cases (the ask's review screen, two equal asks, words matching no open ask, a transcript copy that
+  cannot match), the live ask's own card reads `unanswered`, a word the card keeps for a question the session moved past
+  or died holding, while the row's wait line says `waiting for you` with the control (review 3607 F4). One control,
+  reachable; the card's word is wrong for a live ask. Closed, the surfaced question card also leaves from under its row
+  while the pane is on the review screen.
+- The question's words only single out a call when they can match it (review 3607 A7): with no hook envelope the
+  transcript copy carries one question, so a multi-question ask is never singled out from it; and the transcript's tool
+  input is masked and cut at 4000 bytes, so a larger ask no longer parses and is never singled out. Both fall back to the
+  wait line, safely. The only misattribution found is contrived (a stale one-question ask whose words equal the painted
+  question of a multi-question transcript copy), and every control raises the same live sheet.
+- While an open row's question is answered (review 3607 A2): if the result lands before the ask is cleared, the opened
+  row briefly gains a wait line with its control beside the answered card (one control, raising a sheet that is ending);
+  if the clear lands first, the card reads `unanswered` with no control until the result arrives. Neither sticks, and the
+  count never reaches two.
+- An answered question folds into its row with the other calls; only the question asked now is surfaced.
+- Only the first attention entry is drawn under a closed row; the rest are counted on it.
+- The expansion memory is per session view, by design: leaving the session forgets it. Only the outer row's state is kept
+  across a virtual unmount: Refined's inner run groups and the tool cards' own disclosures inside an opened row keep local
+  state, so a remounted open row shows them closed (review 3450 A4, carried).
+- A height change within 600ms of the reader's tap on a disclosure is taken as theirs: a call arriving in that moment is
+  neither followed at the foot nor held, and the next change nobody tapped for is acted on again from where the reader
+  then is.
+- A tap that opens the newest stretch at the foot 40-100ms after a call arrived in it can throw the tapped header out of
+  view: virtuoso's own 100ms scroll to the end, past the follow's answer (review 3607 F2; measured 1875-2762px in 35 of 40
+  timed taps, section 3). Main follows to the foot on every such open. Carried to the chat screen wave that reworks
+  anchoring.
+- A question is tied to its call by its words: two open asks of one turn asking exactly the same questions single out
+  neither (the wait line carries the control). While the pane is on the ask's review screen the wait is `other`, so the
+  question's card shows no control and the wait line carries it.
+- The hold keeps the row crossing the top of the view in place; a change inside that row above the reader's line (a card
+  opening within an opened stretch, by something other than a tap) is not compensated, and neither is a change while the
+  list is moving or within 200ms of its last scroll, or one that came with an item at either end (the bounds above).
+- The item-at-an-end check compares the item count and the first and last keys since the last height report (review 3607
+  A4): a count change in the middle (a regroup) reads as an item at an end and turns the hold off for that change, and a
+  list change with no height report of its own is charged to the next change. Broader than ruled, never narrower.
+- Two small decisions sit in the list's delivery code (review 3607 A10): what counts as an item at an end (the signature
+  in `onHeight`), and which card gets the pending state (`it.key === inner.asked` in `TranscriptRowView`). Each could move
+  to a pure function (an edges function in `footFollow.ts`, a card-pending one in `toolActivity.ts`); recorded.
+- A current turn's resultless call keeps looking running after the session stops (review 3607 A6): an interrupt, or a
+  result that never arrives, leaves its opened card with the breathing dot, the ticking clock and `running…`, while its
+  row no longer says running. Only an earlier turn's calls are drawn settled.
+- Per-call failed and live are re-derived in `toolActivity.ts` beside `toolSummary.ts`'s own (review 3478 A5): the two
+  agree today; one owner is the follow-up.
+- Two arms of the row barrier (`sameList(entries)`, the attention kind) are redundant with `inner` and the attention
+  entry, so removing either leaves `same-row.test.ts` green (review 3478 A6): no correctness defect, recorded.
+- The run-fold cases of `transcript-rows.test.tsx` mount sets with `toolActivity: 'none'`, which no skin ships, so
+  `restoreStateFrom`'s seeded ranges are not pinned against the activity-folded list on the shipped path (review 3478 A7).
+- The full pwa suite runs past the fleet test slice's memory cap in one go, so it is run in chunks.

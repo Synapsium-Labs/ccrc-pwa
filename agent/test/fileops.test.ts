@@ -1,11 +1,67 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import {
+  mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync,
+  type BigIntStats,
+} from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
-import { MAX_READ_B64_BYTES } from '../src/fileops.js';
+import { mkTmp } from './tmpHelpers.js';
+import { MAX_READ_B64_BYTES, readFromMeasured, readIdentOf } from '../src/fileops.js';
 
 interface Res { ok: boolean; err?: string; [k: string]: unknown }
+
+// The byte-read identity's one seam (run 3531), R99's pattern in the server's io suite: the real `open` is wrapped, never
+// replaced. A test arms `afterOpen` to act on the handle just opened, after the open and before anything reads it: rename
+// another file over its path, or answer controlled bigint stat facts on that one handle. Disarmed, it is the real `open`.
+const hooks = vi.hoisted(() => ({ afterOpen: null as null | ((p: string, fh: FileHandle) => void) }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: (async (...a: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...a);
+      hooks.afterOpen?.(String(a[0]), fh);
+      return fh;
+    }) as typeof actual.open,
+  };
+});
+
+/** Controlled facts for one handle's BIGINT stat (the identity's), the real answer otherwise; `fail` rejects it. */
+interface Facts { birth?: bigint; change?: bigint; ino?: bigint; regular?: boolean; fail?: boolean }
+const withFacts = (fh: FileHandle, f: Facts): void => {
+  const real = fh.stat.bind(fh) as (o?: { bigint?: boolean }) => Promise<unknown>;
+  fh.stat = (async (o?: { bigint?: boolean }) => {
+    if (o?.bigint !== true) return real(o);
+    if (f.fail === true) throw Object.assign(new Error('EIO: stat failed'), { code: 'EIO' });
+    const st = (await real({ bigint: true })) as BigIntStats;
+    if (f.birth !== undefined) st.birthtimeNs = f.birth;
+    if (f.change !== undefined) st.ctimeNs = f.change;
+    if (f.ino !== undefined) st.ino = f.ino;
+    if (f.regular === false) st.isFile = () => false;
+    return st;
+  }) as FileHandle['stat'];
+};
+/** Arm `facts` for every handle opened on `file` until the returned disarm runs. */
+const armFacts = (file: string, f: Facts): (() => void) => {
+  const want = realpathSync(file);   // the agent opens the canonical path
+  hooks.afterOpen = (p, fh) => { if (p === file || p === want) withFacts(fh, f); };
+  return () => { hooks.afterOpen = null; };
+};
+/** The token as the contract states it, derived independently of the code under test. */
+const tokenOf = (dev: bigint, ino: bigint, birth: bigint): string =>
+  createHash('sha256').update(`read-ident-v1\0${dev}\0${ino}\0${birth}`).digest('hex');
+const HEX64 = /^[0-9a-f]{64}$/;
+/** A bounded answer without its optional token, which a fixture's one-call file may or may not carry (its birth and change
+ *  times can fall in one tick or two): present, it must be 64 hex. */
+const sansIdent = <T extends object>(r: T): T => {
+  if (!('ident' in r)) return r;
+  expect((r as { ident: unknown }).ident).toMatch(HEX64);
+  const { ident: _ident, ...rest } = r as T & { ident?: unknown };
+  return rest as T;
+};
 
 describe('ccrc-agent file ops', () => {
   let agent: RunningAgent | undefined;
@@ -312,7 +368,7 @@ describe('ccrc-agent file ops', () => {
       const file = limitsFile('range.txt');
       writeFileSync(file, 'abcdefghij');
       const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset, maxBytes });
-      expect(res).toEqual({
+      expect(sansIdent(res)).toEqual({
         t: 'res', id, ok: true,
         data: expected, dataB64: Buffer.from(expected).toString('base64'), size: 10,
       });
@@ -327,6 +383,35 @@ describe('ccrc-agent file ops', () => {
       writeFileSync(file, 'abcdefghij');
       const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset, maxBytes: 1 });
       expect(res).toEqual({ t: 'res', id, ok: true, data: '', dataB64: '', size: 10 });
+    });
+
+    // ── run 3531: the bounded reply's optional identity, over the wire ──
+    it('a bounded reply with bytes carries the token of its own handle when the facts are usable', async () => {
+      await open();
+      const file = limitsFile('ident.txt');
+      writeFileSync(file, 'abcdefghij');
+      const st = statSync(file, { bigint: true });
+      const disarm = armFacts(file, { birth: 5n, change: 9n });
+      try {
+        const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 2, maxBytes: 3 });
+        expect(res).toEqual({
+          t: 'res', id, ok: true, data: 'cde', dataB64: Buffer.from('cde').toString('base64'), ident: tokenOf(st.dev, st.ino, 5n), size: 10,
+        });
+      } finally { disarm(); }
+    });
+
+    it('the EOF reply and an unbounded reply carry no token even when the facts are usable: their exact old keys', async () => {
+      await open();
+      const file = limitsFile('ident-eof.txt');
+      writeFileSync(file, 'abcdefghij');
+      const disarm = armFacts(file, { birth: 5n, change: 9n });
+      try {
+        expect(await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 10, maxBytes: 4 }))
+          .toEqual({ t: 'res', id, ok: true, data: '', dataB64: '', size: 10 });
+        const old = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 4 });
+        expect(old).toEqual({ t: 'res', id, ok: true, data: 'efghij', size: 10 });
+        expect(Object.keys(old).sort()).toEqual(['data', 'id', 'ok', 'size', 't']);
+      } finally { disarm(); }
     });
 
     it('the largest bound (262144) returns exactly that many bytes of a larger file, byte-exact, at an offset', async () => {
@@ -743,5 +828,126 @@ describe('ccrc-agent file ops', () => {
       dataB64: Buffer.from('ok').toString('base64'),
     });
     expect(res2).toMatchObject({ ok: true });
+  });
+});
+
+// ── run 3531: the byte-read identity, at the function the reply is built from ──
+describe('readFromMeasured: the bounded read\'s identity comes from its own handle', () => {
+  afterEach(() => { hooks.afterOpen = null; });
+  /** A regular file with `content` in a fresh temp directory, and its real device and inode. */
+  const fileWith = (content: string, name = 'f.txt'): { file: string; dev: bigint; ino: bigint } => {
+    const dir = mkTmp('ccrc-ident-');
+    const file = path.join(dir, name);
+    writeFileSync(file, content);
+    const st = statSync(file, { bigint: true });
+    return { file, dev: st.dev, ino: st.ino };
+  };
+
+  it('usable facts (regular, inode not 0, 0 < birth < change): the digest of device, inode and birth time', async () => {
+    const { file, dev, ino } = fileWith('0123456789');
+    armFacts(file, { birth: 5n, change: 9n });
+    expect(await readFromMeasured(file, 3, 4)).toEqual({
+      ok: true, data: '3456', dataB64: Buffer.from('3456').toString('base64'), size: 10, ident: tokenOf(dev, ino, 5n),
+    });
+  });
+
+  it.each([
+    ['birth time 0 (none recorded)', { birth: 0n, change: 9n }],
+    ['birth time negative', { birth: -1n, change: 9n }],
+    ['birth equal to change (a ctime fallback, or untouched since creation)', { birth: 7n, change: 7n }],
+    ['birth after change', { birth: 9n, change: 5n }],
+    ['inode 0', { birth: 5n, change: 9n, ino: 0n }],
+    ['not a regular file on the handle', { birth: 5n, change: 9n, regular: false }],
+    ['the bigint stat fails', { fail: true }],
+  ] as const)('%s: the same bytes and size, and NO token (unmeasured, never a device and inode fallback)', async (_label, f) => {
+    const { file } = fileWith('0123456789');
+    armFacts(file, f);
+    const r = await readFromMeasured(file, 3, 4);
+    expect(r).toEqual({ ok: true, data: '3456', dataB64: Buffer.from('3456').toString('base64'), size: 10 });
+    expect(r).not.toHaveProperty('ident');
+  });
+
+  it('a file that shrinks after the open answers its short or empty bytes as before, but never with a token', async () => {
+    // The shrink runs inside the identity's own bigint stat: after `openRegular` measured the size, before the range read.
+    for (const [cutTo, data] of [[5, '34'], [3, '']] as const) {
+      const { file } = fileWith('0123456789');
+      const want = realpathSync(file);
+      hooks.afterOpen = (p, fh) => {
+        if (p !== file && p !== want) return;
+        withFacts(fh, { birth: 5n, change: 9n });
+        const facts = fh.stat.bind(fh) as (o?: { bigint?: boolean }) => Promise<unknown>;
+        fh.stat = (async (o?: { bigint?: boolean }) => {
+          const st = await facts(o);
+          if (o?.bigint === true) truncateSync(file, cutTo);
+          return st;
+        }) as FileHandle['stat'];
+      };
+      const r = await readFromMeasured(file, 3, 4);
+      expect(r, `cut to ${cutTo}`).toEqual({ ok: true, data, dataB64: Buffer.from(data).toString('base64'), size: 10 });
+      expect(r).not.toHaveProperty('ident');
+    }
+  });
+
+  it('EOF and an unbounded read carry no token, with usable facts', async () => {
+    const { file } = fileWith('0123456789');
+    armFacts(file, { birth: 5n, change: 9n });
+    expect(await readFromMeasured(file, 10, 4)).toEqual({ ok: true, data: '', dataB64: '', size: 10 });
+    expect(await readFromMeasured(file, 4)).toEqual({ ok: true, data: '456789', size: 10 });
+  });
+
+  it('a rename-over AFTER the open: the old bytes with the old file\'s token, then the new bytes with a new token', async () => {
+    const { file, dev, ino } = fileWith('OLD-BYTES\n');
+    const next = path.join(path.dirname(file), 'next.txt');
+    writeFileSync(next, 'NEW-BYTES-LONGER\n');
+    const nextIno = statSync(next, { bigint: true }).ino;
+    let swaps = 0;
+    hooks.afterOpen = (p, fh) => {
+      withFacts(fh, { birth: 1n, change: 2n });
+      if (p === file && swaps === 0) { swaps += 1; renameSync(next, file); }
+    };
+    const first = await readFromMeasured(file, 0, 9);
+    expect(swaps, 'the swap ran after the open').toBe(1);
+    expect(readFileSync(file, 'utf8'), 'the path now names the new file').toBe('NEW-BYTES-LONGER\n');
+    expect(first).toEqual({ ok: true, data: 'OLD-BYTES', dataB64: Buffer.from('OLD-BYTES').toString('base64'), size: 10, ident: tokenOf(dev, ino, 1n) });
+    const second = await readFromMeasured(file, 0, 9);
+    expect(second).toEqual({ ok: true, data: 'NEW-BYTES', dataB64: Buffer.from('NEW-BYTES').toString('base64'), size: 17, ident: tokenOf(dev, nextIno, 1n) });
+    expect(second.ok && first.ok && second.ident !== first.ident).toBe(true);
+  });
+
+  it('old failures are unchanged: missing is absent, a directory and a path through a file are unreadable', async () => {
+    const { file } = fileWith('x');
+    expect(await readFromMeasured(path.join(path.dirname(file), 'nope'), 0, 4)).toEqual({ ok: false, reason: 'absent' });
+    expect(await readFromMeasured(path.dirname(file), 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await readFromMeasured(path.join(file, 'child'), 0, 4)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+});
+
+describe('readIdentOf: answers only on usable facts', () => {
+  const stats = (f: { dev?: bigint; ino?: bigint; birth?: bigint; change?: bigint; regular?: boolean }): BigIntStats =>
+    ({
+      dev: f.dev ?? 7n, ino: f.ino ?? 11n, birthtimeNs: f.birth ?? 5n, ctimeNs: f.change ?? 9n,
+      isFile: () => f.regular ?? true,
+    }) as unknown as BigIntStats;
+
+  it('usable: 64 lowercase hex, the documented digest, the same for the same facts', () => {
+    expect(readIdentOf(stats({}))).toMatch(HEX64);
+    expect(readIdentOf(stats({}))).toBe(tokenOf(7n, 11n, 5n));
+    expect(readIdentOf(stats({}))).toBe(readIdentOf(stats({ change: 100n })));   // ctime gates, it is not in the token
+  });
+
+  it('differs when the device, the inode or the birth time differs', () => {
+    const base = readIdentOf(stats({}));
+    for (const f of [{ dev: 8n }, { ino: 12n }, { birth: 6n }]) expect(readIdentOf(stats(f))).not.toBe(base);
+  });
+
+  it.each([
+    ['not a regular file', { regular: false }],
+    ['inode 0', { ino: 0n }],
+    ['birth 0', { birth: 0n }],
+    ['birth negative', { birth: -1n }],
+    ['birth equal to change', { birth: 9n, change: 9n }],
+    ['birth after change', { birth: 10n, change: 9n }],
+  ] as const)('%s: undefined', (_label, f) => {
+    expect(readIdentOf(stats(f))).toBeUndefined();
   });
 });

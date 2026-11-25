@@ -211,7 +211,7 @@ describe("at the desk the bar's first line is unchanged and the update line is o
       try {
         await seedStripExpanded(ctx); // the check below places all seventeen cards; the strip folds by default (S5b, D-6530)
         const answers = await answerViewThenFail(page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         const refined = view.skin === REFINED;
         const holder = refined ? ROW : STATUS_BAR;
         const bar = refined ? BAR : null;
@@ -253,7 +253,7 @@ describe('at least 24 px under a fine pointer, 44 px under touch', () => {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
         await page.waitForTimeout(300);
         const touch = view.touch === true || view.width < 900;
@@ -291,7 +291,7 @@ describe('on a phone a stale update line wraps, the page never scrolls sideways 
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         const answers = await answerViewThenFail(page);
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
         answers.fail();
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -334,7 +334,7 @@ describe('on a phone the dismiss moves focus to a displayed landmark, never the 
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
         await page.waitForTimeout(300);
         await page.click('.update-indicator-dismiss');
@@ -361,7 +361,7 @@ describe('a keyboard dismiss on a phone leaves focus on the fleet column with no
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        await page.goto(server!.origin + '/');
+        await page.goto(server!.origin + '/fleet');
         await page.waitForSelector('.update-indicator-dismiss', { timeout: 20_000 });
         await page.waitForTimeout(300);
         await page.focus('.update-indicator-dismiss');

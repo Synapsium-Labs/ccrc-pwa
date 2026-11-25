@@ -28,12 +28,15 @@ import type { PlanStorePort } from './coord/planStore.js';
 import type { PlanSync } from './linear/planSync.js';
 import type { DriftPass } from './linear/driftPass.js';
 import type { LinearMigration } from './linear/migration.js';
+import type { ClaudeCodeOwnLists } from '../../shared/overlord-sandbox.js';
+import type { SettleOutcome } from './continuity/routes.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { LimitSampleStore } from './limitSampler.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -44,7 +47,7 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { TestboxAudit } from './testboxAudit.js';
 import type { TestboxAdminOps } from './testboxAdmin.js';
-import type { BuildCaptureTransport } from './buildCaptureLane.js';
+import type { BuildCaptureTransport, BuildCopyTransport } from './buildCaptureLane.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
@@ -53,6 +56,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { IsolationReader } from './isolationFacts.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -241,10 +245,19 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
+   *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
+  overlordRestore?: OverlordRestoreState;
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;
+  /** The isolation word's one reader (Overlord W1, §7.4, H28), built once in `index.ts` over the server's boot facts and the
+   *  live fleet state. Absent (a test, a script): the ladder's `shared-user` input reads `unmeasured: not-wired`, which caps. */
+  isolation?: IsolationReader;
   ladderServerCaps?: readonly string[];
+  /** The sandbox settle step's test seams (W1 sandbox B, review 3325 F4 and F6): isolated own lists in place of the release's
+   *  (`CLAUDE_CODE_OWN_LISTS`, which lists no build), and a completion signal per settle. Absent: the release's lists, no signal. */
+  overlordSandbox?: { readonly ownLists?: ClaudeCodeOwnLists; readonly settled?: (o: SettleOutcome) => void };
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;
@@ -260,6 +273,9 @@ export interface Deps {
   /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
    *  recorded and no job is sent. */
   buildCapture?: BuildCaptureTransport;
+  /** Build capture runner spec 2026-11-22 §2.2: the copy of a build the test box refused `build-absent`, over the admin lane,
+   *  built in `index.ts`. Absent (a test, a script): such a refusal is recorded `no-admin-lane`, and nothing is copied. */
+  buildCopy?: BuildCopyTransport;
   /** Mid-turn mail (plan Task 4.4): called by `POST /api/mail/:id/ack` after an ack lands, never awaited; `index.ts`
    *  composes it as the watcher's kick of the mailhold row, so a released hold's marker clears at the next tick. Absent
    *  (a test, a script): nothing is kicked, and the projection's own beat clears it. */
@@ -289,6 +305,7 @@ export interface Deps {
  *  bag on. */
 export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
   coord?: WatcherCoordPort;
-  /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store. */
-  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf'>;
+  /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store; the inbox wake
+   *  reads its unsettled facts, text-free. */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts'>;
 };

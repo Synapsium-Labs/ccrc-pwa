@@ -151,7 +151,7 @@ export function confirmLabel(p: NamePreview, door: { empty: string; named: (shor
   return door.named(p.short);
 }
 
-/** Where the field's Settings pointer goes: Settings → Security, which holds the Linear section. The one definition is
+/** Where the field's Settings pointer goes: Settings → Integrations, which holds the Linear section. The one definition is
  *  `shared/ledgers.ts`'s (D-8808: the server's item text names it too); held equal to the route table's own path for that
  *  page by `add-workspace-sheet.test.tsx`. */
 export const LINEAR_SETTINGS_PATH = LINEAR_PROJECTS_SETTINGS_PATH;

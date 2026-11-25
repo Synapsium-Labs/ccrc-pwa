@@ -13,11 +13,12 @@
 import {
   TESTBOX_ACT_MAP, TESTBOX_ADMIN_CODE_SENTENCE, TESTBOX_BOX_KEYS, TESTBOX_FLEET_EDITABLE, TESTBOX_PAIRED_BOX_KEYS, TESTBOX_SHAPE_CLASS,
   TESTBOX_SHAPE_SENTENCE, isBoxAddress, isPrivateNetworkAddress,
-  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub,
+  type TestboxAct, type TestboxAdminCode, type TestboxAdminPhase, type TestboxAdminStatus, type TestboxAdminSub, type TestboxBusyHolder,
   type TestboxLedgerPresence, type TestboxLedgerValue, type TestboxSettingChange,
 } from '../../../shared/testbox-admin';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type BoxSettingRow, type NodeWire } from '../../../shared/api';
 import type { TestboxEventRow } from '../../../shared/api';
+import { isTestboxName, isVitestProgram, parseRepoRow } from '../../../shared/testbox';
 import { boxSettingsOf } from './boxSettingsWords';
 
 /** The preflight's one code that carries a corrected access line (`fixLine`), spelled once. */
@@ -88,9 +89,10 @@ export const TESTBOX_CONNECT_TEXT = {
   repositoriesHint: 'One to four. The box keeps a copy of each and runs its tests there.',
   repoName: 'Name',
   repoUrl: 'Fetch URL',
-  repoPackage: 'Package folder',
-  repoInputs: 'Install inputs',
-  repoCommand: 'Test runner',
+  repoPackage: 'Package folders, in install order',
+  repoInputs: 'Other install inputs',
+  repoCommand: 'Test commands',
+  repoFieldsHint: 'Separate package folders and install inputs with spaces, and test commands with commas. Every package gets every command. Parity runs the first command, so it is a vitest runner. Each package installs from its own package.json and package-lock.json; another input is added to the package its path starts with, else to the first.',
   addRepo: 'Add a repository',
   removeRepo: 'Remove',
   offered: 'From the fleet',
@@ -98,6 +100,8 @@ export const TESTBOX_CONNECT_TEXT = {
   badRepoName: 'A name is letters, digits, . _ and -.',
   badRepoUrl: 'An https or ssh URL such as https://git.invalid/team/project.',
   badRepoWord: 'Required.',
+  badRepoTwice: 'Each one once.',
+  badRepoRunner: 'Parity runs the first command, so it is a vitest runner, such as ./node_modules/.bin/vitest.',
   badRepoRow: 'That row is not one the box can take. Check the install inputs.',
   needListen: 'The address the service listens on is required: the box\'s private address, the one ccrc reaches it on.',
   listenNotPrivate: 'The service listens on the box\'s private address, an IP address on a tailnet, a VPN or your provider\'s private network, the one ccrc reaches it on.',
@@ -113,7 +117,7 @@ export const TESTBOX_CONNECT_TEXT = {
   connected: 'Connected',
   tryAgain: 'Try again',
   // step 6
-  parityIntro: 'Parity runs recent pull requests on the test box and on the fleet host and compares them. The switch turns on only after it passes.',
+  parityIntro: 'Parity runs a sample of the tests of the newest merged pull request on the test box and on the fleet host and compares them. The switch turns on only after it passes.',
   runParity: 'Run parity',
   parityRunning: 'Running parity…',
   parityPassed: 'Parity passed.',
@@ -121,6 +125,8 @@ export const TESTBOX_CONNECT_TEXT = {
   parityStale: 'Parity must run again: the box or its settings changed since it last passed.',
   parityNone: 'Parity has not run yet.',
   parityPrs: (n: number) => (n === 1 ? '1 pull request compared' : `${n} pull requests compared`),
+  // D-8945: the light check compares a sample of the pull request's tests; an older record carries no count, and shows none
+  parityFiles: (n: number) => (n === 1 ? '1 test file compared on each side' : `${n} test files compared on each side`),
   fixtureWord: (name: string, result: string) => `${name}: ${result}`,
   // the switch, beside the card's own
   switchWaits: TESTBOX_PARITY_REQUIRED_SENTENCE,
@@ -325,6 +331,59 @@ export function actWord(act: string): string {
  *  none of the flags: no JUnit report is written, every pull request leg reads DIFFERS and the switch never arms. */
 export const TESTBOX_DEFAULT_RUNNER = './node_modules/.bin/vitest';
 
+/** The command heads a new repository row gives each of its packages (spec 2026-10-28 §2.5's default), the runner first:
+ *  parity runs the first package's first head (`ccd/ccrc-testbox-admin`'s `_tba_row_record`). A head a package has no use
+ *  for (a script it lacks) costs nothing: the box only runs what a session asks for, and that fails there as it would
+ *  locally (D-9009). */
+export const TESTBOX_DEFAULT_HEADS: readonly string[] = [TESTBOX_DEFAULT_RUNNER, './node_modules/.bin/tsc', 'npm test', 'npm run test:browser'];
+
+/** One repository row as the card's step 4 holds it, as typed: `pkg` is the package folders in install order, separated by
+ *  spaces; `command` is the command heads, separated by commas; `inputs` is the install inputs added to the packages' own pairs. */
+export interface TestboxRepoDraft { name: string; fetchUrl: string; pkg: string; inputs: string; command: string }
+export const blankRepoDraft = (): TestboxRepoDraft => ({ name: '', fetchUrl: '', pkg: '', inputs: '', command: TESTBOX_DEFAULT_HEADS.join(', ') });
+
+const REPO_URL = /^(?:https|ssh):\/\/[^\s@/]+(?:@[^\s/]+)?\/[^\s]+$/;
+const COMMAND_HEAD = /^[^\s]+(?: [^\s]+)*$/;
+const words = (s: string): string[] => s.trim().split(/\s+/).filter((w) => w !== '');
+const heads = (s: string): string[] => s.split(',').map((h) => h.trim()).filter((h) => h !== '');
+const twice = (xs: readonly string[]): boolean => new Set(xs).size !== xs.length;
+
+/** The row's JSON object for one draft, with the mirror under the box's root (D-9009). Each package gets every head. Its install
+ *  inputs are always its own `package.json` and `package-lock.json` first, because the box builds its pristine copy from a tree
+ *  holding only them and keys the copy on them (`agent/src/testbox/pristine.ts`); a typed input is added, once, to the listed
+ *  package its first path segment names, else to the first package. */
+export function repoRowOf(d: TestboxRepoDraft, root: string): Record<string, unknown> {
+  const names = words(d.pkg);
+  const owned = new Map<string, string[]>(names.map((n) => [n, [`${n}/package.json`, `${n}/package-lock.json`]]));
+  for (const input of words(d.inputs)) {
+    const top = input.split('/')[0] ?? '';
+    const list = owned.get(names.includes(top) ? top : names[0] ?? '');
+    if (list !== undefined && !list.includes(input)) list.push(input);
+  }
+  const commands = heads(d.command);
+  return {
+    name: d.name, fetchUrl: d.fetchUrl, mirrorPath: `${root.replace(/\/+$/, '')}/mirrors/${d.name}.git`,
+    packages: names.map((n) => ({ name: n, installInputs: owned.get(n) ?? [], commands })),
+    buildOutputs: [], systemTools: [],
+  };
+}
+
+/** What is wrong with one repository draft, by field; empty for a row the box's own reader takes (D-9009). */
+export function repoDraftProblems(d: TestboxRepoDraft, root: string): Partial<Record<keyof TestboxRepoDraft | 'row', string>> {
+  const out: Partial<Record<keyof TestboxRepoDraft | 'row', string>> = {};
+  const names = words(d.pkg);
+  const commands = heads(d.command);
+  if (!isTestboxName(d.name)) out.name = TESTBOX_CONNECT_TEXT.badRepoName;
+  if (!REPO_URL.test(d.fetchUrl)) out.fetchUrl = TESTBOX_CONNECT_TEXT.badRepoUrl;
+  if (names.length === 0 || !names.every((n) => isTestboxName(n))) out.pkg = TESTBOX_CONNECT_TEXT.badRepoName;
+  else if (twice(names)) out.pkg = TESTBOX_CONNECT_TEXT.badRepoTwice;
+  if (commands.length === 0 || !commands.every((c) => COMMAND_HEAD.test(c))) out.command = TESTBOX_CONNECT_TEXT.badRepoWord;
+  else if (twice(commands)) out.command = TESTBOX_CONNECT_TEXT.badRepoTwice;
+  else if (!isVitestProgram(commands[0]?.split(' ')[0] ?? '')) out.command = TESTBOX_CONNECT_TEXT.badRepoRunner;
+  if (Object.keys(out).length === 0 && !parseRepoRow(JSON.stringify(repoRowOf(d, root))).ok) out.row = TESTBOX_CONNECT_TEXT.badRepoRow;
+  return out;
+}
+
 /** The fleet's repository, as the card offers it: GitHub's https form of a slug `_gh_repo_slug` measured (`owner/name`). */
 export const GIT_HOST_BASE = 'https://github.com/';
 
@@ -337,6 +396,15 @@ export const TESTBOX_FAMILY_FOLD = 'settings-release-fold testbox-family';
 
 /** A ledger time to the minute, UTC. */
 export const utcMinuteAt = (at: number): string => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
+/** A latest time to the minute, UTC, rounded UP: the minute named is never before the time (D-8899). */
+export const utcMinuteUpAt = (at: number): string => utcMinuteAt(Math.ceil(at / 60_000) * 60_000);
+
+/** The act that holds the admin lock, as a `busy` refusal names it, in one line: the act in the card's words, when it began
+ *  and the latest time it can end. It names no other value (D-8899). */
+export function busyHolderSentence(h: TestboxBusyHolder): string {
+  return `${actWord(h.sub)} is running: it began at ${utcMinuteAt(h.startedAt)} and ends by ${utcMinuteUpAt(h.deadlineAt)} at the latest.`;
+}
 
 /** One ledger row as one line: its minute, the act in words, its outcome, and a closed code's sentence. No address, no secret:
  *  a row carries none (spec §2.10). */
@@ -412,6 +480,8 @@ export const TESTBOX_MANAGE_TEXT = {
   runsNote: 'Runs are in progress on the box. A change to the box waits until none is.',
   applyWhenIdle: 'Apply when idle',
   waiting: 'Waiting until the box is idle.',
+  // the running act's latest end, as the status records it and `utcMinuteUpAt` words it (D-8899)
+  endsBy: (when: string) => `It ends by ${when} at the latest.`,
   cancel: 'Cancel',
   cancelled: 'Cancelled.',
   cancelTooLate: 'Too late to cancel. The change is already being applied to the box.',

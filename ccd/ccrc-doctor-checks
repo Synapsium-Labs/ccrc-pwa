@@ -220,7 +220,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history model-advance-held-back model-held-behind model-sessions-behind model-advance-blocked secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # fourteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned, and the three backups checks before delegation-hooks, pinned; the four model-advance checks (D-8689) follow history, and their functions are at the very END of this file; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
+  models codex docs history model-advance-held-back model-held-behind model-sessions-behind model-advance-blocked model-release-lookup secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # fifteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned, and the three backups checks before delegation-hooks, pinned; the four model-advance checks (D-8689) follow history, then model-release-lookup (model classes wave 3; no name that starts codex), and their functions are at the very END of this file; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -1053,7 +1053,7 @@ _check_services() {
           ccd-scope-sweep.timer) why="no dead pane scope is recorded or collected, and the scope-sweep check has nothing fresh to read" ;;
           # landing order wave 3b: the conflict radar, silent when stopped - its files age in place, and a coordinator sends sync and order mail without a measured conflict.
           ccd-land-probe.timer) why="no open PR is measured for a conflict with the base or with another PR, and the base's required checks go unread" ;;
-          # Overlord W1a: the weekly replay quiz, silent when stopped - `_check_quiz-weekly` reads what its runner recorded, but a record that stops changing is that check's stale arm only after a day.
+          # Overlord W1a: the weekly replay quiz, silent when stopped - `_check_quiz-weekly` reads what its runner recorded, but a record that stops changing is that check's starved arm after two of the timer's periods with no run in flight (run 3508).
           ccd-quiz-weekly.timer) why="the weekly replay quiz is not run, recorded or confirmed, so no W1a lane can get its baseline and the weekly item is raised for the operator" ;;
           # W4a Task 9: the server box's update watchdog. Silent when stopped —
           # it acts only on the day a self-update dies mid-install, and on that
@@ -7025,6 +7025,26 @@ _check_models() {
 # "SERVED BY DOCS" is a row whose `state` is `ready`: a repository with a
 # default branch, the one state whose tree the Docs screen opens. The other
 # six states are listed and serve no page.
+#
+# ── the one reader of `ccd caps` in these checks (model classes follow-up doctor-caps-one-reader; wave 7 review F6) ──
+# Every check that asks which words this box's ccd advertises asks here, once, under one bound (CCRC_DOCTOR_DOCS_TIMEOUT,
+# the docs check's bound for its ccd calls), reading no stdin and with fd 3 closed. It answers two states a caller tells
+# apart: rc 0, MEASURED, with ccd's word list (one word a line; it may lack the word asked about, or be empty) in
+# DR_CCD_CAPS; rc 1, UNMEASURED (no ccd, a non-zero exit, or the bound passed), with DR_CCD_CAPS empty. A caller never
+# folds rc 1 into an empty list: that would say "ccd does not list" of a word nobody measured. `cmd_doctor` runs each
+# check in its own subshell (`out="$( "_check_$name" )"`), so one read serves one check, never the whole run.
+DR_CCD_CAPS_FIX="run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"
+_dr_ccd_caps() {
+  DR_CCD_CAPS=""
+  local out
+  out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null 3>&-)" || return 1
+  DR_CCD_CAPS="$out"
+}
+# rc 0 when the measured list holds <word> as one whole line (bash only, no grep on the doctor's PATH).
+_dr_ccd_lists() {   # <word>
+  [[ $'\n'"$DR_CCD_CAPS"$'\n' == *$'\n'"$1"$'\n'* ]]
+}
+
 _check_docs() {
   # A server-role box runs no ccd verb for Docs: the fleet box's doctor
   # measures the verb where the agent execs it. The role read is
@@ -7119,10 +7139,15 @@ _check_docs() {
       fi
       # Rich-docs spec A12 (W5b): the tokens are read from `ccd caps`, as the server reads them; words only, never a
       # project name. A caps read that fails names both, since neither was measured.
-      local caps="" tok missing=""
-      caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" caps </dev/null 2>/dev/null)" || caps=""
+      local tok missing=""
+      if ! _dr_ccd_caps; then
+        # Unmeasured: never "does not list", which is a measured answer (doctor-caps-one-reader).
+        _dr_warn docs "$line; ccd caps did not answer, so whether this ccd lists $CCRC_DOCTOR_DOCS_CAPS was not measured" \
+          "$DR_CCD_CAPS_FIX"
+        return 2
+      fi
       for tok in $CCRC_DOCTOR_DOCS_CAPS; do
-        case $'\n'"$caps"$'\n' in *$'\n'"$tok"$'\n'*) ;; *) missing="$missing $tok" ;; esac
+        _dr_ccd_lists "$tok" || missing="$missing $tok"
       done
       if [ -n "$missing" ]; then
         _dr_warn docs "$line; this ccd does not list$missing, so Docs here has no per-doc history or no vision and promise sections" \
@@ -11652,8 +11677,9 @@ _DR_TW_SHAPES=(
 
 # <level> <name> <kind> -> 0 iff the entry is a shape Claude Code writes at that level.
 _dr_tw_shape() {
-  # The lowercase 8-4-4-4-12 session id, spelled class by class: a quantified hex class below the box-token marker
-  # would read as a fourth spelling of that check's generation id to its pin (doctor-box-token.test.ts).
+  # The lowercase 8-4-4-4-12 session id, spelled class by class. The spelling dates from when the box-token pin's two
+  # source scans (doctor-box-token.test.ts) read from that section's marker to the end of this file; both now stop at
+  # the end of the box-token section, so nothing in this section is in their reach.
   local row lvl pat kinds re x='[0-9a-f]' u f
   u="$x$x$x$x$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x$x$x$x$x$x$x$x$x"
   local -a fields
@@ -11847,19 +11873,66 @@ _check_pane-scope-stop() {
 
 # ── quiz-weekly ───────────────────────────────────────────────────────────
 # WHAT THE WEEKLY RUNNER RECORDED, READ AND NEVER RE-DERIVED (Overlord W1a). `ccd-quiz-weekly.timer`'s service
-# (`deploy/history-quiz-unattended.mjs`) rewrites `~/.ccrc/quiz/unattended.json` whole by rename at every tick; its `last` block
-# is the tick's time, act, outcome, word and detail. This is the EFFECT check beside `services` (which asks after the timer): it
-# reads that record with jq, by existence and then content, and never prints it whole. Absent is a PASS (no tick has run yet);
-# not that record's JSON is a WARN; a refused or failed last tick is a WARN naming its week, act, word and detail (cut to 200
-# characters); a last tick older than a run plus two ticks (12 h + two periods of the shipped timer, 24 h) is a WARN stale. SKIPs on
-# a server-role box (no history store); on macOS the timer is never installed, so the record is absent and it PASSes. Re-run doctor after the next tick: a refusal is the runner's own and clears itself.
+# (`deploy/history-quiz-unattended.mjs`) rewrites `~/.ccrc/quiz/unattended.json` whole by rename at every tick that reaches its
+# acts (a tick with nothing to do, a closed-failed week and a latched refusal included; the early refusals, a `locked` tick and an
+# unreadable record write none); its `last` block is the tick's time, act, outcome, word and detail. This is the EFFECT check
+# beside `services` (which asks after the timer): it reads that record with jq, by existence and then content, and never prints
+# it whole. Not that record's JSON is a WARN; a fresh refused or failed last tick is a WARN naming its week, act, word and detail
+# (cut to 200 characters). A STARVED TRIGGER IS SAID IN WORDS (run 3508, ruling (e)): with no run in flight (the runner's lock
+# names no live pid), a last tick older than two of the shipped timer's periods (12 h) is a WARN that the timer is not firing,
+# whatever its outcome (a refused or failed record included) when the timer's cadence can be read; with an unreadable cadence
+# or an unloaded reader an old refused or failed record keeps its own words. With no record, the same holds once the installed
+# timer unit is older than two periods. With a run in flight, the bound is a run plus two ticks (TimeoutStartSec's 12 h + two
+# periods, 24 h), measured from the last tick or, with no record, from the lock; past it the run is stuck, whatever the record's
+# outcome (a real run cannot outlive its 12 h, so that is a stale lock). SKIPs on a server-role box (no history store); on macOS
+# the timer is never installed, so the record and the unit are absent and it PASSes. Re-run doctor after the next tick: a
+# refusal is the runner's own and clears itself.
 _check_quiz-weekly() {
-  local role="" rec="$HOME/.ccrc/quiz/unattended.json" vd out at wk act oc word det st age win cad_rc=0
+  local role="" rec="$HOME/.ccrc/quiz/unattended.json" lockf="$HOME/.ccrc/quiz/unattended.lock" vd out at wk act oc word det st age win cad_rc=0
+  local pid="" why="" inflight=0 unit="" placed
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   if [ "$role" = server ]; then
     _dr_skip quiz-weekly "this box records CCRC_ROLE=server, so it keeps no history store and runs no weekly replay quiz"; return 3
   fi
-  if [ ! -e "$rec" ]; then _dr_pass quiz-weekly "no unattended run recorded yet ($rec is absent), so the weekly replay quiz has not ticked here"; return 0; fi
+  # In flight: the runner's own lock (`unattended.lock`, its pid on the first line) names a live process, by the runner's own
+  # rule (`pidAlive`): a pid it may signal, or one it may not (EPERM, read under LC_ALL=C), is alive. Read, never taken.
+  if [ -f "$lockf" ] && [ -r "$lockf" ]; then IFS= read -r pid < "$lockf" || :; fi
+  if [[ "$pid" =~ ^[123456789][0123456789]{0,9}$ ]]; then
+    why="$(LC_ALL=C; kill -0 "$pid" 2>&1)" && inflight=1
+    case "$why" in *"not permitted"*) inflight=1 ;; esac
+  fi
+  if [ ! -e "$rec" ]; then
+    [ "${CCD_OS:-linux}" = darwin ] || unit="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-quiz-weekly.timer)"
+    # A run in flight with no record yet (run 3508 review F3): its lock's age stands for the run's, so a lock left by a dead run
+    # whose pid was reused is stuck past a run plus two ticks, not a first run for ever.
+    if [ "$inflight" -eq 1 ] && placed="$(_plat_mtime "$lockf" 2>/dev/null)" && [[ "$placed" =~ ^[0-9]+$ ]]; then
+      win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 2 ;;
+        3) _dr_cadence_unloaded quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 1 ;;
+      esac
+      age=$(( $(date +%s) - placed ))
+      if (( age > win + 12 * 3600 )); then
+        _dr_warn quiz-weekly "a run is in flight and no unattended quiz tick is recorded, its lock taken $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the run is stuck" \
+          "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
+        return 2
+      fi
+    fi
+    if [ -n "$unit" ] && [ -f "$unit" ] && [ "$inflight" -eq 0 ] && placed="$(_plat_mtime "$unit" 2>/dev/null)" && [[ "$placed" =~ ^[0-9]+$ ]]; then
+      win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
+      case "$cad_rc" in
+        1) _dr_cadence_unread quiz-weekly ccd-quiz-weekly.timer "the starved-timer bound"; return 2 ;;
+        3) _dr_cadence_unloaded quiz-weekly ccd-quiz-weekly.timer "the starved-timer bound"; return 1 ;;
+      esac
+      age=$(( $(date +%s) - placed ))
+      if (( age > win )); then
+        _dr_warn quiz-weekly "the quiz timer's unit was placed $(( age / 3600 )) h ago and no unattended tick is recorded, more than two of its periods ($(( win / 3600 )) h), so the timer is not firing" \
+          "systemctl --user list-timers ccd-quiz-weekly.timer (its NEXT and LAST); systemctl --user status ccd-quiz-weekly.timer; journalctl --user -u ccd-quiz-weekly.service"
+        return 2
+      fi
+    fi
+    _dr_pass quiz-weekly "no unattended run recorded yet ($rec is absent), so the weekly replay quiz has not ticked here"; return 0
+  fi
   vd="$(node --no-warnings "$CCRC_HERE/../deploy/history-quiz-unattended.mjs" --state-verdict 2>/dev/null)" || vd="unreadable verdict-not-run"
   [ "$vd" != ok ] || out="$(jq -er 'def c: tostring | explode | map(if . < 32 then 32 else . end) | implode;
       if (.last.at_ms | type) == "number" and .last.at_ms >= 0 and .last.at_ms < 1e15 then
@@ -11872,26 +11945,35 @@ _check_quiz-weekly() {
     return 2
   fi
   IFS=$'\x1f' read -r at wk act oc word det st <<< "$out"
+  # Two of the shipped timer's periods (read, D-7054). In flight, one run's deadline is added: ccd-quiz-weekly.service's
+  # TimeoutStartSec (12 h), which no timer file carries, so it is the one number restated here.
+  win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
+  age=$(( $(date +%s) - at / 1000 ))
+  # Starved before any outcome (run 3508, F2): every tick that reaches the runner's acts rewrites the record, a closed-failed
+  # week and a latched refusal included, so an old record with no run in flight is a timer not firing whatever it says.
+  if [ "$cad_rc" -eq 0 ] && [ "$inflight" -eq 0 ] && (( age > win )); then
+    _dr_warn quiz-weekly "no unattended quiz tick for $(( age / 3600 )) h and no run is in flight, more than two of the timer's periods ($(( win / 3600 )) h), so the timer is not firing: starved, stopped, or the box was down (the last tick: week $wk, act $act, outcome $oc, word $word)" \
+      "systemctl --user list-timers ccd-quiz-weekly.timer (its NEXT and LAST); systemctl --user status ccd-quiz-weekly.timer; journalctl --user -u ccd-quiz-weekly.service"
+    return 2
+  fi
+  # Stuck before any outcome too (run 3508 review F1): a real run cannot outlive its 12 h, so a run in flight behind a record
+  # older than a run plus two ticks is a stale lock, where the record's own words ("the next tick retries") would be false.
+  if [ "$cad_rc" -eq 0 ] && [ "$inflight" -eq 1 ] && (( age > win + 12 * 3600 )); then
+    _dr_warn quiz-weekly "a run is in flight and the last unattended quiz tick was $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the run is stuck" \
+      "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
+    return 2
+  fi
   case "$oc" in
     refused|failed)
       _dr_warn quiz-weekly "the last unattended quiz tick $oc: week $wk, act $act, word $word, detail: $det" \
         "read why: journalctl --user -u ccd-quiz-weekly.service; the next tick retries or opens the next week, then re-run doctor"
       return 2 ;;
   esac
-  # A run plus two ticks: two of the shipped timer's periods (read, D-7054) and one run's deadline, ccd-quiz-weekly.service's
-  # TimeoutStartSec (12 h), which no timer file carries, so it is the one number restated here.
-  win="$(_dr_cycles_s ccd-quiz-weekly.timer 2)" || cad_rc=$?
   case "$cad_rc" in
     1) _dr_cadence_unread quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 2 ;;
     3) _dr_cadence_unloaded quiz-weekly ccd-quiz-weekly.timer "the stale bound"; return 1 ;;
   esac
-  age=$(( $(date +%s) - at / 1000 ))
-  if (( age > win + 12 * 3600 )); then
-    _dr_warn quiz-weekly "the last unattended quiz tick was $(( age / 3600 )) h ago, more than a run plus two ticks ($(( (win + 12 * 3600) / 3600 )) h), so the timer has stopped or a run is stuck" \
-      "systemctl --user status ccd-quiz-weekly.timer ccd-quiz-weekly.service; journalctl --user -u ccd-quiz-weekly.service"
-    return 2
-  fi
-  _dr_pass quiz-weekly "the last unattended quiz tick ($act, $oc) was $(( age / 3600 )) h ago: week $wk is $st"
+  _dr_pass quiz-weekly "the last unattended quiz tick ($act, $oc) was $(( age / 3600 )) h ago: week $wk is $st$( [ "$inflight" -eq 1 ] && printf '; a run is in flight' )"
 }
 
 # ── the PATH a session really gets (D-8047) ───────────────────────────────
@@ -12256,19 +12338,18 @@ _check_browser-mcp() {
 # no `x` is `pools-unlistable`'s (`_check_pools`), so it SKIPs here; one with `x` but no `r` no other check names, so it
 # FAILs here as unmeasured.
 _check_cap-floor() {
-  local reg="$HOME/.cc-sessions" row fact word say ids caps bad="" fix=""
+  local reg="$HOME/.cc-sessions" row fact word say ids bad="" fix=""
   if [ -e "$reg" ] || [ -L "$reg" ]; then
     [ -x "$reg" ] || { _dr_skip cap-floor "the registry ~/.cc-sessions cannot be searched, which the pools check reports"; return 3; }
   fi
   _cap_floor_standing || { _dr_fail cap-floor "unmeasured: ~/.cc-sessions can be searched but not listed, so nobody knows whether a fact stands that needs a capability" \
     "give ~/.cc-sessions its read bit back (chmod u+r ~/.cc-sessions), then re-run: ccrc doctor"; return 1; }
   [ "${#CAP_FLOOR_STANDING[@]}" -gt 0 ] || { _dr_pass cap-floor "no fact stands on this box that needs a ccd capability"; return 0; }
-  # Bounded, and reading no stdin, as the docs check's ccd calls are: `cmd_doctor` has no per-check timeout.
-  caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null 3>&-)" || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" \
-    "run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"; return 1; }
+  # The one bounded reader (`cmd_doctor` has no per-check timeout); its remedy is this check's, word for word.
+  _dr_ccd_caps || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" "$DR_CCD_CAPS_FIX"; return 1; }
   for row in "${CAP_FLOOR_STANDING[@]}"; do
     IFS='|' read -r fact word say ids <<<"$row"
-    [[ $'\n'"$caps"$'\n' == *$'\n'"$word"$'\n'* ]] && continue   # one whole line; bash only, no grep on the doctor's PATH
+    _dr_ccd_lists "$word" && continue
     bad+="${bad:+; }this box's ccd lacks $word while a $fact stands for$ids, so it fails open there"
     fix+="${fix:+; }ccrc update to a release whose ccd advertises $word, or $say"
   done
@@ -12346,12 +12427,15 @@ _check_overlord-mods() {
 # WHAT EACH SAYS: one WARN line per lane, its findings joined with `_dr_join`, then that lane's remedy; a PASS that
 # names how many lanes were measured. Class words come from the answer; this block spells none.
 #  - `model-advance-held-back`: a class whose newest history entry is a failed advance to its standing candidate
-#    (its canary failed, or the move after a passed canary did). Clears when an advance succeeds, when the candidate
-#    leaves (D-5191), or when the class is held (D-5221: a hold stops
-#    the retries, and the class is then `model-held-behind`'s).
-#  - `model-held-behind`: a held class with a newer eligible model in its family, or whose pin has left the
-#    catalogue (the op's `reason: retired`: its fallback may be OLDER, so that line never calls it newer). Clears
-#    when the hold is released.
+#    (its canary failed, or the move after a passed canary did), held or not: a hold whose end has come
+#    (revert-ends-itself) is retried like any class, and a failed canary keeps it. Clears when an advance succeeds,
+#    or when the candidate leaves (D-5191).
+#  - `model-held-behind` (revert-ends-itself): a hold whose end has come, asked of the op's one decider (`holdEnds`,
+#    `shared/model-advance.mjs`), that still stands past the next hourly refresh (`due`); never a class the
+#    held-back or blocked line already names, nor one on a lane a blocked row names whole. A hold whose end has not
+#    come (a revert hold waiting for a model newer than the one it left) PASSes, and its line's tail names what it
+#    waits for. No remedy here tells the owner to hold, release or hold again: each names what happens by itself, or
+#    the line that owns the cause.
 #  - `model-sessions-behind`: a RUNNING session still rendering a model some move replaced a day or more ago, in a
 #    turn begun after that move; the line names that evidence (D-5194). The op lists
 #    sessions from their files alone; this check asks `_svc_is_active` about each LISTED session only, and only one
@@ -12386,7 +12470,7 @@ DR_MA_JQ_DEFS='def clean: explode | map(if . < 32 or . == 127 then 32 else . end
 # calling check returns, already printed.
 _dr_ma_read() {   # <check name>
   local name="$1" fn role="" out rc lt err
-  DR_MA_JSON=''; DR_MA_LANES=0
+  DR_MA_JSON=''; DR_MA_LANES=0; DR_MA_ANTHROPIC='|'
   for fn in _box_env_value _plat_timeout _svc_is_active _models_roster_path _models_lock_path _models_node; do
     if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${CCRC_HERE:-}" ] || [ -z "${_SVC_REG:-}" ]; then
       _dr_fail "$name" "ccrc's own library is not loaded ($fn, CCRC_HERE or _SVC_REG is missing), so no lane's advance state was read" \
@@ -12431,6 +12515,8 @@ _models_node "$@"' _dr_ma_read advance-health --file "$(_models_roster_path)" --
     return 3
   fi
   DR_MA_JSON="$out"
+  # The Anthropic lanes, `|`-delimited, from the answer's `anthropic`: every remedy that words such a lane apart reads it.
+  DR_MA_ANTHROPIC="|$(printf '%s' "$out" | jq -r '[.lanes[] | select(.anthropic == true) | .id] | join("|")' 2>/dev/null)|"
   return 0
 }
 
@@ -12457,28 +12543,26 @@ _dr_ma_report() {   # <check name> <rows> <remedy fn> <pass detail> [<tail>]
   return "$rc"
 }
 
+# revert-ends-itself: no remedy names a hold, a release or a button; each says what happens by itself.
 _dr_ma_held_back_fix() {   # <lane> <class>…
-  local id="$1"; shift
+  shift
   if [ "$#" -eq 1 ]; then
-    printf '%s' "the next hourly refresh retries it; 'ccrc models $id show' shows the class, and 'ccrc models $id hold $1' stops the retries"
+    printf '%s' "the next hourly refresh retries it, canary first, and this clears once a move succeeds or a newer candidate takes its place"
   else
-    printf '%s' "the next hourly refresh retries each; 'ccrc models $id show' shows the classes, and 'ccrc models $id hold <class>' stops a class's retries ($(_dr_ma_list "$@"))"
+    printf '%s' "the next hourly refresh retries each, canary first, and each clears once its move succeeds or a newer candidate takes its place ($(_dr_ma_list "$@"))"
   fi
 }
 
+# The hold's end has come and the refresh that ends it has not acted since: the line that owns a refresh that is not
+# reaching a lane is named. An Anthropic lane (`DR_MA_ANTHROPIC`, `|`-delimited lane ids from the answer's `anthropic`)
+# has no catalogue for the 'models' line to age, so its refresh timer is the 'services' line's.
 _dr_ma_held_behind_fix() {   # <lane> <class>…
   local id="$1"; shift
-  # An Anthropic lane (`DR_MA_ANTHROPIC`, `|`-delimited lane ids from the answer's `anthropic`) has no canary and no
-  # advance: its class follows its alias once the hold goes (model-class Anthropic arm A2.5).
   case "${DR_MA_ANTHROPIC:-}" in *"|$id|"*)
-    printf '%s' "release the hold from the lane's Models sheet (or with 'ccrc models $id release <class>': $(_dr_ma_list "$@")), and the class follows its alias: its sessions launch on the alias's current id from their next launch. Leaving the hold in place keeps the held id, and this warning"
+    printf '%s' "the hourly refresh ends the hold by itself and the class follows its alias; it has not acted since the alias moved, so the 'services' line names a refresh timer that is not running ($(_dr_ma_list "$@"))"
     return ;;
   esac
-  if [ "$#" -eq 1 ]; then
-    printf '%s' "'ccrc models $id release $1' lets the next hourly refresh advance it, canary first"
-  else
-    printf '%s' "'ccrc models $id release <class>' lets the next hourly refresh advance that class, canary first ($(_dr_ma_list "$@"))"
-  fi
+  printf '%s' "the hourly refresh ends the hold by itself and moves the class, canary first; it has not reached this lane since the end came, which the 'models' line names as a catalogue the refresh is not reaching ($(_dr_ma_list "$@"))"
 }
 
 # "Once it is idle": `ccd stop` ends the pane (`cmd_stop`'s `tmux kill-session`), and a turn in flight with it. The
@@ -12506,7 +12590,13 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
   for c in "$@"; do
     case "$c" in
       advance-file-unreadable|advance-file-invalid)
-        part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it, so run 'ccrc models $id hold <class>' at once for each class that must stay where it is" ;;
+        # An Anthropic lane (`DR_MA_ANTHROPIC`) has no registry to refill a class from, and ccd applies its holds from
+        # this file alone (`_held_model_env_to`, ccd/lib/model-aliases.sh): review 2886 R1. ccd reads only what a launch needs
+        # (the classes object and each `hold.model`), so a file the op calls invalid can still carry holds ccd applies (review 2964 F7).
+        case "${DR_MA_ANTHROPIC:-}" in
+          *"|$id|"*) part="advance file — repair the file the finding names; until it is repaired, the lane's model acts are refused, a hold ccd can no longer read does not reach a launch (that class launches on its alias's current id), and a hold ccd can still read keeps applying. If you remove it instead, its holds and move history are lost, and every class follows its alias" ;;
+          *) part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it" ;;
+        esac ;;
       registry-unreadable|registry-invalid)
         part="registry — repair the file the finding names, or 'ccrc models $id rm' then 'ccrc models $id init <probe>'" ;;
       catalogue-unreadable|catalogue-invalid)
@@ -12516,7 +12606,7 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
       pin-grammar)
         part="pin — 'ccrc models $id set-class <class> <modelId>'" ;;
       shared-family)
-        part="shared family — 'ccrc models $id set-class <class> <modelId>' on one of the classes named, or 'ccrc models $id hold <class>'" ;;
+        part="shared family — neither class named moves until one of them follows another family; the finding names both" ;;
       lane-not-codex-kind)
         part="lane kind — make its roster row exec.kind \"codex\" (README, \"A ChatGPT/Codex lane\"), or leave it, and it never advances" ;;
       alias-source-absent)
@@ -12525,6 +12615,15 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
         part="alias cache — the next session Claude Code starts on this lane refreshes it" ;;
       aliases-file-unreadable|aliases-file-invalid)
         part="aliases file — the refresh will not write over it: read it, then move it aside, and the next hourly refresh starts it again" ;;
+      # Programme wave 3 (D-8838, D-8842): a class waiting out the retired grace on a missing pin; a registry still
+      # refused for an effort level its model dropped, whose verbs refuse until the refresh writes the fallback (so
+      # no verb is offered that refuses on the same registry); and a class running at the fallback the refresh wrote.
+      pin-missing)
+        part="missing pin — the class moves to the older model named once every hourly sighting has missed its pin for six hours, and a sighting that lists it again ends the wait; after that move, the next hourly advance moves back to the pin by itself once it is listed again" ;;
+      effort-dropped)
+        part="effort level — the lane's registry names a level its model no longer offers, so its verbs refuse it; wait for the next hourly refresh, or run 'ccrc models refresh $id' now, which writes the fallback named" ;;
+      effort-fallback)
+        part="effort fallback — the class runs at the level named, one its model offers; to choose another, 'ccrc models $id set-effort <class> <level>' ('ccrc models $id show' lists them); setting any level, the one it runs at included, ends this, and so does the model offering the old level again" ;;
       lock-unwritable)
         part="lock — at the path the finding names: remove a symlink, a FIFO, or whatever stands where the lock file or its directory belongs; make a lock file this account cannot write writable, or remove it; give a lock directory another account owns back to this account; a lock directory this account owns is made 0700 by the next writer ('chmod 700' clears this now)" ;;
       *)
@@ -12557,24 +12656,51 @@ _check_model-advance-held-back() {
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: no class is held back by a failed canary or move"
 }
 
+# revert-ends-itself: the op's `heldBehind` names each hold whose end has come (`holdEnds`) and whether it has stood past
+# the next hourly refresh (`due`); `holdsWaiting` each hold whose end has not. A due row WARNs unless the held-back or
+# blocked line already names its class (a blocked row with no class names the whole lane); every other row rides the
+# tail of the verdict line, so a revert hold waiting for its newer model PASSes with what it waits for named.
 _check_model-held-behind() {
-  local rc rows
+  local rc rows tail
   _dr_ma_read model-held-behind; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
-      .lanes[] | .id as $id | .heldBehind[]
+      .lanes[] | .id as $id | ([.heldBack[].class] + [.blocked[].class]) as $named | .anthropic as $alias
+      | .heldBehind[] | select(.due == true and (.class as $c | $named | any(. == $c or . == null) | not))
       | [$id, .class,
-         ("\($id) \(.class) is held (\(.hold.at[0:16])Z, by \(.hold.by)) "
+         ("\($id) \(.class) is held (\(.hold.at[0:16])Z, by \(.hold.by)) on \(.pin // "none") "
           + (if .reason == "retired"
-             then "on \(.pin), which has left the catalogue; \(.newer) is the newest left in its family"
-             else "while \(.newer) is newer in its family" end) | clean)]
+             then "though it has left the catalogue past its grace (\(.newer) is the newest left in its family)"
+             elif $alias == true then "though its alias has named \(.newer) since \(.since[0:16])Z"
+             elif .from == null then "though the catalogue observed \(.since[0:16])Z lists \(.newer) for its empty class"
+             else "though the catalogue observed \(.since[0:16])Z lists \(.newer), newer than \(.from)" end)
+          + ", and the hold still stands past the hourly refresh that ends it" | clean)]
       | join("\u001f")' 2>/dev/null)"; then
     _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
     return 3
   fi
-  DR_MA_ANTHROPIC="|$(printf '%s' "$DR_MA_JSON" | jq -r '[.lanes[] | select(.anthropic == true) | .id] | join("|")' 2>/dev/null)|"
+  if ! tail="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
+      [.lanes[] | .id as $id | .anthropic as $alias
+       | ((.holdsWaiting[]
+           | "\($id) \(.class) is held on \(.pin // "none") until "
+             + (if .from == null and .hold.by == "revert"
+                then "the hourly refresh can record the class'"'"'s observed model from usable evidence and "
+                  + (if $alias == true then "its alias names a third model after it" else "a newer model of its family appears" end)
+                  + " (no action is needed)"
+                elif $alias != true and .from == null then "a model of its family appears"
+                elif $alias != true then "a model of its family newer than \(.from) appears"
+                elif .from == .pin then "its alias names another model, on evidence after the hold"
+                else "its alias names a model other than \(.pin) and \(.from), on evidence after the hold" end)),
+          (([.heldBack[].class] + [.blocked[].class]) as $named
+           | .heldBehind[] | select((.due == true and (.class as $c | $named | any(. == $c or . == null) | not)) | not)
+           | "\($id) \(.class)'"'"'s hold ends by itself at the next hourly refresh that reaches the lane"))]
+      | if length > 0 then "; " + join("; ") else "" end | clean' 2>/dev/null)"; then
+    _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
+    return 3
+  fi
   _dr_ma_report model-held-behind "$rows" _dr_ma_held_behind_fix \
-    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no held class has a newer model in its family"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no hold whose end has come still stands past the hourly refresh" \
+    "$tail"
 }
 
 _check_model-sessions-behind() {
@@ -12632,7 +12758,7 @@ _check_model-sessions-behind() {
 }
 
 _check_model-advance-blocked() {
-  local rc rows caps id key text ma_kept="" ma_note=""
+  local rc rows id key text ma_kept="" ma_note=""
   _dr_ma_read model-advance-blocked; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
@@ -12644,18 +12770,57 @@ _check_model-advance-blocked() {
     return 3
   fi
   # `alias-source-absent` WARNs only once this box's ccd marks alias launches (`ccd caps` lists `alias-launch-v1`, the
-  # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note.
-  caps="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null)" || caps=""
-  case $'\n'"$caps"$'\n' in
-    *$'\n'alias-launch-v1$'\n'*) ;;
-    *)
-      while IFS=$'\x1f' read -r id key text; do
-        [ -n "$id" ] || continue
-        if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
-      done <<< "$rows"
-      rows="$ma_kept"
-      [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)" ;;
-  esac
+  # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note. A read
+  # that did not answer measured neither, so every row stays as it reads once ccd marks alias launches, and the detail
+  # says why (doctor-caps-one-reader): a box whose ccd did not answer never reads as healthy.
+  if ! _dr_ccd_caps; then
+    case "$rows" in *$'\x1f'alias-source-absent$'\x1f'*)
+      ma_note="; ccd caps did not answer, so whether this box's ccd marks alias launches was not measured" ;;
+    esac
+  elif ! _dr_ccd_lists alias-launch-v1; then
+    while IFS=$'\x1f' read -r id key text; do
+      [ -n "$id" ] || continue
+      if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
+    done <<< "$rows"
+    rows="$ma_kept"
+    [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)"
+  fi
   _dr_ma_report model-advance-blocked "$rows" _dr_ma_blocked_fix \
     "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$ma_note"
+}
+
+# ── model-release-lookup (programme model-class-advance wave 3, release-lookup-warn) ──
+# Named so that no line it prints starts `WARN codex` (the Codex bridge's own readings count those lines) or `FAIL`.
+# The probe records `version` and `readAt` (last good read), `triedAt` (last try), `failingSince` (first failure
+# since the last good read), and `lastError` (last failure's reason). The auth library owns the record's path and
+# read (D-8781); this check only measures the returned record. On failure the probe has the last good release or
+# its floor: WARN, never FAIL. WARN if a try is recent and the last good read is over a day old, or it has never
+# read a release and has failed for over a day. Measure each age from its own stamp using jq's clock; a stale
+# try is PASS (not in use). Missing dependencies or an unmeasurable record are SKIP, not evidence of lane absence.
+_RL_PY='
+import importlib.util, json, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("ccgpt_auth", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = lib
+spec.loader.exec_module(lib)
+print(json.dumps(lib.read_client_release(), allow_nan=False))'
+_check_model-release-lookup() {
+  local lib="$HOME/.local/bin/ccgpt-auth.py" record v
+  command -v jq >/dev/null 2>&1 || { _dr_skip model-release-lookup "jq is not on PATH, so the Codex release lookup's record could not be read — the 'jq' check above owns that"; return 3; }
+  command -v python3 >/dev/null 2>&1 || { _dr_skip model-release-lookup "python3 is unavailable; the release lookup record could not be measured"; return 3; }
+  [ -f "$lib" ] || { _dr_skip model-release-lookup "the installed auth library is unavailable; the release lookup record could not be measured"; return 3; }
+  if ! record="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" python3 -I -c "$_RL_PY" "$lib" </dev/null 2>/dev/null 3>&-)" \
+    || ! v="$(jq -rs 'def t(k): .[k] | if type == "number" then . else null end; def h(s): "\(((now - s) / 3600) | floor) h";
+      (if length == 1 then .[0] else null end) |
+      if type != "object" or t("triedAt") == null then "skip"
+      elif now - t("triedAt") >= 86400 then "pass\u001fthe last lookup was \(h(t("triedAt"))) ago, so it is not being tried"
+      elif t("readAt") != null and now - t("readAt") > 86400 then "warn\u001fthe last good read of the Codex release lookup (\(.version // "none")) was \(h(t("readAt"))) ago\(if t("failingSince") == null then "" else ", and it has failed for \(h(t("failingSince")))" end); its last try, \(h(t("triedAt"))) ago, failed (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
+      elif t("readAt") == null and t("failingSince") != null and now - t("failingSince") > 86400 then "warn\u001fthe Codex release lookup has never read a release, and has failed for \(h(t("failingSince"))) (\((.lastError // "no reason recorded") | tostring | .[0:200]))"
+      else "pass\u001fthe Codex release lookup read \(.version // "nothing yet") \(if t("readAt") == null then "" else "\(h(t("readAt"))) ago" end)" end' <<< "$record" 2>/dev/null)"; then v=; fi
+  case "$v" in
+    "warn"$'\x1f'*) _dr_warn model-release-lookup "${v#*$'\x1f'}" "each Codex lane's catalogue is asked as the last good release, or the built-in floor, until a read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try's); the probe tries again at the next hourly refresh" ;;
+    "pass"$'\x1f'*) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
+    *) _dr_skip model-release-lookup "the Codex release lookup record is unavailable or could not be measured"; return 3 ;;
+  esac
 }

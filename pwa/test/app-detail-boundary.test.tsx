@@ -63,11 +63,11 @@ describe('a throwing detail screen keeps the shell (M4.B1, W4 half)', () => {
     expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.objectContaining({ message: 'runs screen broke' }));
   });
 
-  it('Back to the fleet navigates to / and the pane shows the placeholder again', async () => {
+  it('Back to the fleet navigates to /fleet and the pane shows the placeholder again', async () => {
     navigate('/runs');
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Back to the fleet' }));
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
     expect(screen.getByText('Select a session')).toBeInTheDocument();
     expect(screen.queryByText(FALLBACK)).toBeNull();
   });

@@ -5,7 +5,8 @@
 // sized itself to a card's one-line header, so a long Bash command pushed every card in the group past the column and
 // gave `.chat-scroller` hundreds of pixels of sideways scroll (926px at 360). jsdom computes no layout, so this file
 // holds what Chrome computes: a transcript whose runs include a long command, every group opened, at 360, 390, 1280
-// and 1920 in both skins and both palettes — no tool card's right edge passes its group's (Refined), the scroller and
+// and 1920 in both skins and both palettes, every tool-activity row opened first (desktop polish wave 168: the groups
+// sit inside them) — no tool card's right edge passes its group's (Refined), the scroller and
 // the page have no sideways scroll, and no page error is thrown. Instrument draws no groups (its set says `'none'`),
 // so it holds the scroller half only.
 //
@@ -93,6 +94,13 @@ describe('an opened tool group holds the reading column (D-5475)', () => {
         });
         await page.goto(`${server!.origin}/s/${SESSION.id}`);
         await page.waitForSelector('.chat-item', { timeout: 20_000 });
+        // Since desktop polish wave 168 the runs sit inside each stretch's collapsed tool-activity row: open those first.
+        const stretches = page.locator('.tool-activity-row');
+        for (let i = 0; i < await stretches.count(); i += 1) {
+          const row = stretches.nth(i);
+          await row.scrollIntoViewIfNeeded();
+          if ((await row.getAttribute('aria-expanded')) !== 'true') await row.click();
+        }
         const rows = page.locator('.ref-tool-group-row');
         const groups = await rows.count();
         if (view.skin === REFINED) expect(groups, 'Refined folds the runs into groups').toBeGreaterThan(0);

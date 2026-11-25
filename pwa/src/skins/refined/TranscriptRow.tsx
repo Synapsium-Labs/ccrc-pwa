@@ -8,9 +8,14 @@
 // Markup and this skin's own class names only. The words are `groupToolRun`'s (one derived value, one function); the
 // cards are the shared renderer's (`useTranscriptRow().renderItem`); whether to fold at all is `ChatList`'s, read off
 // the set's `transcriptGrouping` (D-5469). The row part takes no props (D-5678).
+//
+// Since desktop polish wave 168 these groups sit inside a tool-activity row (the shared `ToolActivityRow`, one stretch
+// of a turn's tool activity, collapsed), which this part draws for a `tool-activity` item; its expansion draws each group
+// back through this part, unchanged.
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '@ccrc/ui';
+import { ToolActivityRow } from '../../session/ToolActivityRow';
 import type { ToolGroupItem } from '../../session/toolSummary';
 import { useTranscriptRow } from '../../session/transcriptRow';
 
@@ -46,5 +51,6 @@ function ToolGroupRow({ group }: { group: ToolGroupItem }): ReactNode {
 
 export function TranscriptRow(): ReactNode {
   const { item, renderItem } = useTranscriptRow();
+  if (item.kind === 'tool-activity') return <ToolActivityRow item={item} />;
   return item.kind === 'tool-group' ? <ToolGroupRow group={item} /> : renderItem(item);
 }

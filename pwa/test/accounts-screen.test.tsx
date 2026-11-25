@@ -287,7 +287,7 @@ describe('AccountsScreen — back control', () => {
     render(<AccountsScreen />);
     const back = screen.getByRole('button', { name: /back to fleet/i });
     fireEvent.click(back);
-    expect(location.pathname).toBe('/');
+    expect(location.pathname).toBe('/fleet');
   });
 });
 
@@ -681,8 +681,14 @@ describe('AccountsScreen: the fold\'s Models act', () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     const classes = { haiku: 'm-h', sonnet: 'm-s', opus: 'm-o', fable: null };
     const read = vi.spyOn(api, 'laneModels').mockResolvedValue({
-      ok: true, lane: 'lane-a', models: { kind: 'read', classes: Object.fromEntries(Object.entries(classes).map(([c, m]) => [c, { model: m, label: m, efforts: null }])),
-        advance: { state: 'absent', detail: null, pending: null, classes: null } },
+      ok: true, lane: 'lane-a', models: { kind: 'read', revertHoldEnds: true, classes: Object.fromEntries(Object.entries(classes).map(([c, m]) => [c, { model: m, label: m, efforts: null }])),
+        advance: {
+          state: 'ok', detail: null, pending: null,
+          classes: Object.fromEntries(Object.keys(classes).map((c) => [c, {
+            family: c, hold: null, lastMove: null,
+            ...(c === 'opus' ? { previous: { model: 'm-o-before', effort: null }, revertable: true } : { previous: null, revertable: false }),
+          }])),
+        } },
     });
     const post = vi.spyOn(api, 'laneModelsAct').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     withLanes(connectOf());
@@ -690,8 +696,9 @@ describe('AccountsScreen: the fold\'s Models act', () => {
     fireEvent.click(modelsOf('lane-a'));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.querySelector('[data-frame="models"]')).not.toBeNull();
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Hold the opus class' }));
-    expect(post).toHaveBeenCalledWith('lane-a', { action: 'hold', class: 'opus' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Revert the opus class' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Put back and hold' }));
+    expect(post).toHaveBeenCalledWith('lane-a', { action: 'revert', class: 'opus' });
     // the act settles by reading the lane again (F1 a), so the GET is asked once at open and once after the act
     await vi.waitFor(() => expect(read.mock.calls.map((c) => c[0])).toEqual(['lane-a', 'lane-a']));
   });

@@ -16,19 +16,39 @@
 // service before the prepare awaits anything), so no sync prunes a set a prepare has resolved. A new node version queues every
 // pristine key's rebuild at once, by one tick of the service's timer work (the pristine store reads the box's node
 // from this driver); that tick and the timer's own run one after the other, never at once (`serviceTick`).
+//
+// D-8907, D-8913 (spec docs/superpowers/specs/2026-11-22-test-box-managed-node-design.md §2.5, §2.6, §2.8). Four
+// additions, none of them a frame's (D-8912):
+// - A managed box (its updater's node id is there, `tools.ts#managedOf`) is not this driver's to move: a `tools.sync`
+//   and a retry start nothing there. Its versions for the status answer are the ones its updater measured,
+//   `<tools>/node-state/tools.json`, never the set's copy of a spec. That file is the status answer's alone: it is
+//   written after the service starts, so the pristine store's node is never read from it (`node`).
+// - The hand-over directory serves the drain too (`handOverWaiting`): the runs go to disk exactly as a takeover
+//   writes them, but the service stays up, so the runs leave its queue and their connections are kept here (`kept`).
+//   When admission reopens, `resume` queues them again, in their order, each to the connection that submitted it. A
+//   run on disk keeps its id (`handedOver`): the service refuses a second submission under it.
+// - `admitting` is one answer with two reasons: a takeover, or a standing drain request (`closed`, the entry point's
+//   wiring to the drain's driver).
+// - While a drain request stands this driver starts nothing (the deciders' `held`): a `tools.sync` is kept in this
+//   service's memory, never written to the hand-over (a takeover's file is the next service's; this service stays
+//   up), and a failed sync is not retried. A sync or a takeover already in flight ends as it would have, and the
+//   drain does not answer `idle` over it (`busy`). When the request is over, `resume` requests the kept frame again.
 import {
   closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import path from 'node:path';
 import {
   readTestboxFrame,
-  type RunLog, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxFrame, type TestboxSync, type TestboxToolVersions, type ToolsSync,
+  type RunLog, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxFrame, type TestboxSync, type ToolsSync,
 } from '../../../shared/testbox.js';
+import { NODE_ID_FILE, NODE_STATE_DIR, TOOLS_JSON_FILE } from './boxFiles.js';
+import { readSmall } from './boxFs.js';
 import { retryDelay } from './pristine.js';
+import type { MeasuredTools } from './status.js';
 import { units, type SystemManager } from './systemd.js';
 import {
-  binSet, ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns,
-  specSet, syncNow, withSync, type BoxTools, type ToolsSettings, type ToolsState,
+  binSet, ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, managedOf, parseMeasuredTools, parseReport, parseVersions, released,
+  requested, retryDue, retryStarted, seenRuns, specSet, syncNow, syncsHere, withHandedOver, withSync, type BoxTools, type ToolsSettings, type ToolsState,
 } from './tools.js';
 
 /** What the driver needs of the service it serves (the service itself, in the entry point). */
@@ -44,7 +64,12 @@ export interface ServedService {
   waiting(): Iterable<RunSubmit>;
   /** A submission, as a connection's `run.submit` reaches the service. */
   submit(f: RunSubmit, conn: { send(frame: RunLog | RunSummary): void; refuse(reason: string): void }): void;
+  /** D-8907: every waiting run taken out of the service's queue, each with the connection its frames go to. */
+  forgetWaiting(): ReadonlyMap<string, KeptSink>;
 }
+
+/** Where a handed-over run's frames go once it is queued again: the connection that submitted it. */
+export interface KeptSink { send(frame: RunLog | RunSummary): void }
 
 /** Under `CCRC_TESTBOX_ROOT`: the queued runs a takeover hands to the next service (D-7426). */
 export const HANDOVER_DIR = 'handover';
@@ -66,6 +91,8 @@ export interface ToolSyncDeps {
   readonly exit: (code: number) => void;
   /** The takeover's wait before it tries a failed hand-over again (D-7560); a timer unless a test passes its own. */
   readonly wait?: (ms: number) => Promise<void>;
+  /** A drain request stands (D-8907): no waiting run may start and no handed-over run is queued; absent, never. */
+  readonly closed?: () => boolean;
 }
 
 /** UTC ISO 8601 to the second, as the status frame carries a time. */
@@ -96,6 +123,12 @@ export class ToolSync {
   /** `<tools>/current` as resolved in this turn of the event loop (`undefined`: not yet): a prepare reads its Chrome
    *  and its PATH in one synchronous turn, so both come from one reading, whichever it reads first. */
   private turnSet: string | null | undefined = undefined;
+  /** D-8907: the runs a drain handed over while this service stays up, each with the connection that submitted it. */
+  private readonly kept = new Map<string, KeptSink>();
+  /** The stamp of the last batch a drain handed over (`handOverWaiting`). */
+  private handedAt = 0;
+  /** The run `resume` is queueing now: its file is still on disk, and it is not a second run under that id. */
+  private resuming: string | null = null;
 
   constructor(private readonly d: ToolSyncDeps) {}
 
@@ -110,14 +143,30 @@ export class ToolSync {
       release: linkName(path.join(this.d.toolsDir, 'release', 'installed')),
       versions: parseVersions(readText(path.join(this.d.toolsDir, 'current', 'versions'))),
       set: linkName(path.join(this.d.toolsDir, 'current')),
+      managed: managedOf(readSmall(path.join(this.d.toolsDir, NODE_STATE_DIR, NODE_ID_FILE))),
     };
   }
 
-  /** The box's measured tool versions, for the status answer; `null` before a set is in place. */
-  versions(): TestboxToolVersions | null { return this.box().versions; }
+  /** The box's measured tool versions, for the status answer. On a box the tool sync moves they are the current set's
+   *  (`null` before a set is in place). On a managed box, and on one whose node files cannot be read, they are the
+   *  ones its updater measured (spec §2.6): `tools.json`, a tool it does not carry `null` alone, the whole `null` when
+   *  the file is absent, unreadable or not an object. The set's `versions` file is a copy of a spec, never read there. */
+  versions(): MeasuredTools | null {
+    const box = this.box();
+    if (syncsHere(box.managed)) return box.versions;
+    const r = readSmall(path.join(this.d.toolsDir, NODE_STATE_DIR, TOOLS_JSON_FILE));
+    return r.t === 'text' ? parseMeasuredTools(r.text) : null;
+  }
 
-  /** The current set's node version, for the pristine store's install keys; `null` before a set is in place. */
-  node(): string | null { return this.versions()?.node ?? null; }
+  /** The node the box's installs run under, for the pristine store's install keys, when this driver can say: on a box
+   *  the tool sync moves, the current set's (a sync changes it under the running service), `null` before a set is in
+   *  place. On a managed box, and on one whose node files cannot be read, `null`: the update act restarts the service
+   *  whenever node changes, so the caller's own node is the box's (`main.ts#serviceFor`), and `tools.json` is written
+   *  after the service starts, so at a start it still names the node before (spec §2.5, the spine's steps 7 and 8). */
+  node(): string | null {
+    const box = this.box();
+    return syncsHere(box.managed) ? box.versions?.node ?? null : null;
+  }
 
   /** `<tools>/current` resolved to its set directory, once per turn (`turnSet`); `null` before a set is in place. */
   private currentSetDir(): string | null {
@@ -183,19 +232,35 @@ export class ToolSync {
       if (!r.ok || r.value.t !== 'run.submit') { this.dropHandedOver(name, `does not read as a run.submit${r.ok ? ` (${r.value.t})` : `: ${r.reason}`}`); continue; }
       const id = r.value.runId;
       let refused = null as string | null;
+      // D-8907: a run a drain handed over while this service stayed up goes back to the connection that submitted it.
+      const sink = this.kept.get(id);
+      this.resuming = id;
       try {
         // Queued as the WebSocket door queues a submission, so a later takeover hands it over again while it waits.
-        svc.submit(r.value, { send: () => undefined, refuse: (why) => { refused = why; } });
+        svc.submit(r.value, { send: (frame) => sink?.send(frame), refuse: (why) => { refused = why; } });
       } catch (e) {
         console.error(`ccrc-testbox: the handed-over run ${id} could not be queued (${message(e)}); it stays in ${dir} for the next attempt`);
         continue;
+      } finally {
+        this.resuming = null;
       }
+      this.kept.delete(id);
       if (refused !== null) { this.dropHandedOver(name, `refused: ${refused}`); continue; }
       try { unlinkSync(file); } catch { /* gone */ }
       n++;
     }
     this.resumeSync();
+    this.resumeKept();
     return n;
+  }
+
+  /** D-8907: the `tools.sync` a drain request kept in this service (`tools.ts#requested`'s `held`), requested again now
+   *  that the request is over, as a frame from the door is. */
+  private resumeKept(): void {
+    const r = released(this.state);
+    this.state = r.state;
+    if (r.frame === null) return;
+    this.request(r.frame).catch((e: unknown) => console.error(`ccrc-testbox: the kept tools.sync: ${message(e)}`));
   }
 
   /** The `tools.sync` a takeover handed over (D-7559): requested here as a frame from the door is, and its file removed
@@ -226,19 +291,20 @@ export class ToolSync {
     }
   }
 
-  /** D-7426, D-7559, D-7560: every queued run, and the kept `tools.sync`, written for the next service, in queue order,
-   *  all or none: each file is written
+  /** D-7426, D-7559, D-7560: every queued run, and for a takeover (`withSync`) the kept `tools.sync`, written for the
+   *  next service, in queue order, all or none: each file is written
    *  and fsync'd under a staging name, then all are renamed into place and the directory is fsync'd. A failure removes
    *  what this attempt wrote and throws, so the next attempt writes each run once. Only then is each run's log
-   *  directory, empty while it has not started, removed so the next service takes the id afresh. */
-  private handOver(): void {
+   *  directory, empty while it has not started, removed so the next service takes the id afresh. A drain's hand-over
+   *  writes the runs alone (D-8907): this service stays up and keeps the frame itself, so the frame has one holder. */
+  private handOver(stamp: number, withSync: boolean): void {
     const dir = this.handoverDir;
-    const at = String(this.d.now()).padStart(15, '0');
+    const at = String(stamp).padStart(15, '0');
     const runs = this.queuedFrames();
     const frames: (RunSubmit | ToolsSync)[] = [...runs];
     const files = runs.map((f, i) => path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`));
     // D-7559: the tools.sync that waited, or came during the takeover, goes with them.
-    if (this.state.pending !== null) { frames.push(this.state.pending); files.push(path.join(dir, HANDOVER_TOOLS_SYNC)); }
+    if (withSync && this.state.pending !== null) { frames.push(this.state.pending); files.push(path.join(dir, HANDOVER_TOOLS_SYNC)); }
     if (frames.length === 0) return;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
@@ -252,16 +318,55 @@ export class ToolSync {
     for (const f of runs) { try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ } }
   }
 
-  /** Whether the service may start a waiting run: not once a takeover has begun (D-7426). Submissions still queue, and
-   *  the run limit the status answer reports is the configured one. */
-  admitting(): boolean { return !this.state.takeover; }
+  /** D-8907: the queue to disk for a standing drain, and out of the service's queue: every waiting run written as a
+   *  takeover writes it (`handOver`, all or none; a failure throws and leaves the queue where it was), then forgotten
+   *  by the service, its connection kept here for `resume`. Returns how many handed-over runs are on disk now. */
+  handOverWaiting(): number {
+    const svc = this.svc;
+    if (svc === null) throw new Error('the tool sync serves no service');
+    // A drain hands over more than once (the queue, then each later submission): each batch's files sort after the
+    // last one's, so `resume` reads the runs in the order they were queued, on any clock.
+    this.handedAt = Math.max(this.d.now(), this.handedAt + 1);
+    this.handOver(this.handedAt, false);
+    for (const [id, sink] of svc.forgetWaiting()) this.kept.set(id, sink);
+    return this.pendingHandover();
+  }
+
+  /** D-8907: a cancel for a run the service does not hold: if the run is on disk, handed over, its file goes, so
+   *  `resume` never queues it and its id is free again. An id with no file there changes nothing. */
+  cancelHandedOver(runId: string): void {
+    for (const name of listDir(this.handoverDir)) {
+      if (name.endsWith(`-${runId}.json`)) { try { unlinkSync(path.join(this.handoverDir, name)); } catch { /* gone */ } }
+    }
+  }
+
+  /** D-8907: a run with this id waits on disk to be queued, so the id is used (`service.ts#runIdUsed`, the one owner
+   *  of that rule, asks): a second submission under it would take the first one's place when the runs are queued
+   *  again. Not for the run `resume` is queueing now, whose file goes only once the service has taken it. */
+  handedOver(runId: string): boolean {
+    return runId !== this.resuming && listDir(this.handoverDir).some((name) => name.endsWith(`-${runId}.json`));
+  }
+
+  /** A drain request stands (D-8907): this driver starts nothing. */
+  private held(): boolean { return this.d.closed?.() ?? false; }
+
+  /** A sync's unit is in flight, or its takeover has begun (D-8907: the drain does not answer `idle` over either; the
+   *  updater goes on only when nothing else is moving the box). */
+  busy(): boolean { return this.state.running || this.state.takeover; }
+
+  /** Whether the service may start a waiting run: not once a takeover has begun (D-7426), and not while a drain
+   *  request stands (D-8907). Submissions still queue, and the run limit the status answer reports is the configured
+   *  one. */
+  admitting(): boolean { return !this.state.takeover && !this.held(); }
 
   sync(): TestboxSync { return syncNow(this.state, parseReport(this.state.running ? readText(this.reportFile) : null)); }
 
-  /** The service's status answer with this sync's state in it. */
+  /** The service's status answer with this sync's state in it, and, while a drain request stands, the runs handed
+   *  over to disk in its queue depth (`tools.ts#withHandedOver`, D-8907). */
   status(): StatusAnswer {
     if (this.svc === null) throw new Error('the tool sync serves no service');
-    return withSync(this.svc.status(), this.sync());
+    const held = this.held();
+    return withHandedOver(withSync(this.svc.status(), this.sync()), held, held ? this.pendingHandover() : 0);
   }
 
   /** `CCRC_TESTBOX_TOOLS_DIR`, and the path it resolves to: the roots a spec's set may sit under. */
@@ -313,7 +418,7 @@ export class ToolSync {
   /** A `tools.sync` frame. */
   async request(f: ToolsSync): Promise<void> {
     this.noteRuns();
-    const r = requested(this.state, f, this.box(), utcSecond(this.d.now()));
+    const r = requested(this.state, f, this.box(), utcSecond(this.d.now()), this.held());
     this.state = r.state;
     if (r.start !== null) await this.drive(r.start);
   }
@@ -322,7 +427,8 @@ export class ToolSync {
    *  (`main.ts#timerWork`): a sync runs a unit for minutes, and a takeover waits for every run. */
   async tick(): Promise<void> {
     this.noteRuns();
-    const f = retryDue(this.state, this.d.now());
+    // D-8913, D-8907: never on a managed box, and not while a drain request stands (`tools.ts#retryDue` decides).
+    const f = retryDue(this.state, this.d.now(), this.box().managed, this.held());
     if (f === null) return;
     this.state = retryStarted(this.state, utcSecond(this.d.now()));
     await this.drive(f);
@@ -342,7 +448,7 @@ export class ToolSync {
         if (e.nodeChanged) await this.serviceTick().catch(() => undefined);
         f = null;
         if (e.next !== null) {
-          const r = requested(this.state, e.next, this.box(), utcSecond(this.d.now()));
+          const r = requested(this.state, e.next, this.box(), utcSecond(this.d.now()), this.held());
           this.state = r.state;
           f = r.start;
         }
@@ -376,7 +482,7 @@ export class ToolSync {
   private async takeover(): Promise<void> {
     if (this.svc !== null) await this.svc.idle();
     for (let attempt = 1; ; attempt++) {
-      try { this.handOver(); break; } catch (e) {
+      try { this.handOver(this.d.now(), true); break; } catch (e) {
         const why = message(e);
         console.error(`ccrc-testbox: the queued runs could not be handed over (${why}); the takeover tries again`);
         this.state = { ...this.state, sync: { state: 'failed', detail: `handover: ${why}`, at: utcSecond(this.d.now()) } };

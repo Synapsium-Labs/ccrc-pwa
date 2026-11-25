@@ -5,6 +5,7 @@
 // and its `dead` override, the status word, the chips in the order the header draws them, the ⋯ menu's items
 // (`sessionMenu`, the menu's own reader, each with its command id) and Stop's state. The hooks stay in the part: it
 // passes the clock (`now`, ticking at `headerTickMs`), the pointer query (`finePointer`) and the desk query (`desk`) in.
+import { advisorLineOf, type AdvisorLine } from '../fleet/advisorWords';
 import {
   backgroundWork, backgroundWords, isArchivedRow, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
@@ -14,7 +15,7 @@ import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { hibernatedSince } from '../fleet/hibernated';
-import { contextFact, headerMetaHasCells, headerStatusWord } from '../fleet/sessionFacts';
+import { contextFact, headerMetaHasCells, headerStatusWord, WAITING_ON_WORKERS_TITLE, waitingOnWorkers } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
 import { hasPrCap } from './prCap';
@@ -57,6 +58,8 @@ export type HeaderChip =
   | { kind: 'coordination'; facts: SessionFactSet; coordination: Coordination | null }
   | {
     kind: 'status'; bucket: SessionBucket; asleep: boolean; variant: StatusVariant; word: string;
+    /** Wave 173: a coordinator waiting on its workers (`waitingOnWorkers` over this strip's bucket): the lamp says so. */
+    waiting: boolean;
     /** D-5296: `with coordinator · <parent>` replaces the word. */
     coordinator: { short: string } | null; title: string | undefined;
   }
@@ -119,6 +122,8 @@ export interface DetailRows {
   readonly pr: number | null;
   readonly lane: string | null;
   readonly asks: string | null;
+  /** The coordinator advisor's readout (`advisorLineOf`, the one reader), or null when the advisor never touched it. */
+  readonly advisor: AdvisorLine | null;
 }
 
 export function detailRows(facts: SessionFactSet, coordination: Coordination | null): DetailRows {
@@ -133,6 +138,7 @@ export function detailRows(facts: SessionFactSet, coordination: Coordination | n
     pr: s.pr?.number ?? null,
     lane: facts.lane.away && facts.offPool === null && facts.lane.label !== undefined ? facts.lane.label : null,
     asks: asking ? (s.askSummary ?? '') : null,
+    advisor: advisorLineOf(s.advisor),
   };
 }
 
@@ -261,7 +267,15 @@ export function sessionHeaderView({
   // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints — it
   // always begins with the card's word (`exited` on both; the lamp still speaks `not running`), adding only what this
   // screen knows: the live clock, the age, `on you`, `ready to clean up`.
-  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now });
+  // Wave 173: the rule over the bucket this strip paints (`headerBucket`: the fleet row's bucket whenever the row exists, so
+  // the same bucket and the same workers the row reads), with the workers the facts measured. The one divergence from the
+  // row: a live stream that says dead over a row filed done or idle paints `dead`, so the header reads exited while the row
+  // may read waiting on workers, the done-versus-exited shape that predates this wave. With no facts yet (the fleet list
+  // not loaded), the rule is off here.
+  const waiting = bucket !== null && facts !== null && waitingOnWorkers({
+    coordinator: facts.coordinatorRole, bucket, asleep: asleepAt !== null, workersBusy: facts.workersBusy,
+  });
+  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now, waiting });
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing, contrast-verified set (chat.css) and
   // the glyph already carries the distinction colour must not carry alone. done/cleanup/archived take idle's matte
   // ink, exactly as their dots do (StatusDot's table).
@@ -292,8 +306,9 @@ export function sessionHeaderView({
   if (facts !== null) chips.push({ kind: 'coordination', facts, coordination });
   if (bucket !== null) {
     chips.push({
-      kind: 'status', bucket, asleep: asleepAt !== null, variant, word,
-      coordinator: wcWords === null ? null : { short: wcWords.short }, title: wcWords?.title ?? bgWords?.title,
+      kind: 'status', bucket, asleep: asleepAt !== null, variant, word, waiting,
+      coordinator: wcWords === null ? null : { short: wcWords.short },
+      title: wcWords?.title ?? (waiting ? WAITING_ON_WORKERS_TITLE : bgWords?.title),
     });
   }
   if (wrapper !== '') chips.push({ kind: 'lane', text: accountLabel(roster, wrapper), title: facts?.lane.label });

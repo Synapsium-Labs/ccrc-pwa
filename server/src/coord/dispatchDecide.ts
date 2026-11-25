@@ -1,6 +1,6 @@
 import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
   IDLE_RUN_STATES, MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
-  type CoordCaps, type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
+  type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { routeDefaultFor } from '../../../shared/route-defaults.js';
 import { parseLandingIntents, type LandingIntentHold } from '../../../shared/landingIntents.js';
@@ -80,9 +80,11 @@ const refused = (outcome: DispatchHalt, event?: string, orphanEvent?: string): D
 const orphaned = (res: SpawnEnding, kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string | undefined =>
   (res.ok || res.cutShort === false ? `${DISPATCH_ORPHANED_EVENT}${kind}` : undefined);
 
-/** What `capsMeasured` reads: the caps, the usage and, when the concurrency cap is reached, its numbers. */
+/** What `capsMeasured` reads: the limit, the usage and, when the concurrency cap is reached, its numbers. `limit` is THE
+ *  CAP IN FORCE (`dispatch.ts#capNow`, D-8920), a number and never a `CoordCaps`: that type is the STORED
+ *  number, which is the cap only as the operator's override or while the host is unmeasured. */
 export interface CapsReading {
-  caps: CoordCaps; usage: CoordCapsUsage;
+  limit: number; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
   /** D-8792, armed only: the raw count is at or above the limit but the runs whose worker still works are below it, so the
    *  worker readings freed a slot. It carries the RAW numbers a refusal says. `freedSlotPending` says so as data, the
@@ -167,20 +169,19 @@ export function sendBackCharged(to: RunState, from: RunState, inPlace = false): 
  * rows that still hold a slot, and a slot the readings free is `freedSlot`, handed out by `capRefusalOf`.
  */
 export function capsReadingOf(
-  caps: CoordCaps, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
+  limit: number, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
 ): CapsReading {
-  const limit = caps.maxConcurrentWorkers;
   const running = rows.length;
   const raw = running >= limit ? { limit, running } : null;
-  if (readings === null) return { caps, usage: { running }, overConcurrency: raw };
+  if (readings === null) return { limit, usage: { running }, overConcurrency: raw };
   const holding = rows.filter((r) => {
     const w = readings.get(r.runId);
     return w === undefined || (w !== 'waiting' && w !== 'gone');
   }).length;
   const usage = { running, waiting: running - holding, workingOnly: armed };
   const freed = holding < limit && running >= limit ? { limit, running } : null;
-  if (!armed) return { caps, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
-  return { caps, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
+  if (!armed) return { limit, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
+  return { limit, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
 }
 
 /** D-8792, armed only: whether this reading holds a slot the worker readings freed, which only the freed-slot window may
@@ -261,9 +262,9 @@ export function capShadowLine(
  * without recording into it (`wakeBudget.ts#wakeRoom`), and the dispatch the mail prompts still passes `capRefusalOf`.
  */
 export function capsRoomOf(c: CapsReading, freedAdmissible: number): number {
-  const ordinary = Math.max(0, c.caps.maxConcurrentWorkers - c.usage.running);
+  const ordinary = Math.max(0, c.limit - c.usage.running);
   if (c.usage.workingOnly !== true) return ordinary;
-  const armed = Math.max(0, c.caps.maxConcurrentWorkers - (c.usage.running - (c.usage.waiting ?? 0)));
+  const armed = Math.max(0, c.limit - (c.usage.running - (c.usage.waiting ?? 0)));
   return ordinary + Math.min(armed - ordinary, Math.max(0, freedAdmissible));
 }
 

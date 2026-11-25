@@ -10,6 +10,7 @@
   - **Then (XR2).** Everything but the text goes away, the two corner controls included. You turn one screen at a time by tapping the side of the page, swiping, or pressing an arrow key, and each turn lands on a whole line. A tap at the top shows the overlay, which adds the time left, Aa and the choice of pages or scroll. Esc leaves reader mode on every engine.
 - **What is decided.** ccrc's window owns full screen; the sandboxed frame never asks for it, and its sandbox stays `allow-scripts` with no new attribute. Where an engine refuses element full screen (the iPhone is the likely case, still to be measured), the same view fills the viewport without the browser's request (§4). Screen pages, not true book pages, is your answer to ask 656 on 2026-11-20 (§5). Reading stays one scroll underneath, so place, progress, the quick jump and change marks keep working. A screen wake lock is taken while you read, with an idle release (§6).
 - **What changes.** Two ccrc waves and one library landing. XR1 is ccrc only, on the library's contract release: the one that carries X1's appearance contract and X2's history places, which ccrc re-pins to in X1's wave C. It delivers reader mode in continuous scroll: the button, full screen, the overlay, Back and the place, and the wake lock. The library landing LX6 adds the turning, the in-place hiding of the reader's chrome, a text size and one small op each way on the existing port. It joins the contract release if it is ready by then, otherwise the next one, and no release waits for it. XR2 takes up the release that carries it and brings the screen pages (§7). Nothing widens the sandbox, the shell CSP or the set of channels.
+- **Amended 2026-11-24 (wave 41, run 3605): one wave, first.** You asked for Reader Mode first. The library's 1.2.0 candidate carries LX6, so the two steps above ship together as one ccrc wave, XR, with screen pages from the start and Scroll kept as a switch in the overlay. XR1's interim parts are never built: the corner menu control, the remount with the chrome off, and the frame's Aa in reader mode. The order is now X1's wave C, then a wave that builds X2's Back places alone, then XR, then the rest of X2 (§7.5, Figure 5a). Reader mode reads in the default layout; the rule for the other layouts arrives with them, in X2's P5.1 (§4.3). The leaf plan's § Amendment 2026-11-24 carries the waves, D-8974 and D-8975. Where this spec and that amendment differ, here or in the dated notes below, the amendment governs.
 - **What you must check.** The phone's entry button on the one bar (§3.1) and the wake lock (§6.3), both decided here with the alternatives priced. Four departures from the rich-docs spec are recorded: D-8803 to D-8805 against its closed lists, and D-8831 against its phishing row (§8). The phone engines' full-screen behaviour is one device item for the coordinator to raise (§4.4); desktop Chromium was measured in part (§4.5).
 
 ## 1. Context
@@ -326,6 +327,8 @@ The library reads its chrome switches once, at mount, in 1.1.0 and in the contra
 - **On a desktop, one remount.** XR1 remounts the same document in the same container with the chrome off, through a new bridge method, `ReaderMount.remount({chrome, layout})`: the same rendered document, a new `MessageChannel` and nonce, as the same-page link's `openAt` already does (rich-docs §4.1, D2), but with no `initialHash`, because the library lets a hash win over the stored place and the page's opening fragment must not pull you back to it. The place comes back from the library's own `pos` field. That field is written 250 ms after scrolling stops, and the host drops the old frame's messages once it is destroyed, so the remount waits until `READER_REMOUNT_QUIET_MS` (400 ms) have passed since the last `progress` message, which XR1 asks for from every production mount (D-8805). The fill is drawn at once; only the swap waits.
 - **The cost** is one frame swap, about 0.2 to 1.4 s (lab E4's srcdoc timings), and what a remount already resets: the "Changed since your last visit" notice, open folds and drawn figures. XR2 replaces the chrome remount with the in-place `reading` op (§7.2). So in the default layout, entering and leaving keep the very scroll position, the drawn figures and the folds on every device. From another layout, XR2 still remounts once into `default`, under the same rule.
 
+*Amended 2026-11-24 (D-8975): from wave XR on, entering never remounts for the chrome. The in-place `reading` op hides it on a phone and a desktop alike, so the desktop remount, `READER_REMOUNT_QUIET_MS` and the reading chrome are never built. The layout half of this section still holds as the rule, but the console mounts only the default layout until X2's P5.1 brings the others. So P5.1 builds that half: the measurement, `READER_LAYOUT_RULE`, the remount into `default` and back, and the note. Device row FS-9 moves with it.*
+
 ### 4.4 Engines
 
 **Measured on desktop Chromium, in part.** §4.5: element full screen around a `sandbox="allow-scripts"` srcdoc frame, on the box's own headless Chromium 156.
@@ -344,6 +347,8 @@ The library reads its chrome switches once, at mount, in 1.1.0 and in the contra
 | FS-8 | Desktop Chrome and one phone engine | `requestFullscreen` without a tap's activation rejects; with it, it resolves (M-1) | Holds |
 | FS-9 | iOS and Android, tab and installed | Entering reader mode from `review` and from `guided`, five times each: the remount's time, the worst of the five; the one bar's budgets after the return; no figure drawn without a request (§4.3) | Passes when the worst is under 1.4 s and every budget holds; otherwise `READER_LAYOUT_RULE` becomes `default-only` |
 | FS-10 | iOS and Android | With the overlay shown, a tap on the frame's Aa: whether the window blurs, so the overlay hides before the Aa menu's first tap (§4.2) | Blurs on Android; may not on iOS (one extra tap). Passes on either answer, as long as a tap on the Aa or on its menu never leaves reader mode or acts on the document, and the menu's first item acts by the second tap at the latest |
+
+*Amended 2026-11-24 (D-8975): FS-9 moves to X2's P5.1, which brings the other layouts, and runs with P5.1's acceptance. FS-10 is recorded against the overlay's Aa, the only Aa on screen in reader mode from wave XR on: the frame's Aa is hidden in place, and no blur is subscribed. Its pass words hold for it unchanged.*
 
 ### 4.5 The desktop Chromium measurement
 
@@ -596,6 +601,21 @@ flowchart LR
 ```
 *Figure 5. Wave order. Start at the library's L1. The library lands X1's contract, its rename and X2's additions, and cuts the contract release. X1's wave C re-pins ccrc to it; X2's P6 follows X1's host wave, and X2's P5 then adopts the release; XR1 follows, on that release, in continuous scroll. LX6 joins the contract release only if it is ready by the cut, and the cut never waits for it. XR2, the screen pages, follows on whichever release carries LX6.*
 
+**Amended 2026-11-24 (wave 41, run 3605; D-8974, D-8975).** Figure 5 is the order as first ruled. It changes as follows:
+- LX6 has landed in the library, and the versioned 1.2.0 candidate (`996a39b2…`, the package now named `@synapsium-labs/pinax-lib`) carries the contract, the places and LX6. That was verified at that commit before this amendment.
+- Your priority of 2026-11-24 puts Reader Mode first. Reader mode needs only X2's Back places from P5 and nothing from P6, so those run as a wave of their own, PH, straight after wave C.
+- XR1 and XR2 are one wave, XR.
+
+```mermaid
+flowchart LR
+  REL["Library 1.2.0 published"] --> WC["X1 wave C: re-pin to<br/>pinax-lib 1.2.0"]
+  WC --> PH["Wave PH: Back places<br/>(X2 Task P5.3 alone)"]
+  PH --> XR["Wave XR: reader mode,<br/>screen pages by default,<br/>Scroll in the overlay"]
+  XR --> P6["X2 P6"]
+  P6 --> P5["X2 P5 less P5.3;<br/>P5.1 brings reader mode's<br/>layout rule"]
+```
+*Figure 5a. Wave order from 2026-11-24. Start at the library's release. Wave C re-pins ccrc to 1.2.0 under the library's new package name, PH builds Back places on it, and XR builds reader mode, screen pages included, on PH. X2's P6 and the rest of P5 follow. X2's P2 to P4 are not drawn: they touch no reader host file, except P2.4's truth line, which a claim serialises.*
+
 ## 8. Boundaries, threat model and departures
 
 This section checks reader mode against every wall and records what it departs from.
@@ -626,7 +646,7 @@ This section says how each part is proved; the plan carries the rows.
 - **Unit (jsdom):** the decisions table of `readerMode.ts` (every exit cause by state); the decider's `exit-reader` answers and stale reader places; the wake lock's request, release and idle release under a fake clock; time left at 0, 0.5 and 1 and below a minute; the one-bar tool table; the command row; the sheet's portal target in and out of reader mode.
 - **Browser (the `browser (pwa)` leg, headless desktop Chrome):** the button and `r` enter; the container goes full screen and the frame does not reload (one `load`); refused full screen (`requestFullscreen` stubbed to reject) leaves the fill covering the console; Back and Exit each leave with exactly one history entry consumed, a jump inside reader mode included; the external-link sheet shows inside reader mode; the focus wrap in both directions, and a head control that cannot take focus while reader mode is on (jsdom implements neither `inert` nor this tab order, so these rows are the browser leg's); the head and one-bar budgets at 412 by 915, 915 by 412, 1280 by 800 and 1920 by 1080; no `allowfullscreen` or `allow` on the reader frame (beside the mockup frame's existing row).
 - **Library (its own suites, the landing):** the cases of §7.3, test 8's row and test 9's entry.
-- **Device item (F):** FS-1 to FS-10 (§4.4), Esc and activation among them, which the headless leg cannot prove, and the acceptance row below.
+- **Device item (F):** FS-1 to FS-10 (§4.4), Esc and activation among them, which the headless leg cannot prove, and the acceptance row below. *(Amended 2026-11-24, D-8975: FS-9 is run at X2's P5.1, and FS-10 against the overlay's Aa.)*
 - **Mutation rows:** each guard ships with a row that a deletion reds (the plan's Mutation rows).
 
 **Acceptance: a proposed row for completion Task 17.**
@@ -634,6 +654,8 @@ This section says how each part is proved; the plan carries the rows.
 | Row | Installed action and observation |
 |---|---|
 | Reader mode | On the installed release carrying XR2, in the default layout (reader mode switches to it for its duration, and the other four layouts are never reached in reader mode; one entry from `review` checks the switch and the return, or, under `default-only`, the note): open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. (After XR1 alone, the text scrolls, and two small controls stay over its top corners, ccrc's menu control and the reader's own Aa, as §4.2 says; the row is run in full after XR2.) Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-10 recorded per engine |
+
+*Amended 2026-11-24 (D-8975): the row's text stands, and it is run after wave XR, which carries XR1 and XR2 together. "The release carrying XR2" is the release carrying XR. "(After XR1 alone, …)" describes no shipped state. The layout clause ("one entry from `review` …, or, under `default-only`, the note") and FS-9 are run at X2's P5.1, and FS-10 is recorded against the overlay's Aa.*
 
 ## 10. Decisions
 
@@ -663,6 +685,12 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R20 | XR1's library | The contract release, continuous scroll; LX6 in it if ready, else the next release, never held for | Agreed: the coordinator, review 2933 F7 (a), 2026-11-20 |
 | R21 | Layouts | Reader mode reads in the default layout: entering mounts it in `default`, leaving restores the reader's layout; if XR1's measurement shows that remount breaks a budget, reader mode is offered in the default layout only | Agreed: the coordinator, review 2947 F3, 2026-11-20 |
 
+*Amended 2026-11-24 (D-8974, D-8975).*
+- *R16: from wave XR on, entering is in place on every device in the default layout, and no chrome remount is built.*
+- *R20: XR1 and XR2 run as one wave, XR, on 1.2.0, which carries LX6, after X1's wave C and X2's Task P5.3 (wave PH).*
+- *R21 stands as the rule. X2's P5.1, which brings the other layouts, builds and measures it.*
+- *R11: from wave XR, the overlay's trigger is the frame's top band alone. ccrc's corner menu control is never built.*
+
 ## 11. Promise delta
 
 This design changes no Promise. It designs a reading view of the native Docs reader programme; its acceptance is the proposed row for completion Task 17 (§9).
@@ -677,14 +705,16 @@ none - design of a reading view of the native Docs reader programme; acceptance 
 
 - Screen pages, with scroll as a reader setting: your answer to ask 656, 2026-11-20, relayed by the coordinator (§5). Calm scroll and true book pages stay priced in §5.1.
 - The walls stay: the frame keeps exactly `allow-scripts` with no new attribute, the shell keeps `frame-src 'none'`, and both new ops ride the existing port (§4.1, §7.2, §8).
-- The library stays at 1.1.0 in this wave; its change is designed in §7 and built by the library programme.
+- The library stays at 1.1.0 in this wave; its change is designed in §7 and built by the library programme. *(Amended 2026-11-24: the console's next pin is the library's 1.2.0, under the package's new name, in X1's wave C, D-8976.)*
 - The overlay hides by touch, Kindle-like, both ways: a tap anywhere outside it, or a second tap on the control that showed it, with no timeout. Exit never sits where the menu control was, and the frame's Aa corner stays clear. This is the coordinator's ruling on review 2947 F2, 2026-11-20 (§4.2).
 - Reader mode reads in the default layout, and the reader's own layout returns on exit. If the remount this costs breaks a budget, reader mode is offered in the default layout only. This is the coordinator's ruling on review 2947 F3, 2026-11-20 (§4.3, R21).
-- XR1 runs on the contract release, in continuous scroll. LX6 joins that release if it is ready by the cut, otherwise the next one, and no release is held for it. XR2, the screen pages, follows on the release that carries LX6. This is the coordinator's ruling on review 2933 F7, option (a), 2026-11-20 (§7.5).
+- XR1 runs on the contract release, in continuous scroll. LX6 joins that release if it is ready by the cut, otherwise the next one, and no release is held for it. XR2, the screen pages, follows on the release that carries LX6. This is the coordinator's ruling on review 2933 F7, option (a), 2026-11-20 (§7.5). *(Superseded 2026-11-24 by the line below.)*
+- *Amended 2026-11-24, for review (D-8974, D-8975):* Reader Mode comes first, as one wave, XR, on 1.2.0, after X1's wave C and X2's Back places (wave PH). Screen pages are the default from its first release, and Scroll is a switch in the overlay, remembered per device, not a Settings row (§7.5, Figure 5a).
 
 ### Waiting on you
 
 - **The device item** (§4.4, FS-1 to FS-10): the phone engines' full-screen behaviour, raised by the coordinator. XR1's code does not wait on it: the fill is the path wherever full screen is refused, and the browser leg sets the layout rule before any code. FS-9 can still switch that rule to the default-layout-only fallback after XR1 ships (§4.3), as a one-constant follow-up whose tests XR1 already carries.
+  - *Amended 2026-11-24 (D-8975): no browser leg sets the layout rule before reader mode's code, and wave XR carries no layout tests. X2's P5.1 measures the rule, and FS-9 can switch it after P5.1 ships. The rest of the device item stands for wave XR, with FS-10 recorded against the overlay's Aa.*
 - Two choices made here are worth your glance, though neither waits on you: the phone's button as the last tool of the one bar (§3.1), and the wake lock with its 5 minute idle release (§6.3).
 
 ### Later
