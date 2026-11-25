@@ -11,6 +11,7 @@ import {
   generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import { runOverlordAttempt, runRenewalActs, type OverlordAttemptPort, type RenewalActsDeps } from '../src/continuity/renewalActs.js';
+import { renewalActsOf } from '../src/continuity/renewalWiring.js';
 import { OVERLORD_HANDOVER_BODY, OVERLORD_SPOT_PROBE_BODY, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 import type { DrainRead } from '../src/continuity/renewalDrain.js';
@@ -665,6 +666,23 @@ describe('the write-set before a renewal (designation B, Task 10: RenewalActsDep
     await run(f, second.map((p) => ({ target: { ...p.target, role: 'overlord' as const }, act: p.act })), ask);
     expect(asked).toBe(2);
     expect(f.host.renews).toHaveLength(2);
+  });
+
+  it('renewalActsOf hands its before-renew step on to the acts it runs: an overlord target is asked through the wiring (review 3740 F6)', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'overlord');
+    const asked: string[] = [];
+    const deps = {
+      io: {}, cfg: { registryDir: '/nonexistent' }, tmux: {}, queue: { run: async <T>(_id: string, fn: () => Promise<T>) => fn() },
+      time: { clock: { wall: () => f.t.ports.clock.wall() } }, fleetState: { ccdVerbs: [] },
+      runCcd: async () => { throw new Error('no ccd call is made: the refused write-set holds the try'); },
+    } as unknown as Parameters<typeof renewalActsOf>[0];
+    const wiring = renewalActsOf(deps, f.s as never, [], {} as never, async () => ({ ok: false }), null, new Set(),
+      async (t) => { asked.push(t.sessionId); return { ok: false, detail: 'held for the test' }; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try { await wiring.run(planned); } finally { warn.mockRestore(); }
+    expect(asked).toEqual([COORD]);
+    expect(claimed(f)).toBe(0);
   });
 
   it('a coordinator target never asks it, and the renewal goes ahead', async () => {

@@ -610,7 +610,49 @@ describe('POST /api/overlord/restart', () => {
     }
   });
 
-  it('409 overlord-attempt-pending while a rebind is pending, for an asleep and a gone old body, even after a forced stop', async () => {
+  it('past the attempt\'s deadline, with no lane Live, Restart ends the attempt as failed, stops its body, and starts only the bound one', async () => {
+    for (const force of [false, true]) {
+      const r = await rig();
+      const made = await rebind(r, { force });
+      expect(made.statusCode).toBe(200);
+      const newId = made.json().sessionId as string;
+      r.body.reset(); r.host.delivered.length = 0;
+      r.facts.bodyState = { kind: 'gone', cause: 'stopped' };
+      r.time.advance((made.json().deadlineAt as number) - r.time.ports.clock.wall());
+      const res = await restart(r);
+      expect(res.statusCode, `force ${force}`).toBe(200);
+      expect(res.json()).toEqual({ ok: true, sessionId: r.oldId, awake: true, prompted: true });
+      // The attempt reads failed, through the one writer of that fact; its body's stop was owed and is done.
+      const row = view(r)!;
+      expect(row.pending).toBeNull();
+      expect(row.lastAttempt).toMatchObject({ sessionId: newId, outcome: 'deadline-passed' });
+      expect(row.stopsOwed).toEqual([]);
+      expect(r.coord.designationRead()).toMatchObject({ kind: 'designated', sessionId: r.oldId });
+      // Exactly one body is started, the bound one; the attempt's body is stopped, never started.
+      const of = (op: string) => r.body.log.filter((c) => c.op === op).map((c) => c.id);
+      expect(of('ensure')).toEqual([r.oldId]);
+      expect(of('create')).toEqual([]);
+      expect(of('stop')).toEqual([newId]);
+      expect(r.host.delivered).toEqual([`${r.oldId}:${PROMPT}`]);
+      // The attempt is over, so Rebind opens again by itself (it now reads the body, not the slot).
+      r.facts.old = 'alive';
+      expect((await rebind(r)).json()).toMatchObject({ error: 'overlord-body-alive' });
+    }
+  });
+
+  it('past the deadline, a Restart the body refuses ends nothing: the attempt stays pending', async () => {
+    const r = await rig();
+    const made = await rebind(r);
+    r.body.reset();
+    r.facts.bodyState = { kind: 'up' };
+    r.time.advance((made.json().deadlineAt as number) - r.time.ports.clock.wall() + 1);
+    const res = await restart(r);
+    expect(res.json()).toMatchObject({ error: 'overlord-body-alive', detail: 'alive' });
+    expect(view(r)!.pending).toMatchObject({ sessionId: made.json().sessionId });
+    expect(r.body.log).toEqual([]);
+  });
+
+  it('409 overlord-attempt-pending while a rebind is pending inside its deadline, for an asleep and a gone old body, even after a forced stop', async () => {
     for (const force of [false, true]) {
       for (const state of [{ kind: 'asleep' }, { kind: 'gone', cause: 'stopped' }] as OverlordBodyState[]) {
         const r = await rig();

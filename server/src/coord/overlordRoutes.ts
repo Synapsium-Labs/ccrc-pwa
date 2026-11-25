@@ -476,7 +476,8 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     // Only after every verdict refusal (review F7): a forced rebind stops the old body first; a stop that fails refuses and
     // creates nothing, so neither a verdict refusal nor a failed stop leaves the Overlord stopped. A forced rebind that fails
     // after its stop (the pending write, the create, or the attempt later) leaves the binding naming the stopped body, with
-    // nothing owing it: once the attempt has ended, Restart brings it back (`forced-rebind-may-leave-the-bound-body-stopped`).
+    // nothing owing it. Restart brings it back once the attempt has ended, and past the deadline it ends the attempt itself
+    // (`forced-rebind-may-leave-the-bound-body-stopped`, `restart-ends-an-overdue-attempt`).
     if (force) {
       const stopped = await body.stop(oldId!);
       if (!stopped.ok) return refuseRoute(reply, 'overlord-body-alive', { detail: `the forced stop failed: ${stopped.detail}` });
@@ -500,15 +501,25 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return deps.serial(async () => {
       const read = coord.designationRead();
       if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
-      const binding = read.kind === 'designated' ? { sessionId: read.sessionId, pending: read.row.pending !== null } : null;
+      const p = read.kind === 'designated' ? read.row.pending : null;
+      const binding = read.kind === 'designated' ? { sessionId: read.sessionId, pending: p === null ? null : { sessionId: p.sessionId, deadlineAt: p.deadlineAt } } : null;
       const state = binding === null ? null : facts.body?.(binding.sessionId) ?? null;
-      const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' });
+      const now = deps.clock.wall();
+      const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' }, now);
       if (!v.ok) {
         if (v.error === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord is bound, so there is nothing to restart' });
         if (v.error === 'overlord-attempt-pending') return refuseRoute(reply, 'overlord-attempt-pending', { detail: 'an attempt is pending on the designation' });
         return refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
       }
       const id = binding!.sessionId;
+      if (v.endAttempt !== null) {
+        // An attempt past its deadline is over (`restart-ends-an-overdue-attempt`): failed through its one writer, in this hold,
+        // and its body's stop owed and drained, before the bound body is started; so exactly one body is started.
+        const ended = coord.failPending(v.endAttempt, 'deadline-passed', now, true);
+        if (!ended.ok) return refuseRoute(reply, 'unavailable', { detail: `the overdue attempt of ${v.endAttempt} could not be ended` });
+        console.warn(`ccrc-server: Restart the Overlord: the attempt of ${v.endAttempt} was past its deadline and is failed (deadline-passed)`);
+        await drainOwedStops({ body, coord }, [v.endAttempt]);
+      }
       console.warn(`ccrc-server: Restart the Overlord: ensuring ${id}, asked by ${actor.subject}`);
       const ensured = await body.ensure(id);
       if (!ensured.ok) return refuseRoute(reply, 'fleetFailed', { detail: ensured.detail, sessionId: id });

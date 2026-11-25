@@ -21,7 +21,8 @@ by slug, for the coordinator to fold into the ledger. No D-number is defined her
   after a rebind's go-live, drains the old body on the serialiser (`continuity/routes.ts#settleLoads`).
 - **Restart the Overlord**, `POST /api/overlord/restart` (Task 7): the account gate with no step-up. `overlordBodyOf` maps the
   watcher's last listing and fleet to `up`, `down`, `asleep`, `gone` or `unmeasured`; `restartVerdict` accepts `asleep` and
-  `gone` only, and refuses `overlord-attempt-pending` while an attempt is pending on the slot. On accept: the body adapter's
+  `gone` only, and refuses `overlord-attempt-pending` while an attempt is pending inside its deadline; past it, Restart ends
+  the attempt itself before its steps (`restart-ends-an-overdue-attempt`). On accept: the body adapter's
   new `ensure` (the ensure route's own asked-wake record first, then `CCD_ARGV.ensure`), keep-awake on, and the first prompt.
   Both are exported for readiness, which asks the same decider.
 - **The pending deadline and the settle retry** (Task 7): each generations pass decides one `AttemptAction` with
@@ -48,14 +49,16 @@ by slug, for the coordinator to fold into the ledger. No D-number is defined her
 | `restart-is-attributed` | Restart changes no authority and has no step-up. | It still mints the gate's actor through the identity port and logs who asked, as gates B's census requires of every admin operator door. It writes no row. |
 | `rebind-refuses-while-the-journal-is-not-coherent` | (none) | As designate does (review 2349 F9): a rolled-back or unmeasured authority journal refuses before any stop or create, since the go-live record is a widening. |
 | `renewal-writes-the-class-too` (designation C, carried) | Task 10 names `poolset` and `acctorder`. | The write-set step writes the class as well (`writeClass` after `writeSet`), so a Settings route write that failed heals at the next renewal. |
-| `restart-refuses-while-an-attempt-is-pending` (the coordinator's ruling, call 1021, review 3695 F1) | Restart's refusals are no binding and a body that is not asleep or gone; the plan is silent on a pending attempt. | `restartVerdict` refuses `overlord-attempt-pending` while an attempt is pending on the slot, whatever the bound body reads, before the body steps. Two Overlord bodies are never started side by side, even for the length of the deadline, and a forced rebind's stop is not undone by one tap. Readiness asks the same decider, so it follows. No new word, no wire change. Pinned by a route case and by mutants S6 and S7 of the decider's set. |
-| `forced-rebind-may-leave-the-bound-body-stopped` | A failed attempt leaves the old binding untouched. | It does, and after a forced rebind that binding names a body the rebind stopped: a pending write, a create or an attempt that fails after the stop leaves it stopped, with nothing owing it a start. Once the attempt has ended, Restart accepts it (`gone`) and brings it back. A verdict refusal or a failed stop never leaves it stopped. |
+| `restart-refuses-while-an-attempt-is-pending` (the coordinator's rulings, calls 1021 and 1077; reviews 3695 F1 and 3740 F1) | Restart's refusals are no binding and a body that is not asleep or gone; the plan is silent on a pending attempt. | `restartVerdict` takes the clock and the attempt's deadline, and refuses `overlord-attempt-pending` while an attempt is pending INSIDE its deadline, whatever the bound body reads, before the body steps. Two Overlord bodies are never started side by side inside the deadline, and a forced rebind's stop is not undone by one tap. Readiness asks the same decider, so it follows. No new word, no wire change. Pinned by route cases and by mutants S6 to S9 of the decider's set. |
+| `restart-ends-an-overdue-attempt` (the coordinator's ruling, call 1077, review 3740 F1) | (none) | At or past the deadline the attempt is over: the decider accepts an asleep or gone body and names the attempt (`endAttempt`), and the door, on the serialiser, ends it through the one writer of that fact (`failPending`, outcome `deadline-passed`, its stop owed), drains that stop, and then takes its ordinary steps; exactly one body is started. It is the operator's act at a session-gated door, so it needs no Live, and no new timer, lane, route or setting. The outcome is always `deadline-passed`: the door has no settle fact, so an overdue attempt whose report held is not told apart as `authority-unrecorded` (the Live sweep still tells it apart). A body step that refuses ends nothing. A late start report from the failed body then meets the settle's `none` (the slot is empty), so the old binding stands and nothing goes live; its stop was owed and drained by Restart, and a stop that failed stays owed for the Live sweep. After it, Rebind opens again by itself. Pinned by route cases (plain and forced rebind, past the deadline, with no lane Live), the late-report case in `continuity-start-loads-route.test.ts`, mutant S10, and M25 and M26. |
+| `forced-rebind-may-leave-the-bound-body-stopped` | A failed attempt leaves the old binding untouched. | It does, and after a forced rebind that binding names a body the rebind stopped: a pending write, a create or an attempt that fails after the stop leaves it stopped, with nothing owing it a start. Restart brings it back once the attempt has ended: inside the deadline it refuses, and at or past the deadline it ends the attempt itself and starts the bound body (`restart-ends-an-overdue-attempt`), so the operator is not locked out while `continuity` is not Live. A verdict refusal or a failed stop never leaves it stopped. |
 | `sandbox-settle-extension-moved` | Extend `sandbox-settle.test.ts` for the rebind arm. | The rebind arm is pinned in `continuity-start-loads-route.test.ts` (`sandboxSettle` on a pending rebind, and the settle end to end) and by the sandbox mutant set's T2 and T7, rewritten for it; `sandbox-settle.test.ts` is unchanged. |
 | `restart-generation-end-to-end-not-paired` | A test of Restart finding its own live generation end to end. | The generation a start mints is pinned in `continuity-generations-lane.test.ts`, and Restart's ensure of the bound id in `overlord-rebind-route.test.ts`; no one case pairs the door with the lane's mint. |
 | `deadline-read-again-after-a-restart-by-construction` | A test of the deadline read again after a server restart. | The sweep keeps no state: each pass reads the row and the stored report again. The start-loads cases build a fresh port per step over the same store, and the wiring cases (`overlord-lane-wiring.test.ts`) read it through the watcher's own pass; no case restarts a server. |
 | `rebind-go-live-old-stop-failure-cased-on-the-fail-path` | A test of the settle's drain when the old body's stop fails after a rebind's go-live. | The drain is the one `drainOwedStops`; a stop that fails or throws staying owed is pinned on the fail-pending path, not on the rebind arm. |
 | `tests-after-the-code` | Red first. | The production code was written before its tests, so red was measured by removing each guard from the finished code (under Measured). Commit `bb14555f62` is typed `test(` and carries production lines (the generation fix, two door rows, Restart's attribution, four refusal kebabs, the CLAUDE.md sentence), and `f38c5d038c` puts an in-file extraction (`askedWake`, `createBody`, `createSteps`, `readAccountFacts`) in the same commit as new behaviour. The PR is squash-merged. |
-| `rebind-stamps-its-designation-lines` (the merge with sequence A) | Sequence A's writer bullet: designation B's rebind arms stamp the one sequence inside their own transactions. | `rebindPending` stamps the new body `pending`; a rebind's go-live, now inside sequence A's `txWithAuthorityStamp`, checks its two lines before the append and stamps them after the row write: the new body `live`, then the old body `retired`, both with the attempt's actor. A failed or cancelled rebind stamps `failed` through `failPending` and `retire` as they stand. Both writers are stampers in `sequence-stamp-census.test.ts`. |
+| `rebind-stamps-its-designation-lines` (the merge with sequence A) | Sequence A's writer bullet: designation B's rebind arms stamp the one sequence inside their own transactions. | `rebindPending` stamps the new body `pending`; a rebind's go-live, now inside sequence A's `txWithAuthorityStamp`, checks its two lines before the append and stamps them after the row write: the old body `retired`, then the new body `live` (so the newest designation line is the standing binding's; review 3740 F2), both with the attempt's actor. A failed or cancelled rebind stamps `failed` through `failPending` and `retire` as they stand. Both writers are stampers in `sequence-stamp-census.test.ts`. |
+| `retention-keeps-the-newest-live-designation-line` (review 3740 F2) | Sequence A keeps the newest designation line, read as the current binding's. | While a rebind is pending, or after one failed, the newest designation line is the attempt's (`pending` or `failed`), not the standing binding's. `sequenceOldest` now marks two lines `keep`: the newest designation line and the newest `live` designation line, so a prune keeps the binding's `live` line too; the sequence module's statement says so. A case prunes after a failed rebind (M28). The plan text for the monitor's term check is the coordinator's. |
 | `restamp-stays-identity-only` (the merge with sequence A) | Sequence A's census: the rebind moves `restampOverlordGeneration` to the stampers. | The rebind ends the old body's generation through `endOverlordGeneration`, which stamps it `ended` (with sequence A's `at`, and this PR's widening to the body's own identity), and `restampOverlordGeneration` still moves only the identity and term, so it stays a non-stamper; its census reason says so. |
 | `restart-first-prompt-may-race-the-ensure` | Restart sends the first prompt after the ensure. | It does, as designate does after its create; a prompt the new pane is not ready for answers `prompted: false`, and nothing retries it. |
 
@@ -76,7 +79,7 @@ above). What is not: nothing here checks the hook's order itself; it is relied o
 ## What a merge arms, and what Live arms
 
 At merge, with no switch (behind sign-in for the doors):
-- the two doors, Rebind and Restart;
+- the two doors, Rebind and Restart, and Restart ending an overdue attempt itself (the operator's act, not a lane's);
 - the settle step acting on a pending rebind, and its drain of the old body at a rebind's go-live: not gated by any lane;
 - a failed or cancelled rebind body ending its own generation.
 
@@ -88,9 +91,10 @@ Only while the `continuity` lane is live (seeded shadow; in shadow each pass rec
 
 The continuity row's card says so in one sentence (`shared/lane-arm.ts`).
 
-A known limit: with the lane in shadow, an attempt that never settles stays pending past its deadline, and every later
-Rebind answers `overlord-attempt-pending` until Retire (which for a pending rebind also unbinds the live binding) or Live. The
-Rebind door reads no lane, measured by reading `overlordRoutes.ts#rebind`: it reads the authority journal, the designation
+A known limit, narrowed in fix round 2: with the lane in shadow, an attempt that never settles stays pending past its deadline,
+and every later Rebind answers `overlord-attempt-pending` until the operator's Restart ends it (`restart-ends-an-overdue-attempt`:
+at or past the deadline, with an asleep or gone body), or Retire (which for a pending rebind also unbinds the live binding), or
+Live. Inside the deadline Restart refuses too, by design. The Rebind door reads no lane, measured by reading `overlordRoutes.ts#rebind`: it reads the authority journal, the designation
 row, the pool answer, the old body and the account facts, and refuses on the pending slot alone. Designate reads no lane
 either. No gate is built for it (the coordinator's ruling).
 
@@ -109,19 +113,19 @@ either. No gate is built for it (the coordinator's ruling).
 Each file through `ccrc test`, one at a time, fixture stores and fake ports only, on this branch's commits. No whole-suite
 run; CI and the merge queue are the arbiters for everything else.
 
-- New and touched suites, each green: `overlord-rebind` (29), `overlord-restart-deadline` (33), `overlord-rebind-route` (32),
+- New and touched suites, each green: `overlord-rebind` (31), `overlord-restart-deadline` (35), `overlord-rebind-route` (34),
   `overlord-lane-port` (15), `overlord-lane-wiring` (3), `overlord-body` (45), `overlord-designate-route` (51), `overlord-settings-doors` (60),
-  `continuity-start-loads-route` (60), `continuity-renewal-acts` (36), `continuity-generations-lane` (112, with main's cases), `sandbox-settle` (12).
+  `continuity-start-loads-route` (61), `continuity-renewal-acts` (37), `continuity-generations-lane` (112, with main's cases), `sandbox-settle` (12).
 - Censuses, each green: `auth-gate` (394), `box-token-census` (80), `overlord-doors-census` (32), `overlord-gate-census` (33),
   `overlord-gate-doors` (42), `id-argv-census` (11), `verb-gate` (25), `mail-routes` (61), `single-definition/writers-map` (49), `sequence-stamp-census` (6);
   every `rings/*` and `single-definition/*` file (56 files), each alone.
 - Mutation, scoped to BASELINE, the floors check, `sandboxCheck.ts#sandboxSettle` (T2 and T7 rewritten for the rebind arm) and
-  the three new sets `rebindVerdict` (10 mutants), `restartVerdict` (7) and `pendingDeadlineOf` (12), each at floor 1: 6 of 6
+  the three new sets `rebindVerdict` (10 mutants), `restartVerdict` (10) and `pendingDeadlineOf` (12), each at floor 1: 6 of 6
   tests, every mutant killed. The whole mutation-floors file was not run.
 - By hand, each guard removed in place, its suite run, the file restored byte for byte. M16 to M24 are fix round 1's: the five
   wiring seams review 3695 F2 found unpinned (each killed by `overlord-lane-wiring.test.ts`, which builds the production server
   with a real watcher), Restart while pending (F1), the gate before the body's parse (A1), and the rebind's two sequence stamps
-  the merge with main added.
+  the merge with main added. M25 to M30 are fix round 2's (review 3740 F1, F2, F6 and F7).
 
 | Guard removed | Suite | Red cases |
 |---|---|---|
@@ -149,10 +153,17 @@ run; CI and the merge queue are the arbiters for everything else.
 | M22 Rebind parses its body before the gate | `overlord-rebind-route` | 1 |
 | M23 `rebindPending` stamps no line | `overlord-rebind` | 1 |
 | M24 a rebind's go-live stamps no lines | `overlord-rebind` | 1 |
+| M25 Restart past the deadline does not end the attempt | `overlord-rebind-route` | 1 |
+| M26 Restart ends the attempt but does not stop its body | `overlord-rebind-route` | 1 |
+| M27 the rebind's go-live stamps `live` before `retired` | `overlord-rebind` | 1 |
+| M28 retention keeps only the newest designation line | `overlord-rebind` | 1 |
+| M29 the rebind's go-live appends before its line check | `overlord-rebind` | 1 |
+| M30 `renewalActsOf` hands its acts no before-renew step | `continuity-renewal-acts` | 1 |
 
   The before-renew case keeps the step the watcher hands the production `renewalActsOf` (a pass-through wrapper over the
-  module, which still builds the real acts) and asks it as a renewal would; no case drives a whole Overlord renewal through the
-  watcher.
+  module, which still builds the real acts) and asks it as a renewal would; a case in `continuity-renewal-acts.test.ts` runs
+  the acts `renewalActsOf` builds for an Overlord target and sees the step asked (M30). No case drives a whole Overlord renewal
+  through the watcher.
 - Red first: the production code was written before its tests in this PR, so "red" was measured by removing each guard from
   the finished code (the list above and the mutant sets), not by running the tests on the code before it.
 - The server typecheck, the tests typecheck and the PWA typecheck: clean. The growth check, armed: green.

@@ -166,6 +166,7 @@ describe('designation B\'s wiring, through the production server and a real watc
     expect(w, JSON.stringify(r.calls)).toMatchObject({ ok: true });
     const written = r.calls.map((c) => c.join(' '));
     expect(written.some((c) => c.includes(NEW) && c.includes('poolset=')), JSON.stringify(r.calls)).toBe(true);
+    expect(written.some((c) => c.includes(NEW) && c.includes('class=opus')), JSON.stringify(r.calls)).toBe(true);
     // A body the designation does not bind is refused, and nothing is written for it.
     r.calls.length = 0;
     expect(await (step as (t: { sessionId: string }) => Promise<{ ok: boolean }>)({ sessionId: OLD })).toMatchObject({ ok: false });

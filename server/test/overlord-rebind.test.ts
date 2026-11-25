@@ -10,7 +10,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import * as m from '../src/coord/overlordDesignation.js';
 import {
-  designationRead, failPending, goLive, rebindPending, retire, type AuthorityAppender,
+  designationRead, failPending, goLive, rebindPending, retire, SequenceStampRefused, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
@@ -19,6 +19,8 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { rebindVerdictCases } from './sim/designationSets.js';
+import { pruneSequenceThrough, sequenceOldest } from '../src/coord/overlordSequenceStore.js';
+import { retentionCut } from '../src/coord/overlordSequence.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
@@ -310,25 +312,49 @@ describe('the one sequence (Overlord §10.4): a rebind\'s designation lines', ()
     db.prepare("SELECT id, state, actor, actorKind, at FROM overlord_sequence WHERE kind = 'designation' ORDER BY seq").all();
   const OP = { actor: 'operator-a 01234567', actorKind: 'operator' };
   const AS_LIVE = [{ id: A, state: 'pending', ...OP, at: NOW }, { id: A, state: 'live', ...OP, at: NOW + 1 }];
-  it('rebindPending stamps the new body pending; its go-live stamps it live and the old body retired, in that order', () => {
+  it('rebindPending stamps the new body pending; its go-live stamps the old body retired, then the new one live (the newest line is the binding\'s)', () => {
     const db = openDb(); const f = fake(db);
     liveA(db, f);
     expect(rebind(db).ok).toBe(true);
     expect(lines(db)).toEqual([...AS_LIVE, { id: B, state: 'pending', ...OP, at: NOW + 2 }]);
     expect(goLive(db, f, B, GEN_B, NOW + 3)).toMatchObject({ ok: true, changed: true, previous: A });
     expect(lines(db)).toEqual([...AS_LIVE, { id: B, state: 'pending', ...OP, at: NOW + 2 },
-      { id: B, state: 'live', ...OP, at: NOW + 3 }, { id: A, state: 'retired', ...OP, at: NOW + 3 }]);
+      { id: A, state: 'retired', ...OP, at: NOW + 3 }, { id: B, state: 'live', ...OP, at: NOW + 3 }]);
   });
   it('a refused rebind and a refused go-live stamp nothing; a failed rebind stamps its body failed', () => {
     const db = openDb(); const f = fake(db);
     liveA(db, f);
     expect(rebind(db).ok).toBe(true);
-    expect(rebind(db, { sessionId: C }).ok).toBe(false);
     const before = lines(db);
+    expect(rebind(db, { sessionId: C }).ok).toBe(false);
+    expect(lines(db)).toEqual(before);
     f.answer = () => refuse();
     expect(goLive(db, f, B, GEN_B, NOW + 3)).toMatchObject({ ok: false });
     expect(lines(db)).toEqual(before);
     expect(failPending(db, B, 'deadline-passed', NOW + 4, true)).toEqual({ ok: true, changed: true });
     expect(lines(db)).toEqual([...before, { id: B, state: 'failed', ...OP, at: NOW + 4 }]);
+  });
+  it('a failed rebind followed by a prune keeps the standing binding\'s live line beside the newest one', () => {
+    const db = openDb(); const f = fake(db);
+    liveA(db, f);
+    expect(rebind(db).ok).toBe(true);
+    expect(failPending(db, B, 'deadline-passed', NOW + 3, true)).toEqual({ ok: true, changed: true });
+    const oldest = sequenceOldest(db, 100);
+    if (oldest.kind !== 'measured') throw new Error(oldest.why);
+    const cut = retentionCut(NOW + 10 * 365 * 86_400_000, oldest.value);
+    if (cut.through === null) throw new Error('nothing to prune');
+    expect(pruneSequenceThrough(db, cut.through, cut.keep)).toMatchObject({ pruned: expect.any(Number) });
+    expect(lines(db)).toEqual([{ id: A, state: 'live', ...OP, at: NOW + 1 }, { id: B, state: 'failed', ...OP, at: NOW + 3 }]);
+  });
+  it('a rebind go-live whose line the verdict refuses throws before the append: no record, no row change, no line', () => {
+    const db = openDb(); const f = fake(db);
+    liveA(db, f);
+    expect(rebind(db).ok).toBe(true);
+    f.seen.length = 0;
+    const row = rowOf(db); const before = lines(db);
+    expect(() => goLive(db, f, B, GEN_B, -1)).toThrow(SequenceStampRefused);
+    expect(f.seen).toEqual([]);
+    expect(rowOf(db)).toEqual(row);
+    expect(lines(db)).toEqual(before);
   });
 });

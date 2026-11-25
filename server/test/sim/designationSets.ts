@@ -812,9 +812,12 @@ export function pendingDeadlineCases(m: DesignationModule): Record<string, Suite
 }
 
 type OverlordBodyLike = Parameters<DesignationModule['restartVerdict']>[1];
+type RestartBinding = Parameters<DesignationModule['restartVerdict']>[0];
 export function restartVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
-  const bound = { sessionId: 'overlord-x', pending: false };
-  const ref = (b: { readonly sessionId: string; readonly pending: boolean } | null, body: OverlordBodyLike) => m.restartVerdict(b, body);
+  const NOW = 1_000;
+  const bound: RestartBinding = { sessionId: 'overlord-x', pending: null };
+  const pendingAt = (deadlineAt: number): RestartBinding => ({ sessionId: 'overlord-x', pending: { sessionId: 'overlord-new-owl', deadlineAt } });
+  const ref = (b: RestartBinding, body: OverlordBodyLike, now = NOW) => m.restartVerdict(b, body, now);
   const alive = { ok: false, error: 'overlord-body-alive' } as const;
   return {
     'no live binding is not-found, whatever the body reads': () => {
@@ -830,16 +833,25 @@ export function restartVerdictCases(m: DesignationModule): Record<string, SuiteC
     'an unmeasured body refuses overlord-body-alive (unmeasured)': () => {
       expect(ref(bound, { kind: 'unmeasured', why: 'x' })).toEqual({ ...alive, detail: 'unmeasured' });
     },
-    'an asleep body and a gone one may be restarted': () => {
-      expect(ref(bound, { kind: 'asleep' })).toEqual({ ok: true });
-      for (const cause of ['absent', 'stopped', 'orphan', 'never-started'] as const) expect(ref(bound, { kind: 'gone', cause })).toEqual({ ok: true });
+    'an asleep body and a gone one may be restarted, with no attempt to end': () => {
+      expect(ref(bound, { kind: 'asleep' })).toEqual({ ok: true, endAttempt: null });
+      for (const cause of ['absent', 'stopped', 'orphan', 'never-started'] as const) expect(ref(bound, { kind: 'gone', cause })).toEqual({ ok: true, endAttempt: null });
     },
-    'an attempt pending on the slot refuses overlord-attempt-pending, whatever the body reads': () => {
-      const pending = { sessionId: 'overlord-x', pending: true };
+    'an attempt pending inside its deadline refuses overlord-attempt-pending, whatever the body reads': () => {
       for (const body of [{ kind: 'asleep' }, { kind: 'gone', cause: 'stopped' }, { kind: 'gone', cause: 'absent' }, { kind: 'up' },
         { kind: 'unmeasured', why: 'x' }] as OverlordBodyLike[]) {
-        expect(ref(pending, body)).toEqual({ ok: false, error: 'overlord-attempt-pending' });
+        expect(ref(pendingAt(NOW + 1), body)).toEqual({ ok: false, error: 'overlord-attempt-pending' });
       }
+    },
+    'at or past its deadline the attempt is over: an asleep or gone body is accepted and the attempt named to end': () => {
+      for (const deadlineAt of [NOW, NOW - 1, 0]) {
+        expect(ref(pendingAt(deadlineAt), { kind: 'gone', cause: 'stopped' })).toEqual({ ok: true, endAttempt: 'overlord-new-owl' });
+        expect(ref(pendingAt(deadlineAt), { kind: 'asleep' })).toEqual({ ok: true, endAttempt: 'overlord-new-owl' });
+      }
+    },
+    'past its deadline the body steps still hold, and nothing is named to end on a refusal': () => {
+      expect(ref(pendingAt(NOW - 1), { kind: 'up' })).toEqual({ ...alive, detail: 'alive' });
+      expect(ref(pendingAt(NOW - 1), { kind: 'unmeasured', why: 'x' })).toEqual({ ...alive, detail: 'unmeasured' });
     },
   };
 }
@@ -859,14 +871,16 @@ const REBIND_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: 
     { id: 'R10 the capability step is skipped under force', old: 'return createSteps({ ...f,', new: 'if (f.force) return { act: \'create\', wrapper: \'lane-a\', acctorder: \'\', poolset: \'\' };\n  return createSteps({ ...f,' },
   ], suite: rebindVerdictCases };
 const RESTART_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
-    { id: 'S1 an up body may be restarted', old: "case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };", new: "case 'up': return { ok: true };" },
-    { id: 'S2 a restarting body may be restarted', old: "case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };", new: "case 'down': return { ok: true };" },
-    { id: 'S3 an unmeasured body may be restarted', old: "case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };", new: "case 'unmeasured': return { ok: true };" },
+    { id: 'S1 an up body may be restarted', old: "case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };", new: "case 'up': return { ok: true, endAttempt: null };" },
+    { id: 'S2 a restarting body may be restarted', old: "case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };", new: "case 'down': return { ok: true, endAttempt: null };" },
+    { id: 'S3 an unmeasured body may be restarted', old: "case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };", new: "case 'unmeasured': return { ok: true, endAttempt: null };" },
     { id: 'S4 no binding is restartable', old: "if (binding === null) return { ok: false, error: 'not-found' };", new: '' },
-    { id: 'S6 restart ignores a pending attempt', old: "if (binding.pending) return { ok: false, error: 'overlord-attempt-pending' };", new: '' },
-    { id: 'S7 the pending step after the body steps', old: "  if (binding.pending) return { ok: false, error: 'overlord-attempt-pending' };\n",
-      new: "  if (binding.pending && (body.kind === 'asleep' || body.kind === 'gone')) return { ok: false, error: 'overlord-attempt-pending' };\n" },
-    { id: 'S5 an asleep body is not restartable', old: "case 'asleep': case 'gone': return { ok: true };", new: "case 'asleep': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };\n    case 'gone': return { ok: true };" },
+    { id: 'S5 an asleep body is not restartable', old: "case 'asleep': case 'gone': return { ok: true,", new: "case 'asleep': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };\n    case 'gone': return { ok: true," },
+    { id: 'S6 restart ignores a pending attempt', old: "if (p !== null && now < p.deadlineAt) return { ok: false, error: 'overlord-attempt-pending' };", new: '' },
+    { id: 'S7 the pending step after the body steps', old: 'if (p !== null && now < p.deadlineAt)', new: "if (p !== null && now < p.deadlineAt && (body.kind === 'asleep' || body.kind === 'gone'))" },
+    { id: 'S8 the deadline is ignored', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null)' },
+    { id: 'S9 the deadline ends one tick late', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null && now <= p.deadlineAt)' },
+    { id: 'S10 the overdue attempt is not named', old: 'endAttempt: p === null ? null : p.sessionId', new: 'endAttempt: null' },
   ], suite: restartVerdictCases };
 const DEADLINE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'T1 expires one tick early', old: 'if (now >= p.deadlineAt)', new: 'if (now >= p.deadlineAt - 1)' },

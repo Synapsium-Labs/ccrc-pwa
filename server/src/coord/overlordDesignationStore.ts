@@ -11,8 +11,9 @@
 // appends nothing. Every `from` it states is the row's own value read in the same transaction. A refusal RETURNS from the
 // transaction (it never throws), so a record already appended in it keeps its head row.
 //
-// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending`, `retire` and
-// `applyDesignationRestoreInTx` stamp designation state changes after the row write, in the same transaction. A refused stamp
+// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `rebindPending` (designation B), `goLive` (its rebind
+// arm too), `failPending`, `retire` and `applyDesignationRestoreInTx` stamp designation state changes after the row write, in
+// the same transaction. A refused stamp
 // throws `SequenceStampRefused`. Ordinary stamped writers check their lines before appending; after a durable append, any
 // throw calls the receipt after rollback is attempted, without replacing the original error. Confirm's append precedes this
 // store's restore writer; Confirm's own catch fences after rollback if that append succeeded. In both paths the durable record
@@ -291,7 +292,7 @@ export type OverlordMailRepoint = (to: string, from: string) => { changed: numbe
  *  in this transaction. `designate`: `authority-designate`, `designatedTerm` takes the term, and the body's line is `live`.
  *  `rebind` (plan Task 6): `authority-rebind` naming the old body, `designatedTerm` kept (§3.3.12), the old id onto `pastIds`
  *  and `stopsOwed`, its live generation ended before the new body's is re-stamped, its queued `overlord` mail repointed, and two
- *  lines, the new body `live` and the old one `retired`; `previous` names it for the caller's drain. A refused append, or a step
+ *  lines, the old body `retired` then the new one `live`; `previous` names it for the caller's drain. A refused append, or a step
  *  that throws, rolls the whole move back and the attempt stays pending (question 10). */
 export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: string, generation: string, at: number,
   repoint?: OverlordMailRepoint): GoLiveResult {
@@ -325,8 +326,9 @@ function goLiveRebind(db: DatabaseSync, add: (entry: OverlordAuthorityMove) => A
   sessionId: string, generation: string, term: number, at: number, repoint: OverlordMailRepoint | undefined): GoLiveResult {
   const old = row.bound?.sessionId;
   if (old === undefined) return { ok: true, changed: false };
-  // The attempt's actor on both lines: the binding copies it, and the old body is retired by the same move.
-  const lines = [designationLine(sessionId, 'live', actor, at), designationLine(old, 'retired', actor, at)];
+  // The attempt's actor on both lines: the binding copies it, and the old body is retired by the same move. The old body's
+  // `retired` comes first, so the newest designation line is the standing binding's `live` (review 3740 F2).
+  const lines = [designationLine(old, 'retired', actor, at), designationLine(sessionId, 'live', actor, at)];
   checkLines(lines);
   const a = add({ kind: 'authority-rebind', opKey: `go-live-term-${term}`, term, sessionId, generation, previousSessionId: old });
   if (!a.ok) return a;

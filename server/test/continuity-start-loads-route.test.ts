@@ -628,6 +628,18 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
         expect(drained).toStrictEqual([[NEW, false]]);
       });
 
+      it('a late held report from a rebind body whose attempt Restart already ended (deadline-passed) meets the settle\'s none: the old binding stands, nothing goes live', async () => {
+        app = await openOv(); pendRebind();
+        // As Restart does past the deadline (`restart-ends-an-overdue-attempt`): the attempt failed through its one writer.
+        expect(coord!.failPending(NEW, 'deadline-passed', FAKE_T0, true)).toStrictEqual({ ok: true, changed: true });
+        const before = view();
+        await startNew(app);
+        expect(await report(app, newLoads(), NEW)).toStrictEqual({ sessionId: NEW, startId: 1, act: 'none' });
+        expect(view()).toStrictEqual(before);
+        expect(view()).toMatchObject({ kind: 'designated', sessionId: OLD, row: { pending: null, lastAttempt: { sessionId: NEW, outcome: 'deadline-passed' } } });
+        expect(stops()).toStrictEqual([]);
+      });
+
       it('a go-live answering a previous body drains it, after the go-live and with the id as recorded; a designate\'s go-live drains nothing', async () => {
         app = await openLost(); pend();
         await startOv(app);
