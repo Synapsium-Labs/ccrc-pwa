@@ -685,7 +685,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
-  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). So do
+  designation B's `POST /api/overlord/rebind` (a step-up) and `POST /api/overlord/restart` (a recovery, with no step-up). `GET /api/overlord/ladder`,
   `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
   session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
   takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and

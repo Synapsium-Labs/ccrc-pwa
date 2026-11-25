@@ -2613,6 +2613,13 @@ export class CoordStore {
       [...displaced, program]) };
   }
 
+  /** Designation B (the designation plan, question 7): a rebind that goes live moves the outstanding deliveries of mail
+   *  addressed to the role `overlord` from the old body to the new one, inside `goLive`'s transaction. A parked delivery stays
+   *  on the old id, visible, and no envelope is re-rendered, as `repointCoordinatorMail` leaves a reclaim's (D-1142). */
+  private repointOverlordMail(to: string, from: string): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding', "toId = ? AND mailId IN (SELECT id FROM mail WHERE toId = 'overlord')", [from]) };
+  }
+
   /**
    * D-1425 — the arm (a) could not reach. A role-addressed report the
    * lane had ALREADY GIVEN UP on is delivered to the heir as a NEW row.
@@ -5649,7 +5656,8 @@ export class CoordStore {
   designationRead(): DesignationRead { return designation.designationRead(this.db); }
   designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
   bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
-  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  rebindPending(i: designation.RebindInput): designation.RebindResult { return designation.rebindPending(this.db, i); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at, (to, from) => this.repointOverlordMail(to, from)); }
   failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
   retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }

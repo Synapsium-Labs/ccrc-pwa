@@ -500,12 +500,13 @@ export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, t
 }
 
 /** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
- *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
- *  the caller's transaction and opens none, and stamps each generation it ends `ended` at `at` there (a refused stamp throws,
- *  so the caller's transaction rolls back). */
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. A pending rebind's
+ *  body mints under its own id until it goes live (`roleOf.ts#identityOf`), so that identity is ended too when its attempt fails
+ *  or is cancelled (designation B). It runs INSIDE the caller's transaction and opens none, and stamps each generation it ends
+ *  `ended` at `at` there (a refused stamp throws, so the caller's transaction rolls back). */
 export function endOverlordGeneration(db: DatabaseSync, sessionId: string, at: number): { changed: boolean } {
   const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
-    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended' RETURNING id").all(sessionId) as { id: number }[];
+    + "shadowDeadlineAt = NULL WHERE identity IN ('overlord', ?) AND sessionId = ? AND state <> 'ended' RETURNING id").all(sessionId, sessionId) as { id: number }[];
   for (const g of ended) stampGeneration(db, Number(g.id), 'ended', at);
   return { changed: ended.length > 0 };
 }
