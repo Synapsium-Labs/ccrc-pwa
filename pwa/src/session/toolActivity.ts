@@ -97,6 +97,10 @@ export interface ActivityFold {
   readonly runs: 'tool-runs' | 'none';
   readonly wait: LiveWait;
   readonly busy: boolean;
+  /** Desktop polish wave 175: the index of the first item that is not an older page's (`olderPages.ts#liveFromOf`), in
+   *  the list this fold receives. Older rows are display only: nothing before it runs, waits or holds a live control.
+   *  Absent: every item may. */
+  readonly liveFrom?: number;
 }
 
 const ASK = 'AskUserQuestion';
@@ -130,6 +134,7 @@ function asks(entry: ToolItem, questions: readonly string[]): boolean {
 export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold): (ChatItem | ToolActivityItem)[] {
   let turnStart = 0;
   items.forEach((item, i) => { if (isPrompt(item)) turnStart = i + 1; });
+  turnStart = Math.max(turnStart, fold.liveFrom ?? 0);
   const openAsks: ToolItem[] = [];
   let newestCurrent = -1; // the index of the current turn's newest tool entry
   for (let i = turnStart; i < items.length; i += 1) {
@@ -145,12 +150,16 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
 
   const out: (ChatItem | ToolActivityItem)[] = [];
   let stretch: ToolItem[] = [];
+  let at: number[] = []; // each entry's own item index
   let from = 0; // the index of the stretch's first entry
   const close = (to: number): void => {
     const first = stretch[0];
     const last = stretch[stretch.length - 1];
     if (first === undefined || last === undefined) return;
-    const current = from >= turnStart;
+    // A stretch can span `liveFrom` (an older page's calls joined to the backlog's): it is current by its newest entry,
+    // and only its entries from `turnStart` on can be running. A prompt never falls inside a stretch, so without
+    // `liveFrom` this is `from >= turnStart`, as before.
+    const current = to > turnStart;
     const attention: Attention[] = [
       ...stretch.filter((e) => e === question).map((entry) => ({ kind: 'question' as const, entry })),
       ...stretch.filter(failed).map((entry) => ({ kind: 'failed' as const, entry })),
@@ -160,7 +169,7 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       key: `activity-${first.key}`,
       entries: stretch,
       inner: fold.runs === 'tool-runs' ? groupToolRun(stretch) : [...stretch],
-      live: fold.busy && current && stretch.some((e) => e.result == null),
+      live: fold.busy && current && stretch.some((e, k) => at[k]! >= turnStart && e.result == null),
       latest: toolSummary(last).sentence,
       attention,
       // The stretch holding the current turn's newest call; no stretch spans a prompt, so it is in the current turn.
@@ -168,11 +177,13 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       past: !current,
     });
     stretch = [];
+    at = [];
   };
   items.forEach((item, i) => {
     if (item.kind === 'tool') {
       if (stretch.length === 0) from = i;
       stretch.push(item);
+      at.push(i);
       return;
     }
     close(i);

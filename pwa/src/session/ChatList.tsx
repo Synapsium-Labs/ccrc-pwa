@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
 import { splitClipPaths } from '../../../shared/api';
-import { MailCard, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
+import { MailCard, OlderEdge, OlderGap, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
 import { onPageHidden } from '../lib/pageClock';
@@ -27,7 +27,8 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { heightMove, holdShift } from './footFollow';
+import { heightMove, holdShift, prependShift } from './footFollow';
+import { NO_PAGING, isGapMarker, liveFromOf, type OlderPaging } from './olderPages';
 import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
 import { groupToolRun } from './toolSummary';
@@ -83,6 +84,8 @@ function ChatItemBody({
     case 'divider':
       return <p className="ts-divider">{item.label}</p>;
     case 'message':
+      // Wave 175: where an older page left records out, the store's local marker (`olderPages.ts#prependPage`).
+      if (isGapMarker(item.event)) return <OlderGap />;
       return <MessageBubble event={item.event} id={id} streaming={item.streaming} day={day} />;
     case 'tool':
       return (
@@ -131,11 +134,38 @@ function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
  *  both are on. Applied BEFORE the list is handed to Virtuoso, because a fold changes the count, the indices and the
  *  seeded heights, which no per-item row can. Data, not logic: nothing here compares a skin id (D-5469), and outside a
  *  frame (most suites) nothing folds. */
-function transcriptOf(set: SkinSet | null, items: ChatItem[], wait: LiveWait, busy: boolean): TranscriptItem[] {
+function transcriptOf(
+  set: SkinSet | null, items: ChatItem[], wait: LiveWait, busy: boolean, liveFrom = 0,
+): TranscriptItem[] {
   const runs = set?.transcriptGrouping ?? 'none';
-  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, wait, busy });
+  // `liveFrom` (wave 175): the items before it are an older page's, display only (`olderPages.ts#liveFromOf`).
+  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, wait, busy, liveFrom });
   return runs === 'tool-runs' ? groupToolRun(items) : items;
 }
+
+/** The items a list draws: the chat items, the older rows' boundary found, then folded (wave 175). */
+function itemsOf(
+  set: SkinSet | null, events: ChatEvent[], pending: PendingSend[], busy: boolean, wait: LiveWait, older: OlderPaging,
+): TranscriptItem[] {
+  const built = buildChatItems(events, pending, busy);
+  return transcriptOf(set, built, wait, busy, liveFromOf(built, events, older));
+}
+
+/** The top of the chat while older messages are offered (wave 175): nothing at all when they are not (`none`), so the
+ *  view is today's exactly. */
+function OlderTop({ older, onLoadOlder }: { older: OlderPaging; onLoadOlder?: () => void }): ReactNode {
+  if (older.edge === 'none' || onLoadOlder === undefined) return null;
+  return <OlderEdge state={older.edge} onLoad={onLoadOlder} />;
+}
+
+/** What virtuoso hands its header: the list's own paging and loader. */
+interface HeaderContext { older: OlderPaging; onLoadOlder?: () => void }
+/** Virtuoso's header, a constant component reading the list's context, so the header is one element across renders and
+ *  keeps the control's focus. */
+const OlderHeader = ({ context }: { context: HeaderContext }): ReactNode => (
+  <OlderTop older={context.older} onLoadOlder={context.onLoadOlder} />
+);
+const LIST_PARTS = { Header: OlderHeader };
 
 /** What one transcript row is drawn from: the set, the row, the list's expansion memo, and every prop a plain item's
  *  body reads. */
@@ -218,6 +248,10 @@ export interface ChatListProps {
    *  row whose words read the clock (`sameRow.ts#readsClock`, the usage-limit pill), so that row draws again at local
    *  midnight and no other row does (desktop polish Task C7, review 1128). */
   day?: string;
+  /** Wave 175: the store's older pages (`olderPages.ts`). Absent, or `none`: no control, today's view. */
+  older?: OlderPaging;
+  /** Wave 175: ask for the next older page (`SessionState.loadOlder`). The control and the near-top load call it. */
+  onLoadOlder?: () => void;
 }
 
 /** Plain-list renderer — the virtual list's item model without the viewport
@@ -235,13 +269,16 @@ export function ChatListInner({
   answerLabel,
   onAnswer,
   day,
+  older = NO_PAGING,
+  onLoadOlder,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
-  const items = transcriptOf(set, buildChatItems(events, pending, busy), waitOf(askWait, askPending === true), busy);
+  const items = itemsOf(set, events, pending, busy, waitOf(askWait, askPending === true), older);
   // The reader's open rows, for as long as this session's view is open.
   const expansion = useExpansionMemo(id);
   return (
     <div className="chat-inner">
+      <OlderTop older={older} onLoadOlder={onLoadOlder} />
       {items.map((item) => (
         <div key={item.key} className="chat-item">
           <TranscriptRowView
@@ -367,6 +404,34 @@ export function sizeRanges(px: readonly number[]): { startIndex: number; endInde
  *  number this replaced said "put the last item at the TOP" and then leaned on
  *  `alignToBottom` to undo it. */
 const OPEN_AT_NEWEST = { index: 'LAST', align: 'end' } as const;
+
+/** Wave 175: virtuoso's index of the first row the list opens with. Older pages lower it by the rows they put before it
+ *  (`prependShift`); virtuoso wants it positive, and a session never pages anywhere near this many rows. */
+const FIRST_INDEX = 1_000_000_000;
+
+/** Wave 175: how many rows from the top of the view the hold remembers, in order, so a row the join replaced (a divider
+ *  gone, a stretch that took the page's calls) is stood in for by the next one down. */
+const ANCHOR_ROWS = 8;
+
+/** Wave 175: how near the top, in screen heights, the reader is when the next older page is asked for. */
+const NEAR_TOP_SCREENS = 1.5;
+
+const keyOf = (item: TranscriptItem): string => item.key;
+
+/** Wave 175: a tool stretch that takes an older page's calls at its start changes its key (`activity-<first entry's key>`)
+ *  but is the same stretch, grown, and a stretch keeps its open or closed state as it grows: the new key opens when the
+ *  stretch the reader had open is inside it. Read off the two lists, never off the key's spelling. */
+function keepOpenAcross(was: readonly TranscriptItem[], now: readonly TranscriptItem[], expansion: ExpansionMemo): void {
+  const opened = new Map<string, string>();
+  for (const it of was) {
+    if (it.kind === 'tool-activity' && expansion.get(it.key)) opened.set(it.entries[0]!.key, it.key);
+  }
+  if (opened.size === 0) return;
+  for (const it of now) {
+    if (it.kind !== 'tool-activity' || expansion.get(it.key)) continue;
+    if (it.entries.some((e) => opened.has(e.key))) expansion.set(it.key, true);
+  }
+}
 
 /** What one visit opens with — computed ONCE per mount. */
 interface Opening {
@@ -760,6 +825,8 @@ function ChatScroller({
   answerLabel,
   onAnswer,
   day,
+  older = NO_PAGING,
+  onLoadOlder,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
   // The FOLDED list when the set folds tool activity or tool runs (D-5475, desktop polish wave 168): every index below —
@@ -769,8 +836,8 @@ function ChatScroller({
   const wait = waitOf(askWait, askPending === true);
   const waitIs = waitKey(wait);
   const items = useMemo(
-    () => transcriptOf(set, buildChatItems(events, pending, busy), wait, busy),
-    [events, pending, busy, set, waitIs], // `wait` is read through its key
+    () => itemsOf(set, events, pending, busy, wait, older),
+    [events, pending, busy, set, waitIs, older], // `wait` is read through its key
   );
   // The reader's open tool-activity rows, for as long as this session's view is open: the list's, not a row's, because
   // virtuoso unmounts a row scrolled out of reach.
@@ -818,14 +885,17 @@ function ChatScroller({
   //    wheel, a fling, a smooth scroll, a key, a drag, code), except the scroll event the hold's own write owes;
   //  - whether an item came or went at either end of the list since the last change (appends are the foot follow's,
   //    items added at the top the older-history work's);
-  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read a frame after every scroll, so a `hold`
-  //    puts that row back where the reader last saw it, and a regrouped list can never make it hold another.
+  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read a frame after every scroll but the hold's
+  //    own and the list's own prepend adjustment, so a `hold` puts that row back where the reader last saw it, and a
+  //    regrouped list can never make it hold another. With it the next rows down, in order: when an older page changes
+  //    the row at the join (a divider goes, a stretch takes the page's calls, wave 175), the first of them still drawn
+  //    is held instead.
   const scroller = useRef<HTMLElement | null>(null);
   const lastTap = useRef<number | null>(null);
   const lastMove = useRef<number | null>(null);
   /** Where the hold's own write left the scroller, until the scroll event it owes arrives. */
   const ownWrite = useRef<number | null>(null);
-  const anchor = useRef<{ key: string; top: number } | null>(null);
+  const anchor = useRef<readonly { key: string; top: number }[]>([]);
   /** Where the row `key` stands, from the scroller's top, or null when it is not drawn. */
   const topOf = useCallback((el: HTMLElement, key: string): number | null => {
     const row = el.querySelector(`[data-row-key="${CSS.escape(key)}"]`);
@@ -837,29 +907,51 @@ function ChatScroller({
     // Measured from the scroller's own top, so a move of the scroller itself (a strip or the inline card above or below
     // it changing) is never taken for a move of the rows inside it.
     const top = el.getBoundingClientRect().top;
-    const row = [...el.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top);
-    const at = row === undefined ? null : topOf(el, row.dataset.rowKey!);
-    anchor.current = row === undefined || at === null ? null : { key: row.dataset.rowKey!, top: at };
+    const rows = [...el.querySelectorAll<HTMLElement>('[data-row-key]')];
+    const first = rows.findIndex((r) => r.getBoundingClientRect().bottom > top);
+    anchor.current = first < 0 ? [] : rows.slice(first, first + ANCHOR_ROWS).flatMap((r) => {
+      const at = topOf(el, r.dataset.rowKey!);
+      return at === null ? [] : [{ key: r.dataset.rowKey!, top: at }];
+    });
   }, [topOf]);
   // Read a frame after a scroll, never in it: the list lays out the rows a scroll brings into reach after the scroll
   // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
   const readSoon = useRef(false);
+  /** Wave 175: virtuoso is moving the scroller for rows just put before the first (its first index moved), until two
+   *  frames after that render. Those scroll events are the list's own: neither the reader moving nor a new place to
+   *  hold, so the hold that follows compares against the place the reader had before the page came. */
+  const adjusting = useRef(false);
+  /** The older paging and its loader as of this render, for the callbacks below. */
+  const paging = useRef({ older, onLoadOlder });
+  paging.current = { older, onLoadOlder };
+  /** Wave 175: load the next older page when the reader nears the top: only from `more` (never a retry on its own), only
+   *  for a reader who left the foot (a list too short to scroll offers the control instead), and only within
+   *  NEAR_TOP_SCREENS of the top. */
+  const nearTop = useCallback((): void => {
+    const el = scroller.current;
+    const { older: o, onLoadOlder: load } = paging.current;
+    if (el === null || load === undefined || o.edge !== 'more' || pinned.current) return;
+    if (el.scrollTop <= el.clientHeight * NEAR_TOP_SCREENS) load();
+  }, []);
   const onScroll = useCallback((): void => {
     const el = scroller.current;
     const own = ownWrite.current;
     ownWrite.current = null;
     // The scroll event the hold's own write owes is neither the list moving nor a new place to hold: the hold keeps the
     // place it put back as its baseline, so what it could not put back (under a pixel, a rounded position) is put back
-    // with the next change rather than becoming the new zero (review 3607 A3).
+    // with the next change rather than becoming the new zero (review 3607 A3). Only while the scroller is where the
+    // write left it: a reader who moved it since owes an event of their own, and this one is theirs.
     if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
+    if (adjusting.current) return;
     lastMove.current = performance.now();
     if (readSoon.current) return;
     readSoon.current = true;
     requestAnimationFrame(() => {
       readSoon.current = false;
       readAnchor();
+      nearTop();
     });
-  }, [readAnchor]);
+  }, [readAnchor, nearTop]);
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
@@ -876,6 +968,34 @@ function ChatScroller({
   const edges = useRef<string | null>(null);
   const shown = useRef(items);
   shown.current = items;
+  /** Rows were put before the first since the last height report (wave 175), set where virtuoso's first index moves. */
+  const prepended = useRef(false);
+
+  // VIRTUOSO'S FIRST INDEX (wave 175). Rows put before the first are told to virtuoso by lowering its `firstItemIndex` in
+  // the same render, by how far a row the reader can see moved (`prependShift`, by key), so virtuoso keeps that row where
+  // it was as far as its size estimates allow; the hold puts it back exactly once the new rows measure. Decided here, in
+  // the render that hands virtuoso the new rows, because virtuoso reads both together.
+  const indexing = useRef({ items, first: FIRST_INDEX });
+  if (indexing.current.items !== items) {
+    const was = indexing.current.items;
+    const shift = was.length > 0 && items.length > 0 && was[0]!.key !== items[0]!.key
+      ? prependShift(was.map(keyOf), items.map(keyOf), anchor.current[0]?.key ?? null)
+      : 0;
+    if (shift !== 0) {
+      prepended.current = true;
+      keepOpenAcross(was, items, expansion);
+    }
+    indexing.current = { items, first: indexing.current.first - shift };
+  }
+  const firstIndex = indexing.current.first;
+  const lastFirst = useRef(firstIndex);
+  useLayoutEffect(() => {
+    if (lastFirst.current === firstIndex) return;
+    lastFirst.current = firstIndex;
+    adjusting.current = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { adjusting.current = false; }));
+  }, [firstIndex]);
+
   const onHeight = useCallback((height: number): void => {
     const before = lastHeight.current;
     lastHeight.current = height;
@@ -883,14 +1003,17 @@ function ChatScroller({
     const now = `${list.length}:${list[0]?.key ?? ''}:${list[list.length - 1]?.key ?? ''}`;
     const newItem = edges.current !== null && edges.current !== now;
     edges.current = now;
+    const isPrepend = prepended.current;
+    prepended.current = false;
     const el = scroller.current;
     if (el === null) return;
     const at = performance.now();
+    const from = el.scrollTop;
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
       sinceTap: lastTap.current === null ? null : at - lastTap.current,
       sinceMove: lastMove.current === null ? null : at - lastMove.current,
-      newItem,
+      newItem, prepended: isPrepend,
     });
     if (move === 'foot') {
       virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
@@ -900,12 +1023,15 @@ function ChatScroller({
     // before the change with where it stands now, so a change something else already put back is put back by nothing
     // more (one correction per change), and a list that moved in between is not set back (review 3607 F1). A `none`, or
     // a hold the list's movement cancelled, re-reads it, so the change it let through is the reader's new place.
+    // A move is a scroll event since the change, or the scroller standing elsewhere than at the change with no event yet
+    // (a smooth scroll's first step lands in the frame before its event, carried item 6 of wave 175); virtuoso's own
+    // adjustment for a prepend is neither.
     requestAnimationFrame(() => {
-      const a = anchor.current;
-      const now = a === null ? null : topOf(el, a.key);
-      if (move === 'hold' && a !== null && now !== null) {
-        const moved = lastMove.current !== null && lastMove.current >= at;
-        const shift = holdShift(a.top, now, moved);
+      const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
+      if (move === 'hold' && held !== undefined) {
+        const moved = (lastMove.current !== null && lastMove.current >= at)
+          || (!adjusting.current && Math.abs(el.scrollTop - from) >= 1);
+        const shift = holdShift(held.a.top, held.now!, moved);
         if (shift !== 0) {
           el.scrollTop += shift;
           ownWrite.current = el.scrollTop;
@@ -914,7 +1040,8 @@ function ChatScroller({
       }
       readAnchor();
     });
-  }, [band, readAnchor, topOf]);
+    if (isPrepend) requestAnimationFrame(() => requestAnimationFrame(nearTop));
+  }, [band, readAnchor, topOf, nearTop]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -951,9 +1078,10 @@ function ChatScroller({
   // THE SAME TWO FUNCTIONS UNTIL WHAT THEY READ CHANGES (desktop polish Task C7): virtuoso calls `itemContent` again for
   // every rendered row when it is handed a new one, so a render of this list that changes nothing they read (a screen
   // render with the same events and the same callbacks) hands it the ones it has.
-  const computeItemKey = useCallback((i: number) => items[i]?.key ?? i, [items]);
+  // Virtuoso hands both its own index, which counts from its first index (wave 175).
+  const computeItemKey = useCallback((i: number) => items[i - firstIndex]?.key ?? i, [items, firstIndex]);
   const itemContent = useCallback((i: number): ReactNode => {
-    const item = items[i];
+    const item = items[i - firstIndex];
     if (!item) return null;
     return (
       <MeasuredItem
@@ -969,7 +1097,19 @@ function ChatScroller({
         day={day}
       />
     );
-  }, [items, meter, set, expansion, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
+  }, [items, firstIndex, meter, set, expansion, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
+  // The control's own press: the reader asked for the top, so the foot no longer holds them (a short list's reader is at
+  // the foot when they press it), and the hold keeps the row they were reading in place as the page lands.
+  const loadFromControl = useCallback((): void => {
+    pinned.current = false;
+    paging.current.onLoadOlder?.();
+  }, []);
+  const header = useMemo<HeaderContext>(
+    () => ({ older, ...(onLoadOlder !== undefined ? { onLoadOlder: loadFromControl } : {}) }),
+    [older, onLoadOlder, loadFromControl],
+  );
+  // A page answered while the reader is still near the top asks for the next one (only from `more`).
+  useEffect(() => { nearTop(); }, [older.edge, older.pages, nearTop]);
 
   return (
     <>
@@ -977,8 +1117,11 @@ function ChatScroller({
         ref={virtuoso}
         className="chat-scroller"
         totalCount={items.length}
+        firstItemIndex={firstIndex}
         computeItemKey={computeItemKey}
         itemContent={itemContent}
+        components={LIST_PARTS}
+        context={header}
         defaultItemHeight={opened.height}
         // Per-row priors. A row that arrives LATER, while the session tails,
         // is past the seeded range and falls back to `defaultItemHeight`.

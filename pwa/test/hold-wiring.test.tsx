@@ -17,6 +17,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ChatEvent } from '../../shared/api';
 import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
+import { NO_PAGING, type OlderPaging } from '../src/session/olderPages';
 
 const lay = vi.hoisted(() => ({
   scroller: null as HTMLElement | null,
@@ -25,6 +26,8 @@ const lay = vi.hoisted(() => ({
   owed: false,
   /** Row heights by row key; a row not named is 100px. */
   heights: new Map<string, number>(),
+  /** Whether a write to the scroller lands on a whole pixel, as a browser rounds a position to its device pixels. */
+  round: false,
   props: null as Record<string, unknown> | null,
 }));
 
@@ -39,7 +42,7 @@ vi.mock('react-virtuoso', async () => {
           Object.defineProperty(el, 'scrollTop', {
             configurable: true,
             get: () => lay.top,
-            set: (v: number) => { if (v !== lay.top) { lay.top = v; lay.owed = true; } },
+            set: (v: number) => { const at = lay.round ? Math.round(v) : v; if (at !== lay.top) { lay.top = at; lay.owed = true; } },
           });
           Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 });
         }
@@ -47,10 +50,12 @@ vi.mock('react-virtuoso', async () => {
         (lay.props!.scrollerRef as (el: HTMLElement | null) => void)(el);
       }, []);
       const count = props.totalCount as number;
+      // Virtuoso hands its callbacks its own index, which counts from `firstItemIndex` (wave 175).
+      const first = (props.firstItemIndex as number | undefined) ?? 0;
       const key = props.computeItemKey as (i: number) => string | number;
       const content = props.itemContent as (i: number) => React.ReactNode;
       const rows: React.ReactNode[] = [];
-      for (let i = 0; i < count; i += 1) rows.push(React.createElement('div', { key: key(i), 'data-index': i }, content(i)));
+      for (let i = 0; i < count; i += 1) rows.push(React.createElement('div', { key: key(first + i), 'data-index': i }, content(first + i)));
       return React.createElement('div', { ref: own, 'data-testid': 'scroller' }, rows);
     }),
   };
@@ -71,6 +76,7 @@ beforeEach(() => {
   frames.length = 0;
   lay.top = 0;
   lay.owed = false;
+  lay.round = false;
   lay.heights.clear();
   vi.spyOn(performance, 'now').mockImplementation(() => clock);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
@@ -131,11 +137,17 @@ function session(turns = 30): ChatEvent[] {
   }
   return events;
 }
-const view = (events: ChatEvent[]) => (
+const view = (events: ChatEvent[], older?: OlderPaging) => (
   <SkinSetProvider set={REFINED_SET}>
-    <ChatList id="s" events={events} pending={[]} busy={false} onRetry={() => {}} onDiscard={() => {}} />
+    <ChatList id="s" events={events} pending={[]} busy={false} onRetry={() => {}} onDiscard={() => {}} older={older} onLoadOlder={() => {}} />
   </SkinSetProvider>
 );
+/** Where the row `key` stands from the scroller's top, by the height model. */
+const topOfRow = (key: string): number => {
+  const row = rowsIn(lay.scroller!).find((r) => r.dataset.rowKey === key);
+  expect(row, `no row ${key}`).toBeDefined();
+  return row!.getBoundingClientRect().top;
+};
 
 /** Mount, and leave a reader resting 1050px down a 100px-per-row list (the row at index 10 crossing the top of the view,
  *  50px of it above), the list's first height reported long ago. */
@@ -224,5 +236,79 @@ describe('the list\'s hold of a reader above the foot (review 3607 F1, F7)', () 
     resize(2, 50);
     frame();
     expect(lay.top, 'a tap\'s change was held').toBe(1050);
+  });
+});
+
+describe('carried from the tool-stretch reviews (desktop polish wave 175, item 6)', () => {
+  it('a scroll that moved the scroller in the frame before its event (a smooth scroll\'s first step) is not written over', () => {
+    resting();
+    resize(2, 50);
+    lay.top += 30; // the position moved; its scroll event comes a frame later
+    clock += 8;
+    frame();
+    expect(lay.top, 'the hold wrote over a scroll that had begun').toBe(1080);
+  });
+
+  it('the scroll event after the hold\'s write is the reader\'s when they moved the scroller since: the list is moving', () => {
+    resting();
+    resize(2, 50);
+    frame();
+    expect(lay.top).toBe(1100);
+    lay.top += 40; // the reader scrolls before the event the hold's write owes is dispatched
+    frame();
+    clock += 50;
+    resize(3, 40);
+    frame();
+    expect(lay.top, 'a reader\'s scroll was taken for the hold\'s own write, and the list was held while moving').toBe(1140);
+  });
+
+  it('a position the browser rounds is put back with the next change, never taken as the new place to hold', () => {
+    lay.round = true;
+    resting();
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    for (let n = 0; n < 6; n += 1) {
+      resize(2, 50.6);
+      frame();
+      frame(); // the event the write owes
+      clock += 1000;
+    }
+    expect(Math.abs(topOfRow(key) - was), 'rounded writes drifted the reader').toBeLessThan(0.75);
+  });
+});
+
+describe('rows put before the first: an older page (desktop polish wave 175)', () => {
+  const paged = (n: number): ChatEvent[] => Array.from({ length: n }, (_, i) => ({
+    kind: 'user' as const, uuid: `old${i}`, ts: TS, text: `Older ${i}.`,
+  }));
+
+  it('keeps the row the reader is looking at in place when a page lands above them, by its key', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    frame();
+    expect(topOfRow(key), 'the row the reader was reading moved when the page landed').toBeCloseTo(was, 5);
+  });
+
+  it('holds the next row down when the page changes the row at the join (the first time divider goes)', () => {
+    const events = session();
+    const { rerender } = render(view(events));
+    lay.scroller!.scrollTop = 10;
+    frame();
+    reports(total());
+    frame();
+    clock += 1000;
+    const keys = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+    expect(keys[0]!.startsWith('div-'), 'the list opened without its first time divider').toBe(true);
+    const second = keys[1]!;
+    const was = topOfRow(second);
+    rerender(view([...paged(5), ...events], { ...NO_PAGING, edge: 'more', rows: 5 }));
+    expect(rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!), 'the join kept its divider').not.toContain(keys[0]);
+    reports(total());
+    frame();
+    expect(topOfRow(second), 'the row under the join moved when the page landed').toBeCloseTo(was, 5);
   });
 });

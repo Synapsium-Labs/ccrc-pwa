@@ -19,10 +19,17 @@ import {
 import type {
   AgentHelperView, HelperFrameMembers, HelperReportAnswer, HelperReportRequest, HelpersUnmeasured, WorkflowView,
 } from '../../../shared/workflows';
+import type { OlderPageRequest } from '../../../shared/olderPage';
+import { OLDER_GAP_WORDS } from '@ccrc/ui';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 import { isLocalDivider } from '../session/localDivider';
+import { freshOf } from '../session/eventIdentity';
+import {
+  GAP_PREFIX, NO_PAGING, answerPaging, pagingAsked, pagingOfBacklog, pagingOfDrop, pagingOfRotated, prependPage,
+  requestOf, type OlderPaging,
+} from '../session/olderPages';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -102,7 +109,9 @@ export interface PendingSend {
 }
 
 export interface SessionState {
-  events: ChatEvent[]; // deduped by uuid (tool_result keyed by toolId)
+  /** Each event once, by everything the parser gives it (`session/eventIdentity.ts`), oldest first: an older page's rows
+   *  (desktop polish wave 175) before the backlog's, the live rows after. */
+  events: ChatEvent[];
   offset: number;
   uuid: string | null;
   status: SessionStatus | null;
@@ -207,6 +216,9 @@ export interface SessionState {
   fileMeasured: boolean;
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
+  /** Desktop polish wave 175: older chat pages on this stream (`session/olderPages.ts`): the continuation in hand, the
+   *  request outstanding, and what the top of the chat says. Display only: nothing else in this store reads it. */
+  older: OlderPaging;
   apply(msg: SessionStreamMsg): void;
   /** Decision `ask-answer-returns-next-screen`: the screen an answer route says the pane moved to (`DialogAnswered`'s
    *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
@@ -231,6 +243,10 @@ export interface SessionState {
    *  ask at each stream's first `workflows` frame (the server answers nothing before its first reading), so a row that
    *  still has no answer asks again (review 3072 F4). The answer arrives as a `helper-report` frame. */
   requestHelperReport(id: string): void;
+  /** Desktop polish wave 175: ask for the page of chat records before the oldest one shown, when one can be asked: a
+   *  continuation in hand, no request outstanding, and the socket open. One request at a time; the answer arrives as an
+   *  `older-page` frame. */
+  loadOlder(): void;
 }
 
 /** One answer to a `helper-report` request, as the store keeps it, with the end of the row it answered for. */
@@ -259,6 +275,9 @@ export type SessionSnapshot = Pick<
   readEvery?: NonNullable<HelperFrameMembers['readEvery']> | null;
   /** H2. Optional HERE only, as `agents`: `snapshotOf` always carries it, and a snapshot built without it reads as none. */
   reports?: Readonly<Record<string, HelperReport>>;
+  /** Wave 175. Optional HERE only, as `agents`: `snapshotOf` always carries it, and a snapshot built without it reads as
+   *  no paging. */
+  older?: OlderPaging;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -274,27 +293,19 @@ const localDivider = (text: string): ChatEvent => {
   return { kind: 'system', uuid: `local-${localSeq}`, ts: new Date().toISOString(), text };
 };
 
-/** Append `incoming` to `existing`, skipping events already present. */
+/** Append `incoming` to `existing`, skipping events already present (`eventIdentity.ts`, one rule for a live frame and an
+ *  older page). */
 function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[] {
-  const uuids = new Set<string>();
-  const resultIds = new Set<string>();
-  for (const e of existing) {
-    if (e.kind === 'tool_result') resultIds.add(e.toolId);
-    else uuids.add(e.uuid);
-  }
-  const fresh: ChatEvent[] = [];
-  for (const e of incoming) {
-    if (e.kind === 'tool_result') {
-      if (resultIds.has(e.toolId)) continue;
-      resultIds.add(e.toolId);
-    } else {
-      if (uuids.has(e.uuid)) continue;
-      uuids.add(e.uuid);
-    }
-    fresh.push(e);
-  }
+  const fresh = freshOf(existing, incoming);
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
+
+/** Wave 175: the marker an older page leaves where it skipped a record, a local row the list draws as `OlderGap`. Its time
+ *  is the row it sits above, so it draws no time divider of its own (`olderPages.ts#prependPage`). */
+const gapMarker = (ts: string): ChatEvent => {
+  localSeq += 1;
+  return { kind: 'system', uuid: `${GAP_PREFIX}${localSeq}`, ts, text: OLDER_GAP_WORDS };
+};
 
 /** Both files known and equal: the same session dir (D-5560). */
 const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
@@ -354,6 +365,8 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         strandedAccount: msg.foreignAccount ?? null,
         searchComplete: msg.searchComplete ?? true,
         fileMeasured: msg.fileMeasured ?? true,
+        // Wave 175: paging starts again from this backlog's continuation, and a request outstanding is voided.
+        older: pagingOfBacklog(s.older ?? NO_PAGING, msg.older),
       };
     }
     case 'events':
@@ -431,15 +444,21 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         strandedAccount: null,
         searchComplete: true,
         fileMeasured: true,
+        older: pagingOfRotated(s.older ?? NO_PAGING),
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
     // The heartbeat belongs to the socket (the watchdog in `lib/ws.ts` reads it); the store keeps its state.
     case 'beat':
       return s;
-    // Desktop polish wave 171: older chat pages are served, but no screen asks for one yet; the store keeps its state.
-    case 'older-page':
-      return s;
+    // Desktop polish wave 175: an older page's answer. Display only: it prepends rows and moves the paging, and nothing
+    // else (no question, approval, helper fact, status or pending send reads it).
+    case 'older-page': {
+      const { paging, page } = answerPaging(s.older ?? NO_PAGING, msg);
+      if (page === null) return { ...s, older: paging };
+      const events = prependPage(s.events, page, gapMarker);
+      return { ...s, events, older: { ...paging, rows: paging.rows + events.length - s.events.length } };
+    }
     default:
       // Two guarantees, not one. `satisfies never` keeps the compile-time
       // exhaustiveness this switch had before this arm existed: add a
@@ -474,6 +493,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   agentsUnmeasured: s.agentsUnmeasured,
   readEvery: s.readEvery,
   reports: s.reports,
+  older: s.older,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -909,6 +929,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       file: null,
       pending: [],
       conn: 'connecting',
+      older: NO_PAGING,
 
       applyAnswered(answeredId, next) {
         // D-7220: a dialog written here clears the pairing (the reply carries none; `next`'s `dialog` frame pairs it).
@@ -986,9 +1007,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
           // menu until the next tick frames one.
           // D-7184: the pairing falls with the dialog it was for; the new stream's first frames send their own.
+          // Wave 175: a request outstanding on the socket that left can never be answered on the next one.
           onState: (conn) => {
             if (conn !== 'open') framed = false;
-            set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null });
+            set((s) => (conn === 'open'
+              ? { conn }
+              : { conn, askFrameSeen: false, dialog: null, pairing: null, older: pagingOfDrop(s.older) }));
           },
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
@@ -1065,10 +1089,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // the rows here so a finished workflow is never left on screen as running.
         //
         // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
-        set({
+        set((s) => ({
           ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
-          ...noHelpers(),
-        });
+          ...noHelpers(), older: pagingOfDrop(s.older),
+        }));
       },
 
       async send(text, opts = {}) {
@@ -1132,6 +1156,14 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         const end = get().agents.find((a) => a.id === id)?.endedAt ?? null;
         if (asked.has(id) && asked.get(id) === end) return;
         if (socket?.send({ type: 'helper-report', id } satisfies HelperReportRequest) === true) asked.set(id, end);
+      },
+
+      loadOlder() {
+        const continuation = requestOf(get().older);
+        if (continuation === null) return;
+        if (socket?.send({ type: 'older-page', continuation } satisfies OlderPageRequest) === true) {
+          set((s) => ({ older: pagingAsked(s.older, continuation) }));
+        }
       },
     };
   });

@@ -13,7 +13,7 @@ import {
   continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { PROCESS_CONTINUATION_KEY, type ContinuationKey } from './transcript/continuation.js';
+import { PROCESS_CONTINUATION_KEY, continuationShaped, type ContinuationKey } from './transcript/continuation.js';
 import { readOlderPage } from './transcript/olderPage.js';
 import { gateOlderPage, olderOf, pageAnswer, pageBinding, servingOf, type Serving } from './transcript/olderPageGate.js';
 import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubscriber, type FeedTasks, type SessionFeed } from './sessionFeed.js';
@@ -895,8 +895,10 @@ export class SessionStream implements FeedSubscriber {
    */
   olderPage(continuation: string): void {
     if (this.stopped) return;
+    // Wave 175: every answer names the request it answers, when that request's value has a continuation's shape.
+    const echo = continuationShaped(continuation) ? { for: continuation } : {};
     const gate = gateOlderPage(this.continuations, continuation, this.id, this.serving, this.pageInFlight);
-    if (!gate.go) { this.send(gate.answer); return; }
+    if (!gate.go) { this.send({ ...gate.answer, ...echo }); return; }
     this.pageInFlight = true;
     const gen = this.servingGen;
     const masker = this.deps.masker ?? SHAPE_ONLY_MASKER;
@@ -904,7 +906,7 @@ export class SessionStream implements FeedSubscriber {
     void readOlderPage(this.deps.io, gate.file, gate.c.cursor, bind).then((page) => {
       this.pageInFlight = false;
       // A late page, after the stream moved on, is dropped.
-      if (!this.stopped && gen === this.servingGen) this.send(pageAnswer(this.continuations, gate.c, page));
+      if (!this.stopped && gen === this.servingGen) this.send({ ...pageAnswer(this.continuations, gate.c, page), ...echo });
     }, () => { this.pageInFlight = false; });
   }
 

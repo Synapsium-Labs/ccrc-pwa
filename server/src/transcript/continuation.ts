@@ -46,6 +46,13 @@ const VERSION = 'c1';
 const SHAPE = /^c1\.([0-9a-f]{16})\.((?:[0-9a-f]{2})+)\.([0-9a-f]{64})$/;
 const TAG = /^[0-9a-f]{32}$/;
 
+/** Whether `token` has a continuation's length and grammar, the first two checks `open` makes, and nothing more (no key,
+ *  MAC or field is read). The stream echoes only such a value back on its answer (desktop polish wave 175): an
+ *  over-long or malformed string is never reflected. */
+export function continuationShaped(token: unknown): token is string {
+  return typeof token === 'string' && token.length <= CONTINUATION_MAX_CHARS && SHAPE.test(token);
+}
+
 const safeOffset = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 
 export class ContinuationKey {
@@ -93,7 +100,7 @@ export class ContinuationKey {
    *  MAC verified. */
   open(token: unknown): OpenAnswer {
     const invalid = { ok: false, reason: 'invalid' } as const;
-    if (typeof token !== 'string' || token.length > CONTINUATION_MAX_CHARS) return invalid;
+    if (!continuationShaped(token)) return invalid;
     const m = SHAPE.exec(token);
     if (m === null) return invalid;
     if (m[1] !== this.keyId) return { ok: false, reason: 'expired' };

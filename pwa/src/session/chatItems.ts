@@ -12,6 +12,7 @@ import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } fr
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import type { PendingSend } from '../stores/session';
 import { isLocalDivider } from './localDivider';
+import { uniqueKeys } from './rowKeys';
 import type { MessageEvent } from './MessageBubble';
 import { timeOf } from '../lib/format';
 
@@ -194,13 +195,15 @@ export function buildChatItems(
     }
   }
 
+  // Each row's key once (desktop polish wave 175, `rowKeys.ts`): two message events of one record share its uuid.
+  const rows = uniqueKeys(items);
   for (const p of pending) {
-    items.push({ kind: 'pending', key: `pending-${p.key}`, send: p });
+    rows.push({ kind: 'pending', key: `pending-${p.key}`, send: p });
   }
   // Explicit "Claude is working this turn" indicator. The block caret above only
   // rides the last assistant message, so it's invisible when the last item is a
   // user message, a tool still crunching, or Claude is thinking with no text yet.
   // This trailing pulse makes the working state legible whatever the tail is.
-  if (busy) items.push({ kind: 'working', key: 'working' });
-  return items;
+  if (busy) rows.push({ kind: 'working', key: 'working' });
+  return rows;
 }
