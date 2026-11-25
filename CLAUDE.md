@@ -497,8 +497,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   allocator-era number defined in two plans). The merge queue runs it on the
   merged result, so the pair never lands; the one that lands second renumbers, the entry and every reference to
   it. The allocator (`POST /api/ledger/deviations`) retired on 2026-11-23: it answers 410 and writes nothing,
-  and its prose-seeded floor, which only ever rose, is no longer read; `GET /api/ledger?project=` still reads
-  the numbers it issued. Source files carry `D-N` refs in comments; **read them
+  and its prose-seeded floor, which only ever rose, is no longer raised; `GET /api/ledger?project=` still reports
+  it as history, never a number to take, and still reads the numbers it issued. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
