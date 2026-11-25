@@ -940,7 +940,7 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     const OWN: readonly [string, RegExp][] = [
       // Review 1665 N1: the body's direct-entry guard names the verb to start it protected, as it names ws-lease-mark.
       // Review 1669 C1: its middle is the guard's own grammar, `"${1-}" == <verb> ||` alternations and nothing else.
-      ['direct-entry guard', /^if \[\[ "\$\{BASH_SOURCE\[0\]\}" == "\$\{0\}" \]\] && \{ \[\[ (?:"\$\{1-\}" == [a-z-]+ \|\| )*"\$\{1-\}" == ws-lease-mark \|\| "\$\{1-\}" == ws-lease-audit \|\| "\$\{1-\}" == delegation-adopt \]\] \\$/],
+      ['direct-entry guard', /^if \[\[ "\$\{BASH_SOURCE\[0\]\}" == "\$\{0\}" \]\] && \{ \[\[ (?:"\$\{1-\}" == [a-z-]+ \|\| )*"\$\{1-\}" == ws-lease-mark \|\| "\$\{1-\}" == ws-lease-audit \|\| "\$\{1-\}" == delegation-adopt \|\| "\$\{1-\}" == docs-folder \]\] \\$/],
       ['caps token', /^ {2}echo delegation-adopt {3}# D-8112: /],
       ['definition', /^cmd_delegation_adopt\(\) \{ {3}# ccd delegation-adopt --state on\|off — /],
       ['usage check', /^ {2}\[\[ \$# -eq 2 && \$1 == --state \]\] \|\| die "usage: ccd delegation-adopt --state on\|off"$/],
@@ -968,7 +968,8 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     for (const f of ['ccd/install-session-hooks.sh', 'ccd/session-hook.sh']) {
       const lines = codeLines(BASH.find((b) => rel(b) === f) ?? '').filter((l) => l.includes(NAME));
       expect(lines.length, `${f} forbids the verb`).toBeGreaterThan(0);
-      for (const l of lines) expect(l, `${f} names it outside its forbidden-verb list`).toMatch(/ws-lease-mark.{1,8}delegation-adopt.{1,8}roll/);
+      // X2 P2.3: `docs-folder`, the docs folder registry's one writer, follows it in the same lists.
+      for (const l of lines) expect(l, `${f} names it outside its forbidden-verb list`).toMatch(/ws-lease-mark.{1,8}delegation-adopt.{1,8}docs-folder.{1,8}roll/);
     }
   });
 
@@ -987,7 +988,7 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     // Review 1669 A2: the precedents' row (pane-scope-stop, testbox-remote), with one exact allowance: the launcher's
     // `is_protected` tuple names the verb to start it protected (review 1665 N1). Nothing wider is allowed.
     const ALLOWED: readonly [string, string][] = [['ccd/ccd-entry.py',
-      "    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):"]];
+      "    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt', 'docs-folder')):"]];
     const strays = (file: string, lines: string[]): string[] => lines
       .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))
       .filter((l) => !ALLOWED.some(([f, a]) => f === file && a === l)).map((l) => `${file}: ${l.trim()}`);

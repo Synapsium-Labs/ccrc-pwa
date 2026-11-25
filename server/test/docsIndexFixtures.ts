@@ -82,10 +82,11 @@ export function normaliseDocsIndex(o: unknown): unknown {
 
 /** A `#!/bin/sh` script that answers `caps` with the `caps` lines and anything else with `line` and a newline,
  *  with shell builtins only, so a doctor or install fixture can plant it as `ccd` on a PATH that holds nothing
- *  else. The default `caps` are the two words the doctor's `docs` check reads, so a stub planted without them
- *  stays a healthy ccd. A line or a cap holding a single quote or a newline cannot be quoted by this shape, so
- *  it is refused rather than mangled. */
-export function docsIndexStubScript(line: string, caps: readonly string[] = ['docs-log-v1', 'docs-sections-v2']): string {
+ *  else. The default `caps` are the four words the doctor's `docs` check reads (X2 P2.1 Step 0 added the range and
+ *  folders words), so a stub planted without them stays a healthy ccd. A line or a cap holding a single quote or a
+ *  newline cannot be quoted by this shape, so it is refused rather than mangled. */
+export function docsIndexStubScript(line: string,
+  caps: readonly string[] = ['docs-log-v1', 'docs-sections-v2', 'docs-range-v1', 'docs-folders-v1']): string {
   if (/['\n\r]/.test(line)) throw new Error('docsIndexStubScript: the line holds a single quote or a newline');
   if (caps.some((c) => /['\n\r]/.test(c))) throw new Error('docsIndexStubScript: a cap holds a single quote or a newline');
   const capLines = caps.map((c) => `'${c}'`).join(' ');

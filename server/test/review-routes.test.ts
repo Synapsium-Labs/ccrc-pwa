@@ -51,6 +51,9 @@ async function fixture(armed = false, unreadable = false) {
       : { store } });
   const views = vi.spyOn(store, 'markViewed');
   const close = async () => {
+    // A connection whose response has not finished when the server closes is not idle, so `app.close()` would wait out
+    // its keep-alive timeout (72 s) past the case's 20 s: the case is over, so its connections go first.
+    app.server.closeAllConnections();
     await app.close();
     await Promise.allSettled(views.mock.results.map(result => result.value));
   };

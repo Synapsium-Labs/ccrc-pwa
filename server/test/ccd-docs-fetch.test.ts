@@ -287,6 +287,9 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       + 'fatal: fsck error in packed object\nfatal: fetch-pack: invalid index-pack output\n';
     const LOCK = "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.\n";
     const DIRFILE = "error: cannot lock ref 'refs/remotes/origin/foo/bar': 'refs/remotes/origin/foo' exists; cannot create 'refs/remotes/origin/foo/bar'\n";
+    // The same held ref lock as git 2.53.0 words it (measured under LC_ALL=C, rc 1): neither "cannot lock ref" nor the
+    // `.lock': File exists` evidence, one whole line instead.
+    const LOCK_253 = 'error: fetching ref refs/remotes/origin/main failed: reference already exists\n';
     // The lab case below's stderr on git 2.55.0, measured in a container under the docs argv and LC_ALL=C.
     const DIRFILE_255 = 'warning: fetch normally indicates which branches had a forced update,\n'
       + "but that check has been disabled; to re-enable, use '--show-forced-updates'\n"
@@ -310,6 +313,29 @@ describe('docs-fetch classifier (row 42; R6: measured on git 2.43 under LC_ALL=C
       ['auth: no prompt', 128, "fatal: could not read Username for 'https://example.invalid': terminal prompts disabled\n", false, 'fetch-auth-failed'],
       ['auth: ssh', 128, 'git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n', false, 'fetch-auth-failed'],
       ['lock', 1, LOCK, false, 'ref-locked'],
+      ['lock, git 2.53 wording', 1, LOCK_253, false, 'ref-locked'],
+      ['lock, git 2.53 wording among warnings', 1, `warning: something first\n${LOCK_253}error: some local refs could not be updated\n`,
+        false, 'ref-locked'],
+      // Near misses of the 2.53 line: another rc, another verb word, a prefix or suffix on the line, another ref namespace.
+      ['2.53 lock wording needs rc 1', 255, LOCK_253, false, 'fetch-failed'],
+      ['2.53 lock wording needs rc 1, not 128', 128, LOCK_253, false, 'fetch-transport'],
+      ['2.53 lock line with another verb word', 1,
+        'error: fetching ref refs/remotes/origin/main failed: reference does not exist\n', false, 'fetch-failed'],
+      ['2.53 lock line as part of a longer line', 1,
+        'fatal: error: fetching ref refs/remotes/origin/main failed: reference already exists\n', false, 'fetch-failed'],
+      ['2.53 lock line with a suffix', 1,
+        'error: fetching ref refs/remotes/origin/main failed: reference already exists (and more)\n', false, 'fetch-failed'],
+      ['2.53 lock line outside refs/', 1,
+        'error: fetching ref HEAD failed: reference already exists\n', false, 'fetch-failed'],
+      // Only the tracked prefix the verb fetches into, refs/remotes/origin/, is a held lock of ours.
+      ['2.53 lock line on another refs/ prefix: heads', 1,
+        'error: fetching ref refs/heads/main failed: reference already exists\n', false, 'fetch-failed'],
+      ['2.53 lock line on another refs/ prefix: tags', 1,
+        'error: fetching ref refs/tags/v1 failed: reference already exists\n', false, 'fetch-failed'],
+      ['2.53 lock line on another remote', 1,
+        'error: fetching ref refs/remotes/mirror/main failed: reference already exists\n', false, 'fetch-failed'],
+      ['2.53 lock line on the bare remote directory', 1,
+        'error: fetching ref refs/remotes/origin/ failed: reference already exists\n', false, 'fetch-failed'],
       // A directory/file conflict says "cannot lock ref" too, but no other process holds anything: only a prune
       // cures it, so it is not the retried word. Measured on git 2.43.0 (see the lab case below).
       ['a ref directory/file conflict is not a lock', 1, DIRFILE, false, 'fetch-failed'],
@@ -401,7 +427,8 @@ describe('docs-fetch ref-locked and its lock age (rows 42 and 61, ccd half)', ()
   it('a lock touched 5 s ago answers ref-locked with lockAgeMs about 5000', () => {
     const { a, spanMs } = lockedFetch(5_000);
     expect(a).toMatchObject({ ok: false, failure: 'ref-locked', branch: 'main' });
-    expect(String(a['detail'])).toContain('cannot lock ref');
+    // git 2.43 words a held ref lock "cannot lock ref ... File exists", git 2.53 "fetching ref ... failed: reference already exists".
+    expect(String(a['detail'])).toMatch(/cannot lock ref|^error: fetching ref refs\/\S+ failed: reference already exists$/m);
     // The true age lies between 5000 and 5000 plus the run's own length; 10 ms covers clock rounding.
     expect(a['lockAgeMs'] as number).toBeGreaterThanOrEqual(5_000 - 10);
     expect(a['lockAgeMs'] as number).toBeLessThanOrEqual(5_000 + spanMs + 10);

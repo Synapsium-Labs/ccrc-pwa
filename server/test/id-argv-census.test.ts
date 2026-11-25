@@ -80,6 +80,9 @@ const ID_BUILDERS = {
   poolAnswer: 'no-id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
   docsShowRange: 'no-id',
+  // X2 P2: the outside-folder builders take a folder label (the server checks `DOCS_FOLDER_LABEL_RE` before any exec, and ccd
+  // checks it again) and a path or a pin, never a registry id.
+  docsFolderList: 'no-id', docsFolderAdd: 'no-id', docsFolderRemove: 'no-id', docsFolderRead: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {

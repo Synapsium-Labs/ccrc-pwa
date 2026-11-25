@@ -193,6 +193,15 @@ describe('docs failure vocabulary', () => {
     ['snapshot-gone', 'ccd', 'auto'],
     ['range-too-large', 'ccd', 'none'],
     ['prepare-busy', 'ccd', 'manual'],
+    // Outside folders (X2 P2): the registry and admission words of `docs-folder` and `docs-folder-read`
+    ['bad-label', 'ccd', 'none'],
+    ['unknown-folder', 'ccd', 'none'],
+    ['label-exists', 'ccd', 'none'],
+    ['absent', 'ccd', 'none'],
+    ['not-a-directory', 'ccd', 'none'],
+    ['foreign-owner', 'ccd', 'none'],
+    ['protected', 'ccd', 'none'],
+    ['unreadable', 'ccd', 'manual'],
     // Fetch
     ['remote-absent', 'ccd', 'none'],
     ['remote-branch-absent', 'ccd', 'none'],
@@ -226,17 +235,20 @@ describe('docs failure vocabulary', () => {
     ['bad-query', 'server', 'none'],
     ['raster-mismatch', 'server', 'none'],
     ['response-type-refused', 'server', 'none'],
+    // The outside-folder reads' sign-in gate (X2 P2.3)
+    ['auth-off', 'server', 'none'],
+    ['unauthenticated', 'server', 'none'],
   ];
 
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
   describe('DOCS_FAILURES and DOCS_FAILURE_RETRY (row 53, L0 half)', () => {
-    it('the hand table is whole: 61 distinct words, 45 ccd and 16 server', () => {
+    it('the hand table is whole: 71 distinct words, 53 ccd and 18 server', () => {
       const words = SPEC_WORDS.map(([w]) => w);
-      expect(new Set(words).size).toBe(61);
-      expect(words).toHaveLength(61);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(45);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(16);
+      expect(new Set(words).size).toBe(71);
+      expect(words).toHaveLength(71);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(53);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(18);
     });
 
     it('DOCS_FAILURE_RETRY and DOCS_FAILURES name the same words, in both directions', () => {
@@ -273,10 +285,10 @@ describe('docs failure vocabulary', () => {
   });
 
   describe('DOCS_CCD_FAILURES', () => {
-    it('is exactly the 45 ccd words of the hand table, each once', () => {
+    it('is exactly the 53 ccd words of the hand table, each once', () => {
       const ccd = SPEC_WORDS.filter(([, o]) => o === 'ccd').map(([w]) => w);
-      expect(DOCS_CCD_FAILURES).toHaveLength(45);
-      expect(new Set(DOCS_CCD_FAILURES).size).toBe(45);
+      expect(DOCS_CCD_FAILURES).toHaveLength(53);
+      expect(new Set(DOCS_CCD_FAILURES).size).toBe(53);
       expect(sorted(DOCS_CCD_FAILURES)).toEqual(sorted(ccd));
     });
 
@@ -1787,5 +1799,48 @@ describe('X2 P1: the range ceilings, the stat pin and the range wire types', () 
     expect(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64) })).toContain('f'.repeat(64));
     expect(docsR.docListPinKey({ kind: 'committed', commit: 'c'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' }))
       .toContain('c'.repeat(40));
+  });
+});
+
+// ===== X2 P2.3: the outside-folder grammar, wire kinds and URLs (spec 2026-11-18 section 4.1 and 7) =====
+describe('outside folders (L0)', () => {
+  const FP = 'c'.repeat(64);
+
+  it('DOCS_FOLDER_LABEL_RE is the anchored matcher of DOCS_FOLDER_LABEL_RE_BODY, with no state between calls', () => {
+    expect(docsR.DOCS_FOLDER_LABEL_RE_BODY).toBe('[a-z0-9][a-z0-9-]{0,31}');
+    expect(docsR.DOCS_FOLDER_LABEL_RE.flags).not.toMatch(/[gy]/);
+    for (const ok of ['a', '9', 'team-a', 'a'.repeat(32)]) expect(docsR.DOCS_FOLDER_LABEL_RE.test(ok), ok).toBe(true);
+    for (const bad of ['', '-a', '.a', 'a.b', 'a/b', 'A', 'a b', 'a\n', 'a'.repeat(33), '..']) {
+      expect(docsR.DOCS_FOLDER_LABEL_RE.test(bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(docsR.DOCS_FOLDER_LABEL_RE.test('a')).toBe(true);
+    expect(docsR.DOCS_FOLDER_LABEL_RE.test('a')).toBe(true);
+  });
+
+  it('the folder failure words are ccd\'s, the two gate words are the server\'s, and the verbs name both folder verbs', () => {
+    for (const w of ['bad-label', 'absent', 'not-a-directory', 'foreign-owner', 'protected', 'unreadable', 'label-exists', 'unknown-folder'] as const) {
+      expect(docsR.DOCS_FAILURES[w], w).toBe('ccd');
+    }
+    for (const w of ['auth-off', 'unauthenticated'] as const) expect(docsR.DOCS_FAILURES[w], w).toBe('server');
+    expect(docsR.DOCS_VERBS).toEqual(expect.arrayContaining(['docs-folder', 'docs-folder-read']));
+  });
+
+  it('the entry kinds are the seven ccd lists, derived from the type', () => {
+    expect([...docsR.DOCS_FOLDER_ENTRY_KINDS].sort())
+      .toEqual(['file', 'foreign-owner', 'hardlink', 'other-device', 'special', 'symlink', 'unreadable']);
+  });
+
+  it('docsApi builds the seven doors\' URLs, each label through encodeURIComponent, and the paths URL once', () => {
+    expect(docsR.docsApi.folders()).toBe('/api/docs-folders');
+    expect(docsR.docsApi.folderPaths()).toBe('/api/docs-folders/paths');
+    expect(docsR.docsApi.folderAdd()).toBe('/api/docs-folders');
+    expect(docsR.docsApi.folderRemove('team-a')).toBe('/api/docs-folders/team-a');
+    expect(docsR.docsApi.folderRemove('a/b')).toBe('/api/docs-folders/a%2Fb');
+    expect(docsR.docsApi.folderTree('notes')).toBe('/api/docs-folders/notes/tree');
+    expect(docsR.docsApi.folderFile('notes', 'specs', 'a/b c.md', FP)).toBe(`/api/docs-folders/notes/file?section=specs&path=a%2Fb%20c.md&fp=${FP}`);
+    expect(docsR.docsApi.folderRangePrepare('notes', 'plans', 'a.md', { kind: 'fp', sha: FP }))
+      .toBe(`/api/docs-folders/notes/range?section=plans&path=a.md&pin=${encodeURIComponent('fp:' + FP)}&prepare=1`);
+    expect(docsR.docsApi.folderRangeFrame('notes', 'plans', 'a.md', { kind: 'stat', size: 3, mtimeNs: '4' }, 'e'.repeat(32), 5, 6))
+      .toBe(`/api/docs-folders/notes/range?section=plans&path=a.md&pin=${encodeURIComponent('stat:3:4')}&snapshot=${'e'.repeat(32)}&offset=5&length=6`);
   });
 });

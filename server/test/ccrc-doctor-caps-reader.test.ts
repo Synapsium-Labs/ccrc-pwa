@@ -42,20 +42,31 @@ function check(home: string, name: string, extra: NodeJS.ProcessEnv = {}): { lin
 const N = DOCS_INDEX_READY.projects.length;
 const K = DOCS_INDEX_READY.projects.filter((p) => p.state === 'ready').length;
 const DOCS_LINE = `${N} projects under ccd's projects root, ${K} served by Docs`;
-const DOCS_TAIL = 'so Docs here has no per-doc history or no vision and promise sections';
+const DOCS_TAIL = 'so Docs here lacks per-doc history, the vision and promise sections, large-file reads or outside folders';
+// The four `ccd caps` words the docs check names (X2 P2.1 Step 0 adds P1's range word and P2's folders word).
+const DOCS_WORDS = ['docs-log-v1', 'docs-sections-v2', 'docs-range-v1', 'docs-folders-v1'] as const;
 
 describe('docs: what the caps read measured', () => {
-  it('a measured list holding both words: PASS', () => {
+  it('a measured list holding every word: PASS', () => {
     const home = healthy('ccrc-caps-docs-both-');
-    plantCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-log-v1', 'docs-sections-v2']));
+    plantCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), DOCS_WORDS));
     const r = check(home, 'docs');
     expect(r.line).toBe(`PASS docs: ${DOCS_LINE}`);
     expect(r.code).toBe(0);
   });
 
+  it('a measured list without the range and folders words: WARN naming both, remedy ccrc update (X2 P2.1 Step 0)', () => {
+    const home = healthy('ccrc-caps-docs-norange-');
+    plantCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-log-v1', 'docs-sections-v2']));
+    const r = check(home, 'docs');
+    expect(r.line).toBe(`WARN docs: ${DOCS_LINE}; this ccd does not list docs-range-v1 docs-folders-v1, ${DOCS_TAIL}`);
+    expect(r.next).toBe('  remedy: ccrc update');
+    expect(r.code).toBe(2);
+  });
+
   it('a measured list without docs-log-v1: WARN naming it, remedy ccrc update', () => {
     const home = healthy('ccrc-caps-docs-nolog-');
-    plantCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-sections-v2']));
+    plantCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY), ['docs-sections-v2', 'docs-range-v1', 'docs-folders-v1']));
     const r = check(home, 'docs');
     expect(r.line).toBe(`WARN docs: ${DOCS_LINE}; this ccd does not list docs-log-v1, ${DOCS_TAIL}`);
     expect(r.next).toBe('  remedy: ccrc update');
@@ -66,13 +77,13 @@ describe('docs: what the caps read measured', () => {
     const home = healthy('ccrc-caps-docs-neither-');
     plantCcd(home, docsCcd(`printf '%s\\n' caps ws-add`));
     const r = check(home, 'docs');
-    expect(r.line).toBe(`WARN docs: ${DOCS_LINE}; this ccd does not list docs-log-v1 docs-sections-v2, ${DOCS_TAIL}`);
+    expect(r.line).toBe(`WARN docs: ${DOCS_LINE}; this ccd does not list ${DOCS_WORDS.join(' ')}, ${DOCS_TAIL}`);
     expect(r.next).toBe('  remedy: ccrc update');
     expect(r.code).toBe(2);
   });
 
   // An unmeasured read is a WARN that says nothing was measured, never "does not list" (doctor-caps-one-reader).
-  const DOCS_UNMEASURED = `WARN docs: ${DOCS_LINE}; ccd caps did not answer, so whether this ccd lists docs-log-v1 docs-sections-v2 `
+  const DOCS_UNMEASURED = `WARN docs: ${DOCS_LINE}; ccd caps did not answer, so whether this ccd lists ${DOCS_WORDS.join(' ')} `
     + 'was not measured';
   const CAPS_FIX = '  remedy: run $HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers';
 

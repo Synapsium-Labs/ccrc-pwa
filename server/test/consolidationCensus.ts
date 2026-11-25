@@ -319,6 +319,10 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsShowRange(call.project, call.target.where, call.target.section,', nth: 1, arm: 'carried' },
+  // The outside-folder executors (X2 P2.3): each hands the runner's whole answer to `settle`, whose `classify` reads
+  // `res.ran === false` first (its check 1), as the docs executors above do.
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.verb === \'docs-folder\' ? CCD_ARGV.docsFolderList() : CCD_ARGV.docsFolderRead(call.label, call.read)),', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.mode === \'add\' ? CCD_ARGV.docsFolderAdd(call.label, call.path) : CCD_ARGV.docsFolderRemove(call.label)),', nth: 1, arm: 'carried' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
