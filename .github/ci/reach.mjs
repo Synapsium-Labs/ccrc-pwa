@@ -82,7 +82,9 @@ export const READS = {
   // server/test/scan/ (D-8288): the pwa census and scan suites import the repo's one TypeScript parser from
   // server/test/scan/parse.ts. KNOWN WIDTH: a change to its pin alone (`typescript-api` in server/package.json and the
   // lock) is not listed, so a pull request that only bumps it skips the pwa tests; the merge queue runs them whole.
-  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/', 'ccd/testbox-knobs', 'server/test/scan/'],
+  // ccd/ccrc (desktop-polish wave 180): pwa/test/offered-commands.test.ts reads the CLI's dispatch, so a change to a verb
+  // or its subcommands runs the guard that every command the console offers is one the CLI has.
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/', 'ccd/testbox-knobs', 'server/test/scan/', 'ccd/ccrc'],
   browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
 };
 
