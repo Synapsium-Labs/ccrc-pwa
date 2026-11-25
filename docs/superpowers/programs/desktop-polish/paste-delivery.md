@@ -147,9 +147,11 @@ session run a build on the test box on demand. Instead:
   `shared`, `server/src`, `agent/src` or `pwa/src` spells the count or a part's size; every other use derives from
   `deliveryParts()`. The derivation checks trust with trust and a part with a part: a pair's time is a sum, so a mixed pair
   never exceeds the larger same-kind pair, and the test still asserts all four pairings.
-- Each pass sends at most one capture, trust first. The lane names the first part, in order, of the newest trusted build
-  that has no row at the current recipe version. A box fault spaces the next try by the lane's hour and never counts
-  toward a build's trust fails.
+- Each pass sends at most one capture, trust first. The lane asks for a delivery job only on a pass that sent no trust job,
+  and that is the whole of "trust first": a queued build that is not due (the retry ladder's hour, or a build whose every
+  try sends nothing) does not hold delivery back (call 1145 point 2b, kept by call 1253). The lane names the first part, in
+  order, of the newest trusted build that has no row at the current recipe version. A box fault spaces the next try by the
+  lane's hour and never counts toward a build's trust fails.
 - **The box's capability is its own reader** (call 1148). There is no recipe list on the status answer: on main, that
   reader refuses a whole answer for a key it does not name, so a list would break every capture and test run on an older
   agent. An older box, or a box without the driver wired, refuses the delivery submission at its frame reader, before
@@ -181,8 +183,41 @@ session run a build on the test box on demand. Instead:
   margin 801 s of the 900 s wait; three parts. Gate G1 runs the composed delivery runner on a virtual clock with every
   bound taken, and its elapsed time EQUALS the worst case less the two allowances and the polls' overruns, exactly. So
   the worst case is a bound the runner is held to, not an estimate.
-- **To read it:** the test box builds read (`GET /api/testbox/builds`) shows each build's delivery word and, per case, the
-  verdict, the counts and the first divergence.
+- **To read it:** the test box builds read (`GET /api/testbox/builds`) carries `deliveries`: for each build with any row,
+  its join word, each measured part's cases (verdict, counts, first divergence), and each unmeasured part with its last
+  not-sent word. So a reader tells "no box runs the recipe" (`recipe-not-run`) from "the box was not reached"
+  (`no-test-box`, `not-started`). There is no console surface yet.
+
+## 7a. The lane, built (the capture owner's call 1253), and its known limits
+
+The lane's packet is built as approved, with call 1253's one change: the decider no longer holds delivery back while any
+build is queued. Its conditions are built with it:
+- **The two writers' answers are read.** A refused attempt stamp ends the delivery pass before anything is recorded, as
+  the trust loop's does. A refused record is one server log line. Each has a case.
+- **Two signatures** for `FleetIO.testboxCapture`: a build alone, or `'delivery'` with its part. A delivery ask with no
+  part cannot be written. An untyped caller's is never sent and answers `not-started` (no job went out), at the
+  transport and at both io arms.
+- **The view's reader refuses a view at odds with itself**: every part of the recipe listed exactly once, measured or
+  unmeasured, and the word the join of what is listed. So it refuses a part listed both ways or not at all, and an
+  `intact` or `refused` word beside an unmeasured part. The join is written once (`deliveryResult.ts#deliveryJoinWord`);
+  the lane's word and the reader's check both ask it. A row is current only with its version, word, result and time
+  together, so the join, the next job and the view split a build's parts the same way.
+
+**Known limits** (each said in the PR too):
+- **No give-up and no notice** (read). A part with no current result is asked once an hour for as long as its build is the
+  newest passed one. A version skew or a box fault that persists is twenty-four asks a day, one part each. Nothing raises
+  an item or pushes for it. The spacing is measured by the lane's unanswered and another-recipe cases.
+- **While a delivery capture is out, the whole pass waits** (read; the in-flight case measures that no second job goes
+  out). Builds seen are not noted, the untrusted-build items are neither raised nor settled, and no trust retry is put
+  back, for at most the request's deadline (17 min). At the part's worst case it is 385.5 s.
+- **The table is never pruned** (read: the store has no delete). It holds at most one row per part of each build that was
+  ever the newest passed one.
+- **A deliveries read that throws makes the whole build list read unavailable**, the trust list with it: one answer,
+  never half of one (measured by a case).
+- **What a merge starts** (read). On a server whose capture lane runs (its transport is wired at start-up, as in
+  production), delivery jobs begin for the newest passed build, with no switch. A test box whose tools do not carry the
+  driver closes the frame, and the lane records `recipe-not-run` once an hour until they do (measured by the not-taken
+  case and the spacing).
 
 ## 8. What lands where
 
@@ -195,7 +230,7 @@ session run a build on the test box on demand. Instead:
 | The drive's steps, reply, window and worst case | `agent/src/testbox/captureDelivery.ts` | this PR |
 | The runner's delivery branch, the stand-in's reply rule, the launch geometry, the desk, the composition, the op | the capture files | this PR (packet 2, the Overlord's yes, call 1208) |
 | The parts, the part index on the wire and the version over the split | the capture contract and the result file | this PR (the Overlord's yes, call 1159) |
-| The lane, the store and the read | the lane's files | the lane's packets, to the Overlord and to each file's holder |
+| The lane, the store and the read | `shared/deliveryLane.ts`, `server/src/buildCaptureLane.ts`, `server/src/testboxCapture.ts`, the io arms, `server/src/coord/claudeBuildDeliveriesStore.ts`, migration 128, the builds read | this PR (the Overlord's yes, call 1253; each held file's hunk with its holder's yes) |
 
 ## 9. What this cannot prove, and what stays unmeasured
 
@@ -265,14 +300,17 @@ The driver is the one thing in the recipe that types keys. Each statement has a 
   module graph, the front end's included; the case texts do not. **Measured:** the production PWA build at this branch
   contains no case text, generator or version code. Its JavaScript totals 8,333,992 bytes, against 8,347,026 at the base
   09c8f5d502, with 179 assets each. The difference is chunking. After the parts packet it still holds by construction:
-  the contract (`claudeBuildCapture.ts`, `testbox.ts`, `agent-protocol.ts`) imports only `deliveryResult.ts`, which
-  imports only `claudeVersion.ts`. The bundle is measured again at the final tip.
+  the contract (`claudeBuildCapture.ts`, `testbox.ts`, `agent-protocol.ts`) imports only `deliveryResult.ts`. After the
+  lane, `deliveryResult.ts` imports `claudeVersion.ts` and `claudeBuildTrust.ts` (the not-sent words), and
+  `claudeBuildTrust.ts` imports one type from `deliveryResult.ts`. The front end already bundles both. The decider,
+  `deliveryLane.ts`, imports the case file, and nothing in `pwa/src` imports it. The bundle is measured again at the final
+  tip.
 - **redundant guards dropped.** The link checks on the driver's directories and the explicit field check on a delivery
   reply could not be shown red, since other checks already refuse those inputs. They were removed, not kept.
 
 ## 11. Mutation record
 
-52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145), 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7) and 7 for call 1208 (round 8), each run through `ccrc test` with the file restored afterwards. Every
+52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145), 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7), 7 for call 1208 (round 8) and 46 for the lane (round 9, call 1253), each run through `ccrc test` with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
@@ -293,3 +331,4 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 | packet 2 (round 7) | the shared count 4 and 2 (the deadline test alone); the desk on the default contract; the settle and quiet bounds from the default contract; the quiet period dropped from the worst case; a quiet period of 20 s; build trust reading a delivery bound | the deadline test's pair and equality case; the desk's delivery late case; the bounds pin; the worst-case formula; the pair bound; trust's worst case unchanged by the delivery bounds |
 | call 1208 (round 8) | the kill grace dropped from the worst case; the driver's grace at 0; the runner's no-part check; the desk's part defaulted to 0; the environment built twice; the server's tree dropped from the release; the wiring's grace a constant | the composed delivery run and the figures; the stubborn-child case; the no-part runner and desk cases; the one-environment case; the compiled-driver case; the wiring's grace case (the one survivor, now killed) |
 | parts (rounds 4 and 5) | the turn-length and side-request caps; each currency word; the shared count one more and one fewer | the over-long turn case; the three currency cases; the derivation's equality case |
+| the lane (round 9, call 1253) | the decider: the current-row test, the spacing and its boundary, skipping ahead, the oldest passed build, a failed build, the queued hold put back; the join's order, its `refused` and its `incomplete`; the word from any row; currency's version, result and time; the view's order, not-sent word and word; the reader's coverage and word checks. The lane: trust not first, the attempt word either way, each writer's answer ignored, each currency arm, the null-result check, the recipe line. The transport: not-taken per job kind, the delivery field, the dropped detail, a part-less ask; the remote arm's part-less ask and its reply reader. The store: the whole-row version and word, an unknown not-sent word, the attempt's count, accumulation, why and clock, the record's replace, its clearing of the why and its time | the decider, lane, transport and store cases. Five first survived: the store's whole-row version and word and its unknown-word check, and the record's clearing of the why, each now killed by a new store case; the null-result check, killed once its case named its own line (the sweep's catch had logged one line too). One was cut again where its first snippet matched twice |

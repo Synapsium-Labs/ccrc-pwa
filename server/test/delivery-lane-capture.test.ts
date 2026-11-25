@@ -175,7 +175,7 @@ describe('what each answer comes to', () => {
     const s = await setup(fake(() => ({ kind: 'answered', result: { recipe: 'delivery' } })));
     await s.pass();
     expect(s.coord.claudeBuildDeliveries()[0]).toMatchObject({ attempts: 1, result: null });
-    expect(warned()).toHaveLength(1);
+    expect(warned()).toEqual([expect.stringMatching(/^ccrc-server: delivery capture: the answer for \S+ part 0 is not a delivery result/)]);
   });
 
   it('a build-trust shaped answer to a delivery job is no result', async () => {

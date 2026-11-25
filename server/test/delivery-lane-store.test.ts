@@ -80,6 +80,14 @@ describe('the delivery writers', () => {
     expect(c.claudeBuildDeliveries()[0]).toMatchObject({ attempts: 2, lastAttemptAt: 20, result: r, word: 'intact' });
   });
 
+  it('a recorded result clears the part\'s last not-sent word: a measured part is not also unmeasured', () => {
+    const c = store();
+    c.markDeliveryAttempt('2.1.320', 1, 10, 'recipe-not-run');
+    expect(c.claudeBuildDeliveries()[0]).toMatchObject({ notSent: 'recipe-not-run' });
+    c.recordDelivery(deliveryResultFor('2.1.320', 1), 11);
+    expect(c.claudeBuildDeliveries()[0]).toMatchObject({ notSent: null, word: 'intact', lastAttemptAt: 10 });
+  });
+
   it('a result of the newer recipe replaces an older version\'s row', () => {
     const c = store();
     c.recordDelivery(deliveryResultFor('2.1.320', 0, 'altered', '0123456789abcdef'), 10);
@@ -97,6 +105,19 @@ describe('the delivery writers', () => {
     expect(c.claudeBuildDeliveries().map((r) => `${r.build}:${r.part}`)).toEqual(['2.1.320:0', '2.1.320:1', '2.1.310:1']);
     c.db.prepare("UPDATE claude_build_deliveries SET result = '{\"nope\":1}' WHERE build = '2.1.310'").run();
     expect(c.claudeBuildDeliveries().at(-1)).toMatchObject({ build: '2.1.310', version: null, word: null, result: null, at: null });
+  });
+
+  it('a row is read whole or not at all: a version or a word column at odds with its stored result reads as a part with none, and an unknown not-sent word as none', () => {
+    const c = store();
+    c.recordDelivery(deliveryResultFor('2.1.320', 0), 1);
+    c.recordDelivery(deliveryResultFor('2.1.320', 1), 1);
+    c.markDeliveryAttempt('2.1.320', 2, 3, 'busy');
+    c.db.prepare("UPDATE claude_build_deliveries SET version = '0123456789abcdef' WHERE part = 0").run();
+    c.db.prepare("UPDATE claude_build_deliveries SET word = 'refused' WHERE part = 1").run();
+    c.db.prepare("UPDATE claude_build_deliveries SET notSent = 'gone-fishing' WHERE part = 2").run();
+    const rows = c.claudeBuildDeliveries();
+    for (const p of [0, 1]) expect(rows[p]).toMatchObject({ part: p, version: null, word: null, result: null, at: null, attempts: 0 });
+    expect(rows[2]).toMatchObject({ part: 2, notSent: null, lastAttemptAt: 3 });
   });
 
   it('never touches claude_builds', () => {
