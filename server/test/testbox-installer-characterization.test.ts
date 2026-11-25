@@ -169,10 +169,12 @@ describe('the retry defects of 2026-11-20 that the installer owns (#3130)', () =
     for (const l of cfg) expect(l.startsWith(`config --file ${b.mirror}/config `), l).toBe(true);
   }, 240_000);
 
-  it('the reflink probe\'s directory: the run root is root\'s and `out` under it is the service user\'s', () => {
+  it('the reflink probe\'s directory: the run root is root\'s, and `out` and `captures` under it are the service user\'s', () => {
     const made = sysLog(b).filter((l) => l[0] === 'install' && l[1] === '-d').map((l) => `${l[3]} ${l[5]} ${norm(b, l[8]!)}`);
     expect(made).toContain('0755 root <root>/srv/testbox');
     expect(made).toContain('0750 ccrc-tb-svc <root>/srv/testbox/out');
+    // The build capture's store: the service user's, beside its other directories; the build copy drops to its owner.
+    expect(made).toContain('0750 ccrc-tb-svc <root>/srv/testbox/captures');
   });
 });
 

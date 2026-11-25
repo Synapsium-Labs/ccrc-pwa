@@ -23,6 +23,7 @@ on any day: why does it read what it reads, who leads it, who put it there, and 
 | R9 | The backfill is decided programme by programme by the operator: 13 programmes with open runs become Active, 4 stay Paused, 6 become Idle, 32 Done, 1 Abandoned. The per-programme list is operator data, applied from a private file or a console act, never committed. Live coordinators with no programme get one through the spawn rule or a one-time pass over live sessions; exited sessions are left alone. | — |
 | R10 | The role code's `plain` role conflicts with R1 and is aligned with it. | Overlord spec 2026-11-09 §3.3.9's `plain` row, and W1a's "auto memory for plain sessions" Settings row |
 | R11 | (2026-11-24) Coordinators manage long-term context well enough for one coordinator to own a programme and for a programme to be owned by one coordinator: a 1:1 relationship. At any one time a live programme has exactly one coordinator, and a coordinator owns exactly one live programme. A coordinator whose programme has ended may be given a new one, still one at a time. There are no members. | This spec's earlier design choice "one lead and any number of members" (`programme_members`, D-8986 as first written); R2's "no rule ties one session to one programme" |
+| R12 | (2026-11-24) The Overlord can start a new session with a new programme and a coordinator for it, but it delegates the management of child workspaces to coordinators. | §10's earlier "the pick is the operator's" |
 
 ## 2. What `main` does today (measured)
 
@@ -241,7 +242,7 @@ placeholder (`programme-provisional`). The credential each door takes is in §14
 | start | none → Open | operator, Overlord | `POST /api/programmes {slug, title, why, coordinator?}` | slug free and well-formed (`slug-taken`); why required; `coordinator` names a live top-level session that passes R11 rule 4 (`owns-another-programme`, naming the programme; an unfiled placeholder it owns is withdrawn), or is absent only for the operator's start sheet, which records the pick for the session it starts next (§7; until the join sweep ships, the door refuses an absent `coordinator` with `coordinator-required`, so no start is left unbound with nothing to bind it); the Overlord must name one (`coordinator-required`) | row (`active`); event `started` (actor, why); event `coordinator` only when a session is named (a start-sheet start writes it at the join) |
 | start (spawn) | none → Open | the join sweep (§7) | the sweep | §7's decision answers `mint-provisional` | row (`active`, `placeholder` `unfiled`); events `started` and `coordinator` |
 | start (first run) | none → Open → Active | the coordinator | `POST /api/runs` (`openRun`) on a slug that does not exist yet | today's guards; the claimant passes R11 rule 4 (`owns-another-programme`, naming the programme it owns or whose open runs it claims); the claimant owns its unfiled placeholder or has never been joined (§7), else `not-your-programme` ("you own no programme now", R11 rule 6) | row (`active`); event `started`, actor the claimant, why "first run opened"; the claimant is bound (event `coordinator`); its unfiled placeholder, if any, is unbound and filed into the new programme (event `filed` on both rows) |
-| pick | (no change until the join) | operator | `POST /api/sessions {programme}`, `POST /api/projects/:project/workspaces {programme}` (not a child), the start sheet | real, not ended (`programme-ended`), not a placeholder (`programme-provisional`); not led by R11 rule 5's reading, and no unexpired pick (`programme-has-coordinator`, naming the coordinator, the claimant or the pick's session, which the console then opens instead of starting one); line not `unmeasured` (`coordinator-unmeasured`); on a revival of an existing registry row, that session passes R11 rule 4 (`owns-another-programme`) | a `programme_picks` row reserved before the start and keyed by the session id ccd answers (§7); dropped at once if the start fails; nothing on the programme until the join sweep binds the session |
+| pick | (no change until the join) | operator, Overlord (R12) | `POST /api/sessions {programme}`, `POST /api/projects/:project/workspaces {programme}` (not a child), the start sheet | real, not ended (`programme-ended`), not a placeholder (`programme-provisional`); not led by R11 rule 5's reading, and no unexpired pick (`programme-has-coordinator`, naming the coordinator, the claimant or the pick's session, which the console then opens instead of starting one); line not `unmeasured` (`coordinator-unmeasured`); on a revival of an existing registry row, that session passes R11 rule 4 (`owns-another-programme`) | a `programme_picks` row reserved before the start and keyed by the session id ccd answers (§7); dropped at once if the start fails; nothing on the programme until the join sweep binds the session |
 | dispatch | Open/Idle → Active | derived | `openRun`, `advance` | `openRun` refuses an ended (`plan-closed`, the existing code, its words now "the programme has ended"), paused (`programme-paused`), unknown (`programme-unknown`) or placeholder (`programme-provisional`) programme; a claimant that is not the bound coordinator: `claimed-by-another` (today's code, naming the coordinator) when a binding names someone else, measured absent included, and `not-your-programme` (the ledger doors' existing code) when the programme has no binding, so a free programme is taken first by a pick, a filing or a hand-over, never by a run (R11 rule 8) | nothing new: `run_events` records the run; an open end proposal is withdrawn in the same transaction (system, why "run <id> opened") |
 | run closes | Active → Idle | derived | `closeRun` | — | nothing new: `run_events` records the close; no programme write (D-51 deleted) |
 | pause | Open/Active/Idle → Paused | operator, Overlord | `POST /api/programmes/:slug/state {edge:'pause', why}` | not ended (`programme-ended`); not unknown | `state` `paused`; event with why; open runs keep running |
@@ -479,9 +480,28 @@ actor the coordinator, why "new objective filed from <placeholder>"), which the 
   programme (it owns no live programme and claims no open run, re-measured at the act), and archive-end of a
   programme's coordinator (`{programme:'end'}`, §5). Today's archive guards apply unchanged; an archive of any other
   session stays the operator's.
-- **The pick is the operator's, deliberately.** A pick starts a new session, which spends an account and a pane: that
-  is a fleet act, not a programme act, and the Overlord has no session-start door. The Overlord gives a programme to an
-  existing session instead (start naming it, or hand-over), so R3's "every programme act" holds without it.
+- **The Overlord starts a coordinator for a programme (R12).** A new row in `overlordDoors.ts`, under the same
+  `programme-lifecycle` cell, starts a new top-level session through the operator's own create routes
+  (`POST /api/sessions` or `POST /api/projects/:project/workspaces`, never a child dispatch), in one of two forms:
+  - **a new programme and its coordinator**: `{project, programme: {slug, title, why}}` starts the programme (§5 start,
+    actor the Overlord) and records the pick for the session it creates, which joins it as its coordinator (§7);
+  - **a coordinator for a programme that has none**: `{project, programme: <slug>}` is a pick (§5), under the pick's own
+    guards (`programme-has-coordinator`, `programme-ended`, `programme-provisional`, `coordinator-unmeasured`).
+  The session is placed exactly as an operator-started one is: ccd's pool and account choice, today's create guards
+  and refusals (disk floor, pool, an unservable project), and no new ccd verb. Every refusal is answered to the
+  Overlord in the create route's own words and nothing is retried on its behalf. The start writes the programme's
+  `started` event and the session's `joined` and `coordinator` events, actor the Overlord, with its why, so the
+  programme's history says the Overlord started it and why. R11 binds it as it binds the operator: the pick of a
+  programme with a live coordinator is refused, never a second coordinator.
+- **Child workspaces are the coordinator's (R12): a clear hierarchy.** The operator directs the Overlord, the Overlord
+  directs coordinators, and each coordinator directs its own children; no level micromanages the level below the next.
+  The Overlord starts and manages COORDINATORS and programmes; it
+  never manages a child workspace. It has no door that opens a run, dispatches a worker or reviewer, reclaims,
+  archives, keeps or releases a child, or answers a child's question or prompt: those stay with the programme's
+  coordinator, through the coordinator's own doors, and the Overlord reaches that work only by talking to the
+  coordinator (mail, the existing Overlord-to-coordinator channel). Its archive row (above) refuses a session carrying
+  a `.child` marker (`is-child`). When a coordinator is gone, the Overlord's move is a hand-over or a new coordinator
+  (the start row), never acting on the children itself.
 - **No acknowledgement queue** (R3 as amended 2026-11-24: maximum autonomy, no unnecessary admin burden). An Overlord
   programme act is not written to the D-8126 call record and waits for no Seen. It is recorded in the programme's
   history (§11) with its actor and why, exactly as the operator's own acts are, and the history is where the operator

@@ -42,13 +42,14 @@ import {
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
   type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
-  type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead,
+  type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead, type StepResult,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, type HookStoreRead, type ModelSwitchRow } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
 import * as parks from './approvalParkStore.js';
@@ -5595,6 +5596,11 @@ export class CoordStore {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
     return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
   }
+  /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
+  sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }
+  sequenceOldest(limit: number): ReturnType<typeof sequence.sequenceOldest> { return sequence.sequenceOldest(this.db, limit); }
+  pruneSequenceThrough(through: number, keep: readonly number[]): ReturnType<typeof sequence.pruneSequenceThrough> { return sequence.pruneSequenceThrough(this.db, through, keep); }
+  recordInboxAcknowledgement(id: number, at: number): sequence.StampAnswer { return sequence.stampInboxAcknowledgement(this.db, id, at); }
   /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
   applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
@@ -5609,7 +5615,7 @@ export class CoordStore {
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
-  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
+  stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): StepResult { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
   setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[], c: CursorAdvance | null = null): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind, c); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }

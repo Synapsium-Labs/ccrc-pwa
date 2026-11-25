@@ -4937,6 +4937,29 @@ fi
 # wrapper, a leading redirection), a command over MERGE_PARSE_CAP, a verb split so that `ws-add` is not in the payload
 # (`ws\-add`), a script file and another interpreter.
 #
+# THE WORKER READY DENY (D-8997, D-8998). A PR still under review must not be landable (the owner's ruling of
+# 2026-11-24): an unattended lander lands every green, non-draft PR whose author holds the maintainer role or higher on
+# its repository, and the fleet's PRs are such PRs. So a worker opens its PR as a draft, and only the coordinator marks it
+# ready for review, once its review passes and immediately before it lands it. A session this arm calls a worker (a hold
+# naming a programme wave, read as wave 2's question reads it, or the child marker) is DENIED `gh pr ready` at a command
+# head: GH_READY_RE, GH_MERGE_RE with `ready` for `merge`, derived from its text by cutting the verb tail (GH_READY_CUT),
+# so the head grammar never drifts. It rides THIS arm's strip, so a commit message, a PR body, a grep pattern or a
+# heredoc that names `gh pr ready` passes, as a merge mention does. `gh pr ready <n> --undo` (back to a draft) is the
+# worker's remedy for a PR opened ready, so a ready command whose own words hold `--undo` as a whole flag passes
+# (GH_READY_UNDO_RE, the same head; `--undo=true` and its other true spellings pass, and `--undo=false` or any other
+# value is refused, since gh reads it as a ready). The same session is DENIED a `gh pr create` (or its alias `new`) whose
+# own words hold no `--draft` or `-d` as a whole flag (GH_CREATE_RE and GH_CREATE_DRAFT_RE, the same head again): a PR
+# opened ready is landable the moment its checks pass, which is the likelier accident. The prefilter wakes the strip for
+# `ready`, `create` or `new` only in such a session (`wready`: the marker's existence or the hold's shape, no fork). A
+# coordinator, the operator and a top-level session are never asked; a coordinator whose own workspace carries a wave
+# hold or the marker is refused like a worker, as for the merge, so it opens even a ledger PR as a draft and asks the
+# operator to mark it ready. AN ACCIDENT GUARD, NOT A WALL: it passes unparsed every form the merge head passes (the
+# list above: `bash -c "…"`, a quoted or variable command word, a quoted verb, `xargs`, `eval`, an unlisted or
+# path-spelled wrapper, a leading redirection), a command over MERGE_PARSE_CAP, a second `gh pr ready` beside one that
+# holds `--undo` in one command, a second `gh pr create` beside one that holds `--draft`, a combined short-flag group
+# that holds `d` (`-dw`, refused), the GraphQL `markPullRequestReadyForReview` mutation and a REST create through
+# `gh api`, a script file and another interpreter.
+#
 # THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
 # in every session, by the same single jq and with the same reason prefix. Once the
 # STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
@@ -5180,6 +5203,18 @@ CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-
 # CCD_WSADD_RE (D-8978): the same head grammar with `ccd ws-add`, cut at the same place as CCD_DOOR_RE, so the four never
 # drift. Asked of a child only, by THE CHILD'S WORKSPACE DENY below.
 CCD_WSADD_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+ws-add([[:space:];&|()<>]|$)'
+# GH_READY_RE (D-8998): the same head grammar and gh flags with `ready` for `merge`, DERIVED from GH_MERGE_RE's own text:
+# GH_READY_CUT (a blank class, then `merge(`, spelled with a real tab as GH_MERGE_RE spells it) occurs once in it, at its
+# verb tail, so cutting the shortest suffix there leaves the head, `gh` and `pr` with their flags. Asked of a worker only,
+# by THE WORKER READY DENY below.
+GH_READY_CUT=$'[ \t]+merge('
+GH_READY_RE=${GH_MERGE_RE%"$GH_READY_CUT"*}$'[ \t]+ready([[:space:];&|()<>]|$)'
+# GH_READY_UNDO_RE, GH_CREATE_RE and GH_CREATE_DRAFT_RE (D-8998): the same head with the verb and, for the first and the
+# last, a whole flag among that command's own words (no separator between): `--undo`, or `--draft` or `-d`, bare or with a
+# true value, never `=false`. Asked of a worker only, by THE WORKER READY DENY below.
+GH_READY_UNDO_RE=${GH_MERGE_RE%"$GH_READY_CUT"*}$'[ \t]+ready[ \t]([^;&|()<>\n]*[ \t])?--undo(=(true|TRUE|True|t|T|1))?([[:space:];&|()<>]|$)'
+GH_CREATE_RE=${GH_MERGE_RE%"$GH_READY_CUT"*}$'[ \t]+(create|new)([[:space:];&|()<>]|$)'
+GH_CREATE_DRAFT_RE=${GH_MERGE_RE%"$GH_READY_CUT"*}$'[ \t]+(create|new)[ \t]([^;&|()<>\n]*[ \t])?(--draft|-d)(=(true|TRUE|True|t|T|1))?([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -5254,9 +5289,17 @@ def capped(f): (.tool_input.command // "") as $c
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
 wchild=""
 if [[ -n "$id" ]] && { [[ -e "$REG/$id.child" ]] || [[ -L "$REG/$id.child" ]]; }; then wchild=1; fi
+# THE WORKER READY DENY's session test (D-8998): only a Bash payload that names `ready`, `create` or `new` pays it, and
+# it forks nothing.
+wready=""
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash && ( "$payload" == *ready* || "$payload" == *create* || "$payload" == *new* ) \
+      && -n "$id" ]]; then
+  if [[ -n "$wchild" ]]; then wready=1
+  elif _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then wready=1; fi
+fi
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* \
-           || ( -n "$wchild" && "$payload" == *ws-add* ) ) \
+           || ( -n "$wchild" && "$payload" == *ws-add* ) || -n "$wready" ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
   mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
@@ -5341,6 +5384,20 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
     wreason="ccrc: this workspace carries the child marker — a dispatched child — and a child never creates a workspace (\`ccd ws-add\`): one it makes belongs to no run, so the console lists it as \"Not in a programme\" and your coordinator never sees it (D-8978)."
     wreason+=" If your task needs another worktree or a second session, ask your coordinator; for scratch files use \`\$TMPDIR\`."
     pre_json=$(_hook_deny_json "$wreason") || pre_json=""
+  fi
+  # THE WORKER READY DENY (D-8998), asked last and only when nothing above set a deny.
+  if [[ -n "$wready" && -n "$mcmd" && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+    rreason=""
+    if [[ -n "$wchild" ]]; then rwhy="this workspace carries the child marker — a dispatched child"
+    else rwhy="this workspace's hold names a programme wave — a wave's session"; fi
+    if [[ "$mcmd" =~ $GH_READY_RE && ! "$mcmd" =~ $GH_READY_UNDO_RE ]]; then
+      rreason="ccrc: $rwhy, and a worker never marks its own PR ready for review (\`gh pr ready\`): a PR under review stays a draft, because an unattended lander lands every green, non-draft PR, and your coordinator marks it ready once its review passes, immediately before it lands it (D-8997)."
+      rreason+=" Report wave-done to your coordinator. A PR you opened ready goes back to a draft with \`gh pr ready <n> --undo\`, which passes."
+    elif [[ "$mcmd" =~ $GH_CREATE_RE && ! "$mcmd" =~ $GH_CREATE_DRAFT_RE ]]; then
+      rreason="ccrc: $rwhy, and a worker opens its PR as a draft: a \`gh pr create\` without \`--draft\` opens a PR that an unattended lander lands once its checks pass, before its review has run (D-8997)."
+      rreason+=" Open it with \`gh pr create --draft …\`; your coordinator marks it ready once its review passes. A PR you already opened ready goes back to a draft with \`gh pr ready <n> --undo\`."
+    fi
+    if [[ -n "$rreason" ]]; then pre_json=$(_hook_deny_json "$rreason") || pre_json=""; fi
   fi
 fi
 

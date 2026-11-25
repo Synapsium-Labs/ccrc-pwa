@@ -544,7 +544,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
       '-m 0755 -o root -g root <root>', '-m 0755 -o root -g root <root>/runs', '-m 0755 -o root -g root <root>/install',
       '-m 0755 -o root -g root <root>/pristine', '-m 0755 -o root -g root <root>/runs/1', '-m 0755 -o root -g root <root>/runs/2',
       '-m 0755 -o ccrc-tb-svc -g ccrc-tb-svc <root>/specs',
-      ...['results', 'logs', 'out', 'registry', 'handover', 'out/1', 'out/2', 'out/install'].map((d) => `-m 0750 -o ccrc-tb-svc -g ccrc-tb-svc <root>/${d}`),
+      ...['results', 'logs', 'out', 'registry', 'handover', 'captures', 'out/1', 'out/2', 'out/install'].map((d) => `-m 0750 -o ccrc-tb-svc -g ccrc-tb-svc <root>/${d}`),
     ]);
   });
 

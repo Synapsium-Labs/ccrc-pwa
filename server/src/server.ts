@@ -201,6 +201,12 @@ export function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   const o = raw as Record<string, unknown>;
   // H2 (D-8872): one finished helper's report, asked by its agent id (`isHelperId`, the one rule); anything else is null.
   if (o['type'] === 'helper-report') return isHelperId(o['id']) ? { type: 'helper-report', id: o['id'] } : null;
+  // Desktop polish wave 171: one older chat page, asked by the opaque continuation the stream last sent. Anything but a
+  // string forwards as '' so the stream answers `invalid` rather than leaving the request unanswered; the stream's codec
+  // bounds the length before it parses anything.
+  if (o['type'] === 'older-page') {
+    return { type: 'older-page', continuation: typeof o['continuation'] === 'string' ? o['continuation'] : '' };
+  }
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
@@ -2451,6 +2457,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         const m = asSessionClientMsg(JSON.parse(String(raw)));
         if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
+        else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {

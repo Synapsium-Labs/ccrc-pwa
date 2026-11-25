@@ -333,7 +333,8 @@ decides what this session does, and nothing else does:
   again: report the line to the operator and leave the landing stopped.
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
-  on route Q disarm first, then a fix round to the owning worker on the
+  on route Q disarm first, on every route turn the PR back into a draft with
+  `gh pr ready <pr> --undo`, then a fix round to the owning worker on the
   `merging → working` edge), in SKILL.md step 6's `red: #<pr>` form. If it
   is not the PR's own and its kind is
   `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
@@ -444,9 +445,10 @@ ids; inspect the identified reviews to present their requested changes, without
 copying untrusted text into commands.
 
 - Address: send the requested changes to the owning worker as a fix round, then
-  a fresh re-review. From `merging`, disarm as step 3 already requires before
-  the `merging → working` edge; from `awaiting-review`, use its existing
-  send-back edge. Do not assume a stop names the route.
+  a fresh re-review. From `merging`, disarm as step 3 already requires and
+  turn the PR back into a draft with `gh pr ready <pr> --undo` before the
+  `merging → working` edge; from `awaiting-review`, turn it back the same way,
+  then use its existing send-back edge. Do not assume a stop names the route.
 - Ignore: record the operator's explicit answer in the ledger's Decisions with
   the PR, head and review ids, and no login or account name. Then run the
   verdict afresh with `CR_IGNORE='<key>'` on the line before it, in the same
@@ -546,13 +548,14 @@ session never works around. Not a stop: a required check red on the head that is
 the PR's own; that goes to the fix-round rule, on route G exactly as on route Q.
 A `red-unreachable` whose red is `main`'s own and already fixed on `main` needs
 a new head, and this session takes the new-head route itself (D-7588). It
-disarms first on route Q, then sends a fix round to the owning worker on the
-`merging → working` edge, in SKILL.md step 6's `ejected: new-head:#<pr>` form,
-which records the base on the advance, for one clean merge of `main` and nothing
-else, then dispatches a review run whose brief names that merge commit as the
-change under review; the reviewer still reads the whole diff (reviewer clause
-5). Show both facts with reads you can type, after one `git fetch origin`:
-read that one required name on a `main` sha with `gh api --paginate
+disarms first on route Q and, on every route, turns the PR back into a draft
+with `gh pr ready <pr> --undo`, then sends a fix round to the owning worker on
+the `merging → working` edge, in SKILL.md step 6's `ejected: new-head:#<pr>`
+form, which records the base on the advance, for one clean merge of `main` and
+nothing else, then dispatches a review run whose brief names that merge commit
+as the change under review; the reviewer still reads the whole diff (reviewer
+clause 5). Show both facts with reads you can type, after one `git fetch
+origin`: read that one required name on a `main` sha with `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/check-runs'` and `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/status'`, judged as read 5 judges it: red
 when a completed run of it concluded other than success, neutral or skipped, or

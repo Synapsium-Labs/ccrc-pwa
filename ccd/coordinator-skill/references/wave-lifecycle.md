@@ -29,3 +29,8 @@ steps 1 and 2.
 | Mutation testing | `wave-lifecycle-mutation.md` |
 
 A citation of this file by section, such as "§5b", means the file of that step.
+
+The steps and the API section stood in SKILL.md once, and some references still
+name them so. "SKILL.md step 6" is step 6 of `wave-steps.md`. SKILL.md's "How to
+call the API" is `api.md`, and its section on a wave that crosses into another
+project is `cross-project.md`.

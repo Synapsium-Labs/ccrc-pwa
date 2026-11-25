@@ -86,6 +86,11 @@ not after.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
+   Then make sure the PR under review is a draft (clause 15, D-8997): read its
+   phase with `ccd pr-state --session <worker id>`, and if it reads `open` (a
+   PR opened ready, by an older brief, a home the installer has not reached
+   or a slip), run `gh pr ready <pr> --undo` before step 5 opens its review
+   run.
 5. **Dispatch a review run** (clause 12; design 2026-09-14). With the work run
    at `awaiting-review`, open the reviewer's run and dispatch it:
    `"$API" runs open --json -` with
@@ -137,10 +142,13 @@ not after.
    Once the close answers `ok`, read the
    report — findings are the reviewer's, rulings are yours (clause 10 for any
    deviation the report surfaces). Then ONE of two moves:
-   - **Send back:** `"$API" runs advance <work run id> --json -` with
+   - **Send back:** turn the PR back into a draft first, then `"$API" runs advance <work run id> --json -` with
      `{"to":"working","fingerprint":{…the wave-done fingerprint you verified…}}`
      (a retreat re-measures nothing; it may refuse `cap-concurrency` — retry on
-     the next wake — or `review-in-flight` — you skipped this step's close). Then
+     the next wake — or `review-in-flight` — you skipped this step's close). The
+     draft comes from `gh pr ready <pr> --undo`, before that advance (D-8997; on
+     a PR already a draft it changes nothing), so a PR back under review is
+     never landable. Then
      RE-BRIEF THE WORKER BY MAIL, never by `runs dispatch` — dispatch is
      `planned`'s door only, and a run at `working` has no edge back to
      `dispatched` (D-2824): `"$API" mail send --json -` with
@@ -174,7 +182,8 @@ not after.
      clause 16's first two triggers. A dequeue with any other cause, a
      requested change or a cause you could not read among them, is no
      report-less round: it stays a stop for the operator. For either form, on
-     route Q disarm first (§5), then make the same advance to `working`, on the
+     route Q disarm first (§5), on every route turn the PR back into a draft
+     with `gh pr ready <pr> --undo` (D-8997), then make the same advance to `working`, on the
      `merging → working` edge, and send the same `fix-round` mail with no
      `artifacts`. Every `ejected:` round's advance carries `ejection`, an
      object of two fields: `base`, the sha on the mail's `base:` line, and
