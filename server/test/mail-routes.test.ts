@@ -44,6 +44,8 @@ import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shar
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
 import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
+import { isWitnessKebab } from '../src/coord/overlordAuthorityWitness.js';
+import { isWitnessLinkKebab } from '../src/coord/overlordAuthorityWitnessLink.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
@@ -1114,6 +1116,11 @@ describe('the rejection table is total, in both directions', () => {
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
+        // THE AUTHORITY WITNESS (Overlord W1 authority journal, Task 6): `coord/overlordAuthorityWitness.ts` names where a witness lives
+        // (`'other-host'`), its verdict (`'no-witness'`) and whether a narrowing is held (`'not-yet'`); its link adapter names its
+        // answers (`'predates-op'`). A word rides a verdict or an adapter's answer, never a `refused` or `reject.code`. Admitted through
+        // each file's own exported guard, derived from its typed tables, never NOT_CODES.
+        || isWitnessKebab(tok) || isWitnessLinkKebab(tok)
         || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
         // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on
         // the standing rule `enter-ignored` above states. `coord/delegation-projection.ts` spells the frame's liveness, row groups,

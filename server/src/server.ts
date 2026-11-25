@@ -2256,7 +2256,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2426,7 +2426,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
-    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,

@@ -84,6 +84,14 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'read-by', reader: 'launch-profile-unmet' }, notice: 'none',
     spec: 'the launch profile is not engaged (Table 7.5a, §3.6 H4)',
   },
+  'restore-detected': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
+    spec: 'a restore detected; the operator clears it once the restore is confirmed (Table 7.5a, §7.6)',
+  },
+  'no-witness-since-boot': {
+    kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: "since boot, no witness off the server's volume has answered (Table 7.5a, §7.6)",
+  },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;
 export const LADDER_CAUSES = Object.keys(LADDER_CAUSE_MAP) as LadderCause[];

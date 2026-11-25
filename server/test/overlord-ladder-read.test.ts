@@ -14,10 +14,6 @@ import { ISOLATION_NOT_WIRED } from '../src/isolationWord.js';
 // @ts-expect-error Both condition keys need a reader.
 const incompleteInputs: LadderConditionInputs = { 'generation-degraded': () => 'lifted' };
 void incompleteInputs;
-const futureTable = { ...LADDER_CAUSE_MAP, 'condition-a': { kind: 'condition' } } as const;
-// @ts-expect-error A new condition row cannot ship without its input.
-const futureInputs: LadderConditionInputsFor<typeof futureTable> = { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted' };
-void futureInputs;
 
 function store() {
   const db = new DatabaseSync(':memory:');
@@ -25,8 +21,11 @@ function store() {
   db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
   return { db, coord: new CoordStore(db) };
 }
-const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'launch-profile-unengaged': () => 'lifted' as const };
-
+const lifted = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const, 'shared-user': () => 'lifted' as const, 'launch-profile-unengaged': () => 'lifted' as const, 'no-witness-since-boot': () => 'lifted' as const };
+const futureTable = { ...LADDER_CAUSE_MAP, 'condition-a': { kind: 'condition' } } as const;
+// @ts-expect-error A new condition row cannot ship without its input.
+const futureInputs: LadderConditionInputsFor<typeof futureTable> = lifted;
+void futureInputs;
 
 const designated = { kind: 'designated', sessionId: 'lane-a', term: 1, row: null } as unknown as DesignationRead;
 const none: DesignationRead = { kind: 'not-designated', row: null };
@@ -46,7 +45,7 @@ describe('generation degraded condition', () => {
 describe('composed ladder read', () => {
   it('defaults to chat and fails closed on invalid rows', () => {
     const { db, coord } = store();
-    expect(ladderRead(coord, ladderConditionInputs({ coord, serverCaps: [] }), NO_WITNESS_YET, [])).toMatchObject({ kind: 'measured', effective: { rung: 'chat', binding: [] }, conditions: [{ cause: 'generation-degraded', reading: 'lifted' }, { cause: 'off-model', reading: 'lifted' }, { cause: 'rung-word-missing', reading: 'lifted' }, { cause: 'shared-user', reading: 'unmeasured' }, { cause: 'launch-profile-unengaged', reading: 'lifted' }] });
+    expect(ladderRead(coord, ladderConditionInputs({ coord, serverCaps: [] }), NO_WITNESS_YET, [])).toMatchObject({ kind: 'measured', effective: { rung: 'chat', binding: [] }, conditions: [{ cause: 'generation-degraded', reading: 'lifted' }, { cause: 'off-model', reading: 'lifted' }, { cause: 'rung-word-missing', reading: 'lifted' }, { cause: 'shared-user', reading: 'unmeasured' }, { cause: 'launch-profile-unengaged', reading: 'lifted' }, { cause: 'no-witness-since-boot', reading: 'unmeasured' }] });
     db.exec("INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy) VALUES ('latch-a', 'wrong', '', 1, 'actor')");
     expect(ladderRead(coord, lifted, NO_WITNESS_YET, []).kind).toBe('unmeasured');
     db.close();
@@ -95,8 +94,8 @@ describe('composed ladder read', () => {
 describe("the shared-user condition, read from the isolation word (Overlord W1, Table 7.5a)", () => {
   const WORDS = ['overlord-route-v1', 'overlord-answer-v1'];
   const atFull = () => { const s = store(); s.db.exec("INSERT INTO overlord_ladder VALUES (1, 'full', 'actor', 1, NULL, 'chat', 1)"); return s; };
-  const inputs = (coord: CoordStore, read: IsolationRead | null) =>
-    ladderConditionInputs({ coord, serverCaps: WORDS, ...(read === null ? {} : { isolation: { read: () => read } }) });
+  const inputs = (coord: CoordStore, read: IsolationRead | null, serverCaps: readonly string[] = WORDS) =>
+    ladderConditionInputs({ coord, serverCaps, noWitnessSinceBoot: lifted['no-witness-since-boot'], ...(read === null ? {} : { isolation: { read: () => read } }) });
   it('a shared-user reading binds the effective rung at advise, the condition standing', () => {
     const { db, coord } = atFull();
     const r = ladderRead(coord, inputs(coord, { kind: 'measured', word: 'shared-user', cause: 'local-mode' }), NO_WITNESS_YET, WORDS);
@@ -122,7 +121,7 @@ describe("the shared-user condition, read from the isolation word (Overlord W1, 
   it('in W1 the effective rung is chat either way: the server holds no advise word, so the cap binds only from W2', () => {
     const { db, coord } = atFull();
     for (const read of [{ kind: 'measured', word: 'shared-user', cause: 'store-mode' } as const, { kind: 'measured', word: 'separate-user', cause: 'other-user' } as const]) {
-      const r = ladderRead(coord, ladderConditionInputs({ coord, serverCaps: SERVER_CAPS, isolation: { read: () => read } }), NO_WITNESS_YET, SERVER_CAPS);
+      const r = ladderRead(coord, inputs(coord, read, SERVER_CAPS), NO_WITNESS_YET, SERVER_CAPS);
       expect(r).toMatchObject({ kind: 'measured', effective: { rung: 'chat' } });
     }
     db.close();

@@ -48,6 +48,7 @@ import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, typ
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
 import type { LadderWrite } from './overlordLadderStore.js';
+import type { OverlordAuthorityExchange } from './overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './overlordRestoreState.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -103,6 +104,8 @@ export interface OverlordRouteDeps {
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
   readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
+  /** The authority witness exchange's console arm (Overlord W1 authority journal, Task 6). Absent (a test, a script): the witness door answers 503. */
+  readonly exchange?: Pick<OverlordAuthorityExchange, 'exchangeConsole'>;
   readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
   /** Confirm the restore (authority journal C, `overlordRestoreState.ts`): its one transaction and the guard's state. Absent (a test
    *  server, a script): both of its doors answer `unavailable` after the gate. */
@@ -452,6 +455,25 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     }
     return { ...result, rung: verdict.to, narrowing: verdict.kind === 'lower' ? narrowingState(result.recordSequence, held) : null };
   });
+  // POST: the console's witness exchange (Overlord W1 authority journal, Task 6, §7.6). Session-gated through the account gate with no
+  // step-up and no box token, so it refuses `auth-off` while sign-in is dark (no Overlord without sign-in). The body is `{ held }`: the
+  // tuple the console keeps, or null. It answers the current tuple to keep; the exchange judges what the console held. A narrowing-free
+  // read of the server's facts. The wrong outer body shape is a 400; an admitted tuple object that does not parse is the exchange's
+  // `malformed` word.
+  app.post('/api/overlord/witness', async (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const b = req.body;
+    const shaped = typeof b === 'object' && b !== null && !Array.isArray(b) && Object.keys(b).length === 1 && 'held' in b
+      && ((b as { held: unknown }).held === null || (typeof (b as { held: unknown }).held === 'object' && !Array.isArray((b as { held: unknown }).held)));
+    if (!shaped) return refuseRoute(reply, 'bad-request', { detail: 'body' });
+    const answer = deps.exchange?.exchangeConsole(g.actor.toString(), (b as { held: unknown }).held);
+    if (answer === undefined) return refuseRoute(reply, 'authority-rolled-back', { cause: 'unmeasured: exchange' });
+    if (answer.kind === 'unmeasured') return refuseRoute(reply, 'authority-rolled-back', { cause: `unmeasured: ${answer.why}` });
+    if (answer.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { cause: answer.cause });
+    return { offer: answer.tuple };
+  });
+
   app.post('/api/overlord/rung', async (req, reply) => {
     const body = req.body as { rung?: unknown } | null;
     if (body === null || typeof body !== 'object' || !isRung(body.rung)) return refuseRoute(reply, 'bad-request', { detail: 'rung' });

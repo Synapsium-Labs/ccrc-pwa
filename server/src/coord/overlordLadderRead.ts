@@ -50,7 +50,7 @@ export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
 const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
 
-export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf' | 'startLoadsOfNewestStart'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf; isolation?: { read(): IsolationRead } }): LadderConditionInputs {
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf' | 'startLoadsOfNewestStart'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf; isolation?: { read(): IsolationRead }; noWitnessSinceBoot?: () => ConditionReading }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
@@ -100,6 +100,10 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
     // The isolation word (Overlord W1, §7.4, Table 7.5a): `shared-user` stands, a separate word lifts, and `unmeasured`
     // (an older agent, a down link, no reader wired) is unmeasured, which caps as `shared-user` does.
     'shared-user': () => isolationCondition(deps.isolation?.read() ?? ISOLATION_NOT_WIRED),
+    // No witness off the volume has answered since this boot (the authority exchange's read); absent dep: its effect applies.
+    'no-witness-since-boot': () => {
+      try { return deps.noWitnessSinceBoot === undefined ? 'unmeasured' : deps.noWitnessSinceBoot(); } catch { return 'unmeasured'; }
+    },
   };
 }
 

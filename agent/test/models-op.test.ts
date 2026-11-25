@@ -10,7 +10,7 @@
 //  - The recorder sees the ABSOLUTE launcher, the builder's frozen argv and MODELS_SPAWN_BOUNDS; nothing else.
 //  - Every outcome travels as `ok` with the node's `fleetIdentity`; an exit 1 refusal is still `exited`.
 //  - One gate per agent PROCESS: a second op while one runs is `busy`, on any connection; a rejecting port frees it.
-//  - The ready frame lists `models` eleventh, before `overlord-history`.
+//  - The ready frame lists `models` eleventh, before `witness` and `overlord-history`.
 //  - The op reaches no exec path, and the port is called in one place (a SOURCE scan).
 //  - The real port's child gets exactly {HOME, PATH, LANG}, PATH led by this node's directory (D-5227), no stdin.
 //  - The D-8406 grant stays (D-8688): an older server's file read of the lane's two files still answers.
@@ -219,7 +219,7 @@ describe('the models op over a real agent, with a recording port', () => {
     });
   });
 
-  it('the ready frame lists the twelve fixed words with models eleventh and testbox-capture twelfth, then overlord-history when servable', async () => {
+  it('the ready frame lists the twelve fixed words with models eleventh and testbox-capture twelfth, then witness, then overlord-history when servable', async () => {
     await up(recorder());
     const c = new TestClient(agent!.port);
     clients.push(c);
@@ -227,8 +227,8 @@ describe('the models op over a real agent, with a recording port', () => {
     expect(ops.slice(0, 12)).toEqual(['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync',
       'testbox-admin', 'backup', 'readdir-mtimes', 'models', 'testbox-capture']);
     expect(ops[10]).toBe(MODELS_OP);
-    expect(ops.slice(12)).toEqual(['overlord-history']);
-    // an older server's one reader (`readReadyOps`) takes the thirteen words whole: each on CAP_WORD, within MAX_CAP_WORDS
+    expect(ops.slice(12)).toEqual(['witness', 'overlord-history']);
+    // an older server's one reader (`readReadyOps`) takes the fourteen words whole: each on CAP_WORD, within MAX_CAP_WORDS
     expect(ops.length).toBeLessThanOrEqual(MAX_CAP_WORDS);
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
   });

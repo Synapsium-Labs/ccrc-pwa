@@ -116,7 +116,7 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear',
+      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'witness',
       // Confirm the restore (authority journal C): the guard's state, and the door.
       'restore-read', 'restore-confirm',
       'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
