@@ -27,6 +27,7 @@ import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFa
 import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
 import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
+import { applyLandingDoorRecordTx } from './landingDoorsTx.js';
 import type { LandingControlApplyResult } from './landingNext.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
@@ -3764,8 +3765,8 @@ export class CoordStore {
 
   /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
    *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim.
-   *  The operator's door records (wave 5j, D-9045): a `withdraw` is a mention and never touches `landing_authority`, since
-   *  a withdrawal writes no order; a `pause` names no subject. */
+   *  The operator's door records (wave 5j, D-9045, D-9046): a `withdraw` is a mention and never touches `landing_authority`,
+   *  since a withdrawal writes no order; a `pause` names no subject. Their statements are `applyLandingDoorRecordTx`'s. */
   private applyLandingRecord(r: LandingJournalRecord): void {
     if (r.kind !== 'pause') {
       const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
@@ -3780,14 +3781,16 @@ export class CoordStore {
           .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
       }
     }
+    if (r.kind === 'pause' || r.kind === 'withdraw') applyLandingDoorRecordTx(this.db, r);
     this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
   }
 
   /**
    * The ONLY in-process reopen of the landing fence (shared contract §6): needs a provably clean connection, validates the
    * WHOLE history, checks the cursor and any missing history, confirms the exact snapshot is durable (even at an equal
-   * cursor), then applies only the suffix and the cursor in ONE transaction. It never writes a projection or a witness,
-   * never notices. Any failure keeps the fence; there is no retry timer.
+   * cursor), then applies only the suffix and the cursor in ONE transaction. It writes one projection column word, the
+   * operator's `withdrawn` (with its `detail` and the cleared marker, `landingDoorsTx.ts`, D-9046), and no pin, landed
+   * state, association or witness, and it never notices. Any failure keeps the fence; there is no retry timer.
    */
   replayLandingJournal(): LandingJournalReplay {
     const log = this.landing.landingJournal;
