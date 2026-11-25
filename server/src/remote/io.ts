@@ -359,10 +359,18 @@ export function createIo(client: FleetClient): FleetIO {
      *  sent it: `no-op`. A frame that never left is `not-started` and the agent's held capture gate is `busy`, as the admin
      *  and models ops keep them: no job went out (fix round 1, F3). Any other fault after the send, the deadline or a reply
      *  `readTestboxCaptureReply` refuses for this build is `unanswered`: a job may have gone out. */
-    async testboxCapture(build) {
+    async testboxCapture(build: string, recipe?: 'delivery', part?: number) {
       if (!(client.state.agentOps ?? []).includes(TESTBOX_CAPTURE_OP)) return { ok: false, reason: 'no-op' };
+      // `recipe` and `part` travel only for a delivery job, and together (Desktop polish wave 178); a delivery ask with no
+      // part, which the two signatures leave only an untyped caller, is never sent: `not-started`, no job went out.
+      if (recipe === 'delivery' && part === undefined) return { ok: false, reason: 'not-started' };
       try {
-        const reply = readTestboxCaptureReply(await client.request({ t: 'req', op: TESTBOX_CAPTURE_OP, build }, TESTBOX_CAPTURE_REQUEST_MS), build);
+        const req = recipe === 'delivery'
+          ? { t: 'req', op: TESTBOX_CAPTURE_OP, build, recipe, part } as const
+          : { t: 'req', op: TESTBOX_CAPTURE_OP, build } as const;
+        const reply = recipe === 'delivery'
+          ? readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build, 'delivery', part)
+          : readTestboxCaptureReply(await client.request(req, TESTBOX_CAPTURE_REQUEST_MS), build);
         return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
       } catch (e) {
         if (e instanceof LinkNotSentError) return { ok: false, reason: 'not-started' };

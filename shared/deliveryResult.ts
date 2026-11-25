@@ -5,6 +5,7 @@
 //
 // IT NEVER TOUCHES BUILD TRUST: a delivery result is never a `BuildCaptureResult` and decides nothing.
 import { isClaudeVersion } from './claudeVersion.js';
+import { BUILD_CAPTURE_NOT_SENT_MAP, type BuildCaptureNotSent } from './claudeBuildTrust.js';
 
 /** The case ids, in the order the recipe sends them: a short control first, then the earlier wave's synthetic cases. */
 export type DeliveryCaseId = 'c0' | 'c1' | 'c1b' | 'c2a' | 'c2b' | 'c3' | 'c3b' | 'c3c' | 'c4' | 'c4b' | 'c5';
@@ -178,4 +179,123 @@ export function readDeliveryCaptureResult(v: unknown, build: string, part: numbe
   }
   if (deliveryWord(cases.map((c) => c.verdict)) !== v['word']) return null;
   return { recipe: 'delivery', version: v['version'], build, part, word: v['word'], cases };
+}
+
+// ── what the console's build list reads (Desktop polish wave 178, the capture lane) ──────────────────────────────
+
+/** The join over a build's parts: the parts' words, or `incomplete` while a part has no current result. A word of its own,
+ *  never folded into `intact` or `fault` (`deliveryJoinWord` decides it; `deliveryLane.ts#deliveryWordOf` asks it of the rows). */
+export type DeliveryJoinWord = DeliveryWord | 'incomplete';
+export const DELIVERY_JOIN_WORD_MAP: Record<DeliveryJoinWord, true> = { intact: true, refused: true, fault: true, incomplete: true };
+
+/** THE JOIN, once: each part's current word, by part, `null` for a part with none. Any `fault` is `fault`; else any part with
+ *  none is `incomplete`; else any `refused` is `refused`; else `intact`. The lane's word and the view reader's check both ask it. */
+export function deliveryJoinWord(words: readonly (DeliveryWord | null)[]): DeliveryJoinWord {
+  if (words.includes('fault')) return 'fault';
+  if (words.includes(null)) return 'incomplete';
+  return words.includes('refused') ? 'refused' : 'intact';
+}
+
+/** Why a delivery try sent nothing: the trust lane's not-sent words, and one of the recipe's own. `recipe-not-run`: the box
+ *  WAS reached and closed the connection on the delivery frame, so it does not run the recipe (an older box, or one without
+ *  the driver), which a reader must tell from `no-test-box`, a box not reached. It is the delivery lane's word alone: build
+ *  trust's vocabulary (`BUILD_CAPTURE_NOT_SENT_MAP`), its table's CHECK and the console's wording for it are untouched. */
+export type DeliveryNotSent = BuildCaptureNotSent | 'recipe-not-run';
+export const DELIVERY_NOT_SENT_MAP: Record<DeliveryNotSent, true> = { ...BUILD_CAPTURE_NOT_SENT_MAP, 'recipe-not-run': true };
+
+/** A part with no current result, and why its last try sent nothing (null: it sent a job, or none was tried yet). */
+export interface DeliveryUnmeasuredPart {
+  readonly part: number;
+  readonly notSent: DeliveryNotSent | null;
+}
+
+/** One case as the build list carries it: the verdict, the counts (the sent text's length and each turn's length) and the
+ *  first divergence, as the stored result has them. The send word and the hook witness stay in the result. */
+export interface DeliveryCaseView {
+  readonly id: DeliveryCaseId;
+  readonly verdict: DeliveryCaseVerdict;
+  readonly sentChars: number;
+  readonly receivedChars: readonly number[];
+  readonly divergence: DeliveryDivergence | null;
+}
+
+/** One current part of a build: the recipe version it ran, when it was recorded, its word and its cases. */
+export interface DeliveryPartView {
+  readonly part: number;
+  readonly version: string;
+  readonly at: number;
+  readonly word: DeliveryWord;
+  readonly cases: readonly DeliveryCaseView[];
+}
+
+/** One build's delivery standing: the join word and every current part it has a result for, by part. */
+export interface DeliveryBuildView {
+  readonly build: string;
+  readonly word: DeliveryJoinWord;
+  readonly parts: readonly DeliveryPartView[];
+  /** Every part with no current result, by part, each with its last not-sent word: "no box runs the recipe"
+   *  (`recipe-not-run`) is told from "the box was not reached" (`no-test-box`, `not-started`). */
+  readonly unmeasured: readonly DeliveryUnmeasuredPart[];
+}
+
+/** A case's view, cut from a result's case. */
+export const deliveryCaseViewOf = (c: DeliveryCaseResult): DeliveryCaseView =>
+  ({ id: c.id, verdict: c.verdict, sentChars: c.sentChars, receivedChars: [...c.receivedChars], divergence: c.divergence });
+
+function readCaseView(v: unknown): DeliveryCaseView | null {
+  if (!isObj(v) || !keysAre(v, ['id', 'verdict', 'sentChars', 'receivedChars', 'divergence'])) return null;
+  const { id, verdict, sentChars, receivedChars } = v;
+  if (!isDeliveryCaseId(id) || !has(DELIVERY_CASE_VERDICT_MAP, verdict) || !isCount(sentChars)) return null;
+  if (!Array.isArray(receivedChars) || receivedChars.length > DELIVERY_TURNS_MAX || !receivedChars.every(isCount)) return null;
+  const divergence = readDivergence(v['divergence']);
+  if (divergence === undefined) return null;
+  return { id, verdict, sentChars, receivedChars: [...receivedChars], divergence };
+}
+
+function readPartView(v: unknown): DeliveryPartView | null {
+  if (!isObj(v) || !keysAre(v, ['part', 'version', 'at', 'word', 'cases'])) return null;
+  const { part, version, at, word, cases } = v;
+  if (!isDeliveryPart(part) || typeof version !== 'string' || !DELIVERY_VERSION_SHAPE.test(version) || !isCount(at) || !has(DELIVERY_WORD_MAP, word)) return null;
+  if (!Array.isArray(cases) || cases.length === 0 || cases.length > DELIVERY_CASE_IDS.length) return null;
+  const read = cases.map(readCaseView);
+  return read.every((c) => c !== null) ? { part, version, at, word, cases: read as DeliveryCaseView[] } : null;
+}
+
+/** THE ONE READER of `GET /api/testbox/builds`'s optional `deliveries` list (beside `claudeBuildTrust.ts#readClaudeBuildRecords`,
+ *  which reads the list beside it): every build well formed once, each part once and in order, every part of the recipe listed
+ *  once as measured or unmeasured, and the word the join of them, or `null`. ABSENT
+ *  (`undefined`, a server older than the key) reads as no list at all, `[]`: the answer is still the build record's. */
+export function readDeliveryViews(v: unknown): DeliveryBuildView[] | null {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) return null;
+  const out: DeliveryBuildView[] = [];
+  for (const x of v as unknown[]) {
+    if (!isObj(x) || !keysAre(x, ['build', 'word', 'parts', 'unmeasured']) || !isClaudeVersion(x['build']) || !has(DELIVERY_JOIN_WORD_MAP, x['word'])) return null;
+    if (!Array.isArray(x['parts']) || x['parts'].length > DELIVERY_PART_COUNT) return null;
+    const parts: DeliveryPartView[] = [];
+    let after = -1;
+    for (const raw of x['parts'] as unknown[]) {
+      const p = readPartView(raw);
+      if (p === null || p.part <= after) return null;
+      after = p.part;
+      parts.push(p);
+    }
+    if (!Array.isArray(x['unmeasured'])) return null;
+    const unmeasured: DeliveryUnmeasuredPart[] = [];
+    let last = -1;
+    for (const raw of x['unmeasured'] as unknown[]) {
+      if (!isObj(raw) || !keysAre(raw, ['part', 'notSent']) || !isDeliveryPart(raw['part']) || raw['part'] <= last) return null;
+      if (!(raw['notSent'] === null || has(DELIVERY_NOT_SENT_MAP, raw['notSent']))) return null;
+      last = raw['part'];
+      unmeasured.push({ part: raw['part'], notSent: raw['notSent'] });
+    }
+    if (out.some((b) => b.build === x['build'])) return null;
+    // Every part of the recipe exactly once, measured or not, and the word the join of what is listed: a part both measured
+    // and unmeasured, a missing part, or an `intact` or `refused` beside an unmeasured part is refused (call 1253).
+    const listed = [...parts.map((p) => p.part), ...unmeasured.map((u) => u.part)].sort((a, b) => a - b);
+    if (listed.length !== DELIVERY_PART_COUNT || listed.some((p, i) => p !== i)) return null;
+    if (x['word'] !== deliveryJoinWord(listed.map((i) => parts.find((p) => p.part === i)?.word ?? null))) return null;
+    out.push({ build: x['build'], word: x['word'], parts, unmeasured });
+  }
+  return out;
 }

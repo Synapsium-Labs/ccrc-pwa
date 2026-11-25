@@ -164,6 +164,7 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
+import { deliveryViewsOf } from '../../../shared/deliveryLane.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
@@ -2498,10 +2499,11 @@ export function registerCoordRoutes(
 
   /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
    *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
-   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  its next pass). The GET also carries `deliveries`, the paste delivery recipe's standing per build (Desktop polish wave 178;
+   *  `shared/deliveryLane.ts#deliveryViewsOf`, additive, no console surface reads it yet). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
    *  read is `unavailable`, never an empty list. */
   const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
-    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds(), deliveries: deliveryViewsOf(coord.claudeBuildDeliveries()) }); } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
     }
   };
