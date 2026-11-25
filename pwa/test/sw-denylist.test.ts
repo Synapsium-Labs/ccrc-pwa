@@ -6,26 +6,27 @@ import { swDenylist } from '../src/lib/sw-denylist';
 
 // ── The service worker's navigation denylist is the BUILDER's knob (S6) ────
 //
-// The built-in list is ccrc's own truth only: /api/, /ws/ and /licenses/ must
-// never be answered by the SPA shell. Co-tenant paths (a box may park other services
+// The built-in list is ccrc's own truth only: /api/, /ws/, /licenses/ and the
+// draft review page at /review must never be answered by the SPA shell. Co-tenant
+// paths (a box may park other services
 // at the same web root) are NOT ccrc's to know — they arrive at build time
 // via CCRC_SW_DENYLIST, and a release-tarball install that sets nothing gets
 // the clean default. swDenylist is the single seam vite.config consumes, so
-// this suite pins both halves: the default stays three entries, and the knob
+// this suite pins both halves: the default stays four entries, and the knob
 // appends prefix-anchored patterns rather than replacing ccrc's own.
 //
 // Tested at all because the failure mode is invisible in development: the
 // service worker is not installed there, so a co-tenant path works perfectly
 // until the bundle ships.
 
-/** ccrc's own list, in order: server state, then the shipped licences (D-5095). */
-const OWN: readonly RegExp[] = [/^\/api\//, /^\/ws\//, /^\/licenses\//];
+/** ccrc's own list, in order: server state, the shipped licences (D-5095), then the draft review page (X3 R2.2). */
+const OWN: readonly RegExp[] = [/^\/api\//, /^\/ws\//, /^\/licenses\//, /^\/review(?:\/|\?|$)/];
 
 /** Does this denylist claim the given navigation? */
 const denies = (list: RegExp[], url: string): boolean => list.some((re) => re.test(url));
 
 describe('swDenylist', () => {
-  it('default: ccrc’s own truth only — /api/, /ws/ and /licenses/', () => {
+  it('default: ccrc’s own truth only — /api/, /ws/, /licenses/ and /review', () => {
     expect(swDenylist(undefined).map(String)).toEqual(OWN.map(String));
   });
 
@@ -55,6 +56,29 @@ describe('swDenylist', () => {
       expect(denies(list, under), under).toBe(true);
     }
     expect(denies(list, '/licensesx'), 'a sibling is still ccrc’s').toBe(false);
+  });
+
+  // M-X3.12 (X3 R2.2, review findings N5 and N8): the review page is a separate document with its own header policy,
+  // so the shell must never answer it. Workbox's NavigationRoute tests the denylist against `pathname + search`, so a
+  // link tracker's `?utm_source=` must still be denied, which the plain `(\/|$)` shape misses.
+  it('denies the review page with no configuration: /review, /review/ and /review?utm_source=x', () => {
+    const list = swDenylist(undefined);
+    for (const page of ['/review', '/review/', '/review?utm_source=x', '/review/?utm_source=x']) {
+      expect(denies(list, page), page).toBe(true);
+    }
+  });
+
+  it('the review entry does not claim a sibling: /reviews and /reviews?x stay ccrc’s', () => {
+    const list = swDenylist(undefined);
+    for (const sibling of ['/reviews', '/reviews?x', '/review-queue']) {
+      expect(denies(list, sibling), `${sibling} merely shares a prefix`).toBe(false);
+    }
+  });
+
+  it('planted control: the narrower `(\\/|$)` shape misses the query, which is what the entry above pins', () => {
+    const narrow = [/^\/review(\/|$)/];
+    expect(denies(narrow, '/review?utm_source=x')).toBe(false);
+    expect(denies(narrow, '/review')).toBe(true);
   });
 
   it('still answers ccrc’s own routes with the shell', () => {
@@ -213,7 +237,7 @@ describe('M7.2: the build refuses an entry covering /docs; the default never den
     expect(denies(list, '/api/docs/p/tree')).toBe(true);
   });
 
-  it('/docs is never on the worker\'s own list (C5): every list leads with exactly the three built-ins', () => {
+  it('/docs is never on the worker\'s own list (C5): every list leads with exactly the four built-ins', () => {
     for (const extra of [undefined, '', '/wiki', '/wiki,/fleet']) {
       const list = swDenylist(extra);
       expect(list.slice(0, OWN.length).map(String), JSON.stringify(extra)).toEqual(OWN.map(String));

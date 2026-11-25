@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 302 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 305 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -209,8 +209,11 @@ import type { SessionStore } from './sessions.js';
  *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
  *     decision, with its journal line, stays here.
  *
- *  9. `POST /api/review/open` — draft review by capability: the token in the
- *     body is the credential, and the read door reads no session.
+ *  9. `POST /api/review/open` and `GET /review` — draft review by capability:
+ *     the token in the body is the credential, and the read door reads no
+ *     session. `GET /review` is the one fixed page that posts it, on a tap; it
+ *     holds no snapshot and reads no session. `GET /review.html` and
+ *     `GET /review/` are not exempt (X3 R2).
  *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
@@ -730,6 +733,9 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
 
   ['POST /api/review/open',
     'draft review by capability, reason 9: the token in the body is the credential; the door reads no session'],
+  ['GET /review',
+    'draft review by capability, reason 9: the one fixed review page, which holds no snapshot, reads no session and ' +
+    'posts the token only on a tap'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +

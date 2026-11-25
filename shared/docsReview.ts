@@ -44,6 +44,26 @@ export const REVIEW_OPEN_BODY_BYTES = 256;
 export const REVIEW_MARKER_HEADER = 'x-ccrc-review';
 export const REVIEW_MARKER_VALUE = '1';
 
+// ---- The review page's response headers --------------------------------------------------------------------------
+
+/** The review page's content security policy, sent as a response header (draft-review design §3.5, "The review
+ *  page"). `script-src 'self'` names no inline script; a srcdoc frame inherits and intersects this policy, so the
+ *  style, image and font sources are the ones the export's own meta grants a copy and nothing more. The page's
+ *  policy is never widened to make an engine render a copy (the design stops and asks). One home: the page route
+ *  and the browser harness both read it. */
+export const REVIEW_PAGE_CSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline' data:; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Every response header of the review page (`GET /review`, design §3.5): the policy above, never cached, no
+ *  referrer (the page's address held a capability once), no sniffing, never framed. Lower-case names, so a
+ *  header map reads them as they are sent. */
+export const REVIEW_PAGE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'content-security-policy': REVIEW_PAGE_CSP,
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+});
+
 // ---- The token ---------------------------------------------------------------------------------------------------
 
 /** The capability token: 32 random bytes, base64url without padding, so 43 characters. The one grammar of it. */

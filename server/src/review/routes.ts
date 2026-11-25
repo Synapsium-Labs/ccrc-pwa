@@ -1,8 +1,10 @@
 // Capability read door. The store owns the snapshot and the expiry decision is shared with its writers.
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
   isReviewToken, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
-  REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_SEND_IDLE_MS,
+  REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_PAGE_HEADERS, REVIEW_SEND_IDLE_MS,
 } from '../../../shared/docsReview.js';
 import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { expiryOf, type ReviewEntry } from './policy.js';
@@ -136,5 +138,43 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
         .type('application/octet-stream');
       return reply.send(source.stream);
     });
+  });
+}
+
+/**
+ * The review page (draft-review design §3.5, Task R2.2). `GET /review` sends the built `review.html` with the page's
+ * own header policy (`REVIEW_PAGE_HEADERS`, one home in L0). It reads the file itself and sends the bytes with
+ * `reply.send`; it never calls the static plugin's `sendFile`, which runs the plugin's path filter (that refuses this
+ * very file) and its `setHeaders` (which would turn `no-store` into `no-cache`), review finding N6.
+ *
+ * The file is read on every request, not once at registration: it is a few kilobytes, the operating system caches
+ * it, and the shell (`index.html`) is read per request by the plugin too, so a tree replaced under a running server
+ * (the fallback deploy) never pairs a stale page with new hashed assets. A missing root or an unreadable file is a
+ * 404 with `no-store`, never the app shell: the page's own policy must not be replaced by the shell's.
+ *
+ * `GET /review.html` and `GET /review/` are registered only to answer 404 with `no-store`. They are not exempt from
+ * the auth gate, so armed and with no session the gate answers 401 first; either way a mistyped `/review/#token`
+ * never lands under the app shell's policy. A query string on `/review` reaches the page route, as Fastify routes
+ * on the path. The routes are registered on `app` itself, in the form the source scanners read.
+ */
+export function registerReviewPageRoutes(app: FastifyInstance, pwaRoot: string | null): void {
+  const notFound = (reply: FastifyReply) =>
+    reply.code(404).header('cache-control', 'no-store').send({ ok: false, error: 'not-found' });
+  app.get('/review', async (_req, reply) => {
+    if (pwaRoot === null) return notFound(reply);
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(path.join(pwaRoot, 'review.html'));
+    } catch {
+      return notFound(reply);
+    }
+    for (const [name, value] of Object.entries(REVIEW_PAGE_HEADERS)) reply.header(name, value);
+    return reply.type('text/html; charset=utf-8').send(bytes);
+  });
+  app.get('/review.html', async (_req, reply) => {
+    return notFound(reply);
+  });
+  app.get('/review/', async (_req, reply) => {
+    return notFound(reply);
   });
 }

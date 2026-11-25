@@ -635,3 +635,33 @@ For the coordinator to confirm: the reader lab's one anchor joins D-8767 (the re
   - **Red first.** The holdings test names it among the secret stores, and pins its path. That failed two cases before the fix, and both isolation files then passed, 39 of 39. One Opus · high review found nothing important; its two minor points, the path pin and the comment's wording, were taken.
   - **The generation-day simulation's timeout.** It hit its 600 s bound on a shard that ran 992 s. The same file passed in 444 s in the merge-queue run that landed `6965b6d830`, and it imports nothing this pull request changes, so this is read as load. The next hosted run decides it.
 - **Hosted CI remains the arbiter** for the files run 2949 could not finish locally (linking routes, project-pool routes and cross-side update intent), for the D-6111 timing witnesses, and for the whole selection.
+
+## Results (wave R2, run 3726)
+
+Wave 46, ticket `x3-r2`, base `main` at `bce2bc52fd`. Deviation numbers issued: D-9027 to D-9029.
+
+**R2.2** (the page routes, the static filter, the service-worker denylist). The implementer was Sonnet · high; red first, then green.
+- **Headers, one home.** The page's policy and its four other headers live once in L0, `shared/docsReview.ts` (`REVIEW_PAGE_CSP`, `REVIEW_PAGE_HEADERS`), so the page route and the browser harness (R2.3) read one copy. This is a technical choice: `shared/docsReview.ts` is R1's file and is not in R2's Files list.
+- **The route.** `GET /review` reads `review.html` from the PWA root on each request and sends the bytes itself. It never calls `sendFile`. It reads per request, not once at registration, so a tree replaced under a running server never pairs an old page with new hashed assets. A null root or an unreadable file is a `no-store` 404, never the shell.
+  - `GET /review.html` and `GET /review/` are gated 404s.
+  - The PWA root seam is `Deps.pwaRoot`: absent means `findPwaRoot()`, and null means API-only. `server.ts` changes by one net line.
+- **Gate class 9.** It gains `GET /review`, and the other two routes stay gated. The census moves to 308 scanned, 305 HTTP, 192 gated and 113 exempt.
+  - Under the holder's claim 7004, the gate and its auth test were sent as an exact packet against `main` `1ec2db8ec3`, applied only after the holder's yes, and byte-compared after applying.
+  - The first packet missed the test's sorted EXEMPT key list. Re-running the census on the real routes found the gap (514 of 515), and a one-line second packet was approved and applied.
+- **The static filter.** `pwaStaticOptions` gains `allowedPath`. The plugin hands it a path already decoded once and normalised; the filter decodes it again (conservatively), normalises it, lower-cases it and strips its slashes. It then refuses `review.html` and any sibling named after it (`review.html.br`, `.gz`). Reading @fastify/static 10.1.8 shows the filter is also applied to the file `send` selects, the precompressed one included, and to `sendFile`.
+- **The denylist.** It gains `/^\/review(?:\/|\?|$)/`, spelled as the ledger's carry spells it.
+- **Mutation rows.** Each was made with the Edit tool, run alone, red, then restored and compared byte for byte with a saved copy:
+  - R2-M1 (a) `x-frame-options` dropped: 1 new failure, the DENY row (received null). (b) `no-store` dropped: 2 new failures (received null).
+  - R2-M6, `'unsafe-inline'` in `script-src`: 2 failures, the dark policy and query rows.
+  - R2-M8 (a) the entry dropped: 4 failures. (b) narrowed to `/^\/review(\/|$)/`: 4 failures, among them `/review?utm_source=x: expected false to be true`.
+  - R2-M9 (a) the filter dropped: 13 failures, the 12 unit rows and the plugin row, which answered the page. (b) the filter made case-sensitive: 2 failures, `/Review.HTML` and `/REVIEW%2eHTML`.
+  - R2-M11, `GET /review` on `sendFile`: 5 new failures. The answers were `no-cache` and the shell's bytes, and the null-root row answered 200.
+  - Those runs were made before the review's minor fixes. The added rows (the HEAD headers, the sibling refusals, the census's gate checks) were not run as mutations.
+- **Review.** One Opus · high review found nothing critical or important. Four of its seven minors were taken:
+  - the filter refuses the page's compressed siblings, and its doc is corrected;
+  - the census pins `GET /review` exempt and the two 404s gated;
+  - a `HEAD /review` row pins all five headers.
+
+  Not taken, as advisory: a guard against a second copy of the policy text; the service worker answering `/review.html` and `/Review` (outside the spec's list); and the filter's second decode, kept as a conservative choice.
+- **Local runs**, each foreground. Review routes, static cache and box-token census: 151 of 151. Auth gate: 395 of 395. Service-worker denylist: 21 of 21. Review vocabulary and rings: 141 of 141. The server source typecheck exited 0 before the review's fixes.
+- **Process note (reported to the coordinator).** Four of these runs were piped through `tail`, against the brief's rule. They were the auth-gate and census runs: the 514 of 515 check, the post-fix 151 of 151, and an auth-gate run whose counts were never read. Each run was a single file group. The auth-gate result above is from an unpiped re-run.
