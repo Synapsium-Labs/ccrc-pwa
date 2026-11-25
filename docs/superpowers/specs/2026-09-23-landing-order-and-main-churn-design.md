@@ -129,7 +129,7 @@ is none.
 | Actor | May | May not, and what holds it |
 |---|---|---|
 | **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a programme wave, or whose workspace carries the child marker**, a reviewer's included, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
-| **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds; pause the line | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
+| **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds (the pause is the operator's alone since wave 5j's plan, decision 2: a coordinator reads the pause and does not set it) | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
 | **ccd** | the read-only probe on a timer; compose a candidate; delete its own candidate refs; lineage | move a worker's branch; merge; push or delete anything outside `refs/heads/ccrc/land/*` (pinned) |
 | **Server** | hold the line; mail "next to land"; re-measure what ccd wrote; refuse bad transitions | run git or `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`); take a run to `working` on its own; choose a successor |
 | **Operator** | pause, withdraw, declare order; merge by hand (recorded as an inversion when out of order); break-glass through the admin bypass from their own shell or GitHub's UI (R9) | — |
@@ -529,6 +529,13 @@ wedge-release class), registered in `server/src/coord/routes.ts` so the two scan
 see them: pause the project's line, and withdraw an entry with a coordinator notice. The pinned property:
 a session-only route may pause the line or remove an entry, including the head, but never chooses or reorders
 which entry becomes head — the successor is whatever the recorded order and the radar already say.
+**Amended 2026-11-25 (D-9047, wave 5j's plan):** a withdrawal also brings nothing forward. An order edge to a
+withdrawn entry stays outstanding, so an entry declared after the withdrawn one waits, named in the line's read,
+until a session declares its order again without that entry (an act the feed always records) or the entry
+re-enters through its run and then lands or is closed. Before, an edge to any terminal entry was met, so
+withdrawing the middle of a stack freed the entry above it to land the withdrawn commits. A landed or closed
+target is still met. The pause, the resume and the withdrawal work alike: with sign-in armed the gate demands a
+session, and with sign-in dark each works and records that (D-9049).
 `landing-subtractive.test.ts` pins that; `coord-pause-route.test.ts`'s `SESSION_ONLY` set and
 `box-token-census.test.ts` gain the routes in both directions, with `CLAUDE.md`'s box-token bullet.
 

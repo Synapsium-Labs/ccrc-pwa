@@ -15,12 +15,13 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession, type StopAnswer, type StopBody } from '../../../shared/api';
-import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, cn, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
 import { accountLabel } from '../lib/accounts';
-import { navigate } from '../lib/router';
-import { sessionDocsHref } from '../docs/docsLinks';
+import { sessionDocsHref, type SessionDocsLink } from '../docs/docsLinks';
+import { GHOST_ANCHOR } from '../lib/ghostAnchor';
+import { useTabLink } from '../lib/useTabLink';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { forgetOffered, paneGone } from './presence';
@@ -59,6 +60,17 @@ const RELEASE_CONSEQUENCE =
   + 'until you archive it by hand.';
 
 const CRITICAL = 75;
+
+/** The sheet's Docs row (docs design 4.8): an anchor wearing the ghost button, at the address `sessionDocsHref` built, with the
+ *  Docs tab rule's props (`useTabLink`, desktop polish wave 174). A tap closes the sheet as well as following the link. */
+function DocsRow({ docs, onClose }: { docs: SessionDocsLink; onClose: () => void }): ReactNode {
+  const props = useTabLink()(docs.href);
+  return (
+    <a {...props} className={cn(GHOST_ANCHOR, 'docs-session-row')} onClick={(e) => { onClose(); props.onClick?.(e); }}>
+      {docs.label}
+    </a>
+  );
+}
 
 export function SessionActionsSheet({
   session,
@@ -351,14 +363,12 @@ export function SessionActionsSheet({
             </p>
           )}
 
-          {/* Docs for this session (docs design 4.8): the row right after Restart and its notes. It closes the sheet,
-              then navigates to the href `sessionDocsHref` built; no row when the project fails the project grammar. */}
-          {docsLink !== null && (
-            <Button variant="ghost" className="docs-session-row"
-                    onClick={() => { onClose(); navigate(docsLink.href); }}>
-              {docsLink.label}
-            </Button>
-          )}
+          {/* Docs for this session (docs design 4.8): the row right after Restart and its notes, an anchor wearing the
+              ghost button, to the href `sessionDocsHref` built; no row when the project fails the project grammar. Its
+              address is a real one, so the browser's middle click and copy link work on it. At a desk it opens a Docs tab
+              of its own (the Docs tab rule, desktop polish wave 174), below one it moves within the app; either way the
+              sheet closes. */}
+          {docsLink !== null && <DocsRow docs={docsLink} onClose={onClose} />}
 
           <Button variant="ghost" onClick={() => setSwapOpen(true)}
                   disabled={fault !== null} title={faultTitle}>

@@ -1667,22 +1667,26 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-24.04 with a 20-minute deadline (D-7746)', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-24.04 with a 30-minute deadline (D-7746, D-9055)', () => {
     const b = job('browser-pwa');
     expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
     expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-24.04');
-    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // 30 minutes (D-9055): a shard expects about eleven, and a slow runner ran a green shard past 20 at about 1.7
+    // times a fast runner's time. The limit is for a wedged job, with room for a runner at about twice the usual time.
+    expect(jobKey(b, 'timeout-minutes')).toBe('30');
     // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
     const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
     const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
     expect(total, 'the shard matrix names no total').toBeDefined();
     expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
-    // THREE shards (D-8167): at two, both shards took 14 to 19 minutes in the merge queue and a loaded runner was
-    // cancelled at the 20-minute limit while its tests still passed. The count is a measured choice, and the limit
-    // stays 20: a change to either is a deliberate edit with new times in the job's comment.
-    expect(Number(total), 'the browser leg runs as three shards (D-8167)').toBe(3);
+    // FOUR shards (D-9026): at three (D-8167, after two shards took 14 to 19 minutes), the second shard took 916 s to
+    // 1,211 s in six merge-queue runs of 2026-11-25 and was cancelled twice at the 20-minute limit while its tests
+    // still passed, with the file-time table 36 files behind and one file grown from 360 s to 870 s. The count is a
+    // measured choice, and so is the limit (D-9055): a change to either is a deliberate edit with new times in the
+    // job's comment.
+    expect(Number(total), 'the browser leg runs as four shards (D-9026)').toBe(4);
     expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 

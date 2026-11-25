@@ -6349,7 +6349,8 @@ export class FleetWatcher {
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
       const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
-      const w1 = renewalReadingsOf(this.deps, coord, records);   // W1's renewal readings, one wiring (and its memo) per pass
+      // W1's renewal readings, one wiring (and its memo) per pass; `notLocal` asks the watcher's one memoized resolver (PR B).
+      const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),

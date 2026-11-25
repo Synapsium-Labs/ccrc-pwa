@@ -43,6 +43,7 @@ import { badgePrint, placeBadge, useNavBadges, type NavBadges } from '../../flee
 import { FaceMark } from '../../face/FaceMark';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { deskPlacesFor, FLEET_PLACE, type Place } from '../../lib/places';
+import { PlaceDoor } from '../DoorLink';
 import { useLocation } from '../../lib/router';
 import { ROUTES, topRouteOf } from '../../lib/routes';
 import { useMediaQuery } from '../../lib/useMediaQuery';
@@ -87,20 +88,22 @@ function DeskDoorEntry({ id, icon, current, badges, words }: {
   const count = badge.count;
   const name = count > 0 ? `${word}, ${count} ${badge.word}` : word;
   const pill = count > 0 && <CountBadge className="ins-door-count" aria-hidden="true">{badgePrint(count)}</CountBadge>;
+  // A place's door (`PlaceDoor`): its "Go to" command, or a link where the Docs tab rule opens a new tab (desktop polish
+  // wave 174).
   return (
-    <Door
+    <PlaceDoor
+      id={id}
       className="ins-door"
       glyph={<Icon name={icon} />}
       aria-label={name}
       aria-current={current === id ? 'page' : undefined}
-      {...commandDoor(`go-${id}`)}
     >
       {words
         ? <span className="ins-door-word">{word}</span>
         : <span className="ins-door-tip" aria-hidden="true">{word}</span>}
       {count > 0 && ' '}
       {pill}
-    </Door>
+    </PlaceDoor>
   );
 }
 

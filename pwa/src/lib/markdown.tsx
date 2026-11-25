@@ -13,7 +13,7 @@
 // retired r10's word bound and the main-thread highlight bounds beside it: highlight.js runs only in the worker.
 // Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
 // Chat reading Task L (D-8062): a mark resolves to a link here, at render time, through `ChatRef` (`refHref` with the context
-// `ChatRefsContext` carries); `ChatLink` is chat's one anchor, external (a new tab, no opener) or in-app (`inAppClick`); a
+// `ChatRefsContext` carries); `ChatLink` is chat's one anchor, external (a new tab, no opener) or in-app (`useTabLink`, the Docs tab rule); a
 // Markdown link the console routes (`routedHref`) moves within the app; an inline code span whose whole text is one name links.
 // W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL` and `codeLanguage` to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
@@ -29,7 +29,7 @@ import { MARK_ATTR, isMarkKind, wholeMark, type Mark } from './chatMarks';
 import { refHref, type RefTarget } from './chatRefs';
 import { messageRepos } from './chatRepoEvidence';
 import { routedHref } from './routes';
-import { inAppClick } from '../fleet/settingsText';
+import { useTabLink } from './useTabLink';
 import { ChatRefsContext, MessageReposContext } from '../session/chatRefsContext';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
 import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
@@ -288,11 +288,13 @@ export const SHARED_COMPONENTS: Components = {
 };
 
 /** Chat's one anchor (chat reading Task L, D-8062). External: a new tab with no opener, through `openExternal` (a bare `<a>` in a
- *  standalone PWA would navigate the app itself). In-app: a path inside the console, which a plain click opens within the app and
- *  a modified one leaves to the browser (`inAppClick`). */
+ *  standalone PWA would navigate the app itself). In-app: a path inside the console, by the Docs tab rule (`useTabLink`): at a
+ *  desk a document opens a Docs tab of its own (desktop polish wave 174); otherwise a plain click opens it within the app and a
+ *  modified one leaves it to the browser. */
 export function ChatLink({ target, children }: { target: RefTarget; children?: ReactNode }): ReactNode {
   const { href, external } = target;
-  if (!external) return <a href={href} onClick={inAppClick(href)}>{children}</a>;
+  const link = useTabLink();
+  if (!external) return <a {...link(href)}>{children}</a>;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
       {children}
