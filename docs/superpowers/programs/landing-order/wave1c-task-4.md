@@ -40,7 +40,13 @@ run, the file restored from the saved copy and its sha256 checked equal.
 | G3 (fix round 1, F3) | `ccd/session-hook.sh`, `ae5cafdd0f66e5e72decce2a93b3094475ab2efd927c796697dcad496c550a70` | drops `, before your wave-done only` from the `(4)` line (the reviewer's G3): the new case 3 (`ccd/session-hook.sh lacks: before your wave-done only`). 1 failed, 81 passed over `conflict-sync-text` and `session-hook-sync-advisory`; green at round 0 | sha matches |
 | F1 (fix round 1) | `ccd/coordinator-skill/references/wave-lifecycle-run-care.md`, `e379849faf1d94ea2f6f9dc3769f9b8c17da0383aa0dcca24cd92f406ad9cdfd` | the rev-parse line leaves the code block and the source goes back to `copied from the command's output`: `conflict-sync-text` case 4 (`lacks: copied from the rev-parse output and never typed`; the prose still names `git rev-parse origin/main`, so the first new assertion holds and the second reds). 1 failed, 3 passed | sha matches |
 
-Every predicted red was red. Two rows red more than the table predicts, and both follow from the
+Where each count was measured (review 3738 F6): rows 1C-01 to 1C-05 on the tree of `30ae050843`
+(round 0, before the later cases existed); rows G1, G2, G3 and F1 on the tree of `0adfc5c1ee` (fix
+round 1). Every row, re-measured on the tree of `29d9066bd9` (fix round 2), is in
+`wave1c-fix-round-2.md`; there 1C-01 to 1C-04 red more cases, because the cases added in rounds 1 and
+2 hold the same sentences.
+
+Every predicted red was red. At round 0, two rows red more than the table predicts, and both follow from the
 mutation itself: 1C-01 removes the bound sentence too, so `conflict-sync-text` case 2 reds; 1C-03 changes
 the clause, so the verbatim census reds. Green after each restore: the reader run below.
 
@@ -50,9 +56,9 @@ the clause, so the verbatim census reds. Green after each restore: the reader ru
   `install-worker-skill`, `session-hook-mail-hold`, `session-hook-merge-deny`,
   `session-hook-role-skill-deny`, `hook-helpers-generated`, `update-branch-absent`, `skillstate`,
   `install-census` (the `session-hook*` suites `git grep -l "landing advisory" server/test` names are
-  `session-hook-mail-hold` and `session-hook-sync-advisory`, both in the list): 11 files, 633 tests, green.
+  `session-hook-mail-hold` and `session-hook-sync-advisory`, both in the list): 11 files, 633 tests, green, on the tree of `30ae050843`.
 - Guards: `citations`, `anchors`, `docs-parity`, `topology-clean` and `single-definition/` whole: 48 files,
-  1747 tests, green.
+  1747 tests, green, on the tree of `30ae050843`.
 - `deviation-refs`, after `git fetch origin main`: on the test box it timed out at 20 s in `is looking at
   two real trees, each with a real ledger in it` (33 of 34 passed); alone with `ccrc test --local`, 34 of
   34 green.
@@ -84,7 +90,7 @@ The first push (`e18c4b5516`) ran red in three server shards, for two causes, bo
   coordinator, history and linear skills, sit under their caps the same way).
 
 After the fix: `skill-size-ratchet`, `dtbd`, `ci-shards`, `worker-skill`, `conflict-sync-text` and
-`install-worker-skill`, 160 tests, green.
+`install-worker-skill`, 160 tests, green, on the tree of `052169a265`.
 
 The judge's check reads red on `rules-mixed` alone (skill and reference text beside other changes); the
 coordinator ruled before the wave that the pull request stays whole, because each pin moves with its text.
