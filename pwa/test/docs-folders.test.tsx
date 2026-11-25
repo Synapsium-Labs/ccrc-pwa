@@ -14,7 +14,7 @@ import {
   DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_FAILURE_SENTENCE, DOCS_RANGE_TEXT, DOCS_VIEW_TEXT,
 } from '../src/docs/docsText';
 import { docsCrumbs, docsUpHref } from '../src/docs/DocsHead';
-import { folderActions, folderReadPlan, folderTruthLine } from '../src/docs/folderPage';
+import { folderActions, folderAskedAt, folderPathStale, folderReadPlan, folderTruthLine } from '../src/docs/folderPage';
 import type { DocsFolderLoaders } from '../src/docs/folderPage';
 import type { DocsAnswer } from '../src/docs/failures';
 import { ApiError } from '../src/lib/apiError';
@@ -475,6 +475,35 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
     const f = fakeFolders({ tree: async () => { lists += 1; return ok({ ok: true as const, tree: lists === 1 ? TREE : later }); } });
     open('/docs/~notes/specs', f);
     await screen.findByText('a.md');
+    // Never shown, not even for one commit before the re-read: watch every change of the page.
+    let seen = false;
+    // Each record's own added nodes, not the page's text when the callback runs (by then a later commit may have replaced it).
+    const watch = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) if ((n.textContent ?? '').includes(DOCS_FOLDER_TEXT.missing)) seen = true;
+        if (r.type === 'characterData' && (r.target.textContent ?? '').includes(DOCS_FOLDER_TEXT.missing)) seen = true;
+      }
+    });
+    watch.observe(document.body, { subtree: true, childList: true, characterData: true });
+    act(() => { navigate('/docs/~notes/specs/new.md'); });
+    await screen.findByText('hello folder');
+    watch.disconnect();
+    expect(seen, 'the sentence was drawn from the older listing').toBe(false);
+    expect(lists).toBe(2);
+  });
+
+  it('a move while a listing is on its way: that listing started before the move, so it cannot call the path absent', async () => {
+    let lists = 0;
+    const later: DocsFolderTreeOk = { ...TREE, entries: [...TREE.entries, file('specs', 'new.md')] };
+    const f = fakeFolders({
+      tree: async () => {
+        lists += 1;
+        const n = lists;
+        await new Promise((r) => setTimeout(r, 20));
+        return ok({ ok: true as const, tree: n === 1 ? TREE : later });
+      },
+    });
+    open('/docs/~notes/specs', f);
     act(() => { navigate('/docs/~notes/specs/new.md'); });
     await screen.findByText('hello folder');
     expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.missing);
@@ -490,6 +519,15 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(f.calls.filter((c) => c === 'tree'), 'one more listing, never a loop').toHaveLength(2);
     expect(screen.queryByRole('button', { name: DOCS_FOLDER_TEXT.retry })).toBeNull();
+  });
+
+  it('folderAskedAt and folderPathStale: a listing on its way at the move does not count, and each path re-reads once', () => {
+    expect(folderAskedAt(3, false)).toBe(3);
+    expect(folderAskedAt(3, true), 'the listing in flight started before the move').toBe(4);
+    expect(folderPathStale(true, 3, 3), 'no listing since the move').toBe(true);
+    expect(folderPathStale(true, 4, 4), 'the in-flight one answered: still not newer').toBe(true);
+    expect(folderPathStale(true, 5, 4), 'a newer listing decides').toBe(false);
+    expect(folderPathStale(false, 3, 3), 'a path the listing holds is never stale').toBe(false);
   });
 
   it('an absent path opened first is judged by the listing that page read: no second listing', async () => {

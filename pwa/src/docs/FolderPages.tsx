@@ -32,7 +32,8 @@ import { DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, fillSentence, kib,
 import { CLASS_GLYPH, SECTION_LABEL, leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import {
-  folderListing, folderPathKind, folderRangeLoader, folderRangeVisit, folderReadPlan, folderSectionRows,
+  folderAskedAt, folderListing, folderPathKind, folderPathStale, folderRangeLoader, folderRangeVisit, folderReadPlan,
+  folderSectionRows,
   type DocsFolderLoaders,
 } from './folderPage';
 import { showBytes } from './objectUrls';
@@ -287,11 +288,11 @@ export function FolderPage(p: {
   useEffect(() => { spent.current = false; }, [key]);
   // A path is called absent only by a listing that answered after the navigation that asked for it (review 3783 F1): the
   // page keeps one listing while it stays on one folder, so a file written since, reached by an in-app link, would be
-  // judged by the old one. `asked` is how many listings had answered, or were on their way, when this path was asked for;
-  // a missing path judged by no newer listing reads the tree once more first. Once per path: the next answer is newer.
+  // judged by the old one. `asked` holds, per path, `folderAskedAt`'s count; `folderPathStale` decides the one re-read.
   const asked = useRef({ key, reads });
-  if (asked.current.key !== key) asked.current = { key, reads: reads + (slot.s === 'loading' ? 1 : 0) };
-  const stale = slot.s === 'ok' && loc.kind === 'folder-path' && (leaf === null || leaf.kind === 'missing') && reads <= asked.current.reads;
+  if (asked.current.key !== key) asked.current = { key, reads: folderAskedAt(reads, slot.s === 'loading') };
+  const missing = slot.s === 'ok' && loc.kind === 'folder-path' && (leaf === null || leaf.kind === 'missing');
+  const stale = folderPathStale(missing, reads, asked.current.reads);
   useEffect(() => { if (stale) reload(); }, [stale, reload]);
   let body: ReactNode;
   if (slot.s === 'loading' || stale) body = <p className="docs-loading">{DOCS_FOLDER_TEXT.loading}</p>;

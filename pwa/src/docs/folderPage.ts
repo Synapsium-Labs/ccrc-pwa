@@ -157,6 +157,19 @@ export function folderReadPlan(entry: DocsFolderEntry): FolderReadPlan {
   return range === null ? { mode: 'none', why: 'unpinned' } : { mode: 'range', range, size: entry.size };
 }
 
+/** The listings a folder page's path is judged against (review 3783 F1): those that had answered when the path was asked
+ *  for, plus the one on its way then, which started before the move and so cannot speak for the path. */
+export function folderAskedAt(reads: number, listing: boolean): number {
+  return reads + (listing ? 1 : 0);
+}
+
+/** Whether a folder page reads its tree once more before it calls a path absent (review 3783 F1): the path is missing from
+ *  the listing on screen, and no listing has answered since the path was asked for. Once per path: the next answer is
+ *  newer, so a truly absent path still ends at the sentence, with no loop. */
+export function folderPathStale(missing: boolean, reads: number, askedAt: number): boolean {
+  return missing && reads <= askedAt;
+}
+
 /** A listed modified time as the truth line writes it: UTC, to the minute. `null` for a time outside the wire's one grammar
  *  (`isDocsMtimeNs`; a time before 1970 is negative and never matches), so the line says nothing rather than a wrong time. */
 export function folderTimeText(mtimeNs: string | null): string | null {

@@ -49960,9 +49960,9 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
     op 'add': makes the directory (0700) if absent, so the lock can live in it; `guard()` runs once the lock is held (the
     re-run of admission) and returns a closer or None; the label's file is written whole through a temporary name and a
     rename (the directory fsynced after), refused label-exists when the label stands. An add that refuses after this call
-    made the directory and took the lock takes them away again, while it still holds the lock (its lock file, then the
-    directory, if nothing else is in it), and a call that waited on that lock finds its name gone and refuses
-    registry-busy, never writing under it (review 3783 A1): a refused add creates nothing. op 'remove': an absent `$REG` (ENOENT), directory or label is unknown-folder and creates
+    made the directory and took the lock takes them away again, while it still holds the lock and only when the lock is
+    the directory's one name, and a call that waited on that lock finds its name gone and writes nothing under it: an add
+    refuses registry-busy, a remove unknown-folder (review 3783 A1): a refused add creates nothing. op 'remove': an absent `$REG` (ENOENT), directory or label is unknown-folder and creates
     nothing; any other failure is unreadable; `guard()` runs, then `purge()` (the label's range snapshots), and only then the
     label's file is unlinked, so a purge that fails leaves the label registered and a retry finds it. The closer of `guard`
     runs last. `dl` is the verb's one Deadline: the lock's wait is the smaller of FOLDER_LOCK_WAIT_S and what is left of it.
@@ -50013,8 +50013,8 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
                     raise Fail('unreadable', {'reason': 'registry-busy'})
                 time.sleep(0.02)
             locked = True
-            if os.fstat(lock_fd).st_nlink == 0:   # taken back by a refused first add while this call waited
-                raise Fail('unreadable', {'reason': 'registry-busy'})
+            if os.fstat(lock_fd).st_nlink == 0:   # taken back with its empty registry by a refused first add: nothing stands
+                raise Fail('unknown-folder') if op == 'remove' else Fail('unreadable', {'reason': 'registry-busy'})
             closer = guard() if guard is not None else None
             try:
                 os.lstat(label, dir_fd=reg_fd)
@@ -50052,10 +50052,11 @@ def folder_registry_write(ctx, op, label, body=None, guard=None, purge=None, dl=
         finally:
             if created and locked and not done:
                 # This call made the directory and refused: take back what it made, the lock file and then the directory,
-                # under the lock still. Best effort: a directory with anything else in it stays.
+                # under the lock still, and only while the lock is its one name: a registry another add wrote into stays.
                 try:
-                    os.unlink(FOLDER_LOCK_NAME, dir_fd=reg_fd)
-                    os.rmdir(FOLDER_REGISTRY_NAME, dir_fd=base_fd)
+                    if os.listdir(reg_fd) == [FOLDER_LOCK_NAME]:
+                        os.unlink(FOLDER_LOCK_NAME, dir_fd=reg_fd)
+                        os.rmdir(FOLDER_REGISTRY_NAME, dir_fd=base_fd)
                 except OSError:
                     pass
             os.close(lock_fd)
@@ -50242,7 +50243,8 @@ def folder_bind(a, ident):
 def folder_leaf(root, a):
     """The file a show or a prepare reads -> (fd, fstat). Below the folder's descriptor every middle component (the
     section's own included) is opened O_NOFOLLOW and compared with the protected set by (st_dev, st_ino), as the tree walk
-    compares each directory it opens, so a protected directory reached below the folder refuses protected here too. The leaf
+    compares each directory it opens, so a protected directory reached below the folder refuses protected here too, and
+    one on another device than the folder refuses not-a-file other-device. The leaf
     is lstat'ed relative to its parent BEFORE it is opened: a symlink, FIFO, socket, device or directory refuses
     not-a-file with its kind and is never opened (a FIFO's open can be seen by its writer). Only a regular file is then
     opened, by walk_leaf (O_NOFOLLOW and O_NONBLOCK), and its fstat stays the authority: a hardlink, foreign owner or other
@@ -50325,7 +50327,8 @@ class FolderWalk(object):
 
 def folder_section_open(w, root_fd, slug):
     """The section directory `slug`, opened below the folder's descriptor one component at a time, each O_NOFOLLOW ->
-    its descriptor (the caller closes it), or None when a component is absent or is a file (an absent section is empty). A
+    its descriptor (the caller closes it), or None when a component is absent, is a file or is on another device than the
+    folder (each such section reads as empty: a known limit, the unlisted reasons have no word for a device). A
     component that is a symlink refuses symlink-in-path, an unreadable one unreadable; each component is compared with the
     protected set (protected). A component that is a directory already visited (the folder itself or a directory an earlier
     section walked: a loop through the section's own path) skips the section, counted unlisted too-deep. The components

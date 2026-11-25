@@ -687,6 +687,88 @@ describe('docs-folder: what a refusal leaves behind (X2 P2.1)', () => {
     expect(got).toEqual(['unreadable', { reason: 'registry-busy' }, ['beta']]);
   });
 
+  it('folder remove: a remove that wins a lock whose name was taken back answers unknown-folder', () => {
+    // The take-back removes a registry only when its lock is its one name, so no label stood there: unknown-folder is the
+    // remove's honest word (an add's is registry-busy, above).
+    expect(add('beta', mkdir('zqfix', 'beta'))).toMatchObject({ ok: true });
+    const got = unitJson<[string | null, unknown]>(h.home, [
+      ctxPy(),
+      'import fcntl',
+      'real_flock = fcntl.flock',
+      'gone = [False]',
+      'def flock(fd, op):',
+      '    real_flock(fd, op)',
+      '    if op & fcntl.LOCK_EX and not gone[0]:',
+      '        gone[0] = True',
+      "        os.unlink(home + '/.cc-sessions/docs-folders/.lock')",
+      'fcntl.flock = flock',
+      "a = H.FolderArgs('remove', 'beta', None, [])",
+      'word = ctx_ = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word, ctx_ = f.word, f.ctx',
+      'fcntl.flock = real_flock',
+      'out([word, ctx_])',
+    ].join('\n'));
+    expect(got[0]).toBe('unknown-folder');
+  });
+
+  it('folder add: a refused first add leaves the lock and the registry when another add wrote into it meanwhile', () => {
+    // Review 3783 (the round's own review, #2): three first adds; another one wrote its label before this one won the lock
+    // and refused. Taking the lock's name away then would make a later waiter refuse for nothing.
+    const got = unitJson<[string | null, string[]]>(h.home, [
+      ctxPy(),
+      'import fcntl',
+      'calls = [0]',
+      'def fake(ctx, path, cfg):',
+      '    calls[0] += 1',
+      '    if calls[0] == 1:',
+      '        return os.open("/", os.O_RDONLY), None',
+      '    raise H.Fail("absent")',
+      'H.folder_admit = fake',
+      'real_flock = fcntl.flock',
+      'def flock(fd, op):',
+      '    real_flock(fd, op)',
+      '    if op & fcntl.LOCK_EX:',
+      "        open(home + '/.cc-sessions/docs-folders/beta', 'w').close()",
+      'fcntl.flock = flock',
+      "a = H.FolderArgs('add', 'alpha', '/zq/dir', [])",
+      'word = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word = f.word',
+      'fcntl.flock = real_flock',
+      "out([word, sorted(os.listdir(home + '/.cc-sessions/docs-folders'))])",
+    ].join('\n'));
+    expect(got).toEqual(['absent', ['.lock', 'beta']]);
+  });
+
+  it('folder add: an add that made the directory but never won the lock takes nothing back', () => {
+    // The take-back is only for a call that holds the lock: one that timed out waiting must leave the lock file another
+    // add holds, or a third could lock a fresh one beside it.
+    const got = unitJson<[string | null, unknown, string[]]>(h.home, [
+      ctxPy(),
+      'import fcntl, errno as E',
+      'H.folder_admit = lambda ctx, path, cfg: (os.open("/", os.O_RDONLY), None)',
+      'H.FOLDER_LOCK_WAIT_S = 0',
+      'real_flock = fcntl.flock',
+      'def flock(fd, op):',
+      '    raise BlockingIOError(E.EWOULDBLOCK, "held")',
+      'fcntl.flock = flock',
+      "a = H.FolderArgs('add', 'alpha', '/zq/dir', [])",
+      'word = ctx_ = None',
+      'try:',
+      '    H.verb_folder(ctx, a)',
+      'except H.Fail as f:',
+      '    word, ctx_ = f.word, f.ctx',
+      'fcntl.flock = real_flock',
+      "out([word, ctx_, sorted(os.listdir(home + '/.cc-sessions/docs-folders'))])",
+    ].join('\n'));
+    expect(got).toEqual(['unreadable', { reason: 'registry-busy' }, ['.lock']]);
+  });
+
   it('folder add: a FIFO planted at docs-folders/.lock refuses unreadable at once and never hangs', () => {
     fs.mkdirSync(registryDir(), { mode: 0o700 });
     execFileSync('mkfifo', [path.join(registryDir(), '.lock')]);
