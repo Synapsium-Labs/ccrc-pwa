@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import * as readings from '../src/continuity/renewalReadings.js';
 import {
-  backstopDueCases, backstopInstantCases, classChangedCases, designatedClassCases, fittedCeilingCases, notLocalCases, probesFailedTwiceCases,
+  backstopDueCases, backstopInstantCases, classChangedCases, designatedClassCases, fittedCeilingCases, notLocalAskCases, notLocalCases, probesFailedTwiceCases,
   termRaisedCases,
 } from './sim/renewalReadingSets.js';
 import { BACKSTOP_DEFAULT, BACKSTOP_HOURS, BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone } from '../../shared/renewal-readings.js';
@@ -39,6 +39,10 @@ describe('probesFailedTwiceOf (PR C)', () => {
 
 describe('notLocalOf (PR B)', () => {
   for (const [name, fn] of Object.entries(notLocalCases(readings))) it(name, fn);
+});
+
+describe('notLocalAskOf (PR B, fix round 1 F2)', () => {
+  for (const [name, fn] of Object.entries(notLocalAskCases(readings))) it(name, fn);
 });
 
 describe('the backstop vocabulary (shared/renewal-readings.ts)', () => {

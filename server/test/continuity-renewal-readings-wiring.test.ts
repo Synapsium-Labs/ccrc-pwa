@@ -3,7 +3,8 @@
 // the designation's two readings and binds the pass's latch raise to the ladder's one raise path; PR B adds `notLocal`, for
 // every generation the gather reads, from the watcher's transcript resolver, bracketed by the isolation word's carrier.
 import { describe, it, expect } from 'vitest';
-import { sourceOfSymbol } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
+import { codeOnly } from './sourceScan.js';
 import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS } from '../../shared/continuity.js';
 import type { BackstopRead } from '../../shared/renewal-readings.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
@@ -21,7 +22,8 @@ import type { UsageRead } from '../src/usage.js';
 
 const NOW = Date.UTC(2026, 5, 10, 12, 0, 0);
 const gen = (over: Partial<GenRow>): GenRow =>
-  ({ id: 1, sessionId: 'lane-a-project-a', role: 'overlord', model: 'claude-opus-5-5', startId: 7, startReportedAt: NOW - 86_400_000, ...over }) as GenRow;
+  ({ id: 1, sessionId: 'lane-a-project-a', role: 'overlord', model: 'claude-opus-5-5', lane: 'lane-a', startId: 7, startReportedAt: NOW - 86_400_000,
+    ...over }) as GenRow;
 const usage = (ctxWindow: number | null, stale = false): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens: 1_000, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
@@ -60,28 +62,68 @@ function coordOf(over: Partial<{ spots: (cls: string) => SpotsRead; backstop: ()
 const CFG = { home: '/fixture-home', roster: { byId: new Map([['lane-a', { configDirSuffix: '.claude-lane-a' }]]) } } as unknown as CcrcConfig;
 const KEY: WakingHostKey = { digest: 'a'.repeat(64), keyEpoch: 3 };
 type Asked = ResolveOpts;
-/** The pass's deps: a transcript resolver that records each ask and answers `answer` (a throw when it is an Error), and an
- *  isolation reader whose carrier answers `keys` in turn (the last one repeated). */
-const deps = (logs: string[] = [], o: { answer?: TranscriptResolution | Error; keys?: (WakingHostKey | 'unmeasured')[]; isolation?: false;
-  asks?: Asked[] } = {}) => {
+type Resolve = (o: ResolveOpts) => Promise<TranscriptResolution>;
+/** The pass's deps. `answer` is the shared resolver's (a throw when it is an Error), `fresh` the fresh walk's (default: the same
+ *  answer; `'none'`: no fresh walk wired), each ask recorded. The carrier answers `keys` in turn (the last one repeated), or,
+ *  with `moveIn`, KEY until that ask has run and the next key epoch after it: a host that moves only during that ask. The
+ *  clock reads NOW, or `afterFresh` once the fresh walk has run. `resolve`/`walk` replace the two asks outright. */
+const deps = (logs: string[] = [], o: { answer?: TranscriptResolution | Error; fresh?: TranscriptResolution | 'none';
+  keys?: (WakingHostKey | 'unmeasured')[]; isolation?: false; moveIn?: 'transcript' | 'fresh'; afterFresh?: number;
+  asks?: Asked[]; freshAsks?: Asked[]; resolve?: Resolve; walk?: Resolve } = {}) => {
   const keys = o.keys ?? [KEY];
   let k = 0;
+  let moved = false;
+  let now = NOW;
+  const carrier = (): WakingHostKey | 'unmeasured' => o.moveIn === undefined ? keys[Math.min(k++, keys.length - 1)]!
+    : moved ? { ...KEY, keyEpoch: KEY.keyEpoch + 1 } : KEY;
+  const transcript: Resolve = o.resolve ?? (async (a) => {
+    o.asks?.push(a);
+    if (o.moveIn === 'transcript') moved = true;
+    const answer = o.answer ?? FOUND_HERE;
+    if (answer instanceof Error) throw answer;
+    return answer;
+  });
+  const transcriptFresh: Resolve = o.walk ?? (async (a) => {
+    o.freshAsks?.push(a);
+    if (o.moveIn === 'fresh') moved = true;
+    if (o.afterFresh !== undefined) now = o.afterFresh;
+    const answer = o.fresh ?? o.answer ?? FOUND_HERE;
+    if (answer instanceof Error || answer === 'none') throw new Error('no fresh walk');
+    return answer;
+  });
   return {
-    time: { clock: { wall: () => NOW }, entropy: { hex: (n: number) => 'a'.repeat(2 * n) } }, log: (l: string) => logs.push(l), cfg: CFG,
-    transcript: async (a: ResolveOpts): Promise<TranscriptResolution> => {
-      o.asks?.push(a);
-      const answer = o.answer ?? FOUND_HERE;
-      if (answer instanceof Error) throw answer;
-      return answer;
-    },
-    ...(o.isolation === false ? {} : { isolation: { wakingHostKey: () => keys[Math.min(k++, keys.length - 1)]! } }),
+    time: { clock: { wall: () => now }, entropy: { hex: (n: number) => 'a'.repeat(2 * n) } }, log: (l: string) => logs.push(l), cfg: CFG,
+    transcript, ...(o.fresh === 'none' ? {} : { transcriptFresh }),
+    ...(o.isolation === false ? {} : { isolation: { wakingHostKey: carrier } }),
   };
 };
+/** A resolver fake with the shared resolver's memory (`TranscriptResolver`'s fallback arm): a `fallback` is served again while
+ *  its own path has no file, whatever was written elsewhere; `walk` is the ladder with no memory. `files` maps a uuid to the
+ *  path its transcript has now. `served` counts the answers served from memory. */
+function memoResolver(files: Map<string, string>) {
+  const memo = new Map<string, TranscriptResolution>();
+  const counts = { served: 0, walks: 0 };
+  const walk: Resolve = async (o) => {
+    counts.walks += 1;
+    const at = files.get(o.uuid);
+    return at === undefined ? { kind: 'fallback', path: `${o.configDir}/projects/raw/${o.uuid}.jsonl`, complete: true }
+      : { kind: 'found', path: at, rung: 'uuid-glob', account: null, uuid: o.uuid };
+  };
+  const resolve: Resolve = async (o) => {
+    const key = `${o.configDir}|${o.uuid}|${o.dir}`;
+    const held = memo.get(key);
+    if (held !== undefined && held.kind === 'fallback' && files.get(o.uuid) !== held.path) { counts.served += 1; return held; }
+    const a = await walk(o);
+    memo.set(key, a);
+    return a;
+  };
+  return { resolve, walk, counts };
+}
 const FOUND_HERE: TranscriptResolution = { kind: 'found', path: '/fixture-home/.claude-lane-a/projects/p/x.jsonl', rung: 'registry-resolved', account: null, uuid: START_UUID };
 const ABSENT_HERE: TranscriptResolution = { kind: 'fallback', path: '/fixture-home/.claude-lane-a/projects/p/x.jsonl', complete: true };
 const SEARCH_CUT: TranscriptResolution = { kind: 'fallback', path: '/fixture-home/.claude-lane-a/projects/p/x.jsonl', complete: false };
 const REC = (over: Partial<SessionRecord> = {}): SessionRecord =>
-  ({ id: 'lane-a-project-a', wrapper: 'lane-a', workdir: '/fixture-projects/project-a', uuid: '33333333-4444-5555-6666-777777777777', unmeasured: [], ...over }) as SessionRecord;
+  ({ id: 'lane-a-project-a', wrapper: 'lane-a', workdir: '/fixture-projects/project-a', uuid: START_UUID, unmeasured: [], ...over }) as SessionRecord;
 
 describe('renewalReadingsOf (PR A: the fitted ceiling and the backstop)', () => {
   it('an Overlord generation reads its fitted ceiling (the hard cap until fitted) and the backstop', async () => {
@@ -266,13 +308,83 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
 
   it('no registry row, an unmeasured identity or an account with no config dir is never asked, and reads unmeasured with its reason', async () => {
     const { coord } = coordOf({ start: () => startRead('resume') });
-    for (const [records, why] of [[[], 'no registry row'], [[REC({ unmeasured: ['uuid'] } as never)], 'identity unmeasured'],
-      [[REC({ wrapper: 'lane-z' })], 'no config dir']] as const) {
+    for (const [records, lane, why] of [[[], 'lane-a', 'no registry row'], [[REC({ unmeasured: ['uuid'] } as never)], 'lane-a', 'identity unmeasured'],
+      [[REC({ wrapper: 'lane-z' })], 'lane-z', 'no config dir']] as const) {
       const asks: Asked[] = [];
-      const r = await renewalReadingsOf(deps([], { asks, answer: ABSENT_HERE }), coord, records as readonly SessionRecord[]).w1(gen({}), base());
+      const r = await renewalReadingsOf(deps([], { asks, answer: ABSENT_HERE }), coord, records as readonly SessionRecord[]).w1(gen({ lane }), base());
       expect(r.w1?.notLocal, why).toEqual({ kind: 'unmeasured', why });
       expect(asks, why).toEqual([]);
     }
+  });
+
+  it('a registry row whose conversation or account has moved from the generation\'s is never asked, and reads unmeasured (F2)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    for (const [rec, lane, why] of [
+      [REC({ uuid: '99999999-3333-4444-5555-666666666666' }), 'lane-a', "registry conversation differs from the start's"],
+      [REC({ wrapper: 'lane-b' }), 'lane-a', "registry account differs from the generation's"],
+      [REC(), null, 'generation account unknown'],
+    ] as const) {
+      const asks: Asked[] = [];
+      const freshAsks: Asked[] = [];
+      const r = await renewalReadingsOf(deps([], { asks, freshAsks, answer: ABSENT_HERE }), coord, [rec]).w1(gen({ lane }), base(undefined, turned));
+      expect(r.w1?.notLocal, why).toEqual({ kind: 'unmeasured', why });
+      expect([asks, freshAsks], why).toEqual([[], []]);
+    }
+  });
+
+  it('an absence the shared resolver serves from its memory is checked by a fresh walk, which finds the file at another spelling (F1)', async () => {
+    const files = new Map<string, string>();
+    const r = memoResolver(files);
+    const { coord } = coordOf({ start: () => startRead('startup') });
+    const first = await renewalReadingsOf(deps([], { resolve: r.resolve, walk: r.walk }), coord, [REC()]).w1(gen({}), base(undefined, quiet));
+    expect(first.w1?.notLocal).toEqual(FALSE);
+    files.set(START_UUID, '/fixture-home/.claude-lane-a/projects/resolved-spelling/x.jsonl');
+    const second = await renewalReadingsOf(deps([], { resolve: r.resolve, walk: r.walk }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    expect(r.counts.served).toBe(1);
+    expect(second.w1?.notLocal).toEqual(FALSE);
+  });
+
+  it('with no fresh walk wired, an absence from the shared resolver is never believed (F1)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, fresh: 'none' }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'absence not confirmed by a fresh walk' });
+  });
+
+  it('a found answer from the shared resolver takes no fresh walk; an absence takes exactly one, with the same ask', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    const asks: Asked[] = [];
+    const freshAsks: Asked[] = [];
+    await renewalReadingsOf(deps([], { asks, freshAsks }), coord, [REC()]).w1(gen({}), base());
+    expect([asks.length, freshAsks.length]).toEqual([1, 0]);
+    await renewalReadingsOf(deps([], { asks, freshAsks, answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base());
+    expect([asks.length, freshAsks.length]).toEqual([2, 1]);
+    expect(freshAsks[0]).toEqual(asks[1]);
+  });
+
+  it('a first turn still running reads unmeasured: the transcript\'s first append may not have landed (F1, the race)', async () => {
+    const { coord } = coordOf({ start: () => startRead('startup') });
+    const working: TurnMarkRead = { ...quiet, state: 'working', stopAt: null, at: NOW - 1_000 };
+    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base(undefined, working));
+    expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'first turn still running' });
+  });
+
+  it('the absence is dated after the fresh walk: a marker event between the ask and the walk\'s end does not make it older (F1)', async () => {
+    const { coord } = coordOf({ start: () => startRead('startup') });
+    const lateStop: TurnMarkRead = { ...turned, at: NOW + 500 };
+    const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, afterFresh: NOW + 1_000 }), coord, [REC()]).w1(gen({}), base(undefined, lateStop));
+    expect(r.w1?.notLocal).toEqual(TRUE);
+    const stale = await renewalReadingsOf(deps([], { answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base(undefined, lateStop));
+    expect(stale.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'absence older than the turn marker' });
+  });
+
+  it('the second carrier read comes after the asks: a host that moves only during the shared ask, or only during the fresh walk, reads unmeasured (F3)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    for (const moveIn of ['transcript', 'fresh'] as const) {
+      const r = await renewalReadingsOf(deps([], { answer: ABSENT_HERE, moveIn }), coord, [REC()]).w1(gen({}), base());
+      expect(r.w1?.notLocal, moveIn).toEqual({ kind: 'unmeasured', why: 'host changed during the read' });
+    }
+    const still = await renewalReadingsOf(deps([], { answer: FOUND_HERE, moveIn: 'fresh' }), coord, [REC()]).w1(gen({}), base());
+    expect(still.w1?.notLocal).toEqual(FALSE);
   });
 
   it('a start that cannot be read, or has no row, is never asked about', async () => {
@@ -318,17 +430,20 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
     }
   });
 
-  it('the wiring names no ccd argv and never passes `foreign` to the resolver (the source pin)', () => {
-    const src = sourceOfSymbol('server/src/continuity/renewalReadingsWiring.ts', 'renewalReadingsOf');
-    expect(src).toContain('transcript({ configDir');
-    expect(src).not.toMatch(/ccdargv|CCD_ARGV|CcdArgv/);
-    expect(src).not.toMatch(/\bforeign\b/);
+  it('the wiring file names no ccd argv in its imports or its code, and never passes `foreign` to the resolver (the source pin, F4)', () => {
+    const file = parsedFile('server/src/continuity/renewalReadingsWiring.ts');
+    expect(file.imports.map((e) => e.specifier).filter((x) => /ccdargv/i.test(x))).toEqual([]);
+    expect(file.imports.flatMap((e) => e.names).filter((x) => /ccd_?argv/i.test(x))).toEqual([]);
+    const code = codeOnly(file.text);
+    expect(code).toContain('const o: ResolveOpts = { configDir, dir: who.workdir, registryWorkdir: who.workdir, uuid: ask.uuid };');
+    expect(code).not.toMatch(/ccdargv|CCD_ARGV|CcdArgv/);
+    expect(code).not.toMatch(/\bforeign\b/);
   });
 });
 
 describe('the watcher binds the latch (PR C) and the transcript resolver (PR B)', () => {
   it('sweepGenerations hands the pass the wiring\'s latch, and the wiring the watcher\'s one memoized resolver', () => {
-    const sweep = sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepGenerations');
+    const sweep = codeOnly(sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.sweepGenerations'));
     expect(sweep).toContain('const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records)');
     expect(sweep).toMatch(/generationsPass\(\{[^}]*latch: w1\.latch \}/);
   });

@@ -13,8 +13,10 @@
 // (`designationRead`, read once per pass): `termRaised` and `classChanged`. PR B wires `notLocal` for every generation the gather
 // reads, Overlord and coordinator: the generation's own start by its id (`startById`), then the watcher's one memoized
 // transcript resolver (`deps.transcript`, the same instance its name sweep and idle nudge ask) for that start's uuid under the
-// session's own account, never with `foreign`, bracketed by the isolation word's carrier (`deps.isolation`), read before and
-// after the ask. A field it does not answer keeps the lane's `W1`.
+// generation's own account (`notLocalAskOf` decides what to ask, and refuses a registry row that has moved), never with `foreign`.
+// A complete absence from that resolver may be its memory, so it is checked by one fresh walk of the same ladder
+// (`resolveTranscript`, no memory; review 3696 F1), and only that walk's absence is believed. The isolation word's carrier
+// (`deps.isolation`) is read before the first ask and after the last. A field it does not answer keeps the lane's `W1`.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -23,7 +25,8 @@ import type { CcrcConfig } from '../config.js';
 import { configDirFor } from '../configDir.js';
 import type { IsolationReader } from '../isolationFacts.js';
 import { measuredIdentity, type SessionRecord } from '../registry.js';
-import type { ResolveOpts, TranscriptResolution } from '../transcript/resolve.js';
+import type { FleetIO } from '../io.js';
+import { resolveTranscript, type ResolveOpts, type TranscriptResolution } from '../transcript/resolve.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import type { Clock, Entropy } from '../time/ports.js';
 import { familyClassOf } from '../../../shared/models.js';
@@ -36,7 +39,7 @@ import { laneRaiser, type AuthorityAppender } from '../coord/overlordLadderStore
 import type { GenRow } from './continuityStore.js';
 import { usageReading, type GenReadings } from './generationsLane.js';
 import {
-  backstopDueOf, classChangedOf, fittedCeilingOf, notLocalOf, termRaisedOf, type Carrier, type SpotsRead, type TranscriptAsk, type W1Inputs,
+  backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type Carrier, type SpotsRead, type TranscriptAsk, type W1Inputs,
 } from './renewalReadings.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
@@ -54,6 +57,11 @@ export interface ReadingsDeps {
   /** The watcher's one memoized transcript resolver (`TranscriptResolver.resolve`), reading the host that runs the session.
    *  Absent, or `cfg` absent, `notLocal` is not answered and keeps the lane's `W1` (a producer not wired, never a default). */
   readonly transcript?: (o: ResolveOpts) => Promise<TranscriptResolution>;
+  /** One walk of the same ladder with no memory, which confirms an absence the shared resolver answered (F1). Absent: the
+   *  resolver's own `resolveTranscript` over `io`; with neither, an absence is never believed. */
+  readonly transcriptFresh?: (o: ResolveOpts) => Promise<TranscriptResolution>;
+  /** The fleet's IO, the watcher's own, for the fresh walk. */
+  readonly io?: FleetIO;
   /** The isolation word's one reader; absent, the carrier reads unmeasured and so does `notLocal`. */
   readonly isolation?: Pick<IsolationReader, 'wakingHostKey'>;
 }
@@ -93,23 +101,29 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
   };
 
   const carrier = (): Carrier => deps.isolation?.wakingHostKey() ?? 'unmeasured';
+  const io = deps.io;
+  const freshWalk = deps.transcriptFresh ?? (io === undefined ? undefined : (o: ResolveOpts) => resolveTranscript(io, o));
   /** `notLocal` for one generation (PR B, Task 4): its start by id, then the resolver, bracketed by the carrier. Every input
    *  goes to `notLocalOf`, which decides; a start or identity this cannot read is an ask not made, with its reason. */
   const notLocal = async (g: GenRow, base: GenReadings, cfg: CcrcConfig, transcript: NonNullable<ReadingsDeps['transcript']>): Promise<W1Inputs['notLocal']> => {
     const start = coord.startById(g.startId);
     const decide = (ask: TranscriptAsk, before: Carrier = 'unmeasured', after: Carrier = 'unmeasured') =>
       notLocalOf({ ask, start, before, after, turn: base.turn, startReportedAt: g.startReportedAt });
-    const unread = (why: string) => decide({ kind: 'unread', why });
-    if (!start.ok || start.row === null) return unread('start unread');
+    if (!start.ok || start.row === null) return decide({ kind: 'unread', why: 'no start to ask about' });
     const rec = records.find((r) => r.id === g.sessionId);
-    if (rec === undefined) return unread('no registry row');
-    const who = measuredIdentity(rec);
-    if (who === null) return unread('identity unmeasured');
-    const configDir = configDirFor(cfg, who.wrapper);
-    if (configDir === undefined) return unread('no config dir');
+    const who = rec === undefined ? null : measuredIdentity(rec);
+    const ask = notLocalAskOf({ startUuid: start.row.uuid, lane: g.lane,
+      who: rec === undefined ? 'no-row' : who === null ? 'unmeasured' : { uuid: who.uuid, account: who.wrapper } });
+    if (ask.kind === 'unread') return decide(ask);
+    if (who === null) return decide({ kind: 'unread', why: 'identity unmeasured' });   // never: an unmeasured identity is not asked
+    const configDir = configDirFor(cfg, ask.account);
+    if (configDir === undefined) return decide({ kind: 'unread', why: 'no config dir' });
+    const o: ResolveOpts = { configDir, dir: who.workdir, registryWorkdir: who.workdir, uuid: ask.uuid };
     const before = carrier();
-    const answer = await transcript({ configDir, dir: who.workdir, registryWorkdir: who.workdir, uuid: start.row.uuid });
-    return decide({ kind: 'asked', answer }, before, carrier());
+    let answer = await transcript(o);
+    let fresh = false;
+    if (answer.kind === 'fallback' && answer.complete && freshWalk !== undefined) { answer = await freshWalk(o); fresh = true; }
+    return decide({ kind: 'asked', answer, fresh, observedAt: deps.time.clock.wall() }, before, carrier());
   };
 
   return {
