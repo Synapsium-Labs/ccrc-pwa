@@ -61,7 +61,9 @@ const plant = (w: World, setter: string, at: number, over: { setAt?: number; run
   if (!r.ok) throw new Error('plant failed');
   return r.id;
 };
-/** Every answer, as the base answered it (the scenario below makes them in this order, so the ids are its own). */
+/** The operator's read on the base, before the Overlord's timers added `owner` to each row and `overlordTimers` (additive). */
+const BASE_OP_READ: Answer = {"status": 200, "body": {"ok": true, "timers": [{"id": 34, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 35, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 36, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 37, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 38, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 39, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 41, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}]}};
+/** Every answer, as the base answered it, but for the operator's read, which carries the two additive fields (the scenario below makes them in this order, so the ids are its own). */
 const PINNED: Record<string, Answer> = {
   "set ok": {"status": 201, "body": {"ok": true, "id": 1, "dueAt": 1786007200000}},
   "set no token": {"status": 401, "body": {"ok": false, "error": "unauthenticated", "detail": "no box token presented: this lane takes the box token (x-ccrc-mail-token) and nothing else"}},
@@ -89,7 +91,7 @@ const PINNED: Record<string, Answer> = {
   "cancel wrong uuid": {"status": 403, "body": {"ok": false, "error": "stale-uuid", "detail": "fromUuid does not match the registry — stale sender; re-read your own .uuid"}},
   "cancel mine": {"status": 200, "body": {"ok": true, "id": 40}},
   "cancel again": {"status": 409, "body": {"ok": false, "error": "timer-not-pending"}},
-  "op read worker": {"status": 200, "body": {"ok": true, "timers": [{"id": 34, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 35, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 36, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 37, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 38, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 39, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}, {"id": 41, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true}]}},
+  "op read worker": {"status": 200, "body": {"ok": true, "timers": [{"id": 34, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 35, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 36, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 37, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 38, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 39, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}, {"id": 41, "setAt": 1785992800000, "dueAt": 1786014400000, "note": "planted for lane-b-project-a", "runId": null, "programme": null, "untrusted": true, "owner": "session"}], "overlordTimers": "not-this-session"}},
   "op read bad": {"status": 400, "body": {"ok": false, "error": "bad-request", "detail": "the path names a session id"}},
   "op cancel theirs via coord": {"status": 403, "body": {"ok": false, "error": "timer-not-yours"}},
   "op cancel absent": {"status": 404, "body": {"ok": false, "error": "timer-not-found"}},
@@ -142,6 +144,11 @@ describe('the five timer doors, as a coordinator, a worker and the operator driv
     got['op cancel again'] = await opCancel(w, WORKER, theirs);
     got['op cancel bad'] = await opCancel(w, WORKER, 'x');
     for (const [k, v] of Object.entries(PINNED)) expect(got[k], k).toStrictEqual(v);
+    // The operator's read differs from the base by the two additive fields alone, and nothing else (wire discipline).
+    const stripped = structuredClone(got['op read worker']!) as { status: number; body: { timers: Record<string, unknown>[]; overlordTimers?: unknown } };
+    delete stripped.body.overlordTimers;
+    for (const t of stripped.body.timers) delete t['owner'];
+    expect(stripped).toStrictEqual(BASE_OP_READ);
     expect(Object.keys(got)).toStrictEqual(Object.keys(PINNED));
   });
 

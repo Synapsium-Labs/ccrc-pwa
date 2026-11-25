@@ -34,8 +34,13 @@ export interface OverlordDoorRow extends DoorBase {
   readonly others: 'refuse' | 'hook';
   /** The ladder's door class: `card-probe-note` skips steps 3, 4, 6, 8, 9 and 10 (§11.2; slug handover-is-a-note-door). */
   readonly ladderClass: DoorClass;
-  /** Step 10's cell (the ladder's W1 act kinds). */
-  readonly act: LadderActKind;
+  /** Step 10's cell (the ladder's W1 act kinds), or null: the door performs no act kind, so step 10 is skipped for it and
+   *  only for it (the timer doors, §11.2: "a timer is no act kind"; slug timer-doors-name-no-act-kind). */
+  readonly act: LadderActKind | null;
+  /** What step 1 does when the designation cannot be read: `refuse` every caller (gates B's answer), or decide `by-profile`:
+   *  a caller whose launch profile is measured and not the Overlord's, or absent, is another session (the timer doors, so a
+   *  coordinator's and a worker's timers keep working; slug timer-doors-unmeasured-designation-by-profile). */
+  readonly unmeasuredDesignation: 'refuse' | 'by-profile';
 }
 
 /** An operator door: the account gate, or a console that works dark, then the actor through the port. */
@@ -53,7 +58,13 @@ const HISTORY = 'server/src/coord/overlordHistoryRoutes.ts';
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
 const continuity = (method: HttpMethod, path: string, verbClass: VerbClass, write: boolean, act: LadderActKind): OverlordDoorRow =>
-  ({ group: 'overlord', method, path, file: CONTINUITY, verbClass, write, word: 'continuity-v1', others: 'hook', ladderClass: 'card-probe-note', act });
+  ({ group: 'overlord', method, path, file: CONTINUITY, verbClass, write, word: 'continuity-v1', others: 'hook', ladderClass: 'card-probe-note', act,
+    unmeasuredDesignation: 'refuse' });
+/** A timer door (Overlord W1, the Overlord's timers): every other session keeps W1a's path (`hook`), all ten steps run but
+ *  step 10, and an unreadable designation is decided by the caller's launch profile. */
+const timer = (method: HttpMethod, path: string, verbClass: VerbClass, write: boolean): OverlordDoorRow =>
+  ({ group: 'overlord', method, path, file: CONTINUITY, verbClass, write, word: 'timers-v1', others: 'hook', ladderClass: 'other', act: null,
+    unmeasuredDesignation: 'by-profile' });
 
 export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designate: operator('POST', '/api/overlord/designate', OVERLORD, 'admin'),
@@ -87,28 +98,33 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   // so every step of the order runs, and its act is allowed at `full` only.
   'link-team': {
     group: 'overlord', method: 'POST', path: '/api/linking/confirm', file: LINKING, verbClass: 'operate', write: true,
-    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'link-team',
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'link-team', unmeasuredDesignation: 'refuse',
   },
   // The Overlord's inbox doors (W1 inbox piece, Task 3; question 15): `write: true` on the two reads is the fence, as on `card-record`,
   // so a forger of the attribution reads no word and spends no ceiling; their verb class stays `view`.
   inbox: {
     group: 'overlord', method: 'GET', path: '/api/overlord/inbox', file: INBOX, verbClass: 'view', write: true,
-    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
   messages: {
     group: 'overlord', method: 'GET', path: '/api/overlord/messages/:id', file: INBOX, verbClass: 'view', write: true,
-    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
   acknowledge: {
     group: 'overlord', method: 'POST', path: '/api/overlord/messages/:id/acknowledge', file: INBOX, verbClass: 'operate', write: true,
-    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge',
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge', unmeasuredDesignation: 'refuse',
   },
   // The Overlord's history door (W1, PR B1): a read, so verb class `view`, fenced as the inbox reads are (`write: true`), so a
   // forger of the attribution reads no history and spends no ceiling; a POST only so free text rides the body (ruled R7).
   history: {
     group: 'overlord', method: 'POST', path: '/api/overlord/history', file: HISTORY, verbClass: 'view', write: true,
-    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read', unmeasuredDesignation: 'refuse',
   },
+  // The timer doors (Overlord W1, the Overlord's timers): the set and the cancel are writes (the fence, the witness and the
+  // counter, which `DOOR_TOOLS`' fenced rows present); the list is a read.
+  'timer-set': timer('POST', '/api/timers', 'operate', true),
+  'timer-list': timer('GET', '/api/timers', 'view', false),
+  'timer-cancel': timer('POST', '/api/timers/:id/cancel', 'operate', true),
 };
 
 /** The row a registration names, by its key. A key the table lacks throws: a programming error the census catches. */
@@ -125,9 +141,6 @@ export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string
   'POST /api/sessions/:id/start/loads': { file: CONTINUITY, why: "the hook's report of what a start loaded: the hook's group, box token" },
   'POST /api/sessions/:id/act-key': { file: CONTINUITY, why: "the door process's one claim of its act key: a box-token machine lane, before any fence (W1 door process A1)" },
   'POST /api/sessions/:id/report': { file: CONTINUITY, why: "the hook's report door (witness, reader and model-switch reports): a box-token machine lane in the hook's group (W1 door process B1)" },
-  'POST /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
-  'GET /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
-  'POST /api/timers/:id/cancel': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'GET /api/sessions/:id/timers': { file: CONTINUITY, why: "the operator's read of a session's timers: session-gated, no box token" },
   'POST /api/sessions/:id/timers/:timerId/cancel': { file: CONTINUITY, why: "the operator's cancel of a session's timer: session-gated, no box token" },
   'GET /api/continuity/renewal-backstop': { file: CONTINUITY, why: "the operator's read of the daily renewal backstop: session-gated, no box token" },

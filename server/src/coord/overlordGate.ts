@@ -28,6 +28,7 @@ import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
 import type { IncarnationRead } from '../continuity/timerLane.js';
+import { OVERLORD_PROFILE, type CallerProfileRead } from './otherLanes.js';
 
 /** Step 1's answer: who the caller is to the designation. */
 export type CallerStanding =
@@ -65,13 +66,22 @@ export function incarnationNeeded(sessionId: string, designation: DesignationRea
   return designation.kind !== 'unmeasured' && placeOf(sessionId, designation) !== null;
 }
 
-/** Step 1 (§11.2; questions 4 and 5), first match: an unmeasured designation; then, for the bound id or a pending `designate`
- *  attempt's id, the incarnation (not asked, not recorded, equal, different or absent, unreadable); otherwise `other`. */
+/** Step 1 (§11.2; questions 4 and 5), first match: an unmeasured designation, which at a `by-profile` door (the timer doors,
+ *  Overlord W1) is `other` for a caller whose launch profile is measured and not the Overlord's, or absent, and unmeasured
+ *  for the Overlord's profile, an unreadable one or one not read; at a `refuse` door it is unmeasured whatever the profile.
+ *  Then, for the bound id or a pending `designate` attempt's id, the incarnation (not asked, not recorded, equal, different
+ *  or absent, unreadable); otherwise `other`. */
 export function callerStandingOf(
-  caller: { readonly sessionId: string; readonly incarnation: IncarnationRead | 'not-asked' },
-  designation: DesignationRead,
+  caller: { readonly sessionId: string; readonly incarnation: IncarnationRead | 'not-asked'; readonly profile?: CallerProfileRead },
+  designation: DesignationRead, unmeasuredDesignation: OverlordDoorRow['unmeasuredDesignation'] = 'refuse',
 ): CallerStanding {
-  if (designation.kind === 'unmeasured') return { kind: 'unmeasured', word: 'unavailable', why: `the designation row could not be read: ${designation.why}` };
+  if (designation.kind === 'unmeasured') {
+    const p = caller.profile ?? 'not-read';
+    if (unmeasuredDesignation === 'by-profile' && p !== 'not-read' && (p.kind === 'absent' || (p.kind === 'measured' && p.word !== OVERLORD_PROFILE))) {
+      return { kind: 'other' };
+    }
+    return { kind: 'unmeasured', word: 'unavailable', why: `the designation row could not be read: ${designation.why}` };
+  }
   const place = placeOf(caller.sessionId, designation);
   if (place === null) return { kind: 'other' };
   if (caller.incarnation === 'not-asked') return { kind: 'unmeasured', word: 'unavailable', why: 'the incarnation was not read' };
@@ -206,8 +216,10 @@ const FACT_ARM_MAP = {
   'not-asked': true, 'read-door': true, 'start-door': true, 'read-current': true, 'read-stale': true,
 } as const satisfies Record<'not-asked' | Extract<GateFacts['fence'] | GateFacts['ladder'], string>
   | Exclude<Extract<GateFacts['card'], string>, 'none'>, true>;
+/** A door row's `unmeasuredDesignation` column (the timer doors, Overlord W1). */
+const UNMEASURED_DESIGNATION_MAP = { refuse: true, 'by-profile': true } as const satisfies Record<OverlordDoorRow['unmeasuredDesignation'], true>;
 export const isOverlordGateKebab = (word: string): boolean =>
-  [STANDING_KIND_MAP, FENCE_WHY_MAP, WITNESS_WHY_MAP, GATE_RECORD_MAP, COUNTER_ANSWER_MAP, FACT_ARM_MAP]
+  [STANDING_KIND_MAP, FENCE_WHY_MAP, WITNESS_WHY_MAP, GATE_RECORD_MAP, COUNTER_ANSWER_MAP, FACT_ARM_MAP, UNMEASURED_DESIGNATION_MAP]
     .some((m) => Object.prototype.hasOwnProperty.call(m, word));
 
 const refuse = (word: GateWord, step: GateStep, detail: string, record: GateRecord = null, why: FenceWhy | null = null): GateVerdict =>
@@ -308,8 +320,8 @@ export function overlordGate(f: GateFacts): GateVerdict {
     if (g.kind === 'unmeasured') return refuse('unavailable', '9', `the generations could not be read: ${g.why}`);
     if (g.kind === 'none') return refuse('renewing', '9', 'no live generation');
     if (RENEWING_STATES[g.state]) return refuse('renewing', '9', `the generation is ${g.state}`);
-    // Step 10: the rung by act kind (rungStep).
-    if (ladder !== 'start-door' && ladder.kind === 'read') {
+    // Step 10: the rung by act kind (rungStep). A door that names no act kind skips it, and only it (the timer doors, §11.2).
+    if (door.act !== null && ladder !== 'start-door' && ladder.kind === 'read') {
       const rung = rungStep(ladder.rung.rung, door.ladderClass, door.act);
       if (!rung.pass) return refuse(rung.word, '10', `the act needs the rung ${rung.needs}`);
     }

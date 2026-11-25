@@ -26,6 +26,7 @@ import {
   type WitnessVerdict,
 } from './overlordGate.js';
 import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateStore.js';
+import type { CallerProfileRead } from './otherLanes.js';
 
 /** One witness check, as door process B's `recordWitnessCheck` records it: what `witnessRecordOf` (L1) decided, the used
  *  witness on a pass or the reason of a refusal at step 7a, with where and when; an unmeasured witness records nothing. */
@@ -66,6 +67,10 @@ export interface OverlordGateDeps {
   readonly serverWords: () => readonly string[];
   /** The `Clock` port's wall time. */
   readonly now: () => number;
+  /** The caller's launch profile (the other-lane refusals' reader, `otherLaneReadsOf(...).profile`), asked only when the
+   *  designation is unmeasured at a `by-profile` door, so a measured designation costs no read. Absent: `not-read`, which
+   *  refuses (unmeasured) as gates B did. */
+  readonly profile?: (sessionId: string) => Promise<Exclude<CallerProfileRead, 'not-read'>>;
 }
 
 export type GateRun =
@@ -117,14 +122,20 @@ export function callerGenerationOf(
   return { gens, fact, live, generation };
 }
 
-/** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id. */
-async function standingRead(deps: OverlordGateDeps, sessionId: string): Promise<{ designation: DesignationRead; standing: CallerStanding }> {
+/** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id, and the launch profile
+ *  only when the designation is unmeasured at a `by-profile` door. */
+async function standingRead(deps: OverlordGateDeps, sessionId: string, door: OverlordDoorRow):
+  Promise<{ designation: DesignationRead; standing: CallerStanding }> {
   const designation = attempt<DesignationRead>(() => deps.designation(), (why) => ({ kind: 'unmeasured', why }));
   let incarnation: Parameters<typeof callerStandingOf>[0]['incarnation'] = 'not-asked';
   if (incarnationNeeded(sessionId, designation)) {
     try { incarnation = await deps.identity.incarnation(sessionId); } catch (e) { incarnation = { kind: 'unmeasured', reason: whyOf(e) }; }
   }
-  return { designation, standing: callerStandingOf({ sessionId, incarnation }, designation) };
+  let profile: CallerProfileRead = 'not-read';
+  if (designation.kind === 'unmeasured' && door.unmeasuredDesignation === 'by-profile' && deps.profile !== undefined) {
+    try { profile = await deps.profile(sessionId); } catch (e) { profile = { kind: 'unreadable', why: whyOf(e) }; }
+  }
+  return { designation, standing: callerStandingOf({ sessionId, incarnation, profile }, designation, door.unmeasuredDesignation) };
 }
 
 /** The facts past step 1 that no fence or witness touches, read once, each port's throw its unmeasured arm. */
@@ -152,7 +163,7 @@ export function overlordReadGate(deps: OverlordGateDeps): (sessionId: string, ke
       const row = doorRow(key);
       if (row.group !== 'overlord') throw new Error(`overlordReadGate: ${key} is not an Overlord door`);
       const door: OverlordDoorRow = { ...row, write: false };
-      const { designation, standing } = await standingRead(deps, sessionId);
+      const { designation, standing } = await standingRead(deps, sessionId, door);
       const early = standingVerdict(door, standing);
       if (early !== null) return early;
       const g = callerGenerationOf(deps, sessionId, designation);
@@ -205,7 +216,7 @@ export function overlordGateRun(deps: OverlordGateDeps):
     }
     const caller = who;
     // Step 1, standing: the designation, then the incarnation only for the bound or a pending designate id.
-    const { designation, standing } = await standingRead(deps, claim.sessionId);
+    const { designation, standing } = await standingRead(deps, claim.sessionId, door);
     const early = standingVerdict(door, standing);
     if (early !== null) return early.kind === 'refuse' ? refused(reply, early) : { kind: 'hook', caller };
 

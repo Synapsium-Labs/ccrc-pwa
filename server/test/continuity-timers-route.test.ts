@@ -4,7 +4,7 @@
 // the note's bounds, the registry's attribution, then the facts (the setter's stamp, the bound run or programme, the role's
 // cap, the pending count and the hourly rate), each read once, and a fact that could not be read answers
 // `timer-unmeasured`, never "not yours". The operator's doors are session-gated. Fixture HOMEs and stub reads only.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -23,6 +23,11 @@ import { timerBodyVerdict } from '../src/continuity/timers.js';
 import { REFUSAL_STATUS, TIMER_REFUSALS } from '../../shared/refusal.js';
 import { testDeps } from './helpers.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
+import { hookGate } from './overlordGateFixture.js';
+import { overlordGateRun } from '../src/coord/overlordGateRun.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { refuseRoute } from '../src/refuse.js';
+import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const ME = 'lane-a-project-a';
@@ -67,7 +72,7 @@ async function rig(over: Partial<ContinuityRouteDeps> = {}): Promise<Rig> {
   };
   const attribute = async (): Promise<AttributionRead> => { r.reads.attribute += 1; return r.attribution; };
   registerContinuityRoutes(a, {
-    coord, mailToken: () => TOKEN, wall: () => r.now, attribute, attributeReader: attribute,
+    coord, mailToken: () => TOKEN, wall: () => r.now, attribute, attributeReader: attribute, gate: hookGate(attribute),
     setterStamp: async () => { r.reads.stamp += 1; return typeof r.stamp === 'function' ? r.stamp() : r.stamp; },
     cardRegistry: {
       childMark: async () => { r.reads.role += 1; r.duringRole(); return r.child; },
@@ -582,4 +587,221 @@ describe('the session doors on the real server: the setter stamp is the double r
       payload: { fromId: 'lane-c-project-a', fromUuid: 'u-c', durationMs: 2 * HOUR, note: 'n' } });
     expect(refused(res)).toEqual([503, 'timer-unmeasured']);
   });
+});
+
+// ── Overlord W1, the Overlord's timers (plan w1-overlord-timers.md Task 3) ──────────────────────────────────────────────
+// The three timer doors call the gate: every other session is `hook` and keeps W1a's path (the characterization pins it byte
+// for byte through the real server), the designated session is `pass` and sets, lists and cancels the role's timers, stamped
+// with the designation's term. The operator's read and cancel read the designation. Every refusal a door answers itself after
+// its token check is counted once.
+describe("the Overlord's timers at the doors (Overlord W1)", () => {
+  const BODY = 'lane-o-project-a';
+  const view = (bound: string | null, designatedTerm = 7) => ({
+    bound: bound === null ? null : { sessionId: bound, generation: INC }, pending: null, term: designatedTerm + 2, designatedTerm, model: 'opus' as const,
+    accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'device-a', lastAttempt: null, stopsOwed: [],
+  });
+  const designated = (sessionId: string, designatedTerm = 7): DesignationRead =>
+    ({ kind: 'designated', sessionId, term: designatedTerm + 2, row: view(sessionId, designatedTerm) });
+  interface OvRig extends Rig { designation: DesignationRead; restore: { kind: 'measured'; n: number } | { kind: 'unmeasured' }; counts: [string, string][] }
+  async function ovRig(gateOver?: ContinuityRouteDeps['gate']): Promise<OvRig> {
+    let o: OvRig | undefined;
+    const attribute = async (): Promise<AttributionRead> => ({ ok: true });
+    const hook = hookGate(attribute);
+    const r = await rig({
+      gate: gateOver ?? (async (req, reply, key, claim) => (o!.designation.kind === 'designated' && claim.sessionId === o!.designation.sessionId
+        ? { kind: 'pass', caller: {} as never, generation: null } : hook(req, reply, key, claim))),
+      restoreGeneration: () => o!.restore,
+    });
+    o = Object.assign(r, { designation: designated(BODY) as DesignationRead, restore: { kind: 'measured', n: 2 } as OvRig['restore'], counts: [] as [string, string][] });
+    vi.spyOn(r.coord, 'designationRead').mockImplementation(() => o!.designation);
+    const record = r.coord.recordTimerRefusal.bind(r.coord);
+    vi.spyOn(r.coord, 'recordTimerRefusal').mockImplementation((c) => { o!.counts.push([c.door, c.word]); return record(c); });
+    return o;
+  }
+  const setAs = (r: Rig, from: string, body: Record<string, unknown> = {}) => r.app.inject({ method: 'POST', url: '/api/timers', headers: { 'x-ccrc-mail-token': TOKEN },
+    payload: { fromId: from, fromUuid: UUID, durationMs: 2 * HOUR, note: 'check the board', ...body } });
+  const listAs = (r: Rig, by: string) => r.app.inject({ method: 'GET', url: `/api/timers?${new URLSearchParams({ byId: by, byUuid: UUID })}`, headers: { 'x-ccrc-mail-token': TOKEN } });
+  const cancelAs = (r: Rig, from: string, id: number | string) => r.app.inject({ method: 'POST', url: `/api/timers/${id}/cancel`, headers: { 'x-ccrc-mail-token': TOKEN },
+    payload: { fromId: from, fromUuid: UUID } });
+  const opRead = (r: Rig, session: string) => r.app.inject({ method: 'GET', url: `/api/sessions/${session}/timers` });
+  const roleRows = (r: Rig) => r.coord.db.prepare("SELECT setter, setterIncarnation, setById, setByUuid, role, setRestoreGeneration, runId, programme FROM continuity_timers WHERE setter = 'overlord' ORDER BY id").all()
+    .map((x) => ({ ...(x as object) }));
+  /** A fired role timer of `term`, its one mail's delivery acked at `ackedAt` (null: not acked). */
+  const firedRole = (r: Rig, term: string, ackedAt: number | null, restore: number | null = 2): number => {
+    const ins = r.coord.insertTimer({ setRestoreGeneration: restore, setter: 'overlord', setterIncarnation: term, setById: BODY, setByUuid: UUID, role: 'overlord',
+      note: `fired ${term}`, runId: null, programme: null, setAt: r.now - 3 * HOUR, dueAt: r.now - 2 * HOUR });
+    if (!ins.ok) throw new Error('plant failed');
+    const m = r.coord.db.prepare("INSERT INTO mail (fromId, fromUuid, toId, kind, subject, body, artifacts, at) VALUES ('timer', 'timer', 'overlord', 'status', 's', 'b', '[]', 1) RETURNING id").get() as { id: number };
+    r.coord.db.prepare("INSERT INTO mail_deliveries (mailId, toId, state, envelope, ackedAt) VALUES (?, ?, ?, '', ?)").run(m.id, BODY, ackedAt === null ? 'delivered' : 'acked', ackedAt);
+    r.coord.markTimersFired([ins.id], m.id, r.now - 2 * HOUR);
+    return ins.id;
+  };
+
+  it("a coordinator's set takes W1a's path and stamps the restore generation, 2 or null when it reads unmeasured", async () => {
+    const r = await ovRig();
+    expect((await setAs(r, ME)).statusCode).toBe(201);
+    r.restore = { kind: 'unmeasured' };
+    expect((await setAs(r, ME)).statusCode).toBe(201);
+    const stored = r.coord.db.prepare('SELECT setter, setterIncarnation, setRestoreGeneration FROM continuity_timers ORDER BY id').all().map((x) => ({ ...(x as object) }));
+    expect(stored).toStrictEqual([{ setter: ME, setterIncarnation: INC, setRestoreGeneration: 2 }, { setter: ME, setterIncarnation: INC, setRestoreGeneration: null }]);
+  });
+
+  it("the designated session's set stores the role's timer, stamped with the designation's term, credited to its body", async () => {
+    const r = await ovRig();
+    const res = await setAs(r, BODY);
+    expect(res.statusCode, res.body).toBe(201);
+    expect(roleRows(r)).toStrictEqual([{ setter: 'overlord', setterIncarnation: '7', setById: BODY, setByUuid: UUID, role: 'overlord', setRestoreGeneration: 2, runId: null, programme: null }]);
+    expect(r.reads.stamp, "the registry stamp is not the role's").toBe(0);
+    expect(r.coord.pendingTimersOf(BODY)).toStrictEqual({ ok: true, rows: [] });
+  });
+
+  it("the role's cap is the overlord row's 50 and its rate counts the role's sets, whatever body set them", async () => {
+    const r = await ovRig();
+    for (let i = 0; i < 29; i++) r.coord.insertTimer({ setRestoreGeneration: null, setter: 'overlord', setterIncarnation: '7', setById: 'lane-p-project-a', setByUuid: UUID,
+      role: 'overlord', note: 'x', runId: null, programme: null, setAt: r.now - 1, dueAt: r.now + HOUR });
+    expect((await setAs(r, BODY)).statusCode).toBe(201);
+    expect(refused(await setAs(r, BODY))).toEqual([429, 'timer-rate']);
+    r.now += 2 * HOUR;
+    for (let i = 0; i < 20; i++) r.coord.insertTimer({ setRestoreGeneration: null, setter: 'overlord', setterIncarnation: '7', setById: BODY, setByUuid: UUID,
+      role: 'overlord', note: 'x', runId: null, programme: null, setAt: r.now - 2 * HOUR, dueAt: r.now + HOUR });
+    expect(r.coord.pendingTimersOf('overlord')).toMatchObject({ ok: true, rows: { length: 50 } });
+    expect(refused(await setAs(r, BODY))).toEqual([409, 'timer-cap']);
+  });
+
+  it('a designation that moves between the gate and the insert answers timer-unmeasured and stores nothing', async () => {
+    const r = await ovRig(async () => { r.designation = designated('lane-q-project-a'); return { kind: 'pass', caller: {} as never, generation: null }; });
+    expect(refused(await setAs(r, BODY))).toEqual([503, 'timer-unmeasured']);
+    expect(roleRows(r)).toStrictEqual([]);
+  });
+
+  it('a run or a programme from the Overlord is timer-key-unknown before any claim is read', async () => {
+    const r = await ovRig();
+    const claims = vi.spyOn(r.coord, 'bindingsOf');
+    expect(refused(await setAs(r, BODY, { runId: 3 }))).toEqual([403, 'timer-key-unknown']);
+    expect(refused(await setAs(r, BODY, { programme: 'prog-a' }))).toEqual([403, 'timer-key-unknown']);
+    expect(claims).not.toHaveBeenCalled();
+    expect(roleRows(r)).toStrictEqual([]);
+  });
+
+  it("the Overlord's list: the role's pending timers and the current term's fired ones, unacked or acked inside the window, newest first", async () => {
+    const r = await ovRig();
+    expect((await setAs(r, BODY)).statusCode).toBe(201);
+    const unacked = firedRole(r, '7', null);
+    const inside = firedRole(r, '7', r.now - HOUR, 1);
+    firedRole(r, '7', r.now - 25 * HOUR);
+    firedRole(r, '6', null);
+    const res = await listAs(r, BODY);
+    expect(res.statusCode).toBe(200);
+    const b = res.json() as { timers: { note: string }[]; fired: { id: number; restore: string; firedAt: number; untrusted: boolean }[] };
+    expect(b.timers.map((t) => t.note)).toStrictEqual(['check the board']);
+    expect(b.fired.map((t) => [t.id, t.restore, t.untrusted])).toStrictEqual([[inside, 'set-before-restore', true], [unacked, 'none', true]]);
+    expect(b.fired[0]!.firedAt).toBe(r.now - 2 * HOUR);
+    r.restore = { kind: 'unmeasured' };
+    expect(((await listAs(r, BODY)).json() as typeof b).fired.map((t) => t.restore)).toStrictEqual(['unmeasured', 'unmeasured']);
+  });
+
+  it("a failed fired read is timer-unmeasured, never a partial answer; a coordinator's list carries no fired", async () => {
+    const r = await ovRig();
+    vi.spyOn(r.coord, 'firedTimersOf').mockReturnValue({ ok: false, detail: 'boom' });
+    expect(refused(await listAs(r, BODY))).toEqual([503, 'timer-unmeasured']);
+    const coordList = (await listAs(r, ME)).json() as Record<string, unknown>;
+    expect(Object.keys(coordList).sort()).toStrictEqual(['ok', 'timers']);
+  });
+
+  it("the Overlord cancels the role's timer, and cannot cancel a session's", async () => {
+    const r = await ovRig();
+    const own = (await setAs(r, BODY)).json() as { id: number };
+    const theirs = plant(r, ME);
+    expect(refused(await cancelAs(r, BODY, theirs))).toEqual([403, 'timer-not-yours']);
+    expect((await cancelAs(r, BODY, own.id)).statusCode).toBe(200);
+    expect(r.coord.timerById(own.id)).toMatchObject({ ok: true, row: { state: 'cancelled', cancelReason: 'setter' } });
+    expect(refused(await cancelAs(r, ME, own.id)), "a session cannot cancel the role's").toEqual([403, 'timer-not-yours']);
+  });
+
+  it('the identity word as a caller at the three doors, and as a path at the operator\'s two, is bad-request', async () => {
+    const r = await ovRig();
+    expect(refused(await setAs(r, 'overlord'))).toEqual([400, 'bad-request']);
+    expect(refused(await listAs(r, 'overlord'))).toEqual([400, 'bad-request']);
+    expect(refused(await cancelAs(r, 'overlord', 1))).toEqual([400, 'bad-request']);
+    expect(refused(await opRead(r, 'overlord'))).toEqual([400, 'bad-request']);
+    expect(refused(await opCancel(r, 'overlord', 1))).toEqual([400, 'bad-request']);
+  });
+
+  it("the operator's read: the bound session's page adds the role's timers, marked; another session's is not-this-session; unmeasured keeps the session's own", async () => {
+    const r = await ovRig();
+    plant(r, BODY);
+    expect((await setAs(r, BODY)).statusCode).toBe(201);
+    const bound = (await opRead(r, BODY)).json() as { timers: { owner: string; note: string }[]; overlordTimers: string };
+    expect([bound.overlordTimers, bound.timers.map((t) => t.owner)]).toStrictEqual(['included', ['session', 'overlord']]);
+    const other = (await opRead(r, ME)).json() as typeof bound;
+    expect(other.overlordTimers).toBe('not-this-session');
+    r.designation = { kind: 'not-designated', row: null };
+    expect(((await opRead(r, BODY)).json() as typeof bound).overlordTimers).toBe('not-this-session');
+    r.designation = { kind: 'unmeasured', why: 'the row is unreadable' };
+    const un = (await opRead(r, BODY)).json() as typeof bound;
+    expect([un.overlordTimers, un.timers.map((t) => t.owner)]).toStrictEqual(['unmeasured', ['session']]);
+  });
+
+  it("the operator cancels a role timer through the bound session's page only; unmeasured is timer-unmeasured", async () => {
+    const r = await ovRig();
+    const a = ((await setAs(r, BODY)).json() as { id: number }).id;
+    expect(refused(await opCancel(r, ME, a))).toEqual([403, 'timer-not-yours']);
+    r.designation = { kind: 'unmeasured', why: 'x' };
+    expect(refused(await opCancel(r, BODY, a))).toEqual([503, 'timer-unmeasured']);
+    r.designation = designated(BODY);
+    expect((await opCancel(r, BODY, a)).statusCode).toBe(200);
+    expect(r.coord.timerById(a)).toMatchObject({ ok: true, row: { state: 'cancelled', cancelReason: 'operator' } });
+  });
+
+  it('every refusal after the token is counted once by its door and word; a tokenless call never; a failing count changes nothing', async () => {
+    const r = await ovRig();
+    await setAs(r, ME, { durationMs: 1 });
+    await listAs(r, 'overlord');
+    await cancelAs(r, ME, 999_999);
+    await opRead(r, 'a b');
+    await opCancel(r, ME, 999_999);
+    expect(r.counts).toStrictEqual([['set', 'timer-too-soon'], ['list', 'bad-request'], ['cancel', 'timer-not-yours'], ['operator-read', 'bad-request'], ['operator-cancel', 'timer-not-found']]);
+    await r.app.inject({ method: 'POST', url: '/api/timers', payload: {} });
+    expect(r.counts).toHaveLength(5);
+    vi.spyOn(r.coord, 'recordTimerRefusal').mockImplementation(() => { throw new Error('count failed'); });
+    expect(refused(await setAs(r, ME, { durationMs: 1 }))).toEqual([400, 'timer-too-soon']);
+  });
+
+  it("the gate's own refusals are the gate's, never counted by the door", async () => {
+    const r = await ovRig(async (_req, reply) => { await refuseRoute(reply, 'unavailable', { detail: 'the designation row could not be read' }); return { kind: 'refused' }; });
+    expect(refused(await setAs(r, ME))).toEqual([503, 'unavailable']);
+    expect(refused(await listAs(r, ME))).toEqual([503, 'unavailable']);
+    expect(refused(await cancelAs(r, ME, 1))).toEqual([503, 'unavailable']);
+    expect(r.counts).toStrictEqual([]);
+  });
+});
+
+// The gate under an unmeasured designation at the timer doors (question 12): the real runner, the caller's launch profile
+// deciding. A coordinator and a worker keep their timers; a caller whose profile reads overlord or cannot be read is refused.
+describe('an unmeasured designation at the timer doors decides by the launch profile (Overlord W1, question 12)', () => {
+  const runner = (profiles: Record<string, { kind: 'measured'; word: string } | { kind: 'absent' } | { kind: 'unreadable'; why: string }>, asked: string[]) => {
+    const unread = (): never => { throw new Error('no Overlord fact is read on the hook path'); };
+    return overlordGateRun({
+      identity: attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }),
+      designation: () => ({ kind: 'unmeasured', why: 'the row is unreadable' }),
+      authority: unread, ladder: unread, generations: unread, continuityLive: unread, cardRead: unread, actKey: unread, counter: unread,
+      witness: unread, recordWitness: unread, recordFenceRefusal: unread, serverWords: () => [], now: () => 0,
+      profile: async (id) => { asked.push(id); return profiles[id] ?? { kind: 'absent' }; },
+    });
+  };
+  for (const [who, profile, served] of [
+    ['a coordinator', { kind: 'measured', word: 'coordinator' }, true], ['a worker', { kind: 'measured', word: 'worker' }, true],
+    ['a caller with no profile', { kind: 'absent' }, true], ['the Overlord\'s profile', { kind: 'measured', word: 'overlord' }, false],
+    ['an unreadable profile', { kind: 'unreadable', why: 'profile unreadable' }, false],
+  ] as const) {
+    it(`${who}: ${served ? 'set, list and cancel as before' : '503 unavailable at all three doors'}`, async () => {
+      const asked: string[] = [];
+      const r = await rig({ gate: runner({ [ME]: profile }, asked) });
+      const want = served ? [201, 200, 403] : [503, 503, 503];
+      const s = await set(r); const l = await list(r); const c = await cancel(r, 999_999);
+      expect([s.statusCode, l.statusCode, c.statusCode]).toEqual(want);
+      if (!served) expect([s, l, c].map((x) => (x.json() as { error: string }).error)).toEqual(['unavailable', 'unavailable', 'unavailable']);
+      expect(asked, 'the profile is asked once a call').toEqual([ME, ME, ME]);
+    });
+  }
 });

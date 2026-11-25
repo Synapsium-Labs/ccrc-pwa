@@ -592,7 +592,7 @@ const DESIGNATION_FACT_SET: MutantSet<RoleOfDesignationModule> = { modulePath: R
 const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
     { id: 'I1 a rebind pending body keyed overlord', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'd.pending === sessionId' },
     { id: 'I2 a designate pending body keyed by its id', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'false' },
-    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return 'overlord';", new: '' },
+    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return OVERLORD_IDENTITY;", new: '' },
     { id: 'I4 every id keyed overlord under a row', old: "  return sessionId;\n}\n\n/** The one narrowing", new: "  return 'overlord';\n}\n\n/** The one narrowing" },
   ], suite: identityOfCases };
 

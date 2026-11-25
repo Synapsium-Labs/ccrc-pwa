@@ -2277,6 +2277,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
+    // The timer doors' profile read (Overlord W1): the other-lane refusals' one reader; asking its designation first notes the
+    // unmeasured episode on their one module-scope latch, so the whole server logs one line an episode.
+    profile: (id) => { otherLaneReads.designation(); return otherLaneReads.profile(id); },
   };
   const gate = overlordGateRun(gateDeps);
   // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.
@@ -2359,6 +2362,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' },
     operatorActor: consoleActor, gate,
     notice,
     masker: deps.masker,
