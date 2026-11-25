@@ -39,6 +39,10 @@ export const Unreadable: Story = { args: { state: 'unreadable' } };
 /** A step could not be measured. CHECK Try again is offered, and words distinct from Unreadable. */
 export const Unmeasured: Story = { args: { state: 'unmeasured' } };
 
+/** The server no longer accepts this view's place (a restart). CHECK the words say older messages are there and that
+ *  reopening the chat loads them, with no control: asking again cannot help. */
+export const Expired: Story = { args: { state: 'expired' } };
+
 /** Where a page left out records too long to load. CHECK a dashed rule across the column in mono caps, never read as a
  *  message of the session's own, and that a long line wraps inside a 360px column. */
 export const Gap: Story = { render: () => <OlderGap /> };

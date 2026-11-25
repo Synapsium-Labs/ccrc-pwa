@@ -15,8 +15,8 @@ import { FOCUS_RING } from '../lib/focus';
 import './older-edge.css';
 
 /** Every state the top of the chat can be in while older messages are offered (the app's `none` draws nothing): the
- *  wire's end words less the two never shown (`invalid`, `expired`), and `loading`. */
-export type OlderEdgeState = 'loading' | Exclude<OlderPageEnd, 'invalid' | 'expired'>;
+ *  wire's end words less `invalid` (the app says it as `expired`), and `loading`. */
+export type OlderEdgeState = 'loading' | Exclude<OlderPageEnd, 'invalid'>;
 
 /** The words, one sentence per end, and the control's label where there is one. */
 export const OLDER_WORDS: Readonly<Record<OlderEdgeState, { readonly say: string | null; readonly control: string | null }>> =
@@ -29,6 +29,8 @@ export const OLDER_WORDS: Readonly<Record<OlderEdgeState, { readonly say: string
     absent: { say: 'Older messages cannot be loaded now: the transcript is no longer there.', control: null },
     unreadable: { say: 'Older messages cannot be loaded now: the transcript could not be read.', control: 'Try again' },
     unmeasured: { say: 'Older messages cannot be loaded now: the transcript could not be measured.', control: 'Try again' },
+    // Older messages are there; this view's place in them is no longer accepted (a restart), and asking again cannot help.
+    expired: { say: 'Older messages are there but cannot be loaded here now. Reopen this chat to load them.', control: null },
   });
 
 /** The marker a page leaves where it skipped records too long to send. */

@@ -56,7 +56,10 @@ describe('the top of the chat', () => {
     expect(OLDER_WORDS.start.say).toMatch(/available here/);
     expect(OLDER_WORDS.start.say).not.toMatch(/began|beginning|start of the session/i);
     // Asking again cannot help after `changed` or `absent`: no control. It can after a busy, unreadable or unmeasured.
-    for (const s of ['changed', 'absent', 'start'] as const) expect(OLDER_WORDS[s].control).toBeNull();
+    for (const s of ['changed', 'absent', 'start', 'expired'] as const) expect(OLDER_WORDS[s].control).toBeNull();
+    // Fix round 1, A5: an expired place says older messages are there, and that reopening the chat loads them.
+    expect(OLDER_WORDS.expired.say).toMatch(/Older messages are there/);
+    expect(OLDER_WORDS.expired.say).toMatch(/Reopen this chat/);
     for (const s of ['busy', 'unreadable', 'unmeasured'] as const) expect(OLDER_WORDS[s].control).toBe('Try again');
   });
 
@@ -94,6 +97,17 @@ describe('the top of the chat', () => {
     const at = rows.findIndex((t) => t.includes(OLDER_GAP_WORDS));
     expect(at).toBeGreaterThan(rows.findIndex((t) => t.includes('old')));
     expect(at).toBeLessThan(rows.findIndex((t) => t.includes('held')));
+    expect(container.querySelector('[data-older-gap]')).not.toBeNull();
+  });
+
+  it('fix round 1, A4: a gap with no row of its page above it draws no second copy of the time divider below it', () => {
+    // A page that was only the record it skipped: the marker is the list's first row, timed as the row below it.
+    const at = '2026-11-24T12:00:00.000Z';
+    const gap: ChatEvent = { kind: 'system', uuid: 'local-gap-1', ts: at, text: OLDER_GAP_WORDS };
+    const held: ChatEvent = { kind: 'user', uuid: 'held', ts: at, text: 'held' };
+    const { container } = render(list({ events: [gap, held, assistant('a1')], older: paging('more', 1), onLoadOlder: () => {} }));
+    const dividers = [...container.querySelectorAll('.ts-divider')].map((d) => d.textContent);
+    expect(dividers).toHaveLength(new Set(dividers).size);
     expect(container.querySelector('[data-older-gap]')).not.toBeNull();
   });
 });

@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import type { OlderPageAnswer, OlderPageEnd } from '../../shared/olderPage';
 import {
-  NO_PAGING, answerPaging, isGapMarker, liveFromOf, pagingAsked, pagingOfBacklog, pagingOfDrop, requestOf, type OlderPaging,
+  BUSY_PAUSE_MS, BUSY_RETRIES, NO_PAGING, answerPaging, isGapMarker, liveFromOf, pagingAsked, pagingOfBacklog, pagingOfDrop,
+  prependPage, requestOf, retryDue, type OlderPaging,
 } from '../src/session/olderPages';
 import { buildChatItems } from '../src/session/chatItems';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
@@ -58,18 +59,21 @@ describe('the decider', () => {
     const on = (a: OlderPageAnswer): OlderPaging => answerPaging(p, { ...a, for: C0 }).paging;
     expect(on(answer('more', { continuation: C1 }))).toMatchObject({ edge: 'more', next: C1 });
     expect(on(answer('start'))).toMatchObject({ edge: 'start', next: null });
-    expect(on(answer('busy'))).toMatchObject({ edge: 'busy', next: C0 });
+    // `busy` is asked again on its own first (fix round 1, A6: see 'busy is asked again on its own').
+    expect(on(answer('busy'))).toMatchObject({ edge: 'loading', next: C0, asked: null, busy: 1 });
     expect(on(answer('changed'))).toMatchObject({ edge: 'changed', next: null });
     expect(on(answer('absent'))).toMatchObject({ edge: 'absent', next: null });
     expect(on(answer('unreadable'))).toMatchObject({ edge: 'unreadable', next: C0 });
     expect(on(answer('unmeasured'))).toMatchObject({ edge: 'unmeasured', next: C0 });
-    // A continuation the server no longer accepts: dropped quietly, no control until the next backlog's.
-    expect(on(answer('invalid'))).toMatchObject({ edge: 'none', next: null });
-    expect(on(answer('expired'))).toMatchObject({ edge: 'none', next: null });
+    // A continuation the server no longer accepts: said, with no control, until the next backlog's (fix round 1, A5).
+    expect(on(answer('invalid'))).toMatchObject({ edge: 'expired', next: null });
+    expect(on(answer('expired'))).toMatchObject({ edge: 'expired', next: null });
     for (const edge of ['busy', 'unreadable', 'unmeasured'] as const) {
       expect(requestOf(on(answer(edge)))).toBe(C0);
     }
-    for (const edge of ['start', 'changed', 'absent', 'invalid'] as const) expect(requestOf(on(answer(edge)))).toBeNull();
+    for (const edge of ['start', 'changed', 'absent', 'invalid', 'expired'] as const) {
+      expect(requestOf(on(answer(edge)))).toBeNull();
+    }
   });
 
   it('a `more` with no next continuation is never applied: the same request is offered again', () => {
@@ -139,7 +143,102 @@ describe('a late answer is never applied (no echo: the wave 171 server)', () => 
   it('a busy answer applies nothing and drops nothing', () => {
     const p = pagingAsked(voided(), C1);
     const busy = answerPaging(p, answer('busy'));
-    expect(busy.paging).toMatchObject({ voided: 1, asked: null, edge: 'busy' });
+    expect(busy.paging).toMatchObject({ voided: 1, asked: null, edge: 'loading', busy: 1 });
+  });
+
+  it('A3: the given-up request\'s own answer, arriving after its re-ask was answered, is never applied as the next page', () => {
+    // A request crossing a backlog is answered after it (case B), so the first answer after the void is dropped and the
+    // outstanding request given up; it is asked again at once (the reader near the top).
+    let p = pagingAsked(voided(), C1);
+    p = answerPaging(p, answer('more', { continuation: C2, events: [user('late')] })).paging;
+    p = pagingAsked(p, C1);
+    // The given-up request's answer: the page for C1, applied (it is the right page, whichever request it answers).
+    const first = answerPaging(p, answer('more', { continuation: C2, events: [user('one')] }));
+    expect(first.page?.events).toEqual([user('one')]);
+    p = pagingAsked(first.paging, C2);
+    // The re-ask's answer: the page for C1 again, its continuation C2, the request outstanding. Dropped; C2 still asked.
+    const twice = answerPaging(p, answer('more', { continuation: C2, events: [user('one')] }));
+    expect(twice.page).toBeNull();
+    expect(twice.paging).toEqual(p);
+    // C2's own answer carries the continuation after it, and is applied.
+    expect(answerPaging(p, answer('start', { events: [user('two')] })).page?.events).toEqual([user('two')]);
+  });
+
+  it('A3: when the voided request is never answered (the server dropped it), paging goes on: nothing stalls', () => {
+    // The common case: the voided request's page was dropped by the server, so the first answer after the void is the
+    // new request's own. Dropped once (it cannot be told from a late one), then every later answer applies.
+    let p = pagingAsked(voided(), C1);
+    p = answerPaging(p, answer('more', { continuation: C2, events: [user('own')] })).paging;
+    expect(p.voided).toBe(0);
+    p = pagingAsked(p, C1);
+    const again = answerPaging(p, answer('more', { continuation: C2, events: [user('own')] }));
+    expect(again.page?.events).toEqual([user('own')]);
+    expect(requestOf(again.paging)).toBe(C2);
+  });
+});
+
+describe('busy is asked again on its own (fix round 1, A6)', () => {
+  for (const echo of [true, false]) {
+    it(`${echo ? 'the echo' : 'no echo'}: ${BUSY_RETRIES} retries, one request at a time, saying loading; then Try again`, () => {
+      let p = pagingAsked(pagingOfBacklog(NO_PAGING, C0), C0);
+      const busy = (): OlderPageAnswer => answer('busy', echo ? { for: C0 } : {});
+      for (let n = 1; n <= BUSY_RETRIES; n += 1) {
+        p = answerPaging(p, busy()).paging;
+        expect(p).toMatchObject({ edge: 'loading', asked: null, busy: n });
+        expect(retryDue(p)).toBe(true);
+        expect(requestOf(p)).toBe(C0);
+        p = pagingAsked(p, C0);
+        expect(retryDue(p)).toBe(false);
+        expect(requestOf(p)).toBeNull();
+      }
+      p = answerPaging(p, busy()).paging;
+      expect(p).toMatchObject({ edge: 'busy', asked: null });
+      expect(retryDue(p)).toBe(false);
+      // Try again starts the retries over.
+      p = pagingAsked(p, C0);
+      expect(p.busy).toBe(0);
+      expect(answerPaging(p, busy()).paging).toMatchObject({ edge: 'loading', busy: 1 });
+    });
+  }
+
+  it('an answer that is not busy ends the run of retries', () => {
+    let p = pagingAsked(pagingOfBacklog(NO_PAGING, C0), C0);
+    p = pagingAsked(answerPaging(p, answer('busy', { for: C0 })).paging, C0);
+    p = answerPaging(p, answer('more', { for: C0, continuation: C1, events: [user('x')] })).paging;
+    expect(p).toMatchObject({ edge: 'more', busy: 0 });
+  });
+
+  it('the socket dropping while a retry waits: given up, the control offers it', () => {
+    const p = answerPaging(pagingAsked(pagingOfBacklog(NO_PAGING, C0), C0), answer('busy', { for: C0 })).paging;
+    expect(pagingOfDrop(p)).toMatchObject({ edge: 'more', busy: 0, next: C0 });
+    expect(retryDue(pagingOfDrop(p))).toBe(false);
+  });
+});
+
+describe('an expired continuation is said, never silent (fix round 1, A5)', () => {
+  it('no control, and a backlog with a continuation clears it', () => {
+    const p = answerPaging(pagingAsked(pagingOfBacklog(NO_PAGING, C0), C0), answer('expired', { for: C0 })).paging;
+    expect(p.edge).toBe('expired');
+    expect(requestOf(p)).toBeNull();
+    // A resumed stream (a reconnect with no backlog) leaves it standing.
+    expect(pagingOfDrop(p).edge).toBe('expired');
+    expect(pagingOfBacklog(p, C1)).toMatchObject({ edge: 'more', next: C1 });
+  });
+});
+
+describe('the gap marker draws one time divider (fix round 1, A4)', () => {
+  const at = (uuid: string, ts: string): ChatEvent => ({ kind: 'user', uuid, ts, text: uuid });
+  const gap = (ts: string): ChatEvent => ({ kind: 'system', uuid: 'local-gap-1', ts, text: 'gap' });
+  const dividers = (events: ChatEvent[]): number => buildChatItems(events, [], false).filter((i) => i.kind === 'divider').length;
+
+  it('its time is the page\'s newest row, so the row below it draws the one divider the gap in time needs', () => {
+    const held = [at('h1', '2026-11-24T12:00:00.000Z')];
+    const page = { events: [at('p1', '2026-11-24T10:00:00.000Z')], gap: true };
+    const out = prependPage(held, page, gap);
+    expect(uuids(out)).toEqual(['p1', 'GAP', 'h1']);
+    expect(out[1]!.ts).toBe('2026-11-24T10:00:00.000Z');
+    // One divider over p1 (the first row) and one under the marker, over h1: two hours apart. Never a third.
+    expect(dividers(out)).toBe(2);
   });
 });
 
@@ -256,6 +355,28 @@ describe('the store: requests on the socket', () => {
     store.getState().loadOlder();
     expect(pageRequests(sock.sent)).toEqual([{ type: 'older-page', continuation: C0 }, { type: 'older-page', continuation: C1 }]);
     store.getState().disconnect();
+  });
+
+  it('fix round 1, A6: a busy answer is asked again on its own after the pause, one request at a time', () => {
+    vi.useFakeTimers();
+    try {
+      const { sock, store } = opened();
+      sock.emit(backlog(rows('b', 2), C0));
+      store.getState().loadOlder();
+      sock.emit(answer('busy', { for: C0 }));
+      expect(store.getState().older).toMatchObject({ edge: 'loading', asked: null, busy: 1 });
+      expect(pageRequests(sock.sent)).toHaveLength(1);
+      vi.advanceTimersByTime(BUSY_PAUSE_MS - 1);
+      expect(pageRequests(sock.sent), 'asked again before the pause').toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(pageRequests(sock.sent)).toEqual([{ type: 'older-page', continuation: C0 }, { type: 'older-page', continuation: C0 }]);
+      expect(store.getState().older).toMatchObject({ edge: 'loading', asked: C0 });
+      vi.advanceTimersByTime(BUSY_PAUSE_MS * 4);
+      expect(pageRequests(sock.sent), 'a retry while one is outstanding').toHaveLength(2);
+      store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('an older server: no continuation, no request, no state beyond `none`', () => {

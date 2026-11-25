@@ -27,8 +27,9 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { footLeft, heightMove, holdShift, prependShift } from './footFollow';
+import { TAP_SETTLE_MS, footLeft, heightMove, holdShift, prependShift } from './footFollow';
 import { NO_PAGING, isGapMarker, liveFromOf, type OlderPaging } from './olderPages';
+import { keepOpenAcross, renamedAcross } from './stretchJoin';
 import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
 import { groupToolRun } from './toolSummary';
@@ -147,8 +148,25 @@ function transcriptOf(
 function itemsOf(
   set: SkinSet | null, events: ChatEvent[], pending: PendingSend[], busy: boolean, wait: LiveWait, older: OlderPaging,
 ): TranscriptItem[] {
-  const built = buildChatItems(events, pending, busy);
+  const built = oneDividerAtGap(buildChatItems(events, pending, busy));
   return transcriptOf(set, built, wait, busy, liveFromOf(built, events, older));
+}
+
+/** A gap marker with nothing of its page above it (the page was only the record it skipped) is the first row its time
+ *  divider is measured on, and the row below it is measured again from the same place, so the two draw the same divider
+ *  (fix round 1, A4): the one below the marker goes. Every other gap marker draws none (`olderPages.ts#prependPage`). */
+function oneDividerAtGap(items: ChatItem[]): ChatItem[] {
+  const out: ChatItem[] = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const it = items[i]!;
+    const gapAt = out.length - 1;
+    const gap = out[gapAt];
+    const above = out[gapAt - 1];
+    if (it.kind === 'divider' && gap?.kind === 'message' && isGapMarker(gap.event) && above?.kind === 'divider'
+      && above.label === it.label) continue;
+    out.push(it);
+  }
+  return out.length === items.length ? items : out;
 }
 
 /** The top of the chat while older messages are offered (wave 175): nothing at all when they are not (`none`), so the
@@ -421,23 +439,30 @@ const SETTLE_FRAMES = 2;
 
 const keyOf = (item: TranscriptItem): string => item.key;
 
+/** Fix round 1, F1: tell `wrote` where each of the list's own instant writes of `el` left it (virtuoso moves its scroller
+ *  only through the element's `scrollTo` and `scrollBy`), or null for a smooth one, whose steps land wherever its easing
+ *  puts them. The two methods are wrapped on this element alone; the returned undo puts them back. A measure, not a
+ *  writer: every call goes through unchanged. */
+function ownWrites(el: HTMLElement, wrote: (at: number | null) => void): () => void {
+  const to = el.scrollTo as unknown;
+  const by = el.scrollBy as unknown;
+  if (typeof to !== 'function' || typeof by !== 'function') return () => undefined;
+  const smooth = (a: unknown[]): boolean =>
+    typeof a[0] === 'object' && a[0] !== null && (a[0] as ScrollToOptions).behavior === 'smooth';
+  const wrap = (f: Function) => function (this: HTMLElement, ...a: unknown[]): void {
+    f.apply(this, a);
+    wrote(smooth(a) ? null : el.scrollTop);
+  };
+  el.scrollTo = wrap(to) as HTMLElement['scrollTo'];
+  el.scrollBy = wrap(by) as HTMLElement['scrollBy'];
+  return () => {
+    el.scrollTo = to as HTMLElement['scrollTo'];
+    el.scrollBy = by as HTMLElement['scrollBy'];
+  };
+}
+
 /** The row virtuoso's index `i` names, given its first index (see `computeItemKey`). */
 const rowAt = (i: number, first: number): number => (i >= first ? i - first : i);
-
-/** Wave 175: a tool stretch that takes an older page's calls at its start changes its key (`activity-<first entry's key>`)
- *  but is the same stretch, grown, and a stretch keeps its open or closed state as it grows: the new key opens when the
- *  stretch the reader had open is inside it. Read off the two lists, never off the key's spelling. */
-function keepOpenAcross(was: readonly TranscriptItem[], now: readonly TranscriptItem[], expansion: ExpansionMemo): void {
-  const opened = new Map<string, string>();
-  for (const it of was) {
-    if (it.kind === 'tool-activity' && expansion.get(it.key)) opened.set(it.entries[0]!.key, it.key);
-  }
-  if (opened.size === 0) return;
-  for (const it of now) {
-    if (it.kind !== 'tool-activity' || expansion.get(it.key)) continue;
-    if (it.entries.some((e) => opened.has(e.key))) expansion.set(it.key, true);
-  }
-}
 
 /** What one visit opens with — computed ONCE per mount. */
 interface Opening {
@@ -874,6 +899,7 @@ function ChatScroller({
   const onAtBottom = useCallback((bottom: boolean): void => {
     const el = scroller.current;
     if (bottom) {
+      jumping.current = false;
       if (el !== null) footTop.current = el.scrollTop;
     } else if (pinned.current) {
       // With no scroller to measure, or no foot measured yet, nothing says the reader did not move: virtuoso's word stands.
@@ -916,12 +942,34 @@ function ChatScroller({
   const lastMove = useRef<number | null>(null);
   /** Where the hold's own write left the scroller, until the scroll event it owes arrives. */
   const ownWrite = useRef<number | null>(null);
-  const anchor = useRef<readonly { key: string; top: number }[]>([]);
-  /** Where the row `key` stands, from the scroller's top, or null when it is not drawn. */
-  const topOf = useCallback((el: HTMLElement, key: string): number | null => {
+  const anchor = useRef<readonly { key: string; top: number; bottom: number }[]>([]);
+  /** Where the row `key` stands, its top and its foot, from the scroller's top, or null when it is not drawn. */
+  const edgesOf = useCallback((el: HTMLElement, key: string): { top: number; bottom: number } | null => {
     const row = el.querySelector(`[data-row-key="${CSS.escape(key)}"]`);
-    return row === null ? null : row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    if (row === null) return null;
+    const at = el.getBoundingClientRect().top;
+    const r = row.getBoundingClientRect();
+    return { top: r.top - at, bottom: r.bottom - at };
   }, []);
+  /** Fix round 1, F2: the stretches an older page's calls renamed since the anchor was read (`stretchJoin.ts`), old key to
+   *  new. A renamed stretch grew at its top, so the hold keeps its FOOT where it was. Cleared when the anchor is read. */
+  const renamed = useRef<ReadonlyMap<string, string>>(new Map());
+  /** How far to scroll to put the reader's row back: the first anchor row still drawn, by its top, or a stretch renamed by
+   *  a join, by its foot; null when none of them is drawn. */
+  const heldShift = useCallback((el: HTMLElement, moved: boolean): number | null => {
+    for (const a of anchor.current) {
+      const now = edgesOf(el, a.key);
+      if (now !== null) return holdShift(a.top, now.top, moved);
+      // Followed across every join since the anchor was read (a page, then another, before the list settled).
+      let to = renamed.current.get(a.key);
+      for (let n = 0; to !== undefined && n < renamed.current.size; n += 1) {
+        const grown = edgesOf(el, to);
+        if (grown !== null) return holdShift(a.bottom, grown.bottom, moved);
+        to = renamed.current.get(to);
+      }
+    }
+    return null;
+  }, [edgesOf]);
   const readAnchor = useCallback((): void => {
     const el = scroller.current;
     if (el === null) return;
@@ -931,10 +979,11 @@ function ChatScroller({
     const rows = [...el.querySelectorAll<HTMLElement>('[data-row-key]')];
     const first = rows.findIndex((r) => r.getBoundingClientRect().bottom > top);
     anchor.current = first < 0 ? [] : rows.slice(first, first + ANCHOR_ROWS).flatMap((r) => {
-      const at = topOf(el, r.dataset.rowKey!);
-      return at === null ? [] : [{ key: r.dataset.rowKey!, top: at }];
+      const at = edgesOf(el, r.dataset.rowKey!);
+      return at === null ? [] : [{ key: r.dataset.rowKey!, ...at }];
     });
-  }, [topOf]);
+    renamed.current = new Map();
+  }, [edgesOf]);
   // Read a frame after a scroll, never in it: the list lays out the rows a scroll brings into reach after the scroll
   // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
   const readSoon = useRef(false);
@@ -946,6 +995,15 @@ function ChatScroller({
   const adjusted = useRef(0);
   /** The reader's last wheel, touch, pointer press or key in the list, so a settle never sets back a reader who moved. */
   const readerAt = useRef<number | null>(null);
+  /** Fix round 1, F1: where the list's own last instant write left the scroller (virtuoso's `scrollTo` and `scrollBy`,
+   *  which `ownWrites` reads off the element), or null after a smooth one (Jump to latest) or before any. While a prepend
+   *  settles, a scroll event that finds the scroller anywhere else is the list moving by something no input event says:
+   *  a fling's momentum after the finger lifted, a scrollbar thumb dragged, a smooth scroll still running, the reader. */
+  const listAt = useRef<number | null>(null);
+  /** Fix round 1, F1: Jump to latest was pressed and its smooth scroll has not reached the foot. A page settling meanwhile
+   *  ends at the foot (the reader asked for it): virtuoso's instant write for the page's rows can stop a smooth scroll
+   *  where it is. Ended by reaching the foot, or by the reader's own input. */
+  const jumping = useRef(false);
   /** The older paging and its loader as of this render, for the callbacks below. */
   const paging = useRef({ older, onLoadOlder });
   paging.current = { older, onLoadOlder };
@@ -968,7 +1026,15 @@ function ChatScroller({
     // with the next change rather than becoming the new zero (review 3607 A3). Only while the scroller is where the
     // write left it: a reader who moved it since owes an event of their own, and this one is theirs.
     if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
-    if (adjusting.current) { adjusted.current += 1; return; }
+    if (adjusting.current) {
+      adjusted.current += 1;
+      const at = listAt.current;
+      if (el !== null && prepend.current !== null && (at === null || Math.abs(el.scrollTop - at) >= 1)) {
+        prepend.current.moved = true;
+        lastMove.current = performance.now();
+      }
+      return;
+    }
     // Where the foot stands, while the scroller is measured at it (within the pill's band): rows measuring under a reader at
     // the foot move it; a reader scrolling up leaves the band at their first event, and leaves this where the foot was.
     if (el !== null && el.scrollHeight - el.scrollTop - el.clientHeight <= (band ?? 0) + 1) footTop.current = el.scrollTop;
@@ -984,9 +1050,12 @@ function ChatScroller({
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
-  const onReader = useCallback((): void => { readerAt.current = performance.now(); }, []);
+  const onReader = useCallback((): void => { readerAt.current = performance.now(); jumping.current = false; }, []);
+  const unwatch = useRef<(() => void) | null>(null);
   const onScroller = useCallback((el: HTMLElement | Window | null): void => {
     const old = scroller.current;
+    unwatch.current?.();
+    unwatch.current = null;
     old?.removeEventListener('click', onTap, true);
     old?.removeEventListener('scroll', onScroll);
     for (const type of READER_INPUT) old?.removeEventListener(type, onReader, true);
@@ -995,6 +1064,7 @@ function ChatScroller({
     now?.addEventListener('click', onTap, true);
     now?.addEventListener('scroll', onScroll, { passive: true });
     for (const type of READER_INPUT) now?.addEventListener(type, onReader, { capture: true, passive: true });
+    if (now !== null) unwatch.current = ownWrites(now, (at) => { listAt.current = at; });
   }, [onTap, onScroll, onReader]);
   const lastHeight = useRef<number | null>(null);
   const edges = useRef<string | null>(null);
@@ -1002,7 +1072,11 @@ function ChatScroller({
   shown.current = items;
   /** The prepend the list is settling, as it stood before the rows came: the reader's flag, the scroller and the list's
    *  height then, and a count that tells it from a later one. */
-  const prepend = useRef<{ n: number; at: number; pinned: boolean; scrollTop: number; clientHeight: number; before: number | null } | null>(null);
+  const prepend = useRef<{
+    n: number; at: number; pinned: boolean; scrollTop: number; clientHeight: number; before: number | null;
+    /** The list moved since the page came, by anything but its own writes (fix round 1, F1). */
+    moved: boolean;
+  } | null>(null);
 
   // VIRTUOSO'S FIRST INDEX (wave 175). Rows put before the first are told to virtuoso by lowering its `firstItemIndex` in
   // the same render, by how far a row the reader can see moved (`prependShift`, by key): virtuoso then moves the scroller
@@ -1011,47 +1085,70 @@ function ChatScroller({
   // once the scroller is quiet, `settlePrepend` puts the reader's row back, by its key, in one write. Two writers that never
   // write in the same frame: virtuoso's while it moves, the hold's after. Decided here, in the render that hands virtuoso
   // the new rows, because virtuoso reads both together.
-  const indexing = useRef({ items, first: FIRST_INDEX });
+  const indexing = useRef({ items, first: FIRST_INDEX, settles: 0 });
   if (indexing.current.items !== items) {
     const was = indexing.current.items;
-    const shift = was.length > 0 && items.length > 0 && was[0]!.key !== items[0]!.key
-      ? prependShift(was.map(keyOf), items.map(keyOf), anchor.current[0]?.key ?? null)
-      : 0;
-    if (shift !== 0) {
+    const top = was.length > 0 && items.length > 0 && was[0]!.key !== items[0]!.key;
+    const shift = top ? prependShift(was.map(keyOf), items.map(keyOf), anchor.current[0]?.key ?? null) : 0;
+    // A stretch an older page's calls joined (fix round 1, F2): its open state follows it, and the hold reads its new key.
+    const joins = top ? renamedAcross(was, items) : null;
+    if (joins !== null && joins.size > 0) {
+      keepOpenAcross(was, items, expansion);
+      renamed.current = new Map([...renamed.current, ...joins]);
+    }
+    // A join that adds no row (a page of calls only, fix round 1, F2) settles exactly as a prepend does: virtuoso corrects
+    // the stretch's new height over a frame or two, and the hold then keeps the reader's place by the stretch's foot.
+    const settles = shift !== 0 || (joins !== null && joins.size > 0);
+    if (settles) {
+      const settling = adjusting.current;
       // Set in this render: virtuoso reports the new height in its own layout effect, before this list's effects run.
       adjusting.current = true;
+      // Where the foot stood moves down by the rows put above it: unmeasured until the list measures it again (fix round
+      // 1, A7: a stale one read a reader who moved up during the settle as still below the foot, and took them back).
+      footTop.current = null;
       const el = scroller.current;
       prepend.current = {
         n: (prepend.current?.n ?? 0) + 1, at: performance.now(), pinned: pinned.current, scrollTop: el?.scrollTop ?? 0,
         clientHeight: el?.clientHeight ?? 0, before: lastHeight.current,
+        // A later page while one still settles: the anchor is still the first's, and so is any move since it.
+        moved: settling && prepend.current !== null ? prepend.current.moved : false,
       };
-      keepOpenAcross(was, items, expansion);
     }
-    indexing.current = { items, first: indexing.current.first - shift };
+    indexing.current = { items, first: indexing.current.first - shift, settles: indexing.current.settles + (settles ? 1 : 0) };
   }
   const firstIndex = indexing.current.first;
+  const settles = indexing.current.settles;
 
-  /** The prepend's one correction, once virtuoso is done (see VIRTUOSO'S FIRST INDEX): decided as any change above the
-   *  reader (`heightMove`, with the place the reader had before the rows came), so a reader at the foot is taken back to it,
-   *  a reader who moved meanwhile is left where they are, and anyone else has their row put back by its key. */
+  /** The prepend's one correction, once virtuoso is done (see VIRTUOSO'S FIRST INDEX). FIRST, a list that moved since the
+   *  page came is left where it went, whoever was where then (fix round 1, F1 and A7): the list moving is the reader
+   *  moving, measured by the scroller against where the list's own writes left it (`listAt`), and by the reader's input.
+   *  Otherwise decided as any change above the reader (`heightMove`, with the place the reader had before the rows came):
+   *  a reader at the foot is taken back to it, and anyone else has their row put back by its key. */
   const settlePrepend = useCallback((): void => {
     adjusting.current = false;
     const el = scroller.current;
     const p = prepend.current;
     prepend.current = null;
     if (el === null || p === null) return;
+    if (jumping.current) {
+      toFoot();
+      return;
+    }
+    if (p.moved || (readerAt.current !== null && readerAt.current >= p.at)) {
+      readAnchor();
+      requestAnimationFrame(nearTop);
+      return;
+    }
     const move = heightMove({
       pinned: p.pinned, before: p.before, scrollTop: p.scrollTop, clientHeight: p.clientHeight, band: band ?? 0,
-      sinceTap: null, sinceMove: readerAt.current !== null && readerAt.current >= p.at ? 0 : null,
-      newItem: true, prepended: true,
+      sinceTap: null, sinceMove: null, newItem: true, prepended: true,
     });
     if (move === 'foot') {
       toFoot();
       return;
     }
-    const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
-    if (move === 'hold' && held !== undefined) {
-      const shift = holdShift(held.a.top, held.now!, false);
+    const shift = move === 'hold' ? heldShift(el, false) : null;
+    if (shift !== null) {
       if (shift !== 0) {
         el.scrollTop += shift;
         ownWrite.current = el.scrollTop;
@@ -1060,11 +1157,11 @@ function ChatScroller({
       readAnchor();
     }
     requestAnimationFrame(nearTop);
-  }, [band, readAnchor, topOf, nearTop]);
-  const lastFirst = useRef(firstIndex);
+  }, [band, readAnchor, heldShift, nearTop, toFoot]);
+  const lastSettles = useRef(settles);
   useLayoutEffect(() => {
-    if (lastFirst.current === firstIndex) return;
-    lastFirst.current = firstIndex;
+    if (lastSettles.current === settles) return;
+    lastSettles.current = settles;
     const mine = prepend.current?.n;
     let seen = adjusted.current;
     let quiet = 0;
@@ -1074,7 +1171,7 @@ function ChatScroller({
       if (quiet >= SETTLE_FRAMES) settlePrepend(); else requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-  }, [firstIndex, settlePrepend]);
+  }, [settles, settlePrepend]);
 
   const onHeight = useCallback((height: number): void => {
     const before = lastHeight.current;
@@ -1091,10 +1188,10 @@ function ChatScroller({
     const from = el.scrollTop;
     // Where the foot stands, measured as `heightMove` measures it: against the list before this change.
     if (pinned.current && before !== null && before - el.scrollTop - el.clientHeight <= (band ?? 0) + 1) footTop.current = el.scrollTop;
+    const sinceTap = lastTap.current === null ? null : at - lastTap.current;
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
-      sinceTap: lastTap.current === null ? null : at - lastTap.current,
-      sinceMove: lastMove.current === null ? null : at - lastMove.current,
+      sinceTap, sinceMove: lastMove.current === null ? null : at - lastMove.current,
       newItem, prepended: false,
     });
     if (move === 'foot') {
@@ -1108,19 +1205,25 @@ function ChatScroller({
     // A move is a scroll event since the change, or the scroller standing elsewhere than at the change with no event yet
     // (a smooth scroll's first step lands in the frame before its event, carried item 6 of wave 175).
     requestAnimationFrame(() => {
-      const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
-      if (move === 'hold' && held !== undefined) {
+      // A tap that shrank the list and left the reader at its foot did not move them off it (fix round 1, A1: a reader at
+      // the foot who closes the newest stretch): its window ends, so the next change at the foot is followed. A tap that
+      // grew the list (a row opening under the reader) keeps it: they are no longer at the foot, by their own doing.
+      if (sinceTap !== null && sinceTap < TAP_SETTLE_MS && before !== null && height < before
+        && el.scrollHeight - el.scrollTop - el.clientHeight <= (band ?? 0) + 1) lastTap.current = null;
+      if (move === 'hold') {
         const moved = (lastMove.current !== null && lastMove.current >= at) || Math.abs(el.scrollTop - from) >= 1;
-        const shift = holdShift(held.a.top, held.now!, moved);
-        if (shift !== 0) {
-          el.scrollTop += shift;
-          ownWrite.current = el.scrollTop;
+        const shift = heldShift(el, moved);
+        if (shift !== null) {
+          if (shift !== 0) {
+            el.scrollTop += shift;
+            ownWrite.current = el.scrollTop;
+          }
+          if (!moved) return;
         }
-        if (!moved) return;
       }
       readAnchor();
     });
-  }, [band, readAnchor, topOf]);
+  }, [band, readAnchor, heldShift]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -1234,9 +1337,10 @@ function ChatScroller({
         <button
           type="button"
           className="jump-latest"
-          onClick={() =>
-            virtuoso.current?.scrollToIndex({ index: items.length - 1, behavior: 'smooth' })
-          }
+          onClick={() => {
+            jumping.current = true;
+            virtuoso.current?.scrollToIndex({ index: items.length - 1, behavior: 'smooth' });
+          }}
         >
           Jump to latest <span aria-hidden="true">↓</span>
         </button>

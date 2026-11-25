@@ -14,11 +14,11 @@
 // time, and what it shows (text; a call's name and input; a result's error flag and text; a system row's origin and
 // reset; a compaction mark; a cut's byte count). Two events with the same identity are the same event, read twice.
 //
-// MULTIPLICITY, NOT PRESENCE (`mergeOlder`, `mergeNewer`). A record can carry two blocks that parse to the very same
-// event (two equal text blocks), and those are two rows. So the merge counts: an incoming event is a copy only while the
-// rows held already carry that identity as often as the frame has carried it so far. A frame never splits a record (the
-// backlog and every page begin at a record start, and the tailer sends whole lines), so a record's equal blocks always
-// arrive together, are counted together, and both stay.
+// MULTIPLICITY, NOT PRESENCE (`freshOf`, the one merge, for a live frame and an older page alike). A record can carry two
+// blocks that parse to the very same event (two equal text blocks), and those are two rows. So the merge counts: an
+// incoming event is a copy only while the rows held already carry that identity as often as the frame has carried it so
+// far. A frame never splits a record (the backlog and every page begin at a record start, and the tailer sends whole
+// lines), so a record's equal blocks always arrive together, are counted together, and both stay.
 //
 // THE ONE LIMIT. Two SEPARATE records that are equal in every field the parser gives (the same uuid, time and words) are
 // one identity. Inside one frame they are counted and both appear; across two frames (one held, one arriving) the second

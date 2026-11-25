@@ -107,7 +107,7 @@ afterAll(async () => {
   await server?.close();
 });
 
-async function open(view: AppView) {
+async function open(view: AppView, events: object[] = EVENTS) {
   const app = await openApp(browser!, view, FIXTURE);
   let ws: WebSocketRoute | null = null;
   await app.ctx.route('**/api/sessions/*/clip/**', async (route) => {
@@ -116,7 +116,7 @@ async function open(view: AppView) {
   });
   await app.ctx.routeWebSocket(/\/ws\/session\//, (w) => {
     ws = w;
-    w.send(JSON.stringify({ type: 'backlog', uuid: 'u-1', events: EVENTS, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true }));
+    w.send(JSON.stringify({ type: 'backlog', uuid: 'u-1', events, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true }));
   });
   await app.page.goto(`${server!.origin}/s/${SESSION.id}`);
   await app.page.waitForSelector('.tool-activity-row', { timeout: 20_000 });
@@ -322,5 +322,43 @@ describe('a tap that opens the newest stretch just after a call arrived in it st
       }
       expect(thrown, 'the tapped header was thrown out of view').toEqual([]);
     }, 300_000);
+  }
+});
+
+describe('a reader at the foot who closes the newest stretch still follows a live row (fix round 1, A1)', () => {
+  // The newest stretch three calls long, so its header is in view at the foot open or closed: a reader closes what they
+  // can see. (Opened at the foot, the fixture's 33-call stretch is 1,838px tall in Instrument; closing it from its foot
+  // leaves the reader 1,770px above the new foot, at its header, which is leaving the foot by position.)
+  const SHORT = EVENTS.slice(0, EVENTS.length - 60);
+  for (const view of VIEWS) {
+    it(`${named(view)}: closed at the foot, a row 150ms later is followed`, async () => {
+      const app = await open(view, SHORT);
+      try {
+        // Open the newest stretch by its own header (an open stretch draws run rows of its own inside it), then read to its
+        // foot.
+        await app.page.evaluate(() => { [...document.querySelectorAll<HTMLElement>('.tool-activity-row')].filter((b) => b.closest('.tool-activity-body') === null).at(-1)!.click(); });
+        await app.page.waitForTimeout(1000);
+        // Its rows measure as they come into view, so the foot moves on: read down until the foot is reached.
+        for (let n = 0; n < 4 && (n === 0 || (await foot(app.page)).gap > 2); n += 1) {
+          await app.page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+            s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 100 }));
+            s.scrollTop = s.scrollHeight;
+          });
+          await app.page.waitForTimeout(600);
+        }
+        await expectAtFoot(app.page, 'read to the foot of the open stretch');
+        // Close it at the foot: the list shrinks under the reader, who stays at its foot.
+        await app.page.evaluate(() => { [...document.querySelectorAll<HTMLElement>('.tool-activity-row')].filter((b) => b.closest('.tool-activity-body') === null).at(-1)!.click(); });
+        await app.page.waitForTimeout(150);
+        app.send({ type: 'events', uuid: 'u-1', events: [{ kind: 'assistant', uuid: 'live-after-close', ts: TS, text: `A live row. ${'words '.repeat(30)}` }], offset: 2 });
+        await app.page.waitForSelector('[data-row-key="live-after-close"]', { state: 'attached', timeout: 10_000 });
+        await app.page.waitForTimeout(900);
+        await expectAtFoot(app.page, 'a live row just after the reader closed the newest stretch');
+        expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 60_000);
   }
 });

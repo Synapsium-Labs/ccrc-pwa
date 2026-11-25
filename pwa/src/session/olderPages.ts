@@ -20,7 +20,16 @@
 // of the request outstanding; every other answer is dropped. An answer with no echo (the wave 171 server, which never
 // echoes) is decided by the fallback rule: the first answer that is not `busy` after a void is dropped, whichever request
 // it answers (`voided`), and a request outstanding then is given up and offered again; an answer that arrives with no
-// request outstanding is dropped too; a `busy` answer applies nothing and drops nothing.
+// request outstanding is dropped too; a `busy` answer applies nothing and drops nothing. And an answer whose `more`
+// continuation is the continuation of the request outstanding answers the request BEFORE it (a page already applied: the
+// given-up request's own answer, arriving after its re-ask was answered), so it is dropped and the request kept (fix round
+// 1, A3). Counting the given-up request as voided instead would stall paging: a voided request's answer usually never
+// comes (the server drops a page read across a backlog), so the count would never come back to zero.
+//
+// BUSY IS ASKED AGAIN ON ITS OWN (fix round 1, A6). A `busy` answer means the server was still reading another page for
+// this stream (one it may never answer: a page read across a backlog is dropped by the server). The same request is asked
+// again after a pause, BUSY_RETRIES times in a row, one request at a time, the top still saying it is loading; only then is
+// Try again offered.
 //
 // DISPLAY ONLY. A page's events are rows to read: this module returns them for the store to prepend, and nothing else of
 // the store's state reads an answer.
@@ -32,17 +41,25 @@ import { freshOf } from './eventIdentity';
 import { isLocalDivider } from './localDivider';
 
 /** What the top of the chat says about older messages, one word each, never two collapsed:
- *  - `none`: there is nothing to offer (no continuation: an older server, a stream that cannot page, or a continuation
- *    the server no longer accepts, dropped quietly). The view is today's, with no control;
+ *  - `none`: there is nothing to offer (no continuation: an older server, or a stream that cannot page). The view is
+ *    today's, with no control;
  *  - `more`: older messages can be loaded (the Load older control);
- *  - `loading`: a request is outstanding;
+ *  - `loading`: a request is outstanding, or a `busy` one is about to be asked again;
  *  - `start`: the oldest message available here is shown;
  *  - `busy`: the server was already reading a page for this stream; this request did nothing (Try again);
  *  - `changed`, `absent`: older messages cannot be loaded now, and asking again cannot help until a new backlog;
- *  - `unreadable`, `unmeasured`: older messages cannot be loaded now, and asking again may help (Try again).
- *  The wire's end words less the two a page never shows (`invalid`, `expired`: dropped quietly, `none`), plus `none` and
- *  `loading`: derived, so the read failure pair keeps its one home (`shared/agent-protocol.ts`). */
-export type OlderEdge = 'none' | 'loading' | Exclude<OlderPageEnd, 'invalid' | 'expired'>;
+ *  - `unreadable`, `unmeasured`: older messages cannot be loaded now, and asking again may help (Try again);
+ *  - `expired`: the server no longer accepts the continuation (`expired`, or `invalid`: a restart, a moved file). Older
+ *    messages are there, and reopening the chat loads them; asking again cannot help, and a resumed stream brings no new
+ *    continuation, so it stands until a backlog brings one (fix round 1, A5).
+ *  The wire's end words less `invalid` (said as `expired`), plus `none` and `loading`: derived, so the read failure pair
+ *  keeps its one home (`shared/agent-protocol.ts`). */
+export type OlderEdge = 'none' | 'loading' | Exclude<OlderPageEnd, 'invalid'>;
+
+/** How many `busy` answers in a row are asked again on their own before Try again is offered (fix round 1, A6). */
+export const BUSY_RETRIES = 3;
+/** The pause before each of them, ms. */
+export const BUSY_PAUSE_MS = 800;
 
 /** The edges that offer the control: a load, or a retry of the last request. */
 const ASKABLE: ReadonlySet<OlderEdge> = new Set<OlderEdge>(['more', 'busy', 'unreadable', 'unmeasured']);
@@ -60,39 +77,51 @@ export interface OlderPaging {
   /** How many rows the pages put before the backlog's (their events and gap markers): the rows from `rowsFrom(events)` on,
    *  this many, are older rows, and display only. */
   readonly rows: number;
+  /** How many `busy` answers came in a row for the request being asked (`BUSY_RETRIES`). */
+  readonly busy: number;
 }
 
 export const NO_PAGING: OlderPaging =
-  Object.freeze({ next: null, asked: null, voided: 0, edge: 'none', pages: 0, rows: 0 });
+  Object.freeze({ next: null, asked: null, voided: 0, edge: 'none', pages: 0, rows: 0, busy: 0 });
 
 /** A new backlog on this stream: paging starts again from its continuation, and an outstanding request is voided. */
 export function pagingOfBacklog(p: OlderPaging, older: string | undefined): OlderPaging {
   const next = typeof older === 'string' && older !== '' ? older : null;
   return {
     next, asked: null, voided: p.voided + (p.asked === null ? 0 : 1), edge: next === null ? 'none' : 'more', pages: 0, rows: 0,
+    busy: 0,
   };
 }
 
 /** A `rotated` frame: the file on screen is gone, and so is its continuation; the backlog that follows brings the next. */
 export function pagingOfRotated(p: OlderPaging): OlderPaging {
-  return { next: null, asked: null, voided: p.voided + (p.asked === null ? 0 : 1), edge: 'none', pages: 0, rows: 0 };
+  return { next: null, asked: null, voided: p.voided + (p.asked === null ? 0 : 1), edge: 'none', pages: 0, rows: 0, busy: 0 };
 }
 
-/** The socket left `open`: its outstanding request can never be answered on the next one, and the continuation stays. */
+/** The socket left `open`: its outstanding request can never be answered on the next one, and the continuation stays. A
+ *  `busy` request waiting to be asked again is given up with it: the control offers it. */
 export function pagingOfDrop(p: OlderPaging): OlderPaging {
-  if (p.asked === null && p.voided === 0) return p;
-  return { ...p, asked: null, voided: 0, edge: p.edge === 'loading' ? 'more' : p.edge };
+  if (p.asked === null && p.voided === 0 && p.edge !== 'loading') return p;
+  return { ...p, asked: null, voided: 0, edge: p.edge === 'loading' ? 'more' : p.edge, busy: 0 };
 }
 
-/** The continuation to ask with now, or null: nothing outstanding, a continuation in hand, and an edge that offers it. */
+/** A `busy` request is due to be asked again, after `BUSY_PAUSE_MS` (the store's timer). */
+export const retryDue = (p: OlderPaging): boolean => p.edge === 'loading' && p.asked === null && p.busy > 0 && p.next !== null;
+
+/** The continuation to ask with now, or null: nothing outstanding, a continuation in hand, and an edge that offers it, or
+ *  a `busy` request due again. */
 export function requestOf(p: OlderPaging): string | null {
-  return p.asked === null && p.next !== null && ASKABLE.has(p.edge) ? p.next : null;
+  return p.asked === null && p.next !== null && (ASKABLE.has(p.edge) || retryDue(p)) ? p.next : null;
 }
 
-/** The request for `continuation` was sent. */
+/** The request for `continuation` was sent. Sent from Try again after `busy`, the retries start over. */
 export function pagingAsked(p: OlderPaging, continuation: string): OlderPaging {
-  return { ...p, asked: continuation, edge: 'loading' };
+  return { ...p, asked: continuation, edge: 'loading', busy: p.edge === 'busy' ? 0 : p.busy };
 }
+
+/** A `busy` answer to the request outstanding: asked again on its own while retries are left, then Try again. */
+const busyOf = (p: OlderPaging): OlderPaging =>
+  ({ ...p, asked: null, busy: p.busy + 1, edge: p.busy + 1 <= BUSY_RETRIES ? 'loading' : 'busy' });
 
 /** What an answer does: the paging after it, and the page to prepend, if any. */
 export interface Answered {
@@ -106,18 +135,22 @@ export function answerPaging(p: OlderPaging, a: OlderPageAnswer): Answered {
     // The echo: exactly the request outstanding, or nothing.
     if (p.asked === null || a.for !== p.asked) return { paging: p, page: null };
   } else {
-    if (a.end === 'busy') {
-      return { paging: p.asked === null ? p : { ...p, asked: null, edge: 'busy' }, page: null };
-    }
+    if (a.end === 'busy') return { paging: p.asked === null ? p : busyOf(p), page: null };
     if (p.voided > 0) {
       // Possibly a voided request's answer: dropped. A request outstanding now may have been the one it answered, so it
-      // is given up and the control offers it again.
+      // is given up and the control offers it again (its own answer, if still to come, is dropped by the check below).
       return { paging: { ...p, voided: p.voided - 1, asked: null, edge: p.asked === null ? p.edge : 'more' }, page: null };
     }
     if (p.asked === null) return { paging: p, page: null };
+    // The answer to the request before (fix round 1, A3). Sound because a continuation names a place: a page's next
+    // continuation is where that page ends, strictly before the place it was asked from (`server/src/transcript/
+    // olderRange.ts`: every record a page frames ends at or before its cursor), so it is never the continuation it
+    // answers; and two different places' pages end at different places (the same record count, or the same chunk budget,
+    // back from each), so only the request whose page ended here can carry it.
+    if (a.end === 'more' && a.continuation === p.asked) return { paging: p, page: null };
   }
-  const done = { ...p, asked: null };
-  if (a.end === 'busy') return { paging: { ...done, edge: 'busy' }, page: null };
+  if (a.end === 'busy') return { paging: busyOf(p), page: null };
+  const done = { ...p, asked: null, busy: 0 };
   switch (a.end) {
     case 'more':
       // `more` always carries the next continuation. One without it is not applied: its page has no next to follow it,
@@ -136,8 +169,9 @@ export function answerPaging(p: OlderPaging, a: OlderPageAnswer): Answered {
       return { paging: { ...done, edge: a.end }, page: null };
     case 'invalid':
     case 'expired':
-      // A continuation the server no longer accepts: dropped quietly; the next backlog brings one.
-      return { paging: { ...done, next: null, edge: 'none' }, page: null };
+      // A continuation the server no longer accepts: said, never silent (a resumed stream brings no backlog, so the
+      // control vanishing would read as nothing older); the next backlog brings one.
+      return { paging: { ...done, next: null, edge: 'expired' }, page: null };
     default:
       // An end word this build does not know (a newer server): nothing is applied, and nothing is asked again.
       return { paging: { ...done, next: null, edge: 'none' }, page: null };
@@ -164,7 +198,9 @@ export function rowsFrom(events: readonly ChatEvent[]): number {
  *  when the page skipped a record, at the page's newer edge (the server keeps the records nearest the boundary and skips
  *  the one it cannot send there, so the gap sits between the page and the rows held). Two gaps with nothing between are
  *  one marker. `gap` is the marker to use, minted by the caller (it carries the store's own local id and words); its
- *  time is set to the row it sits above, so it draws no time divider of its own. */
+ *  time is the row it sits BELOW, the page's newest, so it draws no time divider of its own (`chatItems.ts` measures a
+ *  row's gap from the newest time above it, and never counts a local row's): the row below it draws the one divider the
+ *  gap needs (fix round 1, A4). With no row of the page above it, the list drops the repeat (`ChatList.tsx#itemsOf`). */
 export function prependPage(
   events: readonly ChatEvent[], page: NonNullable<Answered['page']>, gap: (ts: string) => ChatEvent,
 ): ChatEvent[] {
@@ -174,7 +210,7 @@ export function prependPage(
   const fresh = freshOf(held, page.events);
   const below = held[0];
   const marker = page.gap && !(below !== undefined && isGapMarker(below) && fresh.length === 0)
-    ? [gap(below?.ts ?? fresh[fresh.length - 1]?.ts ?? new Date(0).toISOString())]
+    ? [gap(fresh[fresh.length - 1]?.ts ?? below?.ts ?? new Date(0).toISOString())]
     : [];
   if (fresh.length === 0 && marker.length === 0) return events as ChatEvent[];
   return [...head, ...fresh, ...marker, ...held];

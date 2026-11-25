@@ -27,8 +27,8 @@ import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 import { isLocalDivider } from '../session/localDivider';
 import { freshOf } from '../session/eventIdentity';
 import {
-  GAP_PREFIX, NO_PAGING, answerPaging, pagingAsked, pagingOfBacklog, pagingOfDrop, pagingOfRotated, prependPage,
-  requestOf, type OlderPaging,
+  BUSY_PAUSE_MS, GAP_PREFIX, NO_PAGING, answerPaging, pagingAsked, pagingOfBacklog, pagingOfDrop, pagingOfRotated,
+  prependPage, requestOf, retryDue, type OlderPaging,
 } from '../session/olderPages';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
@@ -802,6 +802,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   let stopPageClock: (() => void)[] = [];
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** The timer key of an older page's `busy` retry: not a pending send's key (those are minted by `keySeq`). */
+  const OLDER_RETRY = 'older-page-retry';
 
   /** Arm a deadline for `key`, disarming whatever this key had before.
    *
@@ -958,6 +960,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
             pending: confirmed.pending,
           };
         });
+        // A `busy` answer is asked again on its own, after a pause (fix round 1, A6; `olderPages.ts`, BUSY IS ASKED AGAIN).
+        if (msg.type === 'older-page' && retryDue(get().older)) {
+          arm(OLDER_RETRY, BUSY_PAUSE_MS, () => {
+            timers.delete(OLDER_RETRY);
+            if (retryDue(get().older)) get().loadOlder();
+          });
+        }
       },
 
       connect() {

@@ -45,6 +45,9 @@ vi.mock('react-virtuoso', async () => {
             set: (v: number) => { const at = lay.round ? Math.round(v) : v; if (at !== lay.top) { lay.top = at; lay.owed = true; } },
           });
           Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 });
+          // Virtuoso moves its scroller only through these two (fix round 1, F1: the list notes where each left it).
+          el.scrollTo = ((o: ScrollToOptions) => { el.scrollTop = o.top ?? el.scrollTop; }) as HTMLElement['scrollTo'];
+          el.scrollBy = ((o: ScrollToOptions) => { el.scrollTop += o.top ?? 0; }) as HTMLElement['scrollBy'];
         }
         lay.scroller = el;
         (lay.props!.scrollerRef as (el: HTMLElement | null) => void)(el);
@@ -324,5 +327,29 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     lay.scroller!.scrollTop = 900;
     settle();
     expect(lay.top, 'the settle set back a reader who moved').toBe(900);
+  });
+
+  it('fix round 1, F1: a list that moves with no input event while the page settles (a fling, a thumb dragged) is not set back', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // The finger came down before the page (or none did): only the scroller says the list moved.
+    lay.scroller!.scrollTop = 900;
+    settle();
+    expect(lay.top, 'the settle set back movement no input event announced').toBe(900);
+  });
+
+  it('fix round 1, F1: the list\'s own write while the page settles is not the reader moving: the row is held', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // Virtuoso's own compensation, from its estimates: 300px of the 1,200 the page added.
+    act(() => { lay.scroller!.scrollBy({ top: 300 }); });
+    settle();
+    expect(topOfRow(key), 'the list\'s own write was taken for the reader, and the row was not held').toBeCloseTo(was, 5);
   });
 });

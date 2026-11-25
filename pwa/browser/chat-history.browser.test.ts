@@ -429,6 +429,244 @@ describe('an older server', () => {
   }, 60_000);
 });
 
+// ---- movement the reader's input events cannot see (fix round 1, F1 and A7) -------------------------------------------
+/** Move the scroller by `dy` px over `frames` frames, one step a frame, with no input event: a fling's momentum after the
+ *  finger lifted, or a scrollbar thumb dragged (its pointer moves are not listened to). Resolves with the row at the top
+ *  of the view and where it stood, a frame after the last step. */
+const glide = (page: Page, dy: number, frames: number) => page.evaluate(([d, f]) => new Promise<{ key: string; top: number } | null>((done) => {
+  const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+  let n = 0;
+  const step = (): void => {
+    if (n < f) { s.scrollTop += d / f; n += 1; requestAnimationFrame(step); return; }
+    requestAnimationFrame(() => {
+      const top = s.getBoundingClientRect().top;
+      const row = [...s.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top + 1);
+      done(row === undefined ? null : { key: row.dataset.rowKey!, top: row.getBoundingClientRect().top - top });
+    });
+  };
+  requestAnimationFrame(step);
+}), [dy, frames] as const);
+/** `glide`, started in the first frame the list grows (an older page drawn), after a wheel: the reader moving inside
+ *  the settle. */
+const glideOnGrow = (page: Page, dy: number, frames: number) => page.evaluate(([d, f]) => new Promise<{ key: string; top: number } | null>((done) => {
+  const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+  const from = s.scrollHeight;
+  let n = -1;
+  const step = (): void => {
+    if (n < 0) {
+      if (s.scrollHeight === from) { requestAnimationFrame(step); return; }
+      s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: Math.sign(d) * 100 }));
+      n = 0;
+    }
+    if (n < f) { s.scrollTop += d / f; n += 1; requestAnimationFrame(step); return; }
+    requestAnimationFrame(() => {
+      const top = s.getBoundingClientRect().top;
+      const row = [...s.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top + 1);
+      done(row === undefined ? null : { key: row.dataset.rowKey!, top: row.getBoundingClientRect().top - top });
+    });
+  };
+  requestAnimationFrame(step);
+}), [dy, frames] as const);
+/** Wait until the page's newest message row (the one nearest the rows held) is drawn: the page has landed. */
+async function landed(page: Page, all: Ev[], s: Stream, n: number): Promise<void> {
+  const k = Number(s.asked[n - 1]!.continuation.slice(2));
+  const landing = all.slice(Math.max(0, k - PAGE), k).filter((e) => e.kind === 'user' || e.kind === 'assistant').at(-1)!.uuid as string;
+  await page.waitForSelector(`.chat-scroller [data-row-key="${landing}"]`, { state: 'attached', timeout: 10_000 });
+}
+const reader = (page: Page, type: string) => page.evaluate((t) => {
+  document.querySelector<HTMLElement>('.chat-scroller')!.dispatchEvent(new Event(t, { bubbles: true }));
+}, type);
+
+describe('a settle never sets back movement made after the page landed (fix round 1, F1 and A7)', () => {
+  const PHONE = VIEWS.find((v) => v.width === 390 && v.theme === PHOSPHOR)!;
+  const DESK = VIEWS.find((v) => v.width === 1280 && v.theme === PHOSPHOR)!;
+
+  it(`${named(PHONE)}: a fling whose finger came down before the page landed keeps going where it went`, async () => {
+    const all = transcript(6);
+    const { ctx, page, errors, s } = await open(PHONE, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 40);
+      await waitAsked(s, 1);
+      await reader(page, 'touchstart'); // the finger, before the page
+      s.release();
+      await landed(page, all, s, 1);
+      const end = await glide(page, 360, 14); // the fling's momentum, no input event
+      expect(end).not.toBeNull();
+      await page.waitForTimeout(900);
+      const now = await topOf(page, end!.key);
+      report(`F1 fling, ${named(PHONE)}: the row at the fling's end moved ${now === null ? 'out of reach' : (now - end!.top).toFixed(1)} px after it`);
+      expect(now, 'the row the fling ended on is no longer drawn').not.toBeNull();
+      expect(Math.abs(now! - end!.top), 'the settle set the fling back').toBeLessThanOrEqual(4);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it(`${named(DESK)}: a scrollbar thumb pressed before the page landed, dragged, then held still, stays put`, async () => {
+    const all = transcript(6);
+    const { ctx, page, errors, s } = await open(DESK, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 40);
+      await waitAsked(s, 1);
+      await reader(page, 'pointerdown'); // the button, before the page; its moves are not listened to
+      s.release();
+      await landed(page, all, s, 1);
+      const end = await glide(page, 300, 10);
+      expect(end).not.toBeNull();
+      await page.waitForTimeout(900); // the button still held, the thumb still
+      const now = await topOf(page, end!.key);
+      report(`F1 drag, ${named(DESK)}: the row at the drag's end moved ${now === null ? 'out of reach' : (now - end!.top).toFixed(1)} px after it`);
+      expect(now, 'the row the drag ended on is no longer drawn').not.toBeNull();
+      expect(Math.abs(now! - end!.top), 'the content jumped under the thumb').toBeLessThanOrEqual(4);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it(`${named(DESK)}: Jump to latest pressed while a page is out lands at the foot and stays`, async () => {
+    const all = transcript(6);
+    const { ctx, page, errors, s } = await open(DESK, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 40);
+      await waitAsked(s, 1);
+      await page.locator('.jump-latest').click();
+      await page.waitForTimeout(40); // the smooth scroll under way
+      s.release();
+      await page.waitForTimeout(1500);
+      const at = await scroller(page);
+      report(`F1 jump, ${named(DESK)}: ${(at.height - at.top - at.client).toFixed(1)} px from the foot after the page settled`);
+      expect(at.height - at.top - at.client, 'the settle pulled the view back from the foot').toBeLessThanOrEqual(4);
+      expect(at.pill, 'Jump to latest still shows').toBe(false);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it(`${named(PHONE)}: a reader at the foot when the page came, who then moves up, is not thrown back to the end (A7)`, async () => {
+    const all = transcript(6);
+    const { ctx, page, errors, s } = await open(PHONE, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 40);
+      await waitAsked(s, 1);
+      await scrollList(page, 'bottom');
+      expect((await scroller(page)).pill, 'not back at the foot before the page').toBe(false);
+      // At the foot the page's rows are out of reach, so the list growing says the page came: in that frame the reader
+      // wheels up, inside the settle.
+      const moving = glideOnGrow(page, -300, 10);
+      s.release();
+      const end = await moving;
+      expect(end).not.toBeNull();
+      await page.waitForTimeout(900);
+      const at = await scroller(page);
+      const now = await topOf(page, end!.key);
+      report(`A7, ${named(PHONE)}: ${(at.height - at.top - at.client).toFixed(1)} px from the foot; the row moved ${now === null ? 'out of reach' : (now - end!.top).toFixed(1)} px`);
+      expect(at.height - at.top - at.client, 'the reader was thrown back to the end').toBeGreaterThan(100);
+      expect(now, 'the row the reader moved to is no longer drawn').not.toBeNull();
+      expect(Math.abs(now! - end!.top), 'the reader was moved from where they went').toBeLessThanOrEqual(4);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+});
+
+// ---- a page of calls only, joining the top stretch (fix round 1, F2) ------------------------------------------------------
+/** 40 older calls (pages of calls only), then the backlog: 12 calls opening it, then six long messages. With `failAt`, that
+ *  older call fails, so a closed stretch that takes it gains a failure card. */
+function callsAtTop(failAt?: number): Ev[] {
+  const out: Ev[] = [];
+  let t = Date.parse('2026-11-20T08:00:00.000Z');
+  const ts = (): string => { t += 10_000; return new Date(t).toISOString(); };
+  for (let n = 1; n <= 52; n += 1) {
+    const at = ts();
+    out.push({ kind: 'tool_use', uuid: `ju${n}`, ts: at, toolId: `jt${n}`, name: 'Bash', input: JSON.stringify({ command: `step ${n}` }) });
+    out.push({ kind: 'tool_result', ts: at, toolId: `jt${n}`, text: n === failAt ? 'exit 1: no such file' : 'ok', isError: n === failAt });
+  }
+  for (let n = 1; n <= 6; n += 1) {
+    out.push({ kind: n % 2 === 0 ? 'user' : 'assistant', uuid: `jm${n}`, ts: ts(), text: `Message ${n}: ${'words '.repeat(70)}` });
+  }
+  return out;
+}
+const topStretch = (page: Page) => page.evaluate(() => {
+  const row = document.querySelector<HTMLElement>('.chat-scroller [data-row-key^="activity-"]');
+  return row === null ? null : {
+    key: row.dataset.rowKey!, open: row.querySelector('[aria-expanded]')?.getAttribute('aria-expanded') === 'true',
+    card: row.querySelector('.tool-activity-first') !== null,
+  };
+});
+
+describe('a page of calls only, joining the top stretch, holds the reader (fix round 1, F2)', () => {
+  const PHONE = VIEWS.find((v) => v.width === 390 && v.theme === PHOSPHOR && v.skin === REFINED)!;
+
+  it(`${named(PHONE)}: an open top stretch stays open, and what is read below it does not move`, async () => {
+    const all = callsAtTop();
+    const { ctx, page, errors, s } = await open(PHONE, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 0);
+      const was = await topStretch(page);
+      expect(was, 'no stretch at the top').not.toBeNull();
+      await page.locator(`[data-row-key="${was!.key}"] [aria-expanded]`).click();
+      await page.waitForTimeout(500);
+      await scrollList(page, 120); // reading the open stretch and the turn under it, near the top
+      await waitAsked(s, 1);
+      // The open stretch draws its calls as one run ("Ran 12 commands"), so what is read is the stretch's foot and the
+      // message under it.
+      expect((await topStretch(page))!.open, 'the stretch did not open').toBe(true);
+      const before = await topOf(page, 'jm1');
+      expect(before, 'the message under the stretch is not drawn').not.toBeNull();
+      s.release();
+      await expect.poll(() => s.answered, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+      await page.waitForTimeout(900);
+      const now = await topStretch(page);
+      const after = await topOf(page, 'jm1');
+      report(`F2 open, ${named(PHONE)}: key ${was!.key} -> ${now?.key}, open ${String(now?.open)}, the message under it moved ${after === null ? 'out of reach' : (after - before!).toFixed(1)} px`);
+      expect(now!.key, 'the page did not join the stretch').not.toBe(was!.key);
+      expect(now!.open, 'the open stretch closed across the join').toBe(true);
+      expect(after, 'the message under the stretch is no longer drawn').not.toBeNull();
+      expect(Math.abs(after! - before!), 'what was read moved').toBeLessThanOrEqual(1);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+
+  it(`${named(PHONE)}: a closed top stretch that gains a failure card grows above the reader without moving them`, async () => {
+    const all = callsAtTop(30);
+    const { ctx, page, errors, s } = await open(PHONE, () => all);
+    try {
+      s.hold();
+      await scrollList(page, 120);
+      await waitAsked(s, 1);
+      const was = await topStretch(page);
+      expect(was).toMatchObject({ open: false, card: false });
+      const before = await topOf(page, 'jm1');
+      expect(before, 'the message read is not drawn').not.toBeNull();
+      s.release();
+      await expect.poll(() => s.answered, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+      await page.waitForTimeout(900);
+      const now = await topStretch(page);
+      const after = await topOf(page, 'jm1');
+      report(`F2 closed, ${named(PHONE)}: key ${was!.key} -> ${now?.key}, card ${String(now?.card)}, the message read moved ${after === null ? 'out of reach' : (after - before!).toFixed(1)} px`);
+      expect(now!.key, 'the page did not join the stretch').not.toBe(was!.key);
+      expect(now!.card, 'the failure did not surface: the case did not happen').toBe(true);
+      expect(now!.open).toBe(false);
+      expect(after).not.toBeNull();
+      expect(Math.abs(after! - before!), 'the message being read moved').toBeLessThanOrEqual(1);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+});
+
 describe('measurements (printed)', () => {
   it('the anchored row\'s shift per prepend and the time from the request to painted rows', () => {
     const max = Math.max(...measured.shifts);
