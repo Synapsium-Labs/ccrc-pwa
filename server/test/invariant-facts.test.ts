@@ -10,6 +10,8 @@ import { invariantVerdict, type InvariantInput } from '../src/coord/invariants.j
 import { tx } from '../src/coord/tx.js';
 import { stampReach } from '../src/coord/pushOutboxStore.js';
 import { cancelTimer, insertTimer, markTimersFired } from '../src/continuity/continuityStore.js';
+import { packTimerMail } from '../src/continuity/timers.js';
+import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { GEN1, S1, designateLive, restoreRigHooks, rig, rung } from './overlordRestoreRig.js';
 
@@ -82,6 +84,22 @@ describe('gatherInvariantInput', () => {
     for (const n of ['I2', 'I7', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
   });
 
+  it('a journal that could not be read makes the I7 arm unmeasured, and only it (review 3843 F10)', () => {
+    const db = openDb();
+    const input = gatherInvariantInput(depsOf(db, { readJournal: () => ({ kind: 'unmeasured', why: 'unreadable' }) }));
+    expect(input.facts.I7).toEqual({ kind: 'unmeasured', why: 'the authority journal could not be read' });
+    expect(invariantVerdict('I7', input)).toEqual({ kind: 'unmeasured', why: 'the authority journal could not be read' });
+    for (const n of ['I2', 'I5', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+  });
+
+  it('a malformed journal makes the I7 arm unmeasured with its code, never a fold of what it could read (review 3843 F10)', () => {
+    const db = openDb();
+    const input = gatherInvariantInput(depsOf(db, { readJournal: () => ({ kind: 'malformed', code: 'chain-broken', detail: 'a fixture', lines: 3 }) }));
+    expect(input.facts.I7).toEqual({ kind: 'unmeasured', why: 'the authority journal is malformed: chain-broken' });
+    expect(invariantVerdict('I7', input).kind).toBe('unmeasured');
+    for (const n of ['I2', 'I5', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+  });
+
   it('every read happens in one synchronous span inside a transaction, and the gather writes nothing', async () => {
     const db = openDb();
     const count = (sql: string): number => Number((db.prepare(sql).get() as { n: number }).n);
@@ -126,6 +144,23 @@ describe('gatherInvariantInput', () => {
     expect(tx(db, () => cancelTimer(db, c, 'setter-cancel', 'setter', NOW + 7))).toEqual({ changed: true });
     const v2 = invariantVerdict('I17', gatherInvariantInput(depsOf(db)));
     if (v2.kind === 'violated') expect(v2.findings.map((f) => f.subject)).toEqual([`timer:${bad}`]);
+  });
+
+  it('I17 through the timer lane\'s own mail: a subject cut by the subject limit still holds, since no subject is read (review 3843 F10)', () => {
+    const db = openDb();
+    // Ids of seven digits, so the lane's subject for one mail cuts well before the last id.
+    tx(db, () => { db.prepare('UPDATE continuity_timers SET id = 999999 WHERE id = ?').run(timer(db, 'lane-a')); });
+    const ids = Array.from({ length: 24 }, () => timer(db, 'lane-a'));
+    const due = ids.map((id) => ({ id, setter: 'lane-a', dueAt: NOW + 1000, note: 'n', setAt: NOW, setById: 'lane-a', runId: null, programme: null }));
+    const [first] = packTimerMail(due, NOW + 2000);
+    expect(first!.ids).toEqual(ids);
+    expect(Buffer.byteLength(first!.subject)).toBeLessThanOrEqual(MAIL_SUBJECT_MAX_BYTES);
+    expect(first!.subject).toContain('…');
+    expect(first!.subject).not.toContain(String(ids.at(-1)));
+    const m = Number(db.prepare("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) VALUES (?, 'timer', 'u', 'lane-a', NULL, 'status', ?, ?)")
+      .run(NOW + 2000, first!.subject, first!.body).lastInsertRowid);
+    tx(db, () => markTimersFired(db, first!.ids, m, NOW + 2000));
+    expect(invariantVerdict('I17', gatherInvariantInput(depsOf(db)))).toEqual({ kind: 'holds' });
   });
 
   it('I2 through stampReach: a reach-stamped ask with no bound outbox row is violated', () => {

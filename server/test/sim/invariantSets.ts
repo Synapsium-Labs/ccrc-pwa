@@ -34,8 +34,9 @@ const act = (seq: number, actor: string, over: Partial<SequenceWireLine> = {}): 
 const subjects = (v: Verdict): string[] => (v.kind === 'violated' ? v.findings.map((f) => f.subject) : []);
 const unmeasuredOf = (v: Verdict): string[] => (v.kind === 'violated' || v.kind === 'holds-where-measured' ? v.unmeasured.map((u) => u.subject) : []);
 
-/** The monotonicity property (Review Focus 6): `more` adds an unknown, an unmeasured fact or a `known: false` line to `base`.
- *  It never removes a finding and never turns an arm into `holds`. */
+/** The monotonicity property (Review Focus 6): `more` adds an unknown, an unmeasured fact or a `known: false` line other than a
+ *  designation line to `base`. It never removes a finding and never turns an arm into `holds`. (A designation line this build
+ *  cannot name may turn a violated line unmeasured, the safe direction: its own I5 case, review 3843 F7.) */
 function monotone(base: Verdict, more: Verdict): void {
   for (const s of subjects(base)) expect(subjects(more)).toContain(s);
   if (base.kind !== 'holds') expect(more.kind).not.toBe('holds');
@@ -232,6 +233,13 @@ export function i5Cases(m: M): Record<string, SuiteCase> {
       monotone(run([act(1, 'overlord-b')], { current: { kind: 'bound', sessionId: 'overlord-a' } }),
         run([act(1, 'overlord-b'), line(2, { kind: 'grant', known: false, actorKind: 'unknown' })], { current: { kind: 'bound', sessionId: 'overlord-a' } }));
     },
+    'a designation line this build cannot name, after a violated line, turns it unmeasured, never holds (review 3843 F7)': () => {
+      const bound = { current: { kind: 'bound', sessionId: 'overlord-a' } } as const;
+      expect(subjects(run([act(1, 'overlord-b')], bound))).toEqual(['seq:1']);
+      const v = run([act(1, 'overlord-b'), des(2, 'overlord-b', 'handed', { known: false })], bound);
+      expect(v.kind).toBe('holds-where-measured');
+      expect(unmeasuredOf(v)).toEqual(['seq:1']);
+    },
   };
 }
 
@@ -265,6 +273,10 @@ export function i7Cases(m: M): Record<string, SuiteCase> {
     'a term that differs is violated, either way': () => {
       expect(subjects(run(side({ term: 4 }), side()))).toEqual(['term']);
       expect(subjects(run(side({ term: 2 }), side()))).toEqual(['term']);
+    },
+    'the term and the model class must equal the journal\'s: rows ahead of the journal, and behind it, are violated (review 3843 F3)': () => {
+      expect(subjects(run(side({ term: 4, modelClass: 'opus' }), side({ term: 3, modelClass: 'fable' })))).toEqual(['term', 'modelClass']);
+      expect(subjects(run(side({ term: 2, modelClass: 'fable' }), side({ term: 3, modelClass: 'opus' })))).toEqual(['term', 'modelClass']);
     },
     'the binding: the rows bind and the journal does not, or another session or generation, is violated; the journal binding alone holds': () => {
       expect(subjects(run(side(), side({ binding: null })))).toEqual(['binding']);
@@ -491,7 +503,7 @@ const MOVES_SET = set(findingMovesCases, [
   { id: 'E2 one subject twice in a pass', old: 'if (openKeys.has(key) || seen.has(key)) continue;', new: 'if (openKeys.has(key)) continue;' },
   { id: 'E3 holds resolves nothing', old: "if (v.kind === 'holds') { resolve.push(o.id); continue; }", new: '' },
   { id: 'E4 an unmeasured subject resolves', old: 'if (!still && !unknown) resolve.push(o.id);', new: 'if (!still) resolve.push(o.id);' },
-  { id: 'E5 an unmeasured verdict resolves', old: "if (v.kind !== 'violated' && v.kind !== 'holds-where-measured') continue;", new: '' },
+  { id: 'E5 an unmeasured verdict resolves', old: "if (v.kind !== 'violated' && v.kind !== 'holds-where-measured') continue;", new: "if (v.kind !== 'violated' && v.kind !== 'holds-where-measured') { resolve.push(o.id); continue; }" },
   { id: 'E6 a verdict the pass did not ask resolves', old: '    if (v === undefined) continue;\n', new: "    if (v === undefined) { resolve.push(o.id); continue; }\n" },
   { id: 'E7 the key is the subject alone', old: 'const k = (invariant: string, subject: string): string => `${invariant}\\u0000${subject}`;', new: 'const k = (_invariant: string, subject: string): string => subject;' },
 ]);
