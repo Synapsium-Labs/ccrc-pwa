@@ -1114,6 +1114,19 @@ def _urlopen_through_refusal(req, client_gone):
                 raise _ClientGone(e) from None
 
 
+def _connection_closed(connection) -> bool:
+    """True iff the peer has closed `connection`, by a one-byte peek: see
+    `Handler._client_gone`, which says what it can and cannot see. Also the
+    bridge's hook of the same question (`_run_direct`), so the two share one
+    reader."""
+    try:
+        return connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1143,12 +1156,7 @@ class Handler(BaseHTTPRequestHandler):
         pipelining) cannot be seen to leave, since the peek returns that
         request's bytes, so its old request is still sent when the gateway
         returns. The shim's one real client does not pipeline."""
-        try:
-            return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
-        except BlockingIOError:
-            return False
-        except OSError:
-            return True
+        return _connection_closed(self.connection)
 
     def _refuse(self, status: int, message: str) -> None:
         """Answer ONE refusal shape for the entire file (D-3153): a JSON
@@ -1610,7 +1618,7 @@ def _run_direct() -> int:
 
     return bridge.serve(bridge.config_from_env(os.environ),
                         bridge.Hooks(_read_request_body, _content_encoding, _decode_body,
-                                     _effort_and_output_config, _Server))
+                                     _effort_and_output_config, _Server, _connection_closed))
 
 
 if __name__ == "__main__":
