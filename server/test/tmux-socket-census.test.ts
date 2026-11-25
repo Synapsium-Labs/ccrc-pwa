@@ -82,6 +82,11 @@ const TS_EXCEPTIONS: readonly Exception[] = [
   { file: 'agent/src/testbox/client.ts', has: "probe('tmux', 'tmux', ['-V'])", count: 1, why: '`tmux -V` prints the client\'s version and asks no server' },
   { file: 'agent/src/testboxOp.ts', has: "{ file: 'tmux', args: ['-V'] }", count: 1, why: '`tmux -V` prints the client\'s version and asks no server' },
   {
+    file: 'agent/src/testbox/main.ts', has: "tmuxLauncher('tmux',", count: 1,
+    why: 'the test box\'s build capture runs its build in a tmux server of its own (`-L ccrc-capture`, under the capture\'s own '
+      + 'TMUX_TMPDIR, `captureRunner.ts#tmuxLauncher`), on the test box and never the fleet\'s server, so the fleet\'s socket lookup does not apply',
+  },
+  {
     file: 'ccd/history/cli.mjs', has: "spawnSync('tmux', ['display-message', '-p', '-t', pane, '#S']", count: 1,
     why: 'asks the CALLING pane\'s own server, through the `$TMUX` tmux sets in every pane, which session it is: that '
       + 'question has one right server whatever the setting says. The history tool is installed on its own and cannot '

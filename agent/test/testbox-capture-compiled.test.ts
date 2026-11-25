@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readCaptureRecords } from '../../shared/claudeBuildCapture.js';
 import { ALLOW_REPLY, STATUSLINE_REPLY } from '../src/testbox/captureRecord.js';
+import { compiledRecorder } from '../src/testbox/main.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const agentRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -52,6 +53,10 @@ describe('the compiled recorder, as the box runs it', () => {
   it('lands beside the service\'s main.js', () => {
     expect(existsSync(recorder)).toBe(true);
     expect(existsSync(path.join(path.dirname(recorder), 'main.js'))).toBe(true);
+  });
+
+  it('the entry point names it as its own sibling by the compiled name, which is where it lands (capture runner PR 3b)', () => {
+    expect(compiledRecorder()).toBe(path.join(agentRoot, 'src', 'testbox', path.basename(recorder)));
   });
 
   it('recorderPath() of the compiled module names the compiled file itself', () => {

@@ -6,7 +6,7 @@
 // that names a build.
 import { describe, expect, it } from 'vitest';
 import {
-  CAPTURE_BUILDS_KEPT, CAPTURE_SOCKET, CAPTURE_SOCKET_PATH_MAX, buildsToPrune, captureSocketFits, captureSocketPath, captureTmuxDir,
+  CAPTURE_BUILDS_KEPT, CAPTURE_SOCKET, CAPTURE_SOCKET_PATH_MAX, buildsToPrune, capturedBuildUsable, capturePaths, captureSocketFits, captureSocketPath, captureTmuxDir,
 } from '../src/testbox/capture.js';
 
 const ID = 'f'.repeat(32);
@@ -49,5 +49,26 @@ describe('the builds store keeps the newest builds and those a capture still nee
   });
   it('the production count keeps at least one build', () => {
     expect(CAPTURE_BUILDS_KEPT).toBeGreaterThan(0);
+  });
+});
+
+// Review 3623 (carried by PR 2's note): the build a capture runs is a file of its own (capture.ts#capturedBuildUsable).
+describe('capturedBuildUsable: a regular file, no link, one hard link, at its own real path', () => {
+  const OWN = { regular: true, link: false, links: 1, real: '/r/captures/builds/2.1.100' };
+  it('a file of its own is usable', () => { expect(capturedBuildUsable(OWN, OWN.real)).toBe(true); });
+  it.each([
+    ['unread', null],
+    ['not a regular file', { ...OWN, regular: false }],
+    ['a link (as a reader that follows links would still say)', { ...OWN, link: true }],
+    ['a second hard link', { ...OWN, links: 2 }],
+    ['reached through a link on its path', { ...OWN, real: '/elsewhere/2.1.100' }],
+  ])('%s: not usable', (_n, facts) => { expect(capturedBuildUsable(facts, OWN.real)).toBe(false); });
+});
+
+describe('a capture\'s tmux directory is its socket directory, outside its scratch directory (review 3226 F8)', () => {
+  it('capturePaths names the tmux directory under the given base, never under the box root', () => {
+    const p = capturePaths(`/${'r'.repeat(90)}`, ID, '2.1.100', '/tmp');
+    expect(p.tmux).toBe(captureTmuxDir('/tmp', ID));
+    expect(p.tmux.startsWith(p.dir)).toBe(false);
   });
 });

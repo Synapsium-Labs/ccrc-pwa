@@ -5,15 +5,28 @@
 //
 // A submission is answered with `capture.state` frames: `refused` with its typed reason and sentence (nothing queued), or
 // `queued` with its position, then `running`, then `ended` with the runner's verdict, or with none and why when the
-// runner could not judge (it answered no verdict, or threw). Every answer echoes the submission's build. The standing
-// refusals are judged again when a waiting capture starts (a symlink may have moved while it waited), and a capture that
-// waited too long to answer before the fleet agent stops waiting, by the target timings (`capture.ts#captureStartsLate`,
-// not yet the runner's own), is ended with no verdict and a word, never run (F8).
+// runner could not judge (it answered no verdict, or threw). Every answer echoes the submission's build.
+//
+// THE REFUSAL ORDER, pinned whole by `testbox-capture-desk.test.ts` (review 3226 F9): the role; the build (absent, or not a
+// file the capture may run, `capture.ts#capturedBuildUsable`), before the runner, so a box with no runner still gets its
+// build copied; the runner; the write guard; and last, at queueing, a capture id already used. The standing refusals are
+// judged again when a waiting capture starts (a link may have moved while it waited). A capture that waited too long to
+// answer before the fleet agent stops waiting, by the timing contract the runner itself was built from
+// (`capture.ts#captureStartsLate`), is ended with no verdict and a word, never run (F8). While the box admits no work (a
+// tool sync's takeover, or a drain: gate G2) no capture starts: every waiting one is ended with no verdict and a word,
+// so none is started only to be cut off, and none holds a drain open.
+//
+// After each capture ends, the desk hands the builds still queued to the builds store's prune (`capture.ts#buildsToPrune`
+// decides; the entry point acts), so a build a capture still needs is never removed.
+import path from 'node:path';
 import { CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureStateWord, type CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
-import { CAPTURE_LATE_DETAIL, captureStartsLate, captureWrites, capturePaths } from './capture.js';
+import {
+  CAPTURE_CLOSED_DETAIL, CAPTURE_LATE_DETAIL, CAPTURE_TIMINGS, captureBuildsDir, capturedBuildUsable, captureStartsLate, captureWrites, capturePaths,
+  type BuildFileFacts, type CaptureTimings,
+} from './capture.js';
 import type { CaptureRun } from './captureRunner.js';
 import { writeRefusal, type ProbeRole } from './probes.js';
-import { admit, EMPTY_QUEUE, enqueue, finish, positions, type QueueState } from './queue.js';
+import { admit, cancel, EMPTY_QUEUE, enqueue, finish, positions, type QueueState } from './queue.js';
 
 /** The runner as the desk sees it. */
 export interface CaptureRunnerLike { run(captureId: string, build: string): Promise<CaptureRun> }
@@ -27,14 +40,22 @@ export interface CaptureDeskDeps {
   readonly runner: CaptureRunnerLike | null;
   /** `CCRC_TESTBOX_ROOT`. */
   readonly root: string;
+  /** The service's temporary directory, where each capture's tmux directory goes (`capture.ts#captureTmuxDir`). */
+  readonly tmuxBase: string;
   /** The fleet accounts' config directories, read on each submission. */
   readonly fleetDirs: () => readonly string[];
   /** A path with its symlinks followed. */
   readonly realPath: (p: string) => string;
-  /** Whether the build's file is placed (a regular file). */
-  readonly buildPresent: (file: string) => boolean;
+  /** What the build's file is, read without following a link at it (`capture.ts#BuildFileFacts`); `null` when unread. */
+  readonly buildFacts: (file: string) => BuildFileFacts | null;
   /** The clock a capture's wait in the queue is measured on (default `Date.now`). */
   readonly now?: () => number;
+  /** The timing contract the runner was built from (default `CAPTURE_TIMINGS`). */
+  readonly timings?: CaptureTimings;
+  /** Whether the box admits work now (the tool sync's `admitting`, gate G2); absent, always. */
+  readonly admitting?: () => boolean;
+  /** The builds store's prune, given the builds a capture still needs; absent, nothing. */
+  readonly prune?: (inUse: readonly string[]) => void;
 }
 
 /** The capture's own queue holds one at a time, the probe rule's. */
@@ -58,8 +79,10 @@ export class CaptureDesk {
   /** Check role, build, runner and write guard. A missing build comes first even without a runner, so the server can copy it. */
   private standing(f: CaptureSubmit): CaptureRefusal | null {
     if (this.d.role !== 'test-box') return 'not-test-box';
-    const paths = capturePaths(this.d.root, f.captureId, f.build);
-    if (!this.d.buildPresent(paths.buildFile)) return 'build-absent';
+    const paths = capturePaths(this.d.root, f.captureId, f.build, this.d.tmuxBase);
+    // Only the box root's own path is resolved: a link at `captures`, at `builds` or at the build reads as absent.
+    const realBuild = path.join(captureBuildsDir(this.d.realPath(this.d.root)), f.build);
+    if (!capturedBuildUsable(this.d.buildFacts(paths.buildFile), realBuild)) return 'build-absent';
     if (this.d.runner === null) return 'no-runner';
     const fleet = this.d.fleetDirs().map((x) => this.d.realPath(x));
     // Every path the capture writes passes the probe desk's write guard, judged as it leads.
@@ -78,7 +101,7 @@ export class CaptureDesk {
   submit(f: CaptureSubmit, sink: CaptureSink): void {
     const standing = this.standing(f);
     if (standing !== null) { this.refuse(f, sink, standing); return; }
-    const q = this.used.has(f.captureId) ? null : enqueue(this.queue, { id: f.captureId, session: SESSION, kind: 'probe' });
+    const q = this.used.has(f.captureId) ? null : enqueue(this.queue, { id: f.captureId, session: SESSION, kind: 'capture' });
     if (q === null) { this.refuse(f, sink, 'capture-id-used'); return; }
     this.queue = q;
     this.used.add(f.captureId);
@@ -87,8 +110,17 @@ export class CaptureDesk {
     this.pump();
   }
 
-  /** Start the capture the queue admits (one at a time). */
+  /** Start the capture the queue admits (one at a time); while the box admits no work, end every waiting one instead. */
   private pump(): void {
+    if (!(this.d.admitting?.() ?? true)) {
+      for (const e of this.queue.waiting) {
+        const h = this.held.get(e.id)!;
+        this.answer(h.f, h.sink, 'ended', { detail: CAPTURE_CLOSED_DETAIL });
+        this.held.delete(e.id);
+        this.queue = cancel(this.queue, e.id).state;
+      }
+      return;
+    }
     const { state, started } = admit(this.queue, { runs: CAPTURE_SLOTS, sessionRuns: CAPTURE_SLOTS });
     this.queue = state;
     for (const e of started) {
@@ -101,7 +133,7 @@ export class CaptureDesk {
     const h = this.held.get(captureId)!;
     const standing = this.standing(h.f);
     const runner = this.d.runner;
-    if (standing === null && runner !== null && captureStartsLate(this.now() - h.at)) {
+    if (standing === null && runner !== null && captureStartsLate(this.now() - h.at, this.d.timings ?? CAPTURE_TIMINGS)) {
       // Its verdict would come after the fleet agent stopped waiting: ended with no verdict and the word, never run
       // (review 3226 F8). The decision is `capture.ts#captureStartsLate`'s.
       this.answer(h.f, h.sink, 'ended', { detail: CAPTURE_LATE_DETAIL });
@@ -115,6 +147,9 @@ export class CaptureDesk {
     }
     this.held.delete(captureId);
     this.queue = finish(this.queue, captureId);
+    try { this.d.prune?.([...this.held.values()].map((x) => x.f.build)); } catch (e) {
+      console.warn(`ccrc-testbox: the builds store was not pruned: ${e instanceof Error ? e.message : String(e)}`);
+    }
     this.pump();
   }
 

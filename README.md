@@ -7534,8 +7534,13 @@ nothing, so the row counts no attempt and records why, and the card says that no
 "sent N times". A failed capture stays untrusted and pushes one notice. Child approvals read the record: a child on a build that is not trusted is refused `version-unverified`, with
 `trust` naming why (`not-captured`, `capture-queued`, `capture-failed`, `unread` or `record-unreadable`). The card lists
 every build with its verdict, under the rest at every width. A failed build carries its replay output behind a disclosure
-and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box-side capture runner is not built yet
-(plan `docs/superpowers/plans/2026-11-11-new-build-capture.md`, Open), so every new build stays queued until it lands.
+and **Capture again** (`POST /api/testbox/builds/capture`, the operator's). The box captures a build with no credential,
+no new egress and no model spend (spec `docs/superpowers/specs/2026-11-22-build-capture-runner-design.md`): the build runs
+in a scratch home of its own, through a tmux server of its own, against a scripted stand-in model on the capture's
+loopback, and the replay of what it recorded is the verdict. A box that holds no copy of the build answers `build-absent`;
+the server then copies the fleet host's own copy of that build over the admin lane, checked by hash at both ends, and sends
+the job again, so nothing downloads a build. One capture runs at a time, none starts while the box admits no work (a tool
+sync's takeover or a drain), and a fault of the box is never a failed verdict: the build stays queued.
 
 **The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
 **ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
