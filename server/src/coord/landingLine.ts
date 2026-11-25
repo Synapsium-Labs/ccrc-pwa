@@ -56,8 +56,10 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
     const word = storedWord(x);
     return word !== null && word !== 'unrecognised' && word !== 'withdrawn' && LANDING_ENTRY_TERMINAL[word] === true;
   };
+  // A display `withdrawn` target is outstanding here; a stored one behind a display `unknown` is outstanding because
+  // `settled` never settles it. Each rule is the one thing that holds its case.
   const outstanding = new Set(entries.filter((x) => ((x.state === 'pinned' || x.state === 'ejected' || x.state === 'unknown') && !settled(x))
-    || withdrawn(x)).map((x) => x.id));
+    || x.state === 'withdrawn').map((x) => x.id));
   const withdrawnTargets = new Map(entries.filter(withdrawn).map((x) => [x.id, x.pr] as const));
   const taken = new Set<number>();
   const order: LandingEntry[] = [];
