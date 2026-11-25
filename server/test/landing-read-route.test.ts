@@ -362,12 +362,14 @@ describe('GET /api/landing with sign-in armed (5j-a, D-9048)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  const armed = async (over: Partial<Deps> = {}): Promise<FastifyInstance> => {
+  const armed = async (over: Partial<Deps> = {}, seed?: (db: DatabaseSync) => void): Promise<FastifyInstance> => {
     const home = mkTmp('ccrc-landing-read-armed-');
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST, 1)}\n`, { mode: 0o600 });
     const dbPath = path.join(home, '.ccrc', 'coord.db');
-    const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
+    const db = openCoordDb(dbPath);
+    seed?.(db);
+    const coord = landingStoreOver(db, dbPath);
     const base = testDeps(home);
     return buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, mailToken: TOKEN, coord, ...over });
   };
@@ -403,6 +405,26 @@ describe('GET /api/landing with sign-in armed (5j-a, D-9048)', () => {
       expect(typeof body.verdict).toBe('string');
       expect(body.detail).toBe('GET /api/landing takes a session cookie OR the box token (x-ccrc-mail-token); ccrc-api reads it cookieless from the fleet host');
       await app.close(); app = undefined;
+    }
+  });
+
+  // Fix round 1, R3: the dark case this wave inverted asserted that the 401 answers nothing of the line, with an entry in
+  // it. That assertion comes back here, armed: one entry is seeded, a credentialed read of the same app shows it (so the
+  // negative below is not vacuous), and the 401 carries no part of it.
+  it('neither, with an entry in the line: the 401 answers nothing of the line', async () => {
+    const E: LandingEntry = { id: 1, project: 'project-a', pr: 11, pinnedSha: 'a'.repeat(40), handoffCommit: 'b'.repeat(40), runId: null,
+      state: 'pinned', baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false,
+      setBy: 'lane-a-project-a', pinnedAt: 1_000 };
+    app = await armed({}, (db) => seedEntry(db, E));
+    const shown = await read(app, '?project=project-a', tok);
+    expect(shown.statusCode, shown.body).toBe(200);
+    expect((shown.json() as LandingLineView).entries.map((e) => e.pr)).toEqual([11]);
+    expect(shown.body).toContain('a'.repeat(40));
+    const res = await read(app, '?project=project-a', {});
+    expect(res.statusCode, res.body).toBe(401);
+    expect(Object.keys(res.json() as Record<string, unknown>).sort()).toEqual(['detail', 'error', 'ok', 'verdict']);
+    for (const part of ['a'.repeat(40), 'b'.repeat(40), 'lane-a-project-a', '"entries"', '"order"', '"pr"']) {
+      expect(res.body, part).not.toContain(part);
     }
   });
 
