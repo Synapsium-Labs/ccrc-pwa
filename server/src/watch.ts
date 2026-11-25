@@ -8978,10 +8978,9 @@ export class FleetWatcher {
         // mail branch); every other mail is the id-agnostic line above, as before.
         const origin = store.mailOrigin(d.mailId);
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
-        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
-        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
-        // The Overlord's timer line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
-        if (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); })) continue;
+        // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
+        // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
