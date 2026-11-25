@@ -442,12 +442,35 @@ describe('gatherCardFacts: the notes and the checkpoint (the notes piece, Task 3
 
 describe('gatherCardFacts: the pending timers (the timers piece, plan w1a-timers.md Task 10)', () => {
   const set = (c: CoordStore, setter: string, dueAt: number, note: string, over: { runId?: number | null; programme?: string | null } = {}): number => {
-    const r = c.insertTimer({ setter, setterIncarnation: INC, setById: setter, setByUuid: 'u', role: 'worker', note,
+    const r = c.insertTimer({ setRestoreGeneration: null, setter, setterIncarnation: INC, setById: setter, setByUuid: 'u', role: 'worker', note,
       runId: over.runId ?? null, programme: over.programme ?? null, setAt: NOW - 60_000, dueAt });
     if (!r.ok) throw new Error(r.kind);
     return r.id;
   };
   const LONG = `${'word '.repeat(30)}and the end of a long note`;
+
+  // The Overlord's timers (W1, plan w1-overlord-timers.md Task 4): the card's timers key by the session's identity.
+  const bound = (sessionId: string, pendingRebind: string | null = null): DesignationRead => ({ kind: 'designated', sessionId, term: 5, row: {
+    bound: { sessionId, generation: 'g1' }, pending: pendingRebind === null ? null : { sessionId: pendingRebind, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null },
+    term: 5, designatedTerm: 5, model: 'opus', accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] } });
+  it("the bound session's card lists the role's pending timers; a rebind's pending body and a coordinator list their own", async () => {
+    const c = store();
+    const roleTimer = set(c, 'overlord', NOW + 600_000, 'the role');
+    const mine = set(c, ME, NOW + 600_000, 'mine');
+    const theirs = set(c, OTHER, NOW + 600_000, 'theirs');
+    c.designationRead = () => bound(ME);
+    expect(value((await gather(c)).facts.timers).map((t) => t.id)).toStrictEqual([roleTimer]);
+    c.designationRead = () => bound('lane-z-project-a', ME);
+    expect(value((await gather(c)).facts.timers).map((t) => t.id), 'a rebind body keeps its own id').toStrictEqual([mine]);
+    c.designationRead = () => bound(ME);
+    expect(value((await gatherCardFacts(deps(c), OTHER, NOW)).facts.timers).map((t) => t.id), 'another session').toStrictEqual([theirs]);
+  });
+  it('an unmeasured designation makes the timers fact unmeasured, never another identity\'s list', async () => {
+    const c = store();
+    set(c, ME, NOW + 600_000, 'mine');
+    c.designationRead = () => ({ kind: 'unmeasured', why: 'x' });
+    expect((await gather(c)).facts.timers).toEqual({ kind: 'unmeasured', what: 'your pending timers' });
+  });
 
   it('the session\'s own pending timers, oldest due first, each with timerPreview\'s preview; others\' and moved ones are not read', async () => {
     const c = store();

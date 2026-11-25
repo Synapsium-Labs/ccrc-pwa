@@ -4,7 +4,8 @@ import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js
 import { OPERATOR_MESSAGE_SENDER, isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeBody } from '../../../shared/operatorMessages.js';
 import { squash } from '../../../shared/whitespace.js';
 import { SPOT_PROBE_SUBJECT } from '../continuity/renewalFeed.js';
-import type { DesignationFact } from '../roleOf.js';
+import { OVERLORD_IDENTITY, type DesignationFact } from '../roleOf.js';
+import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import {
   isInboxWakeMail, readInboxWakeBody, renderInboxWakeLine, renderSpotProbeLine,
 } from '../../../shared/overlordInbox.js';
@@ -245,23 +246,47 @@ export function renderOperatorMessageNudge(id: number): string {
  *  `resumeRuleOf`, from the mail and the mail pass's clock (read once at the pass's start, so at most one pass before typing); `firstDelivery` is what the first delivery moves besides the delivery's
  *  ack: the operator message's `delivered`, or nothing. */
 export interface FixedLineMailRow {
-  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake';
-  readonly matches: (m: { readonly fromId: string; readonly subject: string }) => boolean;
+  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake' | 'timer';
+  /** `mailToId` is the MAIL ROW's recipient (a role's word, kept on the row), never the delivery's session (Overlord W1). */
+  readonly matches: (m: { readonly fromId: string; readonly subject: string; readonly mailToId?: string }) => boolean;
   readonly designatedOnly: boolean;
   readonly line: (m: { readonly subject: string; readonly body: string }, now: number) => string;
   readonly firstDelivery: 'message-delivered' | 'none';
+  /** True when the row's delivery waits until the designated session's live generation has read its card (C62; the timer row
+   *  only): while it holds, nothing is typed and no attempt is spent. */
+  readonly waitsForCard: boolean;
 }
 export const FIXED_LINE_MAIL: readonly FixedLineMailRow[] = [
   // Only the designated session is ever sent an operator message, so its row needs no designation.
-  { name: 'operator-message', matches: isOperatorMessageMail, designatedOnly: false, firstDelivery: 'message-delivered',
+  { name: 'operator-message', matches: isOperatorMessageMail, designatedOnly: false, firstDelivery: 'message-delivered', waitsForCard: false,
     line: (m) => renderOperatorMessageNudge(operatorMessageIdOf(m.subject)!) },
   // The renewal act's spot-probe notice names `ccrc-api probe`, which the Overlord cannot run; a coordinator keeps the notice's own text.
   { name: 'spot-probe', matches: (m) => m.fromId === OPERATOR_MESSAGE_SENDER && m.subject === SPOT_PROBE_SUBJECT, designatedOnly: true, firstDelivery: 'none',
-    line: () => renderSpotProbeLine() },
+    line: () => renderSpotProbeLine(), waitsForCard: false },
   // The time left is read at the mail pass's clock, taken once at the pass's start (at most one pass before typing), never at queueing.
-  { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none',
+  { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none', waitsForCard: false,
     line: (m, now) => renderInboxWakeLine(readInboxWakeBody(m.body), now) },
+  // The Overlord's timers (W1): the timer lane's mail to the role, matched on the MAIL ROW's recipient, so a session-keyed
+  // timer mail keeps the generic nudge. The Overlord has no mail verb: the line names its timer list door, and waits for the card.
+  { name: 'timer', matches: (m) => m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY, designatedOnly: true,
+    firstDelivery: 'none', waitsForCard: true, line: (m) => renderTimerFiredLine(m.subject) },
 ];
+
+/** The fixed line of the role's timer mail (Overlord W1, question 3): the mail nudge's head, then how many timers came due,
+ *  read from the subject's `timer: <n> due` (an unreadable subject types the line without the count), and the door that reads
+ *  them. No `ccrc-api`, no mail verb, and no part of a note. */
+export function renderTimerFiredLine(subject: string): string {
+  const n = /^timer: ([1-9][0-9]*) due/.exec(subject)?.[1];
+  return `${INJECTED_PROMPTS['mail-nudge'].text} ${n === undefined ? 'Your timers' : `${n} of your timers`} came due: read them with your timer list door.`;
+}
+
+/** The hold of a `waitsForCard` row (C62: "for the Overlord it also waits until that generation has read its card"): the card
+ *  fact gates B's step 8 reads (`cardFactFrom`), delivered only once it reads current. */
+export function cardHoldVerdict(card: 'read-current' | 'read-stale' | 'none' | { readonly kind: 'unmeasured'; readonly why: string }):
+  { readonly deliver: true } | { readonly deliver: false; readonly why: 'card-unread' | 'unmeasured' } {
+  if (card === 'read-current') return { deliver: true };
+  return { deliver: false, why: typeof card === 'object' ? 'unmeasured' : 'card-unread' };
+}
 
 /** The designation as the mail sweep read it once for its pass. */
 export type SweepDesignation = { readonly kind: 'designated'; readonly sessionId: string } | { readonly kind: 'not-designated' } | { readonly kind: 'unmeasured' };
@@ -275,7 +300,7 @@ export function sweepDesignationOf(d: DesignationFact | 'unmeasured'): SweepDesi
 /** The table's row for a mail, or 'generic'. A `designatedOnly` row answers only for a mail to the designated session, and
  *  never under an `unmeasured` designation. */
 export function fixedLineMailOf(
-  m: { readonly fromId: string; readonly subject: string; readonly toId: string }, designated: SweepDesignation,
+  m: { readonly fromId: string; readonly subject: string; readonly toId: string; readonly mailToId?: string }, designated: SweepDesignation,
 ): FixedLineMailRow | 'generic' {
   const row = FIXED_LINE_MAIL.find((r) => r.matches(m));
   if (row === undefined) return 'generic';
@@ -289,6 +314,8 @@ export interface MailNudge {
   readonly line: string;
   readonly operatorMessageId: number | null;
   readonly firstDelivery?: 'none';
+  /** Set for a row that waits for the designated session's card (the timer row): the lane asks `cardHoldVerdict` first. */
+  readonly waitsForCard?: true;
 }
 
 /** The line the mail lane types for one due delivery. A mail the table names types its own fixed line; every other mail types the
@@ -296,13 +323,15 @@ export interface MailNudge {
  *  store. `designated` is the sweep's one designation read (default: none designated) and `now` the mail pass's clock, read once at its start. Pure: it
  *  decides nothing about delivery. */
 export function mailNudgeOf(
-  toId: string, origin: { readonly fromId: string; readonly subject: string; readonly body?: string } | null,
+  toId: string, origin: { readonly fromId: string; readonly subject: string; readonly body?: string; readonly toId?: string } | null,
   designated: SweepDesignation = { kind: 'not-designated' }, now = 0,
 ): MailNudge {
-  const row = origin === null ? 'generic' : fixedLineMailOf({ ...origin, toId }, designated);
+  // `toId` is the delivery's session; the origin's `toId` is the mail row's recipient, which the table matches as `mailToId`.
+  const row = origin === null ? 'generic' : fixedLineMailOf({ fromId: origin.fromId, subject: origin.subject, mailToId: origin.toId, toId }, designated);
   if (origin === null || row === 'generic') return { line: renderMailNudge(toId), operatorMessageId: null };
   const line = row.line({ subject: origin.subject, body: origin.body ?? '' }, now);
-  return row.firstDelivery === 'message-delivered' ? { line, operatorMessageId: operatorMessageIdOf(origin.subject) } : { line, operatorMessageId: null, firstDelivery: row.firstDelivery };
+  if (row.firstDelivery === 'message-delivered') return { line, operatorMessageId: operatorMessageIdOf(origin.subject) };
+  return { line, operatorMessageId: null, firstDelivery: row.firstDelivery, ...(row.waitsForCard ? { waitsForCard: true as const } : {}) };
 }
 
 /** One due delivery of a fixed line whose first delivery moves nothing but the ack (`firstDelivery: 'none'`), already delivered

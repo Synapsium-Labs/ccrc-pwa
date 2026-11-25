@@ -20,6 +20,7 @@ import { effectiveGeneration, type CardReadRead, type GenRow, type GenerationsRe
 import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
+import { cardHoldVerdict } from './envelope.js';
 import {
   callerStandingOf, cardFactFrom, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
   type CallerStanding, type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
@@ -120,6 +121,22 @@ export function callerGenerationOf(
     generation = { kind: 'unmeasured', why: gens.detail };
   }
   return { gens, fact, live, generation };
+}
+
+/** The timer line's card hold (Overlord W1, the Overlord's timers; C62): the live generation of `identity` (the designated
+ *  session's, `identityOf`) among the sweep's one generations read, its card read mapped by the gate's own `cardFactFrom` and
+ *  judged by `cardHoldVerdict`. A hold's reason is logged once when it changes, and read again next sweep. */
+let timerHoldLogged: string | null = null;
+export function timerLineHold(gens: GenerationsRead, identity: string, cardRead: (startId: number) => CardReadRead,
+                              log: (line: string) => void): boolean {
+  const live = gens.ok ? gens.rows.find((g) => g.identity === identity) ?? null : null;
+  const card = !gens.ok ? { kind: 'unmeasured' as const, why: gens.detail }
+    : live === null ? 'none' as const : cardFactFrom(attempt<CardReadRead>(() => cardRead(live.startId), (detail) => ({ ok: false, detail })));
+  const hold = cardHoldVerdict(card);
+  const why = hold.deliver ? null : typeof card === 'object' ? `${hold.why}: ${card.why}` : hold.why;
+  if (why !== null && why !== timerHoldLogged) log(`ccrc-server: the timer line to the Overlord holds: ${why}`);
+  timerHoldLogged = why;
+  return hold.deliver;
 }
 
 /** Step 1's reads: the designation, then the incarnation only for the bound or a pending designate id, and the launch profile

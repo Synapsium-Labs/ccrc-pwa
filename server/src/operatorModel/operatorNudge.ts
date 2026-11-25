@@ -16,7 +16,7 @@ export interface OperatorNudge extends MailNudge {
  *  sweep's one designation read and `now` the mail pass's clock, read once at its start (the wake's time left, at most one pass before typing). */
 export async function operatorNudgeFor(
   readBox: (sessionId: string) => Promise<string | null>, toId: string,
-  origin: { readonly fromId: string; readonly subject: string; readonly body?: string } | null,
+  origin: { readonly fromId: string; readonly subject: string; readonly body?: string; readonly toId?: string } | null,
   designated: SweepDesignation, now: number,
 ): Promise<OperatorNudge> {
   const nudge = mailNudgeOf(toId, origin, designated, now);

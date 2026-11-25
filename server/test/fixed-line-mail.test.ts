@@ -4,7 +4,7 @@
 // `overlord-inbox-wake-lane.test.ts`.
 import { describe, expect, it } from 'vitest';
 import * as envelope from '../src/coord/envelope.js';
-import { fixedLineMailOfCases, sweepDesignationOfCases } from './sim/fixedLineMailSets.js';
+import { cardHoldVerdictCases, fixedLineMailOfCases, sweepDesignationOfCases, timerLineCases } from './sim/fixedLineMailSets.js';
 import {
   FIXED_LINE_MAIL, mailNudgeOf, renderMailNudge, renderOperatorMessageNudge, resumeRuleOf,
 } from '../src/coord/envelope.js';
@@ -20,6 +20,10 @@ const wakeBody = renderInboxWakeBody({ keys: ['probe-round:r1'], waiting: 3, fir
 
 describe('fixedLineMailOf: the table\'s row for a mail, or generic', () => {
   for (const [name, run] of Object.entries(fixedLineMailOfCases(envelope))) it(name, run);
+});
+
+describe('the Overlord\'s timer line and its card hold (Overlord W1, the timers)', () => {
+  for (const [name, run] of Object.entries({ ...timerLineCases(envelope), ...cardHoldVerdictCases(envelope) })) it(name, run);
 });
 
 describe('sweepDesignationOf: the sweep\'s designation read as the table takes it', () => {

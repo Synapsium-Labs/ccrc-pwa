@@ -233,11 +233,11 @@ import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
-import type { overlordReadGate } from './coord/overlordGateRun.js';
+import { timerLineHold, type overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
-import { roleFactsOf, roleOf } from './roleOf.js';
+import { identityOf, roleFactsOf, roleOf } from './roleOf.js';
 import { DesignationEpisode } from './continuity/designationEpisode.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
@@ -6471,8 +6471,12 @@ export class FleetWatcher {
                     names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
+    // The Overlord's timers (W1): the authority guard's state and the restore generation, through the lane's own ports.
+    const guard = this.deps.overlordAuthorityGuard; const restore = this.deps.overlordRestore;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
-      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+      registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line),
+      authority: () => (guard?.state().kind === 'coherent' ? 'coherent' : 'not-coherent'),
+      restoreGeneration: () => restore?.restoreGeneration() ?? { kind: 'unmeasured' } }, timerListingOf(records, listedIds, listedAt, names)));
   }
 
   /** The sequence's retention lane (Overlord §10.4, Table 11.5b; `coord/sequenceRetentionLane.ts`): one prune pass. */
@@ -8974,6 +8978,8 @@ export class FleetWatcher {
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
         // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1).
         if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge)) continue;
+        // The Overlord's timer line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
+        if (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); })) continue;
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
