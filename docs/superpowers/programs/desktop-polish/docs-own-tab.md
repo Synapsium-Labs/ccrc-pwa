@@ -280,13 +280,16 @@ Tests from an independent review of the merged head; no change under `pwa/src`.
 
 | Added | Where | Red first |
 |---|---|---|
-| The fold's fall: a narrow Docs tab that went Back to the console, then opened a document in the app, is the console; the mutation table's line names it | `docs-own-tab.test.tsx` (sent to its claim's holder as a packet first) | with `App`'s `if (docsSoFar && !docsTab) setDocsSoFar(false)` removed: that case red by name, the other 43 green |
+| The fold's fall: a narrow Docs tab that went Back to the console, then opened a document in the app, is the console; the mutation table's line names it | `docs-own-tab.test.tsx` (a packet to its holder, applied on its yes) | with `App`'s `if (docsSoFar && !docsTab) setDocsSoFar(false)` removed: that case red by name, the other 43 green |
 | The shared teardown clears the tab's store (`sessionStorage`) after every case | `pwa/test/setup.ts` | below |
 | A Docs address loaded first and a throwing reader: a Docs tab (asserted), its own boundary's fallback and its link back | `app-docs-boundary.test.tsx` | with the Docs tab branch's `RenderBoundary` removed: this case and the reset case red by name; with the teardown's clear removed: this case red by name (it ran as the console) |
-| The harness's console mark guards itself: a page opened with it is not a Docs tab, asserted at `phone-bar`'s opener | `pwa/browser/phone-bar.browser.test.ts` | see the wave-done |
-| `phone-bar`'s Docs tab case asserts the head's top, which it computed and never read | the same file | not a guard |
-| The ruled header at 1280 in a Docs tab: the action words shown, the bar at the top and a tap tall, the head's gutters equal and the gap under the bar the same gutter | `docs-compact-head.browser.test.ts` (a packet to its holder) | see the wave-done |
+| The harness's console mark guards itself: a page opened with it is not a Docs tab, asserted at `phone-bar`'s opener | `pwa/browser/phone-bar.browser.test.ts` | with the harness's `sessionStorage.setItem` of the mark removed (`browser/app.ts`): the 8 console cases that load a Docs address red at the opener, by name, with its message |
+| `phone-bar`'s Docs tab case asserts the head's top, which it computed and never read: measured 8 with the Docs screen at 0, the screen's own inset, so the case reads the inset rather than pinning a number | the same file | not a guard; a first draft asserting 0 was red in Chrome, at 360 and 390 in both skins |
+| The ruled header at 1280 in a Docs tab: the action words shown, the bar at the top and a tap tall, the head's gutters equal and the gap under the bar the same gutter | `docs-compact-head.browser.test.ts` (a packet to its holder, applied on its yes) | not run against a mutant; green in Chrome, both skins, mouse and coarse pointer |
 | Comments made true: `docs-own-tab.browser.test.ts`'s header (no link back below the desk width), `reader-frame`'s Docs tab comment | those files | none |
+
+The whole pwa jsdom suite with the teardown change: no case went red (no case was passing only because of the leak);
+`app-docs-boundary`'s reset case now runs as a Docs tab whatever ran before it, and passes there too.
 
 Unmeasured still: the title's figure in a Docs tab at 1280 (section 6); focus and scroll across the desk width (section 9).
 
