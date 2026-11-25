@@ -332,18 +332,20 @@ describe('POST /api/runs/:id/reclaim — the heir may be of any project (D-5298,
     const home = mkTmp('ccrc-attr-');
     seedFleet(home);
     seed(home, 'project-c-blank-moor', '');
-    const dead = 'project-a-gone-dusk';
     const w = await openApp(home); app = w.app;
     // Runs whose claimant has no registry row: the reclaim door's own
     // "registry-absent" dead claimant (reclaim.ts's rung 4). One programme per
     // heir, so the first admission leaves the second programme's claimant dead.
-    const open = (program: string): number => {
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme,
+    // so each programme's dead claimant is its own session.
+    const open = (program: string, dead: string): number => {
       const opened = w.coord.openRun({ program, title: 'Wave one', project: 'project-a',
         wave: 1, waveOf: 1, claimedBy: dead, kind: 'work', reviews: null });
-      if (!('id' in opened)) throw new Error('fixture: the run must open');
+      if (!('id' in opened)) throw new Error(`fixture: the run must open: ${JSON.stringify(opened)}`);
       return opened.id;
     };
-    const [a, b, c] = [open('program-a'), open('program-b'), open('program-c')];
+    const [a, b, c] = [open('program-a', 'project-a-gone-dusk'), open('program-b', 'project-a-gone-dawn'),
+      open('program-c', 'project-a-gone-noon')];
     const blank = await app.inject({ method: 'POST', url: `/api/runs/${c}/reclaim`, payload: { claimedBy: 'project-c-blank-moor' } });
     expect([blank.statusCode, blank.json()]).toMatchObject([409, { ok: false, refused: 'project-mismatch' }]);
     const foreign = await app.inject({ method: 'POST', url: `/api/runs/${a}/reclaim`, payload: { claimedBy: FOREIGN } });

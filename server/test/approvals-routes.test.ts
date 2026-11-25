@@ -515,9 +515,9 @@ describe('the claimant rule (D-5530, D-5531): held for the run\'s attributed cla
   it('a run with no claimant: run-unclaimed; journaled unattributed, or unstamped: run-unattributed; an unmeasurable parent: parent-unmeasured — each released, no mail', async () => {
     const cases: [string, (fx: Approvals) => void, string][] = [
       ['unclaimed', (fx) => { fx.child(CHILD2, fx.run(null, CHILD2)); }, 'run-unclaimed'],
-      ['unattributed', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2, { unattributed: true, program: 'prog-u' })); }, 'run-unattributed'],
-      ['unstamped', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2, { coordProject: null, program: 'prog-s' })); }, 'run-unattributed'],
-      ['unmeasurable', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2, { program: 'prog-m' })); fx.unmeasured.add(PARENT); }, 'parent-unmeasured'],
+      ['unattributed', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2, { unattributed: true })); }, 'run-unattributed'],
+      ['unstamped', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2, { coordProject: null })); }, 'run-unattributed'],
+      ['unmeasurable', (fx) => { fx.child(CHILD2, fx.run(PARENT, CHILD2)); fx.unmeasured.add(PARENT); }, 'parent-unmeasured'],
     ];
     for (const [name, setup, reason] of cases) {
       const fx = await standardFixture();

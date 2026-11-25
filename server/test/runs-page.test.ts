@@ -21,11 +21,14 @@ let app: FastifyInstance | null = null;
 afterEach(async () => { await app?.close(); app = null; vi.restoreAllMocks(); });
 
 let n = 0;
-/** One run in a programme of its own (closing a programme's last run retires it), dispatched onto `sess-<n>`. */
+/** Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, and a programme whose last run closes stays
+ *  live (D-51's retirement is gone), so every run here is the next wave of COORD's one programme. */
+const PROGRAM = 'runs-page';
+/** One run, wave `<n>` of `PROGRAM`, dispatched onto `sess-<n>`. */
 const dispatched = (coord: CoordStore): number => {
   n += 1;
-  const program = `runs-page-${n}`;
-  const r = coord.openRun({ program, title: 'Runs page', project: 'project-a', wave: 1, waveOf: 1, claimedBy: COORD }) as { id: number };
+  const r = coord.openRun({ program: PROGRAM, title: 'Runs page', project: 'project-a', wave: n, waveOf: null, claimedBy: COORD });
+  if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
   const slug = `sess-${n}`;
   coord.dispatchRun({
     runId: r.id, sessionId: `project-a-${slug}`, workspace: slug, branch: `ws/${slug}`, resumed: false, clearedAt: null, items: [],
@@ -35,8 +38,7 @@ const dispatched = (coord: CoordStore): number => {
 /** A dispatched run closed `done`, its `closedAt` pinned to `closedAt`. */
 const closed = (coord: CoordStore, closedAt: number): number => {
   const id = dispatched(coord);
-  const program = `runs-page-${n}`;
-  expect(coord.closeRun({ runId: id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program, viaClosing: true }).ok).toBe(true);
+  expect(coord.closeRun({ runId: id, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: PROGRAM, viaClosing: true }).ok).toBe(true);
   coord.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(closedAt, id);
   return id;
 };
@@ -193,10 +195,9 @@ describe('page one keeps a long-lived run that closed after newer ones (console 
   it('a run closed recently with an old id is on page one', async () => {
     const h = await harness();
     const old = dispatched(h.coord); // id 1: opened first, closes last
-    const oldProgram = `runs-page-${n}`;
     const newer: number[] = [];
     for (let i = 0; i < 55; i += 1) newer.push(closed(h.coord, T_OPEN + i * 1_000));
-    expect(h.coord.closeRun({ runId: old, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: oldProgram, viaClosing: true }).ok).toBe(true);
+    expect(h.coord.closeRun({ runId: old, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: PROGRAM, viaClosing: true }).ok).toBe(true);
     h.coord.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(T_OPEN + 999_000, old);
     const page = await getPage(h.app, '/api/runs?closed=1&limit=50');
     // The newest 50 closed by id are 7..56; run 1 closed after all of them, so it rides page one as an extra.

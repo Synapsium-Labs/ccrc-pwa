@@ -30,7 +30,7 @@ const store = () => {
   const programs = new Map<number, string>();
   const open = (o: { readonly sessionId?: string; readonly claimedBy?: string } = {}): number => {
     const program = `w9-hold-${programs.size + 1}`;
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: o.claimedBy ?? 'demo-coord' });
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: o.claimedBy ?? `demo-coord-${programs.size + 1}` });   // one coordinator per programme (R11)
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     programs.set(r.id, program);
     if (o.sessionId !== undefined) coord.bindSession(r.id, o.sessionId);

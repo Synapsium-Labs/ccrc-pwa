@@ -1841,7 +1841,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it('two saves for programmes whose slugs differ only by case, at once: one is stored, the other secret-name-collides', async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const lower = raiseSecret(r, 'api-key', 'prog-a');
     const upper = raiseSecret(r, 'api-key', 'Prog-A');
     // The first save's programme directory waits for a gate: its case check is done, its directory not yet made.
@@ -1871,7 +1871,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it('two saves for programmes whose slugs differ only by case, of different slots, at once: one is stored, the other secret-name-collides', async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const lower = raiseSecret(r, 'slot-x', 'prog-a');
     const upper = raiseSecret(r, 'slot-y', 'Prog-A');
     let open!: () => void;
@@ -1927,7 +1927,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it("Remove deletes a programme directory it leaves empty, and the case collision with it clears", async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const upper = raiseSecret(r, 'api-key', 'Prog-A');
     expect((await save(r, upper, mark())).statusCode).toBe(200);
     const lower = raiseSecret(r, 'api-key', 'prog-a');

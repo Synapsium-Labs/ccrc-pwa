@@ -22,7 +22,9 @@ describe('CoordStore.openRunsClaimedBy', () => {
     const a = open(s, 'lifecycle', 1);
     const b = open(s, 'lifecycle', 2);
     const other = open(s, 'elsewhere', 1, 'another-coordinator');
-    const closed = open(s, 'over', 1);
+    // Programme lifecycle W1 (R11): one session opens one programme; an older build's claim in a second is written here.
+    const closed = open(s, 'over', 1, 'over-opener');
+    s.db.prepare("UPDATE runs SET claimedBy = 'demo-coordinator' WHERE id = ?").run(closed);
     expect(s.advance(closed, 'failed', 'test-close').ok).toBe(true);
     expect(openRunsClaimedBy(s, 'demo-coordinator')).toEqual({
       ok: true,

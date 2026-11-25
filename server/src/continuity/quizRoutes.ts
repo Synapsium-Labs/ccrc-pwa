@@ -282,7 +282,7 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     const attributed = await deps.attribute(fromId, fromUuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
     try {
-      if (!coord.claimsProgramme(fromId, QUIZ_ITEM_PROGRAMME)) {
+      if (!coord.claimsProgramme(fromId, QUIZ_ITEM_PROGRAMME, fromUuid)) {
         return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${fromId} holds no open run of programme ${QUIZ_ITEM_PROGRAMME}` });
       }
     } catch (e) {

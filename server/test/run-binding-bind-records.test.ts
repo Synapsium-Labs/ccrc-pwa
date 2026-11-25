@@ -34,8 +34,12 @@ const OLD = 1_700_000_000_000;
 const BORN = OLD + 5_000_000;
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-bind-records-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number): number => {
-  const id = (s.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one.
+const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'demo', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  const id = opened.id;
   s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(openedAt, id);
   return id;
 };
@@ -65,7 +69,7 @@ describe('a bind with no placeable birth still records an incarnation (the gaps 
     const w1 = open(s, 'prog-a', 'coord-1', BORN - 1000);
     // The minting run recorded a birth but its dispatchStartedAt does not agree, so `childBirthOf` cannot place it.
     s.setSession(w1, 'demo-w', BORN);
-    const w2 = open(s, 'prog-b', 'coord-1', BORN - 1000);
+    const w2 = open(s, 'prog-a', 'coord-1', BORN - 1000, 2);
     s.setSession(w2, 'demo-w');
     // The follow-up owns this: the stamp writes placeable births only, so wave 2 is undecided once the worker is placed.
     expect(born(s, w2)).toEqual({ sessionBornAt: null, sessionBornFor: null });
@@ -128,7 +132,7 @@ describe('a cross-build rollback with a same-id redraw (#1573 round 4)', () => {
     // An OLDER build redraws occupant C on R: R keeps its birth T1 for W and only its dispatchStartedAt moves. R closes.
     s.db.prepare("UPDATE runs SET dispatchStartedAt = ?, state = 'done' WHERE id = ?").run(T4, r);
     // This build binds C's wave W2 (two-arg): the stamp writes the newest placeable birth on record, TX (Rx's).
-    const w2 = open(s, 'prog-w2', 'coord-live', T4 + 100);
+    const w2 = open(s, 'prog-r', 'coord-live', T4 + 100, 2);
     s.setSession(w2, W);
     expect(born(s, w2)).toEqual({ sessionBornAt: TX, sessionBornFor: W });
     const incarnation = incarnationOf(W, childBirthOf(s.run(r), W));
@@ -173,12 +177,12 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
   type OnRecord = 'placeable' | 'unplaceable';
   /** The fixture: an earlier run (done) recorded a birth for `session`, which `childBirthOf` places or cannot place. */
   const birthOnRecord = (s: CoordStore, session: string, kind: OnRecord): void => {
-    const minting = open(s, 'prog-minting', CLAIMANT, BORN - 1000);
+    const minting = open(s, 'prog-wave', CLAIMANT, BORN - 1000);
     if (kind === 'placeable') s.markDispatchStarted(minting, BORN);
     s.setSession(minting, session, BORN);
     s.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(minting);
   };
-  const plannedWave = (s: CoordStore): number => open(s, 'prog-wave', CLAIMANT, BORN + 10);
+  const plannedWave = (s: CoordStore): number => open(s, 'prog-wave', CLAIMANT, BORN + 10, 2);
   const storeArm = (bind: (s: CoordStore, id: number) => void) => async (kind: OnRecord): Promise<Born> => {
     const s = store();
     birthOnRecord(s, WORKER, kind);
@@ -191,7 +195,7 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     seedRow(home, CLAIMANT);
     const { app, coord } = await appFor(home, recorder().run);
     try {
-      seedLegacyProgramme(coord.db, 'prog-wave', 'demo');
+      seedLegacyProgramme(coord.db, 'prog-wave', 'demo', CLAIMANT);
       birthOnRecord(coord, WORKER, kind);
       const res = await app.inject({ method: 'POST', url: '/api/runs', headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
         payload: { program: 'prog-wave', title: 'wave', project: 'demo', wave: 2, waveOf: 3, claimedBy: CLAIMANT,
@@ -308,7 +312,7 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
     expect(sessionRunRead(coord, ADOPTED, viaMark)).toMatchObject({ ok: true, openRun: { id, claimedBy: 'coord-live' } });
     // A later wave bound to the adopted worker records the newest placeable birth of the id (the merge base's stamp),
     // and the adopted worker, unplaceable, reads by the id-string rule: the adopting claimant stays the parent.
-    const wave2 = open(coord, 'prog-wave-2', 'coord-live', T0 + 9000);
+    const wave2 = open(coord, 'prog-wave', 'coord-live', T0 + 9000, 2);
     coord.setSession(wave2, ADOPTED);
     expect(born(coord, wave2)).toEqual({ sessionBornAt: OLD_BIRTH, sessionBornFor: ADOPTED });
     expect(childParentOf(series(coord, ADOPTED), 'coord-live', incarnation)).toBe('coord-live');

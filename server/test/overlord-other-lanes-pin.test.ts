@@ -53,7 +53,7 @@ import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { ID_GATE_TOKEN } from './idGateFixture.js';
-import { legacyOpens } from './helpers/plan.js';
+import { legacyOpens, seedLegacyProgramme } from './helpers/plan.js';
 import { standardFixture, CHILD, CHILD2, PARENT, TOK, uuidOf, type Approvals } from './approvalsHarness.js';
 import { BODIES, proxyRig, seedSlot, who, type ProxyRig } from './linearProxyRig.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
@@ -260,8 +260,8 @@ describe('POST /api/programmes/:slug/items', () => {
       return L.join('\n');
     })).toMatchInlineSnapshot(`
       "claimant raises: 200 {"ok":true,"id":1} | operator_item_events+1 operator_items+1 push_outbox+1
-      non-claimant (plain): 403 {"ok":false,"error":"not-your-programme","detail":"lane-a-plain holds no open run of programme prog-a"} | no rows changed
-      worker: 403 {"ok":false,"error":"not-your-programme","detail":"lane-a-project-a-worker holds no open run of programme prog-a"} | no rows changed
+      non-claimant (plain): 403 {"ok":false,"error":"not-your-programme","detail":"lane-a-plain is not the coordinator of programme prog-a"} | no rows changed
+      worker: 403 {"ok":false,"error":"not-your-programme","detail":"lane-a-project-a-worker is not the coordinator of programme prog-a"} | no rows changed
       stale uuid: 403 {"ok":false,"error":"stale-uuid","detail":"byUuid does not match the registry — stale sender; re-read your own .uuid"} | no rows changed
       items: [{"id":1,"program":"prog-a","raisedBy":"lane-a-project-a-coord","kind":"do","title":"Turn on the setting"}]"
     `);
@@ -459,12 +459,17 @@ describe('the six plan doors', () => {
         const w = await core(st);
         L.push(`== ${name}`);
         // prog-p has a plan owner (COORD); prog-q has none.
+        // Programme lifecycle W1 (R11, D-8993): COORD owns prog-a, so its put could not start prog-p; prog-p is a legacy row
+        // nobody was ever bound to (as the migration leaves one it could not seed), whose plan owner is its putter (planBy).
+        seedLegacyProgramme(w.db, 'prog-p', 'demo');
         L.push(`seed plan prog-p by the owner: ${(await send(w, 'prog-p', '', PLAN, as(COORD))).statusCode}`);
         if (name !== 'declare') L.push(`seed ticket t1: ${(await send(w, 'prog-p', '/tickets', { epic: 'e1', key: 't1', kind: 'task', title: 'First', checkpoint: 'e1-c1' }, as(COORD))).statusCode}`);
         L.push(await step(w, 'the owner', () => send(w, 'prog-p', route, body(2), as(COORD))));
         L.push(await step(w, 'another session, plan owned', () => send(w, 'prog-p', route, body(3), as(PLAIN))));
         if (name !== 'declare') {
           // prog-q gets the same plan and ticket, then its owner is cleared (fixture act): the arm that admits any attributed caller.
+          // A legacy row too (R11: COORD owns prog-a), so the put declares its plan and starts no programme.
+          seedLegacyProgramme(w.db, 'prog-q', 'demo');
           await send(w, 'prog-q', '', PLAN, as(COORD));
           await send(w, 'prog-q', '/tickets', { epic: 'e1', key: 't1', kind: 'task', title: 'First', checkpoint: 'e1-c1' }, as(COORD));
           w.db.prepare("UPDATE programs SET planBy = NULL WHERE slug = 'prog-q'").run();
@@ -479,7 +484,7 @@ describe('the six plan doors', () => {
       seed plan prog-p by the owner: 200
       the owner: 200 {"ok":true,"plan":{"program":"prog-p","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | no rows changed
       another session, plan owned: 403 {"ok":false,"error":"not-plan-owner","detail":"only the programme's coordinator writes its plan"} | no rows changed
-      a plain session, programme has no owner: 200 {"ok":true,"plan":{"program":"prog-q","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | plan_checkpoints+2 plan_epics+2 plan_sync_due+1 programs+1
+      a plain session, programme has no owner: 200 {"ok":true,"plan":{"program":"prog-q","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | plan_checkpoints+2 plan_epics+2 plan_sync_due+1 programme_events+2 programs+1
       stale uuid: 403 {"ok":false,"error":"stale-uuid","detail":"byUuid does not match the registry — stale sender; re-read your own .uuid"} | no rows changed
       plan owners: [{"slug":"prog-p","planBy":"lane-a-project-a-coord"},{"slug":"prog-q","planBy":"lane-a-plain"}]
       == met
@@ -517,9 +522,9 @@ describe('the six plan doors', () => {
       == close
       seed plan prog-p by the owner: 200
       seed ticket t1: 200
-      the owner: 200 {"ok":true,"plan":{"program":"prog-p","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[{"key":"t1","kind":"task","title":"First","project":"demo","checkpoint":"e1-c1","source":"plan","state":"open","runId":null,"identifier":null,"url":null,"sync":"unsynced","syncWord":null}]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | no rows changed
+      the owner: 200 {"ok":true,"plan":{"program":"prog-p","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[{"key":"t1","kind":"task","title":"First","project":"demo","checkpoint":"e1-c1","source":"plan","state":"open","runId":null,"identifier":null,"url":null,"sync":"unsynced","syncWord":null}]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | programme_events+1
       another session, plan owned: 403 {"ok":false,"error":"not-plan-owner","detail":"only the programme's coordinator closes its plan"} | no rows changed
-      a plain session, programme has no owner: 200 {"ok":true,"plan":{"program":"prog-q","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[{"key":"t1","kind":"task","title":"First","project":"demo","checkpoint":"e1-c1","source":"plan","state":"open","runId":null,"identifier":null,"url":null,"sync":"unsynced","syncWord":null}]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | no rows changed
+      a plain session, programme has no owner: 200 {"ok":true,"plan":{"program":"prog-q","planned":true,"initiatives":[],"epics":[{"key":"e1","title":"Epic e1","summary":"s","project":"demo","waves":[1],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e1-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[{"key":"t1","kind":"task","title":"First","project":"demo","checkpoint":"e1-c1","source":"plan","state":"open","runId":null,"identifier":null,"url":null,"sync":"unsynced","syncWord":null}]},{"key":"e2","title":"Epic e2","summary":"s","project":"demo","waves":[2],"state":"planned","url":null,"sync":"unsynced","syncWord":null,"checkpoints":[{"key":"e2-c1","title":"c","kind":"acceptance","state":"open","proves":[],"metAt":null,"evidence":null,"url":null,"sync":"unsynced","syncWord":null}],"tickets":[]}],"doneWhen":[]}} | programme_events+1
       stale uuid: 403 {"ok":false,"error":"stale-uuid","detail":"byUuid does not match the registry — stale sender; re-read your own .uuid"} | no rows changed
       plan owners: [{"slug":"prog-p","planBy":"lane-a-project-a-coord"},{"slug":"prog-q","planBy":null}]"
     `);
@@ -594,7 +599,7 @@ describe('POST /api/runs/:id/reclaim and the archive hand-over', () => {
       return L.join('\n');
     })).toMatchInlineSnapshot(`
       "heir is a worker: 409 {"ok":false,"refused":"heir-is-a-worker","by":"lane-a-project-a-coord"} | no rows changed
-      reclaim to a live coordinator: 200 {"ok":true,"program":"prog-dead","runIds":[2],"from":"lane-a-dead-coord","to":"lane-a-heir-coord"} | run_events+1
+      reclaim to a live coordinator: 200 {"ok":true,"program":"prog-dead","runIds":[2],"from":"lane-a-dead-coord","to":"lane-a-heir-coord"} | programme_events+1 run_events+1
       runs: [{"id":1,"program":"prog-a","claimedBy":"lane-a-project-a-coord"},{"id":2,"program":"prog-dead","claimedBy":"lane-a-heir-coord"}]"
     `);
   });
@@ -607,7 +612,7 @@ describe('POST /api/runs/:id/reclaim and the archive hand-over', () => {
       L.push(`ccd: ${JSON.stringify(w.calls.filter((c) => c[0] === 'ws-archive'))}`);
       return L.join('\n');
     })).toMatchInlineSnapshot(`
-      "archive with a hand-over: 200 {"ok":true,"archived":true,"stopped":false,"ended":[],"moved":{"to":"lane-a-heir-coord","runs":[{"id":1,"program":"prog-a","wave":1,"waveOf":3}]}} | run_events+1
+      "archive with a hand-over: 200 {"ok":true,"archived":true,"stopped":false,"ended":[],"moved":{"to":"lane-a-heir-coord","runs":[{"id":1,"program":"prog-a","wave":1,"waveOf":3}]}} | programme_events+1 run_events+1
       runs: [{"id":1,"program":"prog-a","claimedBy":"lane-a-heir-coord"},{"id":2,"program":"prog-dead","claimedBy":"lane-a-dead-coord"}]
       ccd: [["ws-archive","--session","lane-a-project-a-coord"]]"
     `);

@@ -37,17 +37,20 @@
 #           and places the build at `<box root>/captures/builds/<version>`, mode 0555, owned by that user, which the capture
 #           desk reads as the build being present. A link standing at exactly that name is replaced by the build itself, in
 #           the one rename that places it (the rename never treats the name as a directory): the link's target is never
-#           opened, followed, written or removed, and the answer says a link was replaced (fix round 1 of capture runner
-#           PR 3b: the desk reads a link there as absent, so without this every pass would copy and refuse again).
+#           opened, followed, written or removed, and the answer says the writer's check, made before the stream, saw a link
+#           there (fix round 1 of capture runner PR 3b: the desk reads a link there as absent, so without this every pass
+#           would copy and refuse again); the name can change during the stream, and the answer reports what the check saw.
 #           The stage is removed before the hash, and on every exit the box's shell sees, a hangup and a termination
-#           included: the shell stands ready for one before it makes the stage, so no instant from the stage's making on
-#           leaves it, and the stage's name is cleared first, so that readiness removes nothing else. A kill can leave one
-#           directory only root can enter, in root's temporary folder. Each refusal says one word, which this host's log
-#           keeps.
+#           delivered to that shell included: the shell stands ready for one before it makes the stage, so for those no
+#           instant from the stage's making on leaves it. The clean-up names the stage and nothing else at every instant:
+#           the stage's name is cleared before that readiness stands, and forgotten as soon as the stage is removed on
+#           purpose, so a later exit removes nothing. A kill, or a signal that also reaches the tool making the stage, can
+#           leave one directory only root can enter, in root's temporary folder. Each refusal says one word, which this
+#           host's log keeps.
 # Nothing here writes this host's versions directory or Claude Code's launcher, and the box side writes only under the box's
 # own root and its own stage. Short (one box call), under the verb's lock, recorded in no ledger row (the build's own row
 # says what the copy came to). Its answer is `{"ok":true,"build":"<version>","sha256":"<hex>"}`, with `"replaced":"link"`
-# added when the build replaced a link at its name (the server logs that in one line).
+# added when the box's writer answered that its check saw a link at the name (the server logs that in one line).
 #
 # The box's two programs are one line each: `_tba_ssh` quotes each word with `%q`, and a newline would reach the box's login
 # shell as bash's `$'...'`. The writer travels as one word of the call and runs under the copy program's privilege drop.
@@ -64,13 +67,15 @@ _tba_build_copy_src() { printf '%s/.local/share/claude/versions/%s' "$HOME" "$1"
 # ── BOX-SIDE COMMANDS (begin) ── they run on the test box over ssh, never on this host: the box runs the fleet host's own
 # distribution release (the preflight's `os` check), so its userland is GNU and util-linux's privilege drop is there. The
 # macOS scan (server/test/macos-platform.test.ts) cuts this region and pins what is in it.
-# The copy, as root: $1 the box root, $2 the build, $3 the hash this host took, $4 the writer; stdin the bytes. `installed`
-# on success; otherwise one word on stdout naming what refused, and exit 5 (the store), 4 (the bytes differ) or 1.
+# The copy, as root: $1 the box root, $2 the build, $3 the hash this host took, $4 the writer; stdin the bytes. The
+# writer's `installed` or `installed-over-link` on success; otherwise one word on stdout naming what refused, and exit 5
+# (the store), 4 (the bytes differ) or 1.
 # shellcheck disable=SC2016  # expanded by the box's sh, not here
-TBA_BUILD_COPY_SH='set -e; r=${1%/}; e=$r/results; c=$r/captures; if [ -z "$r" ] || [ -L "$r" ] || [ ! -d "$r" ]; then echo box-root-kind; exit 5; fi; o=$(ls -ldn -- "$r" | awk '"'"'{print $3" "$4}'"'"'); [ "${o%% *}" = 0 ] || { echo box-root-owner; exit 5; }; case "$(ls -ldn -- "$r" | awk '"'"'{print $1}'"'"')" in ?????w*|????????w*) echo box-root-mode; exit 5;; esac; if [ -L "$e" ]; then echo results-link; exit 5; elif [ ! -e "$e" ]; then echo results-absent; exit 5; elif [ ! -d "$e" ]; then echo results-kind; exit 5; fi; o=$(ls -ldn -- "$e" | awk '"'"'{print $3" "$4}'"'"'); u=${o% *}; g=${o#* }; case "$u.$g" in *[!0-9.]*|*.) echo results-owner; exit 5;; esac; [ "$u" != 0 ] && [ "$g" != 0 ] || { echo results-owner; exit 5; }; if [ -L "$c" ]; then echo captures-link; exit 5; elif [ -e "$c" ] && [ ! -d "$c" ]; then echo captures-kind; exit 5; fi; p=${TMPDIR:-/tmp}; p=${p%/}; case "$p/" in "$r"/*) echo stage-under-root; exit 1;; esac; if [ -L "$p" ] || [ ! -d "$p" ]; then echo stage-parent; exit 1; fi; m=$(ls -ldn -- "$p" | awk '"'"'{print $1" "$3}'"'"'); case "$m" in ?????????[tT]*|*" 0") ;; *) echo stage-parent; exit 1;; esac; [ -e "$c" ] || install -d -m 0750 -o "$u" -g "$g" -- "$c"; [ "$(ls -ldn -- "$c" | awk '"'"'{print $3" "$4}'"'"')" = "$u $g" ] || { echo captures-owner; exit 5; }; (cd -- "$r" && exec setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env -- sh -c "$4" sh "$r" "$2" check </dev/null) || exit $?; umask 077; s=; trap '"'"'rm -rf -- "$s"'"'"' EXIT; trap '"'"'exit 1'"'"' HUP INT TERM; s=$(mktemp -d "$p/.ccrc-build-copy.XXXXXXXX"); cat >"$s/b"; exec 3<"$s/b" 4<"$s/b"; rm -rf -- "$s"; h=$(sha256sum <&3); exec 3<&-; [ "${h%% *}" = "$3" ] || { echo hash; exit 4; }; cd -- "$r"; exec setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env -- sh -c "$4" sh "$r" "$2" <&4 4<&-'
+TBA_BUILD_COPY_SH='set -e; r=${1%/}; e=$r/results; c=$r/captures; if [ -z "$r" ] || [ -L "$r" ] || [ ! -d "$r" ]; then echo box-root-kind; exit 5; fi; o=$(ls -ldn -- "$r" | awk '"'"'{print $3" "$4}'"'"'); [ "${o%% *}" = 0 ] || { echo box-root-owner; exit 5; }; case "$(ls -ldn -- "$r" | awk '"'"'{print $1}'"'"')" in ?????w*|????????w*) echo box-root-mode; exit 5;; esac; if [ -L "$e" ]; then echo results-link; exit 5; elif [ ! -e "$e" ]; then echo results-absent; exit 5; elif [ ! -d "$e" ]; then echo results-kind; exit 5; fi; o=$(ls -ldn -- "$e" | awk '"'"'{print $3" "$4}'"'"'); u=${o% *}; g=${o#* }; case "$u.$g" in *[!0-9.]*|*.) echo results-owner; exit 5;; esac; [ "$u" != 0 ] && [ "$g" != 0 ] || { echo results-owner; exit 5; }; if [ -L "$c" ]; then echo captures-link; exit 5; elif [ -e "$c" ] && [ ! -d "$c" ]; then echo captures-kind; exit 5; fi; p=${TMPDIR:-/tmp}; p=${p%/}; case "$p/" in "$r"/*) echo stage-under-root; exit 1;; esac; if [ -L "$p" ] || [ ! -d "$p" ]; then echo stage-parent; exit 1; fi; m=$(ls -ldn -- "$p" | awk '"'"'{print $1" "$3}'"'"'); case "$m" in ?????????[tT]*|*" 0") ;; *) echo stage-parent; exit 1;; esac; [ -e "$c" ] || install -d -m 0750 -o "$u" -g "$g" -- "$c"; [ "$(ls -ldn -- "$c" | awk '"'"'{print $3" "$4}'"'"')" = "$u $g" ] || { echo captures-owner; exit 5; }; (cd -- "$r" && exec setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env -- sh -c "$4" sh "$r" "$2" check </dev/null) || exit $?; umask 077; s=; trap '"'"'rm -rf -- "$s"'"'"' EXIT; trap '"'"'exit 1'"'"' HUP INT TERM; s=$(mktemp -d "$p/.ccrc-build-copy.XXXXXXXX"); cat >"$s/b"; exec 3<"$s/b" 4<"$s/b"; rm -rf -- "$s"; s=; h=$(sha256sum <&3); exec 3<&-; [ "${h%% *}" = "$3" ] || { echo hash; exit 4; }; cd -- "$r"; exec setpriv --reuid="$u" --regid="$g" --clear-groups --inh-caps=-all --reset-env -- sh -c "$4" sh "$r" "$2" <&4 4<&-'
 # The writer, as the service user (the owner of results and captures): $1 the box root, $2 the build; stdin the bytes.
 # Exit 5 with a word: the store. With $3 `check` it asks its store checks only, makes nothing and reads no stdin.
-# `installed`, or `installed-over-link` when a link stood at the build's name and the build replaced it.
+# `installed`, or `installed-over-link` when its check, made before the stream, saw a link at the build's name (the word
+# reports what that check saw; the rename acts on what stands at the name then).
 # shellcheck disable=SC2016  # expanded by the box's sh, not here
 TBA_BUILD_WRITE_SH='set -e; umask 022; k=${3-}; c=$1/captures; d=$c/builds; f=$d/$2; for x in "$c" "$d"; do n=${x##*/}; if [ -L "$x" ]; then echo "$n-link"; exit 5; elif [ -e "$x" ]; then [ -d "$x" ] || { echo "$n-kind"; exit 5; }; elif [ "$k" != check ]; then mkdir -- "$x"; fi; done; l=; if [ -L "$f" ]; then l=-over-link; elif [ -e "$f" ] && [ ! -f "$f" ]; then echo target-kind; exit 5; fi; [ "$k" != check ] || exit 0; t=$(mktemp "$d/.copy.XXXXXXXX"); cat >"$t" && chmod 0555 "$t" && mv -fT -- "$t" "$f" || { rm -f -- "$t"; exit 1; }; echo "installed$l"'
 # ── BOX-SIDE COMMANDS (end) ──────────────────────────────────────────────────────────────────────────────────────

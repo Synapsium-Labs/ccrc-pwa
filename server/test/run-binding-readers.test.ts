@@ -17,8 +17,13 @@ import { okSiblings, parentOfSession } from './coordReadHelpers.js';
 const BORN = 1_700_000_000_000;
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-readers-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string): number =>
-  (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  return opened.id;
+};
 const finish = (s: CoordStore, id: number): void => {
   for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(id, to, 'coordinator');
 };
@@ -63,7 +68,7 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
   it('the open-vs-newest pair: runsNamingSession lists every bound run in any state, openRunsForSession the open ones', () => {
     const s = store();
     const { stale, fresh } = recycled(s, true);
-    const later = open(s, 'prog-later', 'coord-live');
+    const later = open(s, 'prog-new', 'coord-live', 2);
     s.setSession(later, 'demo-w');
     const named = s.runsNamingSession('demo-w', inc);
     expect(named.ok && named.runs.map((r) => [r.id, r.state])).toEqual([[fresh, 'done'], [later, 'planned']]);
@@ -91,7 +96,7 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
   it('heldFor keeps the hold for a pre-planned wave 2 bound without a birth, once wave 1 (the mark) closed', async () => {
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1');
-    const w2 = open(s, 'prog-b', 'coord-1');
+    const w2 = open(s, 'prog-a', 'coord-1', 2);
     // The run of ANOTHER claimant, bound to an EARLIER occupant of the name: it is bound before the birth exists, so the
     // bind (which records the occupant's birth, #1407) has none to record, and the run stays undecided.
     const g = open(s, 'prog-g', 'coord-ghost');
@@ -116,7 +121,7 @@ describe('the readers take the worker\'s incarnation (ARCH-62)', () => {
     // An unstamped wave 2 opened before the birth (undecidable), and an ownerless closed wave 1 (the mark).
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1');
-    const w2 = open(s, 'prog-b', 'coord-1');
+    const w2 = open(s, 'prog-a', 'coord-1', 2);
     s.db.prepare('UPDATE runs SET openedAt = ?, claimedBy = NULL WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
     s.setSession(w1, 'demo-w', BORN);
     s.setSession(w2, 'demo-w');
@@ -155,7 +160,7 @@ describe('the folded readers, asked through bindingReads (ARCH-62 slice 2)', () 
     s.setSession(a, 'demo-w');
     const b = open(s, 'prog-b', 'coord-2');
     s.setSession(b, 'demo-w');
-    const planned = open(s, 'prog-c', 'coord-1');
+    const planned = open(s, 'prog-a', 'coord-1', 2);
     expect(claimantsOfSession(s, 'demo-w')).toEqual(['coord-2', 'coord-1']);
     expect(okSiblings(openRunsClaimedBy(s, 'coord-1')).map((r) => r.id)).toEqual([a, planned]);
     finish(s, a);
@@ -368,7 +373,7 @@ describe('the drift lane reads the worker\'s parent through its incarnation (ARC
   it('a pre-planned wave 2 (wave 1 is the mark and closed; wave 2 unstamped, opened before the birth, same claimant) raises no parent-mismatch', async () => {
     const s = store();
     const w1 = open(s, 'prog-a', 'coord-1');
-    const w2 = open(s, 'prog-b', 'coord-1');
+    const w2 = open(s, 'prog-a', 'coord-1', 2);
     s.db.prepare('UPDATE runs SET openedAt = ? WHERE id IN (?, ?)').run(BORN - 1000, w1, w2);
     s.setSession(w1, 'demo-w', BORN);
     s.setSession(w2, 'demo-w');

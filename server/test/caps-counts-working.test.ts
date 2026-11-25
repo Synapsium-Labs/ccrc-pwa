@@ -108,7 +108,8 @@ function fixture(over: Over = {}) {
   /** A run of WORKER parked at `state` (an idle state), for the send-back door. */
   const parked = (state: RunState): number => {
     seed(WORKER);
-    const o = coord.openRun({ program: `sb-${state}`, title: 't', project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'c-sb' }) as { id: number };
+    // Each parked run in its own programme under its own claimant: one coordinator owns one programme (programme lifecycle W1).
+    const o = coord.openRun({ program: `sb-${state}`, title: 't', project: PROJECT, wave: 1, waveOf: 1, claimedBy: `c-sb-${state}` }) as { id: number };
     coord.markDispatched(o.id, WORKER, `${WORKER}-ws`, `ws/${WORKER}`, false, Date.now() - HOUR);
     coord.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, o.id);
     return o.id;

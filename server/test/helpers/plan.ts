@@ -6,11 +6,19 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isPositiveDecimalSafeInteger, programmeNameFromSlug, shapeProgramSlug } from '../../../shared/api.js';
 import { shapeHomeProject } from '../../src/coord/openRun.js';
 
-export function seedLegacyProgramme(db: DatabaseSync, slug: string, home: string): void {
+//
+// Programme lifecycle W1 (R11 rule 8, D-8993): a run never takes an existing programme that has no coordinator, so a seeded
+// row names the coordinator the test's opens claim as (`coordinator`), as the first run's own mint would have bound it. It
+// is bound only while that session owns no other programme (one programme per coordinator): otherwise the row is left
+// unbound and the open is refused, as R11 refuses it.
+export function seedLegacyProgramme(db: DatabaseSync, slug: string, home: string, coordinator?: string): void {
+  const owns = coordinator === undefined ? undefined
+    : db.prepare('SELECT 1 AS x FROM programs WHERE coordinator = ? AND slug != ?').get(coordinator, slug);
+  const bind = coordinator !== undefined && owns === undefined ? coordinator : null;
   db.prepare(
-    "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired) VALUES (?, ?, ?, 'active', ?, 0) " +
-    'ON CONFLICT(slug) DO UPDATE SET planRequired = 0',
-  ).run(slug, programmeNameFromSlug(slug), Date.now(), home);
+    "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired, coordinator) VALUES (?, ?, ?, 'active', ?, 0, ?) " +
+    'ON CONFLICT(slug) DO UPDATE SET planRequired = 0, coordinator = COALESCE(programs.coordinator, excluded.coordinator)',
+  ).run(slug, programmeNameFromSlug(slug), Date.now(), home, bind);
 }
 
 /** For a suite whose every open is incidental to its subject: wraps the app's `inject` so that a `POST /api/runs` of a work
@@ -27,7 +35,9 @@ export function legacyOpens<A extends { inject: (...a: never[]) => unknown }>(ap
       const slug = typeof body.program === 'string' ? shapeProgramSlug(body.program) : null;
       const home = typeof body.homeProject === 'string' ? shapeHomeProject(body.homeProject) : null;
       const sane = isPositiveDecimalSafeInteger(body.wave) && (body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf));
-      if (body.kind !== 'review' && sane && slug?.ok === true && home?.ok === true) seedLegacyProgramme(db, slug.slug, home.home);
+      if (body.kind !== 'review' && sane && slug?.ok === true && home?.ok === true) {
+        seedLegacyProgramme(db, slug.slug, home.home, typeof body.claimedBy === 'string' ? body.claimedBy : undefined);
+      }
     }
     return inner(...a);
   };

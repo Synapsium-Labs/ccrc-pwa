@@ -121,7 +121,8 @@ describe('POST /api/runs refuses an id that is not a registry id (spec §2.3)', 
     // `CCD_ARGV.wsHold` is `['ws-hold', '--session', <id>, …]`: the accepted id reaches its argv whole.
     expect(calls.filter((c) => c[0] === 'ws-hold').map((c) => c[2])).toEqual(['a.--actor']);
     const project = await postOpen(w.app,
-      { ...OPEN_BODY, program: 'ctl-project', project: 'demo-inner-dash', claimedByUuid: `u-${CLAIMED_BY}` });
+      // Programme lifecycle W1 (R11): one coordinator owns one programme, so the third control opens in the second's.
+      { ...OPEN_BODY, program: 'ctl-session', wave: 3, project: 'demo-inner-dash', claimedByUuid: `u-${CLAIMED_BY}` });
     expect(project.statusCode).toBe(200);
     expect(((await getRuns(w.app)).json() as { runs: unknown[] }).runs).toHaveLength(3);
   });

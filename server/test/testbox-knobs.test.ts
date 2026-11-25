@@ -65,6 +65,7 @@ const BOX_ADDED = [
   { key: 'CCRC_TESTBOX_PROBE_CONFIG_DIR', def: '' },                                      // D-8290: no default, no probes
   { key: 'CCRC_TESTBOX_PROBE_SOCKET', def: 'ccrc-probe' },                                // D-8290
   { key: 'CCRC_TESTBOX_PROBES_PER_DAY', def: '10' },                                      // D-8290
+  { key: 'CCRC_TESTBOX_REGISTRY_KEEP', def: '30d' },                                      // D-9007
 ];
 const HOST_TABLE = [...specTable('fleet host'), ...HOST_ADDED];
 const BOX_TABLE = [...specTable('test box'), ...BOX_ADDED];
@@ -91,7 +92,7 @@ const GOOD: Record<string, string> = {
   CCRC_TESTBOX_TMPFS: 'on', CCRC_TESTBOX_LOG_TAIL: '80', CCRC_TESTBOX_SESSION_RUNS: '2', CCRC_TESTBOX_SERVICE_USER: 'tb-svc',
   CCRC_TESTBOX_LISTEN: '192.0.2.10:7790', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '/etc/ccrc-testbox/service.token',
   CCRC_TESTBOX_UNIT_MAX: '2h', CCRC_TESTBOX_PROBE_CONFIG_DIR: '/srv/scratch/config', CCRC_TESTBOX_PROBE_SOCKET: 'tb-probe',
-  CCRC_TESTBOX_PROBES_PER_DAY: '5',
+  CCRC_TESTBOX_PROBES_PER_DAY: '5', CCRC_TESTBOX_REGISTRY_KEEP: '45d',
 };
 /** A second good value of each key, for the files and the environment box mode must not read. */
 const OTHER: Record<string, string> = Object.fromEntries(Object.entries(GOOD).map(([k, v]) => [k, otherOf(k, v)]));
@@ -128,6 +129,7 @@ const BAD: Record<string, string> = {
   CCRC_TESTBOX_SESSION_RUNS: '0', CCRC_TESTBOX_SERVICE_USER: '1svc', CCRC_TESTBOX_LISTEN: '192.0.2.10:70000',
   CCRC_TESTBOX_SERVICE_TOKEN_FILE: 'service.token', CCRC_TESTBOX_UNIT_MAX: '1hour',
   CCRC_TESTBOX_PROBE_CONFIG_DIR: 'scratch/config', CCRC_TESTBOX_PROBE_SOCKET: 'Probe', CCRC_TESTBOX_PROBES_PER_DAY: '0',
+  CCRC_TESTBOX_REGISTRY_KEEP: '30 days',
 };
 const pick = (src: Record<string, string>, keys: readonly string[]): Record<string, string> =>
   Object.fromEntries(keys.map((k) => [k, src[k]!]));
@@ -280,13 +282,13 @@ const scannedTs = (): string[] => {
 describe('TB1: the test box settings, through ccrc\'s one reader (D-7403; spec §4)', () => {
   it('counted exit: CCRC_SETTINGS 43 -> 87, its test box keys are the host table then the box table, and each mode prints its table in order', () => {
     expect(HOST_KEYS, 'spec §4\'s 15 host keys plus D-7421\'s').toHaveLength(16);
-    expect(BOX_KEYS, 'spec §4\'s 23 box keys plus D-7420\'s, D-7426\'s, D-7501\'s three and D-8290\'s three').toHaveLength(31);
+    expect(BOX_KEYS, 'spec §4\'s 23 box keys plus D-7420\'s, D-7426\'s, D-7501\'s three, D-8290\'s three and D-9007\'s').toHaveLength(32);
     const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(read('ccd/ccrc'));
     const settings = m ? m[1]!.split(' ').filter((w) => w !== '') : [];
     expect(settings.filter((s) => s.startsWith('CCRC_TESTBOX_'))).toEqual([...HOST_KEYS, ...BOX_KEYS]);
     // D-7857 adds one ccrc setting outside the test box's tables, CCRC_CARRY_COPY_WARN_BYTES: 87 -> 88; D-7876 adds
     // one graph key, CCRC_GRAPH_PRESSURE_MAX: 88 -> 89; D-8121 adds the two browser MCP settings: 89 -> 91; D-8122 the memory gate's four: 91 -> 95.
-    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys), 88 with D-7857, 89 with D-7876, 91 with D-8121, 95 with D-8122, 97 with D-8123, 98 with D-8125, 99 with D-8124, 98 with D-8165 (the coordinator lift retires), 101 with D-8290 (the live probes\' three box keys)').toHaveLength(101);
+    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys), 88 with D-7857, 89 with D-7876, 91 with D-8121, 95 with D-8122, 97 with D-8123, 98 with D-8125, 99 with D-8124, 98 with D-8165 (the coordinator lift retires), 101 with D-8290 (the live probes\' three box keys), 102 with D-9007 (the registry cache\'s keep time)').toHaveLength(102);
     const b = fixture();
     expect(knobs(b, 'host').lines.map((f) => f[0])).toEqual(HOST_KEYS);
     expect(knobs(b, 'box').lines.map((f) => f[0])).toEqual(BOX_KEYS);

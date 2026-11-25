@@ -685,7 +685,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
-  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). So do
+  designation B's `POST /api/overlord/rebind` (a step-up) and `POST /api/overlord/restart` (a recovery, with no step-up). `GET /api/overlord/ladder`,
   `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
   session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
   takes the step-up. Confirm the restore (authority journal C), `GET /api/overlord/restore` (the guard's state) and
@@ -746,10 +747,11 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
   that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
-  wave N's** — close-first leaves zero open runs and the server retires the program, breaking
-  `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves
-  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
-  documented recovery for an already-retired program.
+  wave N's** — `toId:'coordinator'` mail that carries NO `runId` resolves only over a programme that shows Active
+  (`lifecycleOf`: an open run and a run ever dispatched), and the open `planned` run keeps it Active; close-first leaves
+  it Idle and such mail unresolvable until the next run is dispatched. Nothing retires a programme any more (programme
+  lifecycle W1, D-8983: D-51 is deleted; only a decision ends one). Mail naming a `runId` still resolves
+  (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate).
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
   (`ccd/coordinator-skill/SKILL.md`); its twenty-four clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES

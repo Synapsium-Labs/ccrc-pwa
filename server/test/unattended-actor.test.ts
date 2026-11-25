@@ -332,10 +332,12 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
     // (`store.ts`'s own comment on the point), so two decoys sharing one
     // program with the run under test would collapse onto the SAME row
     // instead of consuming distinct ids — measured: the first attempt at
-    // this fixture did exactly that (`opened.id` came back `1`).
-    for (const program of ['build9a-decoy-a', 'build9a-decoy-b']) {
+    // this fixture did exactly that (`opened.id` came back `1`). Programme
+    // lifecycle W1 (R11, D-8993): one coordinator owns one programme, so each
+    // decoy programme has its own claimant too.
+    for (const [program, claimedBy] of [['build9a-decoy-a', 'decoy-coordinator-a'], ['build9a-decoy-b', 'decoy-coordinator-b']] as const) {
       const decoy = coord.openRun({ program, title: 'decoy', project: 'demo',
-        wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+        wave: 1, waveOf: 1, claimedBy });
       if (!('id' in decoy)) throw new Error('fixture openRun (decoy) refused');
     }
     const opened = coord.openRun({ program: 'build9a-under-test', title: 'Unattended actor under test',

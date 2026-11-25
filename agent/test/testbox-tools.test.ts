@@ -966,7 +966,7 @@ const [CHROME_2, CHROME_3] = ['131.0.6778.86', '131.0.6778.87'];
 /** The entry point's settings for a service on a fixture box (no repository rows, nothing it would start). */
 const cfgFor = (b: Box): TestboxConfig => ({
   runs: 1, sessionRuns: 1, workers: 1, runTmpdir: '/tmp', root: path.join(path.dirname(b.root), 'svc'), repos: path.join(path.dirname(b.root), 'no-repos'),
-  fetchEveryMs: 60_000, retentionMs: 3_600_000, reportMaxBytes: 1024, toolsDir: b.tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
+  fetchEveryMs: 60_000, retentionMs: 3_600_000, registryKeepMs: 86_400_000, reportMaxBytes: 1024, toolsDir: b.tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
   serviceUser: 'ccrc-tb-svc', listen: { host: '127.0.0.1', port: 0 }, tokenFile: path.join(b.root, 'no-token'), unitMaxMs: 60_000,
   lines: new Map([...SETTINGS_LINES, ['CCRC_TESTBOX_PRISTINE_KEEP', { value: '7d' }]]) as unknown as TestboxConfig['lines'],
 });

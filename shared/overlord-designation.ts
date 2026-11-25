@@ -1,8 +1,8 @@
 // The Overlord's designation (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46, C56; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Tasks 1, 2, 5, 8 and 9): L0, one concern (the index's
 // large-file question 1, slug `wire-types-in-sibling-modules`). The view of the one row, the model class words, the
-// attempt outcomes, the capability words Start the Overlord requires, the set-side placement answer and the
-// doors' body parsers (designate, and the two Settings doors). The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
+// attempt outcomes, the capability words Start the Overlord requires, the set-side placement answer, the deadline sweep's
+// fact and action (designation B) and the doors' body parsers (designate, rebind, and the two Settings doors). The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
 // `node:*`, because the PWA bundles this file.
 import type { PoolSet } from './poolset.js';
 import type { ActorWire } from './overlord-identity.js';
@@ -68,6 +68,20 @@ export type DesignationRead =
   | { readonly kind: 'not-designated'; readonly row: DesignationView | null }
   | { readonly kind: 'unmeasured'; readonly why: string };
 
+/** What a settle of the pending body would read (`server/src/continuity/routes.ts#settleFactOf`): its newest start's stored report, with
+ *  that start's generation and whether the sandbox check holds on it; no stored report yet; or a read that failed. */
+export type SettleFact =
+  | { readonly kind: 'reported'; readonly sessionId: string; readonly startId: number; readonly generation: string | null; readonly held: boolean }
+  | { readonly kind: 'no-report' } | { readonly kind: 'unread'; readonly why: string };
+
+/** One action of the deadline sweep (designation B, plan Task 7), decided by
+ *  `pendingDeadlineOf` and run by the renewal act's acting side. */
+export type AttemptAction =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'resettle'; readonly sessionId: string; readonly startId: number }
+  | { readonly kind: 'expire'; readonly sessionId: string; readonly outcome: 'deadline-passed' | 'authority-unrecorded' }
+  | { readonly kind: 'drain'; readonly ids: readonly string[] };
+
 /** `projectPlacement` with a set side (the index's Q5): the set's own answer, so no field of the project-side wire
  *  `ProjectPlacement` takes a new meaning (review M11). */
 export type SetPlacement =
@@ -118,4 +132,14 @@ export function parseModelBody(v: unknown): OverlordModelClass | null {
 export function parseAccountSetBody(v: unknown): PoolSet | null {
   if (!isRecord(v) || Object.keys(v).length !== 1) return null;
   return parseAccountPools(v['accountPools']);
+}
+
+/** Rebind's body (designation B, plan Task 6): `{}` or `{force: boolean}`, and no other key; an absent body is `{}`. Anything
+ *  else is `null` (400). `force` lifts only the alive step, and stops the old body after every other check has passed. */
+export function parseRebindBody(v: unknown): { readonly force: boolean } | null {
+  if (v === undefined || v === null) return { force: false };
+  if (!isRecord(v)) return null;
+  const keys = Object.keys(v);
+  if (keys.length === 0) return { force: false };
+  return keys.length === 1 && typeof v['force'] === 'boolean' ? { force: v['force'] } : null;
 }

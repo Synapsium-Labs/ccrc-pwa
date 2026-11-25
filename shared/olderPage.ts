@@ -27,11 +27,17 @@ export const OLDER_PAGE_ENDS: readonly OlderPageEnd[] = Object.keys(OLDER_PAGE_E
 
 /** The server's answer to an `OlderPageRequest`: the page's events, oldest first, from the parser the backlog and the
  *  tailer use; `gap` when the page skipped a record too long to frame or to send; `end`, and `continuation` exactly when
- *  `end` is `more`. Display only: no helper facts, question, approval, notification or status rides it. */
+ *  `end` is `more`. Display only: no helper facts, question, approval, notification or status rides it.
+ *  `for` (desktop polish wave 175): the continuation the request sent, echoed, so a client applies an answer only to the
+ *  request it has outstanding (a request can cross a new backlog on the wire and be answered after it). Present only when
+ *  that value had a continuation's length and grammar (`server/src/transcript/continuation.ts#continuationShaped`); an
+ *  over-long or malformed one is never reflected. ADDITIVE: absent from the wave 171 server, where the client falls back
+ *  to dropping the first answer after a void. One reader: `pwa/src/session/olderPages.ts#answerPaging`. */
 export interface OlderPageAnswer {
   type: 'older-page';
   events: ChatEvent[];
   gap: boolean;
   end: OlderPageEnd;
   continuation?: string;
+  for?: string;
 }

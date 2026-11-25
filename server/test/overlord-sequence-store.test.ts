@@ -101,12 +101,22 @@ describe('the prune and the reads', () => {
   const fill = (db: DatabaseSync, kinds: readonly ('g' | 'd')[]): void => {
     kinds.forEach((k, i) => stamp(db, k === 'g' ? { at: AT + i } : { kind: 'designation', id: 'overlord-a', state: 'live', at: AT + i }));
   };
-  it('sequenceOldest marks the newest designation line keep, and only it', () => {
+  it('sequenceOldest marks keep the newest designation line, which here is also the newest live one, and no other', () => {
     const db = openDb();
     fill(db, ['g', 'd', 'g', 'd', 'g']);
     const r = sequenceOldest(db, 10);
     expect(r).toEqual({ kind: 'measured', value: [1, 2, 3, 4, 5].map((seq) => ({ seq, at: AT + seq - 1, keep: seq === 4 })) });
     expect(sequenceOldest(db, 2)).toEqual({ kind: 'measured', value: [{ seq: 1, at: AT, keep: false }, { seq: 2, at: AT + 1, keep: false }] });
+  });
+  it('sequenceOldest marks keep both the newest designation line and the newest live one when they differ (a rebind pending or failed)', () => {
+    const db = openDb();
+    stamp(db, { kind: 'designation', id: 'overlord-a', state: 'live', at: AT });
+    stamp(db, { at: AT + 1 });
+    stamp(db, { kind: 'designation', id: 'overlord-b', state: 'pending', at: AT + 2 });
+    stamp(db, { kind: 'designation', id: 'overlord-b', state: 'failed', at: AT + 3 });
+    stamp(db, { at: AT + 4 });
+    const r = sequenceOldest(db, 10);
+    expect(r).toEqual({ kind: 'measured', value: [1, 2, 3, 4, 5].map((seq) => ({ seq, at: AT + seq - 1, keep: seq === 1 || seq === 4 })) });
   });
   it('a prune deletes through the floor, keeps the kept line and raises the floor', () => {
     const db = openDb();

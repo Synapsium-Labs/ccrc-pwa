@@ -17,6 +17,8 @@ const T = 1_800_000_000_000;
 const MIN = 60_000;
 const H = 60 * MIN;
 const COORD = 'demo-quiet-mesa';
+/** R11: one coordinator owns one live programme, so a second programme has a coordinator of its own. */
+const COORD_B = 'demo-quiet-dune';
 const WORKER = 'demo-brisk-fen';
 const GONE: SessionVerdict = { verdict: 'gone' };
 const LIVE: SessionVerdict = { verdict: 'live' };
@@ -121,10 +123,10 @@ describe('the stuck verdict across a restart (A63)', () => {
   });
 
   it('the first pass after a restart gives every open run the since it had before', async () => {
-    const { home, panes } = fixture(); seedRow(home, COORD);
+    const { home, panes } = fixture(); seedRow(home, COORD); seedRow(home, COORD_B);
     let p = process_(home, panes);
     const a = openRun(p.coord);
-    const b = p.coord.openRun({ program: 'programme-b', title: 'Lane B', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+    const b = p.coord.openRun({ program: 'programme-b', title: 'Lane B', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD_B });
     if (!('id' in b)) throw new Error('fixture openRun refused');
     p.coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(T, b.id);
     for (let m = 0; m <= 90; m += 5) await p.pass(T + m * MIN);

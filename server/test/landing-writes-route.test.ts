@@ -469,7 +469,7 @@ describe('serialisation', () => {
     }
     await create(w, 11);
     const runId = openRun(w, 'coord-a');
-    seedLegacyProgramme(w.store.db, 'holder', 'demo');
+    seedLegacyProgramme(w.store.db, 'holder', 'demo', 'lane-a');   // its coordinator (programme lifecycle W1, R11)
     const opening = w.app.inject({ method: 'POST', url: '/api/runs', headers: tok,
       payload: { program: 'holder', title: 'H', project: 'demo', wave: 1, waveOf: 8, claimedBy: 'lane-a', claimedByUuid: WHO['lane-a'],
         sessionId: 'holder-worker', homeProject: 'demo' } });

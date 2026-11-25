@@ -26,7 +26,13 @@
 // when admission reopens (`admitNow`). It tells the driver of each submission it queues (`queued`), and hands it a
 // cancel for a run it no longer holds (`cancelHandedOver`). A run that waits on disk keeps its id (`handedOver`,
 // asked by `runIdUsed`, the one owner of "two runs never share one id"). No frame carries any of it.
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+//
+// D-9004 to D-9007 (plan docs/superpowers/plans/2026-11-24-testbox-retention.md): retention is one owner of what the
+// box keeps. A run id that has refs and no results or logs (a push the box then refused) is timed from its first
+// sight, a stamp under `<root>/refs-seen/` that a restart keeps; a run handed over to disk keeps its refs; the
+// registry proxy's cache loses each file not served for `CCRC_TESTBOX_REGISTRY_KEEP`; and the tick says when an arm
+// fails instead of dropping it.
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CaptureAnswer, CaptureSubmit } from '../../../shared/claudeBuildCapture.js';
 import type {
@@ -37,9 +43,10 @@ import type { MirrorOps } from './mirror.js';
 import type { CaptureDesk } from './captureDesk.js';
 import type { ProbeDesk } from './probeDesk.js';
 import { admit, cancel as queueCancel, enqueue, EMPTY_QUEUE, finish, positions, queueCounts, type QueueState } from './queue.js';
+import { cachedFiles, dropCached, registryCacheDir } from './registry.js';
 import { lastLine, logTail, OUTPUT_DRAIN_MS, OutputTail, PREPARE_STDERR, readReport, RUN_LOG, SLOT_OUTPUT_FILES } from './results.js';
 import {
-  cleaned, heldUsers, installStep, liveRunIds, makePool, queuedRun, retentionPlan, retrySweep, startupSweep, step, takeUser,
+  cleaned, heldUsers, installStep, liveRunIds, makePool, queuedRun, registryPlan, retentionPlan, retrySweep, startupSweep, step, takeUser,
   type InstallStep, type KeptRun, type Pool, type RunAct, type RunEvent, type RunState,
 } from './runs.js';
 import {
@@ -56,6 +63,8 @@ export interface ServiceSettings extends SpecSettings {
   readonly sessionRuns: number;
   readonly logTail: number;
   readonly retentionMs: number;
+  /** D-9007: a registry proxy cache file not served this long is deleted (`CCRC_TESTBOX_REGISTRY_KEEP`). */
+  readonly registryKeepMs: number;
   /** How often a run's output tail drains besides its watchers; `results.ts#OUTPUT_DRAIN_MS` when unset. */
   readonly outputDrainMs?: number;
 }
@@ -86,8 +95,8 @@ export interface ServiceDeps {
   readonly probes?: ProbeDesk;
   /** The build capture desk (spec 2026-11-22); absent, a `capture.submit` is refused. */
   readonly captures?: CaptureDesk;
-  /** Where the service's notes go (D-8966: a lifecycle script it could not read for a package's install inputs);
-   *  absent, stderr, as the drain's driver writes its own. */
+  /** Where the service's notes go (D-8966: a lifecycle script it could not read for a package's install inputs; D-9005:
+   *  a retention arm that failed); absent, stderr, as the drain's driver writes its own. */
   readonly log?: (line: string) => void;
   /** A submission was queued (D-8907: while a drain has the queue on disk, its driver writes this one there at once,
    *  so the updater's stop loses no run); absent, nothing. */
@@ -140,6 +149,9 @@ interface Run {
 /** A unit end that could not be read is a failure, never a pass. */
 const FAILED_END: UnitEnd = { exit: 255, result: 'unknown' };
 
+/** D-9004: `<root>/refs-seen/<run-id>`, an empty file whose mtime is when retention first saw the run's refs. */
+const REFS_SEEN = 'refs-seen';
+
 /** UTC ISO 8601 to the second, as the status frame carries a time. */
 const utcSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.[0-9]{3}Z$/, 'Z');
 
@@ -148,7 +160,6 @@ export class TestboxService {
   private pool: Pool;
   private readonly runs = new Map<string, Run>();
   private reflink: ProbeResult = { ok: false, detail: 'not probed yet' };
-  private readonly firstSeen = new Map<string, number>();
   private readonly sync: TestboxSync = { state: 'idle', detail: null, at: null };
   private readonly fleetTools: TestboxToolVersions | null = null;
   private readonly driving = new Set<Promise<void>>();
@@ -427,13 +438,14 @@ export class TestboxService {
     for (const r of this.d.rows) if (existsSync(path.join(r.mirrorPath, 'HEAD'))) await this.d.mirror.fetch(r.mirrorPath);
   }
 
-  /** Results, logs and refs past `CCRC_TESTBOX_RETENTION` deleted; refs only once their run's directory is gone. */
+  /** Results, logs and refs past `CCRC_TESTBOX_RETENTION` deleted; refs only once their run's directory is gone and
+   *  no run waiting on disk needs them (D-9006). A run in progress is never listed, so its log directory stays. */
   async retention(): Promise<void> {
     const now = this.d.now();
-    const kept = new Map<string, { at: number; results: boolean; logs: boolean; refs: boolean }>();
+    const kept = new Map<string, { at: number; seen: number; results: boolean; logs: boolean; refs: boolean }>();
     const entry = (id: string) => {
       let e = kept.get(id);
-      if (e === undefined) { e = { at: Number.POSITIVE_INFINITY, results: false, logs: false, refs: false }; kept.set(id, e); }
+      if (e === undefined) { e = { at: Number.POSITIVE_INFINITY, seen: now, results: false, logs: false, refs: false }; kept.set(id, e); }
       return e;
     };
     for (const kind of ['results', 'logs'] as const) {
@@ -447,37 +459,96 @@ export class TestboxService {
       }
     }
     const refsIn = new Map<string, string[]>();
+    let everyMirror = true;
+    // A stamp that cannot be read, written or removed is unmeasured: its run is timed from now for this pass only (its
+    // refs kept), said once at the end, and the pass goes on, so a full root still loses its old results and logs.
+    const unmeasured: string[] = [];
+    const stampAct = (act: () => void): void => {
+      try { act(); } catch (e) { unmeasured.push(e instanceof Error ? e.message : String(e)); }
+    };
     for (const r of this.d.rows) {
-      if (!existsSync(path.join(r.mirrorPath, 'HEAD'))) continue;
+      if (!existsSync(path.join(r.mirrorPath, 'HEAD'))) { everyMirror = false; continue; }
       for (const id of await this.d.mirror.runIds(r.mirrorPath)) {
-        if (!this.firstSeen.has(id)) this.firstSeen.set(id, now);
         const e = entry(id);
+        if (!e.refs) {
+          const seen = this.refsFirstSeen(id, now);
+          if (seen.kind === 'unmeasured') unmeasured.push(seen.reason);
+          e.seen = seen.kind === 'unmeasured' ? now : seen.at;
+        }
         e.refs = true;
         refsIn.set(id, [...(refsIn.get(id) ?? []), r.mirrorPath]);
       }
     }
     const list: KeptRun[] = [...kept].map(([runId, e]) => ({
       runId, results: e.results, logs: e.logs, refs: e.refs,
-      at: Number.isFinite(e.at) ? e.at : (this.firstSeen.get(runId) ?? now),
+      at: Number.isFinite(e.at) ? e.at : e.seen,
     }));
     const live = new Set([...liveRunIds(this.pool), ...this.runs.keys()]);
+    // D-9006: a run handed over to disk is queued again later and checks out its refs then; asked only of a run whose
+    // refs are otherwise due, since each answer lists the hand-over directory.
+    for (const r of list) if (r.refs && now - r.at >= this.s.retentionMs && this.d.handedOver?.(r.runId) === true) live.add(r.runId);
     const plan = retentionPlan(list, live, now, this.s.retentionMs);
     for (const id of plan.results) rmSync(path.join(this.s.root, 'results', id), { recursive: true, force: true });
     for (const id of plan.logs) rmSync(path.join(this.s.root, 'logs', id), { recursive: true, force: true });
     const touched = new Set<string>();
+    const seenDir = path.join(this.s.root, REFS_SEEN);
     for (const id of plan.refs) {
       for (const m of refsIn.get(id) ?? []) { await this.d.mirror.deleteRefs(m, id); touched.add(m); }
-      this.firstSeen.delete(id);
+      stampAct(() => rmSync(path.join(seenDir, id), { force: true }));
+    }
+    // A stamp whose refs are gone some other way goes too, but only on the word of every mirror. A mirror with no HEAD
+    // yet (a row added before its clone) holds this sweep back for as long as it lasts; stamps are empty files.
+    if (everyMirror && existsSync(seenDir)) {
+      stampAct(() => { for (const id of readdirSync(seenDir)) if (!refsIn.has(id)) rmSync(path.join(seenDir, id), { force: true }); });
     }
     for (const m of touched) await this.d.mirror.gc(m);
+    if (unmeasured.length > 0) {
+      const n = unmeasured.length;
+      this.failed('retention', `${n} refs-seen stamp${n === 1 ? '' : 's'} unmeasured, timed from now this pass (first: ${unmeasured[0]})`);
+    }
   }
 
-  /** The timer's work: fetch, sweep, retention, and the pristine store's (a new node version, unused keys, builds
+  /** D-9004: when retention first saw this run's refs, from its stamp; the first sight (a stamp proven absent) writes the
+   *  stamp at `now`. A stamp that cannot be read is never re-stamped, and one that cannot be written is unmeasured, not
+   *  a first sight: the caller times it from now for this pass only. A run whose results or logs are gone while its
+   *  directory held its refs is timed from it then, as before. */
+  private refsFirstSeen(runId: string, now: number): { kind: 'stamped'; at: number } | { kind: 'unmeasured'; reason: string } {
+    const f = path.join(this.s.root, REFS_SEEN, runId);
+    try {
+      return { kind: 'stamped', at: statSync(f).mtimeMs };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unmeasured', reason: e instanceof Error ? e.message : String(e) };
+    }
+    try {
+      mkdirSync(path.dirname(f), { recursive: true });
+      writeFileSync(f, '');
+      const t = new Date(now);
+      utimesSync(f, t, t);
+      return { kind: 'stamped', at: now };
+    } catch (e) {
+      return { kind: 'unmeasured', reason: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** D-9007: every registry proxy cache file not served for `CCRC_TESTBOX_REGISTRY_KEEP` deleted. Synchronous, as the
+   *  proxy's own reads and writes are, so it never falls between one of theirs. */
+  registryRetention(): void {
+    const dir = registryCacheDir(this.s.root);
+    dropCached(dir, registryPlan(cachedFiles(dir), this.d.now(), this.s.registryKeepMs));
+  }
+
+  /** D-9005: a failed arm of the tick, said once per tick, the tool sync's way. */
+  private failed(arm: string, e: unknown): void {
+    (this.d.log ?? console.error)(`ccrc-testbox: ${arm}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  /** The timer's work: fetch, sweep, retention, the registry cache's, and the pristine store's (a new node version, unused keys, builds
    *  whose next attempt has come). */
   async tick(): Promise<void> {
     await this.fetchMirrors().catch(() => undefined);
     await this.sweep();
-    await this.retention().catch(() => undefined);
+    await this.retention().catch((e: unknown) => this.failed('retention', e));
+    try { this.registryRetention(); } catch (e) { this.failed('registry retention', e); }
     this.pristineTick();
   }
 

@@ -22,6 +22,7 @@
 // A coordinator writes only its own programme's ledgers (spec §3.4): an item route also checks the ITEM's programme, so a
 // coordinator acting on another programme's item is `not-your-programme`. A secret's value never reaches these routes
 // (spec §5): the item names a slot, never a path.
+import { OPERATOR_UNMEASURED } from './programmeLifecycleStore.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
@@ -307,14 +308,14 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
   /** Ownership (spec §3.4): `claimsProgramme` or a refusal sent. Its throw (an unreadable run series, D-2545) is 503
    *  `run-unreadable`, so a coordinator with a row this box cannot represent is never told "not your programme" and never
    *  gets a bare 500 (review 1328 F3; `endDeadCoordinator.ts` maps the same reader the same way). */
-  const owns = (coord: CoordStore, reply: FastifyReply, byId: string, program: string): boolean => {
+  const owns = (coord: CoordStore, reply: FastifyReply, byId: string, byUuid: string, program: string): boolean => {
     try {
-      if (coord.claimsProgramme(byId, program)) return true;
+      if (coord.claimsProgramme(byId, program, byUuid)) return true;
     } catch (err) {
       refuseRoute(reply, 'run-unreadable', { detail: errText(err) });
       return false;
     }
-    refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${byId} holds no open run of programme ${program}` });
+    refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${byId} is not the coordinator of programme ${program}` });
     return false;
   };
 
@@ -362,7 +363,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
     if (outside !== null) return refuseOutsideDocLink(reply, outside);
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid', 'itemRaise'))) return;
-    if (!owns(coord, reply, who.byId, slug)) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
     const v = parsed.v;
     if (v.runId !== null) {
       const read = coord.run(v.runId);
@@ -389,7 +390,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const who = identityOf(req.query);
     if (who === null) return bad(reply, 'byId and byUuid are required query values');
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
-    if (!owns(coord, reply, who.byId, slug)) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
     const { open, cleared } = coord.itemsFor(slug, deps.now());
     return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf, deps.secretOf, 'none')) });
   });
@@ -400,7 +401,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
    *  decides NO ownership: attribution is the route's last await, and `ownedItem` reads and checks the item after it. Returns
    *  the caller's id, or null with the refusal sent. */
   const itemHead = async (req: FastifyRequest, reply: FastifyReply):
-    Promise<{ id: number; byId: string; body: Body } | null> => {
+    Promise<{ id: number; byId: string; byUuid: string; body: Body } | null> => {
     const rawId = (req.params as { id: string }).id;
     const id = /^[1-9][0-9]{0,15}$/.test(rawId) ? Number(rawId) : null;
     const body = req.body ?? {};
@@ -408,15 +409,15 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (id === null) { bad(reply, 'the item id is a positive integer'); return null; }
     if (who === null) { bad(reply, 'byId and byUuid are required strings'); return null; }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return null;
-    return { id, byId: who.byId, body: body as Body };
+    return { id, byId: who.byId, byUuid: who.byUuid, body: body as Body };
   };
 
   /** The item and its OWN programme's ownership, or null with the refusal sent. SYNCHRONOUS, and called right before the
    *  write with no await between them, so the ownership a route acts on is the ownership it read. */
-  const ownedItem = (coord: CoordStore, reply: FastifyReply, head: { id: number; byId: string }): ItemRow | null => {
+  const ownedItem = (coord: CoordStore, reply: FastifyReply, head: { id: number; byId: string; byUuid: string }): ItemRow | null => {
     const item = coord.itemById(head.id);
     if (item === null) { refuseRoute(reply, 'unknown-item', { detail: `no item ${head.id}` }); return null; }
-    if (!owns(coord, reply, head.byId, item.program)) return null;
+    if (!owns(coord, reply, head.byId, head.byUuid, item.program)) return null;
     return item;
   };
 
@@ -527,7 +528,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       doneWhen = dw.doneWhen;
     }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
-    if (!owns(coord, reply, who.byId, slug)) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
     // The definition of done is operator-only (O3): a pin sets it only while none is stored; a different list over a stored
     // one is a modification, which cites a ruling or an item (`goals modify`) and leaves a dated row.
     if (doneWhen !== null) {
@@ -576,7 +577,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       doneWhen = dw.doneWhen;
     }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
-    if (!owns(coord, reply, who.byId, slug)) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
     if (itemId !== null) {
       const item = coord.itemById(itemId);
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
@@ -598,7 +599,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const pr = posInt((req.body as Body)['pr']);
     if (pr === null) return bad(reply, 'pr is a positive integer');
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
-    if (!owns(coord, reply, who.byId, slug)) return;
+    if (!owns(coord, reply, who.byId, who.byUuid, slug)) return;
     const marked = coord.markModificationsMerged(slug, pr, deps.now());
     if (marked > 0) changed();
     return reply.code(200).send({ ok: true, marked });
@@ -675,19 +676,20 @@ const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
  *  run whose close detail keeps the operator's own; the operator's words are not checked for the tracker here. */
 const OPERATOR_PLAN_ABANDONED_WHY = 'Ended by the operator with its last run; the reason is on that run\'s record.';
 
-/** D-8558: the operator ends a programme whose last run its act just closed, through the two writers a programme's end already
- *  has: `programs.state` (the close's own retirement, D-51, which an abandon left `abandoned`) and the plan's close (`closePlan`,
- *  the plan store's one writer), so no run opens under it again. The operator's reason stays on the run's close detail; an
- *  abandoned plan's why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. */
+/** D-8558, programme lifecycle W1 (D-8983): the operator ends a programme whose last run its act just closed, through the
+ *  lifecycle's one writer (`decideInTx`, reached by `CoordStore#decideProgramme`): the decision and its record together, the
+ *  binding released, so no run opens under it again. The operator's reason stays on the run's close detail; an abandoned
+ *  end's recorded why is `OPERATOR_PLAN_ABANDONED_WHY`. False when a run of the programme is open. The plan port is no
+ *  longer needed for it: the end is the programme's own decision, not the plan's. */
 function endProgrammeByOperator(
-  coord: CoordStore, plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
+  coord: CoordStore, _plan: PlanStorePort | undefined, program: string, outcome: PlanEndOutcome, now: number,
 ): boolean {
   if (coord.programOpenRunCount(program) !== 0) return false;
-  coord.setProgramState(program, outcome);
-  // Without the plan port (a test, a script) the plan routes answer `unavailable`, and there is no plan here to close either.
-  if (plan !== undefined && plan.planEndOf(program) === null) {
-    plan.closePlan(program, outcome, outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null, now);
-  }
+  // An end already recorded stands (`decideInTx`'s `already-ended`, W1 review A6): the run is closed either way, and the
+  // programme keeps its first end rather than having it rewritten. The signed-in device is not carried to this door.
+  coord.decideProgramme({ slug: program, to: outcome, edge: 'ended', actor: OPERATOR_UNMEASURED,
+    why: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : 'ended by the operator with its last run',
+    planEndWhy: outcome === 'abandoned' ? OPERATOR_PLAN_ABANDONED_WHY : null }, now);
   return true;
 }
 
