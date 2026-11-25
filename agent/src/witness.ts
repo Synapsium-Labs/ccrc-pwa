@@ -7,7 +7,8 @@
 // only). A forged file can open a gap in message ids, the epoch and the restore generation, bounded by the witnessed raise
 // ceiling; it cannot exhaust a counter or lift trust in W1. A forged base above that ceiling still fences authority: Confirm
 // reports success and spends an epoch and a generation, but its follow-up restores the fence without replacing the file.
-// An operator must remove the held file to clear that witness. A console tuple can likewise fence again when presented after Confirm.
+// An operator must remove the held file to clear that witness. A console tuple takes the same verdict path; to clear it,
+// the operator clears that device's stored witness.
 import { closeSync, constants as fsConstants, fstatSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, writeSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';

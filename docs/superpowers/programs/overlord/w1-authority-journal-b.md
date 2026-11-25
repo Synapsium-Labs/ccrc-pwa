@@ -174,5 +174,6 @@ and journal highest values.
 
 A forged base above the ceiling still fences authority. Confirm reports success and spends an epoch and a generation, but its
 follow-up compares the same held agent answer and restores the fence in that pass. The agent receives no replacement offer;
-the operator must remove the held witness file to clear that witness. A console tuple takes the same verdict path and fences
-again when presented after Confirm. Confirm does not discard it.
+the operator must remove the held witness file to clear that witness. A console tuple takes the same verdict path, but the
+post-Confirm console exchange is not pinned by this fixture. Confirm does not clear the device's stored witness; the operator
+clears it on that device to recover.

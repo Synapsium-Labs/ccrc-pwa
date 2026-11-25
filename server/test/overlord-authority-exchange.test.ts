@@ -461,6 +461,7 @@ describe('witnessed counter raises', () => {
       expect(restore.confirm(OPERATOR, 'op-confirm', 1_800_000_000_000)).toMatchObject({
         ok: true, changed: true, epochAtConfirm: 2, restoreGeneration: 1,
       });
+      expect(r.guard.state()).toEqual({ kind: 'coherent' });
       await flush(); // Confirm's scheduled pass, with the same ready answer still held
       expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'witness-epoch' });
       expect(r.agent.sends).toHaveLength(0);
