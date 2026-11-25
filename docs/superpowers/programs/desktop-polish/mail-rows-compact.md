@@ -44,9 +44,13 @@ The console reads the head from `shared/injected-prompts.mjs` (the `mail-nudge` 
 `shared/api.ts`, at its growth cap, gains no line (measured). A turn is the lane's prompt when it is a user turn and
 `injectedPromptOf(text) === 'mail-nudge'`: the head at the start of the turn at a word boundary, nothing looser.
 
-Every form the server types today begins with that head, read from the server's own renderers in the tests: the generic
-nudge (`renderMailNudge`), the operator-message nudge (`renderOperatorMessageNudge`), the inbox wake
-(`renderInboxWakeLine`, with a count, a lapse and the codec's refusal) and the spot-probe notice (`renderSpotProbeLine`).
+Every form the server types today begins with that head, read from the server's own renderers: the generic nudge
+(`renderMailNudge`), the operator-message nudge (`renderOperatorMessageNudge`), the inbox wake (`renderInboxWakeLine`,
+with a count, a lapse and the codec's refusal) and the spot-probe notice (`renderSpotProbeLine`). A console test may not
+import server source (the reach census, `ci-reach-census.test.ts`, refused the first build's import: the console's tests
+skip a change under `server/`), so the forms are rendered once into `server/test/fixtures/mail-prompt-forms.json`, a path
+the console's tests may read, and `server/test/mail-prompt-forms.test.ts` holds that fixture equal to the renderers and
+each form to the head. A renderer that changes its words reds there, in the server suite that a server change runs.
 A person's message that mentions mail, names the head mid-sentence, quotes the prompt lower down, pastes it after other
 words, starts with a space, drops the full stop, says "mails", changes case or runs on past the head stays a bubble.
 
@@ -79,6 +83,21 @@ rows; now 30. The A2 pin still holds for every card that is not a fetch's result
 `mail-card.test.tsx` (the closed card is opened before its inside is read; its one control is its own disclosure, closed and
 open, with no word of acking, replying or answering), `chat-scroll.test.tsx` (the open card's price gains its head line; a
 closed card is one `mail-line`) and `tool-activity.test.tsx` (the words gain `messages`).
+
+**Suite runs on this branch.** The first full pwa run after the build was **red**: 7 cases in 5 files, all censuses this
+wave's new names had not been registered in (a module pair differing only in case, `MailRows.tsx` and `mailRows.ts`; two
+hook classes and the glyph constant missing from the owned vocabulary; one class string spelled twice; three duplicated
+CSS shapes). Fixed by renaming the row file `MailRow.tsx`, reusing the card's own kind and run rules in its head, naming
+the glyph class once, and the census entries (`design-system-boundary.test.ts` and `shape-census.test.ts`, the head beside
+the tool-activity row with its reason). The second full pwa run: 610 files passed (the 611th is todo-only), no failure. The whole browser suite on this tip
+(the coordinator's addition), every file under `pwa/browser`, through the runner in four parts of 30, 30, 30 and 29
+files: 119 files, 4292 cases passed, one marked expected-fail, 52 skipped, none failed.
+The server's guard suites (the fast run's `guardTests`, 262 files) found one more of this wave's, the reach census
+refusing a console test that imported server source (section 2). Their other reds were not this branch's: `ccd-tmux-anchor`
+(19) and `ccd-child-tmpdir` (1) fail only from this worktree's location (an extract of the same tree elsewhere fails the
+one `ccd-tmux-anchor` case current `main` fails too), `deviation-refs` timed out at 20 s under load and passed alone in
+16.5 s, and `typecheck-tests` could not run on the test box (its checkout has no pwa `node_modules`); the new server
+test typechecks clean under the server's settings.
 
 The tests were written after the code, so each guard was proven by a mutant instead of a red-first run: 34 mutants, every
 one killed by the jsdom suites (`mail-rows`, `tool-activity`, `mail-card`, `chat-scroll`, `same-row`). One survived at
