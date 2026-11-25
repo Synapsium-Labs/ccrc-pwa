@@ -789,6 +789,7 @@ Wave 46, ticket `x3-r2`, base `main` at `bce2bc52fd`. Deviation numbers issued: 
   - shard 3 of 4: 29 files passed, 1 failed; 954 passed, 1 expected fail, 40 skipped, 1 failed. The failure was `drawer-prompt-glyph` ("page.waitForTimeout: Page crashed"), in a run where the test slice's memory cap reported an OOM kill. That file alone read 16 of 16;
   - shard 4 of 4: 31 files passed; 895 passed.
   - The first whole-folder run, before the sheet fix, was red (shard 2, above), so this wave's suite line reads red.
+- **The whole browser folder, on the tree that is pushed** (after a second merge of main, at `09c8f5d502`, whose gate files took the holder's yes to a packet; the probe against main `25ed1ee2dd` then exited 0): shard 1 of 4, 30 files, 1445 passed and 12 skipped; shard 2, 30 files, 1027 passed; shard 3, 30 files, 955 passed, 1 expected fail and 40 skipped; shard 4, 31 files, 895 passed. No failure. The gate census, `review-routes` and `pwa-static-cache` read 548 of 548 there, and both typechecks exit 0.
 - **The busy answer: a decision, kept as the spec says.** A 429 `busy` shows the same one sentence and drops the token, like every other failure. A separate busy sentence would tell a stranger which tokens are real, because the per-share limit only answers for a live share (the coordinator's ruling).
 - **Bound to R3.** Export writes review copies with no link that can navigate the frame (D-9029, the coordinator's second ruling).
 - **Process notes, each reported to the coordinator.**
