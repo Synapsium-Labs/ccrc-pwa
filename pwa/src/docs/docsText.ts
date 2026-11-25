@@ -52,6 +52,15 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'snapshot-gone': 'The saved copy Docs was reading this file from went away twice, so Docs stopped; read it again in a moment.',
   'range-too-large': 'This file is {size}; Docs reads files up to {cap}.',
   'prepare-busy': 'The fleet box is busy preparing other large files right now; try again in a moment.',
+  // Outside folders (X2 P2): the registry's and admission's words. None names the folder's path.
+  'bad-label': 'That folder label is not one Docs can address: lower-case letters, digits and dashes, up to 32.',
+  'unknown-folder': 'There is no outside folder by that label on the fleet box.',
+  'label-exists': 'An outside folder already has that label; choose another or remove that one first.',
+  'absent': 'There is no folder at that path on the fleet box.',
+  'not-a-directory': 'That path on the fleet box is not a folder.',
+  'foreign-owner': 'That folder belongs to another user on the fleet box, so Docs will not read it.',
+  'protected': 'That folder is, holds or sits inside a protected place on the fleet box ({reason}), so Docs will not read it.',
+  'unreadable': 'That folder could not be read on the fleet box ({reason}).',
   'remote-absent': 'This repository has no origin remote to fetch from.',
   'remote-branch-absent': 'Origin has no branch by this name.',
   'fetch-auth-failed': "Fetching from origin was refused: the fleet box's credentials were not accepted.",
@@ -83,6 +92,8 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'bad-query': "The server refused this request's parameters.",
   'raster-mismatch': 'These bytes are not a {declared} image.',
   'response-type-refused': 'The server refused to send an answer of an unexpected type.',
+  'auth-off': 'Outside folders are read only with a signed-in session, and sign-in is off on this console.',
+  'unauthenticated': 'Outside folders are read only with a signed-in session; sign in and try again.',
 };
 
 /** The sentences a failure word falls back to when its answer omits a field the sentence above names (absent means
@@ -110,6 +121,8 @@ export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonl
   ],
   'too-many-entries': ['This repository has more entries than Docs lists at once.'],
   'unreadable-path': ['That path could not be read on the fleet box.'],
+  'protected': ['That folder is, holds or sits inside a protected place on the fleet box, so Docs will not read it.'],
+  'unreadable': ['That folder could not be read on the fleet box.'],
   'untrusted-worktree': ['The worktree holding this draft failed the ownership check.'],
   'git-failed': ['A git command failed on the fleet box.'],
   'ccd-killed': ["The fleet box's ccd was stopped before it answered."],

@@ -9,15 +9,17 @@
 // Spelled nowhere here, by rule: the two qualified ref prefixes (derived below from L0's prefix body, refinement
 // (q)), any grammar body, the redactor's rules, and the docs cap token.
 import {
-  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_ENTRIES,
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_FOLDER_ENTRY_KINDS, DOCS_FOLDER_LABEL_RE,
+  DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_ENTRIES,
   DOCS_LOG_MAX_WIRE_BYTES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
   DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES,
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
   DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRangePinText, docsRefText, isDocsBareRef, isDocsCommit,
-  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRangeSnapshot, isDocsRelPath, isDocsSection,
+  isDocsFingerprint, isDocsMtimeNs, isDocsProject, isDocsQualifiedRef, isDocsRangeSnapshot, isDocsRelPath, isDocsSection,
   parseDocsRangeCount, parseDocsRangePinText, parseDocsRef, redactDocsText, sniffRaster,
   type DocContentClass, type DocFilePin, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
-  type DocsFetchOk, type DocsFileResponse, type DocsLogAsk, type DocsRangePin, type DocsRefreshFetch,
+  type DocsFetchOk, type DocsFileResponse, type DocsFolderFileResponse, type DocsFolderLabelRow, type DocsFolderListRow,
+  type DocsFolderShowOk, type DocsFolderTreeOk, type DocsLogAsk, type DocsRangePin, type DocsRefreshFetch,
   type DocsRefreshResponse, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
 } from '../../../shared/docs.js';
@@ -72,6 +74,18 @@ export const DOCS_FAILURE_HTTP: Record<DocsFailure, number> = {
   'snapshot-gone': 409,
   'range-too-large': 413,
   'prepare-busy': 503,
+  // Outside folders (X2 P2.3): a label outside its grammar is a 400 like every argument word; a label the registry does not
+  // hold is a 404 as `unknown-project` is, and one already taken a 409 conflict; a path that is not there is a 404 as
+  // `absent-path` is; an admission refusal (not a directory, another owner's, protected) is a 422 as `not-a-git-repo` and
+  // `untrusted-worktree` are; an unreadable registry, directory or cache is a 502 as `unreadable-path` is.
+  'bad-label': 400,
+  'unknown-folder': 404,
+  'label-exists': 409,
+  'absent': 404,
+  'not-a-directory': 422,
+  'foreign-owner': 422,
+  'protected': 422,
+  'unreadable': 502,
   // Fetch.
   'remote-absent': 422,
   'remote-branch-absent': 404,
@@ -105,6 +119,10 @@ export const DOCS_FAILURE_HTTP: Record<DocsFailure, number> = {
   'bad-query': 400,
   'raster-mismatch': 422,
   'response-type-refused': 500,
+  // The outside-folder sign-in gate (X2 P2.3), the statuses the account gate gives the same words: a dark box answers 501, a
+  // request without a session 401.
+  'auth-off': 501,
+  'unauthenticated': 401,
 };
 
 /** `caps-unknown`'s `Retry-After`, in seconds (section 3.7: 503, `Retry-After: 5`; section 7.1, C1). */
@@ -200,8 +218,11 @@ export function refreshDue(tree: DocsTreeOk): boolean {
 // `docsApi` writes every value through `encodeURIComponent`, so only a hand-typed URL meets a bare `+`, and it reads
 // as a space.
 
-/** The five GET routes whose query `parseDocsApiQuery` reads. The refresh POST's body is `parseDocsRefreshBody`'s. */
-export type DocsApiRoute = 'projects' | 'tree' | 'file' | 'history' | 'range';
+/** The five project GET routes, the outside-folder reads and the folder Remove DELETE (X2 P2.3), whose query
+ *  `parseDocsApiQuery` reads (Remove's takes no key, like the listings'). The refresh POST's body is
+ *  `parseDocsRefreshBody`'s and the folder Add's `parseDocsFolderAddBody`'s. */
+export type DocsApiRoute = 'projects' | 'tree' | 'file' | 'history' | 'range' | 'folder-list' | 'folder-tree' | 'folder-file'
+  | 'folder-range' | 'folder-remove';
 
 /** Where a range read's leaf is: a committed doc at its commit, or a draft at its branch and head, as ccd's
  *  `docs-show-range` takes it. The file route's `servedRef` and `fp` are not here: ccd never reads them, and the range pin
@@ -218,13 +239,28 @@ export interface DocsRangeFrameAsk { snapshot: string; offset: number; length: n
  *  (`docsRangePlan` does that). `frame: null` is a prepare, one meaning. */
 export interface DocsRangeQuery { target: DocsRangeTarget; frame: DocsRangeFrameAsk | null }
 
+/** The leaf an outside folder's range read is of: its place below the folder and its range pin, `fp` or `stat`, never `blob`
+ *  (a folder has no commit). The label is the route's own and rides beside it. */
+export interface DocsFolderRangeTarget { section: DocSectionSlug; path: string; pin: DocsRangePin }
+
+/** A folder range query as `parseDocsApiQuery` leaves it; `frame: null` is a prepare, one meaning. */
+export interface DocsFolderRangeQuery { target: DocsFolderRangeTarget; frame: DocsRangeFrameAsk | null }
+
+/** What a folder file read asks for: the leaf's place and the fingerprint its listing row carried. */
+export interface DocsFolderFileAsk { section: DocSectionSlug; path: string; fp: string }
+
 /** A GET request, parsed. `ref: null` is the default view (the query has no `ref` key), one meaning. */
 export type DocsApiRequest =
   | { route: 'projects' }
   | { route: 'tree'; ref: DocsRefSpec | null }
   | { route: 'file'; pin: DocFilePin }
   | { route: 'history'; ask: DocsLogAsk }
-  | { route: 'range'; query: DocsRangeQuery };
+  | { route: 'range'; query: DocsRangeQuery }
+  | { route: 'folder-list' }
+  | { route: 'folder-remove' }
+  | { route: 'folder-tree' }
+  | { route: 'folder-file'; ask: DocsFolderFileAsk }
+  | { route: 'folder-range'; query: DocsFolderRangeQuery };
 
 /** The pin keys by name, in `DOCS_PIN_KEYS`'s order: a committed pin's two, then a draft pin's three. */
 const [PIN_COMMIT, PIN_SERVED_REF, PIN_BRANCH, PIN_HEAD, PIN_FP] = DOCS_PIN_KEYS;
@@ -239,6 +275,12 @@ const API_KEYS: Readonly<Record<DocsApiRoute, readonly string[]>> = {
   file: [...DOCS_PIN_KEYS, 'section', 'path'],
   history: [PIN_COMMIT, 'section', 'path'],
   range: [PIN_COMMIT, PIN_BRANCH, PIN_HEAD, 'section', 'path', 'pin', 'prepare', 'snapshot', 'offset', 'length'],
+  // A folder has no commit, branch or head: its reads name the leaf by section and path alone, and pin it by `fp` or `pin`.
+  'folder-list': [],
+  'folder-remove': [],
+  'folder-tree': [],
+  'folder-file': ['section', 'path', PIN_FP],
+  'folder-range': ['section', 'path', 'pin', 'prepare', 'snapshot', 'offset', 'length'],
 };
 
 /** The refresh body's keys: exactly these two (section 3.4). */
@@ -351,13 +393,30 @@ function parseRangeQuery(query: Readonly<Record<string, unknown>>): { ok: true; 
     if (!isText(head) || !isDocsCommit(head)) return refused('bad-commit');
     where = { branch, head };
   }
+  const tail = parseRangeTail(query, prepare);
+  if (!tail.ok) return tail;
+  return { ok: true, query: { target: { where, section: tail.section, path: tail.path, pin: tail.pin }, frame: tail.frame } };
+}
+
+/** What every range query shares after its place keys (a project's `commit` or `branch` and `head`, or a folder's none):
+ *  the section, the path, the range pin and the step. */
+type RangeTail = { ok: true; section: DocSectionSlug; path: string; pin: DocsRangePin; frame: DocsRangeFrameAsk | null };
+
+/**
+ * The tail of a range query, in ccd's argv order, the first fault winning: `section`, `path`, `pin` (bad-fingerprint:
+ * ccd's own word for a pin outside the three forms), then the step the caller measured the keys of (`prepare`: the value
+ * `1`, else `range-step`; otherwise `snapshot`, a snapshot id, else `snapshot-gone`, then `offset` and `length`, counts,
+ * the length at least 1, else `range-number`). The project range read and the folder one both call it, so one grammar
+ * reads both.
+ */
+function parseRangeTail(query: Readonly<Record<string, unknown>>, prepare: boolean): RangeTail | DocsFailureBody {
   const place = parsePinPlace(query);
   if (!place.ok) return place;
   const pinText = own(query, 'pin');
   const pin = isText(pinText) ? parseDocsRangePinText(pinText) : null;
   if (pin === null) return refused('bad-fingerprint');
-  const target: DocsRangeTarget = { where, section: place.section, path: place.path, pin };
-  if (prepare) return own(query, 'prepare') === '1' ? { ok: true, query: { target, frame: null } } : badQuery('range-step', 'prepare');
+  const at = { ok: true as const, section: place.section, path: place.path, pin };
+  if (prepare) return own(query, 'prepare') === '1' ? { ...at, frame: null } : badQuery('range-step', 'prepare');
   const snapshot = own(query, 'snapshot');
   if (!isText(snapshot) || !isDocsRangeSnapshot(snapshot)) return refused('snapshot-gone');
   const offsetText = own(query, 'offset');
@@ -366,7 +425,30 @@ function parseRangeQuery(query: Readonly<Record<string, unknown>>): { ok: true; 
   const lengthText = own(query, 'length');
   const length = isText(lengthText) ? parseDocsRangeCount(lengthText) : null;
   if (length === null || length === 0) return badQuery('range-number', 'length');
-  return { ok: true, query: { target, frame: { snapshot, offset, length } } };
+  return { ...at, frame: { snapshot, offset, length } };
+}
+
+/** A folder range query (X2 P2.3): `section`, `path` and `pin` present (`pin-shape`), the step exactly a prepare or exactly a
+ *  frame (`range-step`), then `parseRangeTail`. A folder names its leaf by no commit, branch or head: those keys are unknown. */
+function parseFolderRangeQuery(query: Readonly<Record<string, unknown>>):
+    { ok: true; query: DocsFolderRangeQuery } | DocsFailureBody {
+  if (!Object.hasOwn(query, 'section') || !Object.hasOwn(query, 'path') || !Object.hasOwn(query, 'pin')) return badQuery('pin-shape');
+  const frameKeys = ['snapshot', 'offset', 'length'].filter((k) => Object.hasOwn(query, k));
+  const prepare = Object.hasOwn(query, 'prepare');
+  if (!(prepare ? frameKeys.length === 0 : frameKeys.length === 3)) return badQuery('range-step');
+  const tail = parseRangeTail(query, prepare);
+  return tail.ok ? { ok: true, query: { target: { section: tail.section, path: tail.path, pin: tail.pin }, frame: tail.frame } } : tail;
+}
+
+/** A folder file query: `section`, `path` and `fp` all present (`pin-shape`), then each in ccd's argv order (`bad-section`,
+ *  `bad-path`, `bad-fingerprint`). The server derives the class cap itself, so no size or byte bound is read from the query. */
+function parseFolderFileQuery(query: Readonly<Record<string, unknown>>): { ok: true; ask: DocsFolderFileAsk } | DocsFailureBody {
+  if (!Object.hasOwn(query, 'section') || !Object.hasOwn(query, 'path') || !Object.hasOwn(query, PIN_FP)) return badQuery('pin-shape');
+  const place = parsePinPlace(query);
+  if (!place.ok) return place;
+  const fp = own(query, PIN_FP);
+  if (!isText(fp) || !isDocsFingerprint(fp)) return refused('bad-fingerprint');
+  return { ok: true, ask: { section: place.section, path: place.path, fp } };
 }
 
 /**
@@ -385,6 +467,17 @@ export function parseDocsApiQuery(route: DocsApiRoute, query: Readonly<Record<st
   const repeated = allowed.find((k) => Array.isArray(own(query, k)));
   if (repeated !== undefined) return badQuery('repeated', repeated);
   if (route === 'projects') return { ok: true, req: { route } };
+  if (route === 'folder-list') return { ok: true, req: { route } };
+  if (route === 'folder-remove') return { ok: true, req: { route } };
+  if (route === 'folder-tree') return { ok: true, req: { route } };
+  if (route === 'folder-file') {
+    const file = parseFolderFileQuery(query);
+    return file.ok ? { ok: true, req: { route, ask: file.ask } } : file;
+  }
+  if (route === 'folder-range') {
+    const range = parseFolderRangeQuery(query);
+    return range.ok ? { ok: true, req: { route, query: range.query } } : range;
+  }
   if (route === 'tree') {
     if (!Object.hasOwn(query, 'ref')) return { ok: true, req: { route, ref: null } };
     const text = own(query, 'ref');
@@ -418,6 +511,183 @@ export const DOCS_SECTION_GATED: Readonly<Record<DocSectionSlug, boolean>> = {
 /** The `:project` route parameter: the project grammar, else `bad-project` (section 3.4), before any exec. */
 export function parseDocsProjectParam(project: unknown): { ok: true; project: string } | DocsFailureBody {
   return isText(project) && isDocsProject(project) ? { ok: true, project } : refused('bad-project');
+}
+
+// ===== Outside folders (X2 P2.3; spec 4.1 and 7): the sign-in gate, the label, the Add path and the Add body =====
+
+/** Whether sign-in is armed on this box, as the composition root measures it (`cfg.authEnabled`): one word each. */
+export type DocsSignIn = 'dark' | 'armed';
+
+/** What a folder read may do: `allow`, or the refusal's own word (the project's refusal vocabulary, as the account gate
+ *  answers it). */
+export type FolderReadGate = 'allow' | 'auth-off' | 'unauthenticated';
+
+/**
+ * THE folder read gate (spec 4.1, M11.6): a folder is a live working tree, and the walls forbid reading one without a
+ * session. Every outside-folder read asks it first, before any exec:
+ * - sign-in dark: `auth-off`, whatever `session` says (a dark box has no session worth the name, and the account gate
+ *   refuses dark first for the same reason);
+ * - armed and no session: `unauthenticated`;
+ * - armed and a session: `allow`.
+ * Pure: `session` is the caller's measured answer (the session verdict), never the request.
+ */
+export function folderReadGate(signIn: DocsSignIn, session: boolean): FolderReadGate {
+  if (signIn === 'dark') return 'auth-off';
+  return session ? 'allow' : 'unauthenticated';
+}
+
+/**
+ * The folder Remove gate (spec 4.1 and 7): Remove is a narrowing, so it works while sign-in is dark, and asks no account
+ * gate. With sign-in armed it still needs a session, which the root gate already measures; this restates it, as the account
+ * gate restates the session question for its routes, so a Remove never reaches ccd without one:
+ * - sign-in dark: `allow`, whatever `session` says;
+ * - armed and no session: `unauthenticated`;
+ * - armed and a session: `allow`.
+ */
+export function folderRemoveGate(signIn: DocsSignIn, session: boolean): Exclude<FolderReadGate, 'auth-off'> {
+  if (signIn === 'dark') return 'allow';
+  return session ? 'allow' : 'unauthenticated';
+}
+
+/** The refusal for a word `folderReadGate` or `folderRemoveGate` answered other than `allow`: the docs failure body of that
+ *  word, sent through `sendDocsFailure` like every other docs refusal, so its status is `DOCS_FAILURE_HTTP`'s (501 and 401,
+ *  the account gate's own statuses for the same two words) and the route quotes no word. */
+export function folderGateRefusal(word: Exclude<FolderReadGate, 'allow'>): DocsFailureBody {
+  return { ok: false, failure: word };
+}
+
+/** A folder label in the URL: the label grammar, else `bad-label`, ccd's own word for it (as `parseDocsProjectParam`
+ *  answers `bad-project`), before any exec. The refused text is never echoed. */
+export function parseDocsFolderLabel(label: unknown): { ok: true; label: string } | DocsFailureBody {
+  return isText(label) && DOCS_FOLDER_LABEL_RE.test(label) ? { ok: true, label } : refused('bad-label');
+}
+
+/** The longest absolute path an Add may name, in UTF-8 bytes: Linux's `PATH_MAX`, the same bound ccd's own admission holds
+ *  (`FOLDER_PATH_MAX_BYTES`). The server's check is a second decider of the same fact, legitimately different: ccd re-checks
+ *  beside the files on another host (spec 4.1), and this one only keeps a hostile shape off the verb's argv. */
+export const DOCS_FOLDER_PATH_MAX_BYTES = 4096;
+
+/** A C0 or C1 control (DEL included) anywhere in a path. */
+const FOLDER_PATH_CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+/** A lone surrogate: a JS string can hold one, and a python argv never can. */
+const FOLDER_PATH_LONE_SURROGATE = /\p{Cs}/u;
+const FOLDER_PATH_ENCODER = new TextEncoder();
+
+/**
+ * The shape of an Add's path (spec 4.1: "absolute, no `.` or `..`, bounded length"): it starts with `/`, every other
+ * component is non-empty and neither `.` nor `..` (so no `//`, no trailing `/`, and `/` alone is no folder), it holds no
+ * control character or lone surrogate, and it is at most `DOCS_FOLDER_PATH_MAX_BYTES` bytes of UTF-8. Whether the path
+ * names an admissible directory is ccd's, beside the files.
+ */
+export function isDocsFolderPath(path: string): boolean {
+  if (!path.startsWith('/') || path.length > DOCS_FOLDER_PATH_MAX_BYTES) return false;
+  if (FOLDER_PATH_CONTROL.test(path) || FOLDER_PATH_LONE_SURROGATE.test(path)) return false;
+  if (FOLDER_PATH_ENCODER.encode(path).byteLength > DOCS_FOLDER_PATH_MAX_BYTES) return false;
+  return path.slice(1).split('/').every((component) => component !== '' && component !== '.' && component !== '..');
+}
+
+/** The Add body's keys: exactly these two. */
+const FOLDER_ADD_KEYS: readonly string[] = ['label', 'path'];
+
+/** A parsed Add body. */
+export type DocsFolderAddRequest = { label: string; path: string };
+
+/**
+ * Parse the Add POST's body (spec 4.1), in order, each refusal before any exec and none echoing the path:
+ * 1. not a plain object: `bad-query {why:'body'}`;
+ * 2. an extra key: `bad-query {key, why:'unknown'}`, the first in code-unit order;
+ * 3. `label` or `path` missing or not a string: `bad-query {key, why:'body'}`;
+ * 4. a label outside its grammar: `bad-label`; then a path outside `isDocsFolderPath`: `bad-path`, ccd's own word for a
+ *    path outside its shape. Neither refusal carries the text.
+ */
+export function parseDocsFolderAddBody(body: unknown): { ok: true; req: DocsFolderAddRequest } | DocsFailureBody {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return badQuery('body');
+  const record = body as Readonly<Record<string, unknown>>;
+  const unknown = firstUnknownKey(record, FOLDER_ADD_KEYS);
+  if (unknown !== undefined) return badQuery('unknown', unknown);
+  const label = own(record, 'label');
+  if (!isText(label)) return badQuery('body', 'label');
+  const path = own(record, 'path');
+  if (!isText(path)) return badQuery('body', 'path');
+  const checked = parseDocsFolderLabel(label);
+  if (!checked.ok) return checked;
+  return isDocsFolderPath(path) ? { ok: true, req: { label, path } } : refused('bad-path');
+}
+
+// ===== The folder doors' backstop: nothing outside the known fields leaves, and no free text with it (spec 4.1) =====
+// ccd never sends a folder's path in a tree, a show or a refusal, and the adapter redacts what it carries. These are the
+// server's own second wall, so a ccd that broke that contract (or a field added later) cannot put a path on the wire from
+// a folder door: bodies are BUILT from named fields, each held to a grammar, never copied with a spread.
+
+/** An errno name as ccd words it (`errno.errorcode`'s names, or `E<number>` for a code with none). */
+const FOLDER_ERRNO_RE = /^E[A-Z0-9]{1,15}$/;
+/** A `reason` word: ccd's own words are lower-case kebab (`ssh`, `dot-config`, `registry-busy`) or an errno name. */
+const FOLDER_REASON_RE = /^(?:E[A-Z0-9]{1,15}|[a-z0-9-]{1,40})$/;
+/** A short kebab word: a failure's `why`, `key` and `kind` and a raster's `declared` type. */
+const FOLDER_WORD_RE = /^[a-z0-9-]{1,40}$/;
+/** A signal name (`SIGKILL`). */
+const FOLDER_SIGNAL_RE = /^[A-Za-z0-9]{1,16}$/;
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const wordIn = (re: RegExp) => (v: unknown): boolean => isText(v) && re.test(v);
+
+/** The structured fields a folder door's refusal may carry beside its word, each with the test a value must pass. Every
+ *  other key is dropped: `detail`, `stderrHead`, `cause`, `word`, `site` and every list or free text among them. */
+const FOLDER_FAILURE_FIELDS: Readonly<Record<string, (v: unknown) => boolean>> = {
+  reason: wordIn(FOLDER_REASON_RE), errno: wordIn(FOLDER_ERRNO_RE), why: wordIn(FOLDER_WORD_RE), key: wordIn(FOLDER_WORD_RE),
+  kind: wordIn(FOLDER_WORD_RE), declared: wordIn(FOLDER_WORD_RE), signal: wordIn(FOLDER_SIGNAL_RE),
+  now: (v) => v === 'absent' || v === 'present', lane: (v) => v === 'read' || v === 'fetch',
+  size: isFiniteNumber, cap: isFiniteNumber, count: isFiniteNumber, bytes: isFiniteNumber, rc: isFiniteNumber,
+  code: isFiniteNumber, retryAfterMs: isFiniteNumber, lockAgeMs: (v) => v === null || isFiniteNumber(v),
+};
+
+/**
+ * A refusal as a folder door sends it: the word and the structured fields of `FOLDER_FAILURE_FIELDS` whose values pass their
+ * test, and nothing else. The free-text fields (`detail`, `stderrHead`, `cause`, `word` and the like) are dropped, which
+ * costs the page a sentence's detail and never its word, so no text ccd or the link produced can carry a path out.
+ */
+export function docsFolderFailureBody(body: DocsFailureBody): DocsFailureBody {
+  const kept = Object.entries(body).filter(([key, value]) => Object.hasOwn(FOLDER_FAILURE_FIELDS, key) && FOLDER_FAILURE_FIELDS[key]!(value));
+  return { ok: false, failure: body.failure, ...Object.fromEntries(kept) } as DocsFailureBody;
+}
+
+/** The unlisted reasons ccd names, the only keys of a tree's `byReason` that leave. */
+const FOLDER_UNLISTED_REASONS = ['invalid-utf8', 'unsafe-char', 'too-long', 'too-deep'] as const;
+
+/** A tree body built from the known fields of a tree answer that passed `docsFolderAnswerShape`: the envelope, the label,
+ *  each row's six facts (and its errno, an `unreadable` row's, which the shape check held to `FOLDER_ERRNO_RE`), and the
+ *  four unlisted reasons. An unknown key at any level is dropped. */
+export function docsFolderTreeBody(answer: DocsFolderTreeOk): DocsFolderTreeOk {
+  const by: Record<string, number> = {};
+  for (const reason of FOLDER_UNLISTED_REASONS) {
+    const n = (answer.unlisted.byReason as Readonly<Record<string, number | undefined>>)[reason];
+    if (n !== undefined) by[reason] = n;
+  }
+  return {
+    v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: isFiniteNumber(answer.elapsedMs) ? answer.elapsedMs : 0, label: answer.label,
+    entries: answer.entries.map((e) => ({
+      section: e.section, path: e.path, kind: e.kind, size: e.size, mtimeNs: e.mtimeNs, fp: e.fp,
+      ...(e.kind === 'unreadable' && e.errno !== undefined ? { errno: e.errno } : {}),
+    })),
+    unlisted: { count: answer.unlisted.count, byReason: by },
+  };
+}
+
+/** A show body built from the known fields of a folder show the adapter held to its ask, its one content field rebuilt from
+ *  the verified bytes (`servedShow`'s rule). An unknown key is dropped. */
+function folderShowBody(answer: DocsFolderShowOk, bytes: Uint8Array): DocsFolderShowOk {
+  const content = answer.encoding === 'utf8' ? { text: SHOW_UTF8.decode(bytes) } : { b64: answer.b64 };
+  return {
+    v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: isFiniteNumber(answer.elapsedMs) ? answer.elapsedMs : 0, label: answer.label,
+    source: 'folder', section: answer.section, path: answer.path, size: answer.size, sha256: answer.sha256, fp: answer.fp,
+    mtimeNs: answer.mtimeNs, encoding: answer.encoding, ...content,
+  };
+}
+
+/** The labels-only rows `GET /api/docs-folders` answers (spec 4.1): each folder's label and state, and NEVER its path.
+ *  The one place a path is dropped, so no door can forget to. */
+export function docsFolderLabelRows(rows: readonly DocsFolderListRow[]): DocsFolderLabelRow[] {
+  return rows.map(({ label, state }) => ({ label, state }));
 }
 
 /** A parsed refresh body. `ref: null` is the default view, one meaning; `reason` changes nothing on the server but
@@ -606,17 +876,39 @@ export type DocsRangePlan = { ok: true; target: DocsRangeTarget; frame: DocsRang
 export function docsRangePlan(q: DocsRangeQuery): DocsRangePlan | DocsFailureBody {
   const { target, frame } = q;
   if (('commit' in target.where) !== (target.pin.kind === 'blob')) return refused('bad-fingerprint');
-  if (target.pin.kind === 'stat' && target.pin.size > DOCS_RANGE_MAX_BYTES) {
-    return { ok: false, failure: 'range-too-large', size: target.pin.size, cap: DOCS_RANGE_MAX_BYTES };
+  const job = rangeBoundsJob(target.pin, frame);
+  return job.ok ? { ok: true, target, frame, job: job.job } : job;
+}
+
+/** Steps 2 and 3 of a range plan, shared by a project's and a folder's: the bounds the pin and the step must keep, and the
+ *  lane job of the step that keeps them. One reader of `DOCS_RANGE_MAX_BYTES` and `DOCS_RANGE_FRAME_BYTES` here. */
+function rangeBoundsJob(pin: DocsRangePin, frame: DocsRangeFrameAsk | null): { ok: true; job: DocsJob } | DocsFailureBody {
+  if (pin.kind === 'stat' && pin.size > DOCS_RANGE_MAX_BYTES) {
+    return { ok: false, failure: 'range-too-large', size: pin.size, cap: DOCS_RANGE_MAX_BYTES };
   }
-  if (frame === null) return { ok: true, target, frame, job: RANGE_PREPARE_JOB };
+  if (frame === null) return { ok: true, job: RANGE_PREPARE_JOB };
   if (frame.length > DOCS_RANGE_FRAME_BYTES) {
     return { ok: false, failure: 'range-too-large', size: frame.length, cap: DOCS_RANGE_FRAME_BYTES };
   }
   if (frame.offset + frame.length > DOCS_RANGE_MAX_BYTES) {
     return { ok: false, failure: 'range-too-large', size: frame.offset + frame.length, cap: DOCS_RANGE_MAX_BYTES };
   }
-  return { ok: true, target, frame, job: rangeFrameJob(frame.length) };
+  return { ok: true, job: rangeFrameJob(frame.length) };
+}
+
+/** What `docsFolderRangePlan` decided: the leaf, the step (`frame: null` is a prepare, one meaning) and the lane job. */
+export type DocsFolderRangePlan = { ok: true; target: DocsFolderRangeTarget; frame: DocsRangeFrameAsk | null; job: DocsJob };
+
+/**
+ * Plan one outside-folder range read from the parsed query alone (X2 P2.3; pure, no exec), the first refusal winning:
+ * a folder has no commit, so a `blob` pin is `bad-fingerprint`, ccd's own word for it; then the bounds a project's range
+ * read keeps (`rangeBoundsJob`).
+ */
+export function docsFolderRangePlan(q: DocsFolderRangeQuery): DocsFolderRangePlan | DocsFailureBody {
+  const { target, frame } = q;
+  if (target.pin.kind === 'blob') return refused('bad-fingerprint');
+  const job = rangeBoundsJob(target.pin, frame);
+  return job.ok ? { ok: true, target, frame, job: job.job } : job;
 }
 
 /** A show's server-side plan: the path's class, the `--max-bytes` it sends ccd, and the lane job it books. */
@@ -859,6 +1151,11 @@ const KEY_BLOB = 'blob';
 const KEY_LISTING = 'listing';
 const KEY_FP = 'fp';
 const KEY_NODE = 'node';
+const KEY_FOLDER = 'folder';
+const KEY_FOLDER_LIST = 'folder-list';
+const KEY_FOLDER_TREE = 'folder-tree';
+const KEY_FOLDER_SHOW = 'folder-show';
+const KEY_FOLDER_RANGE = 'folder-range';
 
 function docsKey(kind: string, fields: readonly string[]): string {
   return [kind, ...fields].join(KEY_SEP);
@@ -908,6 +1205,38 @@ export function docsRangeFlightKey(node: string, project: string, target: DocsRa
 /** One project on one node: the generation counter's key and the fetch lane's queue key. */
 export function docsProjectKey(node: string, project: string): string {
   return docsKey(KEY_PROJECT, [node, project]);
+}
+
+/** One outside folder on one node: the generation counter's key. A Remove bumps it, so a read that begins after a Remove never
+ *  joins a flight begun before it (X2 P2.3, `folder: removed while open`). The label grammar excludes NUL. */
+export function docsFolderKey(node: string, label: string): string {
+  return docsKey(KEY_FOLDER, [node, label]);
+}
+
+/** The folder registry's flight: one listing read at a time per node and generation of the registry (`docsFolderKey` of the
+ *  empty label, which no label is). */
+export function docsFolderListFlightKey(node: string, gen: number): string {
+  return docsKey(KEY_FOLDER_LIST, [node, String(gen)]);
+}
+
+/** A folder tree flight: the label and its generation. */
+export function docsFolderTreeFlightKey(node: string, label: string, gen: number): string {
+  return docsKey(KEY_FOLDER_TREE, [node, label, String(gen)]);
+}
+
+/** A folder show flight: the leaf's place and fingerprint, the `--max-bytes` asked, and the folder's generation. */
+export function docsFolderShowFlightKey(node: string, label: string, ask: DocsFolderFileAsk, maxBytes: number,
+  gen: number): string {
+  return docsKey(KEY_FOLDER_SHOW, [node, label, ask.section, ask.path, ask.fp, String(maxBytes), String(gen)]);
+}
+
+/** A folder range flight: the leaf's place and range pin, then the step (`prepare`, or the snapshot, offset and length),
+ *  and the folder's generation. */
+export function docsFolderRangeFlightKey(node: string, label: string, target: DocsFolderRangeTarget,
+  frame: DocsRangeFrameAsk | null, gen: number): string {
+  const step = frame === null ? ['prepare'] : ['frame', frame.snapshot, String(frame.offset), String(frame.length)];
+  return docsKey(KEY_FOLDER_RANGE,
+    [node, label, target.section, target.path, docsRangePinText(target.pin), ...step, String(gen)]);
 }
 
 /** A committed blob in the blob cache (section 6.5): node, repository key, blob. */
@@ -1140,6 +1469,72 @@ export function docsRangeAnswerShape(step: 'prepare' | 'frame', answer: unknown)
     ? { ok: true } : schemaFault();
 }
 
+/** A folder label as an answer carries it: text in the label grammar. */
+function isFolderLabelText(v: unknown): v is string {
+  return isText(v) && DOCS_FOLDER_LABEL_RE.test(v);
+}
+
+/** The kinds of a folder entry, typed by the L0 list. */
+const FOLDER_ENTRY_KINDS: ReadonlySet<string> = new Set(DOCS_FOLDER_ENTRY_KINDS);
+
+/** One folder listing row: its section, a key-text path, a kind of the L0 list, and the facts that kind carries: a `file` a
+ *  byte count, a decimal-string modified time and a fingerprint or `null`; every other kind `null` for all three; an
+ *  `unreadable` row its errno name, no other row one. */
+function folderEntryOk(e: unknown): boolean {
+  if (!isRecord(e)) return false;
+  const section = own(e, 'section');
+  const kind = own(e, 'kind');
+  if (!isText(section) || !isDocsSection(section) || !isKeyText(own(e, 'path'))) return false;
+  if (!isText(kind) || !FOLDER_ENTRY_KINDS.has(kind)) return false;
+  const size = own(e, 'size');
+  const mtimeNs = own(e, 'mtimeNs');
+  const fp = own(e, 'fp');
+  const errno = own(e, 'errno');
+  if (kind === 'unreadable' ? !(isText(errno) && FOLDER_ERRNO_RE.test(errno)) : errno !== undefined) return false;
+  if (kind !== 'file') return size === null && mtimeNs === null && fp === null;
+  return isByteCount(size) && isText(mtimeNs) && isDocsMtimeNs(mtimeNs) && (fp === null || (isText(fp) && isDocsFingerprint(fp)));
+}
+
+/** A folder listing's `unlisted`: a count and a record of per-reason counts. */
+function folderUnlistedOk(u: unknown): boolean {
+  if (!isRecord(u) || !isByteCount(own(u, 'count'))) return false;
+  const by = own(u, 'byReason');
+  return isRecord(by) && Object.values(by).every(isByteCount);
+}
+
+/** One registry row: a label, a state, and a path exactly when the state is `ok`. */
+function folderListRowOk(r: unknown): boolean {
+  if (!isRecord(r) || !isFolderLabelText(own(r, 'label'))) return false;
+  const state = own(r, 'state');
+  const path = own(r, 'path');
+  return state === 'ok' ? isKeyText(path) : state === 'unreadable' && path === null;
+}
+
+/**
+ * The shape an outside-folder ok answer must have before the adapter believes it (X2 P2.3; `docsAnswerShape`'s plain-object
+ * and depth checks first, then the fields the doors send), `malformed-answer {why:'schema'}` on the first fault:
+ * - `list`: `folders` an array of registry rows (`folderListRowOk`);
+ * - `add`: `label` in the label grammar; `remove`: that, and `removed` the boolean `true`;
+ * - `tree`: `label` in the grammar, `entries` an array of listing rows (`folderEntryOk`) and `unlisted` (`folderUnlistedOk`).
+ * A show's checks need a hash and the ask, so they are the adapter's (`checkFolderShow`); a prepare and a frame are
+ * `docsRangeAnswerShape`'s. Takes `unknown`: this is the check that makes the answer's static type true.
+ */
+export function docsFolderAnswerShape(step: 'list' | 'add' | 'remove' | 'tree', answer: unknown): { ok: true } | DocsFailureBody {
+  const base = docsAnswerShape(step === 'tree' ? 'docs-folder-read' : 'docs-folder', answer);
+  if (!base.ok) return base;
+  const a = answer as AnswerRecord;
+  if (step === 'list') {
+    const folders = own(a, 'folders');
+    return Array.isArray(folders) && folders.every(folderListRowOk) ? { ok: true } : schemaFault();
+  }
+  if (!isFolderLabelText(own(a, 'label'))) return schemaFault();
+  if (step === 'add') return { ok: true };
+  if (step === 'remove') return own(a, 'removed') === true ? { ok: true } : schemaFault();
+  const entries = own(a, 'entries');
+  return Array.isArray(entries) && entries.every(folderEntryOk) && folderUnlistedOk(own(a, 'unlisted'))
+    ? { ok: true } : schemaFault();
+}
+
 // ===== The show bound, the raster check and the file representation (section 3.6, section 5.2; refinement (g)) =====
 
 /**
@@ -1201,9 +1596,9 @@ const SHOW_UTF8 = new TextDecoder('utf-8', { ignoreBOM: true });
  * U+FFFD; a `base64` answer's `b64` is the answer's, which check 8 proved is exactly the bytes' canonical base64.
  * A stray `text` beside a `b64`, or a `b64` beside a `text`, never rides. A new object; the answer is never written.
  */
-function servedShow(answer: DocsShowOk, bytes: Uint8Array): DocsShowOk {
+function servedShow<T extends Pick<DocsShowOk, 'encoding' | 'text' | 'b64'>>(answer: T, bytes: Uint8Array): T {
   const { text: _text, b64: _b64, ...facts } = answer;
-  return answer.encoding === 'utf8' ? { ...facts, text: SHOW_UTF8.decode(bytes) } : { ...facts, b64: answer.b64 };
+  return (answer.encoding === 'utf8' ? { ...facts, text: SHOW_UTF8.decode(bytes) } : { ...facts, b64: answer.b64 }) as T;
 }
 
 /**
@@ -1228,11 +1623,32 @@ export function docsFileReply(pin: DocPin, answer: DocsShowOk, bytes: Uint8Array
   if (cls !== 'raster') {
     return { kind: 'json', body: { ok: true, contentClass: cls, show: servedShow(answer, bytes), from } };
   }
-  const declared = declaredRasterType(pin.path);
+  return rasterReply(pin.path, bytes, cacheControlFor(pin, cls));
+}
+
+/** A raster path's reply: its bytes as the declared type when they are that type, else `raster-mismatch`. Shared by a
+ *  project's file and a folder's. */
+function rasterReply(path: string, bytes: Uint8Array, cacheControl: string): Exclude<DocsFileReply, { kind: 'json' }> {
+  const declared = declaredRasterType(path);
   if (rasterVerdict(declared, bytes) === 'mismatch') {
     return { kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared, size: bytes.byteLength } };
   }
-  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl: cacheControlFor(pin, cls), bytes };
+  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl, bytes };
+}
+
+/** What a folder file door answers: `docsFileReply`'s three arms, the JSON one carrying a folder show. */
+export type DocsFolderFileReply = { kind: 'json'; body: DocsFolderFileResponse } | Exclude<DocsFileReply, { kind: 'json' }>;
+
+/**
+ * The reply for a folder show that passed the adapter and `docsShowBound`: `docsFileReply`'s rule over the path's class alone.
+ * Every class but `raster` answers JSON (the show rebuilt from the verified bytes, `servedShow`); a raster whose bytes are
+ * its declared type answers those exact bytes, `no-store` because a folder is a live tree, never immutable; any other raster
+ * is `raster-mismatch`. No request parameter reaches the representation.
+ */
+export function docsFolderFileReply(answer: DocsFolderShowOk, bytes: Uint8Array): DocsFolderFileReply {
+  const cls = contentClass(answer.path);
+  if (cls !== 'raster') return { kind: 'json', body: { ok: true, contentClass: cls, show: folderShowBody(answer, bytes) } };
+  return rasterReply(answer.path, bytes, DOCS_CACHE_NO_STORE);
 }
 
 // ===== The known size and the committed cache's verdicts (section 6.2, section 6.5; refinement (l)) =====

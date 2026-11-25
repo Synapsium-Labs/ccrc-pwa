@@ -345,6 +345,8 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     ['DOCS_RANGE_MAX_BYTES', parityL0.DOCS_RANGE_MAX_BYTES],
     ['DOCS_RANGE_PREPARE_BUDGET_MS', parityL0.DOCS_RANGE_PREPARE_BUDGET_MS],
     ['MTIME_NS_RE', parityL0.DOCS_MTIME_NS_RE_BODY],
+    // X2 P2.1: the outside-folder label grammar, which ccd checks before any path join.
+    ['FOLDER_LABEL_RE', parityL0.DOCS_FOLDER_LABEL_RE_BODY],
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */

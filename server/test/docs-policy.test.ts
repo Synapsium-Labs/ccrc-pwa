@@ -39,6 +39,9 @@ const SPEC_STATUS: readonly (readonly [word: string, status: number])[] = [
   ['draft-changed', 409],
   // Range reads (X2 P1.2).
   ['snapshot-gone', 409], ['range-too-large', 413], ['prepare-busy', 503],
+  // Outside folders (X2 P2.3): each the closest analogue among the words above.
+  ['bad-label', 400], ['unknown-folder', 404], ['label-exists', 409], ['absent', 404], ['not-a-directory', 422],
+  ['foreign-owner', 422], ['protected', 422], ['unreadable', 502],
   // Fetch.
   ['remote-absent', 422], ['remote-branch-absent', 404], ['fetch-auth-failed', 502], ['fetch-rejected-objects', 502],
   ['fetch-transport', 502], ['ref-locked', 409], ['fetch-too-soon', 429], ['fetch-timeout', 504], ['fetch-failed', 502],
@@ -50,14 +53,16 @@ const SPEC_STATUS: readonly (readonly [word: string, status: number])[] = [
   ['malformed-answer', 502], ['unknown-failure', 502],
   // Section 3.7 (the HTTP layer).
   ['foreign-request', 403], ['bad-query', 400], ['raster-mismatch', 422], ['response-type-refused', 500],
+  // The outside-folder reads' sign-in gate (X2 P2.3): the account gate's own statuses for the same two words.
+  ['auth-off', 501], ['unauthenticated', 401],
 ];
 
 describe('DOCS_FAILURE_HTTP (row 53, L1 half): every word has the status the spec gives it', () => {
   const words = SPEC_STATUS.map(([w]) => w);
 
-  it('the transcribed table is whole: 61 distinct words, exactly the vocabulary, in both directions', () => {
-    expect(SPEC_STATUS).toHaveLength(61);
-    expect(new Set(words).size, 'a word transcribed twice').toBe(61);
+  it('the transcribed table is whole: 71 distinct words, exactly the vocabulary, in both directions', () => {
+    expect(SPEC_STATUS).toHaveLength(71);
+    expect(new Set(words).size, 'a word transcribed twice').toBe(71);
     expect([...words].sort()).toEqual(Object.keys(DOCS_FAILURES).sort());
   });
 
@@ -70,7 +75,8 @@ describe('DOCS_FAILURE_HTTP (row 53, L1 half): every word has the status the spe
   });
 
   it('every status is a failure status: success is 200 only, so no 2xx and no 3xx (section 3.7)', () => {
-    const FAILURE_STATUSES = [400, 403, 404, 409, 413, 422, 429, 500, 501, 502, 503, 504];
+    // 401 joined with the outside-folder sign-in gate's `unauthenticated` (X2 P2.3).
+    const FAILURE_STATUSES = [400, 401, 403, 404, 409, 413, 422, 429, 500, 501, 502, 503, 504];
     for (const [word, status] of Object.entries(DOCS_FAILURE_HTTP)) {
       expect(FAILURE_STATUSES, `${word} answers ${status}`).toContain(status);
     }
@@ -2183,5 +2189,287 @@ describe('X2 P1.3: the range plan, query and gate', () => {
     expect(docsRangeFlightKey('n', 'demo', committed(), frame(0, 2))).not.toBe(framed);
     expect(docsRangeFlightKey('n', 'demo', committed(), { ...frame(0, 1), snapshot: 'f'.repeat(32) })).not.toBe(framed);
     expect(docsRangeFlightKey('n', 'demo', committed(), frame(0, 1))).toBe(framed);
+  });
+});
+
+// ===== X2 P2.3: the outside-folder gate, label, path, Add body, queries and plan =====
+import {
+  DOCS_FOLDER_PATH_MAX_BYTES, docsFolderAnswerShape, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
+  docsFolderListFlightKey, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeFlightKey,
+  docsFolderFailureBody, docsFolderTreeBody, folderGateRefusal, folderReadGate, folderRemoveGate, isDocsFolderPath,
+  parseDocsFolderAddBody, parseDocsFolderLabel, type DocsFolderRangeQuery,
+} from '../src/docs/policy.js';
+import { DOCS_FOLDER_LABEL_RE, type DocsFolderShowOk } from '../../shared/docs.js';
+
+describe('X2 P2.3: folderReadGate (M11.6) and the refusal it answers with', () => {
+  it('folderReadGate: dark is auth-off whatever the session, armed without a session is unauthenticated, armed with one allows', () => {
+    expect(folderReadGate('dark', true)).toBe('auth-off');
+    expect(folderReadGate('dark', false)).toBe('auth-off');
+    expect(folderReadGate('armed', false)).toBe('unauthenticated');
+    expect(folderReadGate('armed', true)).toBe('allow');
+  });
+
+  it('the refusal is a docs failure body of the gate\'s own word, at the account gate\'s status for it', () => {
+    expect(folderGateRefusal('auth-off')).toStrictEqual({ ok: false, failure: 'auth-off' });
+    expect(folderGateRefusal('unauthenticated')).toStrictEqual({ ok: false, failure: 'unauthenticated' });
+    expect(DOCS_FAILURE_HTTP['auth-off']).toBe(501);
+    expect(DOCS_FAILURE_HTTP['unauthenticated']).toBe(401);
+  });
+});
+
+describe('X2 P2.3: the label and the Add path are decided here, before any verb', () => {
+  it('parseDocsFolderLabel: the grammar of shared/docs.ts, nothing else, and the refusal never echoes the text', () => {
+    for (const ok of ['a', '0', 'notes', 'team-a', 'a-', 'a'.repeat(32)]) {
+      expect(parseDocsFolderLabel(ok), ok).toStrictEqual({ ok: true, label: ok });
+      expect(DOCS_FOLDER_LABEL_RE.test(ok), ok).toBe(true);
+    }
+    for (const bad of ['', '..', '.', 'a/b', '.x', '-a', 'A', 'a b', 'a.b', 'a_b', 'a'.repeat(33), 'a\u0001', 'a\n', 'café', 5, null, undefined, ['a']]) {
+      const got = parseDocsFolderLabel(bad);
+      expect(got, String(bad)).toStrictEqual({ ok: false, failure: 'bad-label' });
+    }
+  });
+
+  it('isDocsFolderPath: absolute, no dot or dot-dot component, no empty component, no control, bounded', () => {
+    for (const ok of ['/a', '/a/b', '/home/user/notes', '/a b/c', '/a.b/.hidden/c', '/café', '/a/..b', '/a/b.']) {
+      expect(isDocsFolderPath(ok), ok).toBe(true);
+    }
+    for (const bad of ['', '/', 'a', 'a/b', './a', '../a', '/a/', '/a//b', '//a', '/a/./b', '/a/..', '/..', '/a/../b', '/a\u0000b', '/a\u001fb',
+      '/a\u007fb', '/a\u0085b', '/a\nb', '/a\ud800b']) {
+      expect(isDocsFolderPath(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('isDocsFolderPath: the bound is in UTF-8 bytes, 4096 passes and 4097 does not', () => {
+    expect(DOCS_FOLDER_PATH_MAX_BYTES).toBe(4096);
+    expect(isDocsFolderPath('/' + 'x'.repeat(4095))).toBe(true);
+    expect(isDocsFolderPath('/' + 'x'.repeat(4096))).toBe(false);
+    // 2048 two-byte letters after the slash are 4096 bytes plus one, though only 2049 characters.
+    expect(isDocsFolderPath('/' + 'é'.repeat(2048))).toBe(false);
+    expect(isDocsFolderPath('/' + 'é'.repeat(2047) + 'x')).toBe(true);
+  });
+
+  it('parseDocsFolderAddBody: a plain object with exactly label and path, each in its grammar, refusing without the path', () => {
+    expect(parseDocsFolderAddBody({ label: 'notes', path: '/a/b' })).toStrictEqual({ ok: true, req: { label: 'notes', path: '/a/b' } });
+    expect(parseDocsFolderAddBody('x')).toStrictEqual({ ok: false, failure: 'bad-query', why: 'body' });
+    expect(parseDocsFolderAddBody(null)).toStrictEqual({ ok: false, failure: 'bad-query', why: 'body' });
+    expect(parseDocsFolderAddBody([])).toStrictEqual({ ok: false, failure: 'bad-query', why: 'body' });
+    expect(parseDocsFolderAddBody({ label: 'n', path: '/a', z: 1, y: 2 })).toStrictEqual({ ok: false, failure: 'bad-query', key: 'y', why: 'unknown' });
+    expect(parseDocsFolderAddBody({ path: '/a' })).toStrictEqual({ ok: false, failure: 'bad-query', key: 'label', why: 'body' });
+    expect(parseDocsFolderAddBody({ label: 'n' })).toStrictEqual({ ok: false, failure: 'bad-query', key: 'path', why: 'body' });
+    expect(parseDocsFolderAddBody({ label: 'N', path: '/a' })).toStrictEqual({ ok: false, failure: 'bad-label' });
+    const hostile = parseDocsFolderAddBody({ label: 'n', path: '/a/../hostile' });
+    expect(hostile).toStrictEqual({ ok: false, failure: 'bad-path' });
+    expect(JSON.stringify(hostile)).not.toContain('hostile');
+  });
+
+  it('docsFolderLabelRows keeps a label and its state and drops the path', () => {
+    expect(docsFolderLabelRows([{ label: 'a', path: '/x', state: 'ok' }, { label: 'b', path: null, state: 'unreadable' }]))
+      .toStrictEqual([{ label: 'a', state: 'ok' }, { label: 'b', state: 'unreadable' }]);
+  });
+});
+
+describe('X2 P2.3: the folder queries, plan and flight keys', () => {
+  const FPR = 'c'.repeat(64);
+  const SNAP = 'e'.repeat(32);
+  const q = (route: 'folder-list' | 'folder-tree' | 'folder-file' | 'folder-range', query: Record<string, unknown>) =>
+    parseDocsApiQuery(route, query);
+
+  it('folder-list and folder-tree take no key', () => {
+    expect(q('folder-list', {})).toStrictEqual({ ok: true, req: { route: 'folder-list' } });
+    expect(q('folder-tree', {})).toStrictEqual({ ok: true, req: { route: 'folder-tree' } });
+    expect(q('folder-tree', { ref: 'main' })).toMatchObject({ ok: false, failure: 'bad-query', key: 'ref', why: 'unknown' });
+    expect(q('folder-list', { x: '1' })).toMatchObject({ failure: 'bad-query', key: 'x', why: 'unknown' });
+  });
+
+  it('folder-file: section, path and fp, in ccd\'s order, and nothing a project pin carries', () => {
+    expect(q('folder-file', { section: 'specs', path: 'a.md', fp: FPR }))
+      .toStrictEqual({ ok: true, req: { route: 'folder-file', ask: { section: 'specs', path: 'a.md', fp: FPR } } });
+    expect(q('folder-file', { section: 'specs', path: 'a.md' })).toMatchObject({ failure: 'bad-query', why: 'pin-shape' });
+    expect(q('folder-file', { section: 'x', path: '../a', fp: 'z' })).toMatchObject({ failure: 'bad-section' });
+    expect(q('folder-file', { section: 'specs', path: '../a', fp: 'z' })).toMatchObject({ failure: 'bad-path' });
+    expect(q('folder-file', { section: 'specs', path: 'a', fp: 'z' })).toMatchObject({ failure: 'bad-fingerprint' });
+    for (const key of ['commit', 'servedRef', 'branch', 'head', 'maxBytes', 'size']) {
+      expect(q('folder-file', { section: 'specs', path: 'a.md', fp: FPR, [key]: 'x' }), key)
+        .toMatchObject({ failure: 'bad-query', key, why: 'unknown' });
+    }
+    expect(q('folder-file', { section: 'specs', path: 'a.md', fp: [FPR, FPR] })).toMatchObject({ failure: 'bad-query', why: 'repeated', key: 'fp' });
+  });
+
+  it('folder-range: the project range grammar over a place with no commit, branch or head', () => {
+    const base = { section: 'specs', path: 'a.md', pin: `fp:${FPR}` };
+    expect(q('folder-range', { ...base, prepare: '1' })).toStrictEqual({
+      ok: true, req: { route: 'folder-range', query: { target: { section: 'specs', path: 'a.md', pin: { kind: 'fp', sha: FPR } }, frame: null } },
+    });
+    expect(q('folder-range', { ...base, snapshot: SNAP, offset: '0', length: '7' })).toMatchObject({
+      ok: true, req: { query: { frame: { snapshot: SNAP, offset: 0, length: 7 } } },
+    });
+    expect(q('folder-range', { ...base })).toMatchObject({ failure: 'bad-query', why: 'range-step' });
+    expect(q('folder-range', { ...base, prepare: '2' })).toMatchObject({ failure: 'bad-query', why: 'range-step', key: 'prepare' });
+    expect(q('folder-range', { ...base, snapshot: 'x', offset: '0', length: '1' })).toMatchObject({ failure: 'snapshot-gone' });
+    expect(q('folder-range', { ...base, snapshot: SNAP, offset: '0', length: '0' })).toMatchObject({ failure: 'bad-query', why: 'range-number', key: 'length' });
+    expect(q('folder-range', { section: 'specs', path: 'a.md', prepare: '1' })).toMatchObject({ failure: 'bad-query', why: 'pin-shape' });
+    expect(q('folder-range', { ...base, pin: 'x', prepare: '1' })).toMatchObject({ failure: 'bad-fingerprint' });
+    expect(q('folder-range', { ...base, prepare: '1', commit: 'a'.repeat(40) })).toMatchObject({ failure: 'bad-query', key: 'commit', why: 'unknown' });
+  });
+
+  const target = (pin: DocsRangePin): DocsFolderRangeQuery['target'] => ({ section: 'specs', path: 'a.md', pin });
+  it('docsFolderRangePlan: a blob pin is bad-fingerprint, and the bounds are the project range read\'s', () => {
+    const fp: DocsRangePin = { kind: 'fp', sha: FPR };
+    expect(docsFolderRangePlan({ target: target({ kind: 'blob', sha: 'b'.repeat(40) }), frame: null })).toStrictEqual({ ok: false, failure: 'bad-fingerprint' });
+    expect(docsFolderRangePlan({ target: target(fp), frame: null })).toStrictEqual({ ok: true, target: target(fp), frame: null, job: RANGE_PREPARE_JOB });
+    expect(docsFolderRangePlan({ target: target({ kind: 'stat', size: DOCS_RANGE_MAX_BYTES + 1, mtimeNs: '1' }), frame: null }))
+      .toStrictEqual({ ok: false, failure: 'range-too-large', size: DOCS_RANGE_MAX_BYTES + 1, cap: DOCS_RANGE_MAX_BYTES });
+    const asked = { snapshot: SNAP, offset: 0, length: DOCS_RANGE_FRAME_BYTES };
+    expect(docsFolderRangePlan({ target: target(fp), frame: asked })).toMatchObject({ ok: true, job: rangeFrameJob(DOCS_RANGE_FRAME_BYTES) });
+    expect(docsFolderRangePlan({ target: target(fp), frame: { ...asked, length: DOCS_RANGE_FRAME_BYTES + 1 } }))
+      .toMatchObject({ failure: 'range-too-large', cap: DOCS_RANGE_FRAME_BYTES });
+    expect(docsFolderRangePlan({ target: target(fp), frame: { ...asked, offset: DOCS_RANGE_MAX_BYTES - DOCS_RANGE_FRAME_BYTES + 1 } }))
+      .toMatchObject({ failure: 'range-too-large', cap: DOCS_RANGE_MAX_BYTES });
+  });
+
+  it('the folder flight keys differ by each field, and by the folder\'s generation', () => {
+    const ask = { section: 'specs' as const, path: 'a.md', fp: FPR };
+    const keys = [
+      docsFolderListFlightKey('n', 0), docsFolderListFlightKey('n', 1), docsFolderListFlightKey('m', 0),
+      docsFolderTreeFlightKey('n', 'a', 0), docsFolderTreeFlightKey('n', 'b', 0), docsFolderTreeFlightKey('n', 'a', 1),
+      docsFolderShowFlightKey('n', 'a', ask, 5, 0), docsFolderShowFlightKey('n', 'a', ask, 6, 0),
+      docsFolderShowFlightKey('n', 'a', { ...ask, path: 'b.md' }, 5, 0), docsFolderShowFlightKey('n', 'a', ask, 5, 1),
+      docsFolderRangeFlightKey('n', 'a', target({ kind: 'fp', sha: FPR }), null, 0),
+      docsFolderRangeFlightKey('n', 'a', target({ kind: 'fp', sha: FPR }), null, 1),
+      docsFolderRangeFlightKey('n', 'b', target({ kind: 'fp', sha: FPR }), null, 0),
+      docsFolderRangeFlightKey('n', 'a', target({ kind: 'stat', size: 1, mtimeNs: '2' }), null, 0),
+      docsFolderRangeFlightKey('n', 'a', target({ kind: 'fp', sha: FPR }), { snapshot: SNAP, offset: 0, length: 1 }, 0),
+      docsFolderKey('n', 'a'), docsFolderKey('n', ''),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(docsFolderRangeFlightKey('n', 'a', target({ kind: 'fp', sha: FPR }), null, 0)).toBe(
+      docsFolderRangeFlightKey('n', 'a', target({ kind: 'fp', sha: FPR }), null, 0));
+  });
+});
+
+describe('X2 P2.3: the folder answer shapes and the file reply', () => {
+  const FPR = 'c'.repeat(64);
+  const env = (verb: string) => ({ v: 1, verb, ok: true, elapsedMs: 1 });
+  it('docsFolderAnswerShape: list, add, remove and tree hold their rows and refuse the rest as schema', () => {
+    const list = { ...env('docs-folder'), folders: [{ label: 'a', path: '/x', state: 'ok' }, { label: 'b', path: null, state: 'unreadable' }] };
+    expect(docsFolderAnswerShape('list', list)).toStrictEqual({ ok: true });
+    for (const bad of [
+      { ...list, folders: 'x' }, { ...list, folders: [{ label: 'A', path: '/x', state: 'ok' }] },
+      { ...list, folders: [{ label: 'a', path: null, state: 'ok' }] }, { ...list, folders: [{ label: 'a', path: '/x', state: 'unreadable' }] },
+      { ...list, folders: [{ label: 'a', path: '/x', state: 'gone' }] }, { ...list, folders: [5] }, 5, null, [],
+    ]) {
+      expect(docsFolderAnswerShape('list', bad), JSON.stringify(bad)).toMatchObject({ failure: 'malformed-answer', why: 'schema' });
+    }
+    expect(docsFolderAnswerShape('add', { ...env('docs-folder'), label: 'a' })).toStrictEqual({ ok: true });
+    expect(docsFolderAnswerShape('add', { ...env('docs-folder'), label: '..' })).toMatchObject({ why: 'schema' });
+    expect(docsFolderAnswerShape('remove', { ...env('docs-folder'), label: 'a', removed: true })).toStrictEqual({ ok: true });
+    expect(docsFolderAnswerShape('remove', { ...env('docs-folder'), label: 'a', removed: false })).toMatchObject({ why: 'schema' });
+    const file = { section: 'specs', path: 'a.md', kind: 'file', size: 5, mtimeNs: '1700000000000000000', fp: FPR };
+    const tree = { ...env('docs-folder-read'), label: 'a', entries: [file, { section: 'plans', path: 'l', kind: 'symlink', size: null, mtimeNs: null, fp: null },
+      { section: 'plans', path: 'u', kind: 'unreadable', size: null, mtimeNs: null, fp: null, errno: 'EACCES' }], unlisted: { count: 1, byReason: { 'too-deep': 1 } } };
+    expect(docsFolderAnswerShape('tree', tree)).toStrictEqual({ ok: true });
+    for (const bad of [
+      { ...tree, entries: [{ ...file, kind: 'dir' }] }, { ...tree, entries: [{ ...file, mtimeNs: 5 }] }, { ...tree, entries: [{ ...file, mtimeNs: '01' }] },
+      { ...tree, entries: [{ ...file, size: -1 }] }, { ...tree, entries: [{ ...file, fp: 'z' }] }, { ...tree, entries: [{ ...file, section: 'nope' }] },
+      { ...tree, entries: [{ ...file, kind: 'symlink' }] }, { ...tree, entries: [{ ...file, errno: 'EACCES' }] },
+      { ...tree, entries: [{ section: 'plans', path: 'u', kind: 'unreadable', size: null, mtimeNs: null, fp: null }] },
+      { ...tree, unlisted: { count: 1 } }, { ...tree, unlisted: { count: 1, byReason: { x: 'y' } } }, { ...tree, label: 'A' }, { ...tree, entries: {} },
+    ]) {
+      expect(docsFolderAnswerShape('tree', bad), JSON.stringify(bad)).toMatchObject({ failure: 'malformed-answer', why: 'schema' });
+    }
+  });
+
+  const show = (path: string, over: Partial<DocsFolderShowOk> = {}): DocsFolderShowOk => ({
+    v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 1, label: 'a', source: 'folder', section: 'specs', path, size: 3,
+    sha256: FPR, fp: FPR, mtimeNs: '1', encoding: 'utf8', text: 'abc', ...over,
+  });
+  it('docsFolderFileReply: JSON for every class but raster, the raster as its type with no-store, a mismatch refused', () => {
+    const bytes = new TextEncoder().encode('abc');
+    const json = docsFolderFileReply(show('a.md', { text: 'STRAY' }), bytes);
+    expect(json).toMatchObject({ kind: 'json', body: { ok: true, contentClass: 'markdown', show: { text: 'abc', label: 'a', source: 'folder' } } });
+    expect(JSON.stringify(json)).not.toContain('STRAY');
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    expect(docsFolderFileReply(show('i.png', { encoding: 'base64', b64: 'x' }), png)).toMatchObject({ kind: 'bytes', mime: 'image/png', cacheControl: 'no-store' });
+    expect(docsFolderFileReply(show('i.png', { encoding: 'base64', b64: 'x' }), bytes)).toMatchObject({
+      kind: 'refuse', body: { failure: 'raster-mismatch', declared: 'png', size: 3 },
+    });
+  });
+
+  it('docsFolderFileReply builds the show from the known fields: an unknown key never rides, the one content field is the verified bytes', () => {
+    const bytes = new TextEncoder().encode('abc');
+    const leaky = { ...show('a.md'), worktree: '/leak', abs: '/leak' } as DocsFolderShowOk;
+    const got = docsFolderFileReply(leaky, bytes);
+    expect(got.kind).toBe('json');
+    expect(JSON.stringify(got)).not.toContain('/leak');
+    expect(got).toMatchObject({ body: { show: { v: 1, verb: 'docs-folder-read', ok: true, label: 'a', source: 'folder', text: 'abc' } } });
+    const b64 = docsFolderFileReply(show('a.bin', { encoding: 'base64', b64: 'YWJj', text: 'STRAY' }), bytes);
+    expect(b64).toMatchObject({ body: { show: { encoding: 'base64', b64: 'YWJj' } } });
+    expect(JSON.stringify(b64)).not.toContain('STRAY');
+  });
+});
+
+describe('X2 P2.3 review round 1: the Remove gate, the refusal filter and the tree body', () => {
+  it('folderRemoveGate: dark allows, armed without a session is unauthenticated, armed with one allows', () => {
+    expect(folderRemoveGate('dark', true)).toBe('allow');
+    expect(folderRemoveGate('dark', false)).toBe('allow');
+    expect(folderRemoveGate('armed', false)).toBe('unauthenticated');
+    expect(folderRemoveGate('armed', true)).toBe('allow');
+  });
+
+  it('folder-remove takes no key, like the listings', () => {
+    expect(parseDocsApiQuery('folder-remove', {})).toStrictEqual({ ok: true, req: { route: 'folder-remove' } });
+    expect(parseDocsApiQuery('folder-remove', { x: '1' })).toMatchObject({ failure: 'bad-query', key: 'x', why: 'unknown' });
+  });
+
+  it('docsFolderFailureBody keeps the word and the structured fields and drops every free-text field', () => {
+    const P = '/fixture/leak';
+    expect(docsFolderFailureBody({ ok: false, failure: 'helper-failed', detail: P, stderrHead: P, cause: P, word: P, site: P } as DocsFailureBody))
+      .toStrictEqual({ ok: false, failure: 'helper-failed' });
+    expect(docsFolderFailureBody({ ok: false, failure: 'unreadable', reason: 'EACCES', errno: 'ENOENT', detail: P } as DocsFailureBody))
+      .toStrictEqual({ ok: false, failure: 'unreadable', reason: 'EACCES', errno: 'ENOENT' });
+    expect(docsFolderFailureBody({ ok: false, failure: 'protected', reason: 'dot-config' }))
+      .toStrictEqual({ ok: false, failure: 'protected', reason: 'dot-config' });
+    for (const bad of [P, 'Upper', '', 'a'.repeat(41), 'a b', 5, null]) {
+      expect(docsFolderFailureBody({ ok: false, failure: 'protected', reason: bad } as unknown as DocsFailureBody), String(bad))
+        .toStrictEqual({ ok: false, failure: 'protected' });
+    }
+    expect(docsFolderFailureBody({ ok: false, failure: 'unreadable', errno: P } as DocsFailureBody)).toStrictEqual({ ok: false, failure: 'unreadable' });
+    expect(docsFolderFailureBody({ ok: false, failure: 'too-large', size: 5, cap: 4 })).toStrictEqual({ ok: false, failure: 'too-large', size: 5, cap: 4 });
+    expect(docsFolderFailureBody({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 }))
+      .toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 });
+    expect(docsFolderFailureBody({ ok: false, failure: 'draft-changed', now: 'present' })).toStrictEqual({ ok: false, failure: 'draft-changed', now: 'present' });
+    expect(docsFolderFailureBody({ ok: false, failure: 'draft-changed', now: P } as unknown as DocsFailureBody)).toStrictEqual({ ok: false, failure: 'draft-changed' });
+  });
+
+  it('docsFolderTreeBody keeps the known fields of a tree and the four unlisted reasons, and nothing else', () => {
+    const tree = {
+      v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 7, label: 'a', leak: '/leak',
+      entries: [
+        { section: 'specs', path: 'a.md', kind: 'file', size: 1, mtimeNs: '2', fp: 'c'.repeat(64), abs: '/leak' },
+        { section: 'plans', path: 'u', kind: 'unreadable', size: null, mtimeNs: null, fp: null, errno: 'EACCES', abs: '/leak' },
+        { section: 'plans', path: 'l', kind: 'symlink', size: null, mtimeNs: null, fp: null, errno: 'EACCES' },
+      ],
+      unlisted: { count: 3, byReason: { 'too-deep': 1, 'too-long': 2, '/leak': 4 }, abs: '/leak' },
+    } as unknown as Parameters<typeof docsFolderTreeBody>[0];
+    const got = docsFolderTreeBody(tree);
+    expect(JSON.stringify(got)).not.toContain('/leak');
+    expect(got).toStrictEqual({
+      v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 7, label: 'a',
+      entries: [
+        { section: 'specs', path: 'a.md', kind: 'file', size: 1, mtimeNs: '2', fp: 'c'.repeat(64) },
+        { section: 'plans', path: 'u', kind: 'unreadable', size: null, mtimeNs: null, fp: null, errno: 'EACCES' },
+        { section: 'plans', path: 'l', kind: 'symlink', size: null, mtimeNs: null, fp: null },
+      ],
+      unlisted: { count: 3, byReason: { 'too-deep': 1, 'too-long': 2 } },
+    });
+  });
+
+  it('docsFolderAnswerShape: an unreadable row\'s errno must be an errno name, else the answer is a schema fault', () => {
+    const base = { v: 1, verb: 'docs-folder-read', ok: true, elapsedMs: 1, label: 'a', unlisted: { count: 0, byReason: {} } };
+    const row = (errno: unknown) => ({ section: 'plans', path: 'u', kind: 'unreadable', size: null, mtimeNs: null, fp: null, errno });
+    for (const ok of ['EACCES', 'ENOENT', 'E75']) expect(docsFolderAnswerShape('tree', { ...base, entries: [row(ok)] }), ok).toStrictEqual({ ok: true });
+    for (const bad of ['/leak', 'eacces', 'E', 'E' + 'A'.repeat(16), '', 5, undefined]) {
+      expect(docsFolderAnswerShape('tree', { ...base, entries: [row(bad)] }), String(bad)).toMatchObject({ why: 'schema' });
+    }
   });
 });

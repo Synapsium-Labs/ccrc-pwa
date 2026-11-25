@@ -45395,6 +45395,7 @@ DOCS_RANGE_FRAME_BYTES=524288
 DOCS_RANGE_MAX_BYTES=67108864
 DOCS_RANGE_PREPARE_BUDGET_MS=10000
 MTIME_NS_RE=r'0|[1-9][0-9]{0,18}'
+FOLDER_LABEL_RE=r'[a-z0-9][a-z0-9-]{0,31}'
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed','bad-label','absent','not-a-directory','foreign-owner','protected','unreadable','label-exists','unknown-folder'})
 # docs-parity: end
@@ -49676,8 +49677,7 @@ def verb_show_range(ctx, a):
 # THE REGISTRY is `$REG/docs-folders/<label>`, one regular file per label holding the admitted path and a newline, in a
 # directory of mode 0700 that only `folder_registry_write` (the one writer) creates, under a flock on `.lock` there.
 
-# docs-folder's own limits. FOLDER_LABEL_RE is a parity copy (DOCS_FOLDER_LABEL_RE); the others are ccd's.
-FOLDER_LABEL_RE=r'[a-z0-9][a-z0-9-]{0,31}'
+# docs-folder's own limits. FOLDER_LABEL_RE is a parity copy (DOCS_FOLDER_LABEL_RE) and sits in the docs-parity block above; the others are ccd's.
 FOLDER_PATH_MAX_BYTES=4096
 FOLDER_FILE_MAX_BYTES=4097
 FOLDER_REGISTRY_NAME='docs-folders'
