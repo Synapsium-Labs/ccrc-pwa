@@ -10,6 +10,7 @@ import { FIT_WINDOW, SPOT_PROBE_EVERY_TOKENS, type StartSource } from '../../../
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
 import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
+import { RENEWAL_DOOR_READING_SETS } from './renewalReadingDoorSets.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MODULE = path.join(ROOT, 'server/src/continuity/renewalReadings.ts');
@@ -273,7 +274,8 @@ const CLASS_CHANGED_SET: MutantSet<RenewalReadingsModule> = {
       new: "  if (b === false) return { kind: 'measured', value: true };\n  if (b.kind === 'unmeasured') return b;\n  if (g.designatedClass" },
     // Only the fallback fixture supplies a running model; keep the other cases' inputs as given.
     { id: 'K5', old: 'value: b.row.model !== g.designatedClass };\n}',
-      new: "value: b.row.model !== ('model' in g && typeof g.model === 'string' ? familyClassOf(g.model) : g.designatedClass) };\n}\nimport { familyClassOf } from '../../../shared/models.js';" },
+      // The module imports `familyClassOf` itself since PR E, so the mutant adds no import of its own.
+      new: "value: b.row.model !== ('model' in g && typeof g.model === 'string' ? familyClassOf(g.model) : g.designatedClass) };\n}" },
   ],
   suite: classChangedCases,
 };
@@ -545,6 +547,7 @@ const NOT_LOCAL_ASK_SET: MutantSet<RenewalReadingsModule> = {
 export const RENEWAL_READING_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/continuity/renewalReadings.ts#notLocalOf': NOT_LOCAL_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#notLocalAskOf': NOT_LOCAL_ASK_SET as MutantSet<never>,
+  ...RENEWAL_DOOR_READING_SETS,   // PR E: the door process's mappers, cases in their own file
   'server/src/continuity/renewalReadings.ts#fittedCeilingOf': FITTED_CEILING_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopInstantBefore': BACKSTOP_INSTANT_SET as MutantSet<never>,
   'server/src/continuity/renewalReadings.ts#backstopDueOf': BACKSTOP_DUE_SET as MutantSet<never>,

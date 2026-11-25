@@ -48,9 +48,16 @@ import {
   backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type AbsenceProbe, type Carrier, type SpotsRead, type TranscriptAsk,
   type W1Inputs,
 } from './renewalReadings.js';
+import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
+import type { Reading } from './renewalDue.js';
 
 /** The store reads and the one write (the ladder's latch raise) the wiring makes, declared by this consumer. */
-export type ReadingsCoord = Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch' | 'startById'>;
+export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes' | 'backstopRead' | 'designationRead' | 'raiseLatch' | 'startById'> {
+  /** PR E: door process B1's two reads, optional so that a store without them (a test, the simulator, an older wiring)
+   *  leaves `modelDrift` and `readersRunning` at the lane's `W1`. */
+  readonly modelSwitchesOf?: WatcherCoordPort['modelSwitchesOf'];
+  readonly readerEventsOf?: WatcherCoordPort['readerEventsOf'];
+}
 
 export interface ReadingsDeps {
   readonly time: { readonly clock: Pick<Clock, 'wall'>; readonly entropy: Pick<Entropy, 'hex'> };
@@ -143,9 +150,22 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     return decide({ kind: 'asked', answer, measured, observedAt: deps.time.clock.wall() }, before, carrier());
   };
 
+  /** The soft `readersRunning` (PR E), read and mapped inside its own catch, as `field` reads a W1 field (F17). */
+  let readersLogged = false;
+  const readers = (read: () => Reading<number>): Reading<number> => {
+    try { return read(); } catch (e) {
+      if (!readersLogged) {
+        readersLogged = true;
+        log(`ccrc-server: generations: the readers read failed, so readersRunning reads unmeasured this pass: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return { kind: 'unmeasured', why: 'readers read failed' };
+    }
+  };
+
   return {
     w1: async (g, base) => {
       const w1: Partial<W1Inputs> = {};
+      let soft: GenReadings['soft'];
       if (g.role === 'overlord') {
         field(w1, 'fittedCeilingTokens', 'fitted ceiling', () => {
           const cls = g.model === null ? null : familyClassOf(g.model);
@@ -165,10 +185,17 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         field(w1, 'classChanged', 'designation', () => classChangedOf(designation ??= coord.designationRead(), g));
         const store = deps.operatorModel;
         if (store !== undefined) field(w1, 'turns', 'turns', () => store.messagesSince(g.startReportedAt));
+        // PR E: door process B1's two readings, each only where the store hands its read (absent: the lane's `W1`).
+        // Bound to the store: on the composition `coord` is the coordination store, whose reads are methods (review 3710 F1).
+        const modelSwitchesOf = coord.modelSwitchesOf?.bind(coord);
+        const readerEventsOf = coord.readerEventsOf?.bind(coord);
+        if (modelSwitchesOf !== undefined) field(w1, 'modelDrift', 'model drift', () => modelDriftReadingOf({
+          startModel: g.model, startReportedAt: g.startReportedAt, switches: modelSwitchesOf(g.sessionId, g.startId), usage: base.usage }));
+        if (readerEventsOf !== undefined) soft = { readersRunning: readers(() => readersRunningReadingOf(readerEventsOf(g.sessionId, g.startId), deps.time.clock.wall())) };
       }
       const { cfg, transcript } = deps;
       if (cfg !== undefined && transcript !== undefined) await fieldAsync(w1, 'notLocal', 'not-local', () => notLocal(g, base, cfg, transcript));
-      return { w1 };
+      return soft === undefined ? { w1 } : { w1, soft };
     },
     latch: (cause, detail) => {
       const r = raiseLatch({ coord, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: deps.time.clock, entropy: deps.time.entropy },

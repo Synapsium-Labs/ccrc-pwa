@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { chance } from './world.js';
-import { assertScenario, simSeeds, simulate, type Scenario, type SimContext } from './run.js';
+import { assertCovered, assertScenario, runSeeds, seedRanges, simSeeds, simulate, type Scenario, type SimContext } from './run.js';
 import type { Invariant } from './sequence.js';
 
 type CoinEdge = 'heads' | 'tails';
@@ -41,6 +41,26 @@ describe('simulate and the seed-replay convention', () => {
     expect(() => simSeeds([5], { CCRC_SIM_SEED: 'x' })).toThrow(/CCRC_SIM_SEED/);
     expect(() => simSeeds([5], { CCRC_SIM_SEEDS: '0' })).toThrow(/CCRC_SIM_SEEDS/);
     expect(() => simSeeds([5], { CCRC_SIM_SEED: '1', CCRC_SIM_SEEDS: '3' })).toThrow(/CCRC_SIM_SEED/);
+  });
+  it('seedRanges: consecutive ranges of the size, the last shorter, whose union is the list; a size below one throws', () => {
+    expect(seedRanges([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(seedRanges([1, 2, 3, 4], 2)).toEqual([[1, 2], [3, 4]]);
+    expect(seedRanges([7], 20)).toEqual([[7]]);
+    expect(seedRanges([], 20)).toEqual([]);
+    const seeds = Array.from({ length: 200 }, (_, i) => i + 1);
+    expect(seedRanges(seeds, 20).flat()).toEqual(seeds);
+    expect(() => seedRanges(seeds, 0)).toThrow(/size/);
+    expect(() => seedRanges(seeds, 1.5)).toThrow(/size/);
+  });
+  it('runSeeds answers the edges its seeds reached, and assertCovered judges their union, skipped under CCRC_SIM_SEED', async () => {
+    const one = await runSeeds(coin, [], { seeds: [1], testFile: 't' });
+    const both = new Set<CoinEdge>();
+    for (const seeds of seedRanges([1, 2, 3], 1)) for (const e of await runSeeds(coin, [], { seeds, testFile: 't' })) both.add(e);
+    expect([...both].sort()).toEqual(['heads', 'tails']);
+    expect(() => assertCovered(coin, both, {})).not.toThrow();
+    expect(() => assertCovered(coin, new Set<CoinEdge>(['heads']), {})).toThrow(/never reached: tails/);
+    expect(() => assertCovered(coin, new Set<CoinEdge>(), { CCRC_SIM_SEED: '1' })).not.toThrow();
+    expect(one.size).toBeGreaterThan(0);
   });
   it('a violation names the scenario, seed, invariant, line and replay command', async () => {
     const neverTails: Invariant = { name: 'never-tails', says: 'no tails', check: (ls) => {

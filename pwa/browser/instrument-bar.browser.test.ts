@@ -409,7 +409,9 @@ describe('a touch screen keeps the floor', () => {
       const { ctx, page } = await open({ skin: INSTRUMENT, theme, width, touch: true }, '/fleet');
       try {
         const m = await page.evaluate(() => {
-          const controls = [...document.querySelectorAll<HTMLElement>('.ins-topbar button')];
+          // The Docs door is a link at a desk (desktop polish wave 174, `PlaceDoor`), so the bar's controls are its buttons and
+          // its links.
+          const controls = [...document.querySelectorAll<HTMLElement>('.ins-topbar button, .ins-topbar a[href]')];
           return {
             coarse: matchMedia('(pointer: coarse)').matches,
             bell: document.querySelector('.ins-topbar .bell') !== null,

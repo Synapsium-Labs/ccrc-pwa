@@ -19,6 +19,10 @@ import type { BackstopRead } from '../../../shared/renewal-readings.js';
 import type { TurnMarkRead } from '../coord/stall.js';
 import type { GenEvent } from './generationMachine.js';
 import { fittedCeiling, type SpotProbe } from './probes.js';
+import { modelDriftOf, readersRunning, type Read, type ReaderEventIn, type SidecarClass } from './hookReports.js';
+import { familyClassOf } from '../../../shared/models.js';
+import type { ModelSwitchHow } from '../../../shared/continuity-reports.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
 /** The `RenewalInputs` fields the lane reads `W1` until their producers are wired (`renewalInputsOf`'s defaults). The
@@ -149,6 +153,53 @@ export function classChangedOf(d: DesignationRead, g: Pick<DesignatedGeneration,
 export function designatedClassAtMint(d: DesignationRead, identity: string): string | null {
   if (identity !== 'overlord' || d.kind === 'unmeasured' || d.row === null) return null;
   return d.row.model;
+}
+
+// PR E (Task 8): the door process's two readings, `modelDrift` (hard) and the soft `readersRunning`, the Overlord's only. The
+// deciders are door process B1's (`hookReports.ts#modelDriftOf`, `#readersRunning`), passed through unchanged: these mappers
+// only shape their inputs and map their `Read<T>` to a `Reading<T>`, keeping every unmeasured reason.
+
+/** The status line sidecar's read as the gather takes it (`usage.ts#UsageRead`), declared by this consumer. */
+export type SidecarRead =
+  | { readonly kind: 'reading'; readonly usage: { readonly class: string | null; readonly ts: number; readonly stale: boolean } }
+  | { readonly kind: ReadFailure | 'malformed' };
+/** One reported model switch as the hook report store reads it (`ModelSwitchRow`), narrowed to what drift reads. */
+export interface SwitchRowIn { readonly how: ModelSwitchHow; readonly to: string | null }
+
+/** The sidecar as `modelDriftOf` takes it (review 2183 F15: the freshness decision is L1's, not the wiring's), and why it is no
+ *  evidence when it is not fresh. Only a sidecar written after the generation's start is this generation's: one written before
+ *  it (the sidecar's `ts`, seconds, and the start's report, both on the fleet node's clock) is read as stale, so a renewal that
+ *  changes the class is never judged drifted by the reading its predecessor left (slug drift-sidecar-must-postdate-the-start).
+ *  An absent, unreadable or malformed sidecar is absent to the decider, and keeps its own word in `why`. */
+export function modelDriftInputOf(usage: SidecarRead, startReportedAt: number): { readonly sidecar: SidecarClass; readonly why: string | null } {
+  if (usage.kind !== 'reading') return { sidecar: { kind: 'absent' }, why: `usage ${usage.kind}` };
+  if (usage.usage.stale) return { sidecar: { kind: 'stale' }, why: 'usage stale' };
+  if (usage.usage.ts * 1000 <= startReportedAt) return { sidecar: { kind: 'stale' }, why: 'usage from before the start' };
+  return { sidecar: { kind: 'fresh', class: usage.usage.class }, why: null };
+}
+
+/** Table 3.3.11b "The model drifted" (hard; Overlord): `modelDriftOf` over the start's class, the switches reported since the
+ *  start (by the server's clock, `modelSwitchesSinceStart`) and the sidecar (`modelDriftInputOf`). Its measured answer passes
+ *  through; its unmeasured answer keeps its detail, with the sidecar's own word beside it when the sidecar was no evidence. */
+export function modelDriftReadingOf(i: {
+  readonly startModel: string | null; readonly startReportedAt: number; readonly switches: Read<readonly SwitchRowIn[]>; readonly usage: SidecarRead;
+}): Reading<boolean> {
+  const switches = i.switches.ok
+    ? { ok: true as const, value: i.switches.value.map((s) => ({ how: s.how, toClass: s.to === null ? null : familyClassOf(s.to) })) }
+    : i.switches;
+  const side = modelDriftInputOf(i.usage, i.startReportedAt);
+  const a = modelDriftOf({ startClass: i.startModel === null ? null : familyClassOf(i.startModel), switches, sidecarClass: side.sidecar });
+  if (a.ok) return { kind: 'measured', value: a.value };
+  return unmeasured(side.why === null ? a.detail : `${a.detail} (${side.why})`);
+}
+
+/** The soft `readersRunning` (R19's break: no reader running): `readersRunning` over the reader events since the generation's
+ *  start, which `since` names on the server's clock (the start row's receipt, the events' `receivedAt`'s). A failed read is
+ *  unmeasured with its detail, never zero. */
+export function readersRunningReadingOf(read: Read<{ readonly since: number; readonly events: readonly ReaderEventIn[] }>, nowMs: number): Reading<number> {
+  if (!read.ok) return unmeasured(read.detail);
+  const a = readersRunning({ events: { ok: true, value: read.value.events }, generationStartedAt: read.value.since, now: nowMs });
+  return a.ok ? { kind: 'measured', value: a.value } : unmeasured(a.detail);
 }
 
 /** Table 7.5a "Probes failed twice after a renewal" (latch, cap `chat`): a live Overlord step from `probing` to `degraded` on

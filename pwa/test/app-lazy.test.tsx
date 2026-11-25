@@ -81,7 +81,8 @@ describe('the entry does not carry the seven screens', () => {
   });
 
   it('the session screen is preloaded once the page is idle after its first paint (review 1464 F4)', () => {
-    expect(APP).toMatch(/useEffect\(\(\) => preloadWhenIdle\(SessionScreen\), \[\]\);/);
+    // Not in a Docs tab, which loads no session screen (desktop polish wave 174, `docs-own-tab.test.tsx` pins that half).
+    expect(APP).toMatch(/useEffect\(\(\) => \(docsTab \? undefined : preloadWhenIdle\(SessionScreen\)\), \[docsTab\]\);/);
   });
 
   it('the screens that stay eager are still static imports', () => {

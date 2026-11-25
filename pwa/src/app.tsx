@@ -16,7 +16,7 @@
 // screens and the toasts — is the same element in both skins, so a switch
 // remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { Splash } from './face/SplashScreen';
@@ -28,6 +28,11 @@ import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
+import { ConsoleLink } from './components/ConsoleLink';
+import { docsTabTitle } from './docs/docsTabTitle';
+import { isDocsTab } from './lib/docTab';
+import { markConsoleTab, wasConsoleTab } from './lib/tabMark';
+import { DocsTabContext } from './lib/useTabLink';
 import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
@@ -82,19 +87,41 @@ function ArchiveRoute(): ReactNode {
 
 export function App(): ReactNode {
   const { path, search } = useLocation();
+  // A DOCS TAB (desktop polish wave 174, `lib/docTab.ts`): it draws the reader alone and is quiet. It opens no fleet
+  // stream, starts no Overlord poll, loads no session chunk and mounts none of the console's chrome (its polls and sheets,
+  // the palette and the global keys, the badge, the toasts, the splash); the sign-in and block screens stay. What a tab is
+  // comes from its history alone, never its width (fix round 2, R2): a tab is a Docs tab while it shows a Docs page and has
+  // shown only Docs pages, starting from what it was before this load (`wasConsoleTab`, read once, R4). So resizing never
+  // changes a tab's kind or remounts its reader, and a console that moves to a document shows it inside the console.
+  // Kept by React's own pattern for state that follows a prop: adjusted while rendering, and it only ever falls, once.
+  const [docsSoFar, setDocsSoFar] = useState(() => isDocsTab(path, !wasConsoleTab()));
+  const docsTab = isDocsTab(path, docsSoFar);
+  if (docsSoFar && !docsTab) setDocsSoFar(false);
+  // A tab that is the console is marked so for every later load of it: a reload, or a release's reload on a move to a
+  // Docs address, keeps it the console (R4).
+  useEffect(() => { if (!docsTab) markConsoleTab(); }, [docsTab]);
   // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
   // paint, and once loaded the first open draws it in the first commit, with no loading line (reviews 1464 F4 and 1473
   // F3). The entry's imports are unchanged.
-  useEffect(() => preloadWhenIdle(SessionScreen), []);
+  useEffect(() => (docsTab ? undefined : preloadWhenIdle(SessionScreen)), [docsTab]);
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
     // dialog badges. connect() is idempotent; the socket survives navigation.
-    useFleetStore.getState().connect();
-  }, []);
+    // A Docs tab holds none, and no tab ever turns from the console into one.
+    if (!docsTab) useFleetStore.getState().connect();
+  }, [docsTab]);
   // The Overlord's reads (Overlord W1 home, Task 2): one store, started once at the shell, so the bars, the home route and the
   // place read one answer. Its stop ends the poll when the shell unmounts.
-  useEffect(() => useOverlordStore.getState().start(), []);
+  useEffect(() => (docsTab ? undefined : useOverlordStore.getState().start()), [docsTab]);
+  // A Docs tab's title names its document, so several tabs can be told apart; the console's own title comes back when the
+  // tab stops being one.
+  useEffect(() => {
+    if (!docsTab) return undefined;
+    const before = document.title;
+    document.title = docsTabTitle(path, search);
+    return () => { document.title = before; };
+  }, [docsTab, path, search]);
   // The shell holds no subscription to `sessions` (C6, D-6438): a fleet frame that changes one row re-renders the
   // readers of that row, not the frame, the ladder and every sibling mounted here. `/archive` subscribes locally.
   // T9-R2's pools wiring (the epoch and observedEpoch FleetScreen shows) moved
@@ -250,6 +277,19 @@ export function App(): ReactNode {
       <p className="shell-placeholder-copy">Select a session</p>
     </div>
   );
+  // A Docs tab: the reader alone, at a desk the frame's tab bar holding the link back (none below it, `ShellFrame`), and the
+  // two covers that must still show.
+  if (docsTab) {
+    return (
+      <DocsTabContext value={true}>
+        {authLost && <LoginScreen />}
+        {blocked && <BlockScreen />}
+        <ShellFrame set={set} view={view} detailRef={detail} alone={<ConsoleLink label="Console" className="shell-tab-console" />}>
+          <RenderBoundary where="detail" resetKey={path + search} fallback={(e) => <ScreenFallback error={e} />}>{ladder}</RenderBoundary>
+        </ShellFrame>
+      </DocsTabContext>
+    );
+  }
   // The fleet's polls and sheets sit ABOVE the shell (D-5468): one health, updates and projects poll for every
   // reader, and the five fleet sheets rendered by `FleetFlows` beside `.app-shell`, so a fleet list that remounts
   // never closes a sheet it opened.
