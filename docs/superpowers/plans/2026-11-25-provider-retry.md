@@ -33,9 +33,9 @@ matcher list and stays counted). **`unknown` was not produced by any of them**, 
 
 Not measured: the first-party base URL, other Claude Code builds, an HTTP 429 (an account's, not a provider's).
 
-After a failure the input box shows Claude Code's own dim hint, `Resend your message to try again`. Measured on `main` with a
-captured pane: the box reader takes the character under the cursor for a one-character draft. The fix is its own change (#3387).
-Rule 5 below refuses a box that reads as a draft, so **this wave lands after #3387**: before it, a focused pane is never nudged.
+After a failure the input box shows Claude Code's own dim hint, `Resend your message to try again`. Before #3387 the box reader
+took the character under the cursor for a one-character draft (measured on a captured pane), and rule 5 below refuses a draft, so
+a focused pane would never have been nudged. #3387 merged first; the same capture now reads as an empty box.
 
 ## The rungs
 
