@@ -183,9 +183,10 @@ export class OperatorModelStore {
 
   /** The one writer of a message's state and stamps: asks `messageMove`, and writes the next state, the event's stamp
    *  when it is null, and the settlement pair, in one statement. A refused move changes nothing and says why; an absent
-   *  id is refused. `changed` is false when the move was accepted and wrote no new value. */
+   *  id is refused. `changed` is false when the move was accepted and wrote no new value; `from` is the state it moved from, so a
+   *  caller can tell a moved state word from a stamp (the sequence's message line, `messageLine.ts`). */
   moveMessage(id: number, event: MessageEvent, actor: MessageActor, at: number):
-    StoreWrite<{ readonly changed: boolean; readonly state: MessageState }> {
+    StoreWrite<{ readonly changed: boolean; readonly state: MessageState; readonly from: MessageState | 'unknown' }> {
     if (!isCount(at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
     try {
@@ -209,7 +210,7 @@ export class OperatorModelStore {
             + 'settledAt = ?, settledBy = ?, spentAt = ? WHERE id = ?')
             .run(v.next, next.queuedAt, next.deliveredAt, next.pickedUpAt, next.settledAt, next.settledBy, next.spentAt, id);
         }
-        return { ok: true as const, value: { changed, state: v.next } };
+        return { ok: true as const, value: { changed, state: v.next, from: row.state } };
       });
     } catch (err) {
       if (err instanceof StoreStop) return { ok: false, ...err.answer };

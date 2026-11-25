@@ -36,7 +36,7 @@ const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
 function fixture(): { dir: string; db: DatabaseSync } {
   const dir = mkTmp('ccrc-overlord-restore-latch-');
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
-  for (const n of ['CREATE TABLE overlord_authority_head', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder', 'CREATE TABLE decision_rows']) db.exec(find(n));
+  for (const n of ['CREATE TABLE overlord_authority_head', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder', 'CREATE TABLE decision_rows', 'CREATE TABLE overlord_sequence (']) db.exec(find(n));
   return { dir, db };
 }
 

@@ -14,7 +14,7 @@ import {
 } from '../../../shared/continuity.js';
 import { isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
 import {
-  TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerState,
+  TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerDoor, type TimerState,
 } from '../../../shared/continuity-timers.js';
 import type { Observed } from '../time/observed.js';
 import { isTickMailSubject } from '../coord/ledgersMail.js';
@@ -751,6 +751,9 @@ export interface TimerInsert {
   readonly programme: string | null;
   readonly setAt: number;
   readonly dueAt: number;
+  /** The restore generation read at the set (`restoreGeneration()`, Overlord W1 migration 128); null when it read unmeasured, or
+   *  for a row an older build set. `timerRestoreFact` reads every null the same way. */
+  readonly setRestoreGeneration: number | null;
 }
 
 /** One row as read. `role` is the stored word: a newer build may have written a role this one does not know. */
@@ -770,7 +773,7 @@ export type TimerHoldRead =
   | { ok: false; detail: string };
 
 const TIMER_COLUMNS = 'id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, '
-  + 'firedAt, mailId, cancelledAt, cancelReason';
+  + 'firedAt, mailId, cancelledAt, cancelReason, setRestoreGeneration';
 
 /** A stored row, or the reason it does not read (a state or cancel reason outside this build's vocabulary included). */
 function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
@@ -790,10 +793,15 @@ function timerRowOf(raw: Record<string, unknown>): TimerRow | string {
   if (cancelReason !== null && (typeof cancelReason !== 'string' || !isTimerCancelReason(cancelReason))) {
     return `continuity_timers row ${id} has cancel reason ${String(cancelReason)}`;
   }
+  // A restore generation that does not read fails the read, as a bad run does: read as null it would say "not measured".
+  const setRestoreGeneration = intOrNull(raw.setRestoreGeneration);
+  if (raw.setRestoreGeneration !== null && (setRestoreGeneration === null || !Number.isSafeInteger(setRestoreGeneration))) {
+    return `continuity_timers row ${id} has restore generation ${String(raw.setRestoreGeneration)}`;
+  }
   return {
     id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme: strOrNull(raw.programme),
     setAt, dueAt, state: state as TimerState, firedAt: intOrNull(raw.firedAt), mailId: intOrNull(raw.mailId),
-    cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null,
+    cancelledAt: intOrNull(raw.cancelledAt), cancelReason: cancelReason as TimerCancelReason | null, setRestoreGeneration,
   };
 }
 
@@ -815,8 +823,9 @@ export function insertTimer(db: DatabaseSync, row: TimerInsert): { ok: true; id:
   if (!timerMoveAllowed(null, 'pending', 'set-door')) return { ok: false, kind: 'write-failed' };
   try {
     const res = stmt(db, 'INSERT INTO continuity_timers (setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, '
-      + "setAt, dueAt, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')")
-      .run(row.setter, row.setterIncarnation, row.setById, row.setByUuid, row.role, row.note, row.runId, row.programme, row.setAt, row.dueAt);
+      + "setAt, dueAt, state, setRestoreGeneration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .run(row.setter, row.setterIncarnation, row.setById, row.setByUuid, row.role, row.note, row.runId, row.programme, row.setAt, row.dueAt,
+        row.setRestoreGeneration);
     return { ok: true, id: Number(res.lastInsertRowid) };
   } catch {
     return { ok: false, kind: 'write-failed' };
@@ -906,6 +915,55 @@ export function purgeTimers(db: DatabaseSync, before: number): { removed: number
   const res = stmt(db, "DELETE FROM continuity_timers WHERE (state = 'fired' AND firedAt < ?) OR (state = 'cancelled' AND cancelledAt < ?)")
     .run(before, before);
   return { removed: Number(res.changes) };
+}
+
+/** The role's fired timers of one term (Overlord W1, question 2): `state = 'fired'`, `setter`, `setterIncarnation = stamp`,
+ *  and a delivery of its mail that is not acked (`ackedAt IS NULL`: queued, delivered or parked) or one acked at or after
+ *  `since`. Newest first. A read join on `mail_deliveries` by `mailId`; it writes nothing there. A failed read is
+ *  `{ ok: false, detail }`, never an empty list. */
+export function firedTimersOf(db: DatabaseSync, setter: string, stamp: string, since: number): TimersRead {
+  try {
+    const cols = TIMER_COLUMNS.split(', ').map((c) => `t.${c}`).join(', ');
+    return timersOf(stmt(db, `SELECT ${cols} FROM continuity_timers t WHERE t.state = 'fired' AND t.setter = ? AND t.setterIncarnation = ? `
+      + 'AND EXISTS (SELECT 1 FROM mail_deliveries d WHERE d.mailId = t.mailId AND (d.ackedAt IS NULL OR d.ackedAt >= ?)) '
+      + 'ORDER BY t.firedAt DESC, t.id DESC').all(setter, stamp, since) as Record<string, unknown>[]);
+  } catch (e) { return readFailed(e); }
+}
+
+// `continuity_timer_refusals` (M36; migration 128): one count per UTC day, timer door and word, raised by the timer doors'
+// one refusal helper and pruned by the timers lane beside `purgeTimers`. M36's report reads `timerRefusalCounts`.
+
+/** One refusal to count: the UTC day of the door's wall clock, the door, and the word it answered. */
+export interface TimerRefusalCount { readonly day: string; readonly door: TimerDoor; readonly word: string }
+export type TimerRefusalCountsRead =
+  | { ok: true; rows: { day: string; door: string; word: string; n: number }[] } | { ok: false; detail: string };
+
+/** Raises one (day, door, word) count by one, in one statement. Never throws: a failed statement answers `{ ok: false }`,
+ *  which the door ignores, so a failed count never changes an answer. */
+export function recordTimerRefusal(db: DatabaseSync, r: TimerRefusalCount): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO continuity_timer_refusals (day, door, word, n) VALUES (?, ?, ?, 1) '
+      + 'ON CONFLICT (day, door, word) DO UPDATE SET n = n + 1').run(r.day, r.door, r.word);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Every count from `sinceDay` on, by day, door and word. */
+export function timerRefusalCounts(db: DatabaseSync, sinceDay: string): TimerRefusalCountsRead {
+  try {
+    const rows = stmt(db, 'SELECT day, door, word, n FROM continuity_timer_refusals WHERE day >= ? ORDER BY day, door, word')
+      .all(sinceDay) as { day: string; door: string; word: string; n: number | bigint }[];
+    return { ok: true, rows: rows.map((x) => ({ day: x.day, door: x.door, word: x.word, n: Number(x.n) })) };
+  } catch (e) {
+    return { ok: false, detail: `continuity_timer_refusals read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Removes the days before `beforeDay`. The timers lane calls it beside `purgeTimers`. */
+export function purgeTimerRefusals(db: DatabaseSync, beforeDay: string): { removed: number } {
+  return { removed: Number(stmt(db, 'DELETE FROM continuity_timer_refusals WHERE day < ?').run(beforeDay).changes) };
 }
 
 // ------------------------------------------------------------------------------------------------- the notes

@@ -129,6 +129,8 @@ describe('the table itself', () => {
       'inbox', 'messages', 'acknowledge',
       // The Overlord's history door (W1, PR B1).
       'history',
+      // The timer doors (W1, the Overlord's timers): every other session keeps W1a's path.
+      'timer-set', 'timer-list', 'timer-cancel',
     ]);
   });
 });

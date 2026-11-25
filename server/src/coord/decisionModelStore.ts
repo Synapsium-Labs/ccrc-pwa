@@ -20,7 +20,7 @@ import {
   type DecisionVerdict,
 } from '../../../shared/decisionModel.js';
 import { isDecisionGate } from './decisionLines.js';
-import type { AuthorityAppend } from './overlordAuthorityJournal.js';
+import { txWithAuthorityReceipt, type AuthorityAppend } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import type { DecisionUsage } from './decisionModel.js';
 import type {
@@ -350,15 +350,16 @@ export function decisionArmingStore(db: DatabaseSync, journal: DecisionAuthority
     currentLine: (row: DecisionRowId, key: DecisionLineKey) => currentDecisionLine(db, row, key),
     usage: (row: DecisionRowId, day: string, ceiling: number) => decisionUsage(db, row, day, ceiling),
   };
-  const inTx: DecisionArmingTx = {
+  // Each transaction opens through the journal's receipt (review 3646 F4): a throw after a durable append fences the guard.
+  const inTxWith = (held: DecisionAuthorityWriter): DecisionArmingTx => ({
     ...reads,
-    move: (m: DecisionRowMove) => moveDecisionRowInTx(db, journal, m),
+    move: (m: DecisionRowMove) => moveDecisionRowInTx(db, held, m),
     setHost: (host, actor, at) => setDecisionHostInTx(db, host, actor, at),
-  };
+  });
   return {
     ...reads,
-    inTx: (fn) => tx(db, () => fn(inTx)),
-    move: (m) => tx(db, () => moveDecisionRowInTx(db, journal, m)),
+    inTx: (fn) => txWithAuthorityReceipt(db, journal, (held) => fn(inTxWith(held))),
+    move: (m) => txWithAuthorityReceipt(db, journal, (held) => moveDecisionRowInTx(db, held, m)),
     admitLine: (w) => admitDecisionLine(db, w),
     recordCanary: (lineId, asked, crossed) => recordCanary(db, lineId, asked, crossed),
     recordAnchorRun: (row, day, bands, drift) => recordAnchorRun(db, row, day, bands, drift),

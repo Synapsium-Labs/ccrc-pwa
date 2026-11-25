@@ -2598,7 +2598,7 @@ describe('sweepStalls: a worker\'s own timer holds the quiet arm (Overlord §3.3
   const STAMP = '00000001-0000-4000-8000-000000000000';
   const MIN = 60_000;
   const setTimer = (coord: CoordStore, dueAt: number): number => {
-    const r = coord.insertTimer({ setter: WORKER, setterIncarnation: STAMP, setById: WORKER, setByUuid: UUID, role: 'worker',
+    const r = coord.insertTimer({ setRestoreGeneration: null, setter: WORKER, setterIncarnation: STAMP, setById: WORKER, setByUuid: UUID, role: 'worker',
       note: 'check the checks', runId: null, programme: null, setAt: IDLE_AT, dueAt });
     if (!r.ok) throw new Error('timer not set');
     return r.id;

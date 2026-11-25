@@ -98,3 +98,70 @@ and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 - **D-9092** — the outage notice shares the ladder's arming, so a stopped ladder raises none. One
   session that has got past none of its failures for an hour raises it too (the orchestrator's review): its coordinator is not
   told and the quiet ladder holds, so nobody else would hear of it.
+
+## Wave 3a: the lane-failing mark, and the gates that read it
+
+A lane whose provider answers turns with errors is marked, and an automatic move prefers other lanes while the mark stands. **No
+session is moved by this wave.** It lands before wave 3b (a session moves after its third failure), because a moved session
+whose home is the failing lane would otherwise be returned to it at its next idle tick. `ccd` only: nothing on the wire, no
+server reader, no setting, no key sent.
+
+### The file
+
+`$REG/<lane>-provfail` holds `<epoch> <word>`, the shape of `<lane>-authdead`: dotless and per lane, so it is in no registry
+row's glob. One writer, `ccd/ccd#_provfail_pass`, called by `ccd/ccd#cmd_limit_watchdog` (its own timer, once a minute) before
+it asks about any session. One reader, `ccd/ccd#_provfail`. It needs no purge, rename or teardown: past 30 minutes it means
+nothing to the reader, and the next pass removes it, for a lane that left the roster too.
+
+### What sets it, and what ends it
+
+The evidence is each row's turn marker, through one reader (`ccd/ccd#_turn_mark_read`, moved out of the affinity move's
+background hold in a commit of its own and extended by four fields). The lane is the row's `wrapper`. A stamp counts for a lane
+only when it is newer than the row's `lastswap`. Marker, uuid, `wrapper` or `lastswap` absent where needed, unreadable, malformed
+or another conversation's: evidence of nothing, neither failure nor health. A stamp over a minute ahead of the clock: the same.
+
+| On one lane | A newer good Stop there | Mark before the pass | After it |
+|---|---|---|---|
+| one session, 3 counted failures within 2 h since its `lastswap`, the newest within 30 min | no | none, ended or malformed | written, with this pass's epoch |
+| the same | yes | none | none |
+| two sessions, each with an owed failure (no turn since) within 10 min | no | none | written |
+| one such session, or two with one of them older, not owed, or from before its move | - | none | none |
+| anything | no | under 30 min old | left as it is, never rewritten |
+| anything | yes, newer than the mark | under 30 min old | removed |
+| a failure newer than that good Stop, and the first or third row holds | no | under 30 min old | removed and written again |
+| anything else | - | 30 min or older, or malformed | removed |
+
+A **good Stop** is a `done` line whose event is `Stop`; or, on a line a later event wrote, its `stopAt` beside an empty
+`failAts` and either no failure word or a provider's (the hook empties the list at a Stop and a clear only, and a clear writes
+no `stopAt`). Beside any other word the `stopAt` may be that failure's own, so it says nothing.
+
+### The gates
+
+1. **Home** (`ccd/ccd#_swap_target`, through `ccd/ccd#_provfail_holds_home`): the home-recovered arm does not return a session
+   to a marked home. A call that must leave keeps that home as the fallback the arm already had, so nothing is refused.
+2. **Rank** (`ccd/ccd#_swap_target`): a marked candidate scores 101, behind measured (at most 97) and unmeasured (100), ahead of
+   an auth-dead one (now 102). It stays eligible.
+3. **Spread** (`ccd/ccd#_rescue_target`): the spread preference is never bought with a marked lane.
+
+`ccd swap` in every form, `ccd swap-self` and `ccd prefer` read none of it. Pools, the class gate, the pool set, the cooldown and
+do-not-bounce are unchanged.
+
+### Left for the next pull request
+
+The order a provider move takes its target in (`_provider_move_rank_to`, pure, no caller) and the provider of a lane
+(`_lane_provider_to`). They are 14 code lines and this wave is at the growth limit (`ccd (program)` +40).
+
+### Deviations found (wave 3a)
+
+- **D-9095** — the mark is a per-lane fact with one writer in the limit watchdog's pass, so it is off with it:
+  `CCRC_LIMIT_WATCHDOG_MIN=0` reads and writes nothing, by that setting's own rule. Readers then see no mark.
+- **D-9096** — "fresh" is 10 minutes for an owed failure (the outage notice's window), and the three counted
+  failures also need their newest inside the mark's own 30 minutes. Without the second rule a session that was stopped after its
+  third failure would mark its lane again every 30 minutes for 2 h.
+- **D-9097** — the mark is last among lanes a turn can run on, not behind a dead credential: that one cannot run a
+  turn at all. Auth-dead moves from 101 to 102. Both rank inside a bracket, so a marked home-able lane still beats an unmarked
+  overflow lane, as an auth-dead one does.
+- **D-9098** — `_rescue_target`'s spread pass would have taken a marked lane as the only one no rescue had just
+  landed on, ahead of a healthy one. Its name is refused when it is marked, and the pass after it decides.
+- **D-9099** — `ccd prefer` acts through the home arm, so gate 1 alone would have held it back. A `.home` written
+  after the mark is not held, for one move: a row whose `lastswap` is newer than its `.home` is held like any other.

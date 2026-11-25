@@ -8,11 +8,12 @@ import { GENERATION_STATES } from '../../shared/continuity.js';
 import { DESIGNATION_SEQUENCE_STATES } from '../../shared/overlord-designation.js';
 import { ACTOR_SUBJECT_MAX } from '../../shared/overlord-identity.js';
 import { MESSAGE_STATES } from '../../shared/operatorMessages.js';
+import { RUNGS } from '../../shared/overlord-ladder.js';
 import { retentionCutCases, sequenceLineKnownCases, sequenceLineVerdictCases, sequencePageCases } from './sim/sequenceSets.js';
 
 describe('the sequence vocabulary (shared/overlord-sequence.ts)', () => {
-  it('names generation, designation and message lines, each with its id rule and spec text', () => {
-    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message']);
+  it('names generation, designation, message and the ladder\'s two kinds of line, each with its id rule and spec text', () => {
+    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message', 'ladder-rung', 'ladder-latch']);
     for (const k of L0.SEQUENCE_KINDS) {
       expect(L0.SEQUENCE_KIND_MAP[k].id.length).toBeGreaterThan(0);
       expect(L0.SEQUENCE_KIND_MAP[k].spec).toMatch(/^§10\.4 /);
@@ -22,11 +23,14 @@ describe('the sequence vocabulary (shared/overlord-sequence.ts)', () => {
     expect(L0.SEQUENCE_KIND_MAP.generation.states).toBe(GENERATION_STATES);
     expect(L0.SEQUENCE_KIND_MAP.designation.states).toBe(DESIGNATION_SEQUENCE_STATES);
     expect(L0.SEQUENCE_KIND_MAP.message.states).toBe(MESSAGE_STATES);
+    expect(L0.SEQUENCE_KIND_MAP['ladder-rung'].states).toBe(RUNGS);
+    expect(L0.SEQUENCE_KIND_MAP['ladder-latch'].states).toBe(L0.LADDER_LATCH_SEQUENCE_STATES);
+    expect(L0.LADDER_LATCH_SEQUENCE_STATES).toEqual(['raised', 'cleared']);
     expect(DESIGNATION_SEQUENCE_STATES).toEqual(['pending', 'live', 'failed', 'retired']);
   });
   it('isSequenceKind takes the table\'s keys only', () => {
     for (const k of L0.SEQUENCE_KINDS) expect(L0.isSequenceKind(k)).toBe(true);
-    for (const bad of ['', 'Generation', 'ladder-rung', 'constructor', 'toString', '__proto__', null, undefined, 1, {}]) {
+    for (const bad of ['', 'Generation', 'grant', 'constructor', 'toString', '__proto__', null, undefined, 1, {}]) {
       expect(L0.isSequenceKind(bad)).toBe(false);
     }
   });
