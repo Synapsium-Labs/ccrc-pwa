@@ -79,10 +79,13 @@ describe('the built review page (M-X3.12, N8, R2.1)', () => {
     expect(html).not.toMatch(/serviceWorker/);
   });
 
-  it('the built page holds no manifest link', () => {
+  // The PWA plugin adds the manifest link to every HTML entry; vite.config.ts's `reviewPageWithoutManifest` takes it out
+  // of the review page alone, so the shell keeps its own (the installable app needs it).
+  it('the built page holds no manifest link, and the shell keeps its own', () => {
     const html = read('review.html');
     expect(html).not.toMatch(/rel=["']manifest["']/i);
     expect(html).not.toMatch(/\.webmanifest/);
+    expect(read('index.html')).toMatch(/<link rel="manifest" href="\/manifest\.webmanifest"/);
   });
 
   it('the built page carries the data: icon, the no-referrer meta and its own title', () => {
@@ -91,6 +94,33 @@ describe('the built review page (M-X3.12, N8, R2.1)', () => {
     expect(html).toMatch(/<meta name="referrer" content="no-referrer"/);
     expect(html).toContain('<title>Draft for review</title>');
     expect(html).not.toContain('/icons/');
+  });
+
+  // R2.1 review, M1: under `default-src 'none'` with `script-src 'self'` and `img-src data:`, every URL the built page
+  // names must be a `data:` one or a same-origin file under `/assets/`; and the page's import closure must stay its own,
+  // never reaching the shell's entry chunk or React, so a later `manualChunks` or a heavy import into `shared/` shows here.
+  it('every URL the built page names is data: or under /assets/', () => {
+    const html = read('review.html');
+    const urls = [...html.matchAll(/\b(?:src|href)="([^"]*)"/g)].map((m) => m[1]!);
+    expect(urls.length).toBeGreaterThan(2);
+    for (const u of urls) expect(u, u).toMatch(/^(?:data:|\/assets\/[^/?#]+$)/);
+  });
+
+  it("the page's import closure reaches neither the shell's entry chunk nor React", () => {
+    const seen = new Set<string>();
+    const walk = (file: string): void => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const text = read(path.join('assets', file));
+      for (const m of text.matchAll(/(?:from\s*|import\s*\(?\s*)["']\.\/([^"']+\.js)["']/g)) walk(m[1]!);
+    };
+    const entry = /\bsrc="\/assets\/(review-[^"]+\.js)"/.exec(read('review.html'))?.[1];
+    expect(entry, 'the page has an entry chunk of its own').toBeDefined();
+    walk(entry!);
+    // Not vacuous: the entry imports the shared `docs-*` chunk the build splits out (measured 2026-11-25).
+    expect(seen.size, [...seen].join(', ')).toBeGreaterThan(1);
+    expect([...seen].filter((f) => /^index-/.test(f))).toEqual([]);
+    for (const f of seen) expect(read(path.join('assets', f)), f).not.toMatch(/react\.(?:production|development)|__SECRET_INTERNALS|react-dom/);
   });
 
   it('the shell is still built, and its entry script is assets/index-*.js', () => {

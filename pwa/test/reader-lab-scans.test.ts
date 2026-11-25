@@ -28,7 +28,10 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const FRAME_HOME = 'src/readerLab/frames.ts';
 /** The draft review page's entry (X3 R2.1, D-8767): the one other file that builds a frame, by exact path. */
 const REVIEW_HOME = 'src/review/main.ts';
-const FRAME_HOMES: readonly string[] = [FRAME_HOME, REVIEW_HOME];
+/** The measurement fixture's data module (X3 R2.3, D-8767): Export's own copies as string constants, whose TEXT holds
+ *  `<iframe sandbox="" srcdoc=...>` (the mockup wrapper's nested frame). By exact path, never the directory. */
+const LAB_FIXTURE_HOME = 'src/review/labFixture.ts';
+const FRAME_HOMES: readonly string[] = [FRAME_HOME, REVIEW_HOME, LAB_FIXTURE_HOME];
 const LAB_DRAW_HOMES: readonly string[] = ['src/docs/reader/policy.ts', 'src/readerLab/run.ts'];
 const FORBIDDEN_SANDBOX = /\ballow-(?:same-origin|popups|top-navigation|forms|modals|downloads|pointer-lock|presentation|orientation-lock|storage-access)/;
 
@@ -251,6 +254,19 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
     expect(frameFindings(frame, 'src/review/other.ts')).toEqual(['src/review/other.ts iframe', 'src/review/other.ts srcdoc']);
     expect(frameFindings(frame, 'src/review/main.tsx')).toEqual(['src/review/main.tsx iframe', 'src/review/main.tsx srcdoc']);
     expect(frameFindings(frame, REVIEW_HOME)).toEqual([]);
+  });
+
+  it('rule 2: the measurement fixture holds the nested iframe text, and the allowance is its exact path (R2.3)', () => {
+    expect(frameFindings(read(LAB_FIXTURE_HOME), LAB_FIXTURE_HOME, true)).toEqual([`${LAB_FIXTURE_HOME} iframe`, `${LAB_FIXTURE_HOME} srcdoc`]);
+    expect(frameFindings(read(LAB_FIXTURE_HOME), LAB_FIXTURE_HOME)).toEqual([]);
+  });
+
+  it('rule 2 planted: the same nested iframe text anywhere but labFixture.ts is red, review/other.ts and a sibling named like it included (R2.3)', () => {
+    const nested = "export const LAB_PLANTED = '<iframe sandbox=\"\" srcdoc=\"&lt;p&gt;x&lt;/p&gt;\"></iframe>';";
+    expect(frameFindings(nested, LAB_FIXTURE_HOME)).toEqual([]);
+    for (const other of ['src/review/other.ts', 'src/review/labFixture.tsx', 'src/review/lab/labFixture.ts', 'src/readerLab/labFixture.ts']) {
+      expect(frameFindings(nested, other), other).toEqual([`${other} iframe`, `${other} srcdoc`]);
+    }
   });
 
   it('rule 3: no sandbox token beyond allow-scripts anywhere in pwa/src, and frames.ts sets sandbox only from LAB_SANDBOX (M10.9)', () => {

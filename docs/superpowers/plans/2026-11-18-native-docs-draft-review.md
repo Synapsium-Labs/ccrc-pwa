@@ -411,6 +411,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R2-M13 | `src/review/main.ts` | the script or link line holds while the load marker is unanswered | `review-page` lab-mode positive-signal row (N1, re-pass m2) |
 | NDR-X3-R2-M14 | `src/review/labFixture.ts` | a copy's `DOCS_EXPORT_CSP` meta removed from the fixture | `review-lab-fixture`: the fixture no longer equals the builder's bytes (re-pass I3) |
 | NDR-X3-R2-M15 | `reader-lab-scans.test.ts` | rule 3's allowance accepts any value in `main.ts` | `reader-lab-scans` planted control: `'allow-scripts'` in `main.ts` must red (re-pass m13) |
+| NDR-X3-R2-M16 | `vite.config.ts` | `reviewPageWithoutManifest` dropped, so the PWA plugin's manifest link stays in the built page | `review-built` manifest row (R2.1 finding: a blocked request under the page's policy, and lab mode makes none); the same row pins that the shell keeps its own link |
 | NDR-X3-R3-M1 | `review/routes.ts` | the list accepts any section | `review-routes` bad-query row (F15) |
 | NDR-X3-R3-M2 | `review/routes.ts` | pin of an unknown id answers 200 | `review-routes` unknown-share row (F15) |
 | NDR-X3-R3-M3 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
@@ -663,5 +664,9 @@ Wave 46, ticket `x3-r2`, base `main` at `bce2bc52fd`. Deviation numbers issued: 
   - a `HEAD /review` row pins all five headers.
 
   Not taken, as advisory: a guard against a second copy of the policy text; the service worker answering `/review.html` and `/Review` (outside the spec's list); and the filter's second decode, kept as a conservative choice.
-- **Local runs**, each foreground. Review routes, static cache and box-token census: 151 of 151. Auth gate: 395 of 395. Service-worker denylist: 21 of 21. Review vocabulary and rings: 141 of 141. The server source typecheck exited 0 before the review's fixes.
-- **Process note (reported to the coordinator).** Four of these runs were piped through `tail`, against the brief's rule. They were the auth-gate and census runs: the 514 of 515 check, the post-fix 151 of 151, and an auth-gate run whose counts were never read. Each run was a single file group. The auth-gate result above is from an unpiped re-run.
+- **Local runs**, each foreground and unpiped, all on the committed tree `4ec4529f53`:
+  - review routes, static cache and box-token census: 151 of 151 (the main thread's re-run, made after the coordinator's ruling);
+  - auth gate: 395 of 395 (the main thread);
+  - service-worker denylist: 21 of 21, and the review vocabulary with the rings: 141 of 141 (both the implementer's, before the review's fixes, which touched neither);
+  - the server source typecheck: exit 0 (the implementer's, before the review's fixes, which changed only `pwaStatic.ts`'s filter and doc).
+- **Process note (reported to the coordinator; its ruling: cite only unpiped figures).** Four main-thread runs were piped through `tail`, against the brief's rule: the auth-gate and census group twice (514 of 515, then 151 of 151) and the auth-gate file twice. A piped run's exit status is the pipe's, so none of them is cited above: every figure above is from an unpiped run.

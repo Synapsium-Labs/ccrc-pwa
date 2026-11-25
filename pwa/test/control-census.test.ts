@@ -549,6 +549,11 @@ const CONTROLS: Record<string, string> = {
   'docs/export/buildExport.tsx <a> (none)':
     'INLINE. The "Links in this page" list of a saved mockup export (native Docs reader C2, Task 9; base 5.6.9 step 5): drawn '
     + 'into the saved file, never into the app, each link a line of text in the list, as for `docs/export/exportMarkdown.tsx <a> (none)`.',
+  'screens/ReaderLab.tsx <a> (none)':
+    'INLINE. The reader lab\'s one anchor, "Draft review frame (M-X3.16)" (native Docs draft review, X3 R2.3): it opens `/review#lab`, '
+    + 'the measurement page, in a new tab, from inside the sentence that names it. An anchor and not `window.open`, which '
+    + '`reader-lab-scans.test.ts` rule 1 forbids there. WCAG 2.2 SC 2.5.8 exempts a target in a sentence, as for `docs/DocLink.tsx <a> (none)`; '
+    + 'its `href`, `target` and `rel` and its sentence are read below.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
@@ -714,6 +719,36 @@ describe('hand-drawn controls', () => {
     expect(grown, 'this now declares --tap-min — it is not an inline target').toEqual([]);
   });
 
+
+  it('reads the reader lab\'s one anchor: "Draft review frame (M-X3.16)" to /review#lab, in a new tab, inside a sentence of its own (X3 R2.3)', () => {
+    // The census's keys carry no attribute, so the anchor's `href`, `target` and `rel` and its sentence are read here. The
+    // entry above says INLINE: a link inside a sentence, so the sentence is checked, not assumed.
+    const file = path.join(APP_SRC, 'screens', 'ReaderLab.tsx');
+    const src = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const anchors: ts.JsxElement[] = [];
+    const visit = (n: ts.Node): void => {
+      if (ts.isJsxElement(n) && n.openingElement.tagName.getText() === 'a') anchors.push(n);
+      n.forEachChild(visit);
+    };
+    visit(src);
+    expect(anchors, 'the reader lab draws exactly one anchor').toHaveLength(1);
+    const a = anchors[0]!;
+    const attr = (name: string): string | null => {
+      const p = a.openingElement.attributes.properties.find((x): x is ts.JsxAttribute => ts.isJsxAttribute(x) && x.name.getText() === name);
+      return p?.initializer !== undefined && ts.isStringLiteral(p.initializer) ? p.initializer.text : null;
+    };
+    expect(attr('href')).toBe('/review#lab');
+    expect(attr('target')).toBe('_blank');
+    expect(attr('rel')).toBe('noopener noreferrer');
+    expect(a.children.map((c) => (ts.isJsxText(c) ? c.text : '')).join('').trim()).toBe('Draft review frame (M-X3.16)');
+    // A sentence of its own: the anchor's parent is a paragraph with words on either side.
+    const parent = a.parent;
+    expect(ts.isJsxElement(parent) && parent.openingElement.tagName.getText()).toBe('p');
+    const words = (parent as ts.JsxElement).children.filter(ts.isJsxText).map((c) => c.text).join('').trim();
+    expect(words).toMatch(/^Draft review: open the\s+in a new tab\.$/);
+    expect(CONTROLS['screens/ReaderLab.tsx <a> (none)']).toMatch(/^INLINE\./);
+    expect([...controls().keys()]).toContain('screens/ReaderLab.tsx <a> (none)');
+  });
 
   it('makes a control with a computed or absent class cite the rule that answers for it', () => {
     // THE HOLE THIS CLOSES, measured. `.bell` gained both floors and this

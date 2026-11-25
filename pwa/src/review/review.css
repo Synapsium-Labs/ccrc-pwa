@@ -112,3 +112,115 @@ a:focus-visible {
   border-radius: 8px;
   background: #ffffff;
 }
+
+/* Lab mode (X3 R2.3, `/review#lab`): the measurement page. Two short frames, then six lines, each with its reference and
+   its three answers, then the result block. Same palette, same 16px gutter, no horizontal scroll. */
+.review-lab-title {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+}
+
+.review-lab-intro {
+  margin: 0 0 16px;
+}
+
+.review-lab-copies,
+.review-lab-lines,
+.review-lab-result-block {
+  margin: 0 0 24px;
+}
+
+.review-lab-copy {
+  margin: 0 0 16px;
+}
+
+.review-lab-caption {
+  margin: 0 0 4px;
+  color: var(--review-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.review-frame.review-lab-frame {
+  min-height: 18rem;
+}
+
+.review-lab-lines {
+  padding: 0;
+  list-style: none;
+}
+
+.review-lab-row {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+}
+
+.review-lab-line {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.review-lab-key {
+  color: var(--review-accent);
+}
+
+.review-lab-ref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.review-lab-swatch {
+  display: inline-block;
+  width: 64px;
+  height: 16px;
+  border: 1px solid var(--review-fg);
+}
+
+.review-lab-swatch-wide {
+  width: 120px;
+  height: 24px;
+}
+
+.review-lab-sample {
+  font-size: 1.25rem;
+}
+
+.review-lab-look {
+  flex: 1 1 16rem;
+  color: var(--review-muted);
+}
+
+.review-lab-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.review-lab-answers button[aria-pressed='true'] {
+  background: var(--review-accent);
+  color: var(--review-bg);
+}
+
+.review-lab-status {
+  display: block;
+  font-weight: 600;
+}
+
+.review-lab-result {
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+  font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}

@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
-  isReviewToken, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
-  REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_PAGE_HEADERS, REVIEW_SEND_IDLE_MS,
+  isReviewToken, REVIEW_IDLE_DAYS_HEADER, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
+  REVIEW_OPEN_HEADERS, REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_PAGE_HEADERS, REVIEW_SEND_IDLE_MS,
+  REVIEW_SHARED_AT_HEADER, REVIEW_VERSION_HEADER,
 } from '../../../shared/docsReview.js';
 import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import { expiryOf, type ReviewEntry } from './policy.js';
@@ -35,8 +36,7 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
     // Let Fastify enforce the same bounded read for every other media type; none supplies a token.
     scope.addContentTypeParser<Buffer>('*', { parseAs: 'buffer' }, (_req, _body, done) => done(null, undefined));
     const headers = (reply: FastifyReply): void => {
-      reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
-        .header('x-content-type-options', 'nosniff').header('content-disposition', 'attachment');
+      for (const [name, value] of Object.entries(REVIEW_OPEN_HEADERS)) reply.header(name, value);
     };
     const failure = (reply: FastifyReply, error: 'not-found' | 'too-large' | 'busy') => {
       headers(reply);
@@ -46,7 +46,7 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
     scope.setErrorHandler((error, _req, reply) => {
       if (reply.raw.headersSent || reply.raw.destroyed || reply.raw.writableEnded) return;
       // Fastify stages stream headers on both reply and raw response before the first byte.
-      for (const name of ['content-type', 'x-ccrc-review-shared-at', 'x-ccrc-review-version', 'x-ccrc-review-idle-days']) {
+      for (const name of ['content-type', REVIEW_SHARED_AT_HEADER, REVIEW_VERSION_HEADER, REVIEW_IDLE_DAYS_HEADER]) {
         reply.removeHeader(name);
       }
       const tooLarge = typeof error === 'object' && error !== null &&
@@ -132,9 +132,9 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
         });
       }) as typeof reply.raw.write;
       headers(reply);
-      reply.header('x-ccrc-review-shared-at', String(entry.sharedAt))
-        .header('x-ccrc-review-version', String(entry.version))
-        .header('x-ccrc-review-idle-days', String(REVIEW_IDLE_MS / 86400000))
+      reply.header(REVIEW_SHARED_AT_HEADER, String(entry.sharedAt))
+        .header(REVIEW_VERSION_HEADER, String(entry.version))
+        .header(REVIEW_IDLE_DAYS_HEADER, String(REVIEW_IDLE_MS / 86400000))
         .type('application/octet-stream');
       return reply.send(source.stream);
     });

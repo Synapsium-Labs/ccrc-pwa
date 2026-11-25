@@ -44,6 +44,21 @@ export const REVIEW_OPEN_BODY_BYTES = 256;
 export const REVIEW_MARKER_HEADER = 'x-ccrc-review';
 export const REVIEW_MARKER_VALUE = '1';
 
+/** The read door's three answer headers (design §3.5), named once: the server writes them, the review page reads the
+ *  first (R2.1 review, I1). */
+export const REVIEW_SHARED_AT_HEADER = 'x-ccrc-review-shared-at';
+export const REVIEW_VERSION_HEADER = 'x-ccrc-review-version';
+export const REVIEW_IDLE_DAYS_HEADER = 'x-ccrc-review-idle-days';
+
+/** The headers every read-door answer carries, a 200 and every refusal alike (design §3.5, M-X3.11). One home: the
+ *  door and the browser harness (X3 R2.3) both read it. */
+export const REVIEW_OPEN_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'content-disposition': 'attachment',
+});
+
 // ---- The review page's response headers --------------------------------------------------------------------------
 
 /** The review page's content security policy, sent as a response header (draft-review design §3.5, "The review
