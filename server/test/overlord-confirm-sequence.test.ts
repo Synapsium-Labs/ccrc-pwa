@@ -1,8 +1,8 @@
 // Confirm uses the real authority journal and guard; the sequence tables and the rows share the Confirm transaction.
 import { describe, expect, it } from 'vitest';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
-import { designatePending, designationRead, retire } from '../src/coord/overlordDesignationStore.js';
-import { GEN1, NOW, OPERATOR, S1, S2, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, type Rig } from './overlordRestoreRig.js';
+import { designatePending, designationRead, failPending, retire } from '../src/coord/overlordDesignationStore.js';
+import { GEN1, NOW, OPERATOR, S1, S2, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, rung, type Rig } from './overlordRestoreRig.js';
 
 restoreRigHooks();
 
@@ -106,6 +106,84 @@ describe('Confirm stamps the restored designation transaction', () => {
     expect(r.lines()).toEqual([...before.records, expect.any(String)]);
     expect(lastEntry(r)).toMatchObject({ kind: 'authority-restore-confirmed', binding: { kind: 'cleared' } });
     expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(r.offers).toBe(0);
+  });
+
+  // Sequence A's carried cases (review 3675 F2, all three parts; sequence PR B1 piece 5).
+  const mintS1 = (r: Rig): number => {
+    const start = insertStart(r.db, {
+      sessionId: S1, reportId: 'report-n', uuid: GEN1, source: 'startup', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW,
+    });
+    if (!start.ok) throw new Error('could not record the fixture start');
+    const minted = mintGeneration(r.db, {
+      identity: S1, sessionId: S1, role: 'worker', term: 0, rowIncarnation: null, startId: start.id, startReportedAt: NOW,
+      resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW,
+    }, null, false);
+    if (!minted.ok) throw new Error('could not mint the fixture generation');
+    return minted.id;
+  };
+  /** A present row holding neither a binding nor a pending attempt: a pending attempt that failed. */
+  const neitherRow = (r: Rig): void => {
+    expect(designatePending(r.db, r.journal, {
+      sessionId: S2, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: [], untagged: false }, actor: OPERATOR, at: NOW, opKey: 'neither',
+    })).toEqual({ ok: true, changed: true });
+    expect(failPending(r.db, S2, 'deadline-passed', NOW, false)).toMatchObject({ ok: true, changed: true });
+    expect(designationRead(r.db)).toMatchObject({ kind: 'not-designated', row: { pending: null } });
+  };
+
+  it('part 1: a clearing Confirm over a row holding neither a binding nor a pending attempt stamps no designation line', () => {
+    const r = rig();
+    neitherRow(r);
+    r.guard.witnessRefused('witness-epoch');
+    const before = lines(r);
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true });
+    expect(lines(r)).toEqual([...before, RESTORED_RUNG]);
+  });
+
+  it('part 3: a body only the journal binds, ended by Confirm, gets its generation\'s ended line and an owed stop, and no designation line', () => {
+    const r = rig();
+    const generationId = mintS1(r);
+    neitherRow(r);
+    const restore = r.snapshot(false);
+    designateLive(r, S1, GEN1);
+    restore();
+    expect(designationRead(r.db)).toMatchObject({ kind: 'not-designated' });
+    const before = lines(r);
+    expect(confirm(r)).toMatchObject({ ok: true, changed: true, binding: 'cleared' });
+    expect(lines(r)).toEqual([...before,
+      { kind: 'generation', id: String(generationId), state: 'ended', actor: 'server', actorKind: 'server', at: NOW + 1 },
+      RESTORED_RUNG,
+    ]);
+    expect(designationRead(r.db)).toMatchObject({ row: { stopsOwed: expect.arrayContaining([S1]) } });
+  });
+
+  it('part 2: a refused stamp on the pending-only shape rolls everything back but the Confirm record, and fences the guard once', () => {
+    const r = rig();
+    expect(designatePending(r.db, r.journal, {
+      sessionId: S2, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: [], untagged: false }, actor: OPERATOR, at: NOW, opKey: 'pending-only-refused',
+    })).toEqual({ ok: true, changed: true });
+    // A real restore (the rung move's record outlives the database), then the running-server boundary, as the bound shapes do.
+    const restore = r.snapshot(false);
+    expect(rung(r, 'chat', 'off')).toMatchObject({ ok: true, changed: true });
+    restore();
+    r.guard.confirmed();
+    expect(r.guard.state()).toEqual({ kind: 'coherent' });
+    const fences: string[] = [];
+    const writerFailed = r.guard.writerFailed.bind(r.guard);
+    r.guard.writerFailed = (cause) => { fences.push(cause); writerFailed(cause); };
+    const before = { lines: lines(r), generations: generations(r), designation: designationRead(r.db), head: headRow(r), records: r.lines() };
+    r.db.exec(`CREATE TEMP TRIGGER fail_confirm_stamp BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'designation' AND NEW.state = 'retired'
+      BEGIN SELECT RAISE(ABORT, 'fixture refuses the retired line'); END`);
+    expect(confirm(r)).toMatchObject({ ok: false, refusal: 'journal-unwritable', detail: expect.stringContaining('after the append') });
+    expect(lines(r)).toEqual(before.lines);
+    expect(generations(r)).toEqual(before.generations);
+    expect(designationRead(r.db)).toEqual(before.designation);
+    expect(headRow(r)).toEqual(before.head);
+    expect(r.lines()).toEqual([...before.records, expect.any(String)]);
+    expect(lastEntry(r)).toMatchObject({ kind: 'authority-restore-confirmed' });
+    expect(r.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(fences).toEqual(['trailing']);
     expect(r.offers).toBe(0);
   });
 });

@@ -718,6 +718,12 @@ describe('the ladder\'s sequence lines', () => {
     expect(lines(db)).toEqual([{ kind: 'ladder-latch', id: 'unwitnessed-third', state: 'raised', actor: caller.actor.subject, actorKind: 'server', at: NOW }]);
   });
 
+  it('a lane\'s brake of the rung is the server\'s', () => {
+    const db = openDb(); const f = fake(db);
+    tx(db, () => setRungInTx(db, f, { from: 'chat', to: 'off', actor: laneRaiser('renewal-lane'), at: NOW, opKey: 'op-lr' }));
+    expect(lines(db)).toEqual([{ kind: 'ladder-rung', id: 'operator', state: 'off', actor: 'renewal-lane', actorKind: 'server', at: NOW }]);
+  });
+
   it('a lane\'s raise is the server\'s', () => {
     const db = openDb(); const f = fake(db);
     tx(db, () => raiseLatchInTx(db, f, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: laneRaiser('renewal-lane'), at: NOW, opKey: 'op-l' }));
