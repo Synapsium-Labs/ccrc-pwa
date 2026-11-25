@@ -18,6 +18,8 @@ import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, Se
 import { readSession } from './sessionReading.js';
 import { RADAR_PROBE_FRESH_S, freshWithin, sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
 import { sessionRoleOf } from './roleOf.js';
+import { providerRetryShown } from './coord/providerRetry.js';
+import type { ProviderRetryWire } from '../../shared/provider-retry.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
@@ -584,6 +586,9 @@ export interface AssembleFleetOptions {
    *  frame this assembly builds carries an old prediction however long the lane has been blind; the sends that carry an
    *  earlier fleet instead take `dropStaleLandings` (D-7481). */
   landings?: ReadonlyMap<string, SessionLanding>;
+  /** What the provider-failure ladder says of each session (`FleetWatcher.currentProviderRetries()`), keyed by session id.
+   *  Absent on every caller that builds no fleet frame and in older tests. */
+  providerRetries?: ReadonlyMap<string, ProviderRetryWire>;
   /** Console speed S1: the tick's one tmux listing. An ok one replaces the per-row `sessionVerdict` and `panePid`. */
   paneListing?: PaneListing;
   /** The limits the caller already read; absent = read here. */
@@ -624,7 +629,7 @@ export async function assembleFleetWithPanePids(
   now = fleetNow(),
   opts: AssembleFleetOptions = {},
 ): Promise<FleetAssembly> {
-  const { pendingDialogs, statuslines, taskProgress, prStates, hookStates, records, coord, usageReadings, headBranches, landings,
+  const { pendingDialogs, statuslines, taskProgress, prStates, hookStates, records, coord, usageReadings, headBranches, landings, providerRetries,
     paneListing, limitsRead } = opts;
   const panePids = new Map<string, number | null>();
   // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
@@ -666,7 +671,7 @@ export async function assembleFleetWithPanePids(
     // Null means "not waiting, or nothing measured"; a STRING is the reason,
     // and an empty-but-waiting file is `''` — which is why the flag beside it
     // is separate, rather than this field doing double duty as both.
-    let liveWaiting = false, liveWaitingFor: string | null = null;
+    let liveWaiting = false, liveWaitingFor: string | null = null, liveWord: string | null = null;
     // D-115: whether `status` below is a READING or this surface's fail-shut
     // guess. Declared rather than inferred — `watch.ts` cannot tell the two
     // apart from the word `busy` alone, and it must (see `statusUnmeasured`'s
@@ -721,7 +726,7 @@ export async function assembleFleetWithPanePids(
           // has already collapsed `waiting` into `busy` by this line, and that
           // collapse is deliberate and frozen (see its docstring). This is the
           // distinction surviving the collapse rather than dying in it.
-          liveWaiting = live.status === 'waiting';
+          liveWaiting = live.status === 'waiting'; liveWord = live.status;
           liveWaitingFor = live.waitingFor;
         } else if (read.reason === 'unmeasured') {
           // `busy` is this SURFACE's fail-shut direction, and only this
@@ -757,6 +762,7 @@ export async function assembleFleetWithPanePids(
     const sl = statuslines?.get(r.id);
     const head = headBranches?.get(r.id) ?? null;
     const landing = landings?.get(r.id);
+    const retry = providerRetries?.get(r.id);
     // The pane's Workflow row speaks only where Claude Code's own file did not:
     // no readable file (`no-state` leaves the `alive` default `idle`), no
     // configDir, or a build older than 2.1.277 or naming no version. From
@@ -971,6 +977,7 @@ export async function assembleFleetWithPanePids(
         ? null
         : { since: r.limitWait.since * 1000, reset: r.limitWait.reset === null ? null : r.limitWait.reset * 1000,
             account: r.limitWait.account, waiting: r.limitWait.waiting, waitingBy: r.limitWait.waitingBy },
+      ...(providerRetryShown(retry, liveWord) ? { providerRetry: retry } : {}),
       // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
       // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
       // through as 0 (not a real 1970 stamp — the PWA renders text-only when

@@ -30,6 +30,7 @@ import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
 import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
+import { providerRetryOf } from '../../../shared/provider-retry';
 import './fleet.css';
 
 
@@ -141,9 +142,11 @@ function SessionLineView({
   const busy = session.status === 'busy';
   // Wave 173: what this coordinator's workers say, clock-free (`workersBusyOf`, the header's own reader): a primitive, so a
   // frame that changes no answer re-renders no row. A number is a wait on a spawn alone, which only a clock can call in
-  // flight or stalled (`workersWaitAt`), so the row ticks while it holds one, as it does while busy.
+  // flight or stalled (`workersWaitAt`), so the row ticks while it holds one, as it does while busy. So does a provider retry,
+  // whose time turns to now.
   const workersBusy = useFleetStore((st) => workersBusyOf(session, st.sessions, st.runs));
-  const tick = useNow(30_000, (busy || typeof workersBusy === 'number') && now === undefined);
+  const retrying = providerRetryOf(session.providerRetry) !== null;
+  const tick = useNow(30_000, (busy || retrying || typeof workersBusy === 'number') && now === undefined);
   const storeLatest = useFleetStore((st) => fleetClaudeLatest(st.sessions));
   const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
   const facts = sessionFacts({
