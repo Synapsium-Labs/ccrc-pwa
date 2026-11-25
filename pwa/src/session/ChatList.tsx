@@ -27,7 +27,7 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { heightMove, holdShift, prependShift } from './footFollow';
+import { footLeft, heightMove, holdShift, prependShift } from './footFollow';
 import { NO_PAGING, isGapMarker, liveFromOf, type OlderPaging } from './olderPages';
 import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
 import { ToolActivityRow } from './ToolActivityRow';
@@ -864,14 +864,25 @@ function ChatScroller({
   // put back. A reader who had scrolled up is not pinned and is never moved;
   // a wheel, a touch or a key ends the settling at once.
   const pinned = useRef(true);
+  /** Where the scroller stood when the reader was last at the foot (wave 175): a reader who leaves it moved up from here. */
+  const footTop = useRef(0);
+  /** Take the reader to the foot: the one writer of "stay at the foot" (`footFollow.ts#footLeft`). */
+  const toFoot = useCallback((): void => { virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' }); }, []);
   const onAtBottom = useCallback((bottom: boolean): void => {
-    if (!bottom && pinned.current && column.settling()) {
-      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
-      return;
+    const el = scroller.current;
+    if (bottom) {
+      if (el !== null) footTop.current = el.scrollTop;
+    } else if (pinned.current) {
+      const left = footLeft({
+        settling: column.settling(),
+        movedUp: el !== null && el.scrollTop < footTop.current - 1,
+        sinceTap: lastTap.current === null ? null : performance.now() - lastTap.current,
+      });
+      if (left === 'foot') { toFoot(); return; }
     }
     pinned.current = bottom;
     setAtBottom(bottom);
-  }, [column]);
+  }, [column, toFoot]);
 
 
   // READ ONCE PER MOUNT, as a lazy initial state — storage is read and parsed
@@ -954,6 +965,7 @@ function ChatScroller({
     // write left it: a reader who moved it since owes an event of their own, and this one is theirs.
     if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
     if (adjusting.current) { adjusted.current += 1; return; }
+    if (el !== null && pinned.current) footTop.current = el.scrollTop;
     lastMove.current = performance.now();
     if (readSoon.current) return;
     readSoon.current = true;
@@ -1028,7 +1040,7 @@ function ChatScroller({
       newItem: true, prepended: true,
     });
     if (move === 'foot') {
-      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      toFoot();
       return;
     }
     const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
@@ -1078,7 +1090,7 @@ function ChatScroller({
       newItem, prepended: false,
     });
     if (move === 'foot') {
-      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      toFoot();
       return;
     }
     // A frame later, after any correction of the list's own or the browser's: the hold compares where the row stood
@@ -1198,8 +1210,9 @@ function ChatScroller({
         // whole chat going blank mid-scroll.
         increaseViewportBy={{ top: 1200, bottom: 1200 }}
         minOverscanItemCount={{ top: 4, bottom: 4 }}
-        // Stick to the bottom while the reader is there; never yank them back.
-        followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
+        // Off (wave 175, carried item 6a): the list keeps a reader at the foot itself (`toFoot`, `footFollow.ts`). Virtuoso's
+        // follow armed a 100ms window on every render in which a reader's tap was followed to the end.
+        followOutput={false}
         atBottomStateChange={onAtBottom}
         totalListHeightChanged={onHeight}
         scrollerRef={onScroller}

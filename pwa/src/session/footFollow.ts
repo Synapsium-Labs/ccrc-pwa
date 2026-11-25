@@ -104,3 +104,26 @@ export function prependShift(before: readonly string[], after: readonly string[]
 function range(from: number, to: number): number[] {
   return Array.from({ length: Math.max(0, to - from) }, (_, i) => from + i);
 }
+
+/** What the list does when virtuoso says the reader is no longer at the foot (desktop polish wave 175, carried item 6a).
+ *  ONE OWNER OF "STAY AT THE FOOT": virtuoso's own follow is off (it armed a 100ms window on every render that followed a
+ *  reader's tap to the end, measured throwing a tapped header out of view in 13 of 20 taps), so the list keeps a reader
+ *  at the foot itself, here and in `heightMove`'s `foot`. The foot left the reader, not the reader the foot, unless they
+ *  moved the scroller up from where the foot last stood, or tapped a disclosure: then they `leave` it. Otherwise the list
+ *  grew under them, or the view shrank (a phone keyboard opening), and they are taken back (`foot`). While the column
+ *  settles (opening, a width change, a skin change) a pinned reader is taken back whatever moved. */
+export interface FootLeft {
+  /** The column is still settling (`Column.settling`). */
+  readonly settling: boolean;
+  /** The scroller stands above where it last stood at the foot, by a pixel or more. */
+  readonly movedUp: boolean;
+  /** Milliseconds since the reader last opened or closed a disclosure in the list; null if they never have. */
+  readonly sinceTap: number | null;
+}
+
+export function footLeft(c: FootLeft): 'foot' | 'leave' {
+  if (c.settling) return 'foot';
+  if (c.movedUp) return 'leave';
+  if (c.sinceTap !== null && c.sinceTap < TAP_SETTLE_MS) return 'leave';
+  return 'foot';
+}
