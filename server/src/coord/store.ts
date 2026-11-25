@@ -11960,11 +11960,9 @@ export class CoordStore {
     return r?.claimedBy ?? null;
   }
 
-  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
-   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
-   *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
-   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
-   *  a coordinator with a row this box cannot represent is never told "not your programme". */
+  /** True iff `sessionId` is the programme's bound coordinator (`programs.coordinator`, programme lifecycle W1): the
+   *  coordinator's right to write the programme's items, pin and modifications (spec §3.4). An Idle programme keeps its
+   *  coordinator; an ended or unbound one has none, so this answers false for every session. */
   claimsProgramme(sessionId: string, program: string, uuid: string | null): boolean {
     // Programme lifecycle W1 (D-8985, D-8993): the binding, not the open runs, so an Idle programme keeps its owner. The
     // caller's attributed uuid is compared as the attribution gate compares `claimedByUuid` (D-5298); a migration-seeded

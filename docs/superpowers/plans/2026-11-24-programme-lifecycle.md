@@ -158,6 +158,11 @@ programme the operator wants Idle still reads Done is one deploy, not several.
 - **Review fixes recorded on the deviations below:** a plan put on a new slug is a start (D-8993); the first recorded end
   stands, and a kept D-51 end has no effect outside the database until it is decided (D-8983); the plan's owner is the
   binding (D-8985); `moveClaims` asks R11 rule 4 before its first move (D-8993).
+- **After the fixture sweep (round 2):** the Linear put-back records its Abandoned end whenever no end is RECORDED
+  (`planEndOf` null), as on main, so a kept D-51 end still takes it (D-8983). Left as is, on purpose: `close.ts` still
+  releases a child when a non-final close leaves its programme with no open run (`retiresProgram`). The programme now
+  stays Idle, but holding a child for a wave that may never open would keep its workspace indefinitely; the child is
+  re-minted when the next wave dispatches. `run-routes.test.ts` pins that release.
 
 ## W2: the doors (one PR, server)
 
