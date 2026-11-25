@@ -204,6 +204,7 @@
   "server/src/coord/overlordDesignationStore.ts#retire": 1,
   "server/src/coord/overlordDesignationStore.ts#failPending": 1,
   "server/src/coord/overlordDesignationStore.ts#txWithAuthorityStamp": 1,
+  "server/src/coord/overlordAuthorityJournal.ts#txWithAuthorityReceipt": 1,
   "shared/binomialBound.ts#upperBound95": 1,
   "server/src/coord/decisionModel.ts#planDecision": 1,
   "server/src/coord/decisionModel.ts#serveCap": 1,
