@@ -18,12 +18,14 @@
 // @ccrc/ui (its utilities carry the `min-h-tap` floor; its hook class `.btn-primary` is what shell.css gives its
 // width back through), and those utilities ride `@ccrc/ui/styles/theme.css`, which `main.tsx` imports through
 // `styles/base.css` before the root boundary mounts.
-import { Component } from 'react';
+import { Component, useContext } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { ScreenLoadError } from '../lib/lazyScreen';
 import { navigate } from '../lib/router';
 import { FLEET_PATH } from '../lib/routes';
+import { DocsTabContext } from '../lib/useTabLink';
+import { ConsoleLink } from './ConsoleLink';
 import '../styles/shell.css';
 
 export interface RenderBoundaryProps {
@@ -92,6 +94,7 @@ export function RootFallback({ reload = () => location.reload() }: { reload?: ()
  *  reload always fetches afresh. `reload` defaults to reloading the page; tests inject it. */
 export function ScreenFallback({ error, reload = () => location.reload() }: { error?: unknown; reload?: () => void }): ReactNode {
   const unloaded = error instanceof ScreenLoadError;
+  const docsTab = useContext(DocsTabContext);
   return (
     <div className="render-fallback" role="alert">
       <p className="render-fallback-copy">{unloaded ? 'This screen could not be loaded.' : 'This screen could not be shown.'}</p>
@@ -100,9 +103,15 @@ export function ScreenFallback({ error, reload = () => location.reload() }: { er
           Reload
         </Button>
       )}
-      <Button variant="primary" onClick={() => navigate(FLEET_PATH)}>
-        Back to the fleet
-      </Button>
+      {/* In a Docs tab the way out is the tab bar's own link back, to the console's root by the tab rule: at a desk a new tab,
+          never the console drawn here (desktop polish wave 174, fix round 1 A1). In the console it is the move it always was. */}
+      {docsTab ? (
+        <ConsoleLink label="Back to the console" />
+      ) : (
+        <Button variant="primary" onClick={() => navigate(FLEET_PATH)}>
+          Back to the fleet
+        </Button>
+      )}
     </div>
   );
 }

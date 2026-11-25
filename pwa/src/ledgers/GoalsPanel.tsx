@@ -15,6 +15,7 @@ import type { ReactNode } from 'react';
 import { Button, TextLink } from '@ccrc/ui';
 import { ratificationOf, type GoalsVersion, type GoalsView, type Ratification } from '../../../shared/ledgers';
 import { inAppClick } from '../fleet/settingsText';
+import { useTabLink } from '../lib/useTabLink';
 import { releaseDate } from '../lib/format';
 import { specHref } from './ledgerLinks';
 import { doneWhenPlacement, ratificationWords, ratifyOffered } from './ledgerWords';
@@ -23,8 +24,10 @@ import { doneWhenPlacement, ratificationWords, ratifyOffered } from './ledgerWor
  *  programme group of the combined list and the programme view's head. `href` is `specHref`'s or `programmeSpecHref`'s answer;
  *  null draws nothing, so a programme with no pin has no link. Its name says whose spec it opens, since a list holds several. */
 export function SpecLink({ href, programme, className }: { href: string | null; programme: string; className?: string }): ReactNode {
+  // A document link: at a desk it opens a Docs tab of its own (the Docs tab rule, desktop polish wave 174).
+  const link = useTabLink();
   return href === null ? null : (
-    <TextLink href={href} onClick={inAppClick(href)} aria-label={`Spec for ${programme}`} className={className}>Spec</TextLink>
+    <TextLink {...link(href)} aria-label={`Spec for ${programme}`} className={className}>Spec</TextLink>
   );
 }
 
@@ -69,6 +72,7 @@ export function GoalsPanel({ goals, homeProject, itemHref, onRatify }: {
 }): ReactNode {
   const at = goals.inShortAt;
   const href = specHref(goals.specPath, homeProject);
+  const link = useTabLink();
   const pending = goals.modifications.some((m) => !m.merged);
   const placement = doneWhenPlacement(goals);
   const doneWhen = goals.doneWhen ?? [];
@@ -91,7 +95,7 @@ export function GoalsPanel({ goals, homeProject, itemHref, onRatify }: {
           )}
         {href !== null && (
           <p className="pg-goals-open">
-            <TextLink href={href} onClick={inAppClick(href)}>Open the spec in Docs</TextLink>{' to read all of it.'}
+            <TextLink {...link(href)}>Open the spec in Docs</TextLink>{' to read all of it.'}
           </p>
         )}
       </div>
