@@ -7,7 +7,10 @@
 //
 // It also MEASURES what the mail rows cost a reader, scrolling the whole transcript and summing the rows by what they
 // are, and logs it (`MEASURE …`). The same pass run over a build of `main` is the "before" in the task note, and each
-// view's mail rows must come to under a third of it (review 3737 A9), so a fold that stopped folding is red here.
+// view's mail rows must come to under a third of it (review 3737 A9), so a prompt line that stopped being compact is red
+// here in all four views (measured with `isMailPrompt` false: 16073px at 390 against a bound of 8203). A fold that stopped
+// folding is not caught by that bound (measured with the fold removed: 4229px at 390, 4150px at 1280, both under it): it
+// is the assertion of one prompt row per wake that catches it (36 rows against 30), in all four views.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/mail-rows.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -117,13 +120,14 @@ afterAll(async () => {
 });
 
 /** Open the session with `events`, and hand back the socket's sender. */
-async function openSession(page: Page, ctx: Awaited<ReturnType<typeof openApp>>['ctx'], events: object[]) {
+async function openSession(page: Page, ctx: Awaited<ReturnType<typeof openApp>>['ctx'], events: object[], frames: object[] = []) {
   let send: ((frame: object) => void) | null = null;
   await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
     send = (frame) => ws.send(JSON.stringify(frame));
     send({
       type: 'backlog', uuid: 'u-1', events, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
     });
+    for (const f of frames) send(f);
   });
   await page.goto(`${server!.origin}/s/${SESSION.id}`);
   await page.waitForSelector('.chat-scroller .chat-item', { timeout: 20_000 });
@@ -351,6 +355,187 @@ describe('the mail rows of a long coordinator transcript (desktop polish wave 17
         expect(after.cardBottom, 'the question card above the reader changed size or moved').toBe(before.cardBottom);
         expect(after.text, 'the paragraph in view changed').toBe(before.text);
         expect(Math.abs(after.at - before.at), 'the paragraph in view moved').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+// ---- desktop polish wave 179, B2: the question words are the last thing on a stretch's row to shrink -----------------
+const NARROW: AppView[] = [REFINED, INSTRUMENT].map((skin) => ({ skin, theme: PHOSPHOR, width: 0 }))
+  .flatMap((v) => [320, 360, 390].map((width) => ({ ...v, width })));
+
+/** One closed stretch holding a failed call, a call still running and two fetched question cards to this session: the
+ *  newest opens under its row, the older is hidden and the row says "2 messages, 1 question" beside "running" and
+ *  "1 failed", the longest set of words the row carries at a phone's width. */
+function stretchWithHiddenQuestion(): object[] {
+  const events: object[] = [
+    { kind: 'user', uuid: 'q-1', ts: at(0), text: 'Check the mail, then publish.' },
+    { kind: 'assistant', uuid: 'a-1', ts: at(1), text: 'Reading the mail first.' },
+  ];
+  call(events, '~/.local/bin/ccrc-api mail fetch 2001', envelope(1, 'question', 'which base should the next wave take?', BODY), 2);
+  call(events, '~/.local/bin/ccrc-api mail fetch 2002', envelope(2, 'question', 'which tag should the release take?', BODY), 3);
+  call(events, 'npm run build', 'exit 1', 4);
+  (events[events.length - 1] as { isError: boolean }).isError = true;
+  k += 1;
+  events.push({ kind: 'tool_use', uuid: `u${k}`, ts: at(5), toolId: `t${k}`, name: 'Bash', input: JSON.stringify({ command: 'npm publish' }) });
+  return events;
+}
+
+/** Every part of the newest stretch row: its words, width, whether it is cut, and the line it is drawn on (0 the first,
+ *  by its top against the row's first line; fix round 1, F3: the old measure compared the question words with the title
+ *  and read no break). Run in the page. */
+const partsBody = (): { lines: number; parts: { part: string; text: string; width: number; cut: number; line: number }[] } => {
+  const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity-row')];
+  const button = rows[rows.length - 1]!;
+  const named: [string, string][] = [['title', '.tool-activity-title'], ['calls', '.tool-activity-calls:not(.tool-activity-messages)'],
+    ['messages', '.tool-activity-messages'], ['asks', '.tool-activity-asks'], ['state', '.tool-activity-state'],
+    ['flags', '.tool-activity-attention-count'], ['latest', '.tool-activity-latest']];
+  const found = named.flatMap(([part, sel]) => {
+    const el = button.querySelector<HTMLElement>(sel);
+    return el === null ? [] : [{ part, el, r: el.getBoundingClientRect() }];
+  });
+  const tops: number[] = [];
+  for (const f of found) if (!tops.some((t) => Math.abs(t - f.r.top) < 6)) tops.push(f.r.top);
+  tops.sort((a, b) => a - b);
+  return {
+    lines: tops.length,
+    parts: found.map(({ part, el, r }) => ({
+      part, text: el.textContent ?? '', width: Math.round(r.width * 10) / 10, cut: el.scrollWidth - el.clientWidth,
+      line: tops.findIndex((t) => Math.abs(t - r.top) < 6),
+    })),
+  };
+};
+/** What main (1a0c40e691) drew of the label, the calls count and the running word on this row, px, measured in this file's
+ *  Chrome with main's stylesheet and row swapped in (fix round 1, F3): one nowrap line that crushed them. The coordinator's
+ *  ruling: each part is at least as wide as on main at the same width, or whole. The message count is held whole (on main
+ *  it shared a span with the question words); the summary gives way first, by design. */
+const ON_MAIN: Record<string, { title: number; calls: number; state: number }> = {
+  'refined 320': { title: 0, calls: 19.3, state: 19.3 }, 'refined 320 waiting': { title: 0, calls: 0, state: 0 },
+  'refined 360': { title: 0, calls: 27.1, state: 27.1 }, 'refined 360 waiting': { title: 0, calls: 5.2, state: 5.2 },
+  'refined 390': { title: 0, calls: 32.9, state: 32.9 }, 'refined 390 waiting': { title: 0, calls: 11, state: 11 },
+  'instrument 320': { title: 0, calls: 20.7, state: 20.7 }, 'instrument 320 waiting': { title: 0, calls: 0.4, state: 0.4 },
+  'instrument 360': { title: 0, calls: 28.5, state: 28.5 }, 'instrument 360 waiting': { title: 0, calls: 8.2, state: 8.2 },
+  'instrument 390': { title: 0, calls: 34.3, state: 34.3 }, 'instrument 390 waiting': { title: 0, calls: 14, state: 14 },
+};
+
+describe('the question words of a closed stretch are the last to shrink (desktop polish wave 179, B2)', () => {
+  // Plain, and with the session also waiting on an approval (a third flag, "waiting on you": the fixed parts of the row
+  // are then too wide to share one line with the question words at a phone's width).
+  const APPROVAL = { type: 'ask', ask: { approval: { tool: 'Bash', summary: 'npm publish' } } };
+  for (const [view, waiting] of NARROW.flatMap((v) => [[v, false], [v, true]] as const)) {
+    it(`${named(view)}${waiting ? ', waiting on you' : ''}: "1 question" is whole, inside the row and the column`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await openSession(page, ctx, stretchWithHiddenQuestion(), waiting ? [APPROVAL] : []);
+        await page.waitForSelector('.tool-activity-row', { timeout: 20_000 });
+        const tapMin = await page.evaluate(() =>
+          Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')));
+        const m = await page.evaluate(() => {
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity-row')];
+          const button = rows[rows.length - 1]!;
+          const scroller = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const asks = button.querySelector<HTMLElement>('.tool-activity-asks');
+          const r = asks?.getBoundingClientRect();
+          const b = button.getBoundingClientRect();
+          const s = scroller.getBoundingClientRect();
+          return {
+            text: button.textContent ?? '',
+            asks: asks?.textContent ?? null,
+            cut: asks === null ? null : asks.scrollWidth - asks.clientWidth,
+            leftIn: r === undefined ? null : Math.round(r.left - b.left),
+            rightPast: r === undefined ? null : Math.round(r.right - b.right),
+            columnPast: r === undefined ? null : Math.round(r.right - s.right),
+            rowPast: Math.round(b.right - s.right),
+            rowOverflow: button.scrollWidth - button.clientWidth,
+            scrollerSide: scroller.scrollWidth - scroller.clientWidth,
+            height: Math.round(b.height),
+          };
+        });
+        const parts = await page.evaluate(partsBody);
+        console.log(`B2 ${named(view)}${waiting ? ' waiting' : ''}: ${JSON.stringify(m)} ${JSON.stringify(parts)}`);
+        expect(m.text, 'the row does not read as the fixture says').toContain('2 messages,');
+        expect(m.text).toContain('running');
+        expect(m.text).toContain('1 failed');
+        expect(m.asks, 'the question words are not their own element').toBe('1 question');
+        expect(m.cut, 'the question words are cut').toBeLessThanOrEqual(0);
+        expect(m.leftIn!, 'the question words start before the row').toBeGreaterThanOrEqual(0);
+        expect(m.rightPast!, 'the question words pass the row').toBeLessThanOrEqual(0);
+        expect(m.columnPast!, 'the question words pass the column').toBeLessThanOrEqual(0);
+        expect(m.rowPast, 'the row passes the column').toBeLessThanOrEqual(0);
+        expect(m.rowOverflow, 'the row overflows its own box').toBeLessThanOrEqual(0);
+        expect(m.height, 'the row is under the tap floor').toBeGreaterThanOrEqual(Math.floor(tapMin));
+        // The list prices the row at one line, the tap floor (fix round 1, F3): a wrapped row stays inside it.
+        expect(m.height, 'the row grew past the tap floor').toBeLessThanOrEqual(Math.ceil(tapMin) + 1);
+        expect(m.scrollerSide, 'the transcript scrolls sideways').toBeLessThanOrEqual(0);
+        const main = ON_MAIN[`${view.skin} ${view.width}${waiting ? ' waiting' : ''}`];
+        expect(main, 'no measure of main for this view').toBeDefined();
+        for (const part of ['title', 'calls', 'state'] as const) {
+          const p = parts.parts.find((x) => x.part === part);
+          expect(p, `no ${part} on the row`).toBeDefined();
+          if (p!.cut > 0) expect(p!.width, `the ${part} ("${p!.text}") is cut narrower than main drew it`).toBeGreaterThanOrEqual(main![part] - 0.5);
+        }
+        const messages = parts.parts.find((x) => x.part === 'messages');
+        expect(messages?.cut, `the message count ("${messages?.text}") is cut`).toBeLessThanOrEqual(0);
+        // With "waiting on you" the row does not fit one line at any phone width: it breaks, and the break is read off the
+        // parts' own lines (fix round 1, F3).
+        if (waiting) expect(parts.lines, 'the row with a third flag did not break onto a second line').toBe(2);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+// The wrap fallback (B2): when the parts of the row do not fit one line, the row wraps before the question words are cut.
+// At a phone's width the row with "waiting on you" already takes two lines inside the tap floor (above); this second case
+// narrows the stretch and widens the row's gaps until the row needs more lines than the tap floor holds, and the question
+// words are still whole.
+const WRAP_W = 230;
+describe('a row that cannot fit its fixed parts wraps before the question words are cut (desktop polish wave 179, B2)', () => {
+  for (const skin of [REFINED, INSTRUMENT]) {
+    const view: AppView = { skin, theme: PHOSPHOR, width: 390 };
+    it(`${named(view)}, stretch narrowed to ${WRAP_W}px with wide gaps: wraps, the question words whole`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await openSession(page, ctx, stretchWithHiddenQuestion(), [{ type: 'ask', ask: { approval: { tool: 'Bash', summary: 'npm publish' } } }]);
+        await page.waitForSelector('.tool-activity-row', { timeout: 20_000 });
+        await page.addStyleTag({ content: `.tool-activity { max-width: ${WRAP_W}px; } .tool-activity-row { column-gap: 20px; }` });
+        await page.waitForTimeout(600);
+        const tapMin = await page.evaluate(() =>
+          Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min')));
+        const m = await page.evaluate(() => {
+          const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity-row')];
+          const button = rows[rows.length - 1]!;
+          const asks = button.querySelector<HTMLElement>('.tool-activity-asks')!;
+          const chev = button.querySelector<HTMLElement>('.tool-activity-chev')!.getBoundingClientRect();
+          const scroller = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const r = asks.getBoundingClientRect();
+          const b = button.getBoundingClientRect();
+          return {
+            width: Math.round(b.width),
+            height: Math.round(b.height),
+            chev: [Math.round(chev.top - b.top), Math.round(chev.bottom - b.top)], asksTop: Math.round(r.top - b.top),
+            cut: asks.scrollWidth - asks.clientWidth,
+            leftIn: Math.round(r.left - b.left),
+            rightPast: Math.round(r.right - b.right),
+            columnPast: Math.round(r.right - scroller.getBoundingClientRect().right),
+            rowOverflow: button.scrollWidth - button.clientWidth,
+            scrollerSide: scroller.scrollWidth - scroller.clientWidth,
+          };
+        });
+        console.log(`B2 wrap ${named(view)}: ${JSON.stringify(m)}`);
+        expect(m.width, 'the injected style did not narrow the row').toBeLessThanOrEqual(WRAP_W);
+        expect(m.height, 'the row did not wrap').toBeGreaterThan(Math.ceil(tapMin));
+        expect(m.cut, 'the question words are cut').toBeLessThanOrEqual(0);
+        expect(m.leftIn, 'the question words start before the row').toBeGreaterThanOrEqual(0);
+        expect(m.rightPast, 'the question words pass the row').toBeLessThanOrEqual(0);
+        expect(m.columnPast, 'the question words pass the column').toBeLessThanOrEqual(0);
+        expect(m.rowOverflow, 'the row overflows its own box').toBeLessThanOrEqual(0);
+        expect(m.scrollerSide, 'the transcript scrolls sideways').toBeLessThanOrEqual(0);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

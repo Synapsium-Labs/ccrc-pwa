@@ -12,6 +12,7 @@ import { NO_PAGING, liveFromOf, type OlderPaging } from '../src/session/olderPag
 import { foldToolActivity, type ToolActivityItem } from '../src/session/toolActivity';
 import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
+import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 
 afterEach(cleanup);
@@ -158,5 +159,28 @@ describe('older rows are display only in the fold', () => {
     const row = foldToolActivity(items2, { runs: 'none', wait: { kind: 'none' }, busy: true, liveFrom: liveFromOf(items2, answered, p) })
       .find((i): i is ToolActivityItem => i.kind === 'tool-activity')!;
     expect(row.live, 'an older call without a result read as running').toBe(false);
+  });
+});
+
+describe('the build order the list draws from (desktop polish wave 179, A2)', () => {
+  // `itemsOf`: the chat items, the gap divider, the mail fold, the live-from index measured on the FOLDED list, then the
+  // tool fold. A live-from index measured before the mail fold counts the run's prompts one by one, so it lands past a
+  // live call that follows the run, and the tool fold reads that call as an older page's: settled, never running.
+  const nudge = (uuid: string): ChatEvent => user(uuid, `${INJECTED_PROMPTS['mail-nudge'].text} Use the client.`);
+  const read: ChatEvent = { kind: 'tool_use', uuid: 'u-live', ts: TS, toolId: 'live-read', name: 'Read', input: '{"file_path":"/a"}' };
+
+  it.each(SETS)('%s: a run of prompts across the boundary, then a live call: the call still reads as running', (_, set) => {
+    // Two older prompts (the page), one live prompt: one run across the boundary; then the live call, no result yet.
+    const events = [nudge('p0'), nudge('p1'), nudge('l0'), read];
+    const { container } = render(
+      <SkinSetProvider set={set}>
+        <ChatListInner id="s" events={events} pending={[]} busy older={{ ...paging('more'), rows: 2 }} onLoadOlder={() => {}} />
+      </SkinSetProvider>,
+    );
+    expect(container.textContent, 'the three prompts are not one run').toContain('3 times');
+    const row = container.querySelector<HTMLElement>('.tool-activity');
+    expect(row, 'no tool-activity row').not.toBeNull();
+    expect(row!.dataset.live, 'the live call after the run read as an older page\'s: not running').toBe('true');
+    expect(row!.querySelector('.tool-activity-state')?.textContent).toBe('running');
   });
 });

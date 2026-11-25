@@ -33,7 +33,7 @@ On a 30-wake coordinator transcript the mail rows took **24611px before and 3869
 | The memo keeps a choice in either direction (`choice`) | `pwa/src/session/transcriptRow.tsx` | L4 |
 | The row barrier compares the new lists | `pwa/src/session/sameRow.ts` | L1 |
 | The `mail-line` height bucket | `pwa/src/session/itemHeight.ts` | L1 |
-| The chat list: render cases, the fold at the two `transcriptOf` call sites, the prices | `pwa/src/session/ChatList.tsx` (32 lines, held by wave 175, carried by its leave) | L4 |
+| The chat list: render cases, the fold at the two `transcriptOf` call sites, the prices | `pwa/src/session/ChatList.tsx` (49 lines against its base, 36 added and 13 removed, measured with `git diff --stat` over the merge commit 3e08b98dfc against its first parent; fix round 1 added the shape function's third argument, the reader's choices, and the height meter's memo, so a row is sampled as drawn; held by wave 175, carried by its leave. Corrected by wave 179: this row said 32) | L4 |
 | `MailCard`'s closable form (`fold`), `MailPromptLine`, `MailPromptText`, stories | `ui/src/components/mail-card.*`, `ui/src/components/mail-prompt-line.*` | design system |
 
 Nothing changed in what the server types, mail delivery, acknowledgement, the envelope's parsing, which results make a
@@ -75,7 +75,7 @@ to start "Notice." failed that case alone, the fixture case staying green; the f
 | Which card opens by default | A card whose envelope `kind` is `question` AND whose `toId` is the session shown AND which is the newest card of the chat that asks (`opensByDefault`), whatever ordinary mail follows it | `question` is the envelope's one word for a mail that asks for an answer; `toId` is the session the delivery was made to, so a card read about another session asks nothing of this one. "The newest that asks", not "the newest, if it asks", is the coordinator's ruling on review 3737 F2 (the first build read the brief the other way): a question followed by a status mail is open |
 | What "nothing a person would read" is | By item kind, one record over every kind (`SAYS_NOTHING`): a timestamp divider and a prompt say nothing; a message (the person's, the session's, a system row), a mail card, a tool call, a task card, a pending send and the working pulse are read | A divider is a time, which the run's line carries itself; a run that swallowed a tool call would move the session's own act out of its place. A new kind is a compile error until placed |
 | Dividers in a run | A divider between two members goes inside the run (drawn in the opened list as the chat draws one); one after the last member stays outside | Keeps every time visible where it was |
-| Runs across a day | A prompt on another local day than the run's first ends the run (`sameDay`), with or without a divider between them | Review 3737 A3: a run's line shows clock times only, so "23:50 to 00:10" would hide the day; the day's divider stays in the chat |
+| Runs across a day | A prompt on another local day than the run's first ends the run (`sameDay`), whether or not a time divider stands between them. A divider comes from a quiet gap only (ten minutes, `chatItems.ts`), never from a change of day, so two prompts a minute either side of midnight are two lines with no divider between them | Review 3737 A3: a run's line shows clock times only, so "23:50 to 00:10" would hide the day. (Corrected by wave 179: this row said the day's divider stays in the chat; there is no day divider) |
 | Which cards join a stretch | Only a card from the live lane (its event is a `tool_result`, the session's own fetch), and only when a stretch is open before it. A legacy typed card is a user turn, a prompt, and still ends one | "Belongs with the fetch that produced it" |
 | What a closed stretch draws under its row (`underRow`) | The card that opens by default, always; and every card drawn there earlier in this view, open or closed as the reader left it, in the stretch's order, so two can show. A card the reader only opened or closed inside the body never appears there. The row draws `underRow`'s cards, and the list prices the same list (`shapeOf`) | The coordinator's ruling on review 3737 F1 and A4. A card drawn there is marked in the list's memo (`under:<key>`) when it is drawn |
 | A closed stretch holding a question that is not drawn under it | Its count names it: "2 messages, 1 question" (`hiddenAsks`) | The ruling on F2: a closed stretch never hides an asking card without a sign |
@@ -183,6 +183,15 @@ The after-stretch figure includes the one question card drawn open under its row
   (D-4950's note in `chatItems.ts`).
 - Runs are rare in practice: a prompt is usually followed by the session's own fetch. They fold back-to-back prompts,
   such as replays of an unacked delivery or prompts typed while the last was being read.
+- **A card drawn under its row once in a view can come back open on a later page** (wave 179, fix round 1; found by
+  review 3838's panel, a corner): the under-row marks live in the list's memo for the whole view (`underRow`, so nothing
+  moves under the reader), so a card the view once drew under its closed row, then lost with a fresh backlog, is drawn
+  under the row again, open, when a later older page brings it back, though an older page's question never opens by
+  default (B1). Not pinned; stated here as a limit.
+- **Every form that opens with the lane's head is drawn as "Mail arrived"** (accepted as a limit, wave 179): the inbox
+  wake (a count of unread mail, or the codec's refusal) and the spot-probe notice fold into the same line as the generic
+  nudge, though neither of them is one piece of mail arriving. Their own words are one tap away, in the line's full
+  text.
 
 ## 8. The peer arrangement with wave 175 (run 3690)
 
@@ -211,7 +220,7 @@ The coordinator's rulings, and what changed (measured unless marked):
 | F2 | The card that opens by default is the newest that asks something of the session shown, whatever mail follows it; a closed stretch never hides an asking card without a sign | `foldMailRows` marks `asks` and `opens` (the newest asking card); the row's count says "2 messages, 1 question" for asking cards not drawn under it (`hiddenAsks`) |
 | F1 | The default card is always drawn under a closed stretch; a card drawn there earlier stays, open or closed as left; so two can show, in order; the list prices what the row draws, from one function | `underRow` replaces `surfacedOf` (and the item's `surfaced` field, so the row barrier compares one fewer field); the row marks each card it draws there (`under:<key>` in the memo); `shapeOf` reads the memo |
 | A4 | A card only opened or closed in the body never appears under the row | `underRow` reads the drawn mark, never the open choice |
-| A3 | A day divider ends a run | `sameDay`: a prompt on another local day ends the run, with or without a divider |
+| A3 | A day divider ends a run | `sameDay`: a prompt on another local day ends the run, with or without a divider (a divider comes from a quiet gap only, never from a day change: wave 179) |
 | A2 | Accepted as a limit | The note says it (section 2) and a case pins it |
 | A1, A5 | Accepted as a limit; correct the note; price a kept-open card as drawn | Section 7 rewritten; `shapeOf` prices a card by `openOf`, and the meter samples a row with the reader's choices. The opening estimate keeps no choice: the memo is made fresh with the list, so at the opening it holds none (the mutant that dropped it there was equivalent, and the wiring was taken out) |
 | A6, A7 | Add the guards | Cases for both halves of the run branch in `sameRow`, the run arm of the prompt count, a run's one time when its ends are the same minute, a card with no readable time, `aria-controls` on the card, and a run's member divider drawn as the chat's |
@@ -253,3 +262,108 @@ measurements of section 6 ran again on this code and read the same, row for row 
 - The light palette in Chrome (Phosphor only was run); the stylesheet uses the same tokens in both.
 - A real coordinator transcript from the fleet (the fixture is synthetic, with neutral names).
 - Screen-reader speech itself: the accessible names and `aria-expanded` are pinned, not listened to.
+
+## 11. Wave 179, the follow-up (2026-11-25, run 3814)
+
+What the second review of #3358 (run 3763) and the coordinator's later rulings left, built on `main` after #3358 and
+#3361 merged. Measured unless marked.
+
+| Item | Change | Pinned by |
+|---|---|---|
+| B1, an older page's question (the coordinator's ruling on review 3795) | `foldMailRows` takes the older rows' boundary as `liveFrom`, measured by the list (`ChatList.tsx#itemsOf`, on the list the fold receives) and never inside the fold: only a card on the live side can be the newest asking card, so an older page's question never opens by default and is never drawn under a closed row. It still asks, so a closed stretch holding it names it | `mail-rows.test.tsx`: the fold with and without the boundary; the boundary row itself is live (a question that is the first live item opens; fix round 1, M2); in both skins, an older page holding a question changes nothing that is open and draws nothing under a row, and its closed stretch still names it, "1 question" (fix round 1, M3); a live question still opens, under its row, with an older question above it |
+| B2, the question words cut at phone width | The row draws the question words in their own span (`toolActivity.ts#activityWords`' `asks`, `.tool-activity-asks`), which never shrinks, and the row is `flex-wrap: wrap`. **At a phone's width the row does wrap** (fix round 1, F3; the first text here said no real width needed it, which was false): with the question words and two flags it takes two lines, inside the tap floor's 44 px, the one line the list prices it at. The line breaks before the label, the counts or the running word are crushed: the calls count and the running word take a `5ch` basis that grows back to their own width, the message count its own width, the label a zero basis, and the summary what is left (`chat.css`) | `mail-rows.browser.test.ts`, Refined and Instrument at 320, 360 and 390 px, plain and with a "waiting on you" flag: "1 question" whole, inside the row and the column; the height 44 px; the message count whole; the label, the calls count and the running word each at least as wide as `main` drew it at that width (or whole); with "waiting on you", the break onto a second line, read off the parts' own lines. And a second wrap, in both skins at 390 px with the stretch narrowed to 230 px and wide gaps: the row grows past the tap floor (56 px Refined, 53 Instrument), the question words whole and inside the row and the column, nothing overflowing |
+| B3, an open stretch still said "1 question" | `activityWords(item, choice, open)`: an open row names no question; its body draws every card | `mail-rows.test.tsx`, both skins: open, no question words; closed again, the sign is back |
+| B4, the row barrier pinned less than its comment | Two cases, one changing only a card's `opens` and one only its `asks`, alone and inside its stretch's row; the comment on the old case now says it pins a newer card in the stretch, not a card's own fields | `mail-rows.test.tsx` |
+| B5, rendered pins | A question then a status in one wake, inside one stretch; a card the reader closed under the row, then a newer question in the same stretch; the under-row marks surviving a recycled row (the row unmounted and drawn again over the same memo). The Chrome file's header now says what catches what (below) | `mail-rows.test.tsx` |
+| B6, the spoken-name guard | The card in the label-in-name case has a subject that ends in a word. After a `?` the measure read the subject and the kind word as apart with or without the space between them | `mail-rows.test.tsx` |
+| C, this note | Section 1's line count for `ChatList.tsx`, section 3's day rule, the module header of `mailRows.ts` (it named `askWord`, which does not exist; it now names `hiddenAsks` and `activityWords`), and the limit of section 7 on the inbox wake and the probe notice | |
+
+**B2 red first.** On the base (the words in one span), the plain case was red in all four phone views, the question words
+cut by 73 px (Refined 360), 55 (Refined 390), 56 (Instrument 360) and 37 (Instrument 390). At 320 the red-first run was
+not recorded (the 320 cases came later); measured in fix round 1 with `main`'s stylesheet and row swapped in, the span that
+held the question words was cut at 320 in both skins (60.7 px Refined, 65 px Instrument, plain; 0 and 1.2 px waiting). With the words split and no
+CSS change, the plain cases were green (the new span does not shrink), and the case with a "waiting on you" flag was red:
+the row overflowed its own box by 53, 23, 32 and 2 px in the same views. With the CSS, all green, and
+`tool-activity.browser.test.ts` (48 cases, the 360 px fit with two flags among them) green unchanged.
+
+**B2 in fix round 1 (review 3838 F3 and the coordinator's ruling on it).** The reviewer measured the waiting phone rows
+breaking onto a second line at an unchanged 44 px, and the zero bases crushing the label, both counts and the running word
+to about 2 px at Instrument 390, where `main` drew 14, 14 and 44 px. The ruling: nothing on the row a person could read on
+`main` becomes unreadable; each part at least as wide as on `main` at the same width, or whole; the question words still the
+last to shrink; and, if that cannot hold inside 44 px, the widths mailed. It holds. `main`'s widths, measured in Chrome with
+`main`'s stylesheet, row and words swapped in (one nowrap line, 44 px; the label 0 px at every phone width):
+
+| View | Calls count and running word on `main` (plain / waiting) | Message count and question words, one span on `main` | Now (plain and waiting): two lines, 44 px |
+|---|---|---|---|
+| Refined 320 | 19.3 / 0 px | 60.7 / 0 px | calls 44.1, running whole (50.4), messages and "1 question" whole |
+| Refined 360 | 27.1 / 5.2 | 85.2 / 16.2 | calls and running whole, label 19.3 |
+| Refined 390 | 32.9 / 11 | 103.5 / 34.5 | calls and running 45.4, messages and "1 question" whole |
+| Instrument 320 | 20.7 / 0.4 | 65 / 1.2 | calls 43.5, running whole (46.2) |
+| Instrument 360 | 28.5 / 8.2 | 89.4 / 25.7 | calls and running 38 |
+| Instrument 390 | 34.3 / 14 | 107.8 / 44 | every part whole but the label (14.2) |
+
+Tried first and measured: every part with its own width as basis takes three lines (53 to 56 px) in six of the twelve
+views; the label alone with a zero basis leaves Refined 320 waiting at three lines (56 px); a `8ch` basis for the message
+count cuts "2 messages," at Refined 360 and 390 plain, where `main` showed it whole. The case's old `wrapped` measure
+compared the question words with the title and read no break; it is gone, and the break is read off each part's own line.
+
+**What the Chrome file's measure cases catch (B5's header).** Measured with each mutant applied alone: a prompt line that
+stopped being compact (`isMailPrompt` false) is red in all four views on the prompt-row count and over the bound (16073 px
+at 390 against 8203; 8686 and 9514 px at 1280 against about 5161). A fold that stopped folding runs (the run arm cut) is
+NOT caught by the bound (4229 px at 390, 4150 at 1280, both under it): the assertion of one prompt row per wake catches it
+(36 rows against 30), in all four views. The header says so.
+
+**Mutants** (each applied alone, run against its file, restored):
+
+| Mutant | Red by |
+|---|---|
+| B1a the fold ignores its boundary | "the fold takes the boundary in"; "Refined/Instrument: an older page holding a question changes nothing that is open" |
+| B1b the list passes the fold no boundary | "Refined/Instrument: an older page holding a question changes nothing that is open" |
+| B3 the words ignore an open row | "Refined/Instrument: an open stretch names no question"; "the hidden questions" |
+| B4a the barrier skips a card's `opens` | "B4: a card whose default alone (opens) differs is another row" (this mutant survived 227 cases before) |
+| B4b the barrier skips a card's `asks` | "B4: a card whose asking alone (asks) differs is another row" |
+| B5a the newest card opens only when it asks | "Refined/Instrument: a question then a status in one wake, inside one stretch" (and two older cases) |
+| B5b a card the reader closed leaves the row | "Refined/Instrument: a card the reader closed under the row stays there, closed" (and "the list prices what the row draws") |
+| B5c the row clears its under-row marks when it unmounts | "the under-row marks survive a recycled row", alone |
+| B6 no space after the card's subject (`ui`, `mail-card.tsx`) | with the old subject ending in `?`: survived (2 of 2 green); with the new subject: "Refined/Instrument: every mail line ... holds the words it shows in its name" |
+| B2 the row cannot wrap (`flex-wrap` removed from the row) | "refined/instrument, phosphor, 390px, stretch narrowed to 230px with wide gaps: wraps, the question words whole": one line (44 px), the row overflowing by 271 and 250 px; in fix round 1 (`flex-wrap: nowrap` on the row), all twelve phone cases red too, 14 of 14 |
+| F3, round 0's stylesheet (every shrinking part a zero basis) | all twelve phone cases, plain and waiting, each part's width against `main`'s |
+| M2, the boundary row read as older (`i > liveFrom`) | "wave 179, fix round 1 (M2): the boundary row itself is live, so a question that is the first live item opens" (it survived 243 cases in review 3838) |
+| M3, a card's asking gated by the boundary | "Refined/Instrument: wave 179, fix round 1 (M3): a closed stretch still names the question an older page holds" |
+
+B1 and B2 were red first. B3's test was written after its change, and B4, B5 and B6 pin what `main` already does, so
+each of those is proven by its mutant instead.
+
+**Suites.** Through the runner, on this wave's code (eafe13d2da; the head adds only the notes). The **first full pwa
+run was red**: three census cases, from B2's stylesheet. The shape census's registered pair, the stretch row with the mail
+card's head, no longer clusters once the row wraps (a stale entry, and 12 clusters against 13), and the contrast census met
+`.tool-activity-asks`' own colour. Fixed by removing the stale entry and letting the question words take the row's own
+ink. (That run's process was then killed by the test slice's memory cap.) Then the whole pwa set in four parts: 156, 156,
+155 and 155 files (622 by vitest's own `Test Files` lines), 18,752 cases passed, 1 failed and 11 skipped. Eight files failed
+to run only for this worktree's missing server-package dependencies (seven could not import the server's scanner, one
+could not build the worker), and the one case, `settings-screen`'s release window, failed under load. After installing
+those dependencies, the nine files ran together, green: 689 cases. Every file under `pwa/browser` (123) in four parts of 30, 31,
+31 and 31: parts three and four green; parts one and two green but for one case each while the slice's memory cap killed
+processes (2 and 7 kills): `connect-sheet` (instrument 1280, the clock's fast-forward) and `tool-activity` (refined 1280,
+a page key, "the case measures nothing"). Each file then ran alone, green: 20 of 20 and 48 of 48. In all: 123 files, 4,400
+cases passed, 1 expected to fail, 52 skipped, none failed. On a scratch merge of this branch with `main` at 861cd77728
+(after #3370, the coordinator's heads-up 35952): the changed and neighbouring jsdom files, 11 files and 686 cases, and the
+two changed browser files, `chat-history` and `mail-rows`, 68 cases: all green. The merge probe against `main` was clean,
+so nothing was absorbed.
+
+**Suites in fix round 1** (review 3838; through the runner). On this round's code (4414799ca7; the head adds only the
+notes): the changed and neighbouring jsdom files first, 9 files and 259 cases, green; the census files, 10, green; pwa's
+typecheck clean. Then the whole pwa set in four parts of 154, 160, 157 and 151 files (622): parts three and four green
+(3,800 and 4,797 cases); parts one and two green but for one file each while the slice's memory cap killed processes (2
+and 4 kills): one `command-registry` case timed out at 5 s, and `mockup-policy`'s worker was killed. Each file then ran
+alone: `command-registry` green, 28 of 28; `mockup-policy` killed by the cap again at 142 of 153 in an ordinary slot, then
+green in a heavy one, 153 of 153. Every file under `pwa/browser` (123) in four parts of 31, 31, 31 and 30, on a scratch
+merge of this branch's head with `main` at 3b6695cc8f (`main` changed no package file): parts one, three and four green
+(1,317 passed and 12 skipped; 1,134; 998); part two green but for two files that never started. `docs-export` and
+`docs-mockup-export` read the design system's stylesheets as raw text, and the scratch tree's linked packages resolved
+them into this worktree, outside the scratch tree's allow list ("Denied ID"). Both files then ran on the same merge
+commit checked out in this worktree: green, 38 of 38. In all: 123 files, 4,404 cases passed, 1 expected to fail, 52
+skipped, none failed. The memory cap killed processes in three parts (19, 32 and 15 kills) and failed no case. The
+shared browser build was missing from 18:44 to 18:47 UTC (the coordinator's heads-up 36327): no run of this round
+launched in that window (this round's Chrome cases and mutants ended by 18:37; the four browser parts started at 18:57,
+19:14, 19:24 and 19:40). The merge probe against `main` at 3b6695cc8f was clean, so nothing was absorbed.

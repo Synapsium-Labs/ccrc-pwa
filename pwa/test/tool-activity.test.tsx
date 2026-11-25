@@ -328,7 +328,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     t.call('Read', { file_path: '/repo/a.ts' });
     const one = activities(foldToolActivity(buildChatItems(t.events, [], false), { runs: 'none', wait: NONE, busy: false }))[0]!;
     expect(activityWords(one)).toEqual({
-      title: 'Tool activity', calls: '1 call', messages: null, state: null, latest: 'Read a.ts', attention: [],
+      title: 'Tool activity', calls: '1 call', messages: null, asks: null, state: null, latest: 'Read a.ts', attention: [],
     });
   });
 });

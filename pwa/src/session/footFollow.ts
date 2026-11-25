@@ -86,19 +86,26 @@ export function holdShift(was: number, now: number, moved: boolean): number {
 /** How far a row's index moved between two lists of row keys, measured by a row both carry (desktop polish wave 175): the
  *  row `preferred` names when it survives, else the first row after it in `before` that survives, else the first that
  *  does. Virtuoso's first index moves by this so that row keeps its place. 0 when the first row is the same (nothing was
- *  put before it or taken from before it) or no row survives (a new list: a backlog onto another file). By key, never by
- *  counting rows added: at the join a time divider can go and a tool stretch can take the page's calls, so the count of
- *  rows added is not how far the rows below the join moved. Negative when rows were taken from the top. */
-export function prependShift(before: readonly string[], after: readonly string[], preferred: string | null): number {
-  if (before.length === 0 || after.length === 0 || before[0] === after[0]) return 0;
+ *  put before it or taken from before it). NULL when no row survives (a new list: a backlog onto another file), its own
+ *  answer (desktop polish wave 179, A1): a list nothing was put before moves no index, and the caller adds nothing to it.
+ *  A null key is a row in its place that is never a row in common: one from no transcript file, which outlives a change
+ *  of file (`chatItems.ts#fromNoFile`; wave 179, fix round 1, F1).
+ *  By key, never by counting rows added: at the join a time divider can go and a tool stretch can take the page's calls,
+ *  so the count of rows added is not how far the rows below the join moved. Negative when rows were taken from the top. */
+export function prependShift(
+  before: readonly (string | null)[], after: readonly (string | null)[], preferred: string | null,
+): number | null {
+  if (before.length === 0 || after.length === 0) return null;
+  if (before[0] !== null && before[0] === after[0]) return 0;
   const at = new Map<string, number>();
-  after.forEach((k, i) => { if (!at.has(k)) at.set(k, i); });
+  after.forEach((k, i) => { if (k !== null && !at.has(k)) at.set(k, i); });
   const from = preferred === null ? 0 : Math.max(0, before.indexOf(preferred));
   for (const i of [...range(from, before.length), ...range(0, from)]) {
-    const j = at.get(before[i]!);
+    const k = before[i]!;
+    const j = k === null ? undefined : at.get(k);
     if (j !== undefined) return j - i;
   }
-  return 0;
+  return null;
 }
 
 function range(from: number, to: number): number[] {
