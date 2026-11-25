@@ -179,7 +179,8 @@ session run a build on the test box on demand. Instead:
   the entry point composes. Per case the worst case counts the driver's bound, its grace and one drain, the settle and
   the quiet, each with one poll's overrun. Today: build trust 399.5 s; a four-case part 385.5 s; two parts with the
   margin 801 s of the 900 s wait; three parts. Gate G1 runs the composed delivery runner on a virtual clock with every
-  bound taken and holds its elapsed time to the worst case exactly (less the two allowances and the polls' overruns).
+  bound taken, and its elapsed time EQUALS the worst case less the two allowances and the polls' overruns, exactly. So
+  the worst case is a bound the runner is held to, not an estimate.
 - **To read it:** the test box builds read (`GET /api/testbox/builds`) shows each build's delivery word and, per case, the
   verdict, the counts and the first divergence.
 
