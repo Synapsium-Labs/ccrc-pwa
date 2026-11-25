@@ -622,6 +622,35 @@ describe('applyLandingControl: the measured health writes mainRedHold and never 
     expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
   });
 
+  // Wave 5j-b (Task 8): the two M14 rows again, with the pause written by the operator's door through the one authority
+  // writer (journalled), not by fixture SQL. The project is made known to the door by a run-less entry first.
+  const doorPause = (on: boolean): void => {
+    const r = store.writeLandingAuthority({ kind: 'pause', project: P, paused: on, setBy: 'operator', actor: 'flag-off' }, now);
+    if (!r.ok || !r.changed) throw new Error(`fixture door pause refused: ${JSON.stringify(r)}`);
+  };
+  const known = (): void => {
+    const r = store.writeLandingAuthority({ kind: 'entry', project: P, pr: 31, pinnedSha: 'e'.repeat(40), handoffCommit: 'f'.repeat(40), setBy: 'lane-a' }, now);
+    if (!r.ok) throw new Error('fixture entry refused');
+  };
+
+  it('M14, door-written: a pause set before red survives the red and the later green', () => {
+    known();
+    doorPause(true);
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
+  it('M14, door-written: a pause placed between red and green survives the green', () => {
+    known();
+    expect(apply(redCtl)).toMatchObject({ holdChanged: true });
+    doorPause(true);
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: true });
+    expect(apply(controlRead())).toMatchObject({ holdChanged: true });
+    expect(flagsOf()).toEqual({ operatorPaused: true, mainRedHold: false });
+  });
+
   it('M13: pending and unmeasured health never clear red, and a clear flag stays clear', () => {
     const unmeasured = controlRead({ health: healthWith({ state: 'unmeasured', why: 'pending', failing: [], pending: ['required-a'] }) });
     expect(apply(redCtl)).toMatchObject({ holdChanged: true });

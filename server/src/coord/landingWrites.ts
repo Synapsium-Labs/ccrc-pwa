@@ -417,9 +417,9 @@ export function parseLandingDoor(kind: 'withdraw' | 'pause', body: unknown): Lan
 const WITHDRAW_KEYS = ['project', 'pr', 'pinnedAt'] as const;
 const PAUSE_KEYS = ['project', 'paused'] as const;
 
-/** One notice of a withdrawal: its word, recipient, the PR its subject names, the identity tuple the store hashes and
- *  its body. */
-export interface LandingWithdrawNotice { word: 'landing-withdrawn' | 'landing-held'; toId: string; pr: number; identity: string; body: string }
+/** One notice of a withdrawal: its word, the entry it is about (the withdrawn one, or the dependant), its recipient, the
+ *  PR its subject names, the identity tuple the store hashes and its body. */
+export interface LandingWithdrawNotice { word: 'landing-withdrawn' | 'landing-held'; entryId: number; toId: string; pr: number; identity: string; body: string }
 
 /** The withdrawal's notices, from values (D-9050): one to the entry's coordinator and one to each direct dependant's, each
  *  with the identity tuple the store hashes and its body. No clock, no hash. A recipient of kind `none` or `unreadable`
@@ -434,7 +434,7 @@ export function landingWithdrawNoticesOf(f: { project: string; mutation: Extract
     const back = e.runId !== null
       ? 'It comes back by a retreat of its run from merging to working (when it is still at merging) and then a new advance to merging.'
       : 'It is a run-less entry and cannot come back yet (follow-up landing-runless-reentry): POST /api/landing/entries refuses it landing-entry-exists.';
-    out.push({ word: 'landing-withdrawn', toId, pr: e.pr, identity: JSON.stringify(['landing-withdrawn', 1, project, e.id, e.pr, seq, toId]),
+    out.push({ word: 'landing-withdrawn', entryId: e.id, toId, pr: e.pr, identity: JSON.stringify(['landing-withdrawn', 1, project, e.id, e.pr, seq, toId]),
       body: [`The operator withdrew ${project} #${e.pr} (entry ${e.id}, state ${e.state}, pinned at ${e.pinnedSha}) at ${isoOf(f.at)}, journal seq ${seq}.`,
         'Nothing chose a successor, and any entry that waited on this one keeps waiting.',
         `Do not land this PR at that pin. On a project that composes candidates, drop its candidate refs from your own shell (ccd land-candidate --project ${project} --pr ${e.pr} --drop, spec §5.5 step 4).`,
@@ -443,7 +443,7 @@ export function landingWithdrawNoticesOf(f: { project: string; mutation: Extract
   for (const d of m.dependants) {
     if (d.recipient.kind !== 'session') continue;
     const toId = d.recipient.toId;
-    out.push({ word: 'landing-held', toId, pr: d.entry.pr,
+    out.push({ word: 'landing-held', entryId: d.entry.id, toId, pr: d.entry.pr,
       identity: JSON.stringify(['landing-held', 1, project, d.entry.id, d.entry.pr, e.id, seq, toId]),
       body: [`${project} #${d.entry.pr} waits on #${e.pr}, which the operator withdrew, and will not land while that edge stands.`,
         `Any attributed session may release it by declaring its order again without #${e.pr} (POST /api/landing/order), a deliberate act the feed records.`,
