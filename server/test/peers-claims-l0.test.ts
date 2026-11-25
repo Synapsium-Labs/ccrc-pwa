@@ -211,7 +211,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import { hookEventIs, type HookEvent } from './hook-events.js';",
       // The programme lifecycle (W1, D-8983, D-8993) a fourth value line: the stored states and the open refusals from the
       // import-free `programmeLifecycle.ts` (it imports nothing), held there because this file is growth-capped.
-      "import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeRunRefuseCode, type ProgrammeStoredState } from './programmeLifecycle.js';",
+      "import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';",
       "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.

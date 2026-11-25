@@ -137,7 +137,8 @@ export type TicketDoneEvidence = { runId: number } | { pr: number };
 /** `plan ticket-done`'s body: the ticket and exactly one piece of evidence. The caller's identity rides the query. */
 export interface PlanTicketDoneBody { ticket: string; evidence: TicketDoneEvidence }
 /** `why` is required for `abandoned`. */
-export interface PlanCloseBody { outcome: PlanEndOutcome; why?: string }
+/** Programme lifecycle W2 (D-8987): `evidence`, additive, the lines against the definition of done the proposal carries. */
+export interface PlanCloseBody { outcome: PlanEndOutcome; why?: string; evidence?: string[] }
 
 export type CheckpointEvidence = { pr: number } | { itemId: number } | { path: string };
 type SyncWord = BindingState | 'none' | 'unsynced';
