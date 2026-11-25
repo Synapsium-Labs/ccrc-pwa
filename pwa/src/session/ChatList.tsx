@@ -416,6 +416,9 @@ const ANCHOR_ROWS = 8;
 /** Wave 175: how near the top, in screen heights, the reader is when the next older page is asked for. */
 const NEAR_TOP_SCREENS = 1.5;
 
+/** Wave 175: how many frames with no scroll and no height report of virtuoso's own make a prepend settled. */
+const SETTLE_FRAMES = 2;
+
 const keyOf = (item: TranscriptItem): string => item.key;
 
 /** The row virtuoso's index `i` names, given its first index (see `computeItemKey`). */
@@ -920,10 +923,14 @@ function ChatScroller({
   // Read a frame after a scroll, never in it: the list lays out the rows a scroll brings into reach after the scroll
   // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
   const readSoon = useRef(false);
-  /** Wave 175: virtuoso is moving the scroller for rows just put before the first (its first index moved), until two
-   *  frames after that render. Those scroll events are the list's own: neither the reader moving nor a new place to
-   *  hold, so the hold that follows compares against the place the reader had before the page came. */
+  /** Wave 175: virtuoso is moving the scroller for rows just put before the first (its first index moved), from that
+   *  render until the scroller has been quiet for SETTLE_FRAMES frames. Its scroll events and height reports then are the
+   *  list's own: neither the reader moving nor a change to hold, and the place the reader had before the page came stays
+   *  the place to hold (`settlePrepend`). Counted in `adjusted`, which the settle watches. */
   const adjusting = useRef(false);
+  const adjusted = useRef(0);
+  /** The reader's last wheel, touch, pointer press or key in the list, so a settle never sets back a reader who moved. */
+  const readerAt = useRef<number | null>(null);
   /** The older paging and its loader as of this render, for the callbacks below. */
   const paging = useRef({ older, onLoadOlder });
   paging.current = { older, onLoadOlder };
@@ -933,7 +940,8 @@ function ChatScroller({
   const nearTop = useCallback((): void => {
     const el = scroller.current;
     const { older: o, onLoadOlder: load } = paging.current;
-    if (el === null || load === undefined || o.edge !== 'more' || pinned.current) return;
+    // Not while virtuoso settles a page: the scroller still stands where it was before the rows came (the settle asks).
+    if (el === null || load === undefined || o.edge !== 'more' || pinned.current || adjusting.current) return;
     if (el.scrollTop <= el.clientHeight * NEAR_TOP_SCREENS) load();
   }, []);
   const onScroll = useCallback((): void => {
@@ -945,7 +953,7 @@ function ChatScroller({
     // with the next change rather than becoming the new zero (review 3607 A3). Only while the scroller is where the
     // write left it: a reader who moved it since owes an event of their own, and this one is theirs.
     if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
-    if (adjusting.current) return;
+    if (adjusting.current) { adjusted.current += 1; return; }
     lastMove.current = performance.now();
     if (readSoon.current) return;
     readSoon.current = true;
@@ -958,26 +966,33 @@ function ChatScroller({
   const onTap = useCallback((e: Event): void => {
     if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
   }, []);
+  const onReader = useCallback((): void => { readerAt.current = performance.now(); }, []);
   const onScroller = useCallback((el: HTMLElement | Window | null): void => {
     const old = scroller.current;
     old?.removeEventListener('click', onTap, true);
     old?.removeEventListener('scroll', onScroll);
+    for (const type of READER_INPUT) old?.removeEventListener(type, onReader, true);
     scroller.current = el instanceof HTMLElement ? el : null;
     const now = scroller.current;
     now?.addEventListener('click', onTap, true);
     now?.addEventListener('scroll', onScroll, { passive: true });
-  }, [onTap, onScroll]);
+    for (const type of READER_INPUT) now?.addEventListener(type, onReader, { capture: true, passive: true });
+  }, [onTap, onScroll, onReader]);
   const lastHeight = useRef<number | null>(null);
   const edges = useRef<string | null>(null);
   const shown = useRef(items);
   shown.current = items;
-  /** Rows were put before the first since the last height report (wave 175), set where virtuoso's first index moves. */
-  const prepended = useRef(false);
+  /** The prepend the list is settling, as it stood before the rows came: the reader's flag, the scroller and the list's
+   *  height then, and a count that tells it from a later one. */
+  const prepend = useRef<{ n: number; at: number; pinned: boolean; scrollTop: number; clientHeight: number; before: number | null } | null>(null);
 
   // VIRTUOSO'S FIRST INDEX (wave 175). Rows put before the first are told to virtuoso by lowering its `firstItemIndex` in
-  // the same render, by how far a row the reader can see moved (`prependShift`, by key), so virtuoso keeps that row where
-  // it was as far as its size estimates allow; the hold puts it back exactly once the new rows measure. Decided here, in
-  // the render that hands virtuoso the new rows, because virtuoso reads both together.
+  // the same render, by how far a row the reader can see moved (`prependShift`, by key): virtuoso then moves the scroller
+  // itself, from its size estimates, over a few frames, and lands rows away from where they were (measured in Chrome: 451px
+  // after a page of thirty records at 390px). So the hold stands aside while it does (`adjusting`: no read, no write), and
+  // once the scroller is quiet, `settlePrepend` puts the reader's row back, by its key, in one write. Two writers that never
+  // write in the same frame: virtuoso's while it moves, the hold's after. Decided here, in the render that hands virtuoso
+  // the new rows, because virtuoso reads both together.
   const indexing = useRef({ items, first: FIRST_INDEX });
   if (indexing.current.items !== items) {
     const was = indexing.current.items;
@@ -985,19 +1000,63 @@ function ChatScroller({
       ? prependShift(was.map(keyOf), items.map(keyOf), anchor.current[0]?.key ?? null)
       : 0;
     if (shift !== 0) {
-      prepended.current = true;
+      // Set in this render: virtuoso reports the new height in its own layout effect, before this list's effects run.
+      adjusting.current = true;
+      const el = scroller.current;
+      prepend.current = {
+        n: (prepend.current?.n ?? 0) + 1, at: performance.now(), pinned: pinned.current, scrollTop: el?.scrollTop ?? 0,
+        clientHeight: el?.clientHeight ?? 0, before: lastHeight.current,
+      };
       keepOpenAcross(was, items, expansion);
     }
     indexing.current = { items, first: indexing.current.first - shift };
   }
   const firstIndex = indexing.current.first;
+
+  /** The prepend's one correction, once virtuoso is done (see VIRTUOSO'S FIRST INDEX): decided as any change above the
+   *  reader (`heightMove`, with the place the reader had before the rows came), so a reader at the foot is taken back to it,
+   *  a reader who moved meanwhile is left where they are, and anyone else has their row put back by its key. */
+  const settlePrepend = useCallback((): void => {
+    adjusting.current = false;
+    const el = scroller.current;
+    const p = prepend.current;
+    prepend.current = null;
+    if (el === null || p === null) return;
+    const move = heightMove({
+      pinned: p.pinned, before: p.before, scrollTop: p.scrollTop, clientHeight: p.clientHeight, band: band ?? 0,
+      sinceTap: null, sinceMove: readerAt.current !== null && readerAt.current >= p.at ? 0 : null,
+      newItem: true, prepended: true,
+    });
+    if (move === 'foot') {
+      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      return;
+    }
+    const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
+    if (move === 'hold' && held !== undefined) {
+      const shift = holdShift(held.a.top, held.now!, false);
+      if (shift !== 0) {
+        el.scrollTop += shift;
+        ownWrite.current = el.scrollTop;
+      }
+    } else {
+      readAnchor();
+    }
+    requestAnimationFrame(nearTop);
+  }, [band, readAnchor, topOf, nearTop]);
   const lastFirst = useRef(firstIndex);
   useLayoutEffect(() => {
     if (lastFirst.current === firstIndex) return;
     lastFirst.current = firstIndex;
-    adjusting.current = true;
-    requestAnimationFrame(() => requestAnimationFrame(() => { adjusting.current = false; }));
-  }, [firstIndex]);
+    const mine = prepend.current?.n;
+    let seen = adjusted.current;
+    let quiet = 0;
+    const tick = (): void => {
+      if (prepend.current?.n !== mine) return; // a later prepend settles instead
+      if (adjusted.current !== seen) { seen = adjusted.current; quiet = 0; } else quiet += 1;
+      if (quiet >= SETTLE_FRAMES) settlePrepend(); else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [firstIndex, settlePrepend]);
 
   const onHeight = useCallback((height: number): void => {
     const before = lastHeight.current;
@@ -1006,17 +1065,17 @@ function ChatScroller({
     const now = `${list.length}:${list[0]?.key ?? ''}:${list[list.length - 1]?.key ?? ''}`;
     const newItem = edges.current !== null && edges.current !== now;
     edges.current = now;
-    const isPrepend = prepended.current;
-    prepended.current = false;
     const el = scroller.current;
     if (el === null) return;
+    // Virtuoso is settling a prepend: its height reports are its own, and the settle holds once it is done.
+    if (adjusting.current) { adjusted.current += 1; return; }
     const at = performance.now();
     const from = el.scrollTop;
     const move = heightMove({
       pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
       sinceTap: lastTap.current === null ? null : at - lastTap.current,
       sinceMove: lastMove.current === null ? null : at - lastMove.current,
-      newItem, prepended: isPrepend,
+      newItem, prepended: false,
     });
     if (move === 'foot') {
       virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
@@ -1027,13 +1086,11 @@ function ChatScroller({
     // more (one correction per change), and a list that moved in between is not set back (review 3607 F1). A `none`, or
     // a hold the list's movement cancelled, re-reads it, so the change it let through is the reader's new place.
     // A move is a scroll event since the change, or the scroller standing elsewhere than at the change with no event yet
-    // (a smooth scroll's first step lands in the frame before its event, carried item 6 of wave 175); virtuoso's own
-    // adjustment for a prepend is neither.
+    // (a smooth scroll's first step lands in the frame before its event, carried item 6 of wave 175).
     requestAnimationFrame(() => {
       const held = anchor.current.map((a) => ({ a, now: topOf(el, a.key) })).find((r) => r.now !== null);
       if (move === 'hold' && held !== undefined) {
-        const moved = (lastMove.current !== null && lastMove.current >= at)
-          || (!adjusting.current && Math.abs(el.scrollTop - from) >= 1);
+        const moved = (lastMove.current !== null && lastMove.current >= at) || Math.abs(el.scrollTop - from) >= 1;
         const shift = holdShift(held.a.top, held.now!, moved);
         if (shift !== 0) {
           el.scrollTop += shift;
@@ -1043,8 +1100,7 @@ function ChatScroller({
       }
       readAnchor();
     });
-    if (isPrepend) requestAnimationFrame(() => requestAnimationFrame(nearTop));
-  }, [band, readAnchor, topOf, nearTop]);
+  }, [band, readAnchor, topOf]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -1113,8 +1169,9 @@ function ChatScroller({
     () => ({ older, ...(onLoadOlder !== undefined ? { onLoadOlder: loadFromControl } : {}) }),
     [older, onLoadOlder, loadFromControl],
   );
-  // A page answered while the reader is still near the top asks for the next one (only from `more`).
-  useEffect(() => { nearTop(); }, [older.edge, older.pages, nearTop]);
+  // A page answered while the reader is still near the top asks for the next one (only from `more`); and the list's word
+  // that the reader left the foot can come after the scroll that took them up, so it asks too.
+  useEffect(() => { nearTop(); }, [older.edge, older.pages, atBottom, nearTop]);
 
   return (
     <>

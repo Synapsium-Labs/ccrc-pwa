@@ -187,6 +187,9 @@ export function SessionScreen({
   // unvalidated-dynamic-method-call false positive on the route-keyed store.)
   const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
+  // Desktop polish wave 175: the older chat pages the list draws at its top and asks for (`session/olderPages.ts`). Its own
+  // selector: an answer that only moves the top's words (loading, an end) changes no other field read here.
+  const older = useStore((s) => s.older);
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -255,6 +258,7 @@ export function SessionScreen({
     useStore.getState().retry(key);
   }, [askInline, useStore]);
   const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onLoadOlder = useCallback((): void => { useStore.getState().loadOlder(); }, [useStore]);
   const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
@@ -712,6 +716,8 @@ export function SessionScreen({
               answerLabel={answerLabel}
               onAnswer={onAnswer}
               day={day}
+              older={older}
+              onLoadOlder={onLoadOlder}
             />
           </ChatRefsContext>
         )}
