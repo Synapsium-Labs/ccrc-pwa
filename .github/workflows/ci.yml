@@ -532,7 +532,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -641,12 +641,14 @@ jobs:
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. A fast pull
     # request's shards are packed to about four minutes each; a full run's,
-    # the merge queue's among them, are not. A full merge-queue shard took from
-    # 15m47 to 29m53 on 2026-11-24 by runner, and one green shard was
-    # cancelled at a 30-minute deadline a second after its tests passed, which
-    # removed its entry from the queue. So 45 is about half as much again over
-    # the slow case and still under the queue's own hour (D-9014). Pinned —
-    # key AND ceiling — by server/test/oss-metadata.test.ts.
+    # the merge queue's among them, are not. A full merge-queue shard took
+    # from 15m47 to 29m53 on 2026-11-24 by runner, and one green shard was
+    # cancelled at a 30-minute deadline a second after its tests passed,
+    # which removed its entry from the queue. So 45 is about half as much
+    # again over the slow case and still under the queue's own hour (D-9014).
+    # The key and the 60-minute ceiling are pinned by
+    # server/test/oss-metadata.test.ts; nothing pins 45 itself, which D-9014
+    # allows.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -661,7 +663,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       # `fetch-depth: 0`, not the default 1, because topology-clean.test.ts
       # scans the commit RANGE this branch adds — not only the tip — and it
       # needs `origin/main` present to resolve a base. At depth 1 that ref does
@@ -771,7 +773,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -815,7 +817,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -863,7 +865,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -966,7 +968,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       # Full depth, as when this matrix also carried the server leg (whose
       # topology-clean needs `origin/main` — see server-shard): unchanged, so
       # the agent suite meets the tree exactly as before.
@@ -1060,7 +1062,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1155,7 +1157,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1423,7 +1425,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         # Full depth: the reach step below diffs the pull request from its merge base.
@@ -1593,7 +1595,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
@@ -1697,7 +1699,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }
-          node "$RUNNER_TEMP/queue-live.mjs"
+          node "$RUNNER_TEMP/queue-live.mjs" || { rc=$?; [ "$rc" -eq 64 ] && exit 1; echo "queue-live: unmeasured (the script failed, exit $rc)"; exit 0; }
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
       - uses: actions/setup-node@v7

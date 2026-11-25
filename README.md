@@ -8602,7 +8602,7 @@ browser suite there and `test (server)` a red node floor, so either stops the me
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+would catch what it skipped. A server shard's deadline is 45 minutes on every run, not 30: a full queue shard
 measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
 jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
 stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
