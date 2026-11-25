@@ -184,7 +184,7 @@ describe('preview, then apply, then a second apply (spec §13)', () => {
     expect(row(r, 'prog-unnamed')).toMatchObject({ state: 'active' });
   });
 
-  it('an end the file decides releases the coordinator, closes nothing open, and tells it, in the same transaction', async () => {
+  it('an end the file decides releases the coordinator and tells it', async () => {
     const r = await rig();
     prog(r.coord, 'prog-a', { closed: 1, coordinator: 'lane-b' });
     await r.apply([d('prog-a', 'done')]);
@@ -217,13 +217,14 @@ describe('each entry refused in the preview and in the apply, the rest applied',
     // The listed counts hold the real programmes alone; the placeholder and the reserved row are apart.
     expect(p).toMatchObject({ listed: 4, placeholders: 1, reservedRow: true, unlisted: [] });
     expect(p.counts).toMatchObject({ idle: 2, active: 1, done: 1, paused: 0 });
-    const a = await r.apply([...file, d('prog-c', 'open')]);
-    expect(a.entries.slice(0, want.length).map((e) => [e.slug, e.outcome])).toEqual(want);
+    expect((await r.apply(file)).entries.map((e) => [e.slug, e.outcome])).toEqual(want);
     expect(events(r)).toHaveLength(before);
     expect(row(r, 'prog-run')).toMatchObject({ state: 'active', coordinator: 'lane-a' });
     expect(r.coord.programOpenRunCount('prog-run')).toBe(2);
     // A refused entry holds back nothing else: the ones that stand are applied.
-    expect(outcomes(await r.apply([...file, d('prog-b', 'paused')].filter((e) => e.slug !== 'prog-b' || 'why' in e)))['prog-b']).toBe('applied');
+    const a = await r.apply([d('prog-none', 'idle'), d('prog-b', 'paused'), d('prog-run', 'done')]);
+    expect(a.entries.map((e) => e.outcome)).toEqual(['refused:unknown-programme', 'applied', 'refused:programme-runs-open']);
+    expect(row(r, 'prog-b').state).toBe('paused');
   });
 
   it('a mismatch is reported and never forced: the runs decide', async () => {
