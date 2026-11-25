@@ -26,6 +26,7 @@
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
 //   the gated witness exchange (Overlord W1) ......... "a Docs tab starts no witness exchange, and starts one once it is the console"
 //   the witness exchange's sign-in term .............. "on a console tab, sign-in lost stops the witness exchange …"
+//   the effect returning the exchange's stop .......... the same case (no ask in a repeat while signed out)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -65,6 +66,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { clearAuthLost, raiseAuthLost } = await import('../src/lib/auth');
+const { WITNESS_EVERY_MS } = await import('../src/lib/witness');
 const { noteActivated, resetReloadGateForTests, startReloadGate } = await import('../src/lib/swupdate');
 
 const DOC = '/docs/project-a/specs/2026-11-18-native-docs-parity-design.md';
@@ -310,11 +312,19 @@ describe('the authority witness exchange', () => {
     expect(witnessAsks()).toBe(1);
   });
 
-  /** Lose sign-in, then regain it, letting the effects that follow each run. */
+  /** One repeat of the exchange's interval (these cases fake `setInterval` only, so the page's timeouts stay real), then the
+   *  effects that follow. */
+  async function oneRepeat(): Promise<void> {
+    act(() => { vi.advanceTimersByTime(WITNESS_EVERY_MS); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  }
+
+  /** Lose sign-in and let one repeat pass, then regain it, letting the effects that follow each run. */
   async function signOutAndIn(): Promise<{ out: number; back: number }> {
     act(() => { raiseAuthLost('no-session'); });
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(document.querySelector('.login-screen'), 'the sign-in screen').not.toBeNull();
+    await oneRepeat();
     const out = witnessAsks();
     act(() => { clearAuthLost(); });
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
@@ -322,19 +332,27 @@ describe('the authority witness exchange', () => {
   }
 
   it('on a console tab, sign-in lost stops the witness exchange and sign-in regained starts it again', async () => {
-    stubWidth(true);
-    await mount('/fleet');
-    expect(shell()).not.toHaveAttribute('data-tab');
-    expect(witnessAsks()).toBe(1);
-    expect(await signOutAndIn()).toEqual({ out: 1, back: 2 });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      stubWidth(true);
+      await mount('/fleet');
+      expect(shell()).not.toHaveAttribute('data-tab');
+      expect(witnessAsks()).toBe(1);
+      await oneRepeat();
+      expect(witnessAsks(), 'the faked clock drives the repeat').toBe(2);
+      expect(await signOutAndIn(), 'no ask in a repeat while signed out; one at once on sign-in').toEqual({ out: 2, back: 3 });
+    } finally { vi.useRealTimers(); }
   });
 
   it('on a Docs tab, sign-in lost and regained starts no witness exchange', async () => {
-    stubWidth(true);
-    await mount(DOC);
-    expect(shell()).toHaveAttribute('data-tab', 'docs');
-    expect(witnessAsks()).toBe(0);
-    expect(await signOutAndIn()).toEqual({ out: 0, back: 0 });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      stubWidth(true);
+      await mount(DOC);
+      expect(shell()).toHaveAttribute('data-tab', 'docs');
+      expect(witnessAsks()).toBe(0);
+      expect(await signOutAndIn()).toEqual({ out: 0, back: 0 });
+    } finally { vi.useRealTimers(); }
   });
 });
 
