@@ -126,6 +126,8 @@
   "shared/ledgers.ts#modificationSource": 1,
   "shared/overlordHistory.ts#readOverlordHistoryRequest": 1,
   "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1,
+  "server/src/coord/overlordHistory.ts#historyAgentFor": 1,
+  "server/src/coord/overlordHistory.ts#historyDoorAnswer": 1,
   "ccd/history/lib.mjs#decideScope": 1,
   "ccd/history/read-context.mjs#measureReach": 1,
   "agent/src/historyOp.ts#createHistoryOp": 1,
@@ -238,6 +240,9 @@
   "server/src/coord/doneTests.ts#parseDoneTest": 1,
   "server/src/coord/doneTests.ts#targetVerdict": 1,
   "server/src/operatorModel/nameListState.ts#nameListState": 1,
+  "server/src/continuity/renewalReadings.ts#modelDriftInputOf": 1,
+  "server/src/continuity/renewalReadings.ts#modelDriftReadingOf": 1,
+  "server/src/continuity/renewalReadings.ts#readersRunningReadingOf": 1,
   "server/src/continuity/renewalReadings.ts#fittedCeilingOf": 1,
   "server/src/continuity/renewalReadings.ts#backstopInstantBefore": 1,
   "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
@@ -245,6 +250,8 @@
   "server/src/continuity/renewalReadings.ts#classChangedOf": 1,
   "server/src/continuity/renewalReadings.ts#designatedClassAtMint": 1,
   "server/src/continuity/renewalReadings.ts#probesFailedTwiceOf": 1,
+  "server/src/continuity/renewalReadings.ts#notLocalOf": 1,
+  "server/src/continuity/renewalReadings.ts#notLocalAskOf": 1,
   "server/src/coord/overlordLadder.ts#effectiveRung": 1,
   "server/src/coord/overlordLadder.ts#highestHeldRung": 1,
   "server/src/coord/overlordLadder.ts#rungWordReading": 1,
@@ -323,5 +330,7 @@
   "server/src/isolationWord.ts#isolationWord": 1,
   "server/src/isolationWord.ts#hostRelation": 1,
   "server/src/isolationWord.ts#isolationCondition": 1,
-  "server/src/isolationWord.ts#wakingHostKey": 1
+  "server/src/isolationWord.ts#wakingHostKey": 1,
+  "server/src/poolRunway.ts#poolRunway": 1,
+  "server/src/accountLoad.ts#loadLines": 1
 }

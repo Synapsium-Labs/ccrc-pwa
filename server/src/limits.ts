@@ -77,8 +77,12 @@ export interface AccountLimits {
   spawnBlocked?: true;
 }
 
-const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
-const SEVEN_WINDOW = 604800;
+/** The five-hour window: a five reading older than this has rolled over (ccd's rule). Exported for the runway's reading of
+ *  a stored sample (`poolRunway.ts`), which applies `readLimits`' two rolled-over rules again at read time. */
+export const FIVE_WINDOW = 18000;
+/** The weekly window: a seven-day reading older than this has rolled over. Exported for the runway read's span and its
+ *  stored-sample rule (`poolRunway.ts`). */
+export const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 

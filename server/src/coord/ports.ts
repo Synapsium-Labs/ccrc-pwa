@@ -82,11 +82,11 @@ export type WatcherCoordMember =
   | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markBlockWoken' | 'markClaudeBuildAttempt'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markTimersFired' | 'markUnreachable' | 'maxMailDeliveryId'
-  | 'maxRunEventId' | 'meetApprovalParkRuling' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
+  | 'maxRunEventId' | 'meetApprovalParkRuling' | 'mergingRuns' | 'mintGeneration' | 'modelSwitchesOf' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
   | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openProbeRound' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'operatorMarks' | 'outstandingMailFor' | 'parkApprovalRow' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
   | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'pruneSequenceThrough' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'readerEventsOf' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
@@ -94,7 +94,7 @@ export type WatcherCoordMember =
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'sealResponse' | 'sequenceOldest' | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds' | 'standingPairs'
-  | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
+  | 'startById' | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'urgentHolds' | 'wakeBlockTx' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A

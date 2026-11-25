@@ -12,6 +12,8 @@ import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
 import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
+import { loadFactsOf } from './accountLoad.js';
+import { registerPoolRunwayRoute } from './poolRunwayRoute.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
@@ -123,6 +125,7 @@ import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overl
 import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
+import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
@@ -2259,7 +2262,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); } }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2306,12 +2309,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
     projectsChanged: () => projectWalk.drop(),
   });
-  // The Overlord's inbox doors (W1 inbox piece): box-token lanes behind the gate above, each read counted and recorded by the one runner.
+  // The Overlord's inbox doors (W1 inbox piece) and its history door (W1 PR B1): box-token lanes behind the gate above, each read
+  // counted and recorded by the one runner; the history door's link is the fleet state's, the one agent link this server holds.
+  const readRunner = runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
+    turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) });
   registerOverlordInboxRoutes(app, {
-    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(),
-    readRunner: runOverlordRead({ ledger: deps.operatorModel, now: () => deps.time.clock.wall(),
-      turn: (id, uuid) => readTurnMarkMeasured(deps.io, deps.cfg.registryDir, id, uuid, null).then((r) => (r.ok ? r.state : r.reason), () => 'unmeasured' as const) }),
+    mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(), readRunner,
   });
+  registerOverlordHistoryRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, io: deps.io, links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]) });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
@@ -2491,6 +2496,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
+  const drawerMarks = new DrawerInterruptThrottle();   // the drawer's input marks as a typed prompt does, once per session per 2 s
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -2578,6 +2584,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
           const src = drawerInterruptSource(m.data);
           if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt({ notice }, id, src, 'sent');
+          if (deps.coord !== undefined && drawerMarks.admit(id, deps.time.clock.wall())) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
         } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
@@ -3065,6 +3072,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const res = await submitEnter(sendDeps, id, body.expect);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -3767,6 +3775,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       accounts,
     };
   });
+  // The operator's runway read (serviceability PR B; the home plan's question 6): session-gated, masked, read-only.
+  registerPoolRunwayRoute(app, { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), coord: deps.coord, clock: { wall: () => deps.time.clock.wall() } });
 
   /**
    * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the

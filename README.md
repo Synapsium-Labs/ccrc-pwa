@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1526,7 +1526,8 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
-`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence),
+`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -5812,15 +5813,18 @@ names every measured build. `$REG/hibernate-disabled` stops it too. `ccrc update
 restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
-CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
+CI, so a session absorbs `main` only on a licence. Worker clause 16 names four, each read after one
 `git fetch origin`: the branch conflicts —
 `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its
 first line (exit 0 is clean; any other answer is unmeasured and licenses nothing); a required check on
 its PR is red while `main` passes the same tests, measured by re-running the failing test files on a
 clean checkout of `origin/HEAD` in scratch (a red that `main` shows too is reported once as `main-red`
-and left alone); or a `fix-round` mail from the coordinator names the PR ejected from the landing line,
-or next to land in a strict-protection repository. The first two license at most one absorption per
-PR. An absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
+and left alone); a `fix-round` mail from the coordinator names the PR ejected from the landing line,
+or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
+names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
+that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
+absorption of exactly the named commit per mail, before the worker's wave-done of that round only. An
+absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
 take either side of that one line, resolve every other hunk as the source it is, then run

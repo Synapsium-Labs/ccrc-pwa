@@ -29,10 +29,17 @@ export interface OverlordReadDeps {
   readonly now: () => number;
 }
 
-/** What a door's compose answers: rows to send, or a refusal word; either way its line's scope, count and outcome. */
+/** What a door's compose answers: rows to send, another 200 that hands no session text (the history door's `busy`,
+ *  `deadline` and the rest: a line with its outcome word, never a served line, ruled R8), or a refusal word with its
+ *  detail or its own closed fields (`extra`, spread after `detail`); either way its line's scope, count and outcome. */
+/** A refusal's own closed fields: named keys only, so none can be the answer's `ok`, `error` or `detail` (review 3730 F6).
+ *  A door that needs another field names it here. */
+export type ReadRefusalExtra = { readonly cause?: string; readonly refusal?: string };
 export type ReadComposed =
   | { readonly kind: 'rows'; readonly body: unknown; readonly scope: string; readonly count: number }
-  | { readonly kind: 'refuse'; readonly word: RouteRefusal; readonly detail: string; readonly scope: string; readonly outcome: string };
+  | { readonly kind: 'answer'; readonly body: unknown; readonly scope: string; readonly outcome: string }
+  | { readonly kind: 'refuse'; readonly word: RouteRefusal; readonly detail?: string; readonly extra?: ReadRefusalExtra;
+      readonly scope: string; readonly outcome: string };
 
 export interface OverlordReadArgs {
   readonly door: ReadDoor;
@@ -77,9 +84,9 @@ export function runOverlordRead(deps: OverlordReadDeps): (req: FastifyRequest, r
     const wrote = ledger.recordRead(composed.kind === 'rows'
       ? { ...line, scope: composed.scope, count: composed.count, outcome: READ_SERVED_OUTCOME }
       : { ...line, scope: composed.scope, count: 0, outcome: composed.outcome });
-    // 8. A line that did not land sends nothing; one that did sends the rows or the refusal.
+    // 8. A line that did not land sends nothing; one that did sends the rows, the other 200, or the refusal.
     if (!wrote.ok) return refuseRoute(reply, 'write-failed', { detail: 'the read could not be recorded' });
-    if (composed.kind === 'rows') return reply.code(200).send(composed.body);
-    return refuseRoute(reply, composed.word, { detail: composed.detail });
+    if (composed.kind === 'rows' || composed.kind === 'answer') return reply.code(200).send(composed.body);
+    return refuseRoute(reply, composed.word, { ...(composed.detail === undefined ? {} : { detail: composed.detail }), ...composed.extra });
   };
 }

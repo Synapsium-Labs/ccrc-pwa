@@ -46,8 +46,10 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/overlordGateRun.ts': { reason: "the Overlord gate's runner: every Overlord door's one call, which refuses through the reply (Overlord W1 gates B, §11.2)", since: '2026-11-19' },
   'server/src/coord/overlordRead.ts': { reason: "the Overlord's one read runner: takes a door's Fastify request and reply, counts, records the ledger line and answers through refuseRoute (Overlord W1 inbox, Task 2)", since: '2026-11-22' },
   'server/src/coord/overlordInboxRoutes.ts': { reason: "the Overlord's inbox doors: the inbox, one operator message and its acknowledge, each a box-token lane behind the gate (Overlord W1 inbox, Task 3)", since: '2026-11-22' },
+  'server/src/coord/overlordHistoryRoutes.ts': { reason: "the Overlord's history door: one box-token lane behind the gate, a read of every project's history through the one agent that advertises it (Overlord W1, PR B1)", since: '2026-11-24' },
   'server/src/laneModelsRoutes.ts': { reason: "the Models sheet's write door, POST /api/models/:lane (revert of one class; model-class-advance R4)", since: '2026-11-18' },
   'server/src/coord/approvalCensusRoutes.ts': { reason: "the approval census's read, its one session-gated GET (approvals PR 1, Task 1.4)", since: '2026-11-18' },
   'server/src/coord/approvalParkDoor.ts': { reason: "the operator door's approval arm, its step-up ladder over the request and reply (approvals PR 3)", since: '2026-11-19' },
   'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },
+  'server/src/poolRunwayRoute.ts': { reason: "the operator's runway read, GET /api/pools/runway (Overlord W1 serviceability B)", since: '2026-11-22' },
 };

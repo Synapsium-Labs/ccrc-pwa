@@ -32,6 +32,7 @@ import { QUIZ_MUTANT_SETS } from './quizSets.js';
 import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
 import { RATIFICATION_MUTANT_SETS } from './ratificationSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
+import { HISTORY_DOOR_MUTANT_SETS } from './overlordHistoryDoorSets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { RESPONSES_MUTANT_SETS } from './responsesSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
@@ -64,6 +65,7 @@ import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { SEQUENCE_MUTANT_SETS } from './sequenceSets.js';
+import { ACCOUNT_LOAD_MUTANT_SETS } from './accountLoadSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
@@ -222,6 +224,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PORTFOLIO_MUTANT_SETS,
   ...RATIFICATION_MUTANT_SETS,
   ...OVERLORD_HISTORY_MUTANT_SETS,
+  ...HISTORY_DOOR_MUTANT_SETS,
   ...PUSH_OUTBOX_MUTANT_SETS,
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
@@ -261,6 +264,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PROGRAMME_HEALTH_MUTANT_SETS,
   ...WITNESS_MUTANT_SETS,
   ...ISOLATION_MUTANT_SETS,
+  ...ACCOUNT_LOAD_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {
