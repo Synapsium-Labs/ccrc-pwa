@@ -1610,6 +1610,9 @@ export interface TurnMark {
    *  Stop carried no array. NULL when the line has no such field (an older hook) or one this reader cannot judge —
    *  absent, never 0, so hibernation's `scheduled` hold keeps such a session awake. Never condemns the line. */
   readonly crons: number | null;
+  /** The epochs of the last consecutive provider failures, at most eight, oldest first (`stopFailure.ts`'s tokens). The
+   *  reader always sets it; a line with none, or with one it cannot judge, reads as no failures. */
+  readonly failAts?: readonly number[];
   /** `restartAt + RESTART_GRACE_MS` when that restart cut a turn short (`turnMarkGraceUntil`), else null. */
   readonly graceUntil: number | null;
 }

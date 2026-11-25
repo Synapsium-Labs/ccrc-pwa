@@ -28,6 +28,9 @@ const STOP_FAILURE_ERROR_MAP = {
 export type StopFailureError = keyof typeof STOP_FAILURE_ERROR_MAP;
 export type StopFailureClass = 'retry' | 'account' | 'request';
 export const STOP_FAILURE_ERRORS: Readonly<Record<StopFailureError, StopFailureClass>> = STOP_FAILURE_ERROR_MAP;
+/** The tokens a failing PROVIDER sends (measured, 2.1.332: HTTP 529, 503 and 500, a connection dropped before or inside the
+ *  answer and one refused all send `server_error`). The session hook counts exactly these (`failAts`). */
+export const PROVIDER_FAILURE_ERRORS: readonly StopFailureError[] = ['server_error', 'overloaded'];
 /** null for a token this build cannot classify (never guessed): the failed arm holds `failed-unknown`. */
 export function stopFailureClass(err: string | null): StopFailureClass | null {
   if (err === null || !Object.prototype.hasOwnProperty.call(STOP_FAILURE_ERROR_MAP, err)) return null;
