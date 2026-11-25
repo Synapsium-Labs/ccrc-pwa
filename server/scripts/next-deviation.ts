@@ -38,20 +38,24 @@ export function readDefinitionFilesAt(
 /**
  * The base the helper and the collision guard (`deviation-refs.test.ts`) both measure: `envRef`
  * (`$CCRC_LEDGER_BASE`) when it resolves, then `upstream/main` (a fork's project remote), then
- * `origin/main`; else null. No further fallback (the fossil note in `deviation-refs.test.ts`):
+ * `origin/main`; else null. One exception: an `upstream/main` that is a strict ancestor of `origin/main`
+ * is stale (a fork synced through GitHub, or a leftover remote), and `origin/main` holds everything it
+ * does, so `origin/main` is measured. No further fallback (the fossil note in `deviation-refs.test.ts`):
  * local `main` was a fossil on the fleet host, and a silent fossil is worse than "I could not measure".
  */
 export function resolveLedgerBase(
   root: string, envRef: string | undefined = process.env['CCRC_LEDGER_BASE'],
 ): string | null {
-  for (const ref of [envRef, 'upstream/main', 'origin/main']) {
-    if (!ref) continue;
-    try {
-      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root, stdio: 'pipe' });
-      return ref;
-    } catch { /* try the next candidate */ }
-  }
-  return null;
+  const git = (...a: string[]): boolean => {
+    try { execFileSync('git', a, { cwd: root, stdio: 'pipe' }); return true; } catch { return false; }
+  };
+  const resolves = (ref: string): boolean => git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+  if (envRef && resolves(envRef)) return envRef;
+  const up = resolves('upstream/main');
+  const origin = resolves('origin/main');
+  if (up && origin && git('merge-base', '--is-ancestor', 'upstream/main', 'origin/main')
+    && !git('merge-base', '--is-ancestor', 'origin/main', 'upstream/main')) return 'origin/main';
+  return up ? 'upstream/main' : origin ? 'origin/main' : null;
 }
 
 /**
@@ -68,7 +72,9 @@ export function changedDefinitionPaths(root: string, base: string, dirs: readonl
  * Whether `base` (an explicit `$CCRC_LEDGER_BASE`) is behind what the resolver picks without it: null when
  * nothing else resolves, the two are the same ref, or that ref is an ancestor of `base`. Measured against the
  * resolver's own answer, never a hard-coded `origin/main`, so a fork whose `main` diverged from upstream is not
- * stale. Residual: a transient failure to resolve `upstream/main` (D-2732's `packed-refs` case) drops a fork to its
+ * stale. Without an explicit base the two are the same ref by construction, and that is sound: the resolver
+ * already prefers `origin/main` over an `upstream/main` it has passed, so an explicit stale `upstream/main` is the
+ * case this reports. Residual: a transient failure to resolve `upstream/main` (D-2732's `packed-refs` case) drops a fork to its
  * `origin/main` here too; both tools print the base they measured.
  */
 export function staleLedgerBase(root: string, base: string): { anchor: string; behind: number } | null {

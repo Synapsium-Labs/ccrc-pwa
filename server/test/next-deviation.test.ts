@@ -35,6 +35,21 @@ function fixtureRepo(base: Tree = { 'docs/superpowers/programs/p/task-1.md': ent
   if (Object.keys(head).length) commit(head);
   return root;
 }
+/** Moves `origin/main` one commit ahead of where it is, adding `tree`; HEAD stays where it was. */
+function onMainAhead(root: string, tree: Tree): void {
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
+  const back = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  git('checkout', '-q', '-b', 'main-ahead', 'origin/main');
+  for (const [file, text] of Object.entries(tree)) {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), text);
+  }
+  git('add', '-A');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'main moves on');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', back);
+  git('branch', '-q', '-D', 'main-ahead');
+}
 function entry(n: number): string { return `## Deviations found\n\n- **${D(n)}** \u2014 a deviation.\n`; }
 const run = (cwd: string, ...args: string[]) => spawnSync(TSX, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
 
@@ -70,6 +85,13 @@ describe('resolveLedgerBase (the one base resolver: the helper and the guard)', 
   });
   it('an env var that does not resolve falls through, never guessed', () => {
     expect(resolveLedgerBase(withUpstream(), 'no-such-ref')).toBe('upstream/main');
+  });
+  it('a stale upstream/main (a strict ancestor of origin/main) yields to origin/main, which holds all it does', () => {
+    const root = withUpstream();
+    onMainAhead(root, { 'docs/superpowers/plans/later.md': entry(10004) });
+    expect(resolveLedgerBase(root, undefined)).toBe('origin/main');
+    expect(staleLedgerBase(root, 'origin/main')).toBeNull();
+    expect(staleLedgerBase(root, 'upstream/main')).toEqual({ anchor: 'origin/main', behind: 1 });
   });
   it('none resolves: null, with no local-main fallback (D-' + '2732)', () => {
     const root = fixtureRepo();
@@ -126,6 +148,15 @@ describe('next-deviation CLI', () => {
     execFileSync('git', ['update-ref', 'refs/remotes/upstream/main', 'HEAD'], { cwd: root });
     expect(run(root).stderr).toMatch(/measured upstream\/main at \w+/);
     expect(run(root, '--ref', 'origin/main').stderr).toMatch(/measured origin\/main at \w+/);
+  });
+  it('a stale upstream/main behind origin/main: measures origin/main, so a number main already holds is not handed out', () => {
+    const root = fixtureRepo();
+    execFileSync('git', ['update-ref', 'refs/remotes/upstream/main', 'HEAD'], { cwd: root });
+    onMainAhead(root, { 'docs/superpowers/plans/later.md': entry(10004) });
+    const r = run(root);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/measured origin\/main at \w+/);
+    expect(r.stdout).toBe(`${D(10005)}\n`);
   });
   it('exits 2 when no base resolves, naming both remotes', () => {
     const root = fixtureRepo();
