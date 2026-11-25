@@ -8942,11 +8942,6 @@ export class FleetWatcher {
           const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
         }
 
-        // `seen` is added only HERE, once every gate above has passed and the
-        // send is actually about to be attempted — it means "one message per
-        // session per sweep", not "one row considered per sweep", and moving
-        // the claim earlier must not change that.
-        seen.add(d.toId);
         // The REFERENCE NUDGE (robust-mail-delivery spec §1), not `d.envelope`
         // — the lane no longer types the whole stored envelope into the pane.
         // `renderMailNudge` is a pure, ID-AGNOSTIC function of `d.toId` alone
@@ -8981,6 +8976,11 @@ export class FleetWatcher {
         // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
         // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
         if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
+        // `seen` is added only HERE, once every gate above has passed, the nudge is chosen and neither the ack-once nor the card
+        // hold took the row, so the send is actually about to be attempted. It means "one message per session per sweep", not
+        // "one row considered per sweep": a row that types nothing claims nothing (review 3841 F1), and moving the claim
+        // earlier must not change that.
+        seen.add(d.toId);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before

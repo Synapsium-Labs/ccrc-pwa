@@ -948,9 +948,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       const fired = coord.firedTimersOf(OVERLORD_IDENTITY, overlordTimerStamp(term), deps.wall() - TIMER_FIRED_SHOWN_MS);
       if (!pending.ok) return refuseTimer(reply, 'list', 'timer-unmeasured', { detail: pending.detail });
       if (!fired.ok) return refuseTimer(reply, 'list', 'timer-unmeasured', { detail: fired.detail });
+      const firedAts = fired.rows.map((t) => t.firedAt);   // a fired row with no fire time is unmeasured, never fired at zero (review 3841 F3)
+      if (firedAts.includes(null)) return refuseTimer(reply, 'list', 'timer-unmeasured', { detail: 'a fired timer carries no fire time' });
       const now = restoreNow();
-      return reply.code(200).send({ ok: true, timers: pending.rows.map(timerView), fired: fired.rows.map((t): FiredTimerView =>
-        ({ ...timerView(t), firedAt: t.firedAt ?? 0, restore: timerRestoreFact(t.setRestoreGeneration, now) })) });
+      return reply.code(200).send({ ok: true, timers: pending.rows.map(timerView), fired: fired.rows.map((t, i): FiredTimerView =>
+        ({ ...timerView(t), firedAt: firedAts[i]!, restore: timerRestoreFact(t.setRestoreGeneration, now) })) });
     }
     const r = coord.pendingTimersOf(byId);
     if (!r.ok) return refuseTimer(reply, 'list', 'timer-unmeasured', { detail: r.detail });

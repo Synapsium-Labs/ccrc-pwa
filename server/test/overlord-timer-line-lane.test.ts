@@ -14,6 +14,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { FleetWatcher } from '../src/watch.js';
 import { renderMailNudge, renderTimerFiredLine } from '../src/coord/envelope.js';
+import { timerLineHold } from '../src/coord/overlordGateRun.js';
 import { genExpectOf } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
@@ -211,5 +212,112 @@ describe('an unmeasured designation', () => {
     expect(literalSends(h.calls)).toEqual([]);
     expect(keyPresses(h.calls)).toEqual([]);
     for (const id of [role, generic, plain]) expect(rowOf(coord, id)).toEqual({ state: 'queued', attempts: 0 });
+  });
+});
+
+// Review 3841 F1: a held timer line claims nothing. The mail pass's order for one due delivery: every gate, then the nudge, then
+// the ack-once of a fixed line already delivered or the card hold (neither types anything), and only then the session's claim
+// for the sweep and the send. A held row spends no attempt and comes first on every sweep (id order), so if it claimed the
+// session, every later delivery to it would be turned away `same-sweep` for as long as the card does not read current.
+describe('a held timer line claims nothing (review 3841 F1)', () => {
+  /** A pane that echoes the last literal typed into it until a key is pressed, then reads empty: enough for any number of sends. */
+  const livePane = () => {
+    let box = emptyBox;
+    return (args: string[]): string | undefined => {
+      if (args[0] === 'send-keys') box = args[3] === '-l' ? echoedBox(args[5]!) : emptyBox;
+      return args[0] === 'capture-pane' ? box : undefined;
+    };
+  };
+  const primedLive = async () => {
+    const pane = livePane();
+    const h = lane([emptyBox]);
+    const run: Runner = async (cmd, args) => { const box = pane(args); const r = await h.run(cmd, args); return box === undefined ? r : { ...r, stdout: box }; };
+    const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(h.home, run), coord } as Deps), new Bus(), 2000));
+    await w.tick();
+    seedRegistry(h.home);
+    return { h, coord, w };
+  };
+  const plain = (coord: CoordStore): number =>
+    coord.queueDelivery(coord.insertMail({ fromId: 'lane-b-project-a', fromUuid: 'lane-b-project-a', toId: ID, runId: null, kind: 'status', subject: 'hi', body: 'b', artifacts: [] }).id, ID, 'ccrc-mail test payload').id;
+
+  it('a held timer row followed by a plain mail to the same session: the plain mail is delivered in that sweep', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { h, coord, w } = await primedLive();
+    designate(coord, ID);
+    mintOverlord(coord);
+    serveCard(coord, 's1', 'h1', NOW - 4_000);                     // served, never read: the timer line holds
+    const held = queueTimer(coord);
+    const mail = plain(coord);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([renderMailNudge(ID)]);
+    expect(rowOf(coord, mail).state).toBe('delivered');
+    expect(rowOf(coord, held)).toEqual({ state: 'queued', attempts: 0 });
+    expect(gateOf(coord, mail)).not.toBe('same-sweep');
+  });
+
+  it('a held timer row followed by a second timer row: both hold, neither claims; once the card reads, the first is typed and the second waits one sweep as same-sweep', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { h, coord, w } = await primedLive();
+    designate(coord, ID);
+    mintOverlord(coord);
+    serveCard(coord, 's1', 'h1', NOW - 4_000);
+    const first = queueTimer(coord);
+    const second = queueTimer(coord);
+    const after = plain(coord);
+    await w.sweepMail();
+    // Both wait on the same card, so the second holds for the same reason the first does; the plain mail behind them goes.
+    expect(literalSends(h.calls)).toEqual([renderMailNudge(ID)]);
+    for (const id of [first, second]) expect(rowOf(coord, id)).toEqual({ state: 'queued', attempts: 0 });
+    readCard(coord, 's1', 'h1');
+    const later = async (): Promise<void> => { vi.setSystemTime(Date.now() + 2 * MAIL_QUIET_MS); await w.sweepMail(); };   // past the quiet after a send
+    await later();
+    expect(gateOf(coord, first)).toBeNull();
+    expect(literalSends(h.calls)).toEqual([renderMailNudge(ID), TIMER_LINE]);
+    expect(rowOf(coord, first).state).toBe('acked');
+    expect(gateOf(coord, second)).toBe('same-sweep');              // one message per session per sweep, as for any mail
+    await later();
+    expect(literalSends(h.calls)).toEqual([renderMailNudge(ID), TIMER_LINE, TIMER_LINE]);
+    expect(rowOf(coord, second).state).toBe('acked');
+  });
+
+  it('a fixed line already delivered whose ack never landed is acked without typing, and claims nothing either', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { h, coord, w } = await primedLive();
+    designate(coord, ID);
+    const once = queueTimer(coord);
+    coord.db.prepare("UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, attempts = 1 WHERE id = ?").run(NOW - MAIL_REPLAY_MS - 1, once);
+    const mail = plain(coord);
+    await w.sweepMail();
+    expect(rowOf(coord, once).state).toBe('acked');
+    expect(literalSends(h.calls)).toEqual([renderMailNudge(ID)]);
+    expect(rowOf(coord, mail).state).toBe('delivered');
+  });
+});
+
+// Review 3841 F4: the card hold's reason is logged once when it changes, never on every sweep, and a delivery ends the episode.
+describe('the card hold logs its reason once per change (review 3841 F4)', () => {
+  it('three holds for one reason log once; a new reason logs once more; after a delivery the same reason logs again', async () => {
+    const { coord } = await primed([emptyBox]);
+    mintOverlord(coord);
+    serveCard(coord, 's1', 'h1', NOW - 4_000);
+    const lines: string[] = [];
+    const hold = (): boolean => timerLineHold(coord.liveGenerations(), 'overlord', (id) => coord.cardReadOfStart(id), (l) => { lines.push(l); });
+    readCard(coord, 's1', 'h1');
+    expect(hold()).toBe(true);                                     // the card reads current: delivers, and closes any earlier episode
+    serveCard(coord, 's2', 'h2', NOW - 500);                       // a newer card, unread: read-stale
+    for (let i = 0; i < 3; i++) expect(hold()).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(timerLineHold({ ok: false, detail: 'fixture: generations unreadable' }, 'overlord', () => { throw new Error('unasked'); }, (l) => { lines.push(l); })).toBe(false);
+    expect(timerLineHold({ ok: false, detail: 'fixture: generations unreadable' }, 'overlord', () => { throw new Error('unasked'); }, (l) => { lines.push(l); })).toBe(false);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain('fixture: generations unreadable');
+    readCard(coord, 's2', 'h2');
+    expect(hold()).toBe(true);
+    serveCard(coord, 's3', 'h3', NOW - 100);
+    expect(hold()).toBe(false);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe(lines[2]);
+    expect(lines.every((l) => l.startsWith('ccrc-server: the timer line to the Overlord holds: '))).toBe(true);
   });
 });

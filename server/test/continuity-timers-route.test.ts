@@ -721,6 +721,13 @@ describe("the Overlord's timers at the doors (Overlord W1)", () => {
     expect(Object.keys(coordList).sort()).toStrictEqual(['ok', 'timers']);
   });
 
+  it('a fired role timer with no fire time is timer-unmeasured, never fired at zero (review 3841 F3)', async () => {
+    const r = await ovRig();
+    const id = firedRole(r, '7', null);
+    r.coord.db.prepare('UPDATE continuity_timers SET firedAt = NULL WHERE id = ?').run(id);
+    expect(refused(await listAs(r, BODY))).toEqual([503, 'timer-unmeasured']);
+  });
+
   it("the Overlord cancels the role's timer, and cannot cancel a session's", async () => {
     const r = await ovRig();
     const own = (await setAs(r, BODY)).json() as { id: number };

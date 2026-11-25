@@ -580,4 +580,30 @@ describe("the Overlord's timers in the lane (Overlord W1)", () => {
     spy.mockRestore();
     expect([timer(s, id)!.state, timer(s, own)!.state]).toStrictEqual(['pending', 'fired']);
   });
+
+  // Review 3841 F2: the watcher's own binding of the guard and the restore generation (`FleetWatcher.sweepTimers`), through a
+  // real watcher, so deleting or inverting either turns this red. Every other case passes the ports to the pass by hand.
+  it('a real watcher fires a planted role timer under a coherent guard, with the restore line its restore state names; not while the guard is not coherent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+    try {
+      let guard: 'coherent' | 'rolled-back' = 'rolled-back';
+      const deps = (h: string, s: CoordStore) => ({
+        ...testDeps(h), coord: s, time: fakeTime({ wallMs: NOW }).ports,
+        overlordAuthorityGuard: { state: () => ({ kind: guard }) } as never,
+        overlordRestore: { restoreGeneration: () => ({ kind: 'measured', n: 3 }) } as never,
+      });
+      const h = mkTmp('ccrc-timer-lane-w-role-'); mkdirSync(path.join(h, '.cc-sessions'), { recursive: true });
+      const s = store();
+      const id = role(s, { setRestoreGeneration: 1 });
+      vi.spyOn(s, 'designationRead').mockReturnValue(designated(BODY));
+      await quietAtTestEnd(new FleetWatcher(withFakeClock(deps(h, s)), new Bus(), 2000)).sweepTimers([], new Set([ID]), NOW - 1_000, []);
+      expect(timer(s, id)!.state).toBe('pending');
+      guard = 'coherent';
+      await quietAtTestEnd(new FleetWatcher(withFakeClock(deps(h, s)), new Bus(), 2000)).sweepTimers([], new Set([ID]), NOW - 1_000, []);
+      expect(timer(s, id)!.state).toBe('fired');
+      const mails = timerMail(s);
+      expect(mails.map((m) => [m.toId, m.deliverTo])).toStrictEqual([['overlord', BODY]]);
+      expect(mails[0]!.body).toContain('Set before restore 3 of the coordination database');
+    } finally { vi.useRealTimers(); }
+  });
 });
