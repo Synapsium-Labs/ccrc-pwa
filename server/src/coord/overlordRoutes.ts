@@ -496,7 +496,8 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   app.post('/api/overlord/restart', async (req, reply) => {
     const g = deps.gate(req, reply, { cap: null, stepUp: false });
     if (!g.pass) return reply;
-    // It writes no row, but it acts on the Overlord's body, so the act is attributed through the identity port (gates B).
+    // It acts on the Overlord's body, so the act is attributed through the identity port (gates B). Its only row write is ending
+    // an overdue attempt, through `failPending`, whose line carries the attempt's actor as that writer records it.
     const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       const read = coord.designationRead();
@@ -514,11 +515,25 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const id = binding!.sessionId;
       if (v.endAttempt !== null) {
         // An attempt past its deadline is over (`restart-ends-an-overdue-attempt`): failed through its one writer, in this hold,
-        // and its body's stop owed and drained, before the bound body is started; so exactly one body is started.
-        const ended = coord.failPending(v.endAttempt, 'deadline-passed', now, true);
+        // its body's stop owed. A writer that throws answers a refusal word, as the create path's calls do (review 3754 F4).
+        let ended: ReturnType<typeof coord.failPending>;
+        try { ended = coord.failPending(v.endAttempt, 'deadline-passed', now, true); } catch (err) {
+          return refuseRoute(reply, 'unavailable', { detail: `the overdue attempt of ${v.endAttempt} could not be ended: ${err instanceof Error ? err.message : String(err)}` });
+        }
         if (!ended.ok) return refuseRoute(reply, 'unavailable', { detail: `the overdue attempt of ${v.endAttempt} could not be ended` });
         console.warn(`ccrc-server: Restart the Overlord: the attempt of ${v.endAttempt} was past its deadline and is failed (deadline-passed)`);
-        await drainOwedStops({ body, coord }, [v.endAttempt]);
+      }
+      // Restart never starts the bound body while a stop is owed on the slot (review 3754 F1): every owed stop is drained first,
+      // the ended attempt's included, and the result read. One still owed refuses as a failed forced stop does; the attempt stays
+      // ended and the id stays owed, so the next Restart drains it again (`restart-starts-nothing-while-a-stop-is-owed`).
+      const standing = coord.designationRead();
+      if (standing.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
+      const owedIds = standing.row?.stopsOwed ?? [];
+      if (owedIds.length > 0) {
+        const drained = await drainOwedStops({ body, coord }, owedIds);
+        if (drained.owed.length > 0) {
+          return refuseRoute(reply, 'overlord-body-alive', { detail: `a stop the Overlord owes failed: ${drained.owed.join(', ')}; nothing was started` });
+        }
       }
       console.warn(`ccrc-server: Restart the Overlord: ensuring ${id}, asked by ${actor.subject}`);
       const ensured = await body.ensure(id);

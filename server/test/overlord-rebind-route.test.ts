@@ -633,10 +633,82 @@ describe('POST /api/overlord/restart', () => {
       expect(of('ensure')).toEqual([r.oldId]);
       expect(of('create')).toEqual([]);
       expect(of('stop')).toEqual([newId]);
+      // The attempt's body is stopped BEFORE the bound one is ensured.
+      const at = (op: string, id: string) => r.body.log.findIndex((c) => c.op === op && c.id === id);
+      expect(at('stop', newId)).toBeLessThan(at('ensure', r.oldId));
       expect(r.host.delivered).toEqual([`${r.oldId}:${PROMPT}`]);
       // The attempt is over, so Rebind opens again by itself (it now reads the body, not the slot).
       r.facts.old = 'alive';
       expect((await rebind(r)).json()).toMatchObject({ error: 'overlord-body-alive' });
+    }
+  });
+
+  /** A rebind pending for the bound body's replacement, its deadline passed, the bound body gone: Restart's overdue arm. */
+  const overdue = async (): Promise<{ r: Rig; newId: string }> => {
+    const r = await rig();
+    const made = await rebind(r);
+    expect(made.statusCode).toBe(200);
+    r.body.reset(); r.host.delivered.length = 0;
+    r.facts.bodyState = { kind: 'gone', cause: 'stopped' };
+    r.time.advance((made.json().deadlineAt as number) - r.time.ports.clock.wall());
+    return { r, newId: made.json().sessionId as string };
+  };
+
+  it('past the deadline, a stop that fails starts nothing: 409 overlord-body-alive, the attempt stays ended and its id owed; the next Restart drains it and starts', async () => {
+    const { r, newId } = await overdue();
+    r.body.stopAnswer = () => ({ ok: false, detail: 'tmux is busy' });
+    const res = await restart(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['overlord-body-alive']);
+    expect(res.json()).toMatchObject({ ok: false, error: 'overlord-body-alive' });
+    expect(String(res.json().detail)).toContain(newId);
+    expect(r.body.count('ensure')).toBe(0);
+    expect(r.body.count('keepAwake-on')).toBe(0);
+    expect(r.host.delivered).toEqual([]);
+    expect(view(r)).toMatchObject({ pending: null, stopsOwed: [newId], lastAttempt: { sessionId: newId, outcome: 'deadline-passed' } });
+    // A retry heals: the stop is drained again, then the bound body is started.
+    r.body.stopAnswer = () => ({ ok: true, absent: false });
+    r.body.reset();
+    const again = await restart(r);
+    expect(again.statusCode).toBe(200);
+    expect(r.body.idsOf('stop')).toEqual([newId]);
+    expect(r.body.idsOf('ensure')).toEqual([r.oldId]);
+    expect(view(r)!.stopsOwed).toEqual([]);
+  });
+
+  it('every stop the slot owes is drained before the start, not only the ended attempt\'s', async () => {
+    const r = await rig();
+    r.db.prepare('UPDATE overlord_designation SET stopsOwed = ?').run(JSON.stringify(['overlord-owed-otter']));
+    r.facts.bodyState = { kind: 'asleep' };
+    const res = await restart(r);
+    expect(res.statusCode).toBe(200);
+    expect(r.body.idsOf('stop')).toEqual(['overlord-owed-otter']);
+    const at = (op: string) => r.body.log.findIndex((c) => c.op === op);
+    expect(at('stop')).toBeLessThan(at('ensure'));
+    expect(view(r)!.stopsOwed).toEqual([]);
+  });
+
+  it('past the deadline, an ensure that fails answers fleetFailed and keeps the end: the attempt failed, its body stopped, the bound one not started', async () => {
+    const { r, newId } = await overdue();
+    r.body.ensureAnswer = { ok: false, detail: 'ensure exited 1' };
+    const res = await restart(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS.fleetFailed);
+    expect(view(r)).toMatchObject({ pending: null, stopsOwed: [], lastAttempt: { sessionId: newId, outcome: 'deadline-passed' } });
+    expect(r.body.idsOf('stop')).toEqual([newId]);
+    expect(r.body.count('keepAwake-on')).toBe(0);
+    expect(r.host.delivered).toEqual([]);
+  });
+
+  it('past the deadline, a writer that throws or refuses answers 503 unavailable and acts on no body; the attempt stays pending', async () => {
+    for (const fail of ['throws', 'refuses'] as const) {
+      const { r, newId } = await overdue();
+      (r.coord as unknown as { failPending: () => unknown }).failPending = fail === 'throws'
+        ? () => { throw new Error('the database is busy'); }
+        : () => ({ ok: false, reason: 'unmeasured', detail: 'unreadable for the test' });
+      const res = await restart(r);
+      expect(res.statusCode, fail).toBe(REFUSAL_STATUS.unavailable);
+      expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+      expect(r.body.log).toEqual([]);
+      expect(view(r)!.pending).toMatchObject({ sessionId: newId });
     }
   });
 
