@@ -28,7 +28,7 @@ import type { SystemManager } from '../src/testbox/systemd.js';
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TestboxConfig } from '../src/testbox/config.js';
-import { captureDeskComposed, deliveryOf } from '../src/testbox/main.js';
+import { captureDeskComposed, deliveryOf, deliveryWiring } from '../src/testbox/main.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const T: CaptureTimings = {
@@ -365,6 +365,21 @@ describe('the runner\'s delivery bounds are the contract\'s', () => {
     expect(deliveryOf({ delivery: { driver, tmuxConf: null } }, T)).toEqual({ delivery: { driver, tmuxConf: null, settleMs: T.deliverySettleMs, quietMs: T.deliveryQuietMs } });
     expect(deliveryOf({ delivery: null }, T)).toEqual({});
   });
+  it('the production wiring\'s driver child is stopped at the given contract\'s bound and killed its kill grace later', async () => {
+    const dir = mkTmp('ccrc-capwire-');
+    const script = path.join(dir, 'stubborn.cjs');
+    writeFileSync(script, `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n`);
+    const tc: CaptureTimings = { ...CAPTURE_TIMINGS, deliveryDriveMs: 200, deliveryKillGraceMs: 300 };
+    const w = deliveryWiring(tc, script, path.join(dir, 'no-such.conf'));
+    expect(w?.tmuxConf).toBeNull();
+    const t0 = Date.now();
+    const a = await w!.driver.drive({ capture: '/box/captures/x', tmux: '/tmp/ccrc-capture-x', case: 'c0' }, { path: '/usr/bin:/bin', tmpBase: dir });
+    const took = Date.now() - t0;
+    expect(a).toMatchObject({ kind: 'fault', detail: expect.stringMatching(/within 200 ms/) });
+    // Its bound and its grace, the contract's; never the production grace, which would hold it a full second.
+    expect(took).toBeGreaterThanOrEqual(tc.deliveryDriveMs + tc.deliveryKillGraceMs);
+    expect(took).toBeLessThan(tc.deliveryDriveMs + CAPTURE_TIMINGS.deliveryKillGraceMs);
+  }, 20_000);
 });
 
 // Gate G1 for the delivery recipe (the capture owner's call 1208): the composed desk and runner, the real launcher, a
