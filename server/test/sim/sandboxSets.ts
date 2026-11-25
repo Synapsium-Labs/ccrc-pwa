@@ -221,6 +221,32 @@ export function settleCases(m: SandboxModule): Record<string, SuiteCase> {
   };
 }
 
+/** `settleEvidenceStands`'s cases (review 3366 F4): the same evidence read twice stands; a newer start, another report or
+ *  carry, and a changed designation, each with the rest unchanged, do not. */
+export function settleEvidenceCases(m: SandboxModule): Record<string, SuiteCase> {
+  const e = m.expectedSurfaceOf('overlord', FIXTURE_OWN_LISTS)!;
+  type Evidence = Parameters<SandboxModule['settleEvidenceStands']>[0];
+  const newest: NonNullable<Evidence['newest']> = { start: startRow(), report: heldReport(e), carry: { kind: 'none' } };
+  const ev = (over: Partial<Evidence> = {}): Evidence => ({ designation: pendingRead(), newest, ...over });
+  return {
+    'the same evidence, read again, stands': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ designation: pendingRead(), newest: { ...newest, start: startRow() } }))).toBe(true);
+    },
+    'a newer start, another report, another carry or no start, the designation unchanged, does not stand': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, start: startRow({ id: 8 }) } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, report: heldReport(e, { conflicted: true }) } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, report: null } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: { ...newest, carry: { kind: 'absent' } } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ newest: null }))).toBe(false);
+    },
+    'a designation that changed, the newest start unchanged, does not stand (review 3366 F4)': () => {
+      expect(m.settleEvidenceStands(ev(), ev({ designation: pendingRead({ generation: 'other' }) }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ designation: { kind: 'not-designated', row: null } }))).toBe(false);
+      expect(m.settleEvidenceStands(ev(), ev({ designation: { kind: 'unmeasured', why: 'locked' } }))).toBe(false);
+    },
+  };
+}
+
 export function skewCases(m: SandboxModule): Record<string, SuiteCase> {
   const base: Parameters<SandboxModule['skewNoticeOf']>[0] = { sessionId: BODY, running: false, digestStands: true, agreement: 'skewed',
     fleetBuild: 'v0.9.1', serverBuild: 'v0.9.2', noticed: () => false };
@@ -329,9 +355,22 @@ const SKEW_NOTICE_SET: MutantSet<SandboxModule> = {
   suite: (mod) => skewCases(mod),
 };
 
+/** `settleEvidenceStands`'s mutants (review 3366 F4): either half of the check dropped, and the newest start compared by its
+ *  id alone. */
+const SETTLE_EVIDENCE_SET: MutantSet<SandboxModule> = {
+  modulePath: MODULE,
+  mutants: [
+    { id: 'E1', old: ' && JSON.stringify(before.designation) === JSON.stringify(after.designation)', new: '' },
+    { id: 'E2', old: 'JSON.stringify(before.newest) === JSON.stringify(after.newest) && ', new: '' },
+    { id: 'E3', old: 'JSON.stringify(before.newest) === JSON.stringify(after.newest)', new: 'before.newest?.start.id === after.newest?.start.id' },
+  ],
+  suite: (mod) => settleEvidenceCases(mod),
+};
+
 export const SANDBOX_MUTANT_SETS: Readonly<Record<string, MutantSet<SandboxModule>>> = {
   'server/src/continuity/sandboxCheck.ts#sandboxVerdict': SANDBOX_VERDICT_SET,
   'server/src/continuity/sandboxCheck.ts#profileEngagedOf': PROFILE_ENGAGED_SET,
   'server/src/continuity/sandboxCheck.ts#sandboxSettle': SANDBOX_SETTLE_SET,
   'server/src/continuity/sandboxCheck.ts#skewNoticeOf': SKEW_NOTICE_SET,
+  'server/src/continuity/sandboxCheck.ts#settleEvidenceStands': SETTLE_EVIDENCE_SET,
 };
