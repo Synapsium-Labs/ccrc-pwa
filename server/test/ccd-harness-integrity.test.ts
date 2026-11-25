@@ -210,6 +210,13 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
     expect(fns.size).toBeGreaterThan(1000);
   });
 
+  // ITS OWN BUDGET, 60 s where the suite's limit is 20 (landing-order wave 1f, D-9068). The case scans the string text
+  // of every source under server/test, fixtures included: 2,364 files and 67 MB on 2026-11-25, where reading them took
+  // 0.2 s, the shipped set 0.06 s and `overridesIn` over them 16.6 s, measured alone on the fleet's test box at a
+  // one-minute load of about 11 (the plain run before it, at about 9, took 16.6 s). The whole file took 17.1 s and
+  // 22.6 s in merge-queue runs 45563248418 and 45565143100, and in the second this case ran past 20 s and removed a
+  // green pull request (#3362) from the queue. 60 s is about 2.7 times the slowest of those (22.6 s): a budget, not a
+  // guess, and a case that needs more has grown, which is worth reading.
   it('no override names a function nothing ships', () => {
     const shipped = shippedFunctions();
     const all = testSources().flatMap((f) => overridesIn(fs.readFileSync(path.join(TEST_DIR, f), 'utf8'), f));
@@ -218,7 +225,7 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
       'a stub of a function no shipped script defines measures nothing: re-point it at the function that does the '
       + 'work, or, if it is a helper the test defines for itself, list it in TEST_LOCAL_HELPERS under its file')
       .toEqual([]);
-  });
+  }, 60_000);
 
   it('every TEST_LOCAL_HELPERS entry is still defined in its file, and is not a shipped function', () => {
     const shipped = shippedFunctions();
