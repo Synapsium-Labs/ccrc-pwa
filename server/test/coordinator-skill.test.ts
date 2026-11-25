@@ -926,6 +926,11 @@ describe('the coordinator skill: linkage', () => {
       // The programme card's read (D-8075, spec §11.6): the screen's door, session-gated; a coordinator reads its programme through its runs.
       'GET /api/programmes',
       'GET /api/runs/:id/record',
+      // LANDING ORDER WAVE 5j-b (D-9049): the operator's pause and withdraw doors on the landing line. Operator doors the
+      // coordinator is never told about: a coordinator reads a pause and a withdrawal from the line, and learns of a withdrawal
+      // by its notice mail; naming them would invite a door the skill's contract does not give it.
+      'POST /api/landing/pause',
+      'POST /api/landing/withdraw',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

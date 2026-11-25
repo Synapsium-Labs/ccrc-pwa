@@ -28,8 +28,8 @@ import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingViewOf } from './landingLine.js';
 import { landingReadView } from './landingReadView.js';
-import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
-import { actLandingWrite } from './landingWritesAct.js';
+import { landingCommandOf, parseLandingDoor, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
+import { actLandingWrite, type LandingWritePorts } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
@@ -4567,7 +4567,7 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
       const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
       if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
-      const { ok: _ok, coordinator: _c, ...answer } = r;
+      const { ok: _ok, coordinator: _c, released: _r, ...answer } = r;
       return reply.code(200).send({ ok: true, ...answer });
     });
   };
@@ -4580,6 +4580,38 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
     return await landingWrite(req, reply, 'order', 'landingOrder');
+  });
+
+  /** `POST /api/landing/pause` and `POST /api/landing/withdraw` (landing order wave 5j-b, D-9049): the operator's two doors on
+   *  the line, session-gated only. Armed, the global gate demands a session; dark, each works and records `flag-off`. The
+   *  actor is this file's one expression, and no sign-in decision is made here. The L1 decider and the one authority writer
+   *  decide and journal; neither door chooses, reorders or brings forward an entry, and the answer names no head. */
+  const landingDoor = async (req: FastifyRequest, reply: FastifyReply, kind: 'pause' | 'withdraw') => {
+    const parsed = parseLandingDoor(kind, req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
+    const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+    const ports = { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice } satisfies LandingWritePorts;
+    return coordMutex.run(async () => {
+      if (parsed.kind === 'pause') {
+        const r = actLandingWrite({ kind: 'pause', project: parsed.project, paused: parsed.paused, setBy: 'operator', actor }, Date.now(), ports);
+        if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+        const { ok: _ok, ...answer } = r;
+        return reply.code(200).send({ ok: true, ...answer });
+      }
+      const r = actLandingWrite({ kind: 'withdraw', project: parsed.project, pr: parsed.pr, pinnedAt: parsed.pinnedAt, setBy: 'operator', actor },
+        Date.now(), ports);
+      if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+      const { ok: _ok, coordinator: _c, ...answer } = r;
+      return reply.code(200).send({ ok: true, ...answer });
+    });
+  };
+  app.post('/api/landing/pause', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return await landingDoor(req, reply, 'pause');
+  });
+  app.post('/api/landing/withdraw', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return await landingDoor(req, reply, 'withdraw');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
