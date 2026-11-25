@@ -172,11 +172,26 @@ function sameOriginPath(u) {
   }
 }
 
-/** Open (or focus) the app at `url`. The original tap behaviour, unchanged. */
+/** A Docs address: the route table's own Docs pattern (`lib/routes.ts`, the `docs` row), copied because this worker is
+ *  plain JS outside the bundle and cannot import it; `push-sw.test.ts` holds the two together. */
+const DOCS_PAGE = /^\/docs(?:\/|$)/;
+
+/** Whether a window is a Docs tab's: one on a Docs address. A window whose address cannot be read is not one. */
+function onDocs(c) {
+  try {
+    return DOCS_PAGE.test(new URL(c.url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Open (or focus) the app at `url`. A window on a Docs address is never taken (desktop polish wave 174, fix round 1
+ *  L2): a Docs tab draws the reader alone, so the tap brings up another of the app's windows, or opens a new one when every
+ *  window is on Docs. Otherwise the original tap behaviour, unchanged. */
 async function openApp(url) {
   const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   for (const c of wins) {
-    if ('focus' in c) {
+    if ('focus' in c && !onDocs(c)) {
       try {
         await c.navigate(url);
       } catch {

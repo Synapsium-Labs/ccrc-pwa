@@ -13,6 +13,7 @@ import { inject } from 'vitest';
 import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from '../test/fleetFixture';
+import { CONSOLE_TAB_MARK } from '../src/lib/tabMark';
 import { DIST_KEY } from './dist';
 
 /** The run's one production build (`browser/globalSetup.ts`, the browser config's global setup), sealed read-only.
@@ -94,6 +95,11 @@ export interface AppView {
    *  control the page). Absent, workers are blocked, exactly as every other case has them: a worker that took over a page
    *  would answer some of its requests where the harness's routes cannot see them. */
   readonly serviceWorkers?: 'allow';
+  /** `'console'`: every page this context loads is a console tab's load (`lib/tabMark.ts`, a console tab reloaded), so a
+   *  Docs address it opens is drawn inside the console, as a console shows it after a reload. It reaches every page of the
+   *  context, a tab the app opens too, so a case that follows an opened tab leaves it out. Absent, a Docs address loaded
+   *  first is a Docs tab (`isDocsTab`, desktop polish wave 174), the reader alone. */
+  readonly tab?: 'console';
 }
 
 export interface OpenedApp {
@@ -158,6 +164,13 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
       localStorage.setItem(themeKey, theme);
     } catch { /* a context without storage boots the defaults; the measure then says which skin it drew */ }
   }, [SKIN_STORAGE_KEY, view.skin, THEME_STORAGE_KEY, view.theme] as const);
+  if (view.tab === 'console') {
+    await ctx.addInitScript(([key, value]) => {
+      try {
+        sessionStorage.setItem(key, value);
+      } catch { /* a context without storage: the first page decides, and the case says which it drew */ }
+    }, [CONSOLE_TAB_MARK.key, CONSOLE_TAB_MARK.value] as const);
+  }
   const events: HarnessEvent[] = [];
   const listeners = new Set<(event: HarnessEvent) => void>();
   const log = (entry: Unsequenced<HarnessEvent>): void => {

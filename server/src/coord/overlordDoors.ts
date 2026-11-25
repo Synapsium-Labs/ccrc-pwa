@@ -48,6 +48,7 @@ const OVERLORD = 'server/src/coord/overlordRoutes.ts';
 const LEDGERS = 'server/src/coord/ledgersRoutes.ts';
 const LINKING = 'server/src/linking/routes.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts';
+const HISTORY = 'server/src/coord/overlordHistoryRoutes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -101,6 +102,12 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   acknowledge: {
     group: 'overlord', method: 'POST', path: '/api/overlord/messages/:id/acknowledge', file: INBOX, verbClass: 'operate', write: true,
     word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'acknowledge',
+  },
+  // The Overlord's history door (W1, PR B1): a read, so verb class `view`, fenced as the inbox reads are (`write: true`), so a
+  // forger of the attribution reads no history and spends no ceiling; a POST only so free text rides the body (ruled R7).
+  history: {
+    group: 'overlord', method: 'POST', path: '/api/overlord/history', file: HISTORY, verbClass: 'view', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'read',
   },
 };
 

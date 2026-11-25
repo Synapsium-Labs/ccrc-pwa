@@ -24,7 +24,9 @@ const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
 const LINKING_ROUTES = 'server/src/linking/routes.ts';
 // The Overlord's inbox doors (W1 inbox piece): a routes file of its own, beside `overlordRoutes.ts`, which holds only the operator's doors.
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
-const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES] as const;
+// The Overlord's history door (W1, PR B1): a routes file of its own beside the inbox's.
+const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
+const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES] as const;
 /** Table 11.1d's server words (the later waves' words join here when their pieces land). */
 const SERVER_WORDS = ['continuity-v1', 'timers-v1', 'overlord-v1'];
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
@@ -59,7 +61,7 @@ describe('the door table against the routes files', () => {
       expect(regs[r.file], key).toContain(rowRegistration(r));
     }
   });
-  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES]) {
+  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
     it(`${f}: every registration has a row or a NOT_OVERLORD_DOORS entry`, () => {
       expect(unaccounted(f, regs[f]!)).toEqual([]);
     });
@@ -75,7 +77,7 @@ describe('the door table against the routes files', () => {
     }
   });
   it('CONTROL: a planted registration with no row or entry is found, in each exhaustively scanned file', () => {
-    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES]) {
+    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
       const planted = `${sourceOf(f)}\napp.post('/api/planted/door', async () => 1);\n`;
       expect(unaccounted(f, registrationsOf(planted, f)), f).toEqual(['POST /api/planted/door']);
     }
@@ -125,6 +127,8 @@ describe('the table itself', () => {
       'link-team',
       // The Overlord's inbox doors (W1 inbox piece): the inbox, one message and its acknowledge.
       'inbox', 'messages', 'acknowledge',
+      // The Overlord's history door (W1, PR B1).
+      'history',
     ]);
   });
 });

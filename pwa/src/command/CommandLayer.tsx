@@ -7,7 +7,8 @@ import {
   COMMAND_KEY, CommandPalette, KeyHint, RESET_LIST, Sheet, type CommandPaletteOption,
 } from '@ccrc/ui';
 import { useAuthLost } from '../lib/auth';
-import { navigate, useLocation } from '../lib/router';
+import { useLocation } from '../lib/router';
+import { useFollowLink } from '../lib/useTabLink';
 import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
 import { setCharacter } from '../lib/character';
@@ -129,11 +130,14 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // is offered only while the server advertises the word.
   const home = useHome();
   const overlordShown = useOverlordShown();
+  const follow = useFollowLink();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
     runs,
-    navigate: (href) => navigate(href),
+    // A command's move follows the Docs tab rule (`useFollowLink`, desktop polish wave 174): at a desk "Go to Docs", a bar's
+    // Docs door and "Open this session's docs" open a Docs tab of their own; every other move is in-app, as before.
+    navigate: follow,
     setSkin,
     setTheme: (choice) => setTheme(choice),
     setCharacter,
@@ -145,7 +149,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     inspector,
     home,
     overlordShown,
-  }), [path, ordered, runs, openNewSession, openPalette, open, session, inspector, home, overlordShown]);
+  }), [path, ordered, runs, follow, openNewSession, openPalette, open, session, inspector, home, overlordShown]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 

@@ -13,6 +13,8 @@ import type { BackupRead } from '../../shared/backup.js';
 import { captureTestbox, measureTestbox, realTestboxSeams, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import { makeModelsSpawn, modelsEnv, runModelsOp } from '../../agent/src/modelsop.js';
 import type { ModelClass } from '../../shared/models.js';
+import type { OverlordHistoryRequest } from '../../shared/overlordHistory.js';
+import type { OverlordHistoryAsked } from './coord/overlordHistory.js';
 import { readHostMachine, type HostMachineReading, type HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
@@ -312,6 +314,13 @@ export interface FleetIO {
    *  a frame that never left, or a launcher that could not start, is `not-started`; a held agent gate is `busy`; a fault
    *  after the send, the deadline, or a reply off `readModelsOpAnswer`'s grammar is `lost` (UNKNOWN). */
   models(lane: string, action: ModelsAction, cls?: ModelClass): Promise<ModelsAsked>;
+  /** The `overlord-history` op (Overlord W1, PR B1; plan w1-board-history.md Task 5): one read of `ccrc history`'s read
+   *  verbs over every project, answered by the agent's worker thread. Failure contract: never rejects; `OverlordHistoryAsked`
+   *  (`coord/overlordHistory.ts`, the door's port) is the whole of it: `unsupported` (an agent that does not list the op, an
+   *  older agent's `bad-request`, and every local fleet, which has no agent link), `not-started`, `timeout` (this server's
+   *  own wait), `lost` (anything after the send, an abort, the agent's own `timeout`, or a reply off
+   *  `readOverlordHistoryAnswer`'s grammar), or the agent's answer. */
+  overlordHistory(req: OverlordHistoryRequest, signal?: AbortSignal): Promise<OverlordHistoryAsked>;
 }
 
 /** The `testbox` op as a seam answers it, or why there is none (D-7411). */
@@ -616,6 +625,9 @@ export const localIO: FleetIO = {
   // The bare localIO has no configured home: `localIOFor(home)` runs the local arm, so nothing here ever spawns against
   // the process home.
   models: async () => ({ kind: 'unsupported' }),
+  // A local fleet has no agent link, so no Overlord history in W1 (question 10): a stated re-check the door never reaches,
+  // because `historyAgentFor` reads local mode's fleet state, which carries no agent ops, and answers `no-agent` first.
+  overlordHistory: async () => ({ kind: 'unsupported' }),
 };
 
 /** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */

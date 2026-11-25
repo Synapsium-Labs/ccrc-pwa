@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task, as the dispatch specifies. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status: decided by the programme's coordinator on 2026-11-25, on a defect measured in the merge queue that night.** No implementation exists yet. It is built before wave 1d: it is the smaller change and the more frequent cause.
+**Status: decided by the programme's coordinator on 2026-11-25, on a defect measured in the merge queue that night, and amended the same night (D-9055): the shard's deadline goes to 30 minutes as well.** No implementation exists yet. It is built before wave 1d: it is the smaller change and the more frequent cause.
 
-**Goal:** No browser shard of a merge-queue run expects more than about 12 minutes, so a green one is no longer cancelled at its 20-minute deadline and its entry removed.
+**Goal:** No browser shard of a merge-queue run expects more than about 12 minutes, and its deadline leaves room for a runner at about twice the usual time, so a green one is no longer cancelled at its deadline and its entry removed.
 
 **Why:** of the fourteen merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25, six ran the browser suite (the others were documentation groups, which skip it). In those six the second shard took 916 s, 924 s, 1085 s, 1187 s, 1204 s and 1211 s. The last two were cancelled at the deadline about a second after their summary line read all files passed (runs 45516946367 and 45527962041), and each removed a green entry. The first and third shards took 808 s to 1025 s.
 
@@ -14,8 +14,9 @@
 - The runner was not slow: the 27 timed files of the second shard ran at a median of 1.05 times their stored figure.
 - One file is the difference: `project-linking-card.browser.test.ts`, one `describe` of 22 tests, took 869.9 s against a stored 360.3 s. Five pull requests have changed it since 2026-11-13, three of them since 2026-11-20 (#3109, #3123, #3230).
 - Simulated with the sharder's own rule on the run's own times, three workers a shard: three shards expect 878 s each; four expect 870 s, 657 s, 658 s and 659 s, the first set by that one file alone; four with that file in two halves expect 658 s to 659 s each.
+- **The amendment's measurement** (run 45543535717, job 138967552810, 04:18Z the same night): a third green shard was cancelled at the deadline, and this one on a slow runner. 15 of its 39 files had finished, all green, in 2,194 s of file time, at a median of 1.25 times their times in the run above (largest 1.54); by the reporting coordinator's measurement, the same shard on a faster runner an hour earlier (run 45535406715) had needed 2,501 s for all 39. The run's other two shards took 14:29 and 13:14. Balance does nothing for a slow runner: at 1.7 times, a balanced shard of four stands about three minutes under 20.
 
-**Architecture:** A data refresh, one test file moved into two, and one number in the workflow's matrix. D-8167 already ruled how this leg is kept under its deadline: by balance and a shard, never by a longer deadline. This wave follows it; the deadline stays 20.
+**Architecture:** A data refresh, one test file moved into two, and two numbers in the workflow: the matrix and the deadline. D-8167 ruled that this leg is kept under its deadline by balance and a shard, never by a longer deadline. This wave follows it for the heavy shard, and overrules its last clause for the slow runner (D-9055): the deadline is what catches a wedged job, and 20 minutes was within reach of a healthy one.
 
 **Tech Stack:** vitest's browser config and its sequencer (`pwa/browser/slowFirst.ts`), GitHub Actions YAML, vitest suites under `pwa/test/` and `server/test/`.
 
@@ -32,11 +33,11 @@
 
 - **It does not stop the table going stale again.** `FILE_MS` is refreshed by hand from a job log, as D-7746 and D-8167 left it. A source the leg derives for itself is a later wave's; this plan adds none.
 - **It makes no test faster and changes no test's body.** The 22 tests of the split file run as they did, in two files.
-- **It changes no deadline and no setting.**
+- **It changes no setting, and one deadline only,** the browser shard's.
 
 ## Global Constraints
 
-- **The deadline stays 20** on `browser-pwa`, and no other job's deadline changes. Wave 1d owns the server shard's deadline; do not touch it here.
+- **The deadline on `browser-pwa` becomes 30** (D-9055), and no other job's deadline changes. Wave 1d owns the server shard's deadline; do not touch it here.
 - **Every required check name still reports:** `test (pwa)` reads `needs.browser-pwa.result` as before. The job stays one job, `browser-pwa`, named `browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}`.
 - **No test body changes.** In Task 2 an `it` block moves whole, with its title unchanged. Helpers move to one shared module whose name does not contain `.browser.test.`, so the leg does not collect it.
 - **This pull request changes `.github/`, so it runs the full suite** (the selector's `infraTrigger`). Do not add the `full-ci` label and do not dispatch a full run by hand.
@@ -97,10 +98,10 @@
 - Modify: `pwa/browser/slowFirst.ts` (the header's sentence on the count)
 
 **Interfaces:**
-- Produces: `shard: [1, 2, 3, 4]` and `total: [4]` on `browser-pwa`; `timeout-minutes: 20` unchanged.
+- Produces: `shard: [1, 2, 3, 4]`, `total: [4]` and `timeout-minutes: 30` on `browser-pwa`.
 
 - [ ] **Step 1: Move the pin first, and see it red.** In `ci-pipeline.test.ts` the case `is one job, browser-pwa, named browser (pwa) i/n over a shard matrix, …` expects a total of 3 (D-8167). Change the expectation to 4 and its comment to say why (D-9026). Run the suite: red on the count.
-- [ ] **Step 2: Change the matrix,** and add a paragraph to the comment above the deadline, after D-8167's, that says what was measured (D-9026): at three shards the second took 916 s to 1,211 s in six queue runs of 2026-11-25 and was cancelled twice while green; the table was 36 files behind and one file had grown from 360 s to 870 s; at four shards, with the table refreshed and that file in two, a shard expects about 660 s, eleven minutes, and about twelve with its setup. The deadline stays 20.
+- [ ] **Step 2: Change the matrix,** and add a paragraph to the comment above the deadline, after D-8167's, that says what was measured (D-9026): at three shards the second took 916 s to 1,211 s in six queue runs of 2026-11-25 and was cancelled twice while green; the table was 36 files behind and one file had grown from 360 s to 870 s; at four shards, with the table refreshed and that file in two, a shard expects about 660 s, eleven minutes, and about twelve with its setup. Then change `timeout-minutes` to 30 and say why (D-9055): a third green shard was cancelled on a slow runner the same night, at 1.25 to 1.7 times the usual file times, so 30 is a deadline for a wedged job with room for a runner at about twice the usual time. The pin's case in `ci-pipeline.test.ts` that names the 20-minute deadline moves to 30 in the same commit, title and comment with it.
 - [ ] **Step 3: Correct the sentence that names the count** in the header of `slowFirst.ts` ("CI runs three shards since D-8167"). The comment in the `pwa-shard` job that says "the three shards' tests skip" is about the pwa shards, which stay three: leave it.
 - [ ] **Step 4: Run** `ci-pipeline`, `ci-merge-queue`, `oss-metadata` and every suite `git grep -l "browser-pwa" server/test` names, one file per process. Expected: green.
 - [ ] **Step 5: The mutation table,** each row measured red and restored from a saved copy with its sha256 checked:
@@ -108,7 +109,7 @@
 | id | Mutation | Predicted red |
 |---|---|---|
 | 1E-01 | the matrix total goes back to 3 | `ci-pipeline`'s shard-count case |
-| 1E-02 | `timeout-minutes` on `browser-pwa` becomes 30 | `ci-pipeline`'s case that names the 20-minute deadline |
+| 1E-02 | `timeout-minutes` on `browser-pwa` goes back to 20 | `ci-pipeline`'s case that names the deadline |
 | 1E-03 | one name in `FILE_MS` is misspelt | `browser-leg`'s case that every name is a browser file |
 | 1E-04 | one `it` block is deleted from the new file | Task 2 Step 4's title comparison, run as written in the note |
 
@@ -117,6 +118,7 @@
 
 ## Deviations found
 
-One number was issued for this plan on 2026-11-25.
+One number was issued for this plan on 2026-11-25, and one more for its amendment the same night.
 
-- **D-9026 (2026-11-25)** — `browser-four-shards`: the browser leg runs as four shards, not three, with its file-time table refreshed from merge-queue run 45527962041 and `project-linking-card.browser.test.ts` divided into two files. At three shards the second took 916 s to 1,211 s in six queue runs and was cancelled twice at the 20-minute deadline with every test green. The deadline stays 20, as D-8167 ruled: the fix is balance and a shard. The table is still refreshed by hand, which is the residual.
+- **D-9026 (2026-11-25)** — `browser-four-shards`: the browser leg runs as four shards, not three, with its file-time table refreshed from merge-queue run 45527962041 and `project-linking-card.browser.test.ts` divided into two files. At three shards the second took 916 s to 1,211 s in six queue runs and was cancelled twice at the 20-minute deadline with every test green. For the heavy shard the fix is balance and a shard, as D-8167 ruled. The table is still refreshed by hand, which is the residual. Its deadline is D-9055's.
+- **D-9055 (2026-11-25)** — `browser-shard-deadline`: the `browser-pwa` job's deadline is 30 minutes, not 20. It overrules the last clause of D-8167's comment, "never a longer deadline", on a measurement that comment did not have: on 2026-11-25 the same shard's files ran at 1.25 to about 1.7 times their usual time by runner, and a green shard was cancelled for it. A green shard cancelled removes its entry and rebuilds every group behind it; a wedged one that runs to 30 costs ten runner-minutes more than at 20. The same stance as D-9014 takes for the server shards.

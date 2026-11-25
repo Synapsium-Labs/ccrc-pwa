@@ -1505,7 +1505,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and two machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and three machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1526,7 +1526,8 @@ refuses otherwise) and its tick report
 (`POST /api/continuity/quiz-status`, which the Shadow lanes card shows), the coordinator's Live on the quiz's baseline
 (`POST /api/continuity/quiz-baseline/live`, attributed and owned, W1a lanes only),
 the Overlord's inbox doors (`GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and
-`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence),
+`POST /api/overlord/messages/:id/acknowledge`, attributed, then behind the Overlord gate and its fence), the Overlord's
+history door (`POST /api/overlord/history`, a read whose search words ride the body, behind the same gate and fence),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
