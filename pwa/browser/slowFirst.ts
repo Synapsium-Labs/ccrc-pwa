@@ -38,11 +38,14 @@ export const SLOW_FIRST: readonly string[] = [
  *  (runs-widths, 246 s, among them, which had cost the median) and replaced every other figure. Refresh it from a
  *  newer such log when the leg's shards drift apart. */
 export const FILE_MS: Readonly<Record<string, number>> = {
+  'ask-inline.browser.test.ts': 524622,
   // Settings › Integrations (#3230) made it 22 cases over every width, skin and theme: 360,336 ms in queue run
   // 45175290557, and 869,850 ms in queue run 45527962041, the one file that took the second of three shards past its
-  // 20 minutes (D-9026).
-  'project-linking-card.browser.test.ts': 869850,
-  'ask-inline.browser.test.ts': 524622,
+  // 20 minutes (D-9026). Wave 1e divides it in two by its tests' own times in that run: these 12 cases summed 443,250 ms,
+  // its -wide sibling the other 10.
+  'project-linking-card.browser.test.ts': 443250,
+  // The other 10 of the 22 (D-9026): their own times in queue run 45527962041 summed 419,983 ms.
+  'project-linking-card-wide.browser.test.ts': 419983,
   'wheel-chain.browser.test.ts': 359131,
   'runs-widths.browser.test.ts': 302464,
   'frame-cost.browser.test.ts': 264200,
