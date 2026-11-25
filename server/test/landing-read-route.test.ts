@@ -281,6 +281,18 @@ describe('GET /api/landing: the binding', () => {
     expect((await bindingOf()).order).toMatchObject({ paused: false, head: null });
   });
 
+  it('order.waits names a head held behind a withdrawn target, by entry id and PR (5j-a, D-9047), and is absent otherwise', async () => {
+    db.prepare("INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, state, setBy, pinnedAt) VALUES (5, 'project-a', 50, ?, ?, 'withdrawn', 'operator', 1)")
+      .run('f'.repeat(40), 'f'.repeat(40));
+    seedEntry(db, { ...H, afterIds: [5] });
+    const held = (await bindingOf()).order;
+    expect(held).toMatchObject({ paused: false, head: null, waits: [{ entryId: 1, reason: 'withdrawn', on: [{ entryId: 5, pr: 50 }] }] });
+    db.prepare("UPDATE landing_entries SET state = 'landed' WHERE id = 5").run();
+    const met = (await bindingOf()).order;
+    expect(met).toMatchObject({ paused: false, head: { id: 1, pr: 7 } });
+    expect('waits' in met).toBe(false);
+  });
+
   it('?pr= still returns that PR\'s entry, while readiness and order are computed over the whole project', async () => {
     seedEntry(db, H); seedEntry(db, NEXT);
     const body = await bindingOf('?project=project-a&pr=12');

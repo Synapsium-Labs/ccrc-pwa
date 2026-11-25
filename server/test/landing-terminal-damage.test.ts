@@ -164,7 +164,9 @@ describe('a dependent head behind a damaged terminal target (R4)', () => {
   const idOf = (pr: number): number => landingFactsOf(coord, P).entries.find((e) => e.pr === pr)!.id;
   const orderHead = () => { const f = landingFactsOf(coord, P); const o = landingOrder(f.entries, CLEAR_FLAGS, undefined, f.stateWords); return o.paused ? 'paused' : o.head?.pr ?? null; };
 
-  for (const word of TERMINAL) for (const [label, damage] of R4_DAMAGE) {
+  // Wave 5j-a (D-9047), inverted: this loop ran over all three terminal words and expected H to be the ready head with one
+  // cue for each. Its `landed` and `closed` rows stay as they were; its five `withdrawn` rows now hold H (the loop below).
+  for (const word of ['landed', 'closed'] as const) for (const [label, damage] of R4_DAMAGE) {
     it(`raw ${word}, ${label}: H is the ready head, its cue queues once and dedupes, T's bytes are unchanged`, () => {
       rawRow(word, null);
       dependentHead(idOf(5));
@@ -180,6 +182,25 @@ describe('a dependent head behind a damaged terminal target (R4)', () => {
       expect(mails[0]).toMatchObject({ toId: 'creator-a', subject: expect.stringMatching(/^next-to-land:#7:/) });
       expect(apply()).toEqual({ kind: 'duplicate', holdChanged: false });
       expect(cueMails()).toHaveLength(1);
+      expect(rows('SELECT * FROM landing_entries WHERE pr = 5')).toEqual(before);
+    });
+  }
+
+  for (const [label, damage] of R4_DAMAGE) {
+    it(`raw withdrawn, ${label}: H is held behind T, waits names T, no binding is ready, no cue queues, T's bytes are unchanged (5j-a, D-9047)`, () => {
+      rawRow('withdrawn', null);
+      dependentHead(idOf(5));
+      damageT(damage);
+      const before = rows('SELECT * FROM landing_entries WHERE pr = 5');
+      const facts = landingFactsOf(coord, P);
+      expect(facts.entries.find((e) => e.pr === 5)!.state).toBe('unknown');
+      const o = landingOrder(facts.entries, CLEAR_FLAGS, undefined, facts.stateWords);
+      expect(orderHead()).toBeNull();
+      expect(o.waits).toEqual([{ entryId: idOf(7), reason: 'withdrawn', on: [{ entryId: idOf(5), pr: 5 }] }]);
+      expect(binding()).toMatchObject({ mode: 'held' });
+      expect(binding()).not.toMatchObject({ mode: 'ready' });
+      expect(apply()).not.toMatchObject({ kind: 'queued' });
+      expect(cueMails()).toHaveLength(0);
       expect(rows('SELECT * FROM landing_entries WHERE pr = 5')).toEqual(before);
     });
   }
