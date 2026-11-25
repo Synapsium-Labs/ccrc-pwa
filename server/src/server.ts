@@ -1346,7 +1346,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
         taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
         hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
       }),
       pools: poolsWire(
         poolsRead,
@@ -1816,7 +1816,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
           taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
           hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
-          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(), providerRetries: watcher?.currentProviderRetries(),
         })
         : null));
     }

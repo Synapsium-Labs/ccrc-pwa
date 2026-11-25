@@ -147,16 +147,19 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/presence.ts', hits: 1, stances: ['definition'],
     why: '`paneGone`, the pane predicate OA-C15 (a) keeps for sites that only word the pane: a sleeper\'s pane is gone, '
       + 'which is true, and the sites that must tell a sleep from a death read `presenceOf` or `hibernatedSince`' },
-  { source: 'dead-compare', file: 'pwa/src/session/sessionHeaderView.ts', hits: 4, stances: ['consults'],
+  { source: 'dead-compare', file: 'pwa/src/session/sessionHeaderView.ts', hits: 5, stances: ['consults'],
     why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
       + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
-      + 'calm dot instead, so "not running" never sits above "Waking…"' },
+      + 'calm dot instead, so "not running" never sits above "Waking…"; and a dead bucket says no provider retry' },
   { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 5, stances: ['consults', 'true-of-pane'],
     why: 'Forget session is offered only where `forgetOffered` says (presence.ts, D-8111, the rule the held-rows list '
       + 'consults too): never on the server\'s `asleep` or on a row `hibernatedSince` reads asleep, which offers Wake '
       + 'session (ccd forget refuses it, D-5423); the notes word '
       + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
       + 'wrapper notes speak of a live pane only' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/providerRetryWords.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the words of a provider retry: a row whose pane is gone (`paneGone`, D-7181) says none, and a sleeper\'s pane is gone, '
+      + 'and the ladder nudges no sleeper' },
   { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 2, stances: ['consults', 'true-of-pane'],
     why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
       + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp. The second hit is '

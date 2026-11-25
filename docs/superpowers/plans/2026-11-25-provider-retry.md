@@ -1,4 +1,4 @@
-# The provider-failure ladder: wave 1
+# The provider-failure ladder: waves 1, 2 and 3a
 
 Programme: sessions find a working lane by themselves. Wave 1 of it: a session whose turn ended on a provider error is told to
 carry on, by itself, until a turn runs; the operator hears once per outage.
@@ -9,7 +9,8 @@ The operator, 2026-11-25: sessions should naturally find a working lane. Nudge a
 error; in a later wave, move the session to another account by itself; say in words what is happening; one operator notice per
 outage; no coordinator is asked to mend a provider. No new settings. It ships armed.
 
-**Wave 1 only:** no account moves, no change to `ccd`, no console words on the wire. Those are later waves.
+**Wave 1:** no account moves, no change to `ccd`, no console words on the wire. Wave 2, below, is the words; account moves are a
+later wave.
 
 ## W0: what a failing provider looks like to the hook
 
@@ -75,6 +76,37 @@ A real Stop or a `clear` ends it. So does any turn: what is owed is `failAts` no
 Characterization: the moved arm was already pinned by `stall-session.test.ts`, `stall-bodies.test.ts`, `stall-sweep.test.ts`
 and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 
+## Wave 2: the console's words
+
+The ruling's "say in words what is happening". One optional wire field, words, and nothing else: no change to a nudge, a notice, the
+arming or `ccd`, and no setting.
+
+8. **The field** (`shared/provider-retry.ts#ProviderRetryWire`, L0; `FleetSession.providerRetry`, optional): `err`, `since`,
+   `attempts`, `nextAt`, `phase: 'retrying'`. One reader, `providerRetryOf`, for a revived row (`reviveFleetSession`) and for a live
+   frame, which is cast. A phase it does not know, and anything malformed, reads as absent. No `FLEET_PROTO` change.
+9. **Its one writer** (`providerRetry.ts#providerRetryWire`, L1), off the marker and the schedule the verdict nudges on
+   (`owedNudges`, read by both): present only while the ladder is armed, a retry is owed, and the session is one it would nudge or is
+   held by what a person can end. `providerRetryLane.ts` (L4) says it afresh each pass, so a session no pass could judge is absent,
+   and a stopped ladder clears it at once. `fleet.ts` puts it on the row unless the raw live word is `busy` now
+   (`providerRetryShown`): the pass judged up to a minute ago.
+10. **When no time is promised** (`nextAt` null): a dialog, a question, a usage limit, or a nudge queued and not typed (a person's
+    draft, or any other gate of the mail lane).
+11. **The words** (`pwa/src/fleet/providerRetryWords.ts`, L1), and whose place they take:
+
+| State | Words |
+|---|---|
+| due later | `Provider overloaded, retrying 14:52` / `Provider error, retrying 14:52` (the viewer's time; a date when not today) |
+| past due | `Provider overloaded, retrying now` / `Provider error, retrying now` |
+| held | `Provider overloaded, retry waiting` / `Provider error, retry waiting` |
+
+| Owner extended | What it says in their place |
+|---|---|
+| `sessionFacts.ts#sessionFacts`, the row's status word | idle, done, working, waiting on workers, and the `stalled` marker (context pressure is still said) |
+| `sessionFacts.ts#headerStatusWord`, `sessionHeaderView.ts`, the session screen's status line | the same; a session that waits on you reads `waiting on you · Provider overloaded, retry waiting` |
+| `runWords.ts#workerSeenNote`, the run row and the run page | `turn failed` and `quiet` |
+
+Hibernated, dead, exited and archived rows, and a question a coordinator holds, keep their own word.
+
 ## Deviations found
 
 - **D-9085** — the arm that reads a provider failure was dark by design (D-3605: a wave-2 arm is shadow
@@ -98,6 +130,17 @@ and `stall-vocabulary.test.ts`; the move commit changes only their imports.
 - **D-9092** — the outage notice shares the ladder's arming, so a stopped ladder raises none. One
   session that has got past none of its failures for an hour raises it too (the orchestrator's review): its coordinator is not
   told and the quiet ladder holds, so nobody else would hear of it.
+- **D-9100** — the field is absent, never null, when none is known, and it is not kept from one pass to the next: a
+  session whose marker, live word or mail could not be read this pass says nothing, where the outage count keeps its last reading.
+  Words are a promise, so an unread session makes none.
+- **D-9101** — wave 1's `busy` hold is absence, not "waiting": a running turn is the retry. The pass is a minute
+  apart, so the assembly takes the field off a row whose raw live word is `busy` now (`shell` is at rest and keeps it).
+- **D-9102** — a draft is read as "queued and not typed at a later pass", not as the delivery's `draft-present`
+  reason, which the watch's own mail read does not carry. Whatever gate holds a nudge, "retry waiting" is true of it.
+- **D-9103** — a row that waits on the operator keeps `waiting`: the operator's act is the one thing that
+  moves it. Its header says both, and never a time.
+- **D-9104** — a programme box's "no move 2h" and the face's mood keep reading as before: they speak of a
+  programme's movement, not of a failed turn.
 
 ## Wave 3a: the lane-failing mark, and the gates that read it
 
