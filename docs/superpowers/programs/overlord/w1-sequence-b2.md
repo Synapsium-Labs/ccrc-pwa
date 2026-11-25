@@ -143,7 +143,10 @@ With the `invariants` row at its seed, `shadow`:
 
 ## Known limits
 
-- I5 reads unmeasured until the kept designation line's read is wired (the other sequence run's store).
+- I5 reads unmeasured until the kept designation line's read is wired (the other sequence run's store). It is wired in
+  this pull request, at its later merge of main (call 1240). If the order ever changed and this tip reached a box first,
+  the box would show I5's row as `unmeasured` with its reason (`the kept designation line has no reader in this build`),
+  never `holds` and never `violated`: no finding row, no log line past the first verdict word, no latch and no item.
 - A finding over a line the retention lane prunes resolves on the next pass (the subject is no longer listed), though it
   was not measured holding.
 - The gather re-reads the whole window each pass the head moves; an incremental walk from a cursor is the obvious next
