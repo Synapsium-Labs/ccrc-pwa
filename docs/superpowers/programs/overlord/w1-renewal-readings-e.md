@@ -120,16 +120,26 @@ By hand, each restored from the commit after its run:
   session marks `@overlord` after its programmes, so one rule serves the Overlord and a coordinator, and the store's
   `putOperatorMark` stays the one writer. The server's main route file took three added lines, by a packet its other open
   holder, Authority B, consented to on main `94bbc42af9`.
-- **The real pass.** The pass cases drive a coordinator, whose quiet already reads its programmes' marks. The Overlord's
-  quiet reads `@overlord` only once renewal readings F lands (#3352, not merged at this round's base), so its pass case is
-  owed by whichever of E and F lands second; the route cases above already pin that both paths write `@overlord`.
-- **The base.** #3352 had not merged by 03:00Z, so main was merged as it stood, once: `4e17ac96ee`. Its one conflict, in
-  `server/src/coord/ports.ts`, kept both sides' members (`pruneSequenceThrough` and this PR's two).
+- **The real pass.** For each path, a coordinator and the Overlord (no reader running) the operator typed to through it are
+  driven through `generationsPass` with the real `softRenewalMay`: the coordinator waits `no-break`, the Overlord waits
+  `unmeasured` (its quiet reads a measured 0, and its place-hidden input is still the lane's `W1`). Controls with no input
+  start, the Overlord's because its quiet reads 30 minutes, no activity: the break the mark keeps shut.
+- **The bases, two merges.** #3352 had not merged by 03:00Z, so main was merged as it stood: `4e17ac96ee`, its one conflict in
+  `server/src/coord/ports.ts` kept both sides' members (`pruneSequenceThrough` and this PR's two). #3352 then merged, and by
+  the coordinator's ruling in call 1054 main was merged once more at `1ec2db8ec3`, which holds it: the one conflict, in the
+  wiring, kept both sides as written (F's `turns` field, then this PR's two readings).
 - **F3, F4.** "What a merge arms" above gains the soft permit; "no reason is lost" is narrowed to what is true; the drift set's
   mutants are R1 to R5.
 
 Departures of this round, by slug:
 
+- **`the-keying-adds-overlord-for-the-designated-session`**: `markProgrammesOf` answered only the programmes of a session's
+  runs, and the Overlord's quiet reads one key, `@overlord` (renewal readings F, `generationsLane.ts#softInputsOf`), which only
+  the nudge's transaction wrote. The drawer and the submit route type into the pane, so through the keying as it was they
+  would mark the designated session's programmes (usually none) and leave its quiet at no activity, the break open. So the
+  keying adds `@overlord` after the programmes when the designation reads this session as the bound one (`roleOf.ts`'s
+  `designationFactOf` answering `live`). Without it (H9) the keying case, the writer's designation case, and both
+  designated-session route cases go red, and through them the Overlord's real-pass cases.
 - **`drawer-marks-once-per-two-seconds`**: the drawer sends a frame per keystroke, so it marks through a second instance of
   the drawer's existing per-session throttle (`interruptlog.ts#DrawerInterruptThrottle`, 2 s). The mark's windows are 20 and
   30 minutes, so the mark is never more than 2 s behind the input.
@@ -146,6 +156,7 @@ Guards of this round, each measured red then green:
 | H6: the two reads taken off the store, as at `b2f8994ba2` | over a real coordination store, both readings measure and nothing is logged |
 | H7: the drawer's mark call absent (the source before the round) | the drawer marks for the designated session, for a coordinator, and the real pass's drawer case |
 | H8: the submit route's mark call absent (the same) | the submit marks for the designated session, for a coordinator, and the real pass's submit case |
+| H7 and H8 together, after the second merge | the four real-pass cases: a coordinator and the Overlord, through each path |
 | H9: the keying's `@overlord` arm dropped | the keying, the writer's designation read, and both designated-session route cases |
 
 Known limits, measured by reading, not built for:

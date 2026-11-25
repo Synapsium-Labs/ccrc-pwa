@@ -164,13 +164,14 @@ describe('the submit route writes the mark', () => {
 
 // ── Through the real pass: the operator who typed there keeps the permit waiting ───────────────────────────────────────
 
-/** The session's generation (a coordinator of prog-a), at rest in shadow past its least age, a soft due every pass and a free
- *  hold table, the permit the real `softRenewalMay`; on the store the server wrote the mark into. */
-function passOver(s: CoordStore, t: FakeTime): { pass(): ReturnType<typeof generationsPass>; soft: SoftInputs[] } {
+/** The session's generation (a coordinator of prog-a, or the Overlord with no reader running), at rest in shadow past its least
+ *  age, a soft due every pass and a free hold table, the permit the real `softRenewalMay`; on the store the server wrote the
+ *  mark into. */
+function passOver(s: CoordStore, t: FakeTime, role: 'coordinator' | 'overlord' = 'coordinator'): { pass(): ReturnType<typeof generationsPass>; soft: SoftInputs[] } {
   const st = s.insertStart({ sessionId: ID, reportId: 'r-1', uuid: U1, source: 'startup', model: 'claude-opus-5-5', rowIncarnation: 'inc',
     reportedAt: t.ports.clock.wall(), receivedAt: t.ports.clock.wall() });
   if (!st.ok) throw new Error('start');
-  const w = s.mintGeneration({ identity: ID, sessionId: ID, role: 'coordinator', term: 1, rowIncarnation: 'inc', startId: st.id,
+  const w = s.mintGeneration({ identity: role === 'overlord' ? 'overlord' : ID, sessionId: ID, role, term: 1, rowIncarnation: 'inc', startId: st.id,
     startReportedAt: t.ports.clock.wall(), resumed: false, model: 'claude-opus-5-5', lane: 'lane-a', host: null, outcome: 'woken',
     mono: 1_000, proc: 'p1', now: t.ports.clock.wall() }, null, false);
   if (!w.ok) throw new Error('mint');
@@ -179,7 +180,8 @@ function passOver(s: CoordStore, t: FakeTime): { pass(): ReturnType<typeof gener
   s.advanceCursor({ lane: 'generations', from: 0, to: st.id });
   const registry: RegistryFacts[] = [{ id: ID, uuid: U1, lane: 'lane-a', child: { kind: 'none' } }];
   const free: GenReadings = { usage: { kind: 'absent' }, compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
-    behind: { kind: 'measured', value: false }, drain: { held: false } };
+    behind: { kind: 'measured', value: false }, drain: { held: false },
+    ...(role === 'overlord' ? { soft: { readersRunning: { kind: 'measured' as const, value: 0 } } } : {}) };
   const soft: SoftInputs[] = [];
   const pass = () => {
     const deps: GenerationsDeps = { coord: s, clock: t.ports.clock, entropy: t.ports.entropy, proc: 'p1', log: () => {}, retried: new Set(),
@@ -208,6 +210,32 @@ describe('the real pass: input through either path within the break window keeps
       expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
     });
   }
+
+  for (const [name, act] of [
+    ['the drawer', async (r: Awaited<ReturnType<typeof rig>>) => drawerInput(r, 'h')],
+    ['the submit route', async (r: Awaited<ReturnType<typeof rig>>) => { expect((await submit(r.app)).statusCode).toBe(200); }],
+  ] as const) {
+    it(`the Overlord the operator typed to through ${name}, no reader running, keeps the permit waiting`, async () => {
+      const r = await rig();
+      designate(r.coord);
+      await act(r);
+      await vi.waitFor(() => expect(marks(r.coord)).toEqual([{ programme: OVERLORD_OPERATOR_MARK, at: r.time.ports.clock.wall() }]), wait);
+      const f = passOver(r.coord, fakeTime({ wallMs: r.time.ports.clock.wall(), monoMs: 1_000 }), 'overlord');
+      const res = f.pass();
+      expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 0 });
+      expect(f.soft.at(-1)?.readersRunning).toEqual({ kind: 'measured', value: 0 });
+      // Not a break: the quiet is measured 0, and the place-hidden input is still the lane's W1, so the permit waits `unmeasured`.
+      expect(res.waits).toEqual({ unmeasured: 1 });
+    });
+  }
+
+  it('control: with no input the Overlord\'s permit, no reader running, starts (the break the mark keeps shut)', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-mark-paths-ovl-'), '.ccrc', 'coord.db')));
+    designate(s);
+    const f = passOver(s, fakeTime({ wallMs: FAKE_T0, monoMs: 1_000 }), 'overlord');
+    expect(f.pass().waits).toEqual({});
+    expect(f.soft.at(-1)?.operatorQuietObservedMs).toEqual({ kind: 'measured', value: 30 * 60_000 });
+  });
 
   it('control: with no input the same coordinator\'s permit starts', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-mark-paths-ctl-'), '.ccrc', 'coord.db')));
