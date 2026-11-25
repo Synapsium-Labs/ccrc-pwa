@@ -202,6 +202,25 @@ line and its card hold, and the bound session's role rows on the operator's page
 so they also wait on door process B's witness (502 `unmeasured` until the fleet box advertises `door-witness-v1`); its list
 works once designated.
 
+## Fix round 1: what the pull request's fast run caught
+
+The first CI on the pushed tip (42fd79d85b) failed five checks in four server shards. Each came from this change and each
+was a file the local runs had not included:
+
+- The run/session census counted `termOf`'s designation comparison in `continuity/routes.ts` as a binding decided by
+  hand. It reads the designation row's own columns and no run, so it is named in `NOT_BINDING_SITES` with that reason,
+  as the envelope's designation comparison already is.
+- Two migration tests from main still held 127 as the last entry: the programme lifecycle's (now 127 followed by this
+  change's 128) and the limit samples' replay (now undoing 128 as well, from `COORD_SCHEMA_VERSION - 3`).
+- The mail prompt forms fixture lacked the timer line, a new row of the fixed-line table. It now carries the line with
+  and without a count, rendered by `renderTimerFiredLine`, and the console's mail-rows suite reads both.
+- `mailPass` grew to 151 code lines against its cap of 150. The card hold now shares the fixed-line `if` with the
+  ack-once check, in the same order, so the cap holds. A hand mutant that deletes the hold turns six cases of the lane
+  suite red.
+
+The full run dispatched on that tip ran no tests: its test selection failed to download an artifact (HTTP 503, egress
+over the account limit), so `test (server)` reported failure.
+
 ## Known limits
 
 - `firedTimersOf` carries no row cap: it is bounded by the term and the window, and the purge at 90 days.
