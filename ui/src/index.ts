@@ -93,6 +93,7 @@ export { AttachTray, type AttachTrayProps, type StagedImage } from './components
 export { MailCard, mailLineLabel, runLabel, type MailCardFold } from './components/mail-card';
 export { MailPromptLine, MailPromptText, type MailPromptLineProps } from './components/mail-prompt-line';
 export { TaskCard } from './components/task-card';
+export { OlderEdge, OlderGap, OLDER_WORDS, OLDER_GAP_WORDS, type OlderEdgeState } from './components/older-edge';
 export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
 export {
   ToolCard,

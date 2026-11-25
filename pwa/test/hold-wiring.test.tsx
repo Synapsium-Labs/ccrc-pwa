@@ -17,6 +17,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ChatEvent } from '../../shared/api';
 import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
+import { NO_PAGING, type OlderPaging } from '../src/session/olderPages';
 
 const lay = vi.hoisted(() => ({
   scroller: null as HTMLElement | null,
@@ -25,6 +26,8 @@ const lay = vi.hoisted(() => ({
   owed: false,
   /** Row heights by row key; a row not named is 100px. */
   heights: new Map<string, number>(),
+  /** Whether a write to the scroller lands on a whole pixel, as a browser rounds a position to its device pixels. */
+  round: false,
   props: null as Record<string, unknown> | null,
 }));
 
@@ -39,18 +42,23 @@ vi.mock('react-virtuoso', async () => {
           Object.defineProperty(el, 'scrollTop', {
             configurable: true,
             get: () => lay.top,
-            set: (v: number) => { if (v !== lay.top) { lay.top = v; lay.owed = true; } },
+            set: (v: number) => { const at = lay.round ? Math.round(v) : v; if (at !== lay.top) { lay.top = at; lay.owed = true; } },
           });
           Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 });
+          // Virtuoso moves its scroller only through these two (fix round 1, F1: the list notes where each left it).
+          el.scrollTo = ((o: ScrollToOptions) => { el.scrollTop = o.top ?? el.scrollTop; }) as HTMLElement['scrollTo'];
+          el.scrollBy = ((o: ScrollToOptions) => { el.scrollTop += o.top ?? 0; }) as HTMLElement['scrollBy'];
         }
         lay.scroller = el;
         (lay.props!.scrollerRef as (el: HTMLElement | null) => void)(el);
       }, []);
       const count = props.totalCount as number;
+      // Virtuoso hands its callbacks its own index, which counts from `firstItemIndex` (wave 175).
+      const first = (props.firstItemIndex as number | undefined) ?? 0;
       const key = props.computeItemKey as (i: number) => string | number;
       const content = props.itemContent as (i: number) => React.ReactNode;
       const rows: React.ReactNode[] = [];
-      for (let i = 0; i < count; i += 1) rows.push(React.createElement('div', { key: key(i), 'data-index': i }, content(i)));
+      for (let i = 0; i < count; i += 1) rows.push(React.createElement('div', { key: key(first + i), 'data-index': i }, content(first + i)));
       return React.createElement('div', { ref: own, 'data-testid': 'scroller' }, rows);
     }),
   };
@@ -71,6 +79,7 @@ beforeEach(() => {
   frames.length = 0;
   lay.top = 0;
   lay.owed = false;
+  lay.round = false;
   lay.heights.clear();
   vi.spyOn(performance, 'now').mockImplementation(() => clock);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
@@ -131,11 +140,17 @@ function session(turns = 30): ChatEvent[] {
   }
   return events;
 }
-const view = (events: ChatEvent[]) => (
+const view = (events: ChatEvent[], older?: OlderPaging) => (
   <SkinSetProvider set={REFINED_SET}>
-    <ChatList id="s" events={events} pending={[]} busy={false} onRetry={() => {}} onDiscard={() => {}} />
+    <ChatList id="s" events={events} pending={[]} busy={false} onRetry={() => {}} onDiscard={() => {}} older={older} onLoadOlder={() => {}} />
   </SkinSetProvider>
 );
+/** Where the row `key` stands from the scroller's top, by the height model. */
+const topOfRow = (key: string): number => {
+  const row = rowsIn(lay.scroller!).find((r) => r.dataset.rowKey === key);
+  expect(row, `no row ${key}`).toBeDefined();
+  return row!.getBoundingClientRect().top;
+};
 
 /** Mount, and leave a reader resting 1050px down a 100px-per-row list (the row at index 10 crossing the top of the view,
  *  50px of it above), the list's first height reported long ago. */
@@ -224,5 +239,175 @@ describe('the list\'s hold of a reader above the foot (review 3607 F1, F7)', () 
     resize(2, 50);
     frame();
     expect(lay.top, 'a tap\'s change was held').toBe(1050);
+  });
+});
+
+describe('carried from the tool-stretch reviews (desktop polish wave 175, item 6)', () => {
+  it('a scroll that moved the scroller in the frame before its event (a smooth scroll\'s first step) is not written over', () => {
+    resting();
+    resize(2, 50);
+    lay.top += 30; // the position moved; its scroll event comes a frame later
+    clock += 8;
+    frame();
+    expect(lay.top, 'the hold wrote over a scroll that had begun').toBe(1080);
+  });
+
+  it('the scroll event after the hold\'s write is the reader\'s when they moved the scroller since: the list is moving', () => {
+    resting();
+    resize(2, 50);
+    frame();
+    expect(lay.top).toBe(1100);
+    lay.top += 40; // the reader scrolls before the event the hold's write owes is dispatched
+    frame();
+    clock += 50;
+    resize(3, 25); // not the reader's 40, so a hold would show
+    frame();
+    expect(lay.top, 'a reader\'s scroll was taken for the hold\'s own write, and the list was held while moving').toBe(1140);
+  });
+
+  it('a position the browser rounds is put back with the next change, never taken as the new place to hold', () => {
+    lay.round = true;
+    resting();
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    for (let n = 0; n < 6; n += 1) {
+      resize(2, 50.6);
+      frame();
+      frame(); // the event the write owes
+      clock += 1000;
+    }
+    expect(Math.abs(topOfRow(key) - was), 'rounded writes drifted the reader').toBeLessThan(0.75);
+  });
+});
+
+describe('rows put before the first: an older page (desktop polish wave 175)', () => {
+  /** Virtuoso settles a prepend first; the list corrects once the scroller has been quiet for its frames. */
+  const settle = (): void => { for (let i = 0; i < 5; i += 1) frame(); };
+
+  const paged = (n: number): ChatEvent[] => Array.from({ length: n }, (_, i) => ({
+    kind: 'user' as const, uuid: `old${i}`, ts: TS, text: `Older ${i}.`,
+  }));
+
+  it('keeps the row the reader is looking at in place when a page lands above them, by its key', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    settle();
+    expect(topOfRow(key), 'the row the reader was reading moved when the page landed').toBeCloseTo(was, 5);
+  });
+
+  it('holds the next row down when the page changes the row at the join (the first time divider goes)', () => {
+    const events = session();
+    const { rerender } = render(view(events));
+    lay.scroller!.scrollTop = 10;
+    frame();
+    reports(total());
+    frame();
+    clock += 1000;
+    const keys = rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!);
+    expect(keys[0]!.startsWith('div-'), 'the list opened without its first time divider').toBe(true);
+    const second = keys[1]!;
+    const was = topOfRow(second);
+    rerender(view([...paged(5), ...events], { ...NO_PAGING, edge: 'more', rows: 5 }));
+    expect(rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!), 'the join kept its divider').not.toContain(keys[0]);
+    reports(total());
+    settle();
+    expect(topOfRow(second), 'the row under the join moved when the page landed').toBeCloseTo(was, 5);
+  });
+
+  it('a reader who moves while the page settles is left where they moved, never set back', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    lay.scroller!.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+    lay.scroller!.scrollTop = 900;
+    settle();
+    expect(lay.top, 'the settle set back a reader who moved').toBe(900);
+  });
+
+  it('fix round 1, F1: a list that moves with no input event while the page settles (a fling, a thumb dragged) is not set back', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // The finger came down before the page (or none did): only the scroller says the list moved.
+    lay.scroller!.scrollTop = 900;
+    settle();
+    expect(lay.top, 'the settle set back movement no input event announced').toBe(900);
+  });
+
+  it('fix round 1, F1: the list\'s own write while the page settles is not the reader moving: the row is held', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // Virtuoso's own compensation, from its estimates: 300px of the 1,200 the page added.
+    act(() => { lay.scroller!.scrollBy({ top: 300 }); });
+    settle();
+    expect(topOfRow(key), 'the list\'s own write was taken for the reader, and the row was not held').toBeCloseTo(was, 5);
+  });
+
+  it('fix round 2, A3: the list\'s write through scrollTo is its own too: the row is held', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    act(() => { lay.scroller!.scrollTo({ top: lay.top + 300 }); });
+    settle();
+    expect(topOfRow(key), 'a scrollTo write was taken for the reader, and the row was not held').toBeCloseTo(was, 5);
+  });
+
+  it('fix round 2, A3: a move after the list\'s own write, with no input event, is the reader\'s: left where it went', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    // Virtuoso writes (so the list knows where it left the scroller), then the scroller moves on, by no write of its own and
+    // with no input event: a fling under way. Both before the next scroll event.
+    act(() => { lay.scroller!.scrollBy({ top: 300 }); });
+    const went = lay.top + 200;
+    lay.scroller!.scrollTop = went;
+    settle();
+    expect(lay.top, 'the settle set back a move made after the list\'s own write').toBe(went);
+  });
+
+  it('fix round 2, A2: a scroll whose frame comes after a page has landed reads no anchor: the settle holds the reader\'s row', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    // The reader moves up 50px; the scroll event queues its read of the anchor for the next frame.
+    lay.scroller!.scrollTop = 1000;
+    lay.owed = false;
+    act(() => { lay.scroller!.dispatchEvent(new Event('scroll')); });
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    // Before that frame, a page lands: the rows at the top of the view are the page's until virtuoso moves the scroller.
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    settle();
+    expect(topOfRow(key), 'the anchor was read off the page\'s rows, and the reader\'s row was not held').toBeCloseTo(was, 5);
+  });
+
+  it('fix round 2, A2: a height change whose frame comes after a page has landed writes nothing: the settle holds once', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    // A row above the reader grows; its hold is queued for the next frame. Before that frame, a page lands.
+    resize(2, 40);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    const at = lay.top;
+    frame(); // the height change's frame: the page is settling, so it writes nothing
+    expect(lay.top, 'the height change\'s frame wrote the scroller while the page settled').toBe(at);
+    settle();
+    expect(topOfRow(key), 'the row the reader was reading moved').toBeCloseTo(was, 5);
   });
 });

@@ -19,9 +19,12 @@
 //    scroll keys wherever focus is, and virtuoso's own corrections are all the list moving, with no input event needed.
 //    A hold skipped because the list was moving is right: writing the scroller then would end a smooth scroll and set
 //    the reader back by their own movement. And never for a change that came with an item added or removed at either end
-//    of the list: appends are the foot follow's, and items added at the top belong to the older-history work, which owns
-//    that anchor. One change is corrected once: the list compares a frame later, after any correction of virtuoso's or
-//    the browser's own, and puts nothing back when the list moved in between (`holdShift`'s `moved`);
+//    of the list, but one: appends are the foot follow's. ROWS PREPENDED AT THE TOP (an older page, desktop polish wave
+//    175) ARE HELD BY THIS SAME HOLD: the list shifts virtuoso's first index by the prepend, measured by a row's KEY
+//    (`prependShift`), so virtuoso keeps that row in place as well as its size estimates allow, and the hold then puts the
+//    row crossing the top of the view back exactly, by its key. One mechanism, so the two never write the scroller in one
+//    frame. One change is corrected once: the list compares a frame later, after any correction of virtuoso's or the
+//    browser's own, and puts nothing back when the list moved in between (`holdShift`'s `moved`);
 //  - `none`: the reader caused the change by opening or closing a row, a run group or a card, so nothing moves: the
 //    header they tapped stays where it was, and what opened grows downward under it, as every disclosure did before the
 //    fold. A change within `TAP_SETTLE_MS` of the reader's last tap on a disclosure in the list is theirs.
@@ -56,6 +59,8 @@ export interface HeightChange {
   readonly sinceMove: number | null;
   /** An item was added or removed at either end of the list since the last change. */
   readonly newItem: boolean;
+  /** The change came with rows put before the first one (an older page): the hold keeps the reader's row in place. */
+  readonly prepended: boolean;
 }
 
 export type HeightMove = 'foot' | 'hold' | 'none';
@@ -64,7 +69,8 @@ export function heightMove(c: HeightChange): HeightMove {
   if (c.before === null) return 'none';
   if (c.sinceTap !== null && c.sinceTap < TAP_SETTLE_MS) return 'none';
   if (c.pinned && c.before - c.scrollTop - c.clientHeight <= c.band + 1) return 'foot';
-  if (c.newItem || (c.sinceMove !== null && c.sinceMove < MOVE_SETTLE_MS)) return 'none';
+  if (c.sinceMove !== null && c.sinceMove < MOVE_SETTLE_MS) return 'none';
+  if (c.newItem && !c.prepended) return 'none';
   return 'hold';
 }
 
@@ -75,4 +81,49 @@ export function holdShift(was: number, now: number, moved: boolean): number {
   if (moved) return 0;
   const d = now - was;
   return Math.abs(d) < 1 ? 0 : d;
+}
+
+/** How far a row's index moved between two lists of row keys, measured by a row both carry (desktop polish wave 175): the
+ *  row `preferred` names when it survives, else the first row after it in `before` that survives, else the first that
+ *  does. Virtuoso's first index moves by this so that row keeps its place. 0 when the first row is the same (nothing was
+ *  put before it or taken from before it) or no row survives (a new list: a backlog onto another file). By key, never by
+ *  counting rows added: at the join a time divider can go and a tool stretch can take the page's calls, so the count of
+ *  rows added is not how far the rows below the join moved. Negative when rows were taken from the top. */
+export function prependShift(before: readonly string[], after: readonly string[], preferred: string | null): number {
+  if (before.length === 0 || after.length === 0 || before[0] === after[0]) return 0;
+  const at = new Map<string, number>();
+  after.forEach((k, i) => { if (!at.has(k)) at.set(k, i); });
+  const from = preferred === null ? 0 : Math.max(0, before.indexOf(preferred));
+  for (const i of [...range(from, before.length), ...range(0, from)]) {
+    const j = at.get(before[i]!);
+    if (j !== undefined) return j - i;
+  }
+  return 0;
+}
+
+function range(from: number, to: number): number[] {
+  return Array.from({ length: Math.max(0, to - from) }, (_, i) => from + i);
+}
+
+/** What the list does when virtuoso says the reader is no longer at the foot (desktop polish wave 175, carried item 6a).
+ *  ONE OWNER OF "STAY AT THE FOOT": virtuoso's own follow is off (it armed a 100ms window on every render that followed a
+ *  reader's tap to the end, measured throwing a tapped header out of view in 13 of 20 taps), so the list keeps a reader
+ *  at the foot itself, here and in `heightMove`'s `foot`. The foot left the reader, not the reader the foot, unless they
+ *  moved the scroller up from where the foot last stood, or tapped a disclosure: then they `leave` it. Otherwise the list
+ *  grew under them, or the view shrank (a phone keyboard opening), and they are taken back (`foot`). While the column
+ *  settles (opening, a width change, a skin change) a pinned reader is taken back whatever moved. */
+export interface FootLeft {
+  /** The column is still settling (`Column.settling`). */
+  readonly settling: boolean;
+  /** The scroller stands above where it last stood at the foot, by a pixel or more. */
+  readonly movedUp: boolean;
+  /** Milliseconds since the reader last opened or closed a disclosure in the list; null if they never have. */
+  readonly sinceTap: number | null;
+}
+
+export function footLeft(c: FootLeft): 'foot' | 'leave' {
+  if (c.settling) return 'foot';
+  if (c.movedUp) return 'leave';
+  if (c.sinceTap !== null && c.sinceTap < TAP_SETTLE_MS) return 'leave';
+  return 'foot';
 }

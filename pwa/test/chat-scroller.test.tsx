@@ -20,7 +20,7 @@ interface Captured {
   totalCount: number;
   itemContent: (i: number) => unknown;
   computeItemKey: (i: number) => string | number;
-  followOutput: (atBottom: boolean) => 'smooth' | false;
+  followOutput: false | ((atBottom: boolean) => 'smooth' | false);
   atBottomStateChange: (atBottom: boolean) => void;
   initialTopMostItemIndex: number | { index: 'LAST'; align: 'end' };
   alignToBottom: boolean;
@@ -79,14 +79,13 @@ const LAST = { index: 'LAST', align: 'end' };
 const readerScrolls = (): void => { fireEvent.wheel(screen.getByTestId('virtuoso')); };
 
 describe('what ChatList tells the scroller', () => {
-  it('follows new output ONLY while the reader is at the bottom', () => {
-    // `'smooth'` scrolls to the newest line; `false` leaves the view alone.
-    // A list that followed unconditionally would yank a reader out of the
-    // scrollback every time the session spoke — which is the one thing a
-    // transcript must never do.
+  it('turns the scroller\'s own follow off: the chat list keeps a reader at the foot itself', () => {
+    // Desktop polish wave 175, carried item 6a (the coordinator's ruling A): virtuoso's follow armed a 100ms window on
+    // every render in which a reader's tap was followed to the end. The list keeps a reader at the foot itself
+    // (`footFollow.ts`: `heightMove`'s foot and `footLeft`), and never yanks a reader in the scrollback: pinned in
+    // `foot-follow.test.ts` and, with the real list, `browser/chat-foot.browser.test.ts`.
     const p = mount(THREE);
-    expect(p.followOutput(true)).toBe('smooth');
-    expect(p.followOutput(false), 'the reader was yanked back to the bottom').toBe(false);
+    expect(p.followOutput).toBe(false);
   });
 
   it('opens on the LAST item, and keeps the list bottom-aligned', () => {
