@@ -553,3 +553,47 @@ describe('docs-folder registry has one writer (X2 P2.1)', () => {
     }
   });
 });
+
+
+// X2 P2.4: the paths door is the ONE door whose answer carries a folder's absolute path, so its reach is held to one chain:
+// `docsApi.folderPaths` is the only builder of its URL (shared/docs.ts); `pwa/src/lib/api.ts` is the only file that names
+// the builder; and the loader method it fills is read, in pwa/src, by `DocsFoldersSection.tsx` alone. No Docs page, the
+// index included, reads it, so no page can draw a path. Read as comment-stripped text (`stallCodeText`). APPENDED, for the
+// citation audit's reason above.
+describe('docs-ring: only docsApi builds the folder paths URL, only pwa/src/lib/api.ts calls it, and only DocsFoldersSection.tsx calls that method (X2 P2.4)', () => {
+  const BUILDER = /\bfolderPaths\b/;
+  /** The loader method, in any access spelling: `x.paths(`, `x.paths;`, `x?.paths`, `x['paths']`, a destructured `paths`. */
+  const METHOD = /\.paths\b|\[\s*['"`]paths['"`]\s*\]|\{[^}]*\bpaths\b[^}]*\}\s*=/;
+  /** A file that can hold a folder loader at all: it names the loaders' type, the docs client or the folder module. (A bare
+   *  `.paths` of another module's own, `module.paths` or a diff's, is none of this door's.) */
+  const FOLDER_LOADER = /\bDocsFolderLoaders\b|\bapi\.docs\b|\bfolderPage\b/;
+  const readsMethod = (code: string): boolean => METHOD.test(code) && FOLDER_LOADER.test(code);
+  /** The URL's own tail spelled in the PWA: a second builder of it. */
+  const URL_TAIL = /['"`]\/paths['"`]|docs-folders\/paths/;
+  const under = (prefix: string): string[] => ALL.filter((f) => rel(f).startsWith(prefix));
+
+  it('docsApi builds the paths URL once, and pwa/src/lib/api.ts is the one file that names the builder', () => {
+    expect(ALL.filter((f) => BUILDER.test(stallCode(f))).map(rel).sort()).toEqual(['pwa/src/lib/api.ts', 'shared/docs.ts']);
+    expect(under('pwa/src').filter((f) => URL_TAIL.test(stallCode(f))).map(rel), 'no second builder in the PWA').toEqual([]);
+  });
+
+  it('the loader method is read, in pwa/src, by DocsFoldersSection.tsx alone', () => {
+    expect(under('pwa/src').filter((f) => readsMethod(stallCode(f))).map(rel)).toEqual(['pwa/src/screens/settings/DocsFoldersSection.tsx']);
+  });
+
+  it('CONTROL: each spelling of a second caller or a second builder is seen; prose and the labels read are not', () => {
+    const loaderFile = (line: string): string => `import type { DocsFolderLoaders } from './folderPage';\n${line}`;
+    for (const bad of ['await folders.paths();', 'const p = folders.paths;', 'x?.paths()', "folders['paths']()", 'const { paths } = folders;']) {
+      expect(readsMethod(stallCodeText(loaderFile(bad))), bad).toBe(true);
+    }
+    for (const fine of ['await folders.labels();', '// folders.paths() in a comment', 'const dirs = [paths];']) {
+      expect(readsMethod(stallCodeText(loaderFile(fine))), fine).toBe(false);
+    }
+    expect(readsMethod(stallCodeText('const p = module.paths;')), 'another module\'s own .paths is not this door').toBe(false);
+    for (const bad of ["fetch('/paths')", 'fetch(`/api/docs-folders/paths`)']) {
+      expect(URL_TAIL.test(stallCodeText(bad)), bad).toBe(true);
+    }
+    expect(BUILDER.test(stallCodeText('docsApi.folderPaths()'))).toBe(true);
+    expect(BUILDER.test(stallCodeText('// docsApi.folderPaths() in prose'))).toBe(false);
+  });
+});

@@ -1409,13 +1409,23 @@ export type DocsPageLocation =
       /** The version view's commit (rich-docs spec G6); `null` has one meaning, the latest at `ref`. */
       at: string | null;
       view: 'effective' | 'committed'; frame: 'inline' | 'full' };
-export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'
+/** An outside folder's page (X2 P2.4, spec 4.1): `/docs/~<label>`, `/docs/~<label>/<section>`, `/docs/~<label>/<section>/<path>`.
+ *  A SEPARATE union beside `DocsPageLocation`, never a kind of it: every project page carries a `project` and a `ref`, a folder
+ *  page has neither (a folder is no repository, so nothing names a ref), and `DocsHead`, `share.ts` and the project views narrow
+ *  `DocsPageLocation` by `kind !== 'index'` and then read `page.project`. A folder page takes no query key at all: `ref`, `at`,
+ *  `view` and `frame` are the project page's, and are refused here as `unknown-param`. */
+export type DocsFolderLocation =
+  | { kind: 'folder'; label: string }
+  | { kind: 'folder-section'; label: string; section: DocSectionSlug }
+  | { kind: 'folder-path'; label: string; section: DocSectionSlug; path: string; dirSlash: boolean };
+export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-label' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'
   | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
   | 'repeated-param' | 'reserved-node';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_PAGE_PARSE_FAILURE_MAP: Record<DocsPageParseFailure, true> = {
-  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true, 'bad-view': true,
+  'not-docs': true, 'bad-project': true, 'bad-label': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true,
+  'bad-view': true,
   'bad-frame': true, 'bad-escape': true, 'encoded-slash': true, 'commit-in-page': true, 'unknown-param': true,
   'repeated-param': true, 'reserved-node': true,
 };
@@ -1423,8 +1433,13 @@ export const DOCS_PAGE_PARSE_FAILURES: readonly DocsPageParseFailure[] =
   Object.keys(DOCS_PAGE_PARSE_FAILURE_MAP) as DocsPageParseFailure[];
 
 export type DocsPageParse =
-  | { ok: true; loc: DocsPageLocation; canonical: string }
+  | { ok: true; loc: DocsPageLocation | DocsFolderLocation; canonical: string }
   | { ok: false; why: DocsPageParseFailure };
+
+/** Whether a parsed page is an outside folder's (X2 P2.4): the narrowing every caller of `parseDocsPage` makes first. */
+export function isDocsFolderLocation(loc: DocsPageLocation | DocsFolderLocation): loc is DocsFolderLocation {
+  return loc.kind === 'folder' || loc.kind === 'folder-section' || loc.kind === 'folder-path';
+}
 
 type DocsPageKey = (typeof DOCS_PAGE_KEYS)[number];
 type DocsPathLocation = Extract<DocsPageLocation, { kind: 'path' }>;
@@ -1524,7 +1539,10 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   if (segs.some((s) => s.includes('/'))) return { ok: false, why: 'encoded-slash' };
   const [project, sectionText] = segs;
   if (project !== undefined && project.startsWith('@')) return { ok: false, why: 'reserved-node' };
-  if (project !== undefined && !isDocsProject(project)) return { ok: false, why: 'bad-project' };
+  // An outside folder (X2 P2.4): `~` is a character the project grammar never admits, so `~<label>` can be no project.
+  const folder = project !== undefined && project.startsWith('~');
+  if (folder && !DOCS_FOLDER_LABEL_RE.test(project.slice(1))) return { ok: false, why: 'bad-label' };
+  if (!folder && project !== undefined && !isDocsProject(project)) return { ok: false, why: 'bad-project' };
   let section: DocSectionSlug | undefined;
   if (sectionText !== undefined) {
     if (!isDocsSection(sectionText)) return { ok: false, why: 'bad-section' };
@@ -1532,6 +1550,17 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   }
   const path = segs.slice(2).join('/');
   if (segs.length > 2 && !isDocsRelPath(path)) return { ok: false, why: 'bad-path' };
+  if (folder) {
+    // A folder page carries no query key: the keys are the project page's (`PAGE_KEYS_BY_KIND`), never the folder's.
+    const fq = pageQuery(search, []);
+    if (!fq.ok) return fq;
+    const label = project.slice(1);
+    let floc: DocsFolderLocation;
+    if (section === undefined) floc = { kind: 'folder', label };
+    else if (segs.length === 2) floc = { kind: 'folder-section', label, section };
+    else floc = { kind: 'folder-path', label, section, path, dirSlash };
+    return { ok: true, loc: floc, canonical: docsPageUrl(floc) };
+  }
   const kind: DocsPageLocation['kind'] =
     project === undefined ? 'index' : section === undefined ? 'project' : segs.length === 2 ? 'section' : 'path';
   const q = pageQuery(search, PAGE_KEYS_BY_KIND[kind]);
@@ -1581,8 +1610,17 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
  *  values in their grammars, as every parseDocsPage answer does; encodeURIComponent throws URIError on a lone
  *  surrogate, which isDocsRelPath refuses.
  *  parseDocsPage(docsPageUrl(l)) returns l for every canonical l. */
-export function docsPageUrl(loc: DocsPageLocation): string {
+export function docsPageUrl(loc: DocsPageLocation | DocsFolderLocation): string {
   if (loc.kind === 'index') return DOCS_PAGE_PREFIX;
+  if (isDocsFolderLocation(loc)) {
+    // A folder page: the label behind its `~`, then the section and path as a project page writes them, and no query.
+    let url = DOCS_PAGE_PREFIX + '/~' + loc.label;
+    if (loc.kind !== 'folder') url += '/' + loc.section;
+    if (loc.kind === 'folder-path') {
+      url += '/' + loc.path.split('/').map((s) => encodeURIComponent(s)).join('/') + (loc.dirSlash ? '/' : '');
+    }
+    return url;
+  }
   let url = DOCS_PAGE_PREFIX + '/' + encodeURIComponent(loc.project);
   if (loc.kind !== 'project') url += '/' + loc.section;
   if (loc.kind === 'path') {

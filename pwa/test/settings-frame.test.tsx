@@ -399,7 +399,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     notifications: ['Push notifications', 'Release announcements'],
     automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Coordinator advisor', 'When soft renewals happen', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Approvals', 'Permission prompts (M38)'],
-    integrations: ['Linear', 'Project linking', 'GitHub'],
+    integrations: ['Linear', 'Project linking', 'GitHub', 'Docs folders'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
 
