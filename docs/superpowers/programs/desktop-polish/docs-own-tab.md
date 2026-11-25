@@ -79,7 +79,10 @@ those links opened a tab before this wave too (measured: `text-link.tsx`); only 
   Docs tab given the console's room draws the console's row exactly, and at 1280 it shows the words where the console, on
   a long page name, hides them. On a short name the console at 1280 shows them too. In Chrome, both skins, committed
   cases measure the console's row given the console's room and, since wave 177, assert the words shown in a Docs tab at
-  1280; the short-name sentence has no committed case (unmeasured). Slug `docs-tab-head-follows-its-room`; the coordinator
+  1280. The short-name sentence is the case '1280 x 800, <skin>: the row is one line, and the truth line one dense line
+  holding its chip and commit' in `docs-compact-head.browser.test.ts`, which opens the console on the short page and
+  asserts every action shows its words; it does not assert the list of words is non-empty, so an empty list would pass it
+  (that file is another programme's, so wave 177 names the gap and leaves the file). Slug `docs-tab-head-follows-its-room`; the coordinator
   ruled the words at 1280 in a Docs tab right (wave 177's brief).
 - **The width rule** (brief item 5): the shell's own desk test, `DESK_QUERY` (`(min-width: 900px)`), defined once in
   `ui/src/lib/use-media-query.ts` and re-exported by `pwa/src/lib/useMediaQuery.ts`, read with `useDesk()` by `useTabLink`
@@ -229,8 +232,9 @@ The two files the Docs reader's wave C worker holds were changed by the exact di
   `null`, so a refusal shows only as the browser's own notice (review 3644 A12).
 - **The control census** registers an anchor only when it spells `href` or `onClick` as attributes, so the anchors whose
   props are spread (`ConsoleLink`, `PlaceDoor`'s anchor) are outside it; their floors come from their patterns
-  (`GHOST_ANCHOR`'s and `DOOR`'s `min-h-tap`) and the link back's is measured in the browser leg (44 px at 1280; below the
-  desk width a Docs tab draws no bar, so no link back to measure there, fix round 3). The
+  (`GHOST_ANCHOR`'s and `DOOR`'s `min-h-tap`) and the bar's link back is measured in the browser leg (44 px at 1280). Below
+  the desk width a Docs tab draws no bar and so no bar link back (fix round 3); the failed-render fallback still draws its
+  link back there (`app-docs-boundary.test.tsx` asserts it), and its height is unmeasured below the desk width. The
   two that are inside it (the sheet's row, the menu's item) are registered under VARIANT, the arm now reading `LIST_ROW`'s
   class string for the list-row anchor (no category covered one). The census file was another worker's claim (6821); the
   edit was made on that worker's yes and the coordinator's ruling to keep the anchors.
@@ -245,12 +249,14 @@ The two files the Docs reader's wave C worker holds were changed by the exact di
 - **A Docs tab below the desk width moves in place** (review 3666 R3): there the reader's Back at the index and the
   failed-render link move the tab to the console, because the width cannot tell a half-width window from a phone; the tab
   is the console from then on.
-- **A Docs tab below the desk width draws no link back** (fix round 3): from a leaf the way to the console is the reader's
-  Back, once per level up to the index and once more there.
+- **A Docs tab below the desk width draws no bar link back** (fix round 3): from a leaf the way to the console is the
+  reader's Back, once per level up to the index and once more there. Only the failed-render fallback draws a link back
+  there.
 - **A narrow Docs tab on an address the Docs parser refuses** draws no head at all (`DocsScreen` draws `DocsHead` only for a
   page it parsed): the one way on is the "Docs index" link, then the index's Back (by reading `DocsScreen.tsx`).
 - **The two narrow ways back land in different places**: the failed-render fallback's link goes to the console's root
-  (`CONSOLE_ROOT`, the home place), and the index's Back to the fleet list (`/fleet`).
+  (`CONSOLE_ROOT`, the home place), and the index's Back to the fleet list (`/fleet`). Measured in jsdom:
+  `docs-tab-links.test.tsx` (the fallback's link) and `docs-own-tab.test.tsx` (the index's Back).
 - **Crossing the desk width with the bar's link focused** drops the focus to the page: narrowed, the bar and its link go
   (inferred from the frame drawing no bar below the desk width; not measured).
 - **Crossing the desk width swaps the scroll container** (the frame's desk layout and its phone layout scroll different
@@ -282,14 +288,21 @@ Tests from an independent review of the merged head; no change under `pwa/src`.
 |---|---|---|
 | The fold's fall: a narrow Docs tab that went Back to the console, then opened a document in the app, is the console; the mutation table's line names it | `docs-own-tab.test.tsx` (a packet to its holder, applied on its yes) | with `App`'s `if (docsSoFar && !docsTab) setDocsSoFar(false)` removed: that case red by name, the other 43 green |
 | The shared teardown clears the tab's store (`sessionStorage`) after every case | `pwa/test/setup.ts` | below |
-| A Docs address loaded first and a throwing reader: a Docs tab (asserted), its own boundary's fallback and its link back | `app-docs-boundary.test.tsx` | with the Docs tab branch's `RenderBoundary` removed: this case and the reset case red by name; with the teardown's clear removed: this case red by name (it ran as the console) |
+| A Docs address loaded first and a throwing reader: a Docs tab (asserted), its own boundary's fallback and its link back | `app-docs-boundary.test.tsx` | with the Docs tab branch's `RenderBoundary` removed: this case and 'navigating to another Docs page resets the boundary' red by name; with the teardown's clear removed: this case red by name (it ran as the console) |
 | The harness's console mark guards itself: a page opened with it is not a Docs tab, asserted at `phone-bar`'s opener | `pwa/browser/phone-bar.browser.test.ts` | with the harness's `sessionStorage.setItem` of the mark removed (`browser/app.ts`): the 8 console cases that load a Docs address red at the opener, by name, with its message |
 | `phone-bar`'s Docs tab case asserts the head's top, which it computed and never read: measured 8 with the Docs screen at 0, the screen's own inset, so the case reads the inset rather than pinning a number | the same file | not a guard; a first draft asserting 0 was red in Chrome, at 360 and 390 in both skins |
 | The ruled header at 1280 in a Docs tab: the action words shown, the bar at the top and a tap tall, the head's gutters equal and the gap under the bar the same gutter | `docs-compact-head.browser.test.ts` (a packet to its holder, applied on its yes) | not run against a mutant; green in Chrome, both skins, mouse and coarse pointer |
 | Comments made true: `docs-own-tab.browser.test.ts`'s header (no link back below the desk width), `reader-frame`'s Docs tab comment | those files | none |
+| Fix round 1, F1: the three console cases of 'App /docs route (M4.R2)' (the two rows of '%s renders the Docs screen in the detail pane…' and 'the Docs screen is not keyed') enter the console at `/fleet`, then go to the Docs address, asserting the tab is not a Docs tab | `pwa/test/app.test.tsx` | with the console branch's detail boundary keyed by page on Docs addresses (the console remounts its reader on every page change): 'the Docs screen is not keyed' red by name, the rest green |
+| Fix round 1: the twin in a Docs tab, 'in a Docs tab too: the same mount spans a page, ref and section change' | the same file | with the Docs tab branch's boundary keyed by page: that case red by name, the rest green |
+| Fix round 1, A1: 'navigating to another Docs page resets the boundary' asserts it runs as a Docs tab, and says so | `app-docs-boundary.test.tsx` | with the teardown's clear removed: red by name (an earlier case's mark ran it as the console) |
 
-The whole pwa jsdom suite with the teardown change: no case went red (no case was passing only because of the leak);
-`app-docs-boundary`'s reset case now runs as a Docs tab whatever ran before it, and passes there too.
+The whole pwa jsdom suite with the teardown change: no case went red. But the clear moved five cases from the console to a
+Docs tab, each still green there: the two new and reset cases of `app-docs-boundary` above, and the three console cases of
+'App /docs route (M4.R2)' in `app.test.tsx`, which ran as the console only through the leak. The last three carried the
+one guard that the console keeps one Docs mount across a page change, and it was lost silently until fix round 1 made them
+enter the console themselves (the row above). The clear runs after each case, so it does not reach a file's own
+`beforeAll`: three files mount `<App/>` there and leave a mark for their first case, none at a Docs address.
 
 Unmeasured still: the title's figure in a Docs tab at 1280 (section 6); focus and scroll across the desk width (section 9).
 
