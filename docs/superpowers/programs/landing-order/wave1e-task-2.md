@@ -7,7 +7,7 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`
 
 `project-linking-card.browser.test.ts` on the base holds one `describe` of 22 cases. In the order queue run
 45527962041 ran them (job 138915898216, shard 2/3), with each case's own time there and in the green queue run
-45532069453 (job 138929574043) 35 minutes later:
+45532069453 (job 138929574062, shard 2/3; corrected after review run 3750) 35 minutes later:
 
 | # | title | ms, 45527962041 | ms, 45532069453 | after the split |
 |---|---|---|---|---|

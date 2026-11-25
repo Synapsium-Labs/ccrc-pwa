@@ -6,7 +6,7 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`
 ## What changed
 
 - `.github/workflows/ci.yml`, job `browser-pwa` only: `shard: [1, 2, 3, 4]`, `total: [4]`, and a paragraph after
-  D-8167's in the comment above the deadline (`FOUR SHARDS (D-9026)`). `timeout-minutes: 20` is unchanged, the job is
+  D-8167's in the comment above the deadline (`FOUR SHARDS (D-9026)`). `timeout-minutes` was 20 at this step and is 30 at the tip (the amendment below; corrected by the coordinator after review run 3750), the job is
   still one job named `browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}`, and nothing outside the job moved.
 - `server/test/ci-pipeline.test.ts`: the case `is one job, browser-pwa, named browser (pwa) i/n …` expects 4, its
   comment says why (D-9026). Moved first and seen red: `the browser leg runs as four shards (D-9026): expected 3 to be
@@ -30,7 +30,7 @@ heavy shard; nothing fixes a slow runner, and at 1.7 times a balanced shard of f
   about twice the usual time). D-8167's paragraph stays as history. No other job's limit moved.
 - `ci-pipeline.test.ts`: the case's title says `a 30-minute deadline (D-7746, D-9055)`, it expects `'30'`, and its
   comments say why.
-- D-9026's plan text still says the limit stays 20; the coordinator corrects the plan on its ledger pull request.
+- D-9026's plan text said the limit stays 20 when this was written; the coordinator corrected the plan (#3363), and it says 30 since.
 
 ## Simulation
 
@@ -67,7 +67,7 @@ command run, the file restored from the copy and its sha256 compared. Commands r
 |---|---|---|---|---|
 | 1E-01 | `total: [4]` becomes `total: [3]` in `browser-pwa` | `test/ci-pipeline.test.ts` from `server/` | the shard-count case: `expected [ 1, 2, 3, 4 ] to deeply equal [ 1, 2, 3 ]` (its 1..total check comes first) | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
 | 1E-01b | both lists back to three, `shard: [1, 2, 3]` and `total: [3]` | the same | the same case: `the browser leg runs as four shards (D-9026): expected 3 to be 4` | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
-| 1E-02 | `timeout-minutes: 30` on `browser-pwa` goes back to 20 (turned around by D-9055; the plan's row raised it to 30) | the same | the same case, the deadline: `expected '20' to be '30'` | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
+| 1E-02 | `timeout-minutes: 30` on `browser-pwa` goes back to 20 (D-9055; the plan's row is this same mutation back to 20) | the same | the same case, the deadline: `expected '20' to be '30'` | `ci.yml` ffe1f39bb9d8f26c707110f6c9f1941f0758821fc0771ae93f3b7db9d194fd20 |
 | 1E-03 | `runs-widths.browser.test.ts` becomes `run-widths.browser.test.ts` in `FILE_MS` | `test/browser-leg.test.ts` from `pwa/` | `every file FILE_MS names is a browser file, …`: `run-widths.browser.test.ts: expected false to be true` | `slowFirst.ts` 31b5b8aae0590a8e16b54e958d34a7a7014653a4a712e3212164455365a1ae1f |
 | 1E-04 | the `every row opened at ${width}px` block deleted from `project-linking-card-wide.browser.test.ts` | Task 2's title comparison, as written in `wave1e-task-2.md` | exit 1, `DIFF`: `split 17 titles`, five `MISSING every row opened at <w>px …` | `project-linking-card-wide.browser.test.ts` 152e8eab24ee915f4e22d4c046e18e2c5084a7c1a3b224980814d1455a23d9c3 |
 
