@@ -36,11 +36,12 @@ function fixtureRepo(base: Tree = { 'docs/superpowers/programs/p/task-1.md': ent
   return root;
 }
 /** Moves `origin/main` one commit ahead of where it is, adding `tree`; HEAD stays where it was. */
-function onMainAhead(root: string, tree: Tree): void {
+function onMainAhead(root: string, tree: Record<string, string | null>): void {
   const git = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
   const back = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   git('checkout', '-q', '-b', 'main-ahead', 'origin/main');
   for (const [file, text] of Object.entries(tree)) {
+    if (text === null) { git('rm', '-q', file); continue; }   // null: main deletes (or, with an add, moves) it
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     writeFileSync(path.join(root, file), text);
   }
@@ -135,6 +136,14 @@ describe('the guard\'s two git reads', () => {
     onMainAhead(root, { [theirs]: `- **${D(10020)}** \u2014 theirs.\n` });
     expect([...changedDefinitionPaths(root, 'origin/main')]).toEqual([mine]);
     expect(guard(root)).toEqual([{ n: 10020, files: [mine, theirs] }]);
+  });
+  it('a branch behind a main that moved and reworded a file the branch never touched is not a collision', () => {
+    const old = 'docs/superpowers/plans/x.md';
+    const moved = 'docs/superpowers/programs/p/x.md';
+    const root = fixtureRepo({ [old]: `- **${D(10010)}** \u2014 old wording.\n` },
+      { 'docs/superpowers/plans/unrelated.md': '# no deviations here\n' });
+    onMainAhead(root, { [old]: null, [moved]: `- **${D(10010)}** \u2014 new wording.\n` });
+    expect(guard(root)).toEqual([]);
   });
   it('staleLedgerBase: a fork whose own origin/main diverged is measured against upstream/main, and is not stale', () => {
     const root = fixtureRepo();

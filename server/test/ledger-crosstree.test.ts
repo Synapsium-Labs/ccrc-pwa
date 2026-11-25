@@ -435,30 +435,33 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
   const P = 'docs/superpowers/plans/a.md';
   const Q = 'docs/superpowers/specs/b.md';
   const NONE: ReadonlySet<string> = new Set();
+  // Branch-only paths are paths the branch changed since the merge base, so they are passed in `changed`.
+  const ONLY_P: ReadonlySet<string> = new Set([P]);
+  const BOTH: ReadonlySet<string> = new Set([P, Q]);
 
   it('two paths, one per tree, defining the same number with different subjects collide', () => {
-    expect(selfAssignedCollisions([f(P, def(10007, 'one thing'))], [f(Q, def(10007, 'another'))], NONE))
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing'))], [f(Q, def(10007, 'another'))], ONLY_P))
       .toEqual([{ n: 10007, files: [P, Q] }]);
   });
   it('two files on the branch, same number, different subjects collide', () => {
-    expect(selfAssignedCollisions([f(P, def(10007, 'one thing')), f(Q, def(10007, 'another'))], [], NONE))
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing')), f(Q, def(10007, 'another'))], [], BOTH))
       .toEqual([{ n: 10007, files: [P, Q] }]);
   });
   it('one path defining a number twice with different subjects collides with itself', () => {
-    expect(selfAssignedCollisions([f(P, def(10007, 'one thing') + def(10007, 'another'))], [], NONE))
+    expect(selfAssignedCollisions([f(P, def(10007, 'one thing') + def(10007, 'another'))], [], ONLY_P))
       .toEqual([{ n: 10007, files: [P] }]);
   });
   it('a file renamed on the branch (same subject, base path A, branch path B) is not a collision', () => {
-    expect(selfAssignedCollisions([f(Q, def(10007))], [f(P, def(10007))], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(Q, def(10007))], [f(P, def(10007))], new Set([Q]))).toEqual([]);
   });
   it('a spec and its plan mirroring one entry (same subject) are one deviation', () => {
-    expect(selfAssignedCollisions([f(P, def(10007)), f(Q, def(10007))], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(10007)), f(Q, def(10007))], [], BOTH)).toEqual([]);
   });
   it('one plan repeating its own entry verbatim is one deviation', () => {
-    expect(selfAssignedCollisions([f(P, def(10007) + def(10007))], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(10007) + def(10007))], [], ONLY_P)).toEqual([]);
   });
   it('subjects compare with whitespace normalised and trailing punctuation trimmed', () => {
-    expect(selfAssignedCollisions([f(P, def(10007, 'a  subject.')), f(Q, def(10007, 'a subject'))], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(10007, 'a  subject.')), f(Q, def(10007, 'a subject'))], [], BOTH)).toEqual([]);
   });
   it('the same path defining once in each tree is not a collision', () => {
     expect(selfAssignedCollisions([f(P, def(10007))], [f(P, def(10007))], NONE)).toEqual([]);
@@ -473,15 +476,15 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
   it('task notes with the same basename in different programmes collide by full path', () => {
     const a = 'docs/superpowers/programs/x/task-1.md';
     const b = 'docs/superpowers/programs/y/task-1.md';
-    expect(selfAssignedCollisions([f(a, def(10009, 'one'))], [f(b, def(10009, 'two'))], NONE))
+    expect(selfAssignedCollisions([f(a, def(10009, 'one'))], [f(b, def(10009, 'two'))], new Set([a])))
       .toEqual([{ n: 10009, files: [a, b] }]);
   });
   it('a definition quoted inside a fenced block elsewhere is not a second definition', () => {
     const quoted = '```\n' + def(10011, 'other') + '```\n';
-    expect(selfAssignedCollisions([f(P, def(10011)), f(Q, quoted)], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(10011)), f(Q, quoted)], [], BOTH)).toEqual([]);
   });
   it('numbers below the era are left to the old rule', () => {
-    expect(selfAssignedCollisions([f(P, def(8000, 'x') + def(8000, 'y')), f(Q, def(8000, 'z'))], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, def(8000, 'x') + def(8000, 'y')), f(Q, def(8000, 'z'))], [], BOTH)).toEqual([]);
   });
   it('main adds a number to a file the branch never touched: the base copy counts, and a clash reds', () => {
     const shared = '# a long-running plan\n';
@@ -495,19 +498,24 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
       [f(P, shared), f(Q, def(10007, 'theirs'))], new Set([P])))
       .toEqual([{ n: 10007, files: [P, Q] }]);
   });
+  it('main moved and reworded a file the branch never touched: the branch\'s stale copy is not read, no collision', () => {
+    const moved = 'docs/superpowers/programs/p/a.md';
+    expect(selfAssignedCollisions([f(P, def(10010, 'old wording'))], [f(moved, def(10010, 'new wording'))], NONE))
+      .toEqual([]);
+  });
   it('a path the branch did not change is judged by the base copy, even when the branch copy differs', () => {
     expect(selfAssignedCollisions([f(P, def(10007, 'stale'))], [f(P, def(10007, 'current'))], NONE)).toEqual([]);
   });
   it('a wrapped subject is read from the next non-blank line: two different ones collide', () => {
     const wrapped = (subject: string): string => `- **${D(10012)}** \u2014\n\n  ${subject}\n`;
-    expect(selfAssignedCollisions([f(P, wrapped('foo the bar')), f(Q, wrapped('something else entirely'))], [], NONE))
+    expect(selfAssignedCollisions([f(P, wrapped('foo the bar')), f(Q, wrapped('something else entirely'))], [], BOTH))
       .toEqual([{ n: 10012, files: [P, Q] }]);
-    expect(selfAssignedCollisions([f(P, `### ${D(10012)} \u2014\nfoo\n`)], [f(Q, `- **${D(10012)}**:\n  bar\n`)], NONE))
+    expect(selfAssignedCollisions([f(P, `### ${D(10012)} \u2014\nfoo\n`)], [f(Q, `- **${D(10012)}**:\n  bar\n`)], ONLY_P))
       .toEqual([{ n: 10012, files: [P, Q] }]);
   });
   it('a wrapped subject mirrored word for word is one deviation', () => {
     const wrapped = `- **${D(10012)}** \u2014\n  foo the bar.\n`;
-    expect(selfAssignedCollisions([f(P, wrapped), f(Q, wrapped)], [], NONE)).toEqual([]);
+    expect(selfAssignedCollisions([f(P, wrapped), f(Q, wrapped)], [], BOTH)).toEqual([]);
   });
   it('a path the branch deleted is absent: its base copy no longer counts', () => {
     expect(selfAssignedCollisions([f(Q, def(10014, 'kept here'))], [f(P, def(10014, 'the deleted copy')), f(Q, def(10014, 'kept here'))],
@@ -520,12 +528,12 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
   it('an empty wrapped subject is never read from a definition, a heading or a fence on the next line', () => {
     const before = (next: string): string => `- **${D(10016)}** \u2014\n${next}\n`;
     for (const next of [`- **${D(10017)}** \u2014 x`, '## Next', '```\ncode\n```', '~~~\ncode\n~~~']) {
-      expect(selfAssignedCollisions([f(P, before(next)), f(Q, before(next))], [], NONE), next)
+      expect(selfAssignedCollisions([f(P, before(next)), f(Q, before(next))], [], BOTH), next)
         .toEqual([{ n: 10016, files: [P, Q] }]);
     }
   });
   it('an empty subject matches no other definition, not even another empty one', () => {
-    expect(selfAssignedCollisions([f(P, `- **${D(10013)}** \u2014`), f(Q, `- **${D(10013)}** \u2014\n\n`)], [], NONE))
+    expect(selfAssignedCollisions([f(P, `- **${D(10013)}** \u2014`), f(Q, `- **${D(10013)}** \u2014\n\n`)], [], BOTH))
       .toEqual([{ n: 10013, files: [P, Q] }]);
   });
 });

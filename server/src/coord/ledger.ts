@@ -371,19 +371,21 @@ type Files = readonly { readonly path: string; readonly text: string }[];
 /**
  * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined with two different subjects. Identical
  * subjects in any number of paths or lines are one deviation: a spec mirroring its plan, a plan
- * repeating its own entry, a file renamed or moved on the branch. A path present in both trees is
- * judged by the branch's copy only when the branch changed it since the merge base (`changed`), and
- * by the base's copy otherwise: so rewording a merged entry, or fixing a collision the base carries,
- * is not a collision, and main's later addition to a file the branch never touched still counts. A
- * base path the branch lacks counts when main added it after the merge base; one the branch deleted or
- * renamed away is in `changed` (the caller lists renames off) and is absent. Two branches adding
+ * repeating its own entry, a file renamed or moved on the branch. A branch copy is read only when the
+ * branch changed that path since the merge base (`changed`), and a base copy only when it did not: so
+ * rewording a merged entry, or fixing a collision the base carries, is not a collision, main's later
+ * addition to a file the branch never touched still counts, and a file main moved or reworded after
+ * the merge base is not read again from the branch's untouched, stale copy. A base path the branch
+ * lacks counts when main added it after the merge base; one the branch deleted or renamed away is in
+ * `changed` (the caller lists renames off) and is absent. Two branches adding
  * one number to the SAME file are seen only on the merged tree (the queue). `files` lists each
  * defining path once, sorted. Pure, like `crossTreeCollisions`; the caller measures `changed`.
  */
 export function selfAssignedCollisions(branch: Files, base: Files, changed: ReadonlySet<string>): CrossTreeCollision[] {
-  const onBase = new Set(base.map((f) => f.path));
   const defs = definitionLines([
-    ...branch.filter((f) => !onBase.has(f.path) || changed.has(f.path)),
+    // A path the branch did not change holds the merge base's text, which the base's current copy supersedes
+    // (main may since have moved, reworded or deleted it).
+    ...branch.filter((f) => changed.has(f.path)),
     // A path the branch changed (deleted or renamed away included; the caller lists renames off) is the branch's view.
     ...base.filter((f) => !changed.has(f.path)),
   ]);
