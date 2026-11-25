@@ -60,30 +60,32 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | W1 | The `ccrc-overlord` skill: its references, staging and the role-skill deny | #2833 | merged |
 | W1 | The journal kernel moved to K; the shared append-only port and chained-journal file adapter; the file's verified head | #2848; #2880; #2985 | merged |
 | W1 | Authority journal: the journal, its fold, writer and boot coherence (A); Confirm the restore, one transaction behind the step-up (C) | #2895; #3204 | merged |
-| W1 | Authority journal B: the authority witness, its exchange and the ladder's two rows | #3215 | in fix round 3 after review 3679 (rounds 1 and 2 after reviews 3372 and 3526); a draft until accepted; one more merge of main follows the Docs reader programme's #3286 |
+| W1 | Authority journal B: the authority witness, its exchange and the ladder's two rows | #3370 (supersedes #3215, closed 2026-11-25 when its worker died); run 3744 | accepted in substance after review 3764; its last round pushed, its full CI run going, then one narrow review and landing. #3215's last review (3732, round 6 of 6) found no defect |
 | W1 | Pool set: the set in L0 and its library (A1), the session's side (A2), every reader's side (A3), `ccd pool-answer` and the capability floor (B1), `--below-cap` and the push on a lost set (B2) | #2836, #2846, #2857, #2877, #2887 | merged |
 | W1 | Push outbox (the record and its rules, then the one sender); response record (A, B) | #2838, #2859; #2884, #2914 | merged |
-| W1 | Designation: the row, its term, create and retire (A); the model class and account set doors (C) | #2950; #2992 | merged. B (restart and the sweep): run 3652, building |
+| W1 | Designation: the row, its term, create and retire (A); the model class and account set doors (C) | #2950; #2992 | merged. B (Rebind and Restart, the first start's deadline, the set before each renewal): #3346, run 3652, accepted in substance after review 3768; a small last round is committed locally and waits for the base the coordinator names |
 | W1 | Gates: actor columns and the operator doors through `CallerIdentity` (A); the gate order as one decider (B) | #2993; #3076 | merged |
 | W1 | The ladder, its rung door, Pause and off; refusals on the other write lanes (A) | #2994; #2996 | merged |
 | W1 | ccd's Overlord arms: keep-awake and the long-lived library (A), the hold-down, stand-down and crossing end (B), the fresh pick in three steps (C1, C2) | #2898, #2945, #2957, #2971 | merged |
 | W1 | Serviceability: billing and continuity facts, the three inputs, their Settings door (A) | #2878 | merged |
-| W1 | Serviceability B: `limit_samples`, `poolRunway`, the load lines, the runway read, the 95% ladder row | #3210 | fix round 2 built locally after review 3382; waits behind authority B for one base and a migration slot |
+| W1 | Serviceability B: `limit_samples`, `poolRunway`, the load lines, the runway read, the 95% ladder row | #3367 (supersedes #3210); run 3746 | merged (58acf1d450), migration slot 126 |
 | W1 | Private store: the store, its journal and safety nets (A); the console's prompt recorded, then nudged (B) | #2896; #3034 | merged |
 | W1 | Portfolio: the rank, its one writer, the read and rank doors (A); who ratified each goals version (B) | #2842; #2904 | merged |
 | W1 | Board and history: the read-only history op on the agent (A) | #2841 | merged |
-| W1 | Board and history: the history door (B1) | #3348, draft; run 3653 | building; in a fix after its first run |
+| W1 | Board and history: the history door (B1) | #3348; run 3653 | merged (2f140376dd) |
 | W1 | Sandbox: the launch profile measured and rendered (A); the overlord workspace, digest probes, launch-surface-v1 and the no-mods check (A2) | #2847; #2889 | merged |
 | W1 | Sandbox B: the sandbox check, surface arm and settle step (#3205); the hook's surface arm as a PR of its own (#3213) | #3205, #3213 | merged: #3213 (70ebe6d876), then #3205 (f00f030a28) |
+| W1 | Sandbox: the carried pins of reviews 3366 and 3598, and a failed re-read answers `unread` | #3371; run 3758 | merged (657477678e, 2026-11-25 10:16:46Z) |
 | W1 | Door process: the act-key claim door (A1), the spawn step and the door with `ccrc-api` inside (A2), the hook's reports and the witness (B1), the model events and the reader and typed-model arms (B2) | #3035, #3057, #3099, #3201 | merged |
-| W1 | Renewal readings: the seam, the fitted ceiling and the backstop (A); the raised term, the changed class and the probes-failed-twice latch (C) | #2962; #3209 | merged. B (run 3654), E (run 3683) and F (run 3684) building; D waits on serviceability B |
+| W1 | Renewal readings: the seam, the fitted ceiling and the backstop (A); the raised term, the changed class and the probes-failed-twice latch (C); `notLocal` from the transcript resolver (B); model drift and the readers running (E); turns and the operator's quiet (F) | #2962; #3209; #3343; #3350; #3352 | merged: B (c4c3157866), E (676d955d23), F (a4b94d0bc1). D is run 3773 (dispatched 2026-11-25); G and H wait |
+| W1 | Four more console routes write the operator mark, and the drawer's throttle survives a clock step back | #3373, draft; run 3757 | in review (review run 3772) |
 | W1 | The isolation word, measured by both sides | #3208 | merged (5102a69aa3), accepted at the review cap |
 | W1 | Answer marks (R21): on Waiting on you items (A), on asks the operator has (B), "could handle this" on tasks (C) | #2879, #2892, #2902 | merged |
-| W1 | The sequence, its writer, its stamps and its retention lane (A) | #3218 | accepted after reviews 3646 and 3675; in the merge queue at cce47c34cf; its migration is at slot 125 |
+| W1 | The sequence, its writer, its stamps and its retention lane (A) | #3218 | merged (7e1f9752fe, 2026-11-25 00:17:27Z), migration slot 125 |
 | W1 | The inbox, messages and acknowledge doors, the read runner and the coalesced wake | #3220 | merged (01ee0e850c) |
 | W1 | Home and Settings, PR A: the console's home and places, with the Overlord's door | #3207 | merged (6965b6d830) |
 | W1 | Not started: the sequence's PR B and the monitor, the Overlord's timers, the board's later parts, readiness, home B and C, chat, `overlord-v1` | plans merged | planned; each waits as the Next-wave brief says |
-| W1 | The Overlord clause (§11.4) | not built | no plan file yet; its wording is in spec §11.4; the recall clause (#2919) is merged and the contract's room is settled (#2845), so it is dispatchable |
+| W1 | The Overlord clause (§11.4), clause 24 | #3354; plan `docs/superpowers/plans/2026-11-25-overlord-w1-coordinator-clause.md` | merged (1ec2db8ec3); D-9022 to D-9025 |
 | W2 plans | The index, one plan per piece, the fold: #2917; #2921 to #2925, #2928, #2930 to #2933, #2935 to #2938; #2952. Plans in `docs/superpowers/plans/2026-11-16-overlord-w2/` | those PRs | merged |
 | W2 | The pieces that need nothing from W1, built first: the vocabulary, row revisions, private names (A, B), the decision-model port and its arming (A, B), overlaps A, remaining work (A, B), done tests A, forecasts and health (A, B) | #2939; #2965; #2940, #2961; #2948, #2990; #2949; #2951, #3002; #2964; #2987, #3003 | merged |
 | W2 | Route and follow up, the rest: the act catalogue, act rows, journal and reads, the request record and ids, the coordinator and operator doors, relay, follow-up, inbox band 3, label queue, the board's and home's W2 parts, W2 Settings, overlaps B, done tests B, `overlord-route-v1` | plans merged | planned; most wait on W1 pieces |
@@ -94,9 +96,10 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | Approvals through coordinators and the Overlord | The plan (the operator's direction of 2026-11-18); PR 0 (a child with a stale deny digest is routed); PR 1 (the census); PR 2 (the envelope list); PR 3 (the park, built and inert) and its 3v and 3c; prevention (reviewers and briefs remove only literal paths) | #3036; #3045; #3043; #3061; #3106, #3140, #3141; #3038 | merged |
 | No chores for the operator (2026-11-22) | The test box's tool sync takes a home; the build capture runner's design and first PR; a new Claude Code release needs no operator; capture PR 3a | #3167; #3171, #3168; #3170; #3198 | merged |
 | No chores for the operator (2026-11-22) | Capture PR 2: copy missing builds before retrying capture | #3276, which replaced #3239 | merged (e0e8989c05) |
-| No chores for the operator (2026-11-22) | Capture PR 3b: the wiring | #3347, draft; run 3657 | in a containment review (review run 3687) |
+| No chores for the operator (2026-11-22) | Capture PR 3b: the wiring | #3347; run 3657 | merged (09c8f5d502, 2026-11-25 10:07:06Z); it arms the capture runner once a release carrying it is on the test box. Its review carries are run 3774 |
 | Test box and settings pieces | Managed node PR 3; every admin act has a time limit; a light parity check; the run cap derived from the fleet host; Settings › Integrations; a Do item can carry a note to the coordinator | #3233; #3225; #3241; #3224; #3230; #3228 | merged |
 | Test fixes | Two merge-queue flakes; the docs bar's focus case; the digest page's one-post case; the collector's resume cases | #2820; #2953; #2968; #2981 | merged |
+| Test fixes | The generation day's 200 seeds run as ten bounded ranges of twenty, every edge checked over their union | #3356; run 3697 | merged (f432478cab) |
 | W3 | Brief first, then answer first (two steps) | not planned yet | follows W2 |
 | W4 | Learn | not planned yet | follows W3 |
 | W4b | The fleet playbook | not planned yet | follows W3 |
@@ -633,6 +636,232 @@ subsection above is left as it was written.
   by #2845. So nothing waits on the operator: one run writes the short plan and builds the clause, its pin, its count
   word and its cap raise, and it lands before W2 opens.
 
+### Since #3351 (2026-11-25, 02:30Z to 10:15Z)
+
+The calls below are this coordinator's, from call 978 to call 1127. Big calls are marked; the operator may overturn any
+of them. Where these bullets differ from the subsections above, these are the rule now.
+
+- **What landed, in merge order.** Each landed through the merge queue at its reviewed head.
+
+  | PR | Piece | Merge | Reviews | Accepted by |
+  |---|---|---|---|---|
+  | #3218 | Sequence A | 7e1f9752fe, 00:17:27Z | 3646, 3675 | call 958 |
+  | #3352 | Renewal readings F | a4b94d0bc1, 03:16:33Z | (see the PR) | call 1004; re-enqueued once by call 1037 |
+  | #3354 | The Overlord clause, clause 24 | 1ec2db8ec3, 03:16:33Z | 3723 | call 1042 |
+  | #3356 | The generation day's time bound | f432478cab, 03:59:19Z | 3720 | call 1045 |
+  | #3350 | Renewal readings E | 676d955d23, 05:31:43Z | 3710, 3736 | call 1070 |
+  | #3348 | Board B1, the history door | 2f140376dd, 07:14:59Z | 3730 (closed failed), 3749 | call 1093 |
+  | #3343 | Renewal readings B | c4c3157866, 08:22:49Z | 3696, 3718, 3742, 3756 | call 1102 |
+  | #3367 | Serviceability B (supersedes #3210) | 58acf1d450, 09:07:40Z | 3330 and 3382 on #3210; 3761 | call 1111 |
+  | #3347 | Capture PR 3b, the wiring | 09c8f5d502, 10:07:06Z | 3687, 3733 and 3755 (both closed failed), 3765 | call 1116 (big) |
+  | #3371 | The sandbox's carried pins | 657477678e, 10:16:46Z | 3766 | call 1114; re-enqueued once by call 1121 |
+
+  *Table: the Overlord PRs that landed on 2026-11-25. #3371 merged a minute after this fold's snapshot; its run's close
+  follows the worker's MERGED mail.*
+- **The capture wiring (#3347).** Call 996 (big) sent it to fix round 1 after review 3687: the build must start with no
+  shell between tmux and it, the pane's command built in one place, the fault list, the start-up prune, and the build
+  copy's termination case, measured and fixed in this PR. Call 1003: a pane can never start the fixed start program alone.
+  Call 1007 gave its run the standing answer to a hook refusal that matched words only: redo it once in plain words and
+  report it. Call 1047: in the pane, `SHELL` names one fixed system shell, and a missing one is refused before any tmux
+  call. Reviewer 3733 stalled on background lenses and was closed failed; so was 3755. Call 1112 lifted the cap from 3 to
+  6 and opened a third attempt, review 3765, whose lenses ran in the foreground one at a time. It found no containment
+  finding and ten minor ones, none holding. Call 1116 (big): land at the reviewed tip, which arms the capture runner. The
+  PR touches one line of a shared file that the PWA reaches only through an import it never calls, so no browser run was
+  owed before the queue. The Desktop polish programme's coordinator was mailed the merge id, as owed since call 925.
+  Call 1127 dispatched the carries as run 3774 (ticket `capture-3b-review-carries`).
+- **Authority B (#3215, then #3370).** Calls 993, 1002 and 1027 set its last local round: restore an exact pin on the
+  lane table's tail, the recovery words, and one push after the local merge. Narrow review 3732 (round 6 of 6) found no
+  defect; call 1059: land as it stood. Call 1060 held its enqueue while the Desktop polish programme's #3289 was ahead
+  in the queue and conflicted in the app shell: the worker prepared a merge that keeps the witness exchange out of a
+  Docs tab, with a case, to push only if #3289 merged first. #3289 left the queue, so #3215 was enqueued as it stood.
+  The queue then ejected it for its own fault: a browser test lists the exact POST routes, and the PR added one. Call
+  1069 sent it to a fix round with the `full-ci` label. Its worker's turn then ended on a server error and every later
+  delivery failed, so call 1079 opened a fresh child, run 3744, which merged the old tip into its own branch, cured the
+  browser test, added the Docs tab gate, and opened #3370. #3215 was closed with a pointer to #3370. Review 3764 found
+  nothing holding; call 1115: accepted in substance, with one last round (one merge of main, the note's lines, one case
+  for the sign-in term of the shell effect), a full CI run on the exact tip, then one narrow review (round 2 of 3) and
+  landing.
+- **Serviceability B (#3210, then #3367).** Call 1075 flipped the order: Serviceability lands before Authority B. Its
+  worker ran on the same account as Authority B's and died the same way. Call 1082 opened a fresh child, run 3746, which
+  took the dead worker's unpushed local commits, merged main and opened #3367. #3210 was closed with a pointer. A
+  further routine call let the new worker edit the gate's two files on the coordinator's ruling while the dead worker's
+  claims stood. #3367's first PR run was red for a real reason (a test built a watcher without quieting it), fixed with
+  one more merge. Call 1108: a browser part cancelled at its job deadline with no failing file counts as measured, as all
+  three parts were green on the previous tip and the PR reaches the front end only by a type import. Review 3761 found
+  nothing holding; call 1111: land.
+- **Designation B (#3346).** Call 1021 (big): Restart refuses `overlord-attempt-pending` while an attempt is pending; a
+  real-watcher case and a production go-live adapter case; words on what Live arms; the rest of review 3695 carried to
+  `designation-b-review-carries`. Call 1077 (big, it changes 1021) after review 3740: Restart refuses only inside the
+  attempt's deadline; past it Restart fails the attempt through the existing writer and goes on, with no new mechanism;
+  a rebind's go-live stamps the old designation retired before the new one live; the newest live designation line is
+  kept by retention if that is small, else ticket `sequence-kept-line-after-rebind`. Call 1095 (big) after review 3754:
+  Restart first drains every owed stop and refuses, starting nothing, when a stop stays owed, as Rebind does; one merge
+  of main in the same round. Review 3768 found nothing holding (five minor); a routine call the same turn accepted it in
+  substance, with a last small round committed locally and no push until the coordinator names a base after #3371.
+- **Renewal readings B (#3343).** A big call after review 3718 set fix round 2, the last: a case through the default
+  arm, and a believed absence confirmed through measured reads, unmeasured on any unreadable answer. Call 1080 after
+  review 3742 accepted the code and asked for one more merge of main once E had landed. Review 3756 (round 4, the cap
+  lifted) found nothing critical or important; call 1102: land.
+- **Renewal readings E (#3350) and F (#3352).** Call 1004 accepted F. Call 1020 (big) sent E to fix round 1: call the
+  store's reads through the store, with a real-store wiring case, and have both unmarked operator paths (the terminal
+  drawer's input and the submit route) write the operator mark through the prompt route's one writer, with its keying.
+  E was not to land before the mark writes were in it. Call 1054: one more ordinary merge after F landed, keeping both
+  sides. Review 3736 found nothing holding; call 1070: land, with the four console routes that still write no mark as
+  their own small PR (ticket `overlord-quiet-four-unmarked-routes`, call 1099, run 3757, #3373).
+- **The Overlord clause (#3354).** Call 997 (big): the clause's room comes from the compaction note before the contract,
+  not from shortening clauses (D-9022). Call 1025: the skill's rollout revision word stays, and the bump is owed at the
+  first build that can send a coordinator a relay (D-9024). Review 3723 found nothing; call 1042: land.
+- **The generation day's bound (#3356).** Call 1036: one PR, with the judge's size word accepted. Review 3720 found the
+  seeds identical to main's in both modes and seven mutations red; call 1045: land with the bound as built. It removes
+  the flake that ejected PRs from the queue.
+- **Board B1 (#3348).** Calls 1017 and 1029: stop the 332-file local pass, run the files that matter, push, and read the
+  fast run's selection. Review 3730's close was refused as stale, because the worker had committed a prepared merge on
+  this coordinator's word while the review read: this coordinator's slip. Call 1063 (big) closed it failed and used its
+  report as evidence for fix round 1; its F3, the history row in the door process, is deferred to ticket
+  `history-door-process-row`, which this coordinator settles in the door-process plan before the board piece. Review 3749
+  found nothing critical or important; call 1093: land.
+- **The sandbox's carried pins (#3371).** Call 1100 dispatched it (run 3758): review 3366's door pins, and a failed
+  re-read answers `unread` while `stale` stays for changed evidence, with one log line. Call 1107: the worker adds the one
+  floor key line itself, since the file's claim was held by a dead session. Review 3766 found one advisory; call 1114:
+  land. The queue removed it once for a timeout in another programme's test file; call 1121: one re-enqueue at the same
+  head, and a second loss on that case goes to that file's owner.
+- **The two dead workers.** Both of this programme's workers on one account failed every turn from about 04:45Z (a server
+  error, then a model not found), and this coordinator's own session was moved off that account. A coordinator cannot
+  abandon a working run, and a spent child cannot take a new run, so the cure was a fresh child each (calls 1079 and
+  1082). Runs 3299 and 3296 stay open until the operator ends them (items 663 and 662); item 661 reports the failing
+  account. While a dead session's process reads as running, its claims renew themselves.
+- **New runs on main 09c8f5d502 (calls 1126, 1127).** Renewal readings D (run 3773, ticket `w1-renewal-readings-d`): plan
+  Task 7; its holds input stays `not-wired` until PR H, it touches the watch file only by packet to designation B, and it
+  says what its merge arms. The
+  capture carries (run 3774, ticket `capture-3b-review-carries`): the copy program's one assignment, gate G1 made one
+  object and red both ways with its poll pinned, the real-tmux case, the builder's refusal, the words, and the task
+  notes corrected on its own branch. Its review needs a containment lens.
+- **The capture lane's second recipe (call 1131, big).** The Desktop polish programme adds a delivery recipe to the
+  capture runner (its own run) and asked what starts a delivery capture. Ruling: no new door. The capture lane starts one
+  delivery capture for a build after that build passes its trust capture, and the result rides the capture state's
+  existing read; no route, client verb or console surface starts a capture, since the box token is held by every
+  session. Conditions: the server sends a delivery job only to a box that reports knowing the recipe, and the reader
+  refuses an answer that does not echo it; the result is information only and decides nothing; a fault of the box is no
+  verdict, retried by the lane's back-off, and a delivery capture sorts after trust; nothing imports the driver file, no
+  route reaches it, and it refuses a socket outside the capture's scratch root; timings come from the one timing
+  object; the PR counts as a front-end PR at landing. Packets for the shared capture contract come to this coordinator
+  first. This coordinator mails that programme when run 3774's PR merges.
+- **The queue on 2026-11-25.** `shared/api.ts` stands exactly at its growth cap. #3344 (not this programme's) added one
+  line there, so both growth suites failed in every queue group that held it, and something re-enqueued it after each
+  removal. The landing programme's coordinator turned it into a draft. A PR of this programme that adds a code line to
+  that file removes one, and the coordinator checks that file's diff in every wave-done.
+- **Mechanics.** The review cap is lifted with `runs review-rounds`, decided before the extra round opens. `runs advance`
+  to `working` carries the verified fingerprint. An item for the operator carries a kind, a need-by, a title, what, how
+  and why.
+- **Follow-up tickets added since the last fold.** Each rides the PR or run it names.
+  - `renewal-readings-b-review-carries`: review 3718 F7 and review 3756 F1 (no case runs E's door readings and
+    not-local in one call).
+  - `renewal-readings-e-review-carries`: review 3736's minors.
+  - `renewal-readings-f-review-carries`: the minors of F's review.
+  - `sandbox-pins-review-carries`: review 3766's advisory (the doc of `unread` names two of its three causes).
+  - `authority-b2-review-carries`: review 3764 F3 and F4, and a browser case for the witness exchange.
+  - `capture-3b-review-carries`: review 3765's findings; now run 3774.
+  - `board-b1-review-carries`: review 3730's carries, and review 3749 F1, F2 and F4 (the client grammar's differences and
+    the extras type).
+  - `history-door-process-row`: review 3730 F3, readers against fenced rows (above).
+  - `sequence-kept-line-after-rebind`: the newest live designation line kept by retention (call 1077).
+  - `designation-b-review-carries`: review 3695's A2, A3, A6 and A7.
+  - `serviceability-b-review-carries`: review 3382's F9 and F12 (unchanged).
+  - `generation-day-sim-review-carries`: review 3720's minors.
+  - `overlord-quiet-four-unmarked-routes`: run 3757, #3373.
+  - `w1-renewal-readings-d`: run 3773.
+  - `overlord-quiet-unmarked-operator-paths` stays open in the plan, though E's fix round did the work: the ticket-done
+    door refused it because E's PR had already closed E's own ticket. It is to be closed by hand.
+- **Watch items.** The fleet test slice's memory cap kills whole-file and whole-project runs under load (seen by four
+  workers); CI covers the same checks, and an item is raised only if it blocks a landing. Load flakes seen in queue runs:
+  the single-definition vocabularies case at its 20-second bound, one installer case, the secret-mask slow bench at 20
+  seconds, one harness-integrity case at 20 seconds, and a review-routes case of another programme. Three files are red on
+  a clean `main` in a worker checkout but green in the queue (the inbox client's closed-stdout case, a containment
+  loopback case, and the mutation floors' two PWA mood sets): the local environment.
+
+#### The merged task notes, folded
+
+Each note is under `docs/superpowers/programs/overlord/`. Departures by slug; none took a D-number except the clause's.
+
+- **Renewal readings B (`w1-renewal-readings-b.md`).** Departures: `not-local-unwired-keeps-w1`,
+  `not-local-carrier-unmeasured-has-its-own-reason`, `not-local-start-reasons-keep-the-detail`,
+  `not-local-resolver-throw-is-the-field-catch`, `not-local-fork-takes-the-turn-guard`,
+  `not-local-stop-at-the-start-is-after-it`, `isolation-reader-is-server-deps`, `not-local-source-pin-on-parsed-file`,
+  `start-by-id-tests-in-own-file`, `not-local-absence-confirmed-by-a-measured-search` (it replaced fix round 1's fresh
+  walk), `not-local-complete-is-not-a-measured-absence` (a plan correction: the resolver's `complete` is not a measured
+  absence), `not-local-first-turn-running-is-unmeasured`, `not-local-ask-refuses-a-moved-registry-row` and
+  `registry-lookup-named-in-the-run-session-census`. Armed on merge: the coordinators' and the Overlord's due records gain
+  the `not-local` reading; in shadow it is recorded only.
+- **Renewal readings E (`w1-renewal-readings-e.md`).** Departures: `door-readings-floor-is-the-start-rows-receipt`,
+  `one-delegate-for-the-reader-events`, `drift-sidecar-must-postdate-the-start`, `drift-input-carries-the-usage-word`,
+  `door-reads-optional-on-the-wiring`, `door-readings-tests-in-own-files`, `class-changed-k5-imports-nothing`,
+  `sidecar-read-derives-read-failure`, `switch-target-class-unused-by-drift`, and from fix round 1
+  `the-keying-adds-overlord-for-the-designated-session`, `drawer-marks-once-per-two-seconds`,
+  `unread-designation-writes-no-mark` and `overlord-prompts-still-mark-through-the-nudge`. Armed on merge: `model-drift`
+  is a hard row of the Overlord, so on a live lane a measured `true` drains it at its next turn end; `readersRunning`
+  reaches the soft permit. Corrections (review 3736): the note's "36 of 36" is the count before fix round 1, and the door
+  suite has 37 cases at the tip; "input through any console path keeps the break shut" is too broad, since four console
+  routes wrote no mark until #3373; the round's scope beyond the plan's "others 0" (the mark's keying, the prompt
+  hand-offs and three lines of the server's route file) has no slug of its own.
+- **Renewal readings F (`w1-renewal-readings-f.md`).** Departures: `overlord-quiet-read-in-the-lane`,
+  `turns-store-through-watcher-deps`, `turns-why-passed-through`, `turns-tests-in-own-file` and
+  `overlord-quiet-without-store-is-no-activity` (checked, no change). Armed on merge: the Overlord's `turns` and its
+  operator quiet are measured in the lane, in shadow until `continuity` is live.
+- **The Overlord clause (`w1-coordinator-clause.md`).** Departures: `coord-clause-room-from-compaction-note` (D-9022),
+  `coord-clause-index-shortening-not-needed` (D-9023), `coord-clause-condition-held-by-the-build`,
+  `coord-clause-revision-word-unchanged` (D-9024), `held-files-by-packet` and `coord-clause-plan-dated-path` (D-9025).
+  Armed on merge: clause 24 is in the contract, which ends 10 bytes inside its budget. What it asks waits on
+  `overlord-v1`, held by the build, except its last sentence (waves left as a range), which binds from the release and is
+  harmless. Corrections (review 3723): the plan and the note say the named doors answer the capability refusal, while
+  today the client answers an unknown verb; D-9024's phrase is to be tightened; the index needs a row for the plan's
+  dated path.
+- **The generation day's bound (`generation-day-sim-bound.md`).** No departure and no D-number; no product code changed.
+  Armed on merge: nothing.
+- **Board B1 (`w1-board-history-b1.md`).** Departures: `history-door-in-its-own-routes-file`,
+  `history-door-bound-allows-the-pair`, `history-request-read-after-the-gate`, `history-row-fenced`,
+  `read-runner-answer-kind`, `history-line-outcome-words`, `history-mask-pinned-in-the-door-test` and
+  `history-client-grammar-in-jq`. Armed on merge: the history door answers a caller that is the Overlord and passes the
+  gate; no migration, ccd verb, exec grant or history gate-code file. Owed by this coordinator: the board and history
+  plan's lines that still read the history row as unfenced, and the door-process plan against the read tool's rule
+  (ticket `history-door-process-row`).
+- **Serviceability B (`w1-serviceability.md`).** Departures: `a-stored-sample-rolls-at-read`,
+  `the-first-reset-ends-the-proof`, `a-projection-is-never-past` and `an-unknown-window-withholds-regain` (each a plan
+  correction), `ts-mutants-ride-mutant-sets`, `an-unmeasured-window-voids-a-future-crossing`, `one-window-proves-past`,
+  `load-lines-read-no-share`, `runway-read-lists-enabled-anthropic-accounts-by-pool`, `sampler-store-is-its-own-port`,
+  `sample-selection-stays-in-the-lane`, `departures-in-the-programme-note` and `the-runway-read-is-the-index-fold`.
+  Armed on merge: the sampler writes rows every five minutes; only the runway read reads them; the 95% row reads `lifted`
+  until an Overlord exists. Correction: the note asks for the migration to be re-checked at the final base; it landed at
+  slot 126, as the note says. The note names the dead run 3296; the PR was carried by run 3746.
+- **Capture PR 3b (`capture-runner-pr3b.md`).** Departures: `refuse-links-not-rehash`, `store-checks-before-the-stream`,
+  `unknown-life-is-no-verdict`, `closed-admissions-end-the-wait`, `capture-tmux-outside-the-socket-lookup`,
+  `recorder-named-not-imported`, `desk-composed-in-two`, `start-without-a-shell`, `capture-shell-fixed` and
+  `link-at-the-name-healed`, with three points left (the drive's failure line, the private server's session name, the
+  lane's header). Armed on merge: the capture runner, once a release carrying it is on the test box; a pass makes a build
+  trusted, and a fault of the box is never a failed verdict. Corrections (review 3765): the passages that credit the
+  real-tmux case with the login-refusing shell no longer hold, since the capture server's default shell is now set, so
+  that case no longer separates the no-shell cure; `capture-shell-fixed` fixes the pane's `SHELL` value, which tmux always
+  sets, and the pane also carries names the spec's §2.3 did not list (now folded into the spec); the run id the note gives
+  for the real-tmux cases belongs to a later head; a blank line splits the last mutant table. Run 3774 corrects the notes
+  on its branch.
+- **The sandbox's carried pins (`w1-sandbox-pins.md`).** Departures: `f3-door-held-by-the-settle-drain`,
+  `f5-unread-line-covers-the-first-read-too`, `n2-two-cases` and `floor-key-on-ruling`. Armed on merge: a settle whose
+  re-read fails answers `unread` and writes one log line; the word reaches no frame, row or console.
+- **Owed to a note not yet merged.** Authority B's note recorded the first merge of its round, not 61b98f1e5b, the merge
+  review 3732 read (393 gate tests, 80 flag-aware rows, census 306/303/191/112; review 3732 F1). Run 3744's last round
+  adds lines for its own merges and the Docs tab gate (review 3764 F1, call 1115). At #3370's landing, check the note and
+  correct here what it still misses.
+
+#### The W1 map of what is buildable (2026-11-25 10:15Z)
+
+Merged since the last map: Sequence A, renewal readings B, E and F, board B1, serviceability B, the capture wiring, the
+Overlord clause and the sandbox's pins. Building: designation B (run 3652), Authority B (run 3744), the four console
+routes (run 3757), renewal readings D (run 3773) and the capture carries (run 3774). Waiting: the Overlord's timers wait
+on designation B; Sequence B (tickets `sequence-b-message-stamps`, `sequence-a-review-carries`) waits on Authority B;
+readiness waits on designation B and Sequence B; home B waits on designation B and readiness, and home C and chat follow
+as the W1 index says; renewal readings G waits on home B and H on readiness and D; the board's later parts follow this
+coordinator's settling of `history-door-process-row`. The quiz tickets (`quiz-repilot-kill-window`,
+`quiz-doctor-run-age`) reach a history gate-code file, so the history programme's coordinator is asked before any brief.
+
 ## Carried constraints
 
 - **Characterization first.** Every foundation that moves code pins today's behaviour first, green on the old code.
@@ -715,67 +944,110 @@ subsection above is left as it was written.
   conflict with each other while each is clean against main (Sandbox B and Inbox, in the composition root).
 - **A ratchet row or an exact pin count is never raised.** A PR whose own test would push one up re-keys the test
   instead (Authority B's review 3679, F2). A file at its growth cap takes a replaced line, never an added one.
+- **The gate's two files have no holder** (since Serviceability B landed, 2026-11-25). `server/src/auth/gate.ts` and
+  `server/test/auth-gate.test.ts` are edited on the coordinator's ruling, and each merge of them is checked against the
+  mechanical merge tree. Authority B and designation B conflict there and in the box-token and Overlord-doors censuses:
+  whichever lands second merges those, with the counts re-derived.
+- **A PR that touches the front end runs the browser suite on its exact tip before it is marked ready** (the queue
+  ejected #3215 for its own browser red, 2026-11-25). That is any change under `pwa/src` or `ui/src`, or to a `shared/`
+  file that `pwa/src` or `pwa/browser` imports and uses. A pull request's fast run skips the browser suite; the `full-ci`
+  label or a dispatched full run gives it. A browser part cancelled at its job deadline with no failing case is not a red
+  (call 1108).
+- **`shared/api.ts` stands at its growth cap.** A PR that adds a code line there removes one; the coordinator reads that
+  file's diff in every wave-done.
 
 ## Next-wave brief
 
-State as of 2026-11-24 23:30Z, with main at 66eb018733.
+State as of 2026-11-25 10:25Z, with main at 25ed1ee2dd. #3347 merged at 10:07:06Z and #3371 at 10:16:46Z.
 
 - **Where to start.** Read the spec's "In short", §14 (the build order) and "Where things stand". Then read the plan
   of the piece you take, and its task note if it has one. Each plan is self-contained.
 - **Done.** W0 (#2632, #2711), the W1a foundations, and the W1a machine except `continuity-v1`, which waits for the
-  replay baseline. The recall clause is merged (#2919). The weekly quiz line is merged through stage B (#3252, #3253,
-  #3262, #3267). W1 is built through the vocabulary, the skill, the journal kernel and the authority journal's A and C,
-  the pool set, the push outbox and response record, the designation's A and C, the gates, the ladder, the other write
-  lanes, ccd's arms, serviceability A, the private store, the portfolio, the history op, the sandbox's A, A2 and B
-  (#3213, #3205), the door process, renewal readings A and C, the isolation word, the answer marks, the inbox (#3220)
-  and home A (#3207). Capture PR 2 is merged (#3276). W2 has its plans and its first twelve pieces. The Waves table has
-  each PR.
+  replay baseline. The recall clause (#2919) and the Overlord clause, clause 24 (#3354), are merged. The weekly quiz line
+  is merged through stage B (#3252, #3253, #3262, #3267). W1 is built through the vocabulary, the skill, the journal
+  kernel and the authority journal's A and C, the pool set, the push outbox and response record, the designation's A and
+  C, the gates, the ladder, the other write lanes, ccd's arms, serviceability A and B (#3367), the private store, the
+  portfolio, the history op and the history door (#3348), the sandbox's A, A2 and B and its carried pins (#3371), the
+  door process, renewal readings A, B, C, E and F (#3343, #3350, #3352), the isolation word, the answer marks, the
+  sequence's A (#3218), the inbox (#3220) and home A (#3207). Capture PR 2 (#3276) and the wiring (#3347) are merged.
+  W2 has its plans and its first twelve pieces. The Waves table has each PR.
 - **Open runs, and what each waits on.** Every PR below is a draft until the coordinator accepts it.
-  - Sequence A, #3218 (run 3297): accepted after reviews 3646 and 3675, in the merge queue at cce47c34cf, migration at
-    slot 125. On the server's merged notice, prove MERGED, mail the worker at once, settle the run's items and close it
-    final. Then Sequence PR B is dispatchable.
-  - Authority B, #3215 (run 3299): in fix round 3 after review 3679. Step one is local. Step two is one merge of main
-    at the commit where the Docs reader programme's #3286 merges, which re-derives the gate counts, then one push and a
-    wave-done with CI labelled pending. Then a narrow review of the round and the merge.
-  - Serviceability B, #3210 (run 3296): fix round 2 built locally. It waits behind Authority B for one base and a
-    migration slot. The last review round reads the fix round and the merge together.
-  - Capture wiring, #3347 (run 3657): in a containment review (review run 3687). When it is accepted: mark it ready,
-    run the gate, enqueue. When it merges, mail the Desktop polish programme's coordinator with the merge id (owed).
-  - Designation B (run 3652), the board's history door (run 3653, #3348, in a fix after its first run) and renewal
-    readings B (run 3654), E (run 3683) and F (run 3684): building. Each re-derives the shared gate and README counts
-    at its final merge. Renewal readings D waits on serviceability B.
-  - The weekly quiz line has no open run. Read the box after the next ticks: stage B is first measured when a release
-    that carries #3267 is on the box. Tickets `quiz-repilot-kill-window` and `quiz-doctor-run-age` wait for a free slot.
-- **Queue next, as dispatch slots, CI and the disk allow.** The Overlord clause (one run: its short plan, then the
-  clause with the wording of spec §11.4), Sequence PR B (after #3218; tickets `sequence-b-message-stamps` and
-  `sequence-a-review-carries`), the Overlord's timers (after designation B), readiness, home B (carrying the case
-  that ticket `home-a-review-carries` owes) and C, chat, renewal readings G and H after their dependencies, the board's
-  later parts, the `overlord-v1` plan, and the W2 pieces that wait on these. The follow-up tickets
-  `sandbox-b-door-pins`, `sandbox-surface-arm-pins`, `serviceability-b-review-carries`, `authority-b-review-carries`,
-  `authority-witness-above-ceiling` and `capture-pr2-review-carries` ride with the PR they name. D-8126's A10
-  measurement is due about 30 days after A9's rollout mail. W1-5 is not built. Dispatch a review only with free space
-  safely over the floor.
-- **Owed on the next ledger PR, in other documents.** After the capture wiring merges: the capture runner spec's
-  sentence on another version's bytes takes the wiring note's corrected words, and its "three phases" and Figure 2
-  captions are brought in line with what was built. The quiz note's old timer lines are corrected. Plan sentences
-  that say "nothing arms on merge" are checked against what each merged PR armed.
-- **What the operator has been asked.** Nothing is open from this programme. Items 605, 606, 607 and 615 are answered
-  or withdrawn, and the standing yes on item 615 stands. The Overlord's account pools are named in Settings once W1's
-  set row is live (R18); that is not an open item. Big calls stand until the operator overturns them: Renewal F1 and
-  Authority B's two (2026-11-23), and since then calls 592, 633 and 734 (the quiz), 815 (merges), 813, 822, 865, 901 and 925
-  (Capture), 870 (Serviceability B), 914 (Sequence A) and 959 (Authority B).
+  - Designation B, #3346 (run 3652): accepted in substance after review 3768. A small last round is committed locally.
+    The coordinator named its base at 10:23Z, main 25ed1ee2dd, after #3371 landed: one merge (the gate's two files,
+    with the counts re-derived, expected 309 scanned, 306 HTTP, 193 gated, 113 exempt; and the continuity routes file), checked
+    against the mechanical merge tree, one push, a PR run, a wave-done, then one narrow review (round 5 of 6) and landing.
+    The PR body takes review 3740's F3 and F4 corrections and its known limits (a failing stop holds Restart only; Rebind
+    still opens); the judge's `rules-mixed` and `proof-not-built` are named.
+  - Authority B, #3370 (run 3744; it supersedes #3215): accepted in substance after review 3764. Its last round is
+    pushed (one merge of main, the note's lines, a case for the sign-in term of the shell effect), and its full CI run is
+    going. Then a wave-done, one narrow review (round 2 of 3) of the merge and the two small commits, and landing. Mail
+    the Desktop polish programme's coordinator before the enqueue and on MERGED.
+  - The four console routes, #3373 (run 3757): in review (review run 3772, round 1 of 3, lenses in the foreground).
+  - Renewal readings D (run 3773, call 1126): dispatched 10:10Z. Its holds input stays `not-wired` until PR H, and it
+    touches the watch file only by packet to designation B.
+  - The capture carries (run 3774, call 1127): dispatched 10:12Z. Its review needs a containment lens.
+  - The sandbox's pins, #3371 (run 3758): merged. Wait for the worker's MERGED mail, close the run final, and mark
+    `sandbox-surface-arm-pins` done by hand with the run as evidence.
+  - Runs 3296 and 3299: their workers died, and runs 3746 and 3744 carried their work. Each stays open until the operator
+    ends it (items 662 and 663). Run 3009 is a planned placeholder.
+  - The capture runner: once a release carrying 09c8f5d502 is on the test box, read the build records (acceptance), then
+    dispatch ticket `testbox-admin-root-writes` as its own run.
+  - The weekly quiz line has no open run. Stage B is first measured when a release that carries #3267 is on the box.
+- **Queue next, as dispatch slots, CI and the disk allow.** The Overlord's timers (after designation B); Sequence PR B
+  (after Authority B; tickets `sequence-b-message-stamps` and `sequence-a-review-carries`); readiness; home B (carrying
+  the case that ticket `home-a-review-carries` owes) and C; chat; renewal readings G and H after their dependencies; the
+  board's later parts, after this coordinator settles `history-door-process-row`; the `overlord-v1` plan; and the W2
+  pieces that wait on these. The quiz tickets `quiz-repilot-kill-window` and `quiz-doctor-run-age` reach a history
+  gate-code file, so the history programme's coordinator is asked before any brief. The follow-up tickets in the
+  subsection above ride with the PR they name. D-8126's A10 measurement is due about 30 days after A9's rollout mail.
+  W1-5 is not built. Dispatch a review only with free space safely over the floor.
+- **Owed on the next ledger PR, in other documents.** The quiz note's old timer lines are corrected. Plan sentences that
+  say "nothing arms on merge" are checked against what each merged PR armed. The clause's plan and note: the sentence on
+  the refusal word (today the client answers an unknown verb), D-9024's phrase, and the index row for the plan's dated
+  path; W2 owes client rows for the relay acknowledge verb and the act read, and a client-row pin for clause 24. The
+  board and history plan's lines that still read the history row as unfenced, and the door-process plan's reading of
+  history against the read tool's rule (ticket `history-door-process-row`). The I5 plan text for the kept designation
+  line (call 1077). Authority B's note, checked at #3370's landing. The W2 entry step bumps the coordinator skill's
+  rollout revision word with the first build that can send a coordinator a relay (call 1025, D-9024). The capture
+  runner spec's as-built corrections (§2.2's copy steps, Figure 2's caption, §2.3's environment) are made in this PR;
+  decision D3's "a new sub in the repair sub's phases" is left as the decision was worded.
+- **What the operator has been asked.** Items 661, 662 and 663 are open and block nothing: 661 reports an account on
+  which two workers failed every turn, and 662 and 663 ask the operator to end runs 3296 and 3299, which a coordinator
+  cannot abandon while they read as working. The W3 autonomy clause (347 bytes) does not fit the 10 bytes left in the
+  coordinator contract's budget; it is raised as an item, for a shortening or a budget decision, when W3 nears. The
+  standing yes on item 615 stands. Big calls stand until the operator overturns them: Renewal F1 and Authority B's two
+  (2026-11-23), calls 592, 633 and 734 (the quiz), 815 (merges), 813, 822, 865, 901 and 925 (Capture), 870
+  (Serviceability B), 914 (Sequence A) and 959 (Authority B), and since then 996 and 1116 (Capture), 997 (the clause),
+  1020 (readings E), 1021, 1077 and 1095 (designation B), 1063 (board B1), readings B's last fix round, and 1131 (the
+  capture lane's second recipe).
 - **Standing rules a coordinator keeps.**
   - Land only through the merge queue, with the head pinned by the landing entry. Never an admin merge. Never touch the
-    queue once a PR is in it. One re-enqueue after an unrelated timeout, then stop for the operator.
+    queue once a PR is in it. One re-enqueue after an unrelated timeout, then stop for the operator, or for that file's
+    owner when the red is another programme's case.
   - An Overlord PR is a draft until the coordinator accepts it. At landing: mark it ready, run the whole gate, then
     enqueue as a command of its own. Before that, probe the tip against every PR already in the queue.
+  - A PR that touches the front end, or a shared file the front end imports and uses, has the browser suite run on its
+    exact tip before it is marked ready; a pull request's fast run does not run it. A browser part cancelled at its job
+    deadline with no failing case is not a red.
   - One licensed absorption of main per PR, by the worker's own skill. Any further ordinary merge is made on a base the
     coordinator names after measuring the conflict (item 615's standing yes, call 815). Never a rebase, a force-push
     or the PR page's update button. A conflicting PR cannot be enqueued.
-  - A ratchet row or an exact pin count is never raised. A full commit id in a mail is copied from command output.
+  - The gate's two files have no holder: they are edited on the coordinator's ruling, and each merge of them is checked
+    against the mechanical merge tree.
+  - A ratchet row or an exact pin count is never raised. A file at its growth cap (`shared/api.ts` among them) takes a
+    replaced line, never an added one. A full commit id in a mail is copied from command output.
   - Review in a separate worktree at an exact head, reported to the coordinator, who closes the review with the reviewer's
-    measured tip. Three rounds is the cap, and a review that never ran counts. Lift it with a reason that names the
-    round. At the cap, fix only a one-line, already-tested finding; the rest are Known limits in the PR body.
+    measured tip. Three rounds is the cap, and a review that never ran counts. Lift it with `runs review-rounds` and a
+    reason, decided before the round opens. At the cap, fix only a one-line, already-tested finding; the rest are Known
+    limits in the PR body.
+  - While a review reads, the branch does not move: a prepared merge stays uncommitted, since a local commit moves the
+    ref the server measures and the review's close is refused as stale.
+  - A reviewer that stalls on background lenses is closed failed and replaced by a review whose lenses run in the
+    foreground of its turn, one at a time, sized to the round.
+  - A review report is copied to the coordinator's own store before the reviewed work run closes, since the reviewer's
+    folder is reclaimed with it.
+  - A worker whose every turn fails is replaced by a fresh child on its workspace's work; the dead run waits for the
+    operator's end, since a coordinator cannot abandon a working run.
   - Open the next wave's run before closing the last. After a MERGED mail, prove MERGED at the pinned head, mail the
     worker at once, then close the run final and require `released:true`.
   - A brief is at most 8,192 bytes with its prefix; measure bytes and keep it under 8,088. Keep saved server answers out
