@@ -629,13 +629,15 @@ jobs:
     if: ${{ !cancelled() && needs.select.outputs.docs_followup != 'true' && (needs.select.outputs.fast == 'true' && needs.fast-plan.result == 'success' && needs.fast-plan.outputs.count != '0' || needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')) }}
     runs-on: ubuntu-24.04
     # A deadline, not the default. Without this key a wedged job runs for
-    # GitHub's 360 minutes before anyone learns it wedged. Each shard is
-    # packed to about four minutes, up to 12 shards (a longer file gets one of
-    # its own), and the whole unsharded server leg measured 18.5 min at the
-    # median (21.5 max, 2026-09-23) — so 30 is a deadline even for a shard
-    # that received the entire suite. Pinned — key AND ceiling — by
-    # server/test/oss-metadata.test.ts.
-    timeout-minutes: 30
+    # GitHub's 360 minutes before anyone learns it wedged. A fast pull
+    # request's shards are packed to about four minutes each; a full run's,
+    # the merge queue's among them, are not. A full merge-queue shard took from
+    # 15m47 to 29m24 on 2026-11-24 by runner, and one green shard was
+    # cancelled at a 30-minute deadline a second after its tests passed, which
+    # removed its entry from the queue. So 45 is about half as much again over
+    # the slow case and still under the queue's own hour (D-9014). Pinned —
+    # key AND ceiling — by server/test/oss-metadata.test.ts.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.server_matrix || needs.select.outputs.server_matrix) }}
