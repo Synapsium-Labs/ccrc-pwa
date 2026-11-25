@@ -1,7 +1,8 @@
 import type { FastifyReply } from 'fastify';
+import type { ReclaimRefuseCode } from '../../shared/api.js';
 import type { AdvanceRefusal } from './coord/advance.js';
 import { decideOtherLane, type OtherLane, type OtherLaneReads } from './coord/otherLanes.js';
-import { ADVANCE_REJECT_STATUS, REFUSAL_STATUS, RUN_REFUSAL_STATUS, type OpenRunConflict, type RouteRefusal } from '../../shared/refusal.js';
+import { ADVANCE_REJECT_STATUS, RECLAIM_REFUSAL_STATUS, REFUSAL_STATUS, RUN_REFUSAL_STATUS, type OpenRunConflict, type RouteRefusal } from '../../shared/refusal.js';
 
 /**
  * The thin route refusal (D-5381, audit ticket #547, ARCH-11a): `{ ok: false, error,
@@ -35,6 +36,13 @@ export const refuseRun = (
   reply: FastifyReply, refused: OpenRunConflict,
   extra: Readonly<Record<string, unknown>> & { ok?: never; refused?: never } = {},
 ): FastifyReply => reply.code(RUN_REFUSAL_STATUS[refused]).send({ ok: false, refused, ...extra });
+
+/** `refuseRun`'s sibling for the reclaim ladder's own words (programme lifecycle W2: the start and the hand-over answer them
+ *  as the reclaim door does): `{ ok: false, refused, ...extra }` at `RECLAIM_REFUSAL_STATUS`. */
+export const refuseReclaim = (
+  reply: FastifyReply, refused: ReclaimRefuseCode,
+  extra: Readonly<Record<string, unknown>> & { ok?: never; refused?: never } = {},
+): FastifyReply => reply.code(RECLAIM_REFUSAL_STATUS[refused]).send({ ok: false, refused, ...extra });
 
 /**
  * The advance route's refusals (D-6733, audit ticket ARCH-33): one answer per

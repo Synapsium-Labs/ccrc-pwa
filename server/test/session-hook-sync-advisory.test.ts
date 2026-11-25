@@ -119,6 +119,10 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     expect(text).toContain('(4) the coordinator');
     expect(text).toContain('`conflict-sync:`');
     expect(text).toContain('exactly that commit');
+    // The limit and the licence the advisory states, which the text suite reads
+    // in the hook's source only: here, in what the hook prints (review 3751 F3).
+    expect(text).toContain("before this round's wave-done only");
+    expect(text).toContain('your own probe of that commit agrees');
     expect(text).toContain('git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD');
     // Both halves of the conflict answer, in clause 16's words: git 2.43 exits
     // 1 for an unresolvable ref too, so "exit 1" alone would license a typo.

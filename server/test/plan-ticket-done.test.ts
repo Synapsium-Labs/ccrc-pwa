@@ -15,7 +15,7 @@ import type { CoordStore } from '../src/coord/store.js';
 import type { LandingOutcome } from '../src/coord/landingEntry.js';
 import type { PlanView } from '../../shared/plan.js';
 import { DONE_CASES } from './planTicketDoneCases.js';
-import { charWorld, CHAR_COORD, CHAR_COORD_B, CHAR_TOKEN, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
+import { charWorld, CHAR_COORD, CHAR_COORD_B, CHAR_TOKEN, closeAndConfirm, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
 import { mkTmp } from './tmpHelpers.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -437,7 +437,7 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     const x = await world();
     await planVerb(x, 'prog-a', '', SIX);
     const run = await doneBareRun(x);
-    expect((await planVerb(x, 'prog-a', '/close', { outcome: 'done' })).statusCode).toBe(200);
+    expect((await closeAndConfirm(x, 'prog-a')).statusCode).toBe(200);
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: run } }))).toEqual([409, 'plan-closed']);
   });
 

@@ -10,7 +10,14 @@
 // (`backstopInstantBefore`, `backstopDueOf`). PR C: the designation's two readings (`termRaisedOf`, `classChangedOf`), the
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
 // (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
-// `notLocalAskOf`, what that reading asks the resolver about. The later pull requests of the plan add the other mappers here.
+// `notLocalAskOf`, what that reading asks the resolver about. PR D: the account readings, `accountOutsideSetOf`,
+// `classUnservableOf`, `accountLoadOf` with `accountLoadMoveOf`, over the candidates `overlordCandidatesOf` builds once a pass, or
+// those `unboundCandidates` answers from the designation alone. The later pull requests of the plan add the other mappers here.
+//
+// IMPORTS ACROSS CONTEXTS (PR D, plan Task 7): L1 into L1 only, each a producer's own decider, never re-derived. C1's
+// `server/src/poolrule.ts` (the pool answer's parsed type) and `server/src/accountLoad.ts` (serviceability B: the candidates, the
+// load move and the twin's `classUnservable`), and C5's `server/src/coord/overlordDesignation.ts` (designation A's ordered list,
+// `overlordAccounts`), with L0's `serviceability`.
 import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
@@ -23,6 +30,10 @@ import { familyClassOf } from '../../../shared/models.js';
 import type { ModelSwitchHow } from '../../../shared/continuity-reports.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
+import { serviceability, type LaneFacts } from '../../../shared/serviceability.js';
+import type { PoolAnswerRead } from '../poolrule.js';
+import { accountLoadMoveReading, classUnservableReading, overlordLoadCandidates, type Candidates } from '../accountLoad.js';
+import { overlordAccounts, type AccountFacts } from '../coord/overlordDesignation.js';
 
 /** The `RenewalInputs` fields the lane reads `W1` until their producers are wired (`renewalInputsOf`'s defaults). The
  *  wiring answers only the fields whose producer is wired, and the lane spreads them over the defaults. */
@@ -290,4 +301,122 @@ export function notLocalOf(i: {
   }
   if (i.turn.at >= i.ask.observedAt) return unmeasured('absence older than the turn marker');
   return { kind: 'measured', value: true };
+}
+
+// PR D (Task 7): the account readings, the Overlord's only, each hard (Table 3.3.11b, C46, C57, Table 3.4b). Every one reads the
+// candidates (serviceability B's `overlordLoadCandidates` over designation A's ordered list), read once a pass. No designation
+// bound to this generation's session: the row does not apply, measured `false`. The designation unreadable: unmeasured. An
+// unmeasured candidate never folds into a proven absence (fix round 1, F5).
+
+/** The Overlord's candidates for one pass: designation A's ordered list (`overlordAccounts`, asked only of a live binding, which
+ *  alone has a set) under serviceability B's `overlordLoadCandidates`. */
+export function overlordCandidatesOf(d: DesignationRead, f: AccountFacts): Candidates {
+  return overlordLoadCandidates(d, d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : [], f);
+}
+
+/** The candidates for one generation when the designation alone answers, or null when it is this session's live binding and the
+ *  facts and the pool answer must be read (fix round 1, I: the designation is checked first, so no read is made for a generation
+ *  the rows do not apply to). Not this session's (`boundTo`, the one reader of the binding that `termRaisedOf` reads too: no
+ *  designation, a pending one, or a rebind): `not-designated`. Unreadable: unmeasured. */
+export function unboundCandidates(d: DesignationRead, sessionId: string): Candidates | null {
+  const b = boundTo(d, sessionId);
+  if (b === false) return { kind: 'not-designated' };
+  return b.kind === 'unmeasured' ? { kind: 'unmeasured', why: 'designation-unreadable' } : null;
+}
+
+/** The account holds (`overlord_account_holds`, PR H) as this reading takes them, or why they are unread. */
+export type Holds = { readonly ok: true; readonly lanes: readonly string[] } | { readonly ok: false; readonly detail: string };
+
+/** A set on the route record, read from the session's side word as `_session_pool_side` printed it (fix round 1, F1): a set, or
+ *  one of the two bad-set words, which arrive as `verdict=undecidable`. Never the side the verdict was decided on, which
+ *  `_pool_ok_set` sets to `account` for every decided answer under a well-formed set. */
+const isSetSide = (side: string): boolean => side.startsWith('set:') || side === 'set-unreadable' || side === 'set-malformed';
+
+/** Table 3.3.11b "The account is outside the set" (hard; Overlord, C46): the session's account is not one the designation's set
+ *  admits, and a candidate can take the renewal. First match (plan Task 7):
+ *  0. no designation bound to this session: measured false; the designation unreadable: unmeasured;
+ *  1. the pool answer not run, refused or unparsed: unmeasured, naming which;
+ *  2. no set on the route record (a project word): unmeasured;
+ *  3. the answer's account held (`holds`): outside the set, to rule 8 (F7);
+ *  4. `serve`, and 6. `mismatch` over a crossing that stands: measured false, unless the holds are unread, which might decide;
+ *  5. `undecidable`: unmeasured with the pool state; 7. the crossing unreadable: unmeasured;
+ *  8. outside the set (`mismatch` with crossing `none`, or held): the candidates other than the answer's own account decide (fix
+ *     round 1, D: as the other two readings leave the session's account out; slug outside-set-leaves-its-own-account-out). Any
+ *     unmeasured, unmeasured (F5); one serving, true; none serving, false (nothing to land on: `stranded`, slug
+ *     account-triggers-need-a-servable-account). */
+export function accountOutsideSetOf(a: PoolAnswerRead, c: Candidates, holds: Holds | 'not-wired'): Reading<boolean> {
+  if (c.kind === 'not-designated') return { kind: 'measured', value: false };
+  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');
+  if (a.kind === 'not-run') return unmeasured('pool answer not run');
+  if (a.kind === 'refused') return unmeasured(`pool answer refused (${a.code})`);
+  if (a.kind === 'unparsed') return unmeasured(`pool answer unparsed: ${a.why}`);
+  const hasSet = isSetSide(a.answer.side);
+  if (!hasSet) return unmeasured('no set on the route record');
+  const held = holds !== 'not-wired' && holds.ok && holds.lanes.includes(a.answer.account);
+  if (!held) {
+    const inside = a.answer.verdict === 'serve' || (a.answer.verdict === 'mismatch' && a.answer.crossing === 'valid');
+    if (inside) {
+      if (holds !== 'not-wired' && !holds.ok) return unmeasured(`holds unread: ${holds.detail}`);
+      return { kind: 'measured', value: false };
+    }
+    if (a.answer.verdict === 'undecidable') return unmeasured(`undecidable: ${a.answer.poolState}`);
+    if (a.answer.crossing === 'unreadable') return unmeasured('crossing unreadable');
+  }
+  const elsewhere = c.list.filter((x) => x.id !== a.answer.account);
+  if (elsewhere.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');
+  return { kind: 'measured', value: elsewhere.some((x) => x.serves === 'yes') };
+}
+
+/** The account the generation runs on, as `classUnservableOf` reads it: its id (the generation's lane), the model it runs (the
+ *  class is `familyClassOf` of it) and its serviceability facts (`limits.ts#laneFactsOf`; absent, unread). */
+export interface OnAccount { readonly account: string | null; readonly model: string | null; readonly own: LaneFacts | undefined }
+
+/** Table 3.3.11b "The class cannot be served here" (hard; Overlord, Table 3.4b): the server's twin (`serviceability`, asked on the
+ *  set side, mapped by serviceability B's `classUnservableReading`) answers unservable for the generation's class on its account,
+ *  and another candidate serves. Not servable-here is decided first: a servable account is not due whatever the others say. Then
+ *  another candidate unmeasured: unmeasured (F5); one serving: true; none: false (`stranded`). */
+export function classUnservableOf(on: OnAccount, c: Candidates, nowS: number): Reading<boolean> {
+  if (c.kind === 'not-designated') return { kind: 'measured', value: false };
+  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');
+  const cls = on.model === null ? null : familyClassOf(on.model);
+  if (cls === null) return unmeasured('model unknown');
+  if (on.account === null) return unmeasured('account unknown');
+  if (on.own === undefined) return unmeasured('account facts unread');
+  const own = classUnservableReading(serviceability(cls, on.own, 'set-side', nowS));
+  if (own.kind === 'measured' && !own.value) return own;
+  if (own.kind === 'unmeasured') return own;
+  const others = c.list.filter((x) => x.id !== on.account);
+  if (others.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');
+  return { kind: 'measured', value: others.some((x) => x.serves === 'yes') };
+}
+
+/** Serviceability B's load reading for the account the generation runs on (`accountLoadMoveReading`, C57), with this account as
+ *  the current candidate and the rest as the others. An account not among the candidates is unmeasured. THE F5 GUARD: the
+ *  producer counts only serving others and so reads an unmeasured other as "no counted other", `false`; until it reads that as
+ *  unmeasured itself (the plan's index change for serviceability B), a `false` beside an unmeasured other reads unmeasured here,
+ *  so the fold never reaches `renewalDue` (slug load-move-guards-the-unmeasured-other). */
+export function accountLoadOf(account: string | null, c: Candidates, nowS: number): Reading<boolean> {
+  if (c.kind === 'not-designated') return { kind: 'measured', value: false };
+  if (c.kind === 'unmeasured') return unmeasured('designation unreadable');
+  if (account === null) return unmeasured('account unknown');
+  const current = c.list.find((x) => x.id === account);
+  if (current === undefined) return unmeasured('account not a candidate');
+  const others = c.list.filter((x) => x !== current);
+  const load = accountLoadMoveReading(current, others, nowS);
+  if (load.kind === 'measured' && !load.value && others.some((x) => x.serves === 'unmeasured')) return unmeasured('a candidate unmeasured');
+  return load;
+}
+
+/** Table 3.3.11b "The account load" (hard; Overlord, C57): the load reading (`accountLoadOf`) and "the session is idle" by
+ *  Kleene's and, since idleness is the renewal lane's and not the load reading's (slug load-move-joins-idle-in-the-lane). Idle is
+ *  the turn marker read and not `working`. A measured busy session is not due whatever the load says; a load that is not due is
+ *  not due whatever the marker says; an unread marker beside a due load is unmeasured, naming the marker. */
+export function accountLoadMoveOf(load: Reading<boolean>, turn: TurnMarkRead): Reading<boolean> {
+  const idle: Reading<boolean> = turn.ok
+    ? { kind: 'measured', value: turn.state !== 'working' }
+    : unmeasured(`turn marker ${turn.reason}`);
+  if (load.kind === 'measured' && !load.value) return load;
+  if (idle.kind === 'measured' && !idle.value) return idle;
+  if (load.kind === 'unmeasured') return load;
+  return idle;
 }

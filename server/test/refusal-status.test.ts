@@ -90,8 +90,9 @@ function refusalSends(text: string): Send[] {
   return out;
 }
 /** A computed status that IS a table: the helpers' own one send each —
- *  `refuseRun`'s `RUN_REFUSAL_STATUS` (D-5384) and `refuseAdvance`'s `ADVANCE_REJECT_STATUS` (ARCH-33) included. */
-const TABLE_STATUS = /^(?:(?:RUN_)?REFUSAL_STATUS|ADVANCE_REJECT_STATUS)\[/;
+ *  `refuseRun`'s `RUN_REFUSAL_STATUS` (D-5384), `refuseAdvance`'s `ADVANCE_REJECT_STATUS` (ARCH-33) and `refuseReclaim`'s
+ *  `RECLAIM_REFUSAL_STATUS` (programme lifecycle W2) included. */
+const TABLE_STATUS = /^(?:(?:RUN_|RECLAIM_)?REFUSAL_STATUS|ADVANCE_REJECT_STATUS)\[/;
 /** A `refuseRoute` call naming its word as a literal. */
 const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 /** A word a pure decider answers as `refused('<word>'` (`coord/route.ts`): the route sends it through `refuseRoute(reply, decision.refused, …)`. */

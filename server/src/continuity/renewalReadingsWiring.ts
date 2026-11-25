@@ -22,10 +22,34 @@
 // only from that search. The isolation word's carrier (`deps.isolation`) is read before the first read and after the last. A
 // field it does not answer keeps the lane's `W1`.
 //
+// PR D wires the account readings, the Overlord's only: `accountOutsideSet`, `classUnservable` and `accountLoadMove`. Once a pass:
+// the account facts (the roster, `readLimits` and `readSharesMeasured` over the watcher's io, the store's central pool edges, each
+// roster account's `laneFactsOf`) and the candidates `overlordCandidatesOf` builds from them and the designation. Once a pass per
+// Overlord session: ccd's `pool-answer`, through the body adapter's one composer (`ccdPoolAnswer`, behind `ccdCan`). The mappers
+// (`renewalReadings.ts`) decide; this file only reads. The holds are `'not-wired'` until PR H. A coordinator gets none of the three.
+// The designation is read first: when it is not this session's live binding, or is unreadable (`unboundCandidates`), the three
+// answer from it alone, and neither the facts nor the pool answer is read (fix round 1, I).
+//
+// A SECOND LIMITS READER, LEGITIMATELY DIFFERENT (fix round 1, A): the tick reads the limits once and publishes them
+// (`FleetWatcher.currentLimits`), but `sweepGenerations` runs before that read in the same tick, so the tick's own reading would be
+// the previous tick's or none. So the wiring calls the producer's own reader (`readLimits`), as the request-time callers in
+// `server.ts` do, and the shares read, which has no tick owner, the same way. From the merge these reads, the edges read and the
+// pool answer run on every tick, in shadow too, for a generation of the Overlord's role that the designation binds; their cost on
+// the fleet box is not measured (the plan's question 8 stays open).
+//
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
 // lane decides when (`probesFailedTwiceOf`) and logs a refusal; this file only binds the raise and names the refusal's word.
 import type { CcrcConfig } from '../config.js';
+import type { FleetState } from '../fleetstate.js';
+import { laneFactsOf, readLimits, type AccountLimits } from '../limits.js';
+import { readSharesMeasured, type SharesRead } from '../shares.js';
+import type { PoolAnswerRead } from '../poolrule.js';
+import type { LaneFacts } from '../../../shared/serviceability.js';
+import type { Candidates } from '../accountLoad.js';
+import type { AccountFacts } from '../coord/overlordDesignation.js';
+import { bodyRunner, ccdPoolAnswer } from '../coord/overlordBody.js';
+import type { RunCcd } from '../coord/ports.js';
 import { configDirFor } from '../configDir.js';
 import type { IsolationReader } from '../isolationFacts.js';
 import { measuredIdentity, type SessionRecord } from '../registry.js';
@@ -48,6 +72,7 @@ import {
   backstopDueOf, classChangedOf, fittedCeilingOf, notLocalAskOf, notLocalOf, termRaisedOf, type AbsenceProbe, type Carrier, type SpotsRead, type TranscriptAsk,
   type W1Inputs,
 } from './renewalReadings.js';
+import { accountLoadMoveOf, accountLoadOf, accountOutsideSetOf, classUnservableOf, overlordCandidatesOf, unboundCandidates } from './renewalReadings.js';
 import { modelDriftReadingOf, readersRunningReadingOf } from './renewalReadings.js';
 import type { Reading } from './renewalDue.js';
 
@@ -57,6 +82,18 @@ export interface ReadingsCoord extends Pick<WatcherCoordPort, 'closedSpotProbes'
    *  leaves `modelDrift` and `readersRunning` at the lane's `W1`. */
   readonly modelSwitchesOf?: WatcherCoordPort['modelSwitchesOf'];
   readonly readerEventsOf?: WatcherCoordPort['readerEventsOf'];
+  /** PR D: the central pool edges (designation A's ordered list reads them), optional so that a store without them leaves the
+   *  account readings at the lane's `W1`. */
+  readonly accountPoolEdges?: WatcherCoordPort['accountPoolEdges'];
+}
+
+/** PR D: the account readings' three reads, each its producer's own reader. A test hands fakes; absent, the wiring builds them from
+ *  `runCcd`, `io` and `cfg` (`accountReadsOf`), and with any of those absent the account readings keep the lane's `W1`. */
+export interface AccountReads {
+  /** `ccd pool-answer --session <id>`, parsed (`ccdPoolAnswer`). Never throws. */
+  poolAnswer(sessionId: string): Promise<PoolAnswerRead>;
+  limits(nowS: number): Promise<Record<string, AccountLimits>>;
+  shares(): Promise<SharesRead>;
 }
 
 export interface ReadingsDeps {
@@ -78,6 +115,24 @@ export interface ReadingsDeps {
   readonly io?: FleetIO;
   /** The isolation word's one reader; absent, the carrier reads unmeasured and so does `notLocal`. */
   readonly isolation?: Pick<IsolationReader, 'wakingHostKey'>;
+  /** PR D: the account readings' reads; absent, built from the three below (`accountReadsOf`). */
+  readonly accountReads?: AccountReads;
+  /** The server's ccd runner and the fleet state whose caps `ccdCan` reads (the watcher's own), for the pool answer. */
+  readonly runCcd?: RunCcd;
+  readonly fleetState?: Pick<FleetState, 'ccdVerbs'>;
+}
+
+/** The account readings' reads from the watcher's own deps, or none when one is missing. */
+function accountReadsOf(deps: ReadingsDeps): AccountReads | undefined {
+  if (deps.accountReads !== undefined) return deps.accountReads;
+  const { runCcd, io, cfg } = deps;
+  if (runCcd === undefined || io === undefined || cfg === undefined) return undefined;
+  const ran = bodyRunner(runCcd);
+  return {
+    poolAnswer: (id) => ccdPoolAnswer(ran, deps.fleetState, id),
+    limits: (nowS) => readLimits(io, cfg, nowS),
+    shares: () => readSharesMeasured(io, cfg.registryDir),
+  };
 }
 
 /** The gather's port for one pass (`GatherPorts.w1`), and the pass's latch raise (`GenerationsDeps.latch`). */
@@ -150,6 +205,58 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
     return decide({ kind: 'asked', answer, measured, observedAt: deps.time.clock.wall() }, before, carrier());
   };
 
+  // PR D: the account facts and the candidates, once a pass; the pool answer, once a pass per session. Each a promise, so the
+  // generations of one pass share one read, and a read that fails fails each field that awaits it, in that field's own catch.
+  const reads = accountReadsOf(deps);
+  let facts: Promise<AccountFacts> | undefined;
+  let candidates: Promise<Candidates> | undefined;
+  const poolAnswers = new Map<string, Promise<PoolAnswerRead>>();
+  const factsOf = (r: AccountReads, edges: NonNullable<ReadingsCoord['accountPoolEdges']>): Promise<AccountFacts> => facts ??= (async () => {
+    const nowS = Math.floor(deps.time.clock.wall() / 1000);
+    const [limits, shares] = await Promise.all([r.limits(nowS), r.shares()]);
+    const roster = deps.cfg?.roster;
+    if (roster === undefined) throw new Error('no roster');
+    const lanes: Record<string, LaneFacts> = {};
+    for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits, shares);
+    return { roster, limits, edges: edges(), lanes, nowS };
+  })();
+  const candidatesOf = (f: AccountFacts): Promise<Candidates> => candidates ??= Promise.resolve(overlordCandidatesOf(designation ??= coord.designationRead(), f));
+  const poolAnswerOf = (r: AccountReads, id: string): Promise<PoolAnswerRead> => {
+    let p = poolAnswers.get(id);
+    if (p === undefined) { p = r.poolAnswer(id); poolAnswers.set(id, p); }
+    return p;
+  };
+  /** The three account readings of one Overlord generation (PR D, Task 7), each in its own catch. The designation first: when it
+   *  answers alone (`unboundCandidates`), each mapper is handed that answer and nothing else is read. The pool answer is then
+   *  `not-run`, as it was, and the facts unread; each mapper answers from the designation before it consults either. */
+  const accountReadings = async (w1: Partial<W1Inputs>, g: GenRow, base: GenReadings, r: AccountReads,
+    edges: NonNullable<ReadingsCoord['accountPoolEdges']>): Promise<void> => {
+    const early = (): Candidates | null => unboundCandidates(designation ??= coord.designationRead(), g.sessionId);
+    const live = async (): Promise<{ f: AccountFacts; c: Candidates }> => {
+      const f = await factsOf(r, edges);
+      return { f, c: await candidatesOf(f) };
+    };
+    const nowS = (): number => Math.floor(deps.time.clock.wall() / 1000);
+    await fieldAsync(w1, 'accountOutsideSet', 'account set', async () => {
+      const e = early();
+      if (e !== null) return accountOutsideSetOf({ kind: 'not-run' }, e, 'not-wired');
+      const [{ c }, answer] = await Promise.all([live(), poolAnswerOf(r, g.sessionId)]);
+      return accountOutsideSetOf(answer, c, 'not-wired');
+    });
+    await fieldAsync(w1, 'classUnservable', 'class serviceability', async () => {
+      const e = early();
+      if (e !== null) return classUnservableOf({ account: g.lane, model: g.model, own: undefined }, e, nowS());
+      const { f, c } = await live();
+      return classUnservableOf({ account: g.lane, model: g.model, own: g.lane === null ? undefined : f.lanes[g.lane] }, c, f.nowS);
+    });
+    await fieldAsync(w1, 'accountLoadMove', 'account load', async () => {
+      const e = early();
+      if (e !== null) return accountLoadMoveOf(accountLoadOf(g.lane, e, nowS()), base.turn);
+      const { f, c } = await live();
+      return accountLoadMoveOf(accountLoadOf(g.lane, c, f.nowS), base.turn);
+    });
+  };
+
   /** The soft `readersRunning` (PR E), read and mapped inside its own catch, as `field` reads a W1 field (F17). */
   let readersLogged = false;
   const readers = (read: () => Reading<number>): Reading<number> => {
@@ -192,6 +299,9 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         if (modelSwitchesOf !== undefined) field(w1, 'modelDrift', 'model drift', () => modelDriftReadingOf({
           startModel: g.model, startReportedAt: g.startReportedAt, switches: modelSwitchesOf(g.sessionId, g.startId), usage: base.usage }));
         if (readerEventsOf !== undefined) soft = { readersRunning: readers(() => readersRunningReadingOf(readerEventsOf(g.sessionId, g.startId), deps.time.clock.wall())) };
+        // PR D: the account readings, only where the reads and the store's edges are wired (absent: the lane's `W1`).
+        const edges = coord.accountPoolEdges?.bind(coord);
+        if (reads !== undefined && edges !== undefined) await accountReadings(w1, g, base, reads, edges);
       }
       const { cfg, transcript } = deps;
       if (cfg !== undefined && transcript !== undefined) await fieldAsync(w1, 'notLocal', 'not-local', () => notLocal(g, base, cfg, transcript));

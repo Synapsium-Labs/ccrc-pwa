@@ -127,3 +127,110 @@ export const PROGRAMME_RUN_REFUSAL_MAP: Readonly<Record<ProgrammeRunRefuseCode, 
  *  (`unknown-programme`, `CoordStore#reclaimProgramme`). */
 export const PROGRAMME_STORE_REFUSALS = ['already-ended', 'programme-ended', 'unknown-programme'] as const;
 export type ProgrammeStoreRefusal = (typeof PROGRAMME_STORE_REFUSALS)[number];
+
+// ── W2: the doors' vocabulary (programme lifecycle spec §5, §8, §11, §14, §15; D-8987, D-8989, D-8992) ─────────────────
+
+/** The edges of `POST /api/programmes/:slug/state` (spec §5). */
+export const PROGRAMME_STATE_EDGES = ['pause', 'resume', 'end', 'reopen', 'repair'] as const;
+export type ProgrammeStateEdge = (typeof PROGRAMME_STATE_EDGES)[number];
+export const isProgrammeStateEdge = (v: unknown): v is ProgrammeStateEdge =>
+  typeof v === 'string' && (PROGRAMME_STATE_EDGES as readonly string[]).includes(v);
+
+/** Every operator or Overlord programme act the credential rule (spec §14) rules on: the state door's edges, the start, the
+ *  hand-over, and the confirm and decline of an end proposal. */
+export const PROGRAMME_DOOR_ACTS = [...PROGRAMME_STATE_EDGES, 'start', 'hand-over', 'confirm-end', 'decline-end'] as const;
+export type ProgrammeDoorAct = (typeof PROGRAMME_DOOR_ACTS)[number];
+
+/** What a door asks of its caller (spec §14): `dark-ok` works while sign-in is dark and records `flag-off` then; `gate` takes
+ *  the account gate; `step-up` takes its step-up; `rung` is the Overlord's door, gated by its rung cell alone (W7). */
+export const DOOR_CREDENTIALS = ['dark-ok', 'gate', 'step-up', 'rung'] as const;
+export type DoorCredential = (typeof DOOR_CREDENTIALS)[number];
+
+/** Who decides an edge: the operator through a console door, or the Overlord through its own door (W7). */
+export const PROGRAMME_DECIDERS = ['operator', 'overlord'] as const;
+export type ProgrammeDecider = (typeof PROGRAMME_DECIDERS)[number];
+
+/** The doors' own refusal words, each with its ONE status, spread into `shared/refusal.ts`'s `REFUSAL_STATUS`
+ *  (`DELEGATION_ADOPT_REFUSALS`' idiom). CHOSEN, not measured: 400 for what the caller can fix, 404 for a programme that
+ *  is not there, 409 for a state that refuses the act. The pick's and the filing's words (`programme-has-coordinator`,
+ *  `coordinator-unmeasured`) arrive with their doors in W4. The words the doors share with older tables
+ *  (`programme-ended`, `already-asked`, `not-your-programme`) keep those tables' statuses. */
+export const PROGRAMME_DOOR_REFUSALS = {
+  'slug-taken': 409, 'why-required': 400, 'coordinator-required': 409, 'owns-another-programme': 409,
+  'unknown-programme': 404, 'not-paused': 409, 'not-ended': 409, 'not-unknown': 409, 'programme-runs-open': 409, 'evidence-required': 400, 'programme-provisional': 409,
+  'programme-unknown': 409, 'no-coordinator': 409,
+} as const;
+export type ProgrammeDoorRefusal = keyof typeof PROGRAMME_DOOR_REFUSALS;
+
+/** An end proposal's outcome, and the two answers its item offers (spec §8). */
+export type ProgrammeEndOutcome = ProgrammeEndedState;
+export const END_PROPOSAL_OPTIONS: readonly string[] = ['End the programme', 'Keep it open'];
+/** The proposal's evidence: 1 to this many lines, each 1 to `END_EVIDENCE_LINE_MAX` characters. */
+export const END_EVIDENCE_MAX = 24;
+export const END_EVIDENCE_LINE_MAX = 2000;
+
+/** A migration conflict on a live programme (spec §13), derived at each read, never stored: one session holding open runs
+ *  in several programmes, or one programme whose open runs several sessions hold. */
+export const CLAIM_CONFLICT_KINDS = ['session-in-several', 'programme-several-claimants'] as const;
+export interface ProgrammeClaimConflict {
+  readonly kind: (typeof CLAIM_CONFLICT_KINDS)[number];
+  readonly claimants: readonly string[];
+}
+
+/** The lifecycle fields `GET /api/programmes` adds to a row (spec §15), each additive: absent from an older server, and
+ *  read by one PWA reader (W6). `coordinator` is the bound session, named only when the line is `led`. */
+export interface ProgrammeLifecycleFields {
+  lifecycle?: ProgrammeLifecycle | null;
+  coordinatorLine?: CoordinatorLine;
+  coordinator?: string | null;
+  placeholder?: PlaceholderState | null;
+  pausedOpenRuns?: number;
+  claimConflict?: ProgrammeClaimConflict | null;
+}
+
+/** Why a coordinator owns no programme now (spec §6): its programme was handed to another, ended, its placeholder was
+ *  withdrawn, or the operator released it. */
+export const NO_PROGRAMME_WHYS = ['handed-over', 'ended', 'withdrawn', 'released', 'never-joined'] as const;
+export type NoProgrammeWhy = Exclude<(typeof NO_PROGRAMME_WHYS)[number], 'never-joined'>;
+
+/** One coordinator with no programme (spec §6), from its newest event: why, and since when. */
+export interface CoordinatorWithoutProgramme {
+  readonly session: string;
+  readonly why: NoProgrammeWhy;
+  readonly since: number;
+  /** The programme it last owned. */
+  readonly last: string;
+}
+
+/** The programmes read's additive list (spec §6, §15). */
+export interface ProgrammesLifecycleAnswer {
+  coordinatorsWithoutProgramme?: CoordinatorWithoutProgramme[];
+}
+
+/** One line of a programme's story (spec §11): a programme event (its own, or a placeholder's filed into it), or a run's
+ *  transition, oldest first. */
+export type ProgrammeHistoryEntry =
+  | { readonly source: 'programme'; readonly at: number; readonly program: string; readonly edge: ProgrammeEventEdge | string;
+      readonly fromState: string | null; readonly toState: string | null; readonly actorKind: string; readonly actor: string;
+      readonly why: string; readonly session: string | null; readonly detail: unknown }
+  | { readonly source: 'run'; readonly at: number; readonly runId: number; readonly wave: number; readonly kind: string;
+      readonly fromState: string | null; readonly toState: string; readonly actor: string };
+
+/** `GET /api/sessions/:id/programme` (spec §7, §14): the session's one programme, or `none` with why. */
+export type SessionProgrammeAnswer =
+  | { readonly ok: true; readonly programme: { readonly slug: string; readonly placeholder: PlaceholderState | null;
+      readonly lifecycle: ProgrammeLifecycle | null } }
+  | { readonly ok: true; readonly programme: 'none'; readonly why: NoProgrammeWhy | 'never-joined' };
+
+/** The words a coordinator left owning nothing is told (spec §7), once, by system mail. */
+export const NO_PROGRAMME_SENTENCE =
+  'You own no programme now. The operator or the Overlord will give you one or archive this session; open no runs until then.';
+
+/** The lifecycle doors' kebab words, for the code-word census (`mail-routes.test.ts`): their refusals, the event and edge
+ *  words, the door acts and credentials, the coordinator lines, the conflict kinds and why a coordinator owns nothing. Each
+ *  rides a door's answer or a stored event, never a mail rejection. */
+const DOOR_WORDS: ReadonlySet<string> = new Set<string>([
+  ...Object.keys(PROGRAMME_DOOR_REFUSALS), ...PROGRAMME_EVENT_EDGES, ...PROGRAMME_DOOR_ACTS, ...DOOR_CREDENTIALS,
+  ...COORDINATOR_LINES, ...CLAIM_CONFLICT_KINDS, ...NO_PROGRAMME_WHYS,
+]);
+export const isProgrammeDoorWord = (w: string): boolean => DOOR_WORDS.has(w);

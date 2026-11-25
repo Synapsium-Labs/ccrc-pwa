@@ -49,6 +49,9 @@ import type { RunVerdicts } from './runVerdicts.js';
 import { withLastMoves } from './runWire.js';
 import { doneEvidenceVerdict, verdictsReadOf, workMapOf, type DoneEvidenceFacts, type EvidenceVerdict } from './workMap.js';
 import { WORK_READ_FAILED, type WorkAnswer } from '../../../shared/plan.js';
+import { raiseEndProposal } from './programmeLifecycleRoutes.js';
+import type { ProgrammeDoorRefusal } from '../../../shared/programmeLifecycle.js';
+import type { EndRequestRefusal } from '../../../shared/refusal.js';
 
 export interface PlanRouteOpts {
   /** The coordination store, for the programme rows and the project's team key; undefined (a test, a script): `unavailable`. */
@@ -187,7 +190,7 @@ export function planViewOf(
 const NO_OWNER_NOW = '';
 
 /** A door's refusal: a plan word, or `unreachable`, the Linear read's existing 503 (a stored inbound row's issue could not be re-read). */
-type Refused = { refuse: PlanRefusal | 'unreachable' | 'not-your-programme' | 'owns-another-programme'; detail: string };
+type Refused = { refuse: PlanRefusal | 'unreachable' | 'not-your-programme' | 'owns-another-programme' | ProgrammeDoorRefusal | 'programme-ended' | EndRequestRefusal; detail: string };
 type Work = ((c: {
   coord: CoordStore; plan: PlanStorePort; slug: string; caller: string; callerUuid: string; body: unknown; stored: StoredPlan; owner: string | null;
   ws: ReadonlyMap<string, string | null>; routes: TeamRoutes | null; rechecks: ReadonlyMap<string, InboundRecheck>;
@@ -734,9 +737,13 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const closeProjects = home === null ? [...new Set(plan.planOf(slug).epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))] : [home];
     const closeUnfit = textRefusal(coord, closeProjects.map((p) => [p, parsed.close.why] as const));
     if (closeUnfit !== null) return closeUnfit;
-    plan.closePlan(slug, parsed.close.outcome, parsed.close.why === undefined ? null : mask(parsed.close.why), opts.now(),
-      { kind: 'coordinator', id: caller });
-    return { ok: true, plan: viewOf(plan, coord, slug) };
+    // Programme lifecycle W2 (spec §8, D-8987): the close no longer ends anything. It raises the end proposal, with the close's
+    // own outcome, why and evidence, for the operator or the Overlord to confirm; nothing writes `planEnd` here.
+    const proposed = raiseEndProposal(coord, { slug, by: caller, outcome: parsed.close.outcome,
+      why: parsed.close.why === undefined ? 'the plan is complete' : mask(parsed.close.why), evidence: (parsed.close.evidence ?? []).map(mask),
+      via: 'plan' }, opts.now());
+    if (!proposed.ok) return { refuse: proposed.why as Refused['refuse'], detail: proposed.detail };
+    return { ok: true, plan: viewOf(plan, coord, slug), proposal: proposed.id };
   }));
 
   // ── The inbound path (D-8183, design §7.5) ──

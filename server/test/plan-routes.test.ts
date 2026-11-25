@@ -194,9 +194,11 @@ describe('plan put', () => {
     expect(res.json()).toMatchObject({ ok: false, refused: 'reserved-programme' });
   });
 
-  it('a put after close is plan-closed', async () => {
+  it('a put after the programme ENDED is plan-closed; a close alone only proposes the end (programme lifecycle W2, D-8987)', async () => {
     await put(FIRST);
-    expect((await send('/api/programmes/prog-a/plan/close', { outcome: 'done' })).statusCode).toBe(200);
+    expect((await send('/api/programmes/prog-a/plan/close', { outcome: 'done', evidence: ['every epic done'] })).statusCode).toBe(200);
+    expect((await put(FIRST)).statusCode).toBe(200);
+    coord.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'confirmed' }, Date.now());
     const res = await put(FIRST);
     expect([res.statusCode, errorOf(res)]).toEqual([409, 'plan-closed']);
   });
@@ -243,12 +245,20 @@ describe('plan close', () => {
     expect(plan.planEndOf('prog-a')).toBeNull();
   });
 
-  it('close records the end and the why', async () => {
+  it('programme lifecycle W2 (D-8987): close raises the end proposal with its own outcome, why and evidence, and ends nothing', async () => {
     await put(FIRST);
-    const res = await send('/api/programmes/prog-a/plan/close', { outcome: 'abandoned', why: 'superseded' });
-    expect(res.statusCode).toBe(200);
-    expect(plan.planEndOf('prog-a')).toMatchObject({ outcome: 'abandoned', why: 'superseded' });
-    expect(errorOf(await send('/api/programmes/prog-a/plan/close', { outcome: 'done' }))).toBe('plan-closed');
+    const res = await send('/api/programmes/prog-a/plan/close', { outcome: 'abandoned', why: 'superseded', evidence: ['the objective moved elsewhere'] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(plan.planEndOf('prog-a')).toBeNull();
+    expect(coord.programmeLifecycleRow('prog-a')!.state).toBe('active');
+    const item = coord.openEndProposalOf('prog-a')!;
+    expect(item).toMatchObject({ kind: 'decide', state: 'open', action: { verb: 'end-programme', outcome: 'abandoned' } });
+    expect(item.why).toMatch(/^superseded\n/);
+    expect(res.json()).toMatchObject({ ok: true, proposal: item.id });
+    // One proposal at a time, and evidence is required.
+    expect(errorOf(await send('/api/programmes/prog-a/plan/close', { outcome: 'done', evidence: ['x'] }))).toBe('already-asked');
+    coord.withdrawProgrammeEnd(item, 'coord-a', Date.now());
+    expect(errorOf(await send('/api/programmes/prog-a/plan/close', { outcome: 'done' }))).toBe('evidence-required');
   });
 });
 
