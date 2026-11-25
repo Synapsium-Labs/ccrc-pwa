@@ -100,8 +100,9 @@ export function raiseItem(
   return tx(db, () => raiseItemInTx(db, input, now, actor, reach));
 }
 
-/** `raiseItem`'s in-transaction form, for a caller that already holds the transaction (the invariant monitor's finding, which
- *  writes its row in the same one): `checkRaise` first, then the insert, so `operator_items` keeps its one writer behind three
+/** `raiseItem`'s in-transaction form, for a caller that already holds the transaction (programme lifecycle W2: the end
+ *  proposal raises its item with its programme event in one transaction; the invariant monitor's finding writes its row in the
+ *  same one): `checkRaise` first, then the insert, so `operator_items` keeps its one writer behind three
  *  checked entries. A refused input throws `RangeError` inside the caller's `tx()`, which rolls it back. */
 export function raiseItemCheckedInTx(
   db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach,
@@ -138,13 +139,6 @@ function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, act
   writeItemEvent(db, id, now, 'raise', actor, null);
   if (reach !== undefined && operatorWasShown({ heldUntil: input.heldUntil ?? null, closedAt: null, raisedAt: now }, now)) reach(id);
   return id;
-}
-
-/** `raiseItem`'s checks and insert inside a transaction the CALLER holds (programme lifecycle W2: the end proposal raises its
- *  item with its programme event in one transaction). */
-export function raiseItemCheckedInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc'): number {
-  checkRaise(input);
-  return raiseItemInTx(db, input, now, actor);
 }
 
 /** `raiseItem` and a mail in ONE transaction (the pattern of `tickWithMail`): `queue` gets the new id and inserts the system
