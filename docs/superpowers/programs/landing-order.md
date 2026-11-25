@@ -18,9 +18,9 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | — | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; building |
+| 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | — | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; built at `052169a2` (PR #3357, a draft); review run 3727, the first round, is reading it (Decisions, 2026-11-25 03:40) |
 | 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); to dispatch after wave 1e, which changes the same workflow file |
-| 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, and the leg runs as four shards; its deadline stays 20 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026; Decisions, 2026-11-25 02:40); built before 1d; to dispatch once the plan is on `main` |
+| 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, and the leg runs as four shards; its deadline stays 20 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026; Decisions, 2026-11-25 02:40); built before 1d; the plan merged (#3355, `4e17ac96`) and run 3728 was dispatched on 2026-11-25; building |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116; amended by #1753 with the operator's per-project allowance, D-7249); run 1144 (the run's wave 8) dispatched 2026-10-29, once wave 3e had merged and another programme's worker, on the operator's instruction, released its claim on `ccd/session-hook.sh`; block 7309–7318; PR #1863; fix round 1 after review 1184; accepted on `e0a57a94` after review run 1195 and merged through the native queue as `d3250900` (Decisions, 2026-10-29 09:41); D-7309–D-7315 defined after the merge; deploy and live check wait (Next-wave brief) |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
@@ -41,7 +41,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | #2688 (plan #2671) | merged; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25); planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-landing-order-wave5h-landed-reader.md`, D-8294 to D-8314; Decisions, 2026-11-11 16:15); approved as written (item 173), the plan merged (#2671 `f517128c`) and run 1661 dispatched 2026-11-12 (Decisions, 2026-11-12 00:14); accepted by review 1848 after three rounds, departures D-8355 to D-8360; MERGED 2026-11-12 06:37 UTC (#2688 `58bd5591`), run 1850 opened for 5i, then run 1661 closed (Decisions, 2026-11-12 06:41) |
-| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | plan #2801 | plan approved as written 2026-11-14 (item 312; `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks, P1–P6 and amendments A/B (Decisions, 2026-11-14 22:16); the plan merged (#2801) and run 1850 was dispatched (`ccrc-pwa-landing-order-5i`), PR #2837; two review rounds (review runs 2123 and 2152); fix round 2 complete locally at `3c432734d`, not pushed; parked from 2026-11-16 to 2026-11-24 on a second merge of `main`, which the operator allowed (item 641; Decisions, 2026-11-24 20:04); that merge was made and pushed with the round's fixes (tip `1ce1b9cc`); review run 3685, the third, confirmed no finding, and the coordinator accepted the wave on 2026-11-25 (Decisions, 2026-11-25 01:40); the run is at `merging` and PR #2837 is in the merge queue at that tip |
+| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | plan #2801 | plan approved as written 2026-11-14 (item 312; `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head.md`, D-8625 to D-8629), seven tasks, P1–P6 and amendments A/B (Decisions, 2026-11-14 22:16); the plan merged (#2801) and run 1850 was dispatched (`ccrc-pwa-landing-order-5i`), PR #2837; two review rounds (review runs 2123 and 2152); fix round 2 complete locally at `3c432734d`, not pushed; parked from 2026-11-16 to 2026-11-24 on a second merge of `main`, which the operator allowed (item 641; Decisions, 2026-11-24 20:04); that merge was made and pushed with the round's fixes (tip `1ce1b9cc`); review run 3685, the third, confirmed no finding, and the coordinator accepted the wave on 2026-11-25 (Decisions, 2026-11-25 01:40); **merged** in #2837 on 2026-11-25 (`7fdd6a80`), run 1850 closed; its as-built departures are D-9031 to D-9044 in the plan (Decisions, 2026-11-25 03:40) |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
 
@@ -2378,6 +2378,28 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Also seen, and not a wave's work:** one queue run failed in its dependency job after 46 seconds on three
     `bad pack header` answers to the checkout's fetch. That is the host's, and the landing reference's second door
     (re-read the verdict, re-enqueue once) covers it.
+- **2026-11-25 03:40 — wave 5i has landed; wave 1e is dispatched; wave 1c is under review.**
+  - **Wave 5i.** PR #2837 merged on 2026-11-25 at 02:18Z at the reviewed tip
+    `1ce1b9ccdfaa038ecf2788aaac121c275bbdd3aa` (merge commit `7fdd6a80`). Its worker released its ten claims and
+    run 1850 closed `done`. Its as-built departures are numbered in the wave's plan: D-9031 to D-9044, fourteen
+    numbers issued together, the last of them the landing read's effective hold (accepted in the entry of 01:40).
+    Eight slugs that change nothing the line does are recorded there without a number. The plan's Task 7 line now
+    names the notes' real folder.
+  - **Wave 1e** is dispatched (run 3728) on the plan merged in #3355.
+  - **Wave 1c.** The worker reported done at `052169a2` (PR #3357, a draft). It merged `main` once under trigger 1,
+    as recorded at 01:40. It also cut two notes of the worker skill to stay inside the skill-size ratchet, which
+    the plan did not ask for. Review run 3727, the first round, reads both.
+  - **A pull request outside every programme was held out of the merge queue (the coordinator's call, recorded as
+    a big call for the operator).** #3344 adds one code line to `shared/api.ts`, which is capped at exactly its
+    size on `main` (D-8635), so every queue group holding it failed the cap's suite. It was removed twice for
+    failed checks and put back within 13 and 2 minutes, and each removal rebuilt every group behind it. No
+    session held its branch, so there was nobody to mail. The coordinator converted it to a draft while it was
+    last in the queue and said so on the pull request with the one-command undo; it touched no branch, cap or
+    setting. What put it back each time was not established: auto-merge was armed on it eight seconds after it
+    was opened, and the timeline shows no later arming.
+  - **A brief rule, from wave 1c's first push.** A guard refuses an unissued deviation token in any tracked
+    file. A worker's notes name a departure by its bare slug; the placeholder form goes in the wave-done mail
+    only. Briefs say so from wave 1e on.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2925,8 +2947,12 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     before the wave;
   - the related selection for `rundefsTx.ts` cannot run inside the test slice's memory, so a wave that changes
     that file names its focused callers in its plan;
-  - the plan's Task 7 still names the notes' old folder. The ledger PR after the merge corrects it and numbers the
-    wave's departure slugs.
+  - the plan's Task 7 line and the wave's departure numbers were corrected and published on 2026-11-25
+    (Decisions, 2026-11-25 03:40).
+- **Eleven files carry an absolute line cap** (`server/test/growth-caps/`, D-8635), and `shared/api.ts` stands at
+  its cap exactly. A pull request's own run reads green while the queue's combined code is one line over, when
+  two pull requests take the last line. A brief for a wave that could touch a capped file names the cap; a
+  check on the pull request's own run is not planned unless this recurs (Decisions, 2026-11-25 03:40).
 - **The merge queue's limits are the operator's, and they were not the cause on 2026-11-24** (Decisions,
   2026-11-25 01:40). A coordinator that sees the queue land nothing looks first for a queue run whose
   `gh-readonly-queue/…` branch is gone and cancels it, after checking that one branch with
@@ -3044,14 +3070,12 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
 - **Wave 1c is planned** (the same entry): the conflict-sync trigger. Dispatch it once its plan is on `main`. Its
   README hunk needs run 1850's consent while that run holds the file, and the session hook had another programme's
   claim on it when the plan was written.
-- **5i is accepted and in the merge queue** (Decisions, 2026-11-25 01:40): PR #2837 at `1ce1b9cc`, run 1850 at
-  `merging`. On the server's `merged:` mail: prove the merge at that head, mail the worker so it releases its
-  claims, close the run, then the ledger PR that numbers the wave's departures. **5j and 5k** are planned after
-  that, each against `main` as it then stands.
-- **Wave 1c is building** (run 3698). Its review reads the worker's one merge of `main` against both parents: the
+- **5i has landed** (Decisions, 2026-11-25 03:40). **5j and 5k** are planned next, each against `main` as it
+  then stands.
+- **Wave 1c is under review** (run 3727, round 1, of work run 3698). On its landing, number its five departure
+  slugs and fold its four task notes. Its review reads the worker's one merge of `main` against both parents: the
   clause's file changed on `main` while the wave was building.
-- **Wave 1e is planned and goes first** (Decisions, 2026-11-25 02:40): the browser shards. Dispatch it once its
-  plan is on `main`. Its pull request changes `.github/`, so it runs the full suite; the wave-done names the four
+- **Wave 1e is building** (run 3728; Decisions, 2026-11-25 02:40): the browser shards. Its pull request changes `.github/`, so it runs the full suite; the wave-done names the four
   browser shards' durations if they ran. The file-time table is still refreshed by hand: a source the leg
   derives for itself is a later wave's.
 - **Wave 1d is planned** (Decisions, 2026-11-25 01:40): the merge queue's own CI. Dispatch it once 1e's workflow
