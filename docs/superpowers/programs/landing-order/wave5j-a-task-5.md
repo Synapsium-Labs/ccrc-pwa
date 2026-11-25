@@ -97,3 +97,13 @@ One file per process, from `server/`, each as `ccrc test -- ./node_modules/.bin/
   `the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM
   kill(s) in ccrctests.slice); exit 137`. The pull request's own run is the arbiter for both.
 - No full suite ran locally.
+
+## Found by the pull request's first run: one census outside the plan's gate list
+
+The first run on `df8322f225` was red in one server shard: `coord-token.test.ts`, "every box-token lane names itself to
+the check", counts the `checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], <lane>)` call sites in
+`server.ts`, `coord/routes.ts` and `update/routes.ts`, and expected 18 (`expected … to have a length of 18 but got 19`).
+The read's new credential block is the nineteenth, and it names its own route key, `'GET /api/landing'`, as the case
+requires. The plan's Task 5 file list and gate list do not name this file. The fix moves the pin to nineteen
+(`coord/routes.ts` 15 to 16) with a dated comment; no source changed. Every other check of that run passed, CodeQL
+included. Slug for the coordinator: `landing-read-lane-census` (the plan's Task 5 missed the lane-naming census).
