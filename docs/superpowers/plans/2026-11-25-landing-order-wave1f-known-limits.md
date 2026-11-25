@@ -56,7 +56,7 @@
 
 1. **A coordinator who follows the new measure block literally** on a clean branch, on a conflicting branch, and with a tip git cannot resolve. Each must print a `probe exit` line that tells the three apart, and only the second sends a mail.
 2. **The liveness step in the two mixed orders.** A group built before this wave (the old step) with the new script on `main`, and this wave's own group (the new step) with the old script on `main`. Neither may end a live or a landed group's job.
-3. **The exit code chosen for a superseded group** against the codes Node itself exits with (1 to 13, and 128 plus a signal's number). A script killed by a signal must read as failed, never as superseded.
+3. **The exit code chosen for a superseded group** against the codes Node itself exits with (1 to 14 as documented, and 128 plus a signal's number). A script killed by a signal must read as failed, never as superseded.
 4. **The placement pin** when the step that runs the suite is renamed or split: it should turn red and say why, never pass on a job that no longer runs the suite with the base.
 5. **A longer budget hiding a real slowdown.** Each case's comment names the measured time and the date, so a reader can tell a budget from a guess.
 
@@ -121,7 +121,7 @@
 - Modify: `server/test/ci-pipeline.test.ts` (the comment inside the browser-leg case; comment lines only)
 - Modify: `pwa/browser/add-project-sheet.browser.test.ts` (its header comment; comment lines only)
 
-- [ ] **Step 1: The window.** In the workflow's `FOUR SHARDS (D-9026)` paragraph, "in the six merge-queue runs of 2026-11-25 that ran the suite" becomes "in the six merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25 that ran the suite". In the pin suite's comment, "in six merge-queue runs of 2026-11-25" becomes "in the six merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25". Re-wrap each comment at its own width.
+- [ ] **Step 1: The window.** In the workflow's `FOUR SHARDS (D-9026)` paragraph, "in the six merge-queue runs of 2026-11-25 that ran the suite" becomes "in the ten merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25 that ran the suite". In the pin suite's comment, "in six merge-queue runs of 2026-11-25" becomes "in the ten merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25". Re-wrap each comment at its own width. (Ten, not six: corrected after review run 3793; see "Corrections after review run 3793".)
 - [ ] **Step 2: The slow-runner sentence.** In the workflow's `THE LIMIT IS 30 (D-9055)` paragraph:
   - "a third green shard was cancelled" becomes "another green shard was cancelled" (it was at least the fourth cancellation of that night);
   - "and at 1.7 times a balanced shard of four would stand about three minutes under 20." becomes "and at 1.7 times the slowest shard of the four-shard run that landed this (743 s of tests and about 40 s of setup) stands at about 22 minutes, over 20."
@@ -206,13 +206,34 @@
 | 1F-08 | the script exits 1 on `superseded` again | `queue-live` | the superseded case, and the end-to-end case through the step's lines |
 | 1F-09 | the step's line loses its `\|\|` arm and is the bare `node` line again | `queue-live` | the whole-step pin, and the failed-script case |
 | 1F-10 | the batch read drops the last plan of a tree | `deviation-refs` | the characterization case |
+| 1F-11 | the README's "before the wave-done of the round the worker is in" loses "of the round the worker is in" | `conflict-sync-text` | case 3 |
+| 1F-12 | the fence's `tip=$(gh pr view <pr> --json headRefOid --jq .headRefOid)` line is removed | `conflict-sync-text` | case 5 |
+| 1F-13 | the sentence "The probe's own exit status is the `probe exit` line" is removed | `conflict-sync-text` | case 5 |
+| 1F-14 | the sentence "The paths are for the reader: the worker's own probe is what measures" is removed | `conflict-sync-text` | case 5 |
 
 Row 1F-04 runs the suite against a mutated copy of the hook, as the suite's harness allows; the shipped hook is not edited.
 
+## Corrections after review run 3793
+
+Review run 3793 read the wave's branch at `d7daacef34` (pull request #3380): no critical or important finding, ten minor ones, and its panel confirmed none. Two were this plan's own errors, corrected here and in the tasks above. Where this section and a task disagree, this section wins.
+
+- **Ten runs, not six (F1).** Task 2 Step 1 told the builder to write that six merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25 ran the browser suite. Ten did. The coordinator measured them again after the review: their second shard took, in run order, 944, 998, 920, 1,204 (cancelled), 1,187, 924, 1,085, 916, 1,211 (cancelled) and 922 seconds. The range the comment gives, 916 s to 1,211 s, holds over the ten. Eight other runs created in that window skipped the browser tests by step and are not counted.
+- **Node's own exit codes run to 14 (F2).** Review Focus 3 said 1 to 13. Node documents 14 as well. The conclusion is unchanged: 64 is no code Node exits with by itself.
+- **The measure block's exit line (F7).** `probe exit 1` is printed for a conflict and for a tip git cannot resolve. The tree id on the output's first line is what tells them apart, which the paragraph after the fence says. Review Focus 1 asked the exit line alone to tell the three apart; it does not, and it need not.
+- **Four pins without a row (F8).** Rows 1F-11 to 1F-14 above. The review measured each red; the builder measures them again in the fix round.
+- **The characterization case and the legacy list (F4).** The case's recorded count and hash passed through the legacy exclusion filter, a list that may only shrink. The fix round makes the case independent of that list.
+- **Built in the wave's first fix round:** the ten in three places, the exit code range, one contradicting comment removed, the harness budget comment made to agree with its note, the characterization case, and the four rows.
+
 ## Deviations found
 
-Three numbers were issued for this plan on 2026-11-25. They are approved design, not as-built evidence. A worker reports execution departures by slug; the coordinator numbers and records them.
+Three numbers were issued for this plan on 2026-11-25. They are approved design, not as-built evidence. A worker reports execution departures by slug; the coordinator numbers and records them. Three more were issued the same day for the departures the build reported (D-9073 to D-9075); they are defined last.
 
 - **D-9066 (2026-11-25)** — `conflict-sync-probe-status`: the run-care reference's measure step prints the probe's own exit status as a `probe exit` line, and reads the branch tip from the pull request's head. D-9062 put the rev-parse in the same call as the probe, which made the call's exit status the rev-parse line's, so the test the section names ("the probe must exit 1") could not be read from the call it prescribed. Not yet implemented.
 - **D-9067 (2026-11-25)** — `queue-live-exit-code`: the liveness script exits 64 on a superseded group, and the workflow's step ends the job only on that code; any other failure of the script prints an `unmeasured` line and lets the job run. Wave 1d's step ran the script bare, so a script that could not run would have ended every long job of every queue group, and the fix for it would have had to land through that same queue. The step still ends a superseded group's job with exit 1 (D-9015 is unchanged). Not yet implemented.
-- **D-9068 (2026-11-25)** — `scan-case-budget`: two whole-tree scan cases run under their own measured budget of 60 seconds, where the suite's limit is 20: the harness integrity scan of every test source, and the cross-tree deviation scan's first read of two trees. Each ran at 17 to 25 seconds in merge-queue runs, and the first removed a green pull request from the queue. The deviation scan also reads each tree's plans in one git process. Not yet implemented.
+- **D-9068 (2026-11-25)** — `scan-case-budget`: two whole-tree scan cases run under their own measured budget of 60 seconds, where the suite's limit is 20: the harness integrity scan of every test source, and the cross-tree deviation scan's first read of two trees. Each ran at 17 to 25 seconds in merge-queue runs, and the first removed a green pull request from the queue. The deviation scan also reads each tree's plans in one git process. **As built (review run 3793):** only the harness scan's case runs under 60 seconds. The one-process read brought the deviation scan's case from a timeout at 20 seconds to about 2 seconds, so it stays at the suite's limit, as Task 4 Step 3 allowed.
+- **D-9073 (2026-11-25)** — `mutation-hook-copy-local`: row 1F-04 mutates a copy of the session hook in the temp root and points the advisory suite's hook constant at that copy, because the suite has no override for the hook's path.
+  - It runs in the local slice only: the test box cannot read the temp root. The shipped hook is not edited; the review checked its sha256 before and after.
+- **D-9074 (2026-11-25)** — `closure-anchor-blank-lines`: the closure case's end anchor skips blank lines before it looks for a deeper script line, where Task 3 Step 2 asked for a lookahead at the next line only.
+  - A YAML block scalar runs on across a blank line, so a third script line after a blank one would have passed the plan's anchor. The built anchor is strictly stronger; the review measured it red on a third line, on a blank line then a third line, and green on a comment after the step.
+- **D-9075 (2026-11-25)** — `plans-characterization-fixed-commit`: the byte-for-byte characterization case of the plan read reads a fixed commit on `main`, where Task 4 Step 2 said `HEAD`.
+  - With `HEAD`, the recorded count and sha256 would go stale each time a plan is added. The fixed commit is permanent on `main`; in a checkout too shallow to hold it the case fails and says so, it does not skip, and the server shards check out the full history.

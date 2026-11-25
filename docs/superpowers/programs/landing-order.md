@@ -21,7 +21,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | #3357 (plan #3341) | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; built at `052169a2` (PR #3357, a draft); review run 3727, the first round, sent it back for one fix round (Decisions, 2026-11-25 04:30); review run 3738, the second, confirmed no defect and a last round made the worker's own words say this round's wave-done; review run 3751, the third, found nothing critical or important and the wave was accepted with seven minor known limits; **merged** in #3357 on 2026-11-25 (`6ac066f5`), run 3698 closed; its as-built departures are D-9057 to D-9064 in the plan (Decisions, 2026-11-25 07:10 and 08:42) |
 | 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | #3365 (plan #3355) | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); dispatched as run 3739 while 1e was in review, its workflow hunks sent to 1e's holder as a packet; built at `c62318f0` (PR #3365, a draft); review run 3753, the first round, found no defect in the script or its decisions and two guards missing, and sent it back for one fix round; the round was built at `e094d86a`; review run 3762, the second, found nothing critical or important and the wave was accepted with seven minor known limits; **merged** in #3365 on 2026-11-25 (`ba0b0f40`); its as-built departures are D-9069 and D-9070 in the plan (Decisions, 2026-11-25 07:10, 08:42 and 09:30) |
 | 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, the leg runs as four shards, and its deadline goes from 20 to 30 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | #3362 (plan #3355) | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026, and D-9055 for the deadline, which goes to 30; Decisions, 2026-11-25 02:40 and 04:30); built before 1d; the plan merged (#3355, `4e17ac96`) and run 3728 was dispatched on 2026-11-25; built at `62a74ab5` (PR #3362); review run 3750 accepted it on the first round; the queue removed it once for a server test that is not this wave's and it landed on its second entry; **merged** in #3362 on 2026-11-25 (`cb973d69`); its as-built departure is D-9065 in the plan (Decisions, 2026-11-25 07:10 and 08:42) |
-| 1f | 1 and 2, the known limits | the conflict-sync measure step reads the probe's own exit status; the text guards the last reviews found missing; three comments and one README sentence say what was measured; a failed liveness script lets the job run; two whole-tree scan cases run under a measured budget | skills (one reference file; fleet box), CI | 1c, 1d and 1e | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068; Decisions, 2026-11-25 09:30); dispatched as run 3776 (the run's wave 27) once the plan was on `main`; its pull request is #3380, a draft (Decisions, 2026-11-25 12:06) |
+| 1f | 1 and 2, the known limits | the conflict-sync measure step reads the probe's own exit status; the text guards the last reviews found missing; three comments and one README sentence say what was measured; a failed liveness script lets the job run; two whole-tree scan cases run under a measured budget | skills (one reference file; fleet box), CI | 1c, 1d and 1e | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068; Decisions, 2026-11-25 09:30); dispatched as run 3776 (the run's wave 27) once the plan was on `main`; its pull request is #3380, a draft; its first review (run 3793) found ten minor points, and it is in its first fix round, for comments and one test case (the plan's "Corrections after review run 3793"; D-9073 to D-9075) (Decisions, 2026-11-25 12:06 and 12:59) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116; amended by #1753 with the operator's per-project allowance, D-7249); run 1144 (the run's wave 8) dispatched 2026-10-29, once wave 3e had merged and another programme's worker, on the operator's instruction, released its claim on `ccd/session-hook.sh`; block 7309–7318; PR #1863; fix round 1 after review 1184; accepted on `e0a57a94` after review run 1195 and merged through the native queue as `d3250900` (Decisions, 2026-10-29 09:41); D-7309–D-7315 defined after the merge; deploy and live check wait (Next-wave brief) |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
@@ -2578,6 +2578,30 @@ carries it (spec §5.1, amended 2026-09-24).
     design, since the next half's decider refuses such a word before the statement runs.
   - **Wave 1f is dispatched** as run 3776 (the run's wave 27), on the plan merged in #3374. Its pull request
     is #3380, a draft.
+- **2026-11-25 12:59 — wave 1f is in its first fix round; the ledger pull request for wave 5j-a's review has landed.**
+  - **Wave 1f, its wave-done and review run 3793 (round 1).** The worker built the five tasks in 18 files as
+    pull request #3380, a draft, in one push. The review found nothing critical or important, and its panel
+    confirmed no finding. It ran the measure block on four tips, worked the liveness step through both mixed
+    orders under the runner's shell options, found the step line the same in all eleven jobs, reproduced all
+    ten mutation rows, and recomputed the plan read's recorded hash with the old read.
+  - **One browser job was red on that tip,** in a Docs reader case. Nothing on the branch can reach that case
+    (the wave's only browser change is a comment in another file), and the case passed alone and in two
+    whole-file runs at the tip. It reads as a flake, seen once. The fix round's push changes the workflow file,
+    so the whole suite runs again on the pull request: a second measurement before the queue's own.
+  - **Its ten minor findings, and the ruling (call 1185): one short fix round, the second and last.**
+    - The plan told the worker to write that six queue runs in a named window ran the browser suite. Ten did;
+      the coordinator measured them again. The plan is corrected and the three places follow.
+    - Node's own exit codes run to 14, not 13; two adjacent comments contradict each other; one budget comment
+      and its note disagree on two figures.
+    - The case that proves the new plan read equals the old one also pinned a list that may only shrink. It is
+      made independent of that list.
+    - Four text pins had no mutation row. They get rows 1F-11 to 1F-14.
+  - **The worker's three departures are numbered** (D-9073 to D-9075, in the plan): a mutation run on a copy of
+    the hook, a stronger end anchor than the plan asked for, and a fixed commit where the plan said the head.
+    The plan's text for the budget departure now says what was built: one case under 60 seconds, the other back
+    on the suite's limit after its read became one process.
+  - **The ledger pull request #3383 merged** (`a51d7042`): the correction to wave 5j's plan (its section 12)
+    and that wave's two departures are on `main`. Wave 5j-a is still in its first fix round.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3263,9 +3287,12 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
 - **Wave 1d is merged** (#3365 `ba0b0f40`; Decisions, 2026-11-25 09:30): the merge queue's own CI. Its
   departures are D-9069 and D-9070 in its plan. From its merge on, each long job of a queue run asks the
   liveness script first, and a server shard's deadline is 45 minutes.
-- **Wave 1f is dispatched** (run 3776, #3380 a draft; plan
-  `docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068; Decisions,
-  2026-11-25 09:30 and 12:06): five tasks, one pull request, a worker that
+- **Wave 1f is in its first fix round** (run 3776, #3380 a draft; plan
+  `docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, D-9066 to D-9068 and D-9073 to
+  D-9075; Decisions, 2026-11-25 09:30, 12:06 and 12:59). Its first review found ten minor points; the
+  round corrects comments, notes and one test case, and its second review is narrow: that round's commits.
+  One browser job was red on its first tip and reads as a flake; read the browser shards of its next run
+  before the landing. Five tasks, one pull request, a worker that
   does them itself. It edits the workflow file, the README, one coordinator reference and seven test files, so
   read the claims first; it changes a file under `.github/`, so its pull request runs the full suite. Until it
   lands, a pull request that edits `.github/ci/queue-live.mjs` is read with care: a script that cannot run ends
