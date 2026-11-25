@@ -84,6 +84,12 @@ coordinator folds it in. No deviation number was allocated: departures are recor
 - The sequence kinds on main were `generation`, `designation` and `message`; the other run adds `ladder-rung` and
   `ladder-latch`. `stampReach` still has no live caller, so I2 holds over no rows.
 - The latest migration was 127; the timers piece (#3388) also takes 128, so this entry is renumbered at the merge.
+- Main absorbed before the first push: `8886cf49c382e4627751bb11fe64f18da66e0a82` (the push probe answered two conflicts, and
+  the coordinator said yes). The merge commit holds exactly the two both-sides resolutions and nothing else: in
+  `server/test/mail-routes.test.ts`, main's `isProgrammeDoorWord` arm and this branch's `isInvariantKebab` arm, under this
+  branch's failure message (main's was the base's); in `server/test/single-definition/core-vocab.test.ts`, main's
+  `programmeLifecycleActs.ts` and this branch's four files in `HANDLE_HOLDERS`. Main added no migration, so 128 stands
+  until the timers piece lands.
 
 ## Departures, by slug
 
