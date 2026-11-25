@@ -371,6 +371,58 @@ export function findingMovesCases(m: M): Record<string, SuiteCase> {
   };
 }
 
+// -------------------------------------------------------------------------------- the runner's questions (Task 6, L1)
+
+export function invariantPassDueCases(m: M): Record<string, SuiteCase> {
+  const last = { head: 5, mode: 'shadow' as const, atMono: 1_000 };
+  return {
+    'the first pass runs': () => { expect(m.invariantPassDue({ head: 5, mode: 'shadow', atMono: 1_000 }, null, 600_000)).toBe(true); },
+    'the same head, the same mode, inside the table sweep: no pass': () => {
+      expect(m.invariantPassDue({ head: 5, mode: 'shadow', atMono: 1_000 + 599_999 }, last, 600_000)).toBe(false);
+    },
+    'the table sweep elapsed, at its edge: a pass': () => {
+      expect(m.invariantPassDue({ head: 5, mode: 'shadow', atMono: 1_000 + 600_000 }, last, 600_000)).toBe(true);
+    },
+    'a moved head runs at once': () => { expect(m.invariantPassDue({ head: 6, mode: 'shadow', atMono: 1_001 }, last, 600_000)).toBe(true); },
+    'an unreadable head runs (the gather says why)': () => {
+      expect(m.invariantPassDue({ head: 'unmeasured', mode: 'shadow', atMono: 1_001 }, last, 600_000)).toBe(true);
+      expect(m.invariantPassDue({ head: 'unmeasured', mode: 'shadow', atMono: 1_001 }, { ...last, head: 'unmeasured' }, 600_000)).toBe(true);
+    },
+    'a mode that changed runs at once': () => { expect(m.invariantPassDue({ head: 5, mode: 'live', atMono: 1_001 }, last, 600_000)).toBe(true); },
+  };
+}
+
+export function latchedOfCases(m: M): Record<string, SuiteCase> {
+  return {
+    'a refused raise is null: no live finding': () => { expect(m.latchedOf({ ok: false })).toBeNull(); },
+    'a standing latch is standing': () => { expect(m.latchedOf({ ok: true, changed: false })).toBe('standing'); },
+    'a journalled raise is raised; one written as its row alone is row-only': () => {
+      expect(m.latchedOf({ ok: true, changed: true, journalled: true })).toBe('raised');
+      expect(m.latchedOf({ ok: true, changed: true, journalled: false })).toBe('row-only');
+    },
+  };
+}
+
+export function verdictWordChangesCases(m: M): Record<string, SuiteCase> {
+  const v = (entries: [InvariantName, Verdict][]): ReadonlyMap<InvariantName, Verdict> => new Map(entries);
+  return {
+    'the first pass names every invariant it asked, from nothing': () => {
+      expect(m.verdictWordChanges(null, v([['I2', { kind: 'holds' }], ['I9', { kind: 'simulator-only' }]])))
+        .toEqual([{ name: 'I2', from: null, to: 'holds' }, { name: 'I9', from: null, to: 'simulator-only' }]);
+    },
+    'an unchanged word is not named; a changed one is, in table order': () => {
+      const prev = v([['I17', { kind: 'holds' }], ['I2', { kind: 'holds' }]]);
+      const next = v([['I17', { kind: 'unmeasured', why: 'x' }], ['I2', { kind: 'holds' }]]);
+      expect(m.verdictWordChanges(prev, next)).toEqual([{ name: 'I17', from: 'holds', to: 'unmeasured' }]);
+    },
+    'a new finding under a word already violated changes no word': () => {
+      const f = { invariant: 'I2' as const, subject: 'ask:1', seq: null, message: 'x' };
+      expect(m.verdictWordChanges(v([['I2', { kind: 'violated', findings: [f], unmeasured: [] }]]),
+        v([['I2', { kind: 'violated', findings: [f, { ...f, subject: 'ask:2' }], unmeasured: [] }]]))).toEqual([]);
+    },
+  };
+}
+
 // -------------------------------------------------------------------------------------------------------- mutant sets
 
 const set = (cases: (m: M) => Record<string, SuiteCase>, mutants: MutantSet<M>['mutants']): MutantSet<M> =>
@@ -444,6 +496,25 @@ const MOVES_SET = set(findingMovesCases, [
   { id: 'E7 the key is the subject alone', old: 'const k = (invariant: string, subject: string): string => `${invariant}\\u0000${subject}`;', new: 'const k = (_invariant: string, subject: string): string => subject;' },
 ]);
 
+const DUE_SET = set(invariantPassDueCases, [
+  { id: 'F1 a mode change waits', old: 'if (last === null || now.mode !== last.mode) return true;', new: 'if (last === null) return true;' },
+  { id: 'F2 a moved head waits', old: "if (now.head === 'unmeasured' || now.head !== last.head) return true;", new: "if (now.head === 'unmeasured') return true;" },
+  { id: 'F3 an unread head waits', old: "if (now.head === 'unmeasured' || now.head !== last.head) return true;", new: "if (now.head !== 'unmeasured' && now.head !== last.head) return true;" },
+  { id: 'F4 the sweep edge is late', old: 'return now.atMono - last.atMono >= tableSweepMs;', new: 'return now.atMono - last.atMono > tableSweepMs;' },
+  { id: 'F5 never on the cadence', old: 'return now.atMono - last.atMono >= tableSweepMs;', new: 'return false;' },
+]);
+
+const LATCHED_SET = set(latchedOfCases, [
+  { id: 'G1 a refusal is standing', old: '  if (!w.ok) return null;\n', new: '' },
+  { id: 'G2 a standing latch is raised', old: "if (!w.changed) return 'standing';", new: "if (!w.changed) return 'raised';" },
+  { id: 'G3 row-only reads raised', old: "return w.journalled ? 'raised' : 'row-only';", new: "return 'raised';" },
+]);
+
+const CHANGES_SET = set(verdictWordChangesCases, [
+  { id: 'H1 every word is a change', old: 'return from === to ? [] : [{ name, from, to }];', new: 'return [{ name, from, to }];' },
+  { id: 'H2 the first pass is silent', old: 'const from = prev?.get(name)?.kind ?? null;', new: "const from = prev?.get(name)?.kind ?? to;" },
+]);
+
 export const INVARIANT_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#invariantVerdict`]: VERDICT_SET as MutantSet<never>,
   [`${KEY}#i2Structural`]: I2_SET as MutantSet<never>,
@@ -451,4 +522,7 @@ export const INVARIANT_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#i7Authority`]: I7_SET as MutantSet<never>,
   [`${KEY}#i17Timers`]: I17_SET as MutantSet<never>,
   [`${KEY}#findingMoves`]: MOVES_SET as MutantSet<never>,
+  [`${KEY}#invariantPassDue`]: DUE_SET as MutantSet<never>,
+  [`${KEY}#latchedOf`]: LATCHED_SET as MutantSet<never>,
+  [`${KEY}#verdictWordChanges`]: CHANGES_SET as MutantSet<never>,
 };

@@ -26,7 +26,8 @@ export interface Violation { readonly invariant: string; readonly seq: number; r
 // ── the table ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Why a row reads `not-applicable` (call 1219: a row whose tables are on `main` must not say they are absent). */
-export type NotApplicableWhy = 'tables-absent' | 'predicate-not-built';
+const NOT_APPLICABLE_WHY_MAP = { 'tables-absent': 'what the row reads is not built yet', 'predicate-not-built': 'its tables are on main; its predicate has its own ticket' } as const;
+export type NotApplicableWhy = keyof typeof NOT_APPLICABLE_WHY_MAP;
 
 interface InvariantRow {
   /** Table 11.7a's text, shortened. */
@@ -106,6 +107,15 @@ export type InvariantVerdict =
   | { readonly kind: 'not-applicable'; readonly waitsOn: string; readonly why: NotApplicableWhy }
   | { readonly kind: 'simulator-only' };
 export type InvariantVerdictKind = InvariantVerdict['kind'];
+const VERDICT_KIND_MAP = {
+  holds: true, violated: true, 'holds-where-measured': true, unmeasured: true, 'not-applicable': true, 'simulator-only': true,
+} as const satisfies Record<InvariantVerdictKind, true>;
+/** How a live finding's latch stood when it was recorded (`overlord_invariant_findings.latched`). */
+const LATCHED_MAP = { raised: 'raised by this pass', standing: 'already standing', 'row-only': 'raised as its row alone' } as const;
+export type FindingLatched = keyof typeof LATCHED_MAP;
+/** The monitor's own words, for the coordination kebab census: each rides a verdict or a findings row, never a refusal. */
+export const isInvariantKebab = (word: string): boolean =>
+  [Object.keys(VERDICT_KIND_MAP), Object.keys(NOT_APPLICABLE_WHY_MAP), Object.keys(LATCHED_MAP)].some((words) => words.includes(word));
 
 /** A facts arm, as the gatherer read it: `absent` when a table it reads has no migration applied. */
 export type FactsRead<F> =
@@ -338,4 +348,38 @@ export function findingMoves(verdicts: ReadonlyMap<InvariantName, InvariantVerdi
     if (!still && !unknown) resolve.push(o.id);
   }
   return { record, resolve };
+}
+
+// ── the runner's two small questions ──────────────────────────────────────────────────────────────────────────────────────
+
+/** The last pass the runner remembers: the sequence head it read, the mode it ran in, and when (monotonic). */
+export interface LastPass { readonly head: number | 'unmeasured'; readonly mode: 'shadow' | 'live'; readonly atMono: number }
+/** Whether a pass runs now (Table 11.1c's "on each `overlord_sequence` row", measured as "the head moved"): the first pass, a
+ *  mode that changed, a head that moved or cannot be read, or the table invariants' own cadence elapsed (I2, I7 and I17 read
+ *  tables that stamp no line). */
+export function invariantPassDue(now: { head: number | 'unmeasured'; mode: 'shadow' | 'live'; atMono: number }, last: LastPass | null,
+  tableSweepMs: number): boolean {
+  if (last === null || now.mode !== last.mode) return true;
+  if (now.head === 'unmeasured' || now.head !== last.head) return true;
+  return now.atMono - last.atMono >= tableSweepMs;
+}
+
+/** How a live finding's latch stood, from the ladder's answer: raised now, already standing, or raised as its row alone over a
+ *  journal that could not take the record; `null` for a refused raise, which records no live finding. */
+export function latchedOf(w: { readonly ok: false } | { readonly ok: true; readonly changed: false } | { readonly ok: true; readonly changed: true; readonly journalled: boolean }):
+  FindingLatched | null {
+  if (!w.ok) return null;
+  if (!w.changed) return 'standing';
+  return w.journalled ? 'raised' : 'row-only';
+}
+
+/** The invariants whose verdict word moved since the last pass (one log line each), in table order. */
+export function verdictWordChanges(prev: ReadonlyMap<InvariantName, InvariantVerdict> | null, next: ReadonlyMap<InvariantName, InvariantVerdict>):
+  readonly { readonly name: InvariantName; readonly from: InvariantVerdictKind | null; readonly to: InvariantVerdictKind }[] {
+  return INVARIANT_NAMES.flatMap((name) => {
+    const to = next.get(name)?.kind;
+    if (to === undefined) return [];
+    const from = prev?.get(name)?.kind ?? null;
+    return from === to ? [] : [{ name, from, to }];
+  });
 }

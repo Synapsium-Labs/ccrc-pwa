@@ -26,8 +26,9 @@ export interface InvariantFactsDeps {
   readonly readJournal: () => AuthorityFileRead;
   /** The authority guard's state (`OverlordAuthorityGuard.state`). */
   readonly guardState: () => AuthorityState;
-  /** The kept designation line, the window's baseline (the sequence store's `designationBaseline`): the line, none, or unmeasured. */
-  readonly designationBaseline: (db: DatabaseSync) => SequenceRead<SequenceLine | null>;
+  /** The kept designation line, the window's baseline (the sequence store's `designationBaseline`): the line, none, or unmeasured.
+   *  Absent (a build without that read): I5's facts read unmeasured, never a pass and never a violation. */
+  readonly designationBaseline?: ((db: DatabaseSync) => SequenceRead<SequenceLine | null>) | undefined;
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -75,6 +76,7 @@ function i2Facts(db: DatabaseSync): FactsRead<I2Facts> {
 
 function i5Facts(db: DatabaseSync, baselineOf: InvariantFactsDeps['designationBaseline']): FactsRead<I5Facts> {
   return guarded(db, ['overlord_designation'], () => {
+    if (baselineOf === undefined) return unmeasured('the kept designation line has no reader in this build');
     const baseline = baselineOf(db);
     if (baseline.kind === 'unmeasured') return unmeasured(`the kept designation line could not be read: ${baseline.why}`);
     const d = designationRead(db);
@@ -109,6 +111,12 @@ function i17Facts(db: DatabaseSync): FactsRead<I17Facts> {
     for (const m of rows) mails.set(Number(m.id), { fromId: String(m.fromId), toId: String(m.toId) });
     return measured({ timers, mails });
   });
+}
+
+/** The sequence's head (the highest seq ever issued), a cheap read the runner takes before deciding to gather. */
+export function sequenceHead(db: DatabaseSync): SequenceRead<number> {
+  const r = sequenceAfter(db, 0, 0);
+  return r.kind === 'unmeasured' ? r : { kind: 'measured', value: r.value.facts.head };
 }
 
 /** Every input of one pass, read in one synchronous span inside one `tx()` that writes nothing. Never throws. */

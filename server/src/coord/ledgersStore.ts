@@ -100,6 +100,17 @@ export function raiseItem(
   return tx(db, () => raiseItemInTx(db, input, now, actor, reach));
 }
 
+/** `raiseItem`'s in-transaction form, for a caller that already holds the transaction (the invariant monitor's finding, which
+ *  writes its row in the same one): `checkRaise` first, then the insert, so `operator_items` keeps its one writer behind three
+ *  checked entries. A refused input throws `RangeError` inside the caller's `tx()`, which rolls it back. */
+export function raiseItemCheckedInTx(
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach,
+): number {
+  if (!db.isTransaction) throw new Error('raiseItemCheckedInTx: no transaction is open');
+  checkRaise(input);
+  return raiseItemInTx(db, input, now, actor, reach);
+}
+
 /** The push outbox's write beside a raise (Overlord W1, `pushOutboxStore.ts#reachInTx`), handed in by `CoordStore` so this
  *  file imports no outbox code: called inside the raise's transaction, with the new id, only for an item the operator is
  *  shown at its raise (`operatorWasShown`, the hold's one rule); a held item's reach is the held drain's (I2). */
