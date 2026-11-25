@@ -22,7 +22,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import { sequenceLineVerdict } from './overlordSequence.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
-import type { OverlordAuthorityJournal, AuthorityAppendError } from './overlordAuthorityJournal.js';
+import { txWithAuthorityReceipt, type OverlordAuthorityJournal, type AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
 import {
@@ -150,20 +150,10 @@ function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAut
     : { ok: true, journalled: false };
 }
 
-/** A stamped writer's transaction: only a durable append arms the fence. An ordinary refusal still returns and commits. */
+/** A stamped writer's transaction: only a durable append arms the fence (the journal's `txWithAuthorityReceipt`). An ordinary
+ *  refusal still returns and commits. */
 function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {
-  let postAppendFailed: (() => void) | undefined;
-  try {
-    return tx(db, () => write((entry) => {
-      const a = append(db, journal, entry);
-      if (a.ok && a.journalled) postAppendFailed = a.postAppendFailed;
-      return a;
-    }));
-  } catch (error) {
-    // Like tx's rollback, notification is best effort: a faulty receipt must not replace the transaction error.
-    try { postAppendFailed?.(); } catch { /* preserve the first error */ }
-    throw error;
-  }
+  return txWithAuthorityReceipt(db, journal, (held) => write((entry) => append(db, held, entry)));
 }
 
 /** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
