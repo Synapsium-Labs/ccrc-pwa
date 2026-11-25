@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from '../../shared/api';
 import { eventIdentity, freshOf } from '../src/session/eventIdentity';
 import { applySessionMsg, type SessionSnapshot } from '../src/stores/session';
+import { buildChatItems } from '../src/session/chatItems';
+import { uniqueKeys } from '../src/session/rowKeys';
 
 const TS = '2026-11-24T10:00:00.000Z';
 const TS2 = '2026-11-24T10:00:05.000Z';
@@ -89,5 +91,21 @@ describe('the four cases, in the store\'s merge', () => {
   it('a local row (a notice, a rotation divider, a gap marker) is never taken for a copy', () => {
     const local: ChatEvent = { kind: 'system', uuid: 'local-9', ts: TS, text: 'notice' };
     expect(freshOf([local], [{ ...local }])).toHaveLength(1);
+  });
+});
+
+describe('each row\'s key once (`rowKeys.ts`)', () => {
+  it('two message rows of one record get two keys, the newest keeping the plain one', () => {
+    const items = buildChatItems([user('r1', 'first block'), user('r1', 'second block')], [], false);
+    const keys = items.filter((i) => i.kind === 'message').map((i) => i.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.at(-1)).toBe('r1');
+  });
+
+  it('rows put before the first never rename a row already shown', () => {
+    const shown = uniqueKeys([{ key: 'a' }, { key: 'b' }]);
+    const after = uniqueKeys([{ key: 'b' }, { key: 'x' }, ...shown]);
+    expect(after.slice(-2).map((i) => i.key)).toEqual(['a', 'b']);
+    expect(after[0]!.key).toBe('b~1');
   });
 });

@@ -257,7 +257,7 @@ describe('carried from the tool-stretch reviews (desktop polish wave 175, item 6
     lay.top += 40; // the reader scrolls before the event the hold's write owes is dispatched
     frame();
     clock += 50;
-    resize(3, 40);
+    resize(3, 25); // not the reader's 40, so a hold would show
     frame();
     expect(lay.top, 'a reader\'s scroll was taken for the hold\'s own write, and the list was held while moving').toBe(1140);
   });
@@ -278,6 +278,9 @@ describe('carried from the tool-stretch reviews (desktop polish wave 175, item 6
 });
 
 describe('rows put before the first: an older page (desktop polish wave 175)', () => {
+  /** Virtuoso settles a prepend first; the list corrects once the scroller has been quiet for its frames. */
+  const settle = (): void => { for (let i = 0; i < 5; i += 1) frame(); };
+
   const paged = (n: number): ChatEvent[] => Array.from({ length: n }, (_, i) => ({
     kind: 'user' as const, uuid: `old${i}`, ts: TS, text: `Older ${i}.`,
   }));
@@ -289,7 +292,7 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     const was = topOfRow(key);
     rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
     reports(total());
-    frame();
+    settle();
     expect(topOfRow(key), 'the row the reader was reading moved when the page landed').toBeCloseTo(was, 5);
   });
 
@@ -308,7 +311,18 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     rerender(view([...paged(5), ...events], { ...NO_PAGING, edge: 'more', rows: 5 }));
     expect(rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!), 'the join kept its divider').not.toContain(keys[0]);
     reports(total());
-    frame();
+    settle();
     expect(topOfRow(second), 'the row under the join moved when the page landed').toBeCloseTo(was, 5);
+  });
+
+  it('a reader who moves while the page settles is left where they moved, never set back', () => {
+    const events = session();
+    const { rerender } = resting(events);
+    rerender(view([...paged(12), ...events], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    lay.scroller!.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+    lay.scroller!.scrollTop = 900;
+    settle();
+    expect(lay.top, 'the settle set back a reader who moved').toBe(900);
   });
 });
