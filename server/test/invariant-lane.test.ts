@@ -19,6 +19,12 @@ import { tx } from '../src/coord/tx.js';
 import { insertTimer, markTimersFired } from '../src/continuity/continuityStore.js';
 import { INVARIANTS_LANE } from '../../shared/lane-arm.js';
 import { mkTmp } from './tmpHelpers.js';
+import { mkdirSync } from 'node:fs';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps, withFakeClock } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 const NOW = 1_800_000_000_000;
 const SWEEP = 600_000;
@@ -293,5 +299,25 @@ describe('the ladder\'s invariant-violation row (Table 7.5a; the seams case, her
       causeTable: LADDER_CAUSE_MAP, serverCaps: ['overlord-route-v1', 'overlord-answer-v1'] } as const;
     expect(effectiveRung(facts)).toMatchObject({ rung: 'advise', binding: [{ cause: 'invariant-violation', kind: 'latch', cap: 'advise', known: true }] });
     expect(effectiveRung({ ...facts, operatorRung: { kind: 'set', rung: 'chat' } })).toMatchObject({ rung: 'chat' });
+  });
+});
+
+describe('FleetWatcher.sweepInvariants: the lane through its row (slug invariant-monitor-built-in-the-composition-root)', () => {
+  it('with no monitor wired (a test, a script), the sweep returns: no pass runs and nothing reads as a pass', async () => {
+    const home = mkTmp('ccrc-invariants-w-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(home), time: fakeTime({ wallMs: 1_800_000_000_000 }).ports }), new Bus(), 2000));
+    await expect(w.sweepInvariants()).resolves.toBeUndefined();
+  });
+  it('with a monitor wired, one sweep runs one pass, handed the watcher\'s item reach', async () => {
+    const home = mkTmp('ccrc-invariants-w-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: unknown[] = [];
+    const monitor = { pass: (reach?: unknown) => { calls.push(reach); }, last: () => null } as unknown as InvariantMonitor;
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock({ ...testDeps(home), time: fakeTime({ wallMs: 1_800_000_000_000 }).ports,
+      invariantMonitor: monitor }), new Bus(), 2000));
+    await w.sweepInvariants();
+    expect(calls).toHaveLength(1);
+    expect(typeof calls[0]).toBe('function');
   });
 });
