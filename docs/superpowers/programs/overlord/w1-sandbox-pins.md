@@ -54,6 +54,9 @@ Without any mutant: the door file 50/50, the arm file 17/17, the settle file 14/
   including an `unread` from the first read (an expected surface, designation or newest start that could not be
   read), as the brief words it ("a `stale` or an `unread` settle writes one server log line").
 - `n2-two-cases`: the reviewer's two inputs are two cases, so each is shown red on its own.
+- `floor-key-on-ruling`: the floor key line in `server/test/sim/mutation-floors.json` was added on the coordinator's
+  ruling (call 1107) while the file's claim was still held by a lost session that could not answer the packet. The
+  change is exactly that packet: one added key line among the sandbox rows, no floor lowered.
 
 ## Left out, and why
 
@@ -61,5 +64,8 @@ Without any mutant: the door file 50/50, the arm file 17/17, the settle file 14/
   directory): neither is a present failure or can cause a false pass (review 3598, refuted); changing the helper is
   outside "if cheap".
 - Review 3366 F1 and F6 to F11 and review 3598 N5 and N6 were not in this wave's brief.
+- The whole floors file ran (354 cases): every key passed, the new one included, except the two `pwa/src/face/mood.ts`
+  keys, whose baseline could not import `@ccrc/ui` in the test box's checkout (an environment fact: their baseline
+  failed before any mutant ran, and this branch touches nothing under `pwa` or `ui`).
 - The whole test-tree type check was killed by the test slice's memory cap (exit 137); a narrow type check over the
   touched test files and what they import passed instead.
