@@ -2992,6 +2992,8 @@ export class FleetWatcher {
       void this.sweepForecasts().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the decision model's ANCHOR-SET lane (Overlord W2): a daily pass of asks, each on the 2 s deadline.
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the AUTHORITY WITNESS lane (Overlord W1 §7.6): a nudge of the exchange, which keeps its one flight.
+      void this.runLane('authorityWitness', () => this.deps.overlordAuthorityExchange?.nudge())?.catch(() => { /* one bad nudge must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.

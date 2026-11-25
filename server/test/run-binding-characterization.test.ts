@@ -15,8 +15,13 @@ import { claimantsOfSession, coordinatorOfRun, openRunsClaimedBy, workerOfRun } 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-binding-char-'), '.ccrc', 'coord.db')));
 
-const open = (s: CoordStore, program: string, claimedBy: string): number =>
-  (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  return opened.id;
+};
 
 const finish = (s: CoordStore, id: number): void => {
   for (const to of ['dispatched', 'closing', 'done'] as const) {
@@ -124,8 +129,8 @@ describe('the other session-keyed readers as they answer before ARCH-62', () => 
     const s = store();
     const a = open(s, 'prog-a', 'coord-1');
     s.setSession(a, 'demo-w');
-    const b = open(s, 'prog-b', 'coord-1');
-    const c = open(s, 'prog-c', 'coord-1');
+    const b = open(s, 'prog-a', 'coord-1', 2);
+    const c = open(s, 'prog-a', 'coord-1', 3);
     finish(s, c);
     expect(okSiblings(openRunsClaimedBy(s, 'coord-1')).map((r) => r.id)).toEqual([a, b]);
   });

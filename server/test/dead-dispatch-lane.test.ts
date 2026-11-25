@@ -99,9 +99,12 @@ const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: strin
   };
   // The coordinator: live in tmux, supervised now, so the lane's own coordinator reason leaves it alone.
   plant(COORD, { started: '1', supervised: String(Math.floor(T0 / 1000)) });
-  /** A planned run claimed by the coordinator, whose dispatch was stamped `ageMs` ago and bound nothing. */
-  const stalled = (ageMs: number, program = 'prog-a'): number => {
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+  /** A planned run claimed by the coordinator, whose dispatch was stamped `ageMs` ago and bound nothing. Programme lifecycle
+   *  W1 (R11): the coordinator owns ONE programme, so several runs are several waves of `prog-a`, never several programmes
+   *  (a distinct wave keeps `openRun`'s planned-duplicate arm from handing back the same row). */
+  const stalled = (ageMs: number, wave = 1): number => {
+    const program = 'prog-a';
+    const r = coord.openRun({ program, title: program, project: 'demo', wave, waveOf: wave, claimedBy: COORD });
     if (!('id' in r)) throw new Error('openRun refused');
     coord.markDispatchStarted(r.id, clock - ageMs);
     return r.id;
@@ -274,7 +277,7 @@ describe('the dead-dispatch pass cap (D-7502)', () => {
    *  is then visibly not an id-order pass. Answers the ids oldest stamp first. */
   const herd = (f: Awaited<ReturnType<typeof fixture>>, n: number): number[] => {
     const ids: number[] = [];
-    for (let i = 0; i < n; i += 1) ids.push(f.stalled(BOUND + (i + 1) * 1_000, `prog-${i}`));
+    for (let i = 0; i < n; i += 1) ids.push(f.stalled(BOUND + (i + 1) * 1_000, i + 1));
     return ids.reverse();
   };
 
@@ -433,7 +436,7 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     const f = await fixture();
     const id = f.stalled(BOUND * 2);
     const sid = returned(f, id);
-    const other = f.coord.openRun({ program: 'prog-b', title: 'prog-b', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+    const other = f.coord.openRun({ program: 'prog-a', title: 'prog-a', project: 'demo', wave: 2, waveOf: 2, claimedBy: COORD });
     if (!('id' in other)) throw new Error('openRun refused');
     f.coord.setSession(other.id, sid);
     await f.pass();
@@ -531,7 +534,7 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     const f = await fixture();
     const ids: number[] = [];
     for (let i = 0; i < DISPATCH_ABANDON_PER_PASS + 3; i += 1) {
-      const id = f.stalled(BOUND + (i + 1) * 1_000, `prog-${i}`);
+      const id = f.stalled(BOUND + (i + 1) * 1_000, i + 1);
       returned(f, id, `w${i}`);
       ids.push(id);
     }
@@ -566,7 +569,7 @@ describe("bindReturnedChild (D-7563): the spawn arm's write, refused on any chan
     const id = f.stalled(BOUND * 2);
     const startedAt = okRun(f.coord.run(id))!.dispatchStartedAt!;
     // An earlier run that once recorded a birth for this session id, since bound elsewhere.
-    const old = f.stalled(BOUND * 3, 'prog-old');
+    const old = f.stalled(BOUND * 3, 2);
     f.coord.db.prepare('UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = ? WHERE id = ?').run('demo-w9', old);
     expect(bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w9', claimedBy: COORD, startedAt })).toEqual({ ok: true });
     expect(f.coord.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(id)).toEqual({ sessionBornAt: null, sessionBornFor: null });
@@ -658,7 +661,7 @@ describe('an orphaned spawn goes to the pass at once (D-8126)', () => {
     const id = f.stalled(60_000);
     orphan(f, id, 'registry-unmeasurable', f.now() - 90_000);
     expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
-    const other = f.stalled(60_000, 'prog-b');
+    const other = f.stalled(60_000, 2);
     orphan(f, other);
     f.coord.recordRunEvent(other, 'coordinator', 'something-else', f.now() + 1);
     expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(other);
@@ -687,7 +690,7 @@ describe('an orphaned spawn goes to the pass at once (D-8126)', () => {
   it('the per-pass cap still holds when every candidate is orphaned', async () => {
     let arms = 0;
     const f = await fixture({ beforeAbandon: () => { arms += 1; } });
-    const ids = Array.from({ length: DISPATCH_ABANDON_PER_PASS + 2 }, (_, i) => f.stalled(60_000, `prog-o${i}`));
+    const ids = Array.from({ length: DISPATCH_ABANDON_PER_PASS + 2 }, (_, i) => f.stalled(60_000, i + 1));
     for (const id of ids) orphan(f, id);
     await f.pass();
     expect(arms).toBe(DISPATCH_ABANDON_PER_PASS);

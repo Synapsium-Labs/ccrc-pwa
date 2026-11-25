@@ -9,6 +9,7 @@ import type { PhaseView, PlanView } from '../../shared/plan.js';
 import { PHASE_CASES } from './planPhasesCases.js';
 import {
   buildCharacterizationPlans, charWorld, CHAR_TOKEN, openRun, planVerb, readCharacterizationPlans, ONE, SIX, type CharWorld,
+  CHAR_COORD_B,
 } from './helpers/planPhasesFixture.js';
 
 let w: CharWorld | undefined;
@@ -245,16 +246,16 @@ describe('the acceptance: stored plans and runs open, as before WM0', () => {
     const x = await world();
     await buildCharacterizationPlans(x);
     expect((await planVerb(x, 'prog-a', '', { ...SIX, phases: [ph('p1', [e('w5')]), ph('p2', [e('w4')])] })).statusCode).toBe(200);
-    expect((await planVerb(x, 'prog-b', '', { ...ONE, phases: [ph('p1', [e('only')])] })).statusCode).toBe(200);
+    expect((await planVerb(x, 'prog-b', '', { ...ONE, phases: [ph('p1', [e('only')])] }, CHAR_COORD_B)).statusCode).toBe(200);
     const base = { title: 'later', project: 'project-a', waveOf: 6, homeProject: 'project-a' };
     const named = await openRun(x, { ...base, program: 'prog-a', wave: 6, ticket: 'w5-t1' });
     const bare = await openRun(x, { ...base, title: 'later, no ticket', program: 'prog-a', wave: 5 });
-    const b2 = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2 });
+    const b2 = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2, claimedBy: CHAR_COORD_B, claimedByUuid: `u-${CHAR_COORD_B}` });
     const word = (r: { json: () => unknown }) => (r.json() as { refused?: string }).refused;
     expect([named.statusCode, bare.statusCode, b2.statusCode, word(bare), word(b2)], `${named.body} ${bare.body} ${b2.body}`)
       .toEqual([200, 409, 409, 'ticket-required', 'ticket-required']);
     const bareNamed = await openRun(x, { ...base, title: 'later, named', program: 'prog-a', wave: 5, ticket: 'w4-t1' });
-    const b2Named = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2, ticket: 'only-t2' });
+    const b2Named = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2, ticket: 'only-t2', claimedBy: CHAR_COORD_B, claimedByUuid: `u-${CHAR_COORD_B}` });
     expect([bareNamed.statusCode, b2Named.statusCode], `${bareNamed.body} ${b2Named.body}`).toEqual([200, 200]);
     const held = (k: string) => x.plan.planOf('prog-a').epics.find((ep) => ep.key === k)!.tickets.filter((tk) => tk.runId !== null).map((tk) => tk.key);
     expect([held('w5'), held('w4')]).toEqual([['w5-t1'], ['w4-t1']]);

@@ -19,6 +19,7 @@
 import {
   LANDING_ENTRY_TERMINAL, LANDING_PAUSE_BY, isLandingEntryState, LANDING_PAUSE_BYS,
   type LandingBinding, type LandingEntryState, type LandingBindingReason, type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
+  type LandingWait,
 } from '../../../shared/landingLine.js';
 import { RADAR_PROBE_FRESH_S, freshWithin } from '../../../shared/api.js';   // L0: the one freshness rule
 import type { LandingControlRead } from './radar.js';                       // type-only: no ring edge
@@ -40,13 +41,26 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
   // and that record's word terminal in `LANDING_ENTRY_TERMINAL`. Diagnostic damage then does not block a healthy dependent.
   // A missing or duplicate record, `'unrecognised'`, a stored `unknown`, `pinned` and `ejected` stay outstanding. Omitted
   // `stateWords` is the display-only rule exactly.
-  const settled = (x: LandingEntry): boolean => {
-    if (stateWords === undefined || x.state !== 'unknown' || !Number.isSafeInteger(x.id) || x.id <= 0) return false;
-    if (entries.filter((y) => y.id === x.id).length !== 1) return false;
+  // Wave 5j-a (D-9047): a WITHDRAWN target is outstanding too, so a withdrawal never brings another landing forward. It is an
+  // entry whose display state is `withdrawn`, or, with `stateWords` given, one exactly identified as `settled` demands whose
+  // stored word is `withdrawn` behind a display `unknown`. `settled` therefore never settles a stored `withdrawn`; `landed`
+  // and `closed` still settle, and are met.
+  const storedWord = (x: LandingEntry): LandingEntryState | 'unrecognised' | null => {
+    if (stateWords === undefined || x.state !== 'unknown' || !Number.isSafeInteger(x.id) || x.id <= 0) return null;
+    if (entries.filter((y) => y.id === x.id).length !== 1) return null;
     const records = stateWords.filter((w) => w.id === x.id);
-    return records.length === 1 && records[0]!.value !== 'unrecognised' && LANDING_ENTRY_TERMINAL[records[0]!.value] === true;
+    return records.length === 1 ? records[0]!.value : null;
   };
-  const outstanding = new Set(entries.filter((x) => (x.state === 'pinned' || x.state === 'ejected' || x.state === 'unknown') && !settled(x)).map((x) => x.id));
+  const withdrawn = (x: LandingEntry): boolean => x.state === 'withdrawn' || storedWord(x) === 'withdrawn';
+  const settled = (x: LandingEntry): boolean => {
+    const word = storedWord(x);
+    return word !== null && word !== 'unrecognised' && word !== 'withdrawn' && LANDING_ENTRY_TERMINAL[word] === true;
+  };
+  // A display `withdrawn` target is outstanding here; a stored one behind a display `unknown` is outstanding because
+  // `settled` never settles it. Each rule is the one thing that holds its case.
+  const outstanding = new Set(entries.filter((x) => ((x.state === 'pinned' || x.state === 'ejected' || x.state === 'unknown') && !settled(x))
+    || x.state === 'withdrawn').map((x) => x.id));
+  const withdrawnTargets = new Map(entries.filter(withdrawn).map((x) => [x.id, x.pr] as const));
   const taken = new Set<number>();
   const order: LandingEntry[] = [];
   const rest = new Set(line);
@@ -58,17 +72,24 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
     order.push(next);
   }
   const head = order[0] ?? null;
-  // What waits on an ejected or unknown target, or on a cycle (a self-edge included), goes last in key order.
+  // What waits on an ejected, unknown or withdrawn target, or on a cycle (a self-edge included), goes last in key order.
   for (const x of line) if (rest.has(x)) order.push(x);
+  // Each pinned entry with a direct edge to a withdrawn target, in key order, its targets by entry id and PR (F12 ruling).
+  const waits: LandingWait[] = line.flatMap((x) => {
+    const on = [...new Set(x.afterIds)].filter((t) => withdrawnTargets.has(t)).sort((a, b) => a - b)
+      .map((t) => ({ entryId: t, pr: withdrawnTargets.get(t)! }));
+    return on.length === 0 ? [] : [{ entryId: x.id, reason: 'withdrawn' as const, on }];
+  });
+  const tail = waits.length > 0 ? { waits } : {};
   // Amendment A (D-8625): main-red alone does not pause the head the walk already selected when it has `fixesMain`. The
   // walk and its after edges are unchanged, so a fixesMain entry behind an outstanding target is not the head and stays
   // paused; an operator pause suppresses the head whatever the entry is.
   const redExempt = !flags.operatorPaused && head?.fixesMain === true;
   const by = LANDING_PAUSE_BYS.filter((k) => flags[LANDING_PAUSE_BY[k]] && !(k === 'main-red' && redExempt));
   const held = recovery?.hold ? { reason: recovery.hold.reason, subjectIds: [...recovery.hold.subjectIds] } : undefined;
-  if (by.length > 0) return held ? { paused: true, by, order, held } : { paused: true, by, order };
-  if (held) return { paused: false, order, head: null, held };
-  return { paused: false, order, head };
+  if (by.length > 0) return held ? { paused: true, by, order, held, ...tail } : { paused: true, by, order, ...tail };
+  if (held) return { paused: false, order, head: null, held, ...tail };
+  return { paused: false, order, head, ...tail };
 }
 
 /** The landing read's view of one project's entries: `order` over every entry (as before), `entries` the ones not

@@ -6,7 +6,7 @@ One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
 
 On a native-queue project the last wave's producer lands BEFORE this close,
 exactly as §5's "Landing on a native-queue project" says: with no wave N+1
-open, closing it first would retire the programme and reclaim the child
+open, closing it first would leave the programme Idle and reclaim the child
 under a PR still queued.
 
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last

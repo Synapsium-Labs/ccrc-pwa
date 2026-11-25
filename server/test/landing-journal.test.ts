@@ -194,6 +194,115 @@ describe('the journal parser (shared contract §3)', () => {
   });
 });
 
+// Landing order wave 5j-a, Task 1 (D-9045): the operator's two door records. The characterization cases were green on the
+// baseline parser before the union was split; the two that named a door kind answered `kind` there, the old parser's
+// answer, kept here as a comment because it is what a server older than 5j-a says on such a journal: `{ok:false,
+// reason:'kind', record:2}` for a `withdraw` after an entry, and `{ok:false, reason:'kind', record:1}` for a lone `pause`.
+const withdraw = (seq: number, id: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, seq, at: 1000 + seq, setBy: 'operator', subject: sub(id), kind: 'withdraw', actor: 'flag-off', ...over,
+});
+const pause = (seq: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, seq, at: 1000 + seq, setBy: 'operator', kind: 'pause', project: 'proj-a', paused: true, actor: 'flag-off', ...over,
+});
+
+describe('the door record kinds (wave 5j-a, D-9045)', () => {
+  it('characterization: an entry and an order parse to exactly the objects they were', () => {
+    const recs = [entry(1, 1), entry(2, 2), order(3, 2, [sub(1)], true), order(4, 1, [], false)];
+    expect(parseLandingJournal(text(...recs))).toEqual({ ok: true, records: recs, lastSeq: 4 });
+  });
+
+  it('a withdraw parses, as its subject\'s first mention, and a later order may mention that subject', () => {
+    const run = sub(1, 'proj-a', 10, { kind: 'run', observedRunId: 7 });
+    const recs = [withdraw(1, 1, { subject: run }), entry(2, 2), order(3, 2, [sub(1)], false)];
+    expect(parseLandingJournal(text(...recs))).toEqual({ ok: true, records: recs, lastSeq: 3 });
+  });
+
+  it('a withdraw after its entry parses, and a pause parses alone and beside subject records', () => {
+    expect(parseLandingJournal(text(entry(1, 1), withdraw(2, 1)))).toEqual({ ok: true, records: [entry(1, 1), withdraw(2, 1)], lastSeq: 2 });
+    expect(parseLandingJournal(text(pause(1)))).toEqual({ ok: true, records: [pause(1)], lastSeq: 1 });
+    const recs = [entry(1, 1), pause(2), pause(3, { paused: false })];
+    expect(parseLandingJournal(text(...recs))).toEqual({ ok: true, records: recs, lastSeq: 3 });
+  });
+
+  it('every actor form the device actor owner produces parses, untrimmed', () => {
+    const forms = ['flag-off', 'unmeasured', 'device:Mozilla/5.0 ', `device:${'x'.repeat(120)}`, 'device:', 'device:\u{1F600}'];
+    for (const actor of forms) {
+      expect(parseLandingJournal(text(withdraw(1, 1, { actor }))), actor).toMatchObject({ ok: true, lastSeq: 1 });
+      expect(parseLandingJournal(text(pause(1, { actor }))), actor).toMatchObject({ ok: true, lastSeq: 1 });
+    }
+    // a label of 120 units cut through a surrogate pair, as `deviceActor`'s slice can leave it
+    const cut = `device:${'y'.repeat(119)}${'\u{1F600}'.slice(0, 1)}`;
+    expect(parseLandingJournal(text(pause(1, { actor: cut })))).toMatchObject({ ok: true, lastSeq: 1 });
+  });
+
+  it('an extra key or a missing key is fields, for a pause and for a withdraw', () => {
+    expect(parseLandingJournal(text(pause(1, { extra: 1 })))).toEqual(bad('fields', 1));
+    expect(parseLandingJournal(text(withdraw(1, 1, { extra: 1 })))).toEqual(bad('fields', 1));
+    expect(parseLandingJournal(text(pause(1, { subject: sub(1) })))).toEqual(bad('fields', 1));
+    expect(parseLandingJournal(text(withdraw(1, 1, { project: 'proj-a' })))).toEqual(bad('fields', 1));
+    const { actor: _a, ...pauseNoActor } = pause(1);
+    const { paused: _p, ...pauseNoPaused } = pause(1);
+    const { actor: _b, ...withdrawNoActor } = withdraw(1, 1);
+    const { subject: _s, ...withdrawNoSubject } = withdraw(1, 1);
+    for (const r of [pauseNoActor, pauseNoPaused, withdrawNoActor, withdrawNoSubject]) {
+      expect(parseLandingJournal(text(r))).toEqual(bad('fields', 1));
+    }
+  });
+
+  it('setBy other than operator is fields, on both door kinds', () => {
+    for (const setBy of ['lane-a', 'Operator', 'operator ', '']) {
+      expect(parseLandingJournal(text(pause(1, { setBy }))), setBy).toEqual(bad('fields', 1));
+      expect(parseLandingJournal(text(withdraw(1, 1, { setBy }))), setBy).toEqual(bad('fields', 1));
+    }
+  });
+
+  it('an actor with a control character is fields', () => {
+    for (const actor of ['device:a\nb', 'device:\u0000', 'device:tab\there', 'device:\u007f', 'device:\u009b']) {
+      expect(parseLandingJournal(text(pause(1, { actor }))), JSON.stringify(actor)).toEqual(bad('fields', 1));
+      expect(parseLandingJournal(text(withdraw(1, 1, { actor }))), JSON.stringify(actor)).toEqual(bad('fields', 1));
+    }
+  });
+
+  it('an actor longer than the owner can produce is fields', () => {
+    const long = `device:${'x'.repeat(121)}`;
+    expect(parseLandingJournal(text(pause(1, { actor: long })))).toEqual(bad('fields', 1));
+    expect(parseLandingJournal(text(withdraw(1, 1, { actor: long })))).toEqual(bad('fields', 1));
+    // 120 units counted as UTF-16 units: 60 astral characters fill it, 61 overrun it
+    expect(parseLandingJournal(text(pause(1, { actor: `device:${'\u{1F600}'.repeat(60)}` })))).toMatchObject({ ok: true });
+    expect(parseLandingJournal(text(pause(1, { actor: `device:${'\u{1F600}'.repeat(61)}` })))).toEqual(bad('fields', 1));
+  });
+
+  it('an actor of another shape is fields', () => {
+    for (const actor of ['lane-a', 'device', 'Device:x', ' device:x', 'flag-off ', 'unmeasured\n', '', 7, null, ['device:x']]) {
+      expect(parseLandingJournal(text(pause(1, { actor }))), JSON.stringify(actor)).toEqual(bad('fields', 1));
+      expect(parseLandingJournal(text(withdraw(1, 1, { actor }))), JSON.stringify(actor)).toEqual(bad('fields', 1));
+    }
+  });
+
+  it('a pause whose project is blank or untrimmed, or whose paused is not a boolean, is fields', () => {
+    for (const project of ['', ' ', ' proj-a', 7]) {
+      expect(parseLandingJournal(text(pause(1, { project }))), JSON.stringify(project)).toEqual(bad('fields', 1));
+    }
+    for (const paused of [1, 'true', null]) {
+      expect(parseLandingJournal(text(pause(1, { paused }))), JSON.stringify(paused)).toEqual(bad('fields', 1));
+    }
+  });
+
+  it('a withdraw whose subject contradicts the history is identity', () => {
+    expect(parseLandingJournal(text(entry(1, 1), withdraw(2, 1, { subject: sub(1, 'proj-a', 99) })))).toEqual(bad('identity', 2));
+    expect(parseLandingJournal(text(entry(1, 1), withdraw(2, 2, { subject: sub(2, 'proj-a', 10) })))).toEqual(bad('identity', 2));
+  });
+
+  it('a withdraw is a mention, not an entry: a later entry for its identity is identity', () => {
+    expect(parseLandingJournal(text(withdraw(1, 1), entry(2, 1)))).toEqual(bad('identity', 2));
+  });
+
+  it('a kind still unknown is kind', () => {
+    expect(parseLandingJournal(text(pause(1, { kind: 'resume' })))).toEqual(bad('kind', 1));
+    expect(parseLandingJournal(text(entry(1, 1), withdraw(2, 1, { kind: 'withdrawn' })))).toEqual(bad('kind', 2));
+  });
+});
+
 // ---------------------------------------------------------------- the adapter
 
 interface Fx { dir: string; leaf: string }

@@ -301,9 +301,22 @@ describe('POST /api/timers: the facts, each refusal through the door', () => {
     openRun(r.coord, 'prog-b', OTHER);
     expect(refused(await set(r, { programme: 'prog-b' }))).toEqual([403, 'timer-key-unknown']);
     openRun(r.coord, 'prog-a', ME);
-    r.coord.db.prepare("UPDATE programs SET planEnd = 'met' WHERE slug = 'prog-a'").run();
+    // Programme lifecycle W1 (D-8983): the end is the stored decision, which also releases the binding.
+    r.coord.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'test' }, Date.now());
     expect(refused(await set(r, { programme: 'prog-a' }))).toEqual([403, 'timer-key-unknown']);
     expect(rows(r)).toEqual([]);
+  });
+
+  // Programme lifecycle W1 (task 6, W1 review S5): the route's programme key flips with the DECISION, not with the runs: an
+  // Idle programme (its last run closed, stored `active`) is still its coordinator's, so a timer on it is set; on `main`
+  // D-51 retired it at the close and this was 403.
+  it("the caller's Idle programme still takes a programme timer: it flips with the decision, not with the last close", async () => {
+    const r = await rig();
+    const mine = openRun(r.coord, 'prog-a', ME);
+    expect(r.coord.advance(mine, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(r.coord.closeRun({ runId: mine, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: 'prog-a', viaClosing: true }))
+      .toMatchObject({ ok: true });
+    expect((await set(r, { programme: 'prog-a' })).statusCode).toBe(201);
   });
 
   it("a worker's sixth pending timer is 409 timer-cap, and a coordinator's twenty-first", async () => {

@@ -8,13 +8,13 @@ import path from 'node:path';
 import * as restoreModule from '../src/coord/overlordRestore.js';
 import { tx } from '../src/coord/tx.js';
 import { OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_TORN_DIR } from '../src/coord/overlordAuthority.js';
-import { OverlordRestoreState, preWitnessFacts } from '../src/coord/overlordRestoreState.js';
+import { OverlordRestoreState } from '../src/coord/overlordRestoreState.js';
 import { applyDesignationRestoreInTx, designationRead, retire } from '../src/coord/overlordDesignationStore.js';
 import { ladderRows, raiseLatchInTx } from '../src/coord/overlordLadderStore.js';
 import { insertStart, mintGeneration, type MintInput } from '../src/continuity/continuityStore.js';
 import { confirmRestorePlanCases, restoreStricterCases } from './sim/overlordRestoreSets.js';
 import {
-  GEN1, GEN2, OPERATOR, NOW, S1, S2, confirm, designateLive, headRow, lastEntry, restoreRigHooks, rig, rung,
+  GEN1, GEN2, OPERATOR, NOW, S1, S2, confirm, designateLive, exchangeFacts, headRow, lastEntry, restoreRigHooks, rig, rung,
 } from './overlordRestoreRig.js';
 
 restoreRigHooks();
@@ -45,7 +45,7 @@ function withPrivacyHeadFence(r: ReturnType<typeof rig>) {
   };
   const state = new OverlordRestoreState({
     db: r.db, journal: r.journal, guard,
-    witness: { ...preWitnessFacts(r.journal), offerNow: () => { r.offers += 1; } },
+    witness: { ...exchangeFacts(r.exchange), offerNow: () => { r.offers += 1; } },
   });
   return { guard, state };
 }
@@ -118,7 +118,7 @@ describe('Confirm the restore: the transaction', () => {
     const r = rig();
     designateLive(r, S1, GEN1);
     const guard = { state: () => ({ kind: 'unmeasured', why: 'journal' }) as const, confirmed: () => {}, writerFailed: () => {}, remeasure: () => {} };
-    const state = new OverlordRestoreState({ db: r.db, journal: r.journal, guard, witness: preWitnessFacts(r.journal) });
+    const state = new OverlordRestoreState({ db: r.db, journal: r.journal, guard, witness: r.exchange });
     const before = r.lines();
     expect(state.confirm(OPERATOR, 'c', NOW)).toEqual({ ok: false, refusal: 'journal-unreadable', detail: 'the authority guard reads unmeasured' });
     expect(r.lines()).toEqual(before);
@@ -130,7 +130,7 @@ describe('Confirm the restore: the transaction', () => {
     r.guard.witnessRefused('witness-epoch');
     const state = new OverlordRestoreState({
       db: r.db, journal: r.journal, guard: r.guard,
-      witness: { ...preWitnessFacts(r.journal), epoch: () => ({ kind: 'unmeasured', why: 'privacy-head' }) },
+      witness: { ...exchangeFacts(r.exchange), epoch: () => ({ kind: 'unmeasured', why: 'privacy-head' }) },
     });
     const before = r.lines();
     expect(state.confirm(OPERATOR, 'c', NOW)).toMatchObject({ ok: false, refusal: 'journal-unreadable' });
@@ -261,7 +261,7 @@ describe('Confirm the restore: the transaction', () => {
     const before = r.lines();
     const state = new OverlordRestoreState({
       db: r.db, journal: r.journal, guard: r.guard,
-      witness: { ...preWitnessFacts(r.journal), highest: () => { throw new Error('the exchange failed'); } },
+      witness: { ...exchangeFacts(r.exchange), highest: () => { throw new Error('the exchange failed'); } },
     });
     expect(state.confirm(OPERATOR, 'c', NOW)).toMatchObject({ ok: false, refusal: 'journal-unreadable' });
     expect(r.lines()).toEqual(before);

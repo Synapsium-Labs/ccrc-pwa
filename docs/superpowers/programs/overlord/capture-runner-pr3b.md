@@ -24,7 +24,8 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   deciding by `capture.ts#buildsToPrune`).
 - **G1, one timing contract.** `capture.ts#CAPTURE_TIMINGS` now holds every bound of a capture: the step, exit and poll
   timeouts, the per-call tmux bound, PR 2's stop wait, a bound on the stand-in's close, and two allowances (the setup and
-  the removal). The entry point builds the runner and the launcher from it, and the desk's late check reads the same object.
+  the removal). The entry point builds the runner and the launcher from it, and the desk's late check reads the same contract
+  (at this PR's merge through a second reference to the constant; the very object since review 3765 F2).
   `captureWorstCaseMs` counts the runner as wired. The gate's test (`agent/test/testbox-capture-deadline.test.ts`, "gate
   G1") goes through the composer the entry point calls (`main.ts#captureDeskComposed`, which hands the runner and the desk's
   late check the contract; fix round 1, review 3687 F2), with the real launcher on a virtual clock: every tmux call takes
@@ -32,7 +33,9 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   close never ends. Each of two queued captures ends at exactly the time those limits add up to (`captureWorstCaseMs` less
   its two allowances and the polls' overruns, which this clock never takes), and the second ends, with its margin, inside
   `TESTBOX_CAPTURE_DEADLINE_MS`; a build that stalls at its last step ends that step's limit later, less the exit wait.
-  Measured exactly, so a bound the composition hands the runner other than the contract's shows as a difference. The
+  Measured exactly, so a bound the composition hands the runner other than the contract's shows as a difference. At this
+  PR's merge that held for the runner's bounds and the launcher's, but for the desk's late check only in the stricter
+  direction, and the runner's poll was not pinned (review 3765 F2); `capture-runner-carries.md` closes both. The
   launcher's every call is asked at the contract's bound, and the runner's stop wait and close bound are required
   dependencies, with no default of their own.
 - **G2, the takeover admission gate.** The desk reads the tool sync's `admitting`. While it is closed (a takeover, or a
@@ -74,10 +77,14 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   program alone (alone, it would print the pane's whole environment into what the capture records; programme call 1003):
   the pane's command is built in one place (`captureRunner.ts#capturePaneCommand`), which refuses, before any tmux call, a
   build path that is missing, empty, blank, not absolute, or that holds an `=` (which that program would read as a variable
-  to set); the runner answers such a start as no verdict.
-  Measured on a private tmux 3.6 server with a login-refusing default shell: the one-word pane ended at once, the two-word
-  pane lived. The service user's shell is unchanged, and no operator act is asked. A real-tmux case gives the capture's tmux
-  server a shell that refuses logins (first showing that a one-word pane under it ends) and holds that the capture passes.
+  to set); the runner answers such a start as no verdict (review 3765 F5 narrowed it to a plain character set:
+  `capture-runner-carries.md`).
+  Measured on a private tmux 3.6 server with a login-refusing default shell, before the fixed default shell below: the
+  one-word pane ended at once, the two-word pane lived. The service user's shell is unchanged, and no operator act is asked.
+  A real-tmux case runs the capture under a caller whose `SHELL` refuses logins (first showing that a one-word pane under that
+  shell ends) and holds that the capture passes. Since the fixed default shell, a one-word pane would run under it and pass
+  that case too, so at this PR's merge the no-shell start was pinned only by the launcher's argument-tail case with a fake
+  tmux (review 3765 F3); the real case now also reads how tmux reports the pane was started (`capture-runner-carries.md`).
 - **The build sees a usable shell (programme call 1047).** tmux hands the pane its server's default shell as `SHELL`,
   which it takes from the caller's `SHELL` or else from the user's entry, so on the box the build would see the service
   user's login-refusing shell and its tool step could fail, a fault of the box read as a failed verdict. The property now:
@@ -101,15 +108,21 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   operator to Repair, which cannot cure it. The property now: the next pass's one copy heals it, as it heals a second name.
   The writer, under the same dropped identity, replaces the link itself in the one rename that places the build; the rename
   never treats the name as a directory, so the link's target is never opened, followed, written or removed. The writer's
-  answer, the verb's answer (`"replaced":"link"`) and one server log line say a link was replaced. Measured: a rename that
+  answer, the verb's answer (`"replaced":"link"`) and one server log line say the writer's check, made before the stream,
+  saw a link at the name: the name can change during the stream, so the word reports what the check saw, not what the
+  rename replaced (review 3765 F8). Measured: a rename that
   may treat the name as a directory places the build inside a directory a link names. The directory checks stay refusals.
 - **A termination at any instant leaves no stage (ticket capture-copy-termination-stage-flake).** PR 2's case "a
   termination during the stream removes the stage" failed once in the merge queue (run 45527959477, on another PR), with
   the copy ended non-zero and its stage left. It was the product, not an early read: the copy's shell made the stage and
   only then stood ready for a termination, so one arriving in between took the default action and left the stage (root's
   only, empty, in root's temporary folder). The test's read was not early: the shell removes the stage before it exits.
-  The property now: the shell stands ready for a termination before it makes the stage, so no instant from the stage's
-  making on leaves it, and the stage's name is cleared before that readiness stands, so it never removes anything else.
+  The property now: the shell stands ready for a termination before it makes the stage, so for a termination delivered to
+  the copy's shell (what was measured) no instant from the stage's making on leaves it, and the stage's name is cleared
+  before that readiness stands. At this PR's merge that clearing covered the instants before the stage only; since review
+  3765 F1 the name is also forgotten as soon as the stage is removed on purpose, so the clean-up names the stage and nothing
+  else at every instant (`capture-runner-carries.md`). A kill, or a signal that also reaches the tool making the stage, can
+  leave one empty directory only root can enter, in root's temporary folder.
   Measured: the queue's case passed 20 of 20 alone and 20 of 20 beside four CPU-bound loops before the fix, so the window is
   narrow; after the fix it passed 20 of 20 beside the same loops. A termination delivered at the instant the stage is made,
   by the test's stand-in for the stage-making tool, left the stage every time before the fix and never after it.
@@ -148,9 +161,12 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   temporary path; the fit's own refusal has its case.
 - **start-without-a-shell** (fix round 1, F1; the coordinator preferred it to naming a shell for the pane). The pane's
   command is two words, so tmux runs it with no shell; the service user keeps its shell.
-- **capture-shell-fixed** (fix round 1, programme call 1047). The capture's pane environment gains one variable beyond the
-  spec's list (§2.3): `SHELL`, the fixed system shell, set as the capture server's default shell. The coordinator folds
-  the spec's section on the ledger pull request.
+- **capture-shell-fixed** (fix round 1, programme call 1047). The pane already had `SHELL` (tmux always sets it, from the
+  caller's `SHELL` or the user's entry); this round fixes its value: the fixed system shell, set as the capture server's
+  default shell. §2.3's list was already short of the capture's environment (it names neither `TERM` nor the recording
+  variable, the temporary directory is only in Table 7, and tmux adds its own marker variables to every pane), so a fold
+  that adds only `SHELL` leaves §2.3 short of those too (review 3765 F9). No constraint is weakened: the fixed shell is
+  neither a fleet home nor an account variable. The coordinator folds the spec's section on the ledger pull request.
 - **link-at-the-name-healed** (fix round 1, the coordinator's item). A link at exactly the build's name is replaced by the
   build in the copy's one rename; a link or a file at `captures` or `captures/builds` still refuses.
 - **left: the drive's failure line naming the step.** The replay already names every event never recorded; naming the step
@@ -231,11 +247,10 @@ Fix round 1 (review 3687), each removed in turn against the files named:
 | its refusal of a path that is not absolute | the empty, blank and relative paths' cases |
 | its refusal of a path holding an `=` | that case |
 | the launcher building the pane's command anywhere but the builder | the five refusal cases: a tmux call is made |
-| the build started as one word through the default shell | the launcher's start case (the two words); on a private tmux server with a login-refusing default shell, the build gone at once |
+| the build started as one word through the default shell | the launcher's start case (the two words). The private-server measurement under a login-refusing default shell predates the fixed default shell, under which a one-word pane lives (review 3765 F3); the real case now reads tmux's report of the start (`capture-runner-carries.md`) |
 | the start program left out of the pane's command | the launcher's start case |
 | the shell ready for a termination before it makes the stage (the stage made first, as before) | a termination at the instant the stage is made leaves no stage; the order's text pin |
 | the stage's name cleared before the clean-up stands | the order's text pin (the one instant no fixture reaches: after the clean-up stands, before the stage is asked for) |
-
 | the capture server's default shell set to the fixed shell (call 1047) | the launcher's default-shell case; on a private tmux server through the real launcher, the pane's `SHELL` was the caller's refusing shell |
 | the fixed shell's check before the start | the missing-shell case (and the default-shell case, which asks it once) |
 | that check made after the first tmux call | the missing-shell case: a tmux call is made |
@@ -244,18 +259,23 @@ Fix round 1 (review 3687), each removed in turn against the files named:
 All 27 were killed (the stage-name row on the program's text, as said). The real-tmux case with a login-refusing shell skips in this session's lane (its socket path is too
 long here) and runs in CI; its red without the cure was measured at the launcher, on a private tmux server with such a
 shell, by a script outside the test wrapper: with the cure the build was alive a second after the start, without it gone.
+That measurement predates the fixed default shell; under it a one-word pane lives, so the real case no longer went red for
+one word by that route (review 3765 F3).
 
 ## What only a real box shows
 
 - That tmux on the box prints the pane's process for `new-session -P -F '#{pane_pid}'`, makes it a group leader, runs a
   command of two words with no shell, and that the start program keeps the build in that process. Checked on the fleet host
   (tmux 3.6, the version the box's tool sync installs to match) against a private socket in the session's temporary
-  directory: a build stand-in that ignores a hangup was ended by the stop, and under a login-refusing default shell the
-  two-word pane lived where a one-word pane ended. The suite's two real-tmux cases skip in a session's lane, because the
-  socket's path under its temporary directory is too long, and run in CI: on the fix round's first tip both ran and passed
-  in the `test (agent)` job (run 45533701118).
+  directory: a build stand-in that ignores a hangup was ended by the stop, and, before the fixed default shell, under a
+  login-refusing default shell the two-word pane lived where a one-word pane ended. The suite's two real-tmux cases skip in a
+  session's lane, because the socket's path under its temporary directory is too long, and run in CI: both ran and passed
+  in the `test (agent)` job on the fix round's first tip (run 45528527166) and on its later head d1cb7d1f (run 45533701118)
+  (review 3765 F10 g).
 - That the pane starts under the service user's real entry, whose shell refuses logins (review 3687 F1): the cases stand in
-  for it with `SHELL`, which tmux reads first.
+  for it with the caller's `SHELL`. Since the fixed default shell, tmux gives the pane that shell whatever the caller's
+  `SHELL` or the user's entry says, so the stand-in shows that the caller's value does not reach the pane, not how a pane
+  under the user's own entry would start (review 3765 F3).
 - That the fixed shell is on the box as an executable file (the start refuses otherwise, no verdict), and that the build's
   tool step runs through it there. The cases show the pane is given it; only a real capture shows the build's tool step
   using it.

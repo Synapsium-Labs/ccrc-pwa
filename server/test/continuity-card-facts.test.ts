@@ -107,7 +107,11 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
 
   it('a coordinator between runs, with declared intent, gets the programme of the newest run it claimed (C51)', async () => {
     const c = store();
-    const old = openRun(c, 'prog-old', ME);
+    // Programme lifecycle W1 (R11): `openRun` no longer lets one claimant open runs in two programmes, so the older
+    // programme's run is history from before it (a run claimed under the old rules): opened under a stand-in, then
+    // claimed by ME and closed, as the migration finds such rows (an open one would be a conflict, and refuse ME prog-a).
+    const old = openRun(c, 'prog-old', `${ME}-standin`);
+    c.db.prepare("UPDATE runs SET claimedBy = ?, state = 'done' WHERE id = ?").run(ME, old);
     const run = openRun(c, 'prog-a', ME);
     c.db.prepare("UPDATE runs SET state = 'done' WHERE id IN (?, ?)").run(old, run);
     const { facts: f, renderer } = await gather(c, { declaredIntent: () => true });
@@ -386,7 +390,8 @@ describe('gatherCardFacts: the notes and the checkpoint (the notes piece, Task 3
   it('the live notes, newest first, each with what its row is now; another identity\'s notes are not read', async () => {
     const c = store();
     const run = openRun(c, 'prog-a', ME);
-    const closed = openRun(c, 'prog-b', ME);
+    // Programme lifecycle W1 (R11): ME owns one programme, so its second run is prog-a's next wave.
+    const closed = openRun(c, 'prog-a', ME, 2);
     const a = note(c, { kind: 'run', id: run }, 'one', NOW - 3_000);
     const b = note(c, { kind: 'run', id: closed }, 'two', NOW - 2_000);
     const d = note(c, { kind: 'programme', slug: 'prog-z' }, 'three', NOW - 1_000);

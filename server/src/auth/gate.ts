@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 306 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 307 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -90,7 +90,7 @@ import type { SessionStore } from './sessions.js';
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
  *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/runs/:id/signals`, `/api/feed`,
  *     `/api/lifecycle`, `/api/peers`, `/api/claims`, `/api/asks`, `/api/pools/epoch`,
- *     `/api/updates/intent/:nodeId`) do NOT: they take a live session cookie OR the token
+ *     `/api/updates/intent/:nodeId`, `/api/landing`) do NOT: they take a live session cookie OR the token
  *     (D-149), which is why the coordinator can read its own wave ledger
  *     cookieless from the fleet host — and, for the newest members, why
  *     `ccd-pool-sync.timer` can pull the account-pool projection cookieless too, and
@@ -387,9 +387,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "the allocation record and a project's floor, read cookieless from the fleet host — " +
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
   ['GET /api/landing',
-    "a project's landing line — its entries, its flags and the decider's order — read cookieless from the fleet host " +
-    'before the coordinator enqueues (landing order wave 5e) — box-token gated (requireMailToken), the GET /api/ledger ' +
-    'convention: no attribution to check'],
+    'EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the same dual-credential arrangement as `GET /api/feed`: ' +
+    "a project's landing line (its entries, its flags and the decider's order) is read COOKIELESS from the fleet host by " +
+    '`ccrc-api landing show` before the coordinator enqueues, and the console reads it with a session. The handler ' +
+    'requires one of those credentials before revealing even `501 not-configured`, so this entry gives the console its ' +
+    'read without making the line anonymous; there is no attribution to check'],
   ['POST /api/landing/entries',
     'a session records a landing entry it is about to enqueue (landing order wave 5f) — box-token gated (the mandatory ' +
     'requireMailToken, no cookie fallback), attribution checked against the registry as the claim lanes check it; the ' +

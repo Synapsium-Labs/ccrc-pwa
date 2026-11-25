@@ -181,8 +181,10 @@ const fixture = (opts: FixtureOpts = {}) => {
   };
   let progN = 0;
   const openRun = (): { id: number; program: string } => {
-    const program = `w4-prog-${++progN}`;
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    // Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so each run is the next WAVE of its one
+    // programme, never the first run of another (a distinct wave keeps `openRun`'s reuse of a planned row from folding).
+    const program = 'w4-prog';
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: ++progN, waveOf: null, claimedBy: 'demo-coord' });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     return { id: r.id, program };
   };
@@ -2044,10 +2046,11 @@ describe('one entry describes one workspace generation (spec §5.6, §5.7)', () 
 // `CHILD_BIRTH_SKEW_MS` belongs to an earlier workspace under the same slug.
 describe('the coordination fence at the lane — a claim counts only in the child\'s current generation (spec §1 rule 4, §5.6)', () => {
   let k4N = 0;
-  /** A run `by` claims, in a programme of its own, opened at the fixture clock and abandoned there unless `open`. */
+  /** A run `by` claims, in the programme `by` owns (one per claimant: programme lifecycle W1, R11), as its next wave, opened
+   *  at the fixture clock and abandoned there unless `open`. */
   const coordinatedBy = (f: ReturnType<typeof fixture>, by: string, open = false): { id: number; program: string } => {
-    const program = `k4-coord-${++k4N}`;
-    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: by });
+    const program = `k4-coord-${by}`;
+    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: ++k4N, waveOf: null, claimedBy: by });
     if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
     if (!open) f.abandon({ id: r.id, program });
     return { id: r.id, program };

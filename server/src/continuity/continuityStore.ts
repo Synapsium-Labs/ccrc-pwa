@@ -751,7 +751,7 @@ export interface TimerInsert {
   readonly programme: string | null;
   readonly setAt: number;
   readonly dueAt: number;
-  /** The restore generation read at the set (`restoreGeneration()`, Overlord W1 migration 127); null when it read unmeasured, or
+  /** The restore generation read at the set (`restoreGeneration()`, Overlord W1 migration 128); null when it read unmeasured, or
    *  for a row an older build set. `timerRestoreFact` reads every null the same way. */
   readonly setRestoreGeneration: number | null;
 }
@@ -930,7 +930,7 @@ export function firedTimersOf(db: DatabaseSync, setter: string, stamp: string, s
   } catch (e) { return readFailed(e); }
 }
 
-// `continuity_timer_refusals` (M36; migration 127): one count per UTC day, timer door and word, raised by the timer doors'
+// `continuity_timer_refusals` (M36; migration 128): one count per UTC day, timer door and word, raised by the timer doors'
 // one refusal helper and pruned by the timers lane beside `purgeTimers`. M36's report reads `timerRefusalCounts`.
 
 /** One refusal to count: the UTC day of the door's wall clock, the door, and the word it answered. */

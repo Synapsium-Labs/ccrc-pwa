@@ -1,0 +1,68 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Older messages, at the top of a session's chat (desktop polish     *
+   *  wave 175). A quiet band, centred in the column like the time       *
+   *  dividers it sits among: the control is a pill of Jump to latest's  *
+   *  shape, never a primary, because loading history commits nothing.  *
+   * ------------------------------------------------------------------ */
+  .older-edge {
+    display: grid;
+    justify-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-3) var(--sp-2);
+    min-width: 0;
+    text-align: center;
+  }
+  .older-edge-say {
+    margin: 0;
+    max-width: 40ch;
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+    overflow-wrap: anywhere;
+  }
+  .older-edge-say:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--r-sm);
+  }
+  .older-edge-load {
+    min-height: var(--tap-min);
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--edge-strong);
+    border-radius: var(--r-full);
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
+    padding: 0 var(--sp-4);
+    cursor: pointer;
+  }
+  .older-edge-load[aria-disabled='true'] {
+    cursor: default;
+    color: var(--ink-secondary);
+    border-color: var(--edge-subtle);
+  }
+  /* Read by a screen reader only. */
+  .older-edge-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* Where a page left records out: a dashed rule across the column, so it never reads as a message of the session's. */
+  .older-gap {
+    margin: 0;
+    padding: var(--sp-1) var(--sp-3);
+    border-block: 1px dashed var(--edge-strong);
+    font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+    letter-spacing: var(--ls-caps-sm);
+    color: var(--ink-tertiary);
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+}

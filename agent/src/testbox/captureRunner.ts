@@ -208,10 +208,10 @@ export function groupLife(signal: (pid: number, sig: 0) => void, pgid: number): 
 }
 
 /** What starts the build in its pane: tmux runs a command given as two or more words directly, with no shell between it
- *  and the command (tmux's manual, "executed directly (without sh -c)"); a command of one word goes through the pane's
- *  default shell, which for the test box's service user is one that refuses logins (review 3687 F1). This fixed system
- *  program, then the build's absolute path, is two words: it replaces itself with the build, so no interpreter reads the
- *  build's name and the pane's process is the build. */
+ *  and the command (tmux's manual, "executed directly (without sh -c)"); a command of one word would go through the pane's
+ *  default shell (review 3687 F1; that is now {@link CAPTURE_SHELL}, so the two words are what keeps a shell out). This
+ *  fixed system program, then the build's absolute path, is two words: it replaces itself with the build, so no
+ *  interpreter reads the build's name and the pane's process is the build. */
 export const CAPTURE_START = '/usr/bin/env';
 
 /** The shell the build sees as `SHELL` (programme call 1047): one fixed, absolute system shell its tool step can use, set
@@ -231,13 +231,21 @@ export function executableFile(file: string): boolean {
   }
 }
 
+/** The characters a build's path may hold (review 3765 F5): letters, digits, `.`, `_`, `/` and `-`. That is the set the
+ *  fleet's copy accepts for the box root (`ccd/testbox-build-copy`, which refuses any other root before it reaches the box)
+ *  together with a build version's digits and dots, so every build the copy can place passes; and nothing in it is read
+ *  specially by tmux's argument parser or by a shell, so the path stays one path to the build whatever reads it. No `=`
+ *  either, which the start program would read as a variable to set. */
+const CAPTURE_PATH_CHARS = /^[A-Za-z0-9._/-]+$/;
+
 /** The pane's command, built in this one place: {@link CAPTURE_START}, then `binary` as a word of its own. A pane can never
- *  start the fixed program alone (alone, it would print the pane's whole environment into what the capture records), so
- *  this throws, before any tmux call, unless `binary` is a string naming an absolute path with no `=` (which that program
- *  would read as a variable to set): an empty, missing, blank or relative path is refused. */
+ *  start the fixed program alone (alone, it would print the pane's whole environment into what the capture records), and
+ *  never a path tmux could read as anything but that one path, so this throws, before any tmux call, unless `binary` is a
+ *  string naming an absolute path in {@link CAPTURE_PATH_CHARS}: an empty, missing, blank or relative path is refused, and
+ *  so is one holding any other character. The throw is a fault of the box, never a verdict. */
 export function capturePaneCommand(binary: unknown): readonly [string, string] {
-  if (typeof binary !== 'string' || !path.isAbsolute(binary) || binary.includes('=')) {
-    throw new Error('the build\'s path is missing, not absolute, or holds an =: it cannot be started without a shell');
+  if (typeof binary !== 'string' || !path.isAbsolute(binary) || !CAPTURE_PATH_CHARS.test(binary)) {
+    throw new Error('the build\'s path is missing, not absolute, or holds a character other than a letter, a digit, ., _, / or -: it cannot be started without a shell as one path');
   }
   return [CAPTURE_START, binary];
 }

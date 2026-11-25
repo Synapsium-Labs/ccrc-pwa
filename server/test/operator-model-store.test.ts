@@ -10,7 +10,7 @@ import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
 import { PrivateStoreUnmigratable, defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
-import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
+import { openOperatorModelStore, OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
 import type { MessageActor, MessageEvent, MessageState, ReadLine } from '../../shared/operatorMessages.js';
 import { EVENT_ACTORS, TABLE_1 } from './sim/operatorModelSets.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -94,6 +94,19 @@ describe('operator-model.db: the shared opener at 0600', () => {
 });
 
 describe('recordMessage', () => {
+  it('issues above a witnessed id even when the two local copies agree on an older id', () => {
+    const dir = mkTmp('ccrc-opmodel-');
+    let witnessed: number | null = null;
+    const f = openOperatorModelStore(defaultOperatorModelDbPath(dir), dir, 1000,
+      { witnessHighestIds: () => ({ message: witnessed }) });
+    opened.push(f.db);
+    const input = { at: 1001, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'fixture', mark: false, composedKey: null };
+    expect(idOf(f.store.recordMessage(input))).toBe(1);
+    witnessed = 40;
+    expect(idOf(f.store.recordMessage({ ...input, at: 1002 }))).toBe(41);
+    witnessed = 2;
+    expect(idOf(f.store.recordMessage({ ...input, at: 1003 }))).toBe(42);
+  });
   it('records a row, recorded, with its hash and its actor, after one journal record', () => {
     const f = fixture();
     const r = record(f);

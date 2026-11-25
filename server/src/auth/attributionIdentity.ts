@@ -39,6 +39,12 @@ const mint = (actor: ActorWire): RecordedActor => {
   return frozen;
 };
 
+/** THE SERVER'S OWN ACTOR for one of its lanes (slug `server-actor-is-attributed`): kind `server`, issuer `server`, strength
+ *  `attributed` (the three strengths describe a caller, and the server holds no credential). It is a recorded actor, so a
+ *  brake takes it; it is not the account gate's operator, so a widening (`ladderActor(…, 'widen')`) refuses it. */
+export const serverActorOf = (lane: string): RecordedActor =>
+  mint({ kind: 'server', subject: `ccrc server: ${lane}`, issuer: 'server', strength: 'attributed' });
+
 const consoleOf = (c: ConsoleCaller): ConsoleCaller => {
   const frozen = Object.freeze({ ...c });
   CONSOLE_MINTED.add(frozen);
@@ -75,6 +81,7 @@ export function attributionIdentity(deps: AttributionIdentityDeps): CallerIdenti
       if (!isGateActor(actor)) throw new Error('callerIdentity.operator: not an actor the account gate minted');
       return mint({ kind: 'operator', subject: String(actor), issuer: 'account-gate', strength: 'operator' });
     },
+    server: serverActorOf,
     console(armed, device): ConsoleCaller {
       if (!armed) return consoleOf({ kind: 'dark' });
       if (device === null) return consoleOf({ kind: 'device-unmeasured' });

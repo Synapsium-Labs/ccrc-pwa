@@ -320,7 +320,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
-  'continuity_timer_refusals'] as const;
+  'programme_events', 'programme_picks', 'continuity_timer_refusals'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -482,6 +482,10 @@ describe(TABLES_PIN, () => {
       coordinator_state: ['server/src/coord/schema.ts#(module)', `${S}setCaps`],
       // The history of limits (Overlord W1 serviceability PR B, plan w1-serviceability.md Task 5): the sampler's insert and prune.
       limit_samples: ['insertLimitSamples', 'pruneLimitSamples'].map((f) => `server/src/coord/limitSamplesStore.ts#${f}`),
+      // The programme lifecycle (W1, D-8989): append-only events and the picks, one writer each in the lifecycle store; the
+      // migration's seed events are SQL in MIGRATIONS' string, so the scanner names its module.
+      programme_events: ['server/src/coord/programmeLifecycleStore.ts#appendEventInTx', 'server/src/coord/schema.ts#(module)'],
+      programme_picks: ['server/src/coord/programmeLifecycleStore.ts#pickInTx'],
     });
   });
 

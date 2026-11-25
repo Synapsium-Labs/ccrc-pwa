@@ -41,8 +41,8 @@ const set = (s: CoordStore, over: Partial<TimerInsert> = {}): number => {
   if (!r.ok) throw new Error('timer not set');
   return r.id;
 };
-const openRun = (s: CoordStore, program = 'prog-a'): number => {
-  const opened = s.openRun({ program, title: 'T', project: 'project-a', wave: 2, waveOf: 3, claimedBy: OTHER });
+const openRun = (s: CoordStore, program = 'prog-a', claimedBy = OTHER): number => {
+  const opened = s.openRun({ program, title: 'T', project: 'project-a', wave: 2, waveOf: 3, claimedBy });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   return opened.id;
 };
@@ -297,11 +297,15 @@ describe('the cleanup arm: setter-gone from the stamp only, and every unmeasured
     expect(timersPass({ coord: s, now: NOW, log: () => {} }, LISTED, facts)).toMatchObject({ waited: 1, fired: [] });
   });
 
-  it('a programme with planEnd cancels its timer programme-ended; one whose state reads done with planEnd unset keeps it', async () => {
+  // Programme lifecycle W1 (W1 review, C1 and A1): a DECIDED end (state and its record together, `decideInTx`) cancels; a D-51
+  // `done` the migration kept for the operator (state `done`, `planEnd` unset: spec §13 step 4's `auto-retire-kept`) keeps
+  // its timer and fires it, as on `main`, because a cancel is never undone by the operator's later reopen. Red with the lane
+  // reading `programmeLive` (isEnded alone): prog-b's timer is then cancelled.
+  it('a programme whose end was decided cancels its timer programme-ended; a kept D-51 done with planEnd unset keeps it', async () => {
     const s = store();
     openRun(s, 'prog-a');
-    openRun(s, 'prog-b');
-    s.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = 'prog-a'").run();
+    openRun(s, 'prog-b', 'project-a-third');   // one coordinator owns one programme (R11)
+    s.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'test' }, NOW);
     s.db.prepare("UPDATE programs SET state = 'done' WHERE slug = 'prog-b'").run();
     const ended = set(s, { programme: 'prog-a' });
     const between = set(s, { programme: 'prog-b' });

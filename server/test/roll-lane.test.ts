@@ -280,9 +280,11 @@ describe('rollPass: what is rolled (D-7452)', () => {
 describe('rollPass: claimed runs and claims do not hold a roll (D-7562)', () => {
   // On a real store: the coordinator claims open runs (a stale planned one, a dispatched one its child works) and holds a
   // live claim, which held every live coordinator off the roll before the operator's ruling of 2026-10-30.
+  // R11: one coordinator owns at most one live programme, so a claimant's runs are waves of its own programme.
   let seq = 0;
   const openRun = (s: CoordStore, o: { claimedBy: string; state: RunState; worker?: string }): void => {
-    const r = s.openRun({ program: `program-${++seq}`, title: 't', project: 'project-a', wave: 1, waveOf: 1, claimedBy: o.claimedBy });
+    const wave = ++seq;
+    const r = s.openRun({ program: `program-${o.claimedBy}`, title: 't', project: 'project-a', wave, waveOf: wave, claimedBy: o.claimedBy });
     if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
     if (o.worker !== undefined) s.setSession(r.id, o.worker);
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(o.state, r.id);

@@ -585,7 +585,7 @@ export class PlanSync {
     const planEnd = upkeep ? null : plan.planEndOf(slug);
     const tickets = stored.epics.flatMap((e) => e.tickets);
     const outcome = prog === null ? null : programmeEnd({
-      planEnd: planEnd?.outcome ?? null, programState: prog.row.state, epics: stored.epics,
+      programState: prog.row.state, planEnd: planEnd?.outcome ?? null, epics: stored.epics,
       openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
     });
     const slots = slotsOf(store);

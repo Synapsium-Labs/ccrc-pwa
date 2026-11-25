@@ -34,7 +34,7 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
   it('the migration\'s slot is found by its DDL, after the card\'s tables', () => {
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
     expect(slot).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_card_reads')) + 1);
-    // Two entries name it: the one that creates it, and the Overlord's timers' restore column (migration 127), which alters it.
+    // Two entries name it: the one that creates it, and the Overlord's timers' restore column (migration 128), which alters it.
     expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE continuity_timers ('))).toHaveLength(1);
     expect(MIGRATIONS.filter((m) => m.includes('continuity_timers')).map((m) => m.includes('CREATE TABLE continuity_timers (') || m.includes('ALTER TABLE continuity_timers ADD COLUMN setRestoreGeneration')))
       .toStrictEqual([true, true]);
@@ -227,7 +227,7 @@ describe('continuity_timers: the table and its writers (Overlord §3.3.12, C61)'
 
 // Overlord W1, the Overlord's timers (plan w1-overlord-timers.md Task 2): the restore generation at the set, the role's fired
 // list and the refusal count (M36), on a fixture coord.db at the new version.
-describe('the restore column, the fired list and the refusal count (Overlord W1, migration 127)', () => {
+describe('the restore column, the fired list and the refusal count (Overlord W1, migration 128)', () => {
   const W1A_COLUMNS = 'id, setter, setterIncarnation, setById, setByUuid, role, note, runId, programme, setAt, dueAt, state, '
     + 'firedAt, mailId, cancelledAt, cancelReason';
   /** One mail and its one delivery, as the lane queues them, with the delivery's ack time (null: not acked). */

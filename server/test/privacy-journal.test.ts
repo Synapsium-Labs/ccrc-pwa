@@ -255,6 +255,20 @@ describe('the store records through the privacy journal', () => {
     const last = read.kind === 'records' ? read.records.at(-1)! : null;
     expect(o.store.privacyJournalHead()).toEqual({ kind: 'measured', value: { digest: last!.digest, sequence: 2, highestId: 2 } });
   });
+
+  it('privacyJournalDigestAt answers the digest at a sequence, null past the head, and unmeasured for a refused or unreadable journal', () => {
+    const dir = dirIn();
+    const o = open(dir);
+    expect(o.store.privacyJournalDigestAt(1)).toEqual({ kind: 'measured', value: null });
+    record(o); record(o);
+    const read = chainedJournalFileAt(PRIVACY_JOURNAL_FORMAT, dir, PRIVACY_JOURNAL_BASENAME).read();
+    const recs = read.kind === 'records' ? read.records : [];
+    expect(o.store.privacyJournalDigestAt(2)).toEqual({ kind: 'measured', value: recs[1]!.digest });
+    expect(o.store.privacyJournalDigestAt(3)).toEqual({ kind: 'measured', value: null });
+    expect(o.store.privacyJournalDigestAt(0)).toEqual({ kind: 'measured', value: null });
+    writeFileSync(path.join(dir, PRIVACY_JOURNAL_BASENAME), 'not a record\n');
+    expect(o.store.privacyJournalDigestAt(1).kind).toBe('unmeasured');
+  });
 });
 
 describe('the open\'s boot lines (F2, F6)', () => {
