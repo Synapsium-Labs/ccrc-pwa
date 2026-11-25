@@ -75,6 +75,7 @@ import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
 import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
+import { moveOperatorMessage } from './operatorModel/messageLine.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -2345,7 +2346,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
       stateOf: (m) => deps.operatorModel?.messageStateOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
-      pickUp: (m, at) => deps.operatorModel?.moveMessage(m, 'pick-up', 'hook', at) ?? { ok: false, error: 'not-open', detail: 'no private store' } },
+      // The pick-up's move and its sequence line, in one synchronous segment (call 1218).
+      pickUp: (m, at) => deps.operatorModel === undefined ? { ok: false, error: 'not-open', detail: 'no private store' }
+        : moveOperatorMessage({ store: deps.operatorModel, coordDb: deps.coord?.db, warn: (l) => { console.warn(l); } }, m, 'pick-up', 'hook', at) },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared

@@ -86,12 +86,11 @@ const MESSAGE_LINE_CALLERS = [`${ML}#moveOperatorMessage`, 'server/src/operatorM
 export const MESSAGE_MOVERS: Readonly<Record<string, string>> = {
   [`${ML}#moveOperatorMessage`]: 'the one combinator: the move, then its line when the state word changed, in one synchronous segment',
   'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)',
-  'server/src/server.ts#buildServer': 'the hook\'s pick-up port: moves with no line until its peer packet lands (the continuity routes and server.ts are held by another run)',
 };
-/** Every caller of the combinator, in server/src. */
+/** Every caller of the combinator, in server/src (`server.ts#buildServer` composes the hook's pick-up port). */
 const COMBINATOR_CALLERS = [
   'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass', 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued',
-  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt',
+  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt', 'server/src/server.ts#buildServer',
 ] as const;
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
