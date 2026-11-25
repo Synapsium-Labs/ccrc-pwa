@@ -51,19 +51,44 @@ type Shaped =
   | { ok: true; record: LandingJournalRecord }
   | { ok: false; reason: 'version' | 'kind' | 'fields' };
 
+/** Each kind's exact top-level keys. `withdraw` and `pause` are the operator's door records (wave 5j, D-9045). */
+const FIELDS: Record<LandingJournalRecord['kind'], readonly string[]> = {
+  entry: ['v', 'seq', 'at', 'setBy', 'subject', 'kind', 'claim'],
+  order: ['v', 'seq', 'at', 'setBy', 'subject', 'kind', 'after', 'fixesMain'],
+  withdraw: ['v', 'seq', 'at', 'setBy', 'subject', 'kind', 'actor'],
+  pause: ['v', 'seq', 'at', 'setBy', 'kind', 'project', 'paused', 'actor'],
+};
+const isKind = (v: unknown): v is LandingJournalRecord['kind'] =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(FIELDS, v);
+/** A door record's actor: exactly the output grammar of the device actor owner (`ccdargv.ts#deviceActor`), which is not
+ *  trimmed. `flag-off` (sign-in dark), `unmeasured` (no label), or `device:` and at most 120 UTF-16 code units with no
+ *  control character; a blank label is the owner's output too. */
+const isActor = (v: unknown): v is string => typeof v === 'string'
+  && (v === 'flag-off' || v === 'unmeasured' || (v.startsWith('device:') && v.length <= 127 && !/\p{Cc}/u.test(v)));
+/** A door record is the operator's alone: its actor when `setBy` is `'operator'` and the actor reads, else `null`. */
+const doorActor = (doc: Record<string, unknown>): string | null =>
+  (doc.setBy === 'operator' && isActor(doc.actor) ? doc.actor : null);
+
 /** One parsed JSON value to a record: version, then kind, then the exact field shape. */
 function shape(doc: unknown): Shaped {
   if (!isRecord(doc)) return { ok: false, reason: 'fields' };
   if (doc.v !== 1) return { ok: false, reason: 'version' };
-  if (doc.kind !== 'entry' && doc.kind !== 'order') return { ok: false, reason: 'kind' };
-  const fields = doc.kind === 'entry'
-    ? ['v', 'seq', 'at', 'setBy', 'subject', 'kind', 'claim']
-    : ['v', 'seq', 'at', 'setBy', 'subject', 'kind', 'after', 'fixesMain'];
-  if (!hasExactKeys(doc, fields)) return { ok: false, reason: 'fields' };
+  if (!isKind(doc.kind)) return { ok: false, reason: 'kind' };
+  if (!hasExactKeys(doc, FIELDS[doc.kind])) return { ok: false, reason: 'fields' };
   if (!isPositiveSafe(doc.seq) || !isNonnegativeSafe(doc.at) || !isName(doc.setBy)) return { ok: false, reason: 'fields' };
+  if (doc.kind === 'pause') {
+    const actor = doorActor(doc);
+    if (actor === null || !isName(doc.project) || typeof doc.paused !== 'boolean') return { ok: false, reason: 'fields' };
+    return { ok: true, record: { v: 1, seq: doc.seq, at: doc.at, setBy: doc.setBy, kind: 'pause', project: doc.project,
+      paused: doc.paused, actor } };
+  }
   const subject = readSubject(doc.subject);
   if (subject === null) return { ok: false, reason: 'fields' };
   const head = { v: 1 as const, seq: doc.seq, at: doc.at, setBy: doc.setBy, subject };
+  if (doc.kind === 'withdraw') {
+    const actor = doorActor(doc);
+    return actor === null ? { ok: false, reason: 'fields' } : { ok: true, record: { ...head, kind: 'withdraw', actor } };
+  }
   if (doc.kind === 'entry') {
     const c = doc.claim;
     if (!isRecord(c) || !hasExactKeys(c, ['pinnedSha', 'handoffCommit']) || !isHash(c.pinnedSha) || !isHash(c.handoffCommit)) {
@@ -122,8 +147,12 @@ export function parseLandingJournal(text: string): LandingJournalParse {
     const rec = shaped.record;
     if (rec.seq !== position) return { ok: false, reason: 'sequence', record: position };
     // An entry introduces an identity never mentioned before; every mention must agree with the history.
-    if (rec.kind === 'entry' && identities.has(rec.subject.id)) return { ok: false, reason: 'identity', record: position };
-    if (!identities.mention(rec.subject)) return { ok: false, reason: 'identity', record: position };
+    // A pause names a project and no identity (wave 5j); a withdraw's subject is a mention like any other, and may be the
+    // subject's first (a run-bound entry is never journalled at creation).
+    if (rec.kind !== 'pause') {
+      if (rec.kind === 'entry' && identities.has(rec.subject.id)) return { ok: false, reason: 'identity', record: position };
+      if (!identities.mention(rec.subject)) return { ok: false, reason: 'identity', record: position };
+    }
     if (rec.kind === 'order') {
       for (const ref of rec.after) {
         if (!identities.mention(ref)) return { ok: false, reason: 'identity', record: position };

@@ -3763,17 +3763,23 @@ export class CoordStore {
   }
 
   /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
-   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim. */
+   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim.
+   *  The operator's door records (wave 5j, D-9045): a `withdraw` is a mention and never touches `landing_authority`, since
+   *  a withdrawal writes no order; a `pause` names no subject. */
   private applyLandingRecord(r: LandingJournalRecord): void {
-    const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
-      'observedSeq = excluded.observedSeq');
-    const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
-    [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
-      s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
-    this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
-      'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
-      .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+    if (r.kind !== 'pause') {
+      const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
+        'observedSeq = excluded.observedSeq');
+      const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
+      [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
+        s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
+      if (r.kind !== 'withdraw') {
+        this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
+          'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
+          .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+      }
+    }
     this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
   }
 

@@ -137,12 +137,19 @@ export interface LandingCreationClaim {
 export interface LandingAuthority {
   afterIds: number[]; fixesMain: boolean; setBy: string; seq: number;
 }
-export type LandingJournalRecord = {
-  v: 1; seq: number; at: number; setBy: string; subject: LandingSubjectRef;
-} & (
+interface LandingJournalHead { v: 1; seq: number; at: number; setBy: string }
+/** A record about one entry. `withdraw` (wave 5j, D-9045) is the operator's withdrawal: `setBy` is `'operator'` and
+ *  `actor` is the text the device actor owner records (`flag-off` while sign-in is dark). */
+export type LandingJournalSubjectRecord = LandingJournalHead & { subject: LandingSubjectRef } & (
   | { kind: 'entry'; claim: { pinnedSha: string; handoffCommit: string } }
   | { kind: 'order'; after: LandingSubjectRef[]; fixesMain: boolean }
+  | { kind: 'withdraw'; actor: string }
 );
+/** The operator's pause or resume of one project's line (wave 5j, D-9045): it names a project and no subject. */
+export type LandingJournalPauseRecord = LandingJournalHead & {
+  kind: 'pause'; project: string; paused: boolean; actor: string;
+};
+export type LandingJournalRecord = LandingJournalSubjectRecord | LandingJournalPauseRecord;
 export type LandingJournalInvalidReason =
   | 'empty' | 'blank' | 'torn' | 'json' | 'version' | 'kind'
   | 'fields' | 'sequence' | 'identity';
