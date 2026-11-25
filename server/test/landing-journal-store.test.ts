@@ -1108,6 +1108,17 @@ describe('the authority writer journals the operator\'s doors and tells the coor
     expect(cursor(f)).toBe(r.seq);
   });
 
+  it('a stored pin time that does not read is never 0: a withdraw carrying pinnedAt 0 is landing-entry-moved, nothing appended (F4)', () => {
+    const f = boot();
+    const { a } = lineOf(f);
+    f.db.prepare("UPDATE landing_entries SET pinnedAt = 'not-a-time' WHERE id = ?").run(a);
+    const before = journal(f);
+    expect(f.store.writeLandingAuthority(withdrawCmd(1, 0), 9000)).toMatchObject({ ok: false, error: 'landing-entry-moved' });
+    expect(journal(f)).toBe(before);
+    expect(stateOf(f, a)).toBe('pinned');
+    expect(mails(f)).toEqual([]);
+  });
+
   it('the entry\'s notice and one landing-held per direct dependant are queued once each, from operator; a transitive one gets none', () => {
     const f = boot();
     const { a, b } = lineOf(f);

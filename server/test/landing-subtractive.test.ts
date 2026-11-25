@@ -22,10 +22,14 @@ import { sourceOfSymbol } from './scan/symbols.js';
 const P = 'project-a';
 const SHA = 'a'.repeat(40);
 const HC = 'c'.repeat(40);
-const TABLES = ['landing_entries', 'landing_projects', 'landing_subjects', 'landing_authority', 'landing_projection_witness', 'landing_journal_cursor'] as const;
-const KEY: Record<(typeof TABLES)[number], string> = {
-  landing_entries: 'id', landing_projects: 'project', landing_subjects: 'id', landing_authority: 'subjectId',
-  landing_projection_witness: 'entryId', landing_journal_cursor: 'id',
+// Every landing table (review run 3864's F5 ruling added landing_intents, the run-keyed landing holds, which no door writes).
+const TABLES = [
+  'landing_entries', 'landing_projects', 'landing_subjects', 'landing_authority', 'landing_projection_witness', 'landing_journal_cursor',
+  'landing_intents',
+] as const;
+const KEY: Record<(typeof TABLES)[number], readonly string[]> = {
+  landing_entries: ['id'], landing_projects: ['project'], landing_subjects: ['id'], landing_authority: ['subjectId'],
+  landing_projection_witness: ['entryId'], landing_journal_cursor: ['id'], landing_intents: ['runId', 'key'],
 };
 
 const closers: Array<() => Promise<unknown>> = [];
@@ -78,6 +82,10 @@ const world = async (form: Form): Promise<World> => {
   edge('D', ['B'], true);
   db.prepare("UPDATE landing_entries SET state = 'ejected', ejections = 1 WHERE id = ?").run(ids.E);
   db.prepare("UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE id = ?").run(ids.F);
+  // A landing hold of the project's own, so an empty landing_intents cannot pass for an unchanged one.
+  const held = store.openRun({ program: 'prog-held', title: 't', project: P, wave: 1, waveOf: null, claimedBy: 'coord-held' });
+  if (!('id' in held)) throw new Error('fixture openRun refused');
+  db.prepare('INSERT INTO landing_intents (runId, project, key, setBy, takenAt) VALUES (?, ?, ?, ?, ?)').run(held.id, P, 'path:held.ts', 'coord-held', 3000);
   const log = new NotifyLog(path.join(home, 'notify.json'));
   await log.load();
   const base = testDeps(home);
@@ -90,7 +98,7 @@ const world = async (form: Form): Promise<World> => {
 /** Every row of every landing table, keyed by its table's key. */
 const snapshot = (w: World): Record<string, Record<string, Record<string, unknown>>> =>
   Object.fromEntries(TABLES.map((t) => [t, Object.fromEntries((w.db.prepare(`SELECT * FROM ${t}`).all() as Record<string, unknown>[])
-    .map((r) => [String(r[KEY[t]]), r]))]));
+    .map((r) => [KEY[t].map((c) => String(r[c])).join('/'), r]))]));
 /** Each changed cell, as `table key column`. */
 const diff = (a: ReturnType<typeof snapshot>, b: ReturnType<typeof snapshot>): string[] => {
   const out: string[] = [];
@@ -117,6 +125,7 @@ describe.each(['run-bound', 'run-less'] as const)('the withdraw door is subtract
   it.each(['A', 'B', 'C', 'D', 'E', 'F'] as const)('withdrawing %s changes only its own state, detail and marker, its subject row and the cursor', async (x) => {
     const w = await world(form);
     const before = snapshot(w);
+    expect(Object.keys(before.landing_intents!)).toHaveLength(1);
     const recs = records(w).length;
     const res = await withdraw(w, x);
     expect(res.statusCode, res.body).toBe(200);
@@ -136,6 +145,7 @@ describe.each(['run-bound', 'run-less'] as const)('the pause door is subtractive
     const w = await world(form);
     const headBefore = headOf(orderOf(w));
     let prev = snapshot(w);
+    expect(Object.keys(prev.landing_intents!)).toHaveLength(1);
     for (const paused of [true, false]) {
       const recs = records(w).length;
       const res = await pause(w, paused);

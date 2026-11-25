@@ -5,7 +5,7 @@
 // a real login with a chosen `user-agent` gives the labelled session, and a hand-built `sessionAuth` answering `device: null`
 // gives `unmeasured`, which no real session yields (the `collect-lane-route.test.ts` rig; section 11, C8). Every answer is
 // read whole by `inject` before its app closes.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -243,6 +243,18 @@ describe('the doors\' bodies and refusals (section 4.5)', () => {
     v.db.prepare("UPDATE runs SET claimedBy = x'00' WHERE id = ?").run(o.id);   // a BLOB: the association does not read
     const run = await door(v.app, 'withdraw', { project: P, pr: 7, pinnedAt: 7 });
     expect([run.statusCode, run.json()]).toMatchObject([503, { ok: false, error: 'run-unreadable' }]);
+  });
+
+  // The two words only the writer itself can answer (review run 3864's F3 ruling): the deps hand the door the real store, whose
+  // writer is spied to answer each word once. No seam in source; the route's status and word are what is pinned.
+  it.each([['landing-record-unparseable', 500], ['landing-sequence-overflow', 409]] as const)('the writer\'s %s answers %i with its word', async (word, status) => {
+    const w = await world();
+    const spy = vi.spyOn(w.store, 'writeLandingAuthority').mockReturnValue({ ok: false, error: word } as never);
+    for (const [which, body] of [['pause', { project: P, paused: true }], ['withdraw', { project: P, pr: 1, pinnedAt: 1001 }]] as const) {
+      const res = await door(w.app, which, body);
+      expect([statusOf(word), res.statusCode, res.json()], which).toEqual([status, status, { ok: false, error: word }]);
+    }
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 
   it('an infrastructure refusal is 503 (no journal port), and with no coordination 501', async () => {

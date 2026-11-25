@@ -382,19 +382,24 @@ describe('landingWrites.ts is the pure L1 module its header says it is', () => {
   const CLOCK_AND_FS = new Set(['Date', 'performance', 'fs', 'require', 'readFileSync', 'writeFileSync']);
   const clock = (p: ParsedFile): string[] => identifierReferences(p.text, p.path, CLOCK_AND_FS).map((x) => `${x.line} ${x.name}`);
   const probe = (src: string): ParsedFile => parseSource(src, 'probe.ts');
+  // The one value import admitted: the shared landing vocabulary, spelled exactly (D-9093, review run 3864's F6 ruling).
+  const SHARED_LANDING = '../../../shared/landingLine.js';
+  const otherValueImports = (p: ParsedFile): string[] => valueImports(p).filter((s) => s !== SHARED_LANDING);
   it('CONTROL: the scans see a builtin, a value import and a clock; a comment is not a clock', () => {
     expect(builtins(probe(`import { readFileSync } from 'node:fs';`))).toEqual(['node:fs']);
     expect(valueImports(probe(`import { x } from './store.js';`))).toEqual(['./store.js']);
     expect(valueImports(probe(`import type { x } from './store.js';`))).toEqual([]);
+    expect(otherValueImports(probe(`import { x } from './store.js';\nimport { y } from '${SHARED_LANDING}';`))).toEqual(['./store.js']);
+    expect(otherValueImports(probe(`import { y } from '../../shared/landingLine.js';`))).toEqual(['../../shared/landingLine.js']);
     expect(clock(probe('const t = Date.now();'))).toEqual(['1 Date']);
     expect(clock(probe('// Date.now() is not used\nconst t = 1;'))).toEqual([]);
   });
-  it('has no clock, no fs, no node builtin and no value import at all', () => {
+  it('has no clock, no fs, no node builtin and no value import except the shared landing vocabulary', () => {
     const p = parsedFile(FILE);
     expect(p.symbols.length).toBeGreaterThan(0);
     expect(clock(p)).toEqual([]);
     expect(builtins(p)).toEqual([]);
-    expect(valueImports(p)).toEqual([]);
+    expect(otherValueImports(p)).toEqual([]);
   });
 });
 
@@ -757,7 +762,7 @@ describe('landingMutationNotice: a release of a withdrawn hold is always in the 
   });
 });
 
-describe('the withdraw arm reads terminal exactly as L0 classifies it (the mirror in landingWrites.ts)', () => {
+describe('the withdraw arm reads terminal exactly as L0 classifies it (one copy, LANDING_ENTRY_TERMINAL, D-9093)', () => {
   it.each([...LANDING_ENTRY_STATES])('stored word %s', (w) => {
     const f = facts({ entries: line(), words: { 101: w } });
     const got = refused(withdraw(1, 1001), f);

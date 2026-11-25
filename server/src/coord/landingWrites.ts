@@ -1,4 +1,5 @@
-// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type. The
+// L1, context C4 (landing order wave 5f). PURE: no clock, no fs, no store, no I/O; every import is a type
+// except the shared landing vocabulary's terminal map (D-9093). The
 // attributed landing writes' vocabulary and their ONE decision: `decideLandingMutation` reads the coherent facts the
 // store gathered inside its transaction and answers a refusal or the one mutation to journal. `CoordStore.
 // writeLandingAuthority` (L3) gathers, calls this, then appends and applies; nothing here acts.
@@ -52,6 +53,7 @@ import type {
   LandingBoundaryFailure, LandingEntry, LandingEntryState, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingNoticeOutcome,
   LandingRecovery, LandingSubjectRef,
 } from '../../../shared/landingLine.js';
+import { LANDING_ENTRY_TERMINAL } from '../../../shared/landingLine.js';
 import type { LandingProjectionRead, LandingTerminalRepair } from './landingEntry.js';
 import type { NoticeRecord } from '../notice.js';
 
@@ -250,14 +252,8 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
 
 const wordOf = (facts: LandingMutationFacts, id: number): LandingEntryState | 'unrecognised' | undefined =>
   facts.stateWords.find((w) => w.id === id)?.value;
-/** `LANDING_ENTRY_TERMINAL`'s classification, mirrored (D-9093) because this module takes no value import (its purity test). The
- *  `Record` makes a new state a compile error here, and `landing-writes.test.ts` drives the withdraw arm over every state
- *  against the L0 map, so the mirror cannot drift silently. */
-const TERMINAL_WORD: Record<LandingEntryState, boolean> = {
-  pinned: false, ejected: false, unknown: false, landed: true, withdrawn: true, closed: true,
-};
 const isTerminalWord = (w: LandingEntryState | 'unrecognised' | undefined): boolean =>
-  w !== undefined && w !== 'unrecognised' && TERMINAL_WORD[w];
+  w !== undefined && w !== 'unrecognised' && LANDING_ENTRY_TERMINAL[w];
 
 /** The withdraw arm, steps 2 to 7 of its refusal order (the identity conflict, step 1, answered above). */
 function decideWithdraw(command: Extract<LandingAuthorityCommand, { kind: 'withdraw' }>, facts: LandingMutationFacts,
