@@ -6,10 +6,11 @@
 // the keyboard and the spoken names. The heights and the reader's place are `browser/mail-rows.browser.test.ts`'.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { ChatEvent, MailEnvelope } from '../../shared/api';
+import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
-import { renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordInbox';
-import { renderEnvelope, renderMailNudge, renderOperatorMessageNudge } from '../../server/src/coord/envelope';
 import { ChatListInner, shapeOf } from '../src/session/ChatList';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { MailRow } from '../src/session/MailRow';
@@ -26,7 +27,14 @@ import { sameTranscriptItem } from '../src/session/sameRow';
 
 afterEach(cleanup);
 
-const SELF = 'lane-a-project-a';
+/** Every form of the lane's prompt the server types today, rendered by its own renderers and held equal to them by
+ *  `server/test/mail-prompt-forms.test.ts` (a console test reads `server/test/fixtures/`, never server source). */
+const FORMS = JSON.parse(readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'server', 'test', 'fixtures', 'mail-prompt-forms.json'), 'utf8',
+)) as { self: string; forms: Record<'generic' | 'operatorMessage' | 'inboxWake' | 'inboxWakeLapsed' | 'inboxWakeUnreadable' | 'spotProbe', string> };
+const SELF = FORMS.self;
+/** The generic nudge to this session. */
+const renderMailNudge = (_self: string): string => FORMS.forms.generic;
 const TS = (min: number): string => new Date(Date.UTC(2026, 10, 24, 10, min)).toISOString();
 const SETS: [string, SkinSet][] = [['Refined', REFINED_SET], ['Instrument', INSTRUMENT_SET]];
 const NONE = { kind: 'none' } as const;
@@ -42,11 +50,20 @@ const call = (name: string, input: string, result = 'ok', min = 0): ChatEvent[] 
     { kind: 'tool_result', ts: TS(min), toolId: `t${n}`, text: result, isError: false },
   ];
 };
-/** The envelope as the server renders it today (`renderEnvelope`), with a delivery id. */
-const envelopeOf = (over: Partial<MailEnvelope> = {}): string => renderEnvelope({
-  id: 17, fromId: 'coordinator', toId: SELF, runId: 5, program: 'demo', wave: 2, waveOf: 4,
-  kind: 'status', subject: 'wave-brief', artifacts: [], body: 'Do the wave.', ...over,
-});
+/** The envelope in the grammar a transcript holds it in (written out, as `mail-card.test.tsx` does, so this suite reads
+ *  the grammar as it appears; the round trip with the server's renderer is `server/test/mail-envelope-parse.test.ts`'s). */
+const envelopeOf = (over: Partial<MailEnvelope> = {}): string => {
+  const e: MailEnvelope = {
+    id: 17, fromId: 'coordinator', toId: SELF, runId: 5, program: 'demo', wave: 2, waveOf: 4,
+    kind: 'status', subject: 'wave-brief', artifacts: [], body: 'Do the wave.', ...over,
+  };
+  const lines = [`id: ${e.id}`, `from: ${e.fromId}`, `to: ${e.toId}`];
+  if (e.runId !== null) lines.push(`run: ${e.runId} (program:${e.program} wave ${e.wave}/${e.waveOf})`);
+  lines.push(`kind: ${e.kind}`, `subject: ${e.subject}`);
+  if (e.artifacts.length > 0) lines.push('artifacts:', ...e.artifacts.map((p) => `  ${p}`));
+  lines.push(`ack: ccrc-api mail ack ${e.id} --json -   (${e.id} is this DELIVERY id, not the`, '--');
+  return '```' + MAIL_ENVELOPE_FENCE + '\n' + lines.join('\n') + '\n' + e.body + '\n```';
+};
 /** The live lane: the session's own fetch, whose result is the envelope. */
 const fetchMail = (over: Partial<MailEnvelope> = {}, min = 0): ChatEvent[] =>
   call('Bash', '~/.local/bin/ccrc-api mail fetch 17', envelopeOf(over), min);
@@ -56,12 +73,12 @@ const kinds = (items: readonly { kind: string }[]): string[] => items.map((i) =>
 /** Every form the server types today, from its own renderers: the generic nudge, the operator-message nudge, the
  *  inbox wake (with a count, a lapse, and the codec's refusal) and the spot-probe notice. */
 const SERVER_FORMS: [string, string][] = [
-  ['the generic nudge', renderMailNudge(SELF)],
-  ['the operator-message nudge', renderOperatorMessageNudge(42)],
-  ['the inbox wake', renderInboxWakeLine({ ok: true, body: { keys: [], waiting: 2, firstDue: { kind: 'by', at: 90_000 } } }, 0)],
-  ['the inbox wake, lapsed', renderInboxWakeLine({ ok: true, body: { keys: [], waiting: 1, firstDue: { kind: 'by', at: 0 } } }, 5)],
-  ['the inbox wake, unreadable body', renderInboxWakeLine({ ok: false }, 0)],
-  ['the spot-probe notice', renderSpotProbeLine()],
+  ['the generic nudge', FORMS.forms.generic],
+  ['the operator-message nudge', FORMS.forms.operatorMessage],
+  ['the inbox wake', FORMS.forms.inboxWake],
+  ['the inbox wake, lapsed', FORMS.forms.inboxWakeLapsed],
+  ['the inbox wake, unreadable body', FORMS.forms.inboxWakeUnreadable],
+  ['the spot-probe notice', FORMS.forms.spotProbe],
 ];
 const HEAD = INJECTED_PROMPTS['mail-nudge'].text;
 /** What a person might type: it mentions the prompt, quotes it lower down, pastes it after other words, or starts with

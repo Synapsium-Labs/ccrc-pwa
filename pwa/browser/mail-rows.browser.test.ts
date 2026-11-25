@@ -12,7 +12,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
-import { renderEnvelope, renderMailNudge } from '../../server/src/coord/envelope';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -48,17 +50,28 @@ const FIXTURE: AppFixture = {
 
 const BASE = (NOW - 4 * 3600) * 1000;
 const at = (min: number): string => new Date(BASE + min * 60_000).toISOString();
-const NUDGE = renderMailNudge(SELF);
+/** The generic nudge as the server types it (`server/test/fixtures/mail-prompt-forms.json`, held equal to the server's
+ *  renderer by `server/test/mail-prompt-forms.test.ts`), addressed to this session. */
+const FORMS = JSON.parse(readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'server', 'test', 'fixtures', 'mail-prompt-forms.json'), 'utf8',
+)) as { self: string; forms: { generic: string } };
+const NUDGE = FORMS.forms.generic.split(FORMS.self).join(SELF);
 let k = 0;
 const call = (into: object[], command: string, text: string, min: number): void => {
   k += 1;
   into.push({ kind: 'tool_use', uuid: `u${k}`, ts: at(min), toolId: `t${k}`, name: 'Bash', input: JSON.stringify({ command }) });
   into.push({ kind: 'tool_result', ts: at(min), toolId: `t${k}`, text, isError: false });
 };
-const envelope = (i: number, kind: string, subject: string, body: string): string => renderEnvelope({
-  id: 1000 + i, fromId: `project-a-worker-${i % 3}`, toId: SELF, runId: 40 + (i % 3), program: 'demo', wave: i % 5, waveOf: 5,
-  kind: kind as 'status', subject, artifacts: i % 4 === 0 ? [`/w/project-a/docs/report-${i}.md`] : [], body,
-});
+/** A fetched envelope in the grammar a transcript holds it in (as `pwa/test/mail-card.test.tsx` writes it out). */
+const envelope = (i: number, kind: string, subject: string, body: string): string => {
+  const id = 1000 + i;
+  const lines = [`id: ${id}`, `from: project-a-worker-${i % 3}`, `to: ${SELF}`, `run: ${40 + (i % 3)} (program:demo wave ${i % 5}/5)`,
+    `kind: ${kind}`, `subject: ${subject}`];
+  if (i % 4 === 0) lines.push('artifacts:', `  /w/project-a/docs/report-${i}.md`);
+  lines.push(`ack: ccrc-api mail ack ${id} --json -   (${id} is this DELIVERY id, not the`,
+    '  mail row\'s own id) with body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.', '--');
+  return '```' + MAIL_ENVELOPE_FENCE + '\n' + lines.join('\n') + '\n' + body + '\n```';
+};
 const BODY = 'suite: green\n{"branchTip":"0123456789abcdef0123456789abcdef01234567","prNumber":12,"prPhase":"draft"}\n'
   + 'The wave is built and pushed once; the fast run on the exact tip is green.';
 
