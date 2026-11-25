@@ -9,9 +9,10 @@
 //   settle and close;
 // - `servedReadiness` decides what the door and the board are served: the stored word while this process's lane is
 //   fresh, else `unmeasured` with `boot` or `stale` (fix round 1, F2).
-// Runtime imports: L0, designation B's L1 module and the renewal act's `RENEWING_STATES` (L1); every other import is a type.
+// Runtime imports: L0, designation B's L1 module, the renewal act's `RENEWING_STATES` and the stall watch's StopFailure
+// classifier (`stopFailureClass`, L1); every other import is a type.
 import {
-  ACCOUNT_FAILURE_ERRS, READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
+  READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
   READINESS_LONG_TURN_MS, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_SERVED_WHY, READINESS_WORDS,
   type ReadinessItemKind, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../../shared/overlord-readiness.js';
@@ -23,6 +24,7 @@ import type { Rung } from '../../../shared/overlord-ladder.js';
 import type { MarkerState, SessionStatus } from '../../../shared/api.js';
 import { restartVerdict, type OverlordBodyState } from './overlordDesignation.js';
 import { RENEWING_STATES } from '../continuity/renewalFeed.js';
+import { stopFailureClass } from './stopFailure.js';
 import type { Candidates } from '../accountLoad.js';
 import type { TurnMarkRead } from './stall.js';
 import type { HookStateRead } from '../hookstate.js';
@@ -236,8 +238,12 @@ function strandedOf(s: SubjectReadings): Fact<StrandCause | null> {
     }
   }
   if (s.swapBlocked !== null) return measured('swap-blocked');
+  // The account failed the turn when the stall watch's one classifier puts the token in its account class (slug
+  // account-failure-reads-the-stopfailure-classes); a token it cannot classify is neither a failure nor a pass: unread.
   const t = s.turnMark;
-  if (t.ok && t.state === 'failed' && t.err !== null && ACCOUNT_FAILURE_ERRS.includes(t.err)) return measured('turn-failed');
+  const cls = t.ok && t.state === 'failed' ? stopFailureClass(t.err) : undefined;
+  if (cls === 'account') return measured('turn-failed');
+  if (cls === null) unread.push('turn-failed token unclassified');
   if (!t.ok && t.reason !== 'absent') unread.push('turn-marker');
   if (s.strand.kind === 'marked') return measured('unread');
   if (s.strand.kind === 'unreadable' || s.strand.kind === 'no-record') unread.push('strand-marker');

@@ -19,6 +19,7 @@
 // a body `down` and of a dialog, keyed by session id, the last pass's monotonic time and the last prune. A restart
 // re-observes them: the first pass reads `unmeasured` (`boot`), and a bound restarts from the next sighting (question 4).
 import type { DatabaseSync } from 'node:sqlite';
+import type { Clock } from '../time/ports.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { EarliestReset } from '../../../shared/loadLines.js';
 import type { Rung } from '../../../shared/overlord-ladder.js';
@@ -50,7 +51,7 @@ type StoreRead<T> = { readonly kind: 'measured'; readonly value: T } | { readonl
 export interface ReadinessLanePort {
   /** The coordination database the readiness store writes. */
   readonly db: DatabaseSync;
-  readonly clock: { wall(): number; mono(): number };
+  readonly clock: Clock;
   designation(): DesignationRead;
   /** The ladder's composed read: the operator's rung. */
   ladder(): { readonly kind: 'read'; readonly operatorRung: Rung } | { readonly kind: 'unmeasured'; readonly why: string };

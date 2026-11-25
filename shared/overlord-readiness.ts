@@ -89,12 +89,6 @@ export const STRAND_CAUSES = Object.keys(STRAND_CAUSE_MAP) as readonly StrandCau
 export const isStrandCause = (v: unknown): v is StrandCause =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(STRAND_CAUSE_MAP, v);
 
-/** The StopFailure tokens that mean the account failed the turn: exactly Table 6.4a's three. The hook records Claude Code's
- *  `error` field cleaned to `[a-z_]` (`ccd/session-hook.sh`, the StopFailure arm); a test pins that each is in the account class
- *  of `server/src/coord/stopFailure.ts#STOP_FAILURE_ERRORS`, so the two never disagree. Any other token is a failed turn that
- *  is not the account's, and strands nothing. */
-export const ACCOUNT_FAILURE_ERRS: readonly string[] = ['rate_limit', 'authentication_failed', 'billing_error'];
-
 /** The operator items this lane raises (question 9): one per cause, settled by the lane when the cause clears. */
 const READINESS_ITEM_KIND_MAP = {
   stranded: 'no account can serve the Overlord, keyed by the strand cause',

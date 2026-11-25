@@ -66,6 +66,17 @@ describe('restartsSince', () => {
     expect(count(s, A, T0 + 501)).toEqual({ ok: true, count: 0 });
   });
 
+  it('a retire, then a new designation\'s first start, counts zero restarts (call 1319, retired-outcome-is-not-a-restart)', () => {
+    const s = store();
+    // The retired body's generation ends the old term; the new designation mints in a new term, and in the same term too.
+    gen(s, { identity: 'overlord', term: 1, n: 1, state: 'ended', outcome: 'retired', startReportedAt: T0 + 10 });
+    gen(s, { identity: 'overlord', term: 2, n: 1, state: 'active', outcome: null, startReportedAt: T0 + 100 });
+    expect(count(s, 'overlord', T0)).toEqual({ ok: true, count: 0 });
+    const t = store();
+    pair(t, 'overlord', 'retired', T0 + 100);
+    expect(count(t, 'overlord', T0)).toEqual({ ok: true, count: 0 });
+  });
+
   it('a first generation (no predecessor) is not a restart', () => {
     const s = store();
     gen(s, { identity: A, n: 1, state: 'active', outcome: null, startReportedAt: T0 + 5 });

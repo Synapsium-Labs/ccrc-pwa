@@ -564,6 +564,11 @@ describe('unsettledFacts and messageFactsById: the text-free readers', () => {
 });
 
 describe('lastServedReadAt: the Overlord\'s proof of its current generation', () => {
+  it('an empty inbox read (outcome rows, count 0) counts as served (call 1319, point 4)', () => {
+    const f = fixture();
+    f.store.recordRead({ ...SERVED, at: 1_500, generation: 7, door: 'inbox', count: 0 });
+    expect(f.store.lastServedReadAt(7, 1_000)).toEqual({ kind: 'measured', value: 1_500 });
+  });
   it('answers the newest served line of the generation after sinceMs, from any door, leaving out everything else', () => {
     const f = fixture();
     f.store.recordRead({ ...SERVED, at: 1_000, generation: 5 });                                   // at sinceMs: left out

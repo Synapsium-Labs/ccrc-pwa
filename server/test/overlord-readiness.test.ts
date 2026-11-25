@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { GENERATION_OUTCOMES } from '../../shared/continuity.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import {
-  ACCOUNT_FAILURE_ERRS, READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
+  READINESS_DEAF_MS, READINESS_DIALOG_MS, READINESS_FRESH_MS, READINESS_HOOK_QUIET_MS,
   READINESS_LONG_TURN_MS, READINESS_RESTART_BOUND_MS, READINESS_RESTARTS_PER_HOUR, READINESS_WORDS, RESTART_OUTCOME_MAP,
   RESTART_OUTCOMES, STRAND_CAUSES, admitRank, type ReadinessWire, type ReadinessWord, type StrandCause,
 } from '../../shared/overlord-readiness.js';
@@ -487,11 +487,25 @@ describe('the strand cause (C57, F7)', () => {
   it('a blocked swap strands swap-blocked', () => {
     expect(stranded({ swapBlocked: { at: 1, reason: 'x' } })).toEqual(m('swap-blocked'));
   });
-  it('a failed turn strands turn-failed only for the three account tokens', () => {
-    for (const err of ACCOUNT_FAILURE_ERRS) expect(stranded({ turnMark: markOf({ state: 'failed', err }) })).toEqual(m('turn-failed'));
-    expect(stranded({ turnMark: markOf({ state: 'failed', err: 'server_error' }) })).toEqual(m(null));
-    expect(stranded({ turnMark: markOf({ state: 'failed', err: null }) })).toEqual(m(null));
+  it('a failed turn strands turn-failed exactly for the owner\'s account class, whatever tokens that class holds (call 1319)', () => {
+    const classes = STOP_FAILURE_ERRORS as Readonly<Record<string, string>>;
+    const account = Object.keys(classes).filter((e) => classes[e] === 'account');
+    expect(account.length, 'CONTROL: the owner has account tokens').toBeGreaterThan(0);
+    for (const err of Object.keys(classes)) {
+      expect([err, stranded({ turnMark: markOf({ state: 'failed', err }) })]).toEqual([err, m(classes[err] === 'account' ? 'turn-failed' : null)]);
+    }
     expect(stranded({ turnMark: markOf({ state: 'done', err: 'rate_limit' }) })).toEqual(m(null));
+  });
+  it('a failed turn whose token the classifier cannot name is neither a failure nor a pass: unmeasured at the stranded row', () => {
+    for (const err of ['a_token_from_a_later_build', null]) {
+      const got = stranded({ turnMark: markOf({ state: 'failed', err }) });
+      expect(got.kind).toBe('unmeasured');
+    }
+    // It never raises the word: through the decider, an otherwise-ready Overlord reads unmeasured, at the stranded row.
+    const word = overlordReadiness(readinessFactsOf(readings({ turnMark: markOf({ state: 'failed', err: 'a_token_from_a_later_build' }) }), NOW), NOW);
+    expect([word.word, word.why]).toEqual(['unmeasured', 'stranded: turn-failed token unclassified unread']);
+    // A measured cause still wins over the unclassified token.
+    expect(stranded({ swapBlocked: { at: 1, reason: 'x' }, turnMark: markOf({ state: 'failed', err: 'a_token_from_a_later_build' }) })).toEqual(m('swap-blocked'));
   });
   it('a marked strand with no other cause strands unread; an unreadable strand marker is unmeasured', () => {
     expect(stranded({ strand: { kind: 'marked', reason: 'ccd words' } })).toEqual(m('unread'));
@@ -678,12 +692,6 @@ describe('the vocabulary', () => {
     const sec = /^RestartSec=(\d+)\s*$/m.exec(unit);
     expect(sec, 'the unit has no RestartSec= line').not.toBeNull();
     expect(READINESS_RESTART_BOUND_MS).toBe(Number(sec?.[1]) * 1000 + 6_100);
-  });
-  it('each ACCOUNT_FAILURE_ERRS token is in the account class of the StopFailure classification', () => {
-    expect(ACCOUNT_FAILURE_ERRS.length).toBe(3);
-    for (const e of ACCOUNT_FAILURE_ERRS) {
-      expect([e, (STOP_FAILURE_ERRORS as Readonly<Record<string, string>>)[e]]).toEqual([e, 'account']);
-    }
   });
   it('every strand cause is spelled, and the thresholds are the spec\'s', () => {
     expect([...STRAND_CAUSES].sort()).toEqual(['limited', 'projection', 'set-admits-none', 'set-unreadable', 'swap-blocked', 'turn-failed', 'unread']);
