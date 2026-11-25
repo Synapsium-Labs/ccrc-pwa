@@ -5823,7 +5823,7 @@ and left alone); a `fix-round` mail from the coordinator names the PR ejected fr
 or next to land in a strict-protection repository; or a `conflict-sync:` mail from the coordinator
 names the PR and a base commit for a conflict the coordinator measured, and the worker's own probe of
 that commit agrees. The first two license at most one absorption per PR. The fourth licenses one
-absorption of exactly the named commit per mail, before the worker's wave-done of that round only. An
+absorption of exactly the named commit per mail, before the wave-done of the round the worker is in. An
 absorption is `git merge` and nothing else — never a rebase, a force-push, or GitHub's branch
 update by any route (its button, `gh pr update-branch`, the API) — and a conflict in a
 `# ccrc:generated` stamp line (the session hook's generated region carries one; `ccd/ccd` does not) is never hand-resolved:
