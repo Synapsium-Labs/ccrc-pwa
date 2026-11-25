@@ -1243,6 +1243,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
     '/api/fleet/overrides': "the switchboard's override names with a marker state word each, and the approvals topology's two words and file name: no session text (D-8382)",
     '/api/push/key': 'the VAPID public key',
+    '/api/sessions/:id/programme': "a session's one programme as its slug, its placeholder state and its shown lifecycle, or `none` with one word of why (programme lifecycle W2): no session text",
     '/api/models/:lane': "a lane's classes, each with its model id, catalogue label and effort levels, and, on the `models` op's path, the lane's advance state (each class's family, hold, previous model and last move, the pending intent, and the file's state), all read from the lane's own model files; an `unreadable` or `invalid` state's `detail` is a file path and an error message: no session text (D-8406, D-8686)",
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",
@@ -1824,9 +1825,27 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     expect(calls.filter((c) => c.name === 'setErrorHandler')).toHaveLength(1);
     expect(calls.filter((c) => c.name === 'addHook' && c.args[0]?.kind === 'string' && c.args[0].text === 'onSend')).toHaveLength(2);
     for (const f of routeFiles()) {
-      if (f.join('/') === 'server.ts' || f[0] === 'docs') continue;
+      if (f.join('/') === 'server.ts' || f[0] === 'docs' || Object.hasOwn(OWN_ERROR_HANDLER, f.join('/'))) continue;
       expect(read(f), f.join('/')).not.toMatch(/setErrorHandler\(/);
     }
+    // Each named exemption is still needed: its file is still a route file and still sets its own handler. A file
+    // that stops doing either leaves an entry that excuses nothing, and this goes red until the entry is removed.
+    const routeNames = routeFiles().map((f) => f.join('/'));
+    for (const name of Object.keys(OWN_ERROR_HANDLER)) {
+      expect(routeNames, `${name} is no longer a route file; remove its OWN_ERROR_HANDLER entry`).toContain(name);
+      expect(read(name.split('/')), `${name} no longer sets an error handler; remove its OWN_ERROR_HANDLER entry`).toMatch(/setErrorHandler\(/);
+    }
+  });
+
+  /** Route files that may set an error handler of their own, by exact path under `server/src`, each with its reason. */
+  const OWN_ERROR_HANDLER: Record<string, string> = {
+    // X3 R2: the file became a route file here when the review page's `app.get` routes joined it.
+    'review/routes.ts': 'the draft review read door has a plugin and an error handler of its own (draft-review design '
+      + '§3.5, R1), which answers only its fixed refusal bodies and echoes no error text, so it reveals nothing to mask',
+  };
+
+  it('every OWN_ERROR_HANDLER entry gives its reason', () => {
+    for (const [name, why] of Object.entries(OWN_ERROR_HANDLER)) expect(why.length, name).toBeGreaterThan(40);
   });
 
   it('"Send it" presses Enter when the box holds the draft the 409 showed masked, and still refuses box-mismatch for any other draft', async () => {

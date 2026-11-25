@@ -42,10 +42,11 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, TestboxAdminRouteRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, ReclaimRefuseCode, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { LinkingRefusal } from './linking.js';
 import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
+import { PROGRAMME_DOOR_REFUSALS, type ProgrammeDoorRefusal } from './programmeLifecycle.js';
 import { DELEGATION_BACKFILL_REFUSALS, type DelegationBackfillRefusal } from './delegationBackfill.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { RunCloseRefusal } from './run-close.js';
@@ -380,6 +381,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ReviewRoundsRefusal
   // The end-request route (D-8076): its three words of its own.
   | EndRequestRefusal
+  // The programme lifecycle's doors (W2): their words, each with its status in `PROGRAMME_DOOR_REFUSALS`.
+  | ProgrammeDoorRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
   // The replay quiz's record door: its one word of its own.
@@ -447,6 +450,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   ...DELEGATION_ADOPT_REFUSALS,
   // The one-time pass's door (D-8874): one new word, CHOSEN, with its status in `DELEGATION_BACKFILL_REFUSALS`.
   ...DELEGATION_BACKFILL_REFUSALS,
+  // The programme lifecycle's doors (W2): CHOSEN, each status declared once in `PROGRAMME_DOOR_REFUSALS`.
+  ...PROGRAMME_DOOR_REFUSALS,
   // The linking standard (D-8147): CHOSEN, not measured, new words. 400 for what the operator can retype (a team key or an
   // override the grammar refuses), 404 for a project the box does not know, 409 for a request the project's state refuses
   // now (the repository is public, nothing is measured yet, the template is there, no key is set, a tracker id or a
@@ -689,7 +694,9 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'>;
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'
+  // Programme lifecycle W1 (D-8983, D-8993): the lifecycle's open refusals.
+  | 'programme-paused' | 'programme-unknown' | 'programme-provisional' | 'owns-another-programme' | 'not-your-programme'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -705,6 +712,14 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
   // Programme work map WM1 (D-8727): chosen, not measured — a new word, 409 like the plan's five.
   'ticket-required': 409,
+  // Programme lifecycle W1 (D-8983, D-8993): chosen, not measured — the family's 409.
+  'programme-paused': 409, 'programme-unknown': 409, 'programme-provisional': 409, 'owns-another-programme': 409,
+  'not-your-programme': 409,
+};
+
+/** The reclaim ladder's own words (`ReclaimRefuseCode`) at the one status the reclaim door sends them with (programme lifecycle W2). */
+export const RECLAIM_REFUSAL_STATUS: Readonly<Record<ReclaimRefuseCode, 409>> = {
+  'claimant-alive': 409, 'no-claimant': 409, 'heir-is-a-worker': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

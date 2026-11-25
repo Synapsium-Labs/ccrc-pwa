@@ -80,6 +80,10 @@ const mailRows = (r: Rig): { fromId: string; toId: string; runId: number | null;
   ).all() as never;
 const closeRuns = (r: Rig, program: string): void => { r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = ?").run(program); };
 const stateOf = (r: Rig, id: number): string | undefined => r.coord.itemById(id)?.state;
+/** Programme lifecycle W2: end a programme by decision (the one writer), as the operator's state door does. */
+const endProgramme = (r: Rig, program: string): void => {
+  r.coord.decideProgramme({ slug: program, to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'test end' }, Date.now());
+};
 /** The tick mail's line when the tick carried no answer, which only a do item's can (D-8931): its note is optional. */
 const NO_NOTE_LINE = 'no answer: the operator ticked it with no note (a do item\'s note is optional)';
 
@@ -200,9 +204,11 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     expect(again.json()).toMatchObject({ ok: false, error: 'not-open' });
     expect(r.coord.itemById(ticked)!).toMatchObject({ state: 'checking', answer: 'The first note.' });
     expect(mailRows(r)).toHaveLength(1);
-    // No coordinator is waiting once the programme's last run closed: the note is not stored for nobody to read.
+    // No coordinator is waiting once the programme has ENDED (programme lifecycle W2, D-8992: an Idle one's tick is delivered):
+    // the note is not stored for nobody to read.
     const ended = raise(r, { title: 'After the end' });
     closeRuns(r, 'prog-a');
+    endProgramme(r, 'prog-a');
     const late = await tick(r, ended, note);
     expect(late.statusCode, late.body).toBe(409);
     expect(late.json()).toMatchObject({ ok: false, error: LEDGER_ROUTE_REFUSALS.programmeEnded });
@@ -243,10 +249,21 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     expect(mailRows(r)).toHaveLength(1);
   });
 
-  it('a tick after the programme\'s last run closed is refused programme-ended and the item stays open (Review Focus 1)', async () => {
+  it('programme lifecycle W2 (D-8992): a tick after the last run closed (Idle) mails the bound coordinator; it is no longer refused', async () => {
     const r = await rig();
     const id = raise(r);
     closeRuns(r, 'prog-a');
+    const res = await tick(r, id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(stateOf(r, id)).toBe('checking');
+    expect(mailRows(r).map((m) => m.toId)).toEqual(['lane-a']);
+  });
+
+  it('a tick after the programme ENDED is refused programme-ended and the item stays open (Review Focus 1; W2: the decision, not the runs)', async () => {
+    const r = await rig();
+    const id = raise(r);
+    closeRuns(r, 'prog-a');
+    endProgramme(r, 'prog-a');
     const res = await tick(r, id);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, error: LEDGER_ROUTE_REFUSALS.programmeEnded });
@@ -256,15 +273,16 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     expect(r.waiting()).toBe(0);
   });
 
-  it('a tick while the programme\'s only open run is unclaimed is refused programme-unclaimed, not programme-ended (review 1328 F2)', async () => {
+  it('a tick while the programme has no coordinator is refused no-coordinator, not programme-ended (review 1328 F2; programme lifecycle W2)', async () => {
     const r = await rig();
     const id = raise(r);
     r.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE program = ?').run('prog-a');
+    r.coord.db.prepare('UPDATE programs SET coordinator = NULL, coordinatorUuid = NULL WHERE slug = ?').run('prog-a');
     const res = await tick(r, id);
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, error: LEDGER_ROUTE_REFUSALS.programmeUnclaimed });
+    expect(res.json()).toMatchObject({ ok: false, error: 'no-coordinator' });
     const detail = (res.json() as { detail: string }).detail;
-    expect(detail).toMatch(/abandon/i);
+    expect(detail).toMatch(/hand it to a coordinator/i);
     expect(detail).not.toMatch(/dismiss instead/i);
     expect(stateOf(r, id)).toBe('open');
     expect(mailRows(r)).toEqual([]);
@@ -749,6 +767,8 @@ describe('the tick mail and its label across the run and the coordinator\'s life
     expect((await tick(r, id)).statusCode).toBe(200);
     markDeliveries(r, 'delivered');
     r.coord.db.prepare("UPDATE runs SET claimedBy = 'lane-b' WHERE program = 'prog-a'").run();
+    // Programme lifecycle W2: the tick mails the BINDING; a takeover moves it (a distinct uuid, as lane-b owns prog-b too).
+    r.coord.db.prepare("UPDATE programs SET coordinator = 'lane-b', coordinatorUuid = 'takeover' WHERE slug = 'prog-a'").run();
     w.fleet = lane;
     sendBack(r, id);
     return { r, id };

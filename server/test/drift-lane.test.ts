@@ -38,7 +38,7 @@ function rig() {
   /** A working run whose last act is `agoMs` before `now`. */
   const quietRun = (now: number, agoMs: number): number => {
     n += 1;
-    const r = coord.openRun({ program: `program-${n}`, title: 'T', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'coord-a' });
+    const r = coord.openRun({ program: 'program-coord-a', title: 'T', project: 'project-a', wave: n, waveOf: null, claimedBy: 'coord-a' });   // one programme per coordinator (R11)
     if (!('id' in r)) throw new Error('fixture openRun refused');
     db.prepare("UPDATE runs SET state = 'working' WHERE id = ?").run(r.id);
     db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)')

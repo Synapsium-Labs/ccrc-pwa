@@ -114,13 +114,17 @@ export function sequenceAfter(db: DatabaseSync, after: number, limit: number):
   }
 }
 
-/** The oldest `limit` lines in seq order, each marked `keep` when it is the newest line of `SEQUENCE_KEPT_KIND`. */
+/** The oldest `limit` lines in seq order, each marked `keep` when it is the newest line of `SEQUENCE_KEPT_KIND`, or the newest
+ *  `live` line of that kind (the standing binding's while a rebind is pending or after one failed; review 3740 F2). */
 export function sequenceOldest(db: DatabaseSync, limit: number): SequenceRead<readonly { seq: number; at: number; keep: boolean }[]> {
   try {
-    const kept = db.prepare('SELECT max(seq) AS seq FROM overlord_sequence WHERE kind = ?').get(SEQUENCE_KEPT_KIND) as { seq: unknown } | undefined;
-    const keptSeq = kept === undefined || kept.seq === null ? null : num(kept.seq);
+    const seqOf = (r: { seq: unknown } | undefined): number | null => (r === undefined || r.seq === null ? null : num(r.seq));
+    const kept = [
+      seqOf(db.prepare('SELECT max(seq) AS seq FROM overlord_sequence WHERE kind = ?').get(SEQUENCE_KEPT_KIND) as { seq: unknown } | undefined),
+      seqOf(db.prepare("SELECT max(seq) AS seq FROM overlord_sequence WHERE kind = ? AND state = 'live'").get(SEQUENCE_KEPT_KIND) as { seq: unknown } | undefined),
+    ];
     const rows = db.prepare('SELECT seq, at FROM overlord_sequence ORDER BY seq LIMIT ?').all(Math.max(0, Math.trunc(limit))) as Record<string, unknown>[];
-    return { kind: 'measured', value: rows.map((r) => ({ seq: num(r['seq']), at: num(r['at']), keep: num(r['seq']) === keptSeq })) };
+    return { kind: 'measured', value: rows.map((r) => ({ seq: num(r['seq']), at: num(r['at']), keep: kept.includes(num(r['seq'])) })) };
   } catch (e) {
     return { kind: 'unmeasured', why: `the sequence could not be read: ${errText(e)}` };
   }

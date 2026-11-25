@@ -531,7 +531,7 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Wave two', project: 'demo', wave: 2, waveOf: 3,
         claimedBy: 'coord-1', kind: 'work', reviews: null, homeProject: 'demo', sessionId: 'ws-1',
-        unattributed: false, coordProject: 'demo', ticket: null,
+        unattributed: false, coordProject: 'demo', claimedByUuid: 'u-coord-1', ticket: null,
       },
     });
   });
@@ -545,7 +545,7 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Review wave two', project: 'demo-2', wave: 4, waveOf: null,
         claimedBy: 'coord-1', kind: 'review', reviews: 7, homeProject: 'demo',
-        unattributed: false, coordProject: 'demo-2', ticket: null,
+        unattributed: false, coordProject: 'demo-2', claimedByUuid: 'u-coord-1', ticket: null,
       },
     });
   });
@@ -662,7 +662,7 @@ describe('the route answers the decider\'s refusals with the inline sends\' exac
     expect([none.statusCode, none.body])
       .toEqual([400, '{"ok":false,"error":"bad-request","detail":"reviews names no run"}']);
     // The programme is declared as a pre-plan one: a fresh slug with no row is `plan-missing` since D-8181.
-    seedLegacyProgramme(coord.db, WORK.program, WORK.homeProject);
+    seedLegacyProgramme(coord.db, WORK.program, WORK.homeProject, WORK.claimedBy);
     const first = await post(app, { ...WORK });
     expect(first.statusCode).toBe(200);
     const mismatch = await post(app, { ...WORK, wave: 3, homeProject: 'other-home' });

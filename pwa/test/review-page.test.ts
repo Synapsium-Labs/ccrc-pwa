@@ -11,7 +11,7 @@ import {
   labResultText, startReviewPage,
   type LabAnswers,
 } from '../src/review/main';
-import { LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY } from '../src/review/labFixture';
+import { LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY } from '../generated/reviewLabFixture';
 
 const TOKEN = 'Tk3_-Tk3_-Tk3_-Tk3_-Tk3_-Tk3_-Tk3_-Tk3_-Tk3_-'.slice(0, 43);
 const SHARED_AT = Date.UTC(2026, 10, 26, 12, 0, 0);
@@ -689,10 +689,10 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     // The page's own style text names no URL but a data: one (its reference font).
     const urls = [...document.querySelectorAll('style')].flatMap((s) => [...(s.textContent ?? '').matchAll(/url\(([^)]*)\)/g)].map((m) => m[1] ?? ''));
     for (const u of urls) expect(u.replace(/^['"]/, '')).toMatch(/^data:font\/woff2;base64,/);
-    // `labFixture` is a static import: the entry's code (its comment lines set aside) holds no dynamic `import(`.
+    // `generated/reviewLabFixture` is a static import: the entry's code (its comment lines set aside) holds no dynamic `import(`.
     const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'review', 'main.ts'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
     expect(source).not.toMatch(/\bimport\s*\(/);
-    expect(source).toMatch(/^import \{[^}]*\} from '\.\/labFixture';$/m);
+    expect(source).toMatch(/^import \{[^}]*\} from '\.\.\/\.\.\/generated\/reviewLabFixture';$/m);
   });
 
   it('shows no "Open draft" button and no reopen sentence, and says what the page is', () => {

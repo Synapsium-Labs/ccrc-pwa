@@ -29,9 +29,10 @@ const FRAME_HOME = 'src/readerLab/frames.ts';
 /** The draft review page's entry (X3 R2.1, D-8767): the one other file that builds a frame, by exact path. */
 const REVIEW_HOME = 'src/review/main.ts';
 /** The measurement fixture's data module (X3 R2.3, D-8767): Export's own copies as string constants, whose TEXT holds
- *  `<iframe sandbox="" srcdoc=...>` (the mockup wrapper's nested frame). By exact path, never the directory. */
-const LAB_FIXTURE_HOME = 'src/review/labFixture.ts';
-const FRAME_HOMES: readonly string[] = [FRAME_HOME, REVIEW_HOME, LAB_FIXTURE_HOME];
+ *  `<iframe sandbox="" srcdoc=...>` (the mockup wrapper's nested frame). It is generated and lives in `pwa/generated/`,
+ *  outside the authored `src/` tree this scan walks, so it takes no allowance here: the scan never reads it. */
+const LAB_FIXTURE_FILE = 'generated/reviewLabFixture.ts';
+const FRAME_HOMES: readonly string[] = [FRAME_HOME, REVIEW_HOME];
 const LAB_DRAW_HOMES: readonly string[] = ['src/docs/reader/policy.ts', 'src/readerLab/run.ts'];
 const FORBIDDEN_SANDBOX = /\ballow-(?:same-origin|popups|top-navigation|forms|modals|downloads|pointer-lock|presentation|orientation-lock|storage-access)/;
 
@@ -256,15 +257,19 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
     expect(frameFindings(frame, REVIEW_HOME)).toEqual([]);
   });
 
-  it('rule 2: the measurement fixture holds the nested iframe text, and the allowance is its exact path (R2.3)', () => {
-    expect(frameFindings(read(LAB_FIXTURE_HOME), LAB_FIXTURE_HOME, true)).toEqual([`${LAB_FIXTURE_HOME} iframe`, `${LAB_FIXTURE_HOME} srcdoc`]);
-    expect(frameFindings(read(LAB_FIXTURE_HOME), LAB_FIXTURE_HOME)).toEqual([]);
+  it('rule 2: the measurement fixture holds the nested iframe text, and it lives only in pwa/generated/, which this scan never reads (R2.3)', () => {
+    // The fixture really holds the text (so the scan WOULD flag it, were it in the tree), and the scan's tree has no such file.
+    expect(frameFindings(read(LAB_FIXTURE_FILE), LAB_FIXTURE_FILE, true)).toEqual([`${LAB_FIXTURE_FILE} iframe`, `${LAB_FIXTURE_FILE} srcdoc`]);
+    expect(ALL().filter((f) => /labfixture/i.test(f))).toEqual([]);
+    expect(ALL().every((f) => f.startsWith('src/'))).toBe(true);
+    // No file the scan reads holds the nested text but the two homes: the only copy of it outside them is the generated module.
+    const nestedText = /<iframe sandbox=""/;
+    expect(ALL().filter((f) => !FRAME_HOMES.includes(f) && !f.startsWith('src/docs/') && nestedText.test(read(f)))).toEqual([]);
   });
 
-  it('rule 2 planted: the same nested iframe text anywhere but labFixture.ts is red, review/other.ts and a sibling named like it included (R2.3)', () => {
+  it('rule 2 planted: the same nested iframe text anywhere under src/ is red, the old fixture path included (R2.3)', () => {
     const nested = "export const LAB_PLANTED = '<iframe sandbox=\"\" srcdoc=\"&lt;p&gt;x&lt;/p&gt;\"></iframe>';";
-    expect(frameFindings(nested, LAB_FIXTURE_HOME)).toEqual([]);
-    for (const other of ['src/review/other.ts', 'src/review/labFixture.tsx', 'src/review/lab/labFixture.ts', 'src/readerLab/labFixture.ts']) {
+    for (const other of ['src/review/other.ts', 'src/review/labFixture.ts', 'src/review/lab/labFixture.ts', 'src/readerLab/labFixture.ts']) {
       expect(frameFindings(nested, other), other).toEqual([`${other} iframe`, `${other} srcdoc`]);
     }
   });

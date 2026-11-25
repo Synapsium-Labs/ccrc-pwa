@@ -6,6 +6,7 @@ import {
 } from '../../shared/api.js';
 import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { ReadyWitness } from '../../shared/agent-protocol.js';
 import type { HostReport, PeerFacts } from '../../shared/isolation.js';
 import type { CoordStore } from './coord/store.js';
 import { buildInfoOfRow } from './update/inventory.js';
@@ -149,6 +150,11 @@ export interface FleetState {
    *  The runtime substitute for the compile error is the same whole-object
    *  `toEqual` in `remote-connect.test.ts`. */
   agentOps?: readonly string[];
+  /** The authority witness tuple the fleet host's agent holds (`AgentReady.authorityWitness`, Overlord W1 Task 6), read by
+   *  `remote/client.ts` through `readReadyWitness` (the one reader) on EVERY ready: `absent` is an older agent, never `nothing`
+   *  (it holds none). Handshake cadence, a sample at connect; the `witness` op's answer is the fresher read. OPTIONAL for
+   *  `agentOps`' reason: an omitted key reads `undefined`, "no ready yet". */
+  authorityWitness?: ReadyWitness;
   /** Overlord W1, the isolation word (§7.4): what the agent's ready frame said of its host, through its one reader
    *  `readHostReport` — the report, `'absent'` (an older agent) or `'malformed'`. Optional for `observedEpoch`'s reason:
    *  `undefined` is "no ready yet", which the decider reads as `no-agent`, the honest answer for every fixture that

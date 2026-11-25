@@ -12,6 +12,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { crossTreeCollisions, definitionsIn, floorFromScan,
          LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
 import { LEDGER_SEED_GAP } from '../../shared/api.js';
@@ -284,10 +285,13 @@ function resolveLedgerBase(cwd: string): string | null {
 const LEDGER_BASE = resolveLedgerBase(ROOT);
 
 /** `docs/superpowers/plans/*.md` as a given REF holds them, without checking it
- *  out and without merging it. One `ls-tree` plus one `cat-file` per plan;
- *  measured at ~0.4 s for 67 files, against the 163 ms this file's floor scan
- *  already spends walking the whole tracked tree. */
+ *  out and without merging it. One `ls-tree` plus one `cat-file --batch` per
+ *  tree (D-9068): one `cat-file` per plan was measured at ~0.4 s for 67 files,
+ *  and at 9.3 s and 11.8 s for the two trees of 962 plans on 2026-11-25. */
 const plansCache = new Map<string, { path: string; text: string }[]>();
+/** What `plansAt` answered for the characterization's fixed commit, from the one-process-per-blob read (D-9068). */
+const PLANS_AT_FIXED_COUNT = 962;
+const PLANS_AT_FIXED_SHA256 = 'ec50384ba564240a65662dd02fa17f74c45f790dba5a9473c192167cf3602433';
 const plansAt = (ref: string): { path: string; text: string }[] => {
   // Memoised per ref. A ref does not move during a run, and the corpus
   // classification table below asks for HEAD once per row — nine `ls-tree` walks
@@ -299,19 +303,41 @@ const plansAt = (ref: string): { path: string; text: string }[] => {
   return out;
 };
 
-const readPlansAt = (ref: string): { path: string; text: string }[] => {
+const readPlansAt = (ref: string): { path: string; text: string }[] =>
+  readPlanBlobsAt(ref, (file) => !LEGACY_PER_PLAN_LEDGERS.has(file));
+
+/** The `.md` plans of REF that `keep` admits, read as `plansAt` reads them. The filter is an argument so that the
+ *  characterization case below can pass a frozen copy of the exclusion list, which `LEGACY_PER_PLAN_LEDGERS` is not:
+ *  that list may only shrink, and a recorded hash must not move when it does (wave 1f fix round 1, R5). */
+const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] => {
   const listing = execFileSync('git',
     ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
-  const out: { path: string; text: string }[] = [];
+  const wanted: { sha: string; path: string }[] = [];
   for (const line of listing.split('\n').filter(Boolean)) {
     const sp = line.indexOf(' ');
     const sha = line.slice(0, sp);
     const file = line.slice(sp + 1).split('/').pop()!;
-    if (!file.endsWith('.md') || LEGACY_PER_PLAN_LEDGERS.has(file)) continue;
-    out.push({ path: file,
-      text: execFileSync('git', ['cat-file', 'blob', sha],
-        { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 24 }) });
+    if (!file.endsWith('.md') || !keep(file)) continue;
+    wanted.push({ sha, path: file });
+  }
+  // D-9068: every blob of the tree through ONE `git cat-file --batch`, where a process per plan cost about ten
+  // seconds a tree at 962 plans under load. Each answer is `<sha> blob <size>\n<size bytes>\n`, in the order asked;
+  // each text is decoded from its own bytes, as the per-blob read decoded its whole stdout. The buffer is a
+  // gigabyte: one tree's plans weighed about 98 MB on 2026-11-25.
+  const batch = execFileSync('git', ['cat-file', '--batch'],
+    { cwd: ROOT, input: wanted.map((w) => `${w.sha}\n`).join(''), maxBuffer: 1 << 30 });
+  const out: { path: string; text: string }[] = [];
+  let at = 0;
+  for (const w of wanted) {
+    const eol = batch.indexOf(0x0a, at);
+    const head = batch.subarray(at, eol).toString('utf8').split(' ');
+    if (eol < 0 || head[0] !== w.sha || head[1] !== 'blob') {
+      throw new Error(`git cat-file --batch answered "${head.join(' ')}" for ${w.path} (${w.sha}) at ${ref}`);
+    }
+    const end = eol + 1 + Number(head[2]);
+    out.push({ path: w.path, text: batch.subarray(eol + 1, end).toString('utf8') });
+    at = end + 1;
   }
   return out;
 };
@@ -358,6 +384,10 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     expect(sha, `the base ${LEDGER_BASE} resolved to nothing`).toMatch(/^[0-9a-f]{7,}$/);
   });
 
+  // THE SUITE'S LIMIT, on purpose (landing-order wave 1f, D-9068). This is the first case to read the two trees, so
+  // it pays for both reads: one process per plan took 9.3 s and 11.8 s for 962 plans a tree, and the case timed out
+  // at 20 s four times on 2026-11-25. Through one `cat-file --batch` per tree it took 2.2 s in three runs alone on
+  // the fleet's test box and 2.6 s in the local slice that day, under the 5 s the plan set for keeping the limit.
   it('is looking at two real trees, each with a real ledger in it', () => {
     // The anti-vacuity partner. `crossTreeCollisions` over two empty lists is
     // [], which satisfies the assertion below for entirely the wrong reason.
@@ -436,6 +466,26 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       'nothing; (2) anything marked BOTH ON THE BASE, which is already on main and is not this ' +
       'branch to renumber.')
       .toEqual([]);
+  });
+
+  // CHARACTERIZATION of the plan read (landing-order wave 1f, D-9068): what the plan read answers for one fixed commit,
+  // every path and every text, in order, as one sha256. Recorded from the one-process-per-blob read before the read
+  // became one `git cat-file --batch` per tree, so the batch read is held to the same bytes. A fixed commit, not
+  // HEAD: HEAD's plans change with every pull request that adds one, and a recorded hash of them would go stale. The
+  // commit is this wave's base on main, permanent history like the incident shas below.
+  it('reads a fixed commit\'s plans byte for byte as the one-process-per-blob read did (characterization, D-9068)', () => {
+    const ref = '25ed1ee2ddd0bc60afca0f518e95974f2c554c9e';
+    expect(() => execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { cwd: ROOT, stdio: 'pipe' }), `${ref} is unreachable — this checkout is too shallow`).not.toThrow();
+    // The exclusion list as it stood when the hash was recorded, frozen here: a later removal from
+    // LEGACY_PER_PLAN_LEDGERS changes what `plansAt` reads, not what this case measures (R5).
+    const frozen = new Set(['2026-08-07-smart-branch-naming.md', '2026-08-08-build7-core.md',
+      '2026-08-08-build7-surfaces.md']);
+    const list = readPlanBlobsAt(ref, (file) => !frozen.has(file));
+    expect(list.length).toBe(PLANS_AT_FIXED_COUNT);
+    const sha = createHash('sha256');
+    for (const p of list) sha.update(`${p.path}\0${p.text}\0`);
+    expect(sha.digest('hex'), 'the plan read answers other bytes than the read it replaced').toBe(PLANS_AT_FIXED_SHA256);
   });
 
   // THE GUARD ON THE GUARD, and the only row that proves this scan can FAIL.

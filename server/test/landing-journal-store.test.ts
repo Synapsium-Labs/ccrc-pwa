@@ -91,8 +91,10 @@ const restore = (f: Fx, snap: string, replay = true): Fx => {
   return boot(f.home, undefined, replay);
 };
 
+/** The waves of coord-a's one programme (programme lifecycle W1, R11: one coordinator owns one programme). */
+let journalWave = 0;
 const openRun = (f: Fx, project: string = P, wave = 1): number => {
-  const o = f.store.openRun({ program: `prog-${project}-${wave}`, title: 't', project, wave, waveOf: 9, claimedBy: 'coord-a' });
+  const o = f.store.openRun({ program: 'prog-coord-a', title: 't', project, wave: ++journalWave, waveOf: null, claimedBy: 'coord-a' });   // one programme per coordinator (R11)
   if (!('id' in o)) throw new Error('fixture openRun refused');
   f.store.setSession(o.id, `${project}-ws${wave}`);
   for (const to of ['dispatched', 'working', 'awaiting-review'] as const) {
@@ -955,5 +957,119 @@ describe('an ambient landing read does not own the rollback (wave 5i, M18)', () 
     const land = { kind: 'land', project: P, pr: 9, by: 'reader', at: 1, outcome: { word: 'closed' }, expect: null } as const;
     expect(f.store.advanceLanding(land)).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' });
     expect(f.db.isOpen).toBe(false);
+  });
+});
+
+// Landing order wave 5j-a, Task 2 (D-9046): replay applies the operator's door records. No route writes one in 5j-a, so
+// each case appends the record to the fixture journal itself, then reboots the fixture store and replays the suffix.
+describe('replay applies the operator\'s pause and withdrawal (wave 5j-a, D-9046)', () => {
+  const appendRecords = (f: Fx, ...recs: Record<string, unknown>[]): void =>
+    appendFileSync(f.log, recs.map((r) => `${JSON.stringify(r)}\n`).join(''));
+  const rebooted = (f: Fx): Fx => {
+    f.db.close();
+    const g = boot(f.home, undefined, false);
+    expect(g.store.replayLandingJournal()).toMatchObject({ ok: true });
+    return g;
+  };
+  const subjectOf = (id: number, pr: number, project: string = P) => ({ id, project, pr, binding: { kind: 'no-run' } });
+  const pauseRec = (seq: number, paused: boolean, project: string = P) =>
+    ({ v: 1, seq, at: 9000 + seq, setBy: 'operator', kind: 'pause', project, paused, actor: 'flag-off' });
+  const withdrawRec = (seq: number, id: number, pr: number, project: string = P) =>
+    ({ v: 1, seq, at: 9000 + seq, setBy: 'operator', subject: subjectOf(id, pr, project), kind: 'withdraw', actor: 'device:lane-a ' });
+  const flagsOf = (f: Fx, project: string = P) =>
+    f.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project) as { operatorPaused: number; mainRedHold: number } | undefined;
+  const entryRow = (f: Fx, id: number) =>
+    f.db.prepare('SELECT state, quarantineKind, detail FROM landing_entries WHERE id = ?').get(id) as { state: string; quarantineKind: string | null; detail: string | null } | undefined;
+  /** Every ordering fact of every row and every authority row: what a door must never change. */
+  const authorityBytes = (f: Fx): string => JSON.stringify([
+    rows(f, 'SELECT id, project, pr, afterIds, fixesMain, setBy, pinnedAt FROM landing_entries ORDER BY id'),
+    rows(f, 'SELECT * FROM landing_authority ORDER BY subjectId'),
+  ]);
+  const detailOf = (seq: number) => JSON.stringify({ v: 1, by: 'operator', at: 9000 + seq, word: 'withdrawn', seq });
+
+  it.each([0, 1])('a pause after an entry sets operatorPaused and leaves mainRedHold %i; a later resume clears it', (red) => {
+    const f = boot();
+    const a = created(f, 1);
+    created(f, 2);
+    order(f, 2, { afterIds: [a], fixesMain: true });
+    f.db.prepare('INSERT INTO landing_projects (project, mainRedHold) VALUES (?, ?)').run(P, red);
+    const before = authorityBytes(f);
+    appendRecords(f, pauseRec(4, true));
+    const g = rebooted(f);
+    expect(flagsOf(g)).toEqual({ operatorPaused: 1, mainRedHold: red });
+    expect(authorityBytes(g)).toBe(before);
+    expect(cursor(g)).toBe(4);
+    appendRecords(g, pauseRec(5, false));
+    const h = rebooted(g);
+    expect(flagsOf(h)).toEqual({ operatorPaused: 0, mainRedHold: red });
+    expect(authorityBytes(h)).toBe(before);
+    expect(cursor(h)).toBe(5);
+  });
+
+  it('a pause of a project with no flags row creates it with mainRedHold clear', () => {
+    const f = boot();
+    created(f, 1);
+    expect(flagsOf(f)).toBeUndefined();
+    appendRecords(f, pauseRec(2, true));
+    expect(flagsOf(rebooted(f))).toEqual({ operatorPaused: 1, mainRedHold: 0 });
+  });
+
+  it.each([
+    ['pinned', "UPDATE landing_entries SET state = 'pinned' WHERE id = ?"],
+    ['ejected', "UPDATE landing_entries SET state = 'ejected', ejections = 1 WHERE id = ?"],
+    ['unknown (quarantined)', "UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE id = ?"],
+  ])('a withdraw over a %s row reads withdrawn, its marker cleared and its detail written', (_label, sql) => {
+    const f = boot();
+    const a = created(f, 1);
+    const b = created(f, 2);
+    order(f, 2, { afterIds: [a] });
+    f.db.prepare(sql).run(b);
+    const before = authorityBytes(f);
+    appendRecords(f, withdrawRec(4, b, 2));
+    const g = rebooted(f);
+    expect(entryRow(g, b)).toEqual({ state: 'withdrawn', quarantineKind: null, detail: detailOf(4) });
+    expect(entryRow(g, a)!.state).toBe('pinned');
+    expect(authorityBytes(g)).toBe(before);
+    expect(cursor(g)).toBe(4);
+  });
+
+  it('a withdraw over a landed row leaves it landed, and the cursor still advances', () => {
+    const f = boot();
+    const a = created(f, 1);
+    f.db.prepare("UPDATE landing_entries SET state = 'landed', detail = 'x' WHERE id = ?").run(a);
+    const before = authorityBytes(f);
+    appendRecords(f, withdrawRec(2, a, 1));
+    const g = rebooted(f);
+    expect(entryRow(g, a)).toEqual({ state: 'landed', quarantineKind: null, detail: 'x' });
+    expect(authorityBytes(g)).toBe(before);
+    expect(cursor(g)).toBe(2);
+  });
+
+  it('a withdraw over no row inserts nothing, its subject is listed missing, and the cursor advances', () => {
+    const f = boot();
+    created(f, 1);
+    const before = authorityBytes(f);
+    appendRecords(f, withdrawRec(2, 5, 50));
+    const g = rebooted(f);
+    expect(count(g, 'landing_entries')).toBe(1);
+    expect(entryRow(g, 5)).toBeUndefined();
+    const five = rec(g).subjects.find((s) => s.id === 5)!;
+    expect(five.projection).toEqual({ kind: 'missing', association: 'unmeasured' });
+    expect(five.authority).toEqual({ kind: 'not-set' });
+    expect(authorityBytes(g)).toBe(before);
+    expect(cursor(g)).toBe(2);
+  });
+
+  it('a withdraw whose subject id names a row of another (project, pr) leaves that row as it was', () => {
+    const f = boot();
+    created(f, 1);
+    rawProjection(f, 7, 70);
+    const row = JSON.stringify(rows(f, 'SELECT * FROM landing_entries WHERE id = 7'));
+    const before = authorityBytes(f);
+    appendRecords(f, withdrawRec(2, 7, 71));
+    const g = rebooted(f);
+    expect(JSON.stringify(rows(g, 'SELECT * FROM landing_entries WHERE id = 7'))).toBe(row);
+    expect(authorityBytes(g)).toBe(before);
+    expect(cursor(g)).toBe(2);
   });
 });

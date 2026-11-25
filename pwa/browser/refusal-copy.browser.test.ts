@@ -96,6 +96,8 @@ const FIXTURE: AppFixture = {
 };
 
 const REFUSAL = JSON.stringify({ ok: false, error: 'registry-unmeasurable' });
+/** The authority witness exchange's route (`api.overlordWitness`), the one POST the collector does not gather. */
+const WITNESS_ROUTE = '/api/overlord/witness';
 
 // ---- the leg -------------------------------------------------------------------------------------------------------
 
@@ -124,6 +126,9 @@ async function boot(view: AppView, route: string): Promise<{ page: Page; errors:
     const req = r.request();
     const path = new URL(req.url()).pathname;
     if (req.method() !== 'POST') return r.fallback();
+    // The console's authority witness (Overlord W1, `lib/witness.ts`) POSTs its exchange on every signed-in console load,
+    // whatever surface is open. It is no surface under test here, so it is left out of the exact list by its one path.
+    if (path === WITNESS_ROUTE) return r.fallback();
     posts.push(path);
     if (path === `/api/sessions/${WORKER}/archive`) {
       const force = (req.postDataJSON() as { force?: unknown } | null)?.force === true;

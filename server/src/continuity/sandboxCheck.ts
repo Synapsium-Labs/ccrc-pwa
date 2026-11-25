@@ -207,7 +207,7 @@ export type SettleAct =
   | { readonly kind: 'fail-pending'; readonly sessionId: string; readonly properties: readonly PropertyVerdict[] };
 
 /** What a loads report does to the designation (Task 9; slug `settle-takes-the-report-start-id`). It acts only for a pending
- *  `designate` attempt (a `rebind` is designation B's) whose session is the newest start's and whose generation is the one
+ *  attempt, a `designate` or (designation B) a `rebind`, whose session is the newest start's and whose generation is the one
  *  that start reported, and only when the report's start IS that newest `startup` or `resume` start (a respawn before the first
  *  `Stop` makes a `resume` start, and its report settles). Every other report is `none`, and so is a resend once settled,
  *  because settling clears the pending slot. */
@@ -215,7 +215,7 @@ export function sandboxSettle(designation: DesignationRead, reportStartId: numbe
   verdict: SandboxVerdict): SettleAct {
   if (designation.kind === 'unmeasured' || newest === null || newest.id !== reportStartId) return { kind: 'none' };
   const p = designation.row?.pending ?? null;
-  if (p === null || p.kind !== 'designate' || p.sessionId !== newest.sessionId) return { kind: 'none' };
+  if (p === null || p.sessionId !== newest.sessionId) return { kind: 'none' };
   if (p.generation === null || p.generation !== newest.rowIncarnation) return { kind: 'none' };
   if (verdict.engaged) return { kind: 'go-live', sessionId: p.sessionId, generation: p.generation };
   return { kind: 'fail-pending', sessionId: p.sessionId, properties: verdict.properties.filter((x) => x.state !== 'held') };

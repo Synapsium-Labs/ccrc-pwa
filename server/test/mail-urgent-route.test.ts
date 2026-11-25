@@ -130,7 +130,8 @@ describe('CoordStore.urgentVerdict: the sender rule over the store facts (spec ย
     const at = (id: number, openedAt: number, dispatchStartedAt: number | null) =>
       r.coord.db.prepare('UPDATE runs SET openedAt = ?, dispatchStartedAt = ? WHERE id = ?').run(openedAt, dispatchStartedAt, id);
     // OTHER_COORD's run, still open, bound the name when an earlier occupant was born; PEER's run minted the occupant now.
-    const ghost = r.coord.openRun({ program: 'program-old', title: 'old', project: 'project-a', wave: 1, waveOf: 3, claimedBy: OTHER_COORD });
+    // Programme lifecycle W1 (R11, D-8993): OTHER_COORD owns program-b, so its ghost run is that programme's next wave.
+    const ghost = r.coord.openRun({ program: 'program-b', title: 'program-b', project: 'project-a', wave: 2, waveOf: 3, claimedBy: OTHER_COORD });
     const live = r.coord.openRun({ program: 'program-new', title: 'new', project: 'project-a', wave: 1, waveOf: 3, claimedBy: PEER });
     if (!('id' in ghost) || !('id' in live)) throw new Error('openRun refused');
     at(ghost.id, OLD, OLD);
@@ -405,20 +406,27 @@ describe("a reclaim carries an urgent mail to the displaced coordinator, and its
 
   it("a run coordinator's urgent mail to its worker stays put when that worker is later displaced as claimant (review 3069 F3)", async () => {
     const r = await rig(); app = r.app;
-    // OTHER_COORD's urgent mail to its worker COORD about the outer run. A reclaim hands the programme to COORD itself,
-    // its own live worker (D-3028), and a second reclaim displaces COORD: the mail is a worker's, so it never moves.
-    const toWorker = writeUrgent(r.coord, OTHER_COORD, COORD, r.outer);
-    expect(r.coord.reclaimProgram(r.outer, COORD, NOW, null)).toMatchObject({ ok: true });
-    expect(r.coord.reclaimProgram(r.outer, PEER, NOW + 1, null)).toMatchObject({ ok: true });
-    expect(r.coord.urgentHolds().get(COORD)).toEqual([{ deliveryId: toWorker, role: 'coordinator' }]);
+    // COORD's urgent mail to its worker WORKER about the work run. A reclaim hands the programme to WORKER itself, its own
+    // live worker (D-3028), and a second reclaim displaces WORKER: the mail is a worker's, so it never moves. Programme
+    // lifecycle W1 (R11, D-8993): the worker made heir is one that owns no other programme, so the rig's COORD (which owns
+    // program-a) cannot be program-b's heir; program-a's own worker plays the part.
+    const toWorker = writeUrgent(r.coord, COORD, WORKER, r.work);
+    expect(r.coord.reclaimProgram(r.work, WORKER, NOW, null)).toMatchObject({ ok: true });
+    expect(r.coord.reclaimProgram(r.work, PEER, NOW + 1, null)).toMatchObject({ ok: true });
+    expect(r.coord.urgentHolds().get(WORKER)).toEqual([{ deliveryId: toWorker, role: 'coordinator' }]);
     expect(r.coord.urgentHolds().has(PEER)).toBe(false);
   });
 
   it("another programme's reclaim leaves it where it is", async () => {
     const r = await rig(); app = r.app;
     const urgent = writeUrgent(r.coord, OVERLORD, OTHER_COORD, r.outer, 'overlord');
-    const other = r.coord.openRun({ program: 'program-d', title: 'd', project: 'project-a', wave: 1, waveOf: 3, claimedBy: OTHER_COORD });
+    // Programme lifecycle W1 (R11, D-8993): openRun no longer lets OTHER_COORD claim a run in a second programme, but a
+    // migration conflict (spec ยง13, `session-in-several`) or a hand-recovered row still leaves one session claiming runs in
+    // two programmes, so program-d's run is opened by another claimant and then hand-written onto OTHER_COORD, as such a
+    // row stands. The reclaim then displaces OTHER_COORD from program-d, and its program-b hold must stay where it is.
+    const other = r.coord.openRun({ program: 'program-d', title: 'd', project: 'project-a', wave: 1, waveOf: 3, claimedBy: 'lane-a-legacy' });
     if (!('id' in other)) throw new Error('openRun refused');
+    r.coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(OTHER_COORD, other.id);
     expect(r.coord.reclaimProgram(other.id, PEER, NOW, null)).toMatchObject({ ok: true });
     expect(r.coord.urgentHolds().get(OTHER_COORD)).toEqual([{ deliveryId: urgent, role: 'overlord' }]);
     expect(r.coord.urgentHolds().has(PEER)).toBe(false);

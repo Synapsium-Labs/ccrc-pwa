@@ -254,10 +254,11 @@ describe('W5-R9: retain\'s refusal order, by name, one request each (the intent 
     expect(w.coord.advance(run.id, 'failed', 'test-close').ok).toBe(true);
     w.coord.db.prepare('UPDATE runs SET openedAt = ?, closedAt = ? WHERE id = ?').run(D0, D0 + DAY, run.id);
     // D-7818: 501 newer closed runs of other sessions push the worker's run out of the bounded read; the door reads every run that
-    // named the parent, so the coordinator is still named
+    // named the parent, so the coordinator is still named. Programme lifecycle W1 (R11): one coordinator owns one programme,
+    // so each of those programmes has its own coordinator.
     for (let i = 0; i < 501; i++) {
-      const other = w.coord.openRun({ program: `program-z${i}`, title: 'run-z', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'coord-b-demo' });
-      if (!('id' in other)) throw new Error('openRun refused');
+      const other = w.coord.openRun({ program: `program-z${i}`, title: 'run-z', project: 'project-a', wave: 1, waveOf: 1, claimedBy: `coord-z${i}-demo` });
+      if (!('id' in other)) throw new Error(`openRun refused: ${JSON.stringify(other)}`);
       w.coord.bindSession(other.id, `lane-z${i}-demo`);
       expect(w.coord.advance(other.id, 'failed', 'test-close').ok).toBe(true);
     }

@@ -12,7 +12,9 @@ import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/overlordAuthorityJournal.js';
 import { NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../src/appendOnlyFile.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from '../src/coord/overlordAuthorityGuard.js';
-import { OverlordRestoreState, preWitnessFacts, type RestoreWitnessFacts } from '../src/coord/overlordRestoreState.js';
+import { OverlordRestoreState, type RestoreWitnessFacts } from '../src/coord/overlordRestoreState.js';
+import { OverlordAuthorityExchange } from '../src/coord/overlordAuthorityExchange.js';
+import { PRIVACY_HEAD_UNWIRED } from '../src/coord/privacyJournalHead.js';
 import { bindPendingGeneration, designatePending, goLive } from '../src/coord/overlordDesignationStore.js';
 import { setRungInTx } from '../src/coord/overlordLadderStore.js';
 import { gateActorOf } from '../src/accounts/audit.js';
@@ -42,12 +44,14 @@ export function restoreRigHooks(): void {
 
 export interface Rig {
   dir: string; dbPath: string; db: DatabaseSync; journal: OverlordAuthorityJournal; guard: OverlordAuthorityGuard;
-  state: OverlordRestoreState; held: { epoch: number; restoreGeneration: number }; offers: number;
+  state: OverlordRestoreState; exchange: OverlordAuthorityExchange; held: { epoch: number; restoreGeneration: number } | null; offers: number;
+  /** Whether the fixture carrier refuses to open, without changing its bytes. */
+  unreadable: boolean;
   /** How many of the next writes to the journal file throw (the append's own write; a cut writes elsewhere). */
   failAppends: number;
   /** How many of the next truncations of the journal file throw (a cut's last step, after its bytes are kept aside). */
   failTruncates: number;
-  /** The witness facts the next open composes over the stand-in (`held` and `offers` stay the rig's). */
+  /** Optional unit-fixture overrides over the exchange (`held` and `offers` stay the rig's). */
   witness: Partial<RestoreWitnessFacts>;
   /** Close and open again (a restart): a new journal, guard and boot over the same files. */
   restart(): void;
@@ -55,17 +59,30 @@ export interface Rig {
   lines(): string[];
 }
 
+/** Bind the real exchange methods for unit fixtures that override one of the reads. */
+export function exchangeFacts(exchange: OverlordAuthorityExchange): RestoreWitnessFacts {
+  return {
+    epoch: (file) => exchange.epoch(file), privacy: () => exchange.privacy(), highest: () => exchange.highest(),
+    told: () => exchange.told(), offerNow: () => exchange.offerNow(),
+  };
+}
+
 export function rig(witnessOver: Partial<RestoreWitnessFacts> = {}): Rig {
   const dir = mkTmp('ccrc-overlord-restore-');
   const dbPath = path.join(dir, 'coord.db');
   copyFileSync(template, dbPath);
   const time = fakeTime({ wallMs: NOW });
-  const r = { dir, dbPath, held: { epoch: 0, restoreGeneration: 0 }, offers: 0, failAppends: 0, failTruncates: 0, witness: witnessOver } as Rig;
+  const r = { dir, dbPath, held: null, offers: 0, unreadable: false, failAppends: 0, failTruncates: 0, witness: witnessOver } as Rig;
   const leafPath = path.join(dir, OVERLORD_AUTHORITY_BASENAME);
   const leafFds = new Set<number>();
   const ops: AppendOnlyFsOps = {
     ...NODE_APPEND_ONLY_FS,
-    openSync: (p, flags, mode) => { const fd = NODE_APPEND_ONLY_FS.openSync(p, flags, mode); if (p === leafPath) leafFds.add(fd); else leafFds.delete(fd); return fd; },
+    openSync: (p, flags, mode) => {
+      if (p === leafPath && r.unreadable) throw Object.assign(new Error('a fixture read failure'), { code: 'EACCES' });
+      const fd = NODE_APPEND_ONLY_FS.openSync(p, flags, mode);
+      if (p === leafPath) leafFds.add(fd); else leafFds.delete(fd);
+      return fd;
+    },
     closeSync: (fd) => { leafFds.delete(fd); NODE_APPEND_ONLY_FS.closeSync(fd); },
     ftruncateSync: (fd, len) => {
       if (leafFds.has(fd) && r.failTruncates > 0) { r.failTruncates -= 1; throw Object.assign(new Error('a fixture truncate failure'), { code: 'EIO' }); }
@@ -83,11 +100,18 @@ export function rig(witnessOver: Partial<RestoreWitnessFacts> = {}): Rig {
     const guard = new OverlordAuthorityGuard(port);
     const journal = new OverlordAuthorityJournal(overlordAuthorityFileAt(dir, ops), { clock: time.ports.clock }, guard);
     runOverlordAuthorityBoot(port, guard, () => { /* quiet */ });
-    const pre = preWitnessFacts(journal);
+    const exchange = new OverlordAuthorityExchange({
+      journal, guard, privacy: PRIVACY_HEAD_UNWIRED, boot: `fixture-boot-${opened.length}`,
+      committedRows: () => db.isTransaction ? { kind: 'unmeasured' } : journal.readRows(db),
+      agent: null, relationOf: () => 'unmeasured', warn: () => {},
+    });
     const witness: RestoreWitnessFacts = {
-      ...pre, highest: () => ({ kind: 'measured', ...r.held }), offerNow: () => { r.offers += 1; }, ...r.witness,
+      ...exchangeFacts(exchange),
+      highest: () => r.held === null ? exchange.highest() : { kind: 'measured', ...r.held },
+      offerNow: () => { r.offers += 1; exchange.offerNow(); },
+      ...r.witness,
     };
-    Object.assign(r, { db, journal, guard, state: new OverlordRestoreState({ db, journal, guard, witness }) });
+    Object.assign(r, { db, journal, guard, exchange, state: new OverlordRestoreState({ db, journal, guard, witness }) });
   };
   r.restart = () => { r.db.close(); open(); };
   r.snapshot = (withJournal) => {

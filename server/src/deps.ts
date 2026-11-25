@@ -36,6 +36,7 @@ import type { LimitSampleStore } from './limitSampler.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
 import type { OverlordRestoreState } from './coord/overlordRestoreState.js';
 import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
@@ -252,6 +253,9 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** The authority witness exchange (Overlord W1, Task 6), built in `index.ts` after the guard and the agent link: the console door's
+   *  `exchange`, the watcher's `authorityWitness` lane's nudge, and PR C's Confirm reads. Absent (a test, a script): the door answers 503 and the lane does nothing. */
+  overlordAuthorityExchange?: OverlordAuthorityExchange;
   /** Confirm the restore, the restore generation and `termRaised` (authority journal C, `coord/overlordRestoreState.ts`), built
    *  once in `index.ts` over the same journal and guard. Absent (a test, a script): the Confirm door answers `unavailable`. */
   overlordRestore?: OverlordRestoreState;

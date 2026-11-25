@@ -252,7 +252,12 @@ describe('6. the claimant lanes', () => {
   });
 
   it('reclaimRun asks once, after the heir\'s registry read and before the worker rung and the claimant\'s measurement', () => {
-    const fn = between(RECLAIM_SRC, 'export async function reclaimRun(', '\n}\n');
+    // Programme lifecycle W1 (W1 review): the ladder from the claimant's shape to rung 4 is `heirLadder`, which `reclaimRun`
+    // asks once (and `reclaimProgrammeTo`, the binding-only move, asks too), so the ask and its order are pinned there.
+    const door = between(RECLAIM_SRC, 'export async function reclaimRun(', '\n}\n');
+    expect(count(door, 'await heirLadder(')).toBe(1);
+    expect(count(door, 'decideOtherLane(')).toBe(0);
+    const fn = between(RECLAIM_SRC, 'async function heirLadder(', '\n}\n');
     const call = "decideOtherLane('runReclaim', to,";
     expect(count(RECLAIM_SRC, 'decideOtherLane(')).toBe(1);
     expect(count(fn, call)).toBe(1);
@@ -279,6 +284,8 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/programmes/:slug/spec': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/programmes/:slug/modifications': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/programmes/:slug/modifications/merged': ['programme-ownership', 'attribution, then `claimsProgramme`'],
+  // Programme lifecycle W2: the Overlord's body is never bound (`overlordClaimant` at an open, `heirLadder` at every other door).
+  'POST /api/programmes/:slug/end-proposal': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/calls': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/remaining': ['programme-ownership', 'attribution, then `claimsProgramme` (measured; after the plan)'],
   'POST /api/leases/:lease/retain': ['lease-ownership', '`decideRetain` refuses `not-lease-parent`'],

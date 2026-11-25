@@ -468,8 +468,9 @@ describe('POST /api/runs', () => {
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     expect((await postOpen(app, { ...OPEN_BODY, claimedBy: 'demo-self', sessionId: 'demo-self' })).statusCode).toBe(200);
-    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Self', claimedBy: 'demo-self' });
-    expect(res.statusCode).toBe(200);
+    // Programme lifecycle W1 (R11): one coordinator owns one live programme, so its second run is in the same programme.
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, title: 'Self', claimedBy: 'demo-self' });
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
   });
 
   it('admits the session of an OWNERLESS open run — there is no `by` to name (D-3012)', async () => {
@@ -2215,7 +2216,7 @@ describe('POST /api/runs/:id/close', () => {
     expect(fleetActs(c.calls)).toEqual(['ws-hold']);
   });
 
-  it('a non-final close that RETIRES its program releases the child — never a hold for a wave that cannot open', async () => {
+  it('a non-final close of its program\'s LAST open run releases the child — never a hold for a wave nobody opened — and the program stays live', async () => {
     const sessionId = `${PROJECT}-child4`;
     const c = await dispatchedChild(sessionId, PR_NONE(sessionId));
     c.calls.length = 0;
@@ -2223,7 +2224,8 @@ describe('POST /api/runs/:id/close', () => {
     expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
     expect(fleetActs(c.calls)).toEqual(['ws-release']);
     const program = c.coord.db.prepare("SELECT state FROM programs WHERE slug = 'build4'").get() as { state: string };
-    expect(program.state, 'D-51 retired it in the same close').toBe('done');
+    // Programme lifecycle W1 (R4, D-51 gone): a close never ends the programme; with no open run it is Idle, still live.
+    expect(program.state, 'no close ends the programme').toBe('active');
   });
 
   it('an unreadable marker never authorises a reclaim — the close still does exactly what it did before', async () => {
@@ -2686,8 +2688,8 @@ describe('POST /api/runs/:id/close', () => {
     });
   });
 
-  it('retires the program only once ALL its runs are terminal, mirroring whichever run ' +
-     'closes it out (D-51)', async () => {
+  it('never retires the program, not even once ALL its runs are terminal: an end is a decision, ' +
+     'not a close\'s side effect (programme lifecycle W1 R4; D-51 gone)', async () => {
     const sessionA = `${PROJECT}-close11`;
     const root = gitRoot(PROJECT, `ws/${sessionA}`, TIP);
     const { id: idA, coord } = await dispatchedRun(sessionA, root,
@@ -2709,11 +2711,13 @@ describe('POST /api/runs/:id/close', () => {
 
     // Close the sibling too, as an explicit abandon — D-49 lets this route
     // skip verifyDone, so a fabricated sessionId with no real git root still
-    // closes cleanly. NOW it is the last run, and the program retires
-    // `abandoned`, mirroring the run that closed it out.
+    // closes cleanly. NOW it is the last run: D-51 retired the program here,
+    // mirroring the run that closed it out; programme lifecycle W1 keeps it
+    // live (Idle), so no close of a run is a programme's end.
     const resB = await postClose(app!, sibling.id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(resB.statusCode).toBe(200);
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'abandoned' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'active' }]);
+    expect(coord.programmeLive('build4')).toBe(true);
   });
 
   it('answers 404 unknown-run for a run id that does not exist', async () => {
@@ -3431,8 +3435,10 @@ describe('GET /api/mail?to= (review findings 1/15)', () => {
     const abandonedLiveId = queueTo('abandoned, run still live', liveRun.id);
     w.coord.rejectDelivery(abandonedLiveId, 'undeliverable', 'replayed without ack past the replay ceiling');
 
+    // Programme lifecycle W1 (R11): one coordinator owns one live programme, so the second programme has its own.
     const closedRun = w.coord.openRun({ program: 'p-closed', title: 'closed', project: PROJECT,
-      wave: 1, waveOf: 1, claimedBy: CLAIMED_BY }) as { id: number };
+      wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    expect(typeof closedRun.id).toBe('number');
     const abandonedClosedId = queueTo('abandoned, run now closed', closedRun.id);
     w.coord.rejectDelivery(abandonedClosedId, 'undeliverable', 'replayed without ack past the replay ceiling');
     w.coord.advance(closedRun.id, 'failed', 'coordinator');   // planned -> failed directly

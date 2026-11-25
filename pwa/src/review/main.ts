@@ -2,7 +2,8 @@
 //
 // Ring: L4, an entry that owns the DOM and one network call and decides nothing beyond what the page's words say. It
 // imports only L0 (`shared/docsReview.ts`: the marker header, the token grammar and the date formatter), its own
-// stylesheet, `./labFixture` (a generated data module: lab mode's two copies as string constants) and `../readerLab/device`
+// stylesheet, `../../generated/reviewLabFixture` (a generated data module outside the authored source tree: lab mode's two
+// copies and the page ground as string constants) and `../readerLab/device`
 // (D-9028: `deviceOf`, the reader lab's one owner of the engine and OS class, pure and importing nothing, so the page keeps
 // no user-agent parser of its own). No React and no app shell: the page is a fixed document served at `/review` under its own header policy
 // (`script-src 'self'`, no inline script, no external font, `img-src data:`), so nothing here writes an inline script,
@@ -26,7 +27,7 @@
 //
 // Lab mode (X3 R2.3, the measurement row M-X3.16): a fragment of exactly `lab` is the measurement page, not a token. It is
 // cleared like any fragment, then the page makes NO request of any kind (no `fetch`, no XHR, no beacon, no dynamic
-// `import()`, no URL that is not `data:`), mounts the two committed copies of `./labFixture` (a static import: Export's own
+// `import()`, no URL that is not `data:`), mounts the two committed copies of `../../generated/reviewLabFixture` (a static import: Export's own
 // bytes plus one canary script each) through the same frame code the copy path uses (each frame restores its own copy, D-9029, each frame's own bound of three restores within ten seconds), and draws seven lines, each with a
 // reference the page itself draws, which the operator answers by comparing a frame with it. A line reads "Not measured"
 // until answered, and the script and link lines' "Unchanged" is held until both load markers (`inline-style`,
@@ -39,7 +40,7 @@ import {
   REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_SHARED_AT_HEADER, isReviewToken, reviewDate,
 } from '../../../shared/docsReview';
 import { deviceOf, type LabFeatures } from '../readerLab/device';
-import { LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY } from './labFixture';
+import { LAB_GROUND, LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY } from '../../generated/reviewLabFixture';
 import './review.css';
 
 const ROOT_ID = 'review-root';
@@ -152,9 +153,10 @@ function copyFrame(doc: Document, text: string, title: string, linksListed: bool
 // ---- lab mode: the pure half ---------------------------------------------------------------------------------------------
 
 /** The reference colours the page draws beside its lines, each the colour the fixture draws: the copy's page ground
- *  (`--bg-page` of Export's dark default), the Markdown copy's picture, and the mockup's swatch. `review-lab-fixture.test.tsx`
- *  holds each to the fixture's own bytes. */
-export const LAB_GROUND = '#0b0d0c';
+ *  (`--bg-page` of Export's dark default; a console token colour, so it is generated from Export's own bytes into the
+ *  fixture module and re-exported here, never typed in this file), the Markdown copy's picture, and the mockup's swatch.
+ *  `review-lab-fixture.test.tsx` holds each to the fixture's own bytes. */
+export { LAB_GROUND };
 export const LAB_IMAGE_COLOUR = '#c2185b';
 export const LAB_SWATCH_COLOUR = '#1f7a4d';
 

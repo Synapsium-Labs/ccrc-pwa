@@ -12,7 +12,7 @@ import { realPathOf } from '../src/testbox/probeFs.js';
 import { CAPTURE_REFUSALS, CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureSubmit } from '../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../shared/claudeBuildTrust.js';
 import { readTestboxFrame, type ProbeAnswer, type RunLog, type RunSummary } from '../../shared/testbox.js';
-import { CAPTURE_CLOSED_DETAIL, capturePaths, type BuildFileFacts } from '../src/testbox/capture.js';
+import { CAPTURE_CLOSED_DETAIL, CAPTURE_TIMINGS, capturePaths, type BuildFileFacts } from '../src/testbox/capture.js';
 import { CaptureDesk, type CaptureDeskDeps, type CaptureRunnerLike } from '../src/testbox/captureDesk.js';
 import type { CaptureRun } from '../src/testbox/captureRunner.js';
 import { FRAME_HANDLERS, TestboxService, type Conn, type ServiceSettings } from '../src/testbox/service.js';
@@ -202,7 +202,7 @@ describe('the capture desk runs one capture at a time (spec §2.5)', () => {
 describe('the test service takes capture.submit through the desk (spec §2.5)', () => {
   const SETTINGS = (root: string): ServiceSettings => ({
     root, workers: 2, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: [], runUserPrefix: 'ccrc-tb-',
-    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000,
+    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 86_400_000,
   });
   const service = (captures?: CaptureDesk): TestboxService => new TestboxService({
     settings: SETTINGS(ROOT), rows: [], sys: {} as SystemManager, probe: async () => ({ ok: true }), mirror: {} as MirrorOps,
@@ -490,7 +490,7 @@ describe('the composed desk prunes the builds store after a capture, and capture
     for (const n of ['2.1.1', '2.1.2', '2.1.3', '2.1.4', '2.1.100']) writeFileSync(path.join(dir, n), 'x');
     const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
     const runner = new GatedRunner();
-    const d = captureDeskWith(cfg, runner, '/tmp', { home: root });
+    const d = captureDeskWith(cfg, runner, CAPTURE_TIMINGS, '/tmp', { home: root });
     const sink = new Sink();
     d.submit(SUBMIT(1), sink);
     d.submit(SUBMIT(2, '2.1.1'), sink);

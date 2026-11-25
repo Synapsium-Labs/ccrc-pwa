@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 55 id-taking calls across 20 files.
+// THE CLAIM: 56 id-taking calls across 20 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -405,6 +405,8 @@ const GATES = {
   'overlord-body-route': { file: 'coord/overlordBody.ts', scope: 'setRoute', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
   /** The Overlord body's keep-awake composer refuses an id that is not a registry id before it composes `keep-awake`. */
   'overlord-body-keep-awake': { file: 'coord/overlordBody.ts', scope: 'keepAwake', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
+  /** Restart's resume composer refuses an id that is not a registry id before it composes `ensure` (Overlord W1 designation B). */
+  'overlord-body-ensure': { file: 'coord/overlordBody.ts', scope: 'ensure', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
 } as const satisfies Readonly<Record<string, GateHome>>;
 
 type Gate = keyof typeof GATES;
@@ -534,6 +536,8 @@ const CENSUS: readonly CensusRow[] = [
   // no `CCD_ARGV` call of its own: it runs the stop route's own `stopArgvFor` (behind its `readSessionRecord` and `stopPairRefused`).
   { file: 'coord/overlordBody.ts', scope: 'setRoute', builder: 'routeSet', id: 'id', origin: ['stored'], gate: ['overlord-body-route'] },
   { file: 'coord/overlordBody.ts', scope: 'keepAwake', builder: 'keepAwake', id: 'id', origin: ['stored'], gate: ['overlord-body-keep-awake'] },
+  // designation B: Restart's `ensure`, on the bound id the designation row names.
+  { file: 'coord/overlordBody.ts', scope: 'ensure', builder: 'ensure', id: 'id', origin: ['stored'], gate: ['overlord-body-ensure'] },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -565,6 +569,9 @@ const GATE_FILES = [
   'coord/archiveDoor.ts',
   // coord/overlordBody.ts (Overlord W1 designation A): `setRoute` and `keepAwake` vet their id with the predicate before composing.
   'coord/overlordBody.ts',
+  // coord/programmeLifecycleRoutes.ts (programme lifecycle W2): the start's coordinator, the hand-over's heir and a session read's id
+  // are vetted by the predicate before any registry read; it composes no argv.
+  'coord/programmeLifecycleRoutes.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

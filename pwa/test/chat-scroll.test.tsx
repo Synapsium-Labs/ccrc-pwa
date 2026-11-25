@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { ChatEvent } from '../../shared/api';
+import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
 import type { PendingSend } from '../src/stores/session';
 
 const seen = vi.hoisted(() => ({
@@ -349,6 +350,34 @@ describe('the list learns from heights its rows MEASURED, never from estimates',
     // save would keep the first save's rows AND add the later ones: one visit
     // would add more than its share.
     expect(localStorage.getItem(ROWS_KEY)).toBe(once);
+  });
+
+  it('samples a row as the reader left it: a stretch with a card they closed under it counts that card\'s line (desktop polish wave 176)', async () => {
+    // A question to this session is drawn open under its closed stretch; a newer question arrives in a later stretch,
+    // so the first no longer opens by default but stays under its row (`underRow`); the reader closes it there. That
+    // stretch now draws two lines with nothing expanded, so it is sampled, and as two lines: the meter prices it with
+    // the reader's choices, as the row draws it.
+    const fetch = (uuid: string, subject: string, min: number): ChatEvent[] => {
+      const env = '```' + MAIL_ENVELOPE_FENCE + '\n' + [`id: 1${min}`, 'from: coordinator', 'to: s', 'kind: question',
+        `subject: ${subject}`, `ack: ccrc-api mail ack 1${min} --json -`, '--'].join('\n') + '\nWhich base?\n```';
+      return [
+        { kind: 'tool_use', uuid, ts: at(min), toolId: `t-${uuid}`, name: 'Bash', input: '{"command":"mail fetch"}' },
+        { kind: 'tool_result', ts: at(min), toolId: `t-${uuid}`, text: env, isError: false },
+      ];
+    };
+    const { SkinSetProvider } = await import('../src/skins/frame');
+    const { REFINED_SET } = await import('../src/skins/refined/parts');
+    const first: ChatEvent[] = [{ kind: 'user', uuid: 'go', ts: at(0), text: 'Go.' }, ...fetch('f1', 'first?', 0)];
+    const list = (events: ChatEvent[]) => <SkinSetProvider set={REFINED_SET}><ChatList id="s" events={events} pending={[]} /></SkinSetProvider>;
+    const { rerender, getByRole } = render(list(first));
+    rerender(list([...first, { kind: 'assistant', uuid: 'r', ts: at(1), text: 'Asking.' }, ...fetch('f2', 'second?', 1)]));
+    const head = getByRole('button', { name: /^Mail from coordinator: first\?/ });
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(head);
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    measure(() => 90);
+    pagehide();
+    expect(bare(stored()['activity'])).toEqual([{ lines: 2, px: 90 }]);
   });
 
   it('leaves a kind this visit never measured exactly as it was', () => {
@@ -687,16 +716,22 @@ describe('a row is priced by what it RENDERS', () => {
   // Built directly: what is under test is the shape of the card, not the grammar
   // that produces one.
   const event: ChatEvent = { kind: 'user', uuid: 'src', ts: at(0), text: 'x' };
-  it('a mail card is its sender and meta rows, a row per artifact, and its body\'s capped well', () => {
-    const mail = (artifacts: string[], body: string): ChatItem => ({
-      kind: 'mail', key: 'm', event: event as Extract<ChatItem, { kind: 'mail' }>['event'],
+  it('a mail card open by default is its head line, sender and meta rows, a row per artifact, and its body\'s capped well', () => {
+    const mail = (artifacts: string[], body: string, opens = true): ChatItem => ({
+      kind: 'mail', key: 'm', event: event as Extract<ChatItem, { kind: 'mail' }>['event'], opens, asks: false,
       envelope: { id: 1, fromId: 'a', toId: 'b', runId: null, program: null, wave: null, waveOf: null,
         kind: 'status', subject: 'done', artifacts, body },
     });
     // A well neither wraps nor grows past its cap, and is not Markdown.
-    expect(shapeOf(mail(['/x/a.md', '/x/b.md'], linesOf(40, 'body')))).toEqual({ bucket: 'mail', lines: 2 + 2 + WELL_LINES });
-    expect(shapeOf(mail([], 'x'.repeat(600)))).toEqual({ bucket: 'mail', lines: 2 + 1 });
-    expect(shapeOf(mail([], ''))).toEqual({ bucket: 'mail', lines: 2 });
+    expect(shapeOf(mail(['/x/a.md', '/x/b.md'], linesOf(40, 'body')))).toEqual({ bucket: 'mail', lines: 3 + 2 + WELL_LINES });
+    expect(shapeOf(mail([], 'x'.repeat(600)))).toEqual({ bucket: 'mail', lines: 3 + 1 });
+    expect(shapeOf(mail([], ''))).toEqual({ bucket: 'mail', lines: 3 });
+    // Closed (every card but the newest asking one, desktop polish wave 176): one line, whatever it carries.
+    expect(shapeOf(mail(['/x/a.md'], linesOf(40, 'body'), false))).toEqual({ bucket: 'mail-line', lines: 1 });
+    // Priced as the reader left it (review 3737 A5): a card kept open, or opened, is priced open; one closed, closed.
+    const chose = (open: boolean) => (key: string): boolean | undefined => (key === 'm' ? open : undefined);
+    expect(shapeOf(mail([], 'x'.repeat(600), false), undefined, chose(true))).toEqual({ bucket: 'mail', lines: 3 + 1 });
+    expect(shapeOf(mail([], 'x'.repeat(600), true), undefined, chose(false))).toEqual({ bucket: 'mail-line', lines: 1 });
   });
 
   it('a task card is its summary row, and the closed details toggle when it has details', () => {

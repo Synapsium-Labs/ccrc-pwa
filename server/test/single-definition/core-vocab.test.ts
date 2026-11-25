@@ -858,10 +858,18 @@ describe('Build 7 nouns', () => {
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
       // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
       'landingControlTx.ts',
+      // Wave 5j-a (D-9046): `landingDoorsTx.ts` runs the operator's pause and withdraw statements inside `CoordStore.applyLandingRecord`, so it names the handle type.
+      'landingDoorsTx.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
       'advisorStore.ts',
       // The history of limits (Overlord W1 serviceability B): the sampler's SQL takes a handle by argument.
-      'limitSamplesStore.ts']);
+      'limitSamplesStore.ts',
+      // The programme lifecycle (W1, D-8983): `programmeLifecycleStore.ts` is the decision's, the binding's and the events' one
+      // writer, inside its caller's transaction; it names the handle by `import type`, and every function takes it as an argument.
+      'programmeLifecycleStore.ts',
+      // Programme lifecycle W2: `programmeLifecycleActs.ts` composes the doors' acts (an item and its programme event, an end and
+      // its item) inside `CoordStore`'s transactions, through the two writers' in-transaction functions; `import type` alone.
+      'programmeLifecycleActs.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

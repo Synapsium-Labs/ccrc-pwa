@@ -186,6 +186,7 @@ import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type E
 import { iso } from './continuity/card.js';
 import { renewalHoldsMail } from './continuity/renewalFeed.js';
 import { renewalActsOf } from './continuity/renewalWiring.js';
+import { runOverlordAttempt, type OverlordLanePort } from './continuity/renewalActs.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
@@ -1307,6 +1308,7 @@ export class FleetWatcher {
   /** The inbox wake lane, made at its first pass (its ports read `deps`), and the read gate `buildServer` hands over. */
   private inboxWake: ReturnType<typeof createInboxWakeLane> | undefined;
   private inboxReadGate: ReturnType<typeof overlordReadGate> | undefined;
+  private overlordLane: OverlordLanePort | undefined;
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -2394,6 +2396,8 @@ export class FleetWatcher {
     return this.deadCoordinatorState;
   }
 
+  /** Designation B: the designation's lane port, built by the composition root over the doors' store, body and settle step. */
+  useOverlordLane(port: OverlordLanePort): void { this.overlordLane = port; }
   /** `buildServer` hands the inbox wake lane the Overlord read gate (`overlordReadGate`, the gate runner's own readers); until it
    *  does, the wake holds `unmeasured`. */
   useInboxReadGate(gate: ReturnType<typeof overlordReadGate>): void {
@@ -2988,6 +2992,8 @@ export class FleetWatcher {
       void this.sweepForecasts().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the decision model's ANCHOR-SET lane (Overlord W2): a daily pass of asks, each on the 2 s deadline.
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the AUTHORITY WITNESS lane (Overlord W1 §7.6): a nudge of the exchange, which keeps its one flight.
+      void this.runLane('authorityWitness', () => this.deps.overlordAuthorityExchange?.nudge())?.catch(() => { /* one bad nudge must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
@@ -6350,7 +6356,9 @@ export class FleetWatcher {
       const { io, cfg } = this.deps;
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
-      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
+      const lane = this.overlordLane;   // designation B: the write-set before each Overlord renewal, and the deadline sweep's facts
+      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo, lane && ((t) => lane.beforeRenew(t.sessionId)));
+      const attempt = await lane?.facts().catch((e: unknown) => { console.warn(`ccrc-server: overlord attempt: facts unread: ${String(e)}`); return undefined; });
       // W1's renewal readings, one wiring (and its memo) per pass; `notLocal` asks the watcher's one memoized resolver (PR B).
       const w1 = renewalReadingsOf({ ...this.deps, transcript: (o) => this.transcripts.resolve(o) }, coord, records);
       const readings = await gatherGenerationReadings(coord, {
@@ -6374,9 +6382,10 @@ export class FleetWatcher {
         readings,
         canRenew: acts.canRenew,
         // The roster this server holds now (`reloadRoster` swaps it): an account's organization label, or null.
-        orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null,
+        orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null, attempt,
       });
       if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
+      if (lane !== undefined && pass.attempt !== null) await runOverlordAttempt(lane, pass.attempt, (line) => console.warn(line));
       // The PreCompact field's retraction runs live or shadow (ruling F2 on review 2312): a `refuse` never outlives its reason.
       if (pass.retract.length > 0) await acts.retract(pass.retract);
     });

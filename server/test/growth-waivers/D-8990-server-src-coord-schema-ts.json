@@ -1,0 +1,8 @@
+{
+  "file": "server/src/coord/schema.ts",
+  "maxDelta": 125,
+  "d": "D-8990",
+  "reason": "programme lifecycle W1's one migration (spec 2026-11-24 §13): the binding and placeholder columns, the partial unique index, the programme_events and programme_picks tables, the started events, the state rule and the binding seed with its conflicts, as one append-only entry that is frozen once applied; measured +117 net code lines against the merge-base",
+  "added": "2026-11-24",
+  "createdAt": "2026-11-24"
+}

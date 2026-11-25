@@ -1,11 +1,15 @@
 // Overlord W1, the renewal readings' wiring (plan `w1-renewal-readings.md`, PRs A, B and C): `renewalReadingsOf` reads each
 // wired producer once per pass, answers the Overlord's fields, and catches each producer on its own (review 2183 F17); PR C adds
 // the designation's two readings and binds the pass's latch raise to the ladder's one raise path; PR B adds `notLocal`, for
-// every generation the gather reads, from the watcher's transcript resolver, bracketed by the isolation word's carrier.
-import { describe, it, expect } from 'vitest';
+// every generation the gather reads, from the watcher's transcript resolver, bracketed by the isolation word's carrier. PR D adds
+// the account readings, the Overlord's only: one pool answer per Overlord session per pass, the account facts and the candidates
+// once per pass.
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { codeOnly } from './sourceScan.js';
@@ -20,7 +24,11 @@ import { GLOB_STAT_CONCURRENCY, type ResolveOpts, type TranscriptResolution } fr
 import type { WakingHostKey } from '../src/isolationWord.js';
 import type { TurnMarkRead } from '../src/coord/stall.js';
 import type { GenReadings } from '../src/continuity/generationsLane.js';
-import { renewalReadingsOf, type ReadingsCoord } from '../src/continuity/renewalReadingsWiring.js';
+import { renewalReadingsOf, type AccountReads, type ReadingsCoord } from '../src/continuity/renewalReadingsWiring.js';
+import { parsePoolAnswer, type PoolAnswerRead } from '../src/poolrule.js';
+import type { AccountLimits } from '../src/limits.js';
+import type { CcdArgv } from '../src/ccdargv.js';
+import type { CcdResult } from '../src/coord/ports.js';
 import type { SpotsRead } from '../src/continuity/renewalReadings.js';
 import type { UsageRead } from '../src/usage.js';
 
@@ -519,6 +527,170 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
     expect(code).toContain('const o: ResolveOpts = { configDir, dir: who.workdir, registryWorkdir: who.workdir, uuid: ask.uuid };');
     expect(code).not.toMatch(/ccdargv|CCD_ARGV|CcdArgv/);
     expect(code).not.toMatch(/\bforeign\b/);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------- PR D: the account readings
+
+const NOW_S = Math.floor(NOW / 1000);
+const lim = (pct: number): AccountLimits => ({ five: pct, seven: pct, ts: NOW_S - 60, fiveResetAt: NOW_S + 9_000, sevenResetAt: NOW_S + 300_000,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
+/** Three Anthropic accounts: `lane-a` (the generation's) in `pool-b`, `lane-b` and `lane-c` in `pool-a`, the designation's set. */
+const ACCOUNTS = [['lane-a', 'pool-b'], ['lane-b', 'pool-a'], ['lane-c', 'pool-a']].map(([id, pool]) => ({
+  id, pool, homeAble: true, exec: { kind: 'upstream' }, telemetry: 'anthropic', fableBilling: 'included', continuity: { kind: 'recorded' },
+}));
+const ACFG = { ...CFG, registryDir: '/fixture-home/.cc-sessions', roster: { byId: new Map(ACCOUNTS.map((a) => [a.id, { configDirSuffix: `.claude-${a.id}` }])), accounts: ACCOUNTS } } as unknown as CcrcConfig;
+const OPUS = BOUND({ model: 'opus' });
+const answerLine = (verdict: string, crossing = 'none'): string =>
+  `pool-answer side=set:pool-a verdict=${verdict} pool-side=account pool-state=named:pool-b crossing=${crossing} account=lane-a\n`;
+/** The account reads, each call recorded; `limits` throws when it is an Error. */
+function acctReads(calls: string[], o: { answer?: string; limits?: Record<string, AccountLimits> | Error } = {}): AccountReads {
+  return {
+    poolAnswer: async (id) => { calls.push(`pool-answer:${id}`); return parsePoolAnswer({ ran: true, code: 0, stdout: o.answer ?? answerLine('mismatch') }); },
+    limits: async (nowS) => {
+      calls.push(`limits:${nowS}`);
+      if (o.limits instanceof Error) throw o.limits;
+      return o.limits ?? { 'lane-a': lim(90), 'lane-b': lim(40), 'lane-c': lim(40) };
+    },
+    shares: async () => { calls.push('shares'); return { kind: 'absent' }; },
+  };
+}
+/** The store with its central edges (none: the declared tags decide), each read recorded in `calls`. */
+const withEdges = (c: ReturnType<typeof coordOf>): ReadingsCoord =>
+  ({ ...c.coord, accountPoolEdges: () => { c.calls.push('edges'); return new Map(); } });
+const acctDeps = (calls: string[], logs: string[] = [], o: Parameters<typeof acctReads>[1] = {}) =>
+  ({ ...deps(logs), cfg: ACFG, accountReads: acctReads(calls, o) });
+const pick = (w1: object | undefined) => {
+  const r = (w1 ?? {}) as Record<string, unknown>;
+  return { accountOutsideSet: r['accountOutsideSet'], classUnservable: r['classUnservable'], accountLoadMove: r['accountLoadMove'] };
+};
+
+describe('renewalReadingsOf (PR D: the account readings)', () => {
+  afterEach(removeTmpFixtures);
+
+  it('outside the set with a serving candidate is due (F1: pool set B1\'s line, `pool-side=account`); the class serves here; the account is not a candidate', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([]), withEdges(c), []).w1(gen({}), base());
+    expect(pick(r.w1)).toEqual({ accountOutsideSet: TRUE, classUnservable: FALSE,
+      accountLoadMove: { kind: 'unmeasured', why: 'account not a candidate' } });
+  });
+
+  it('the same line with `verdict=serve` is not due', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const r = await renewalReadingsOf(acctDeps([], [], { answer: answerLine('serve') }), withEdges(c), []).w1(gen({}), base());
+    expect(r.w1?.accountOutsideSet).toEqual(FALSE);
+  });
+
+  it('the load move reads the candidates and the turn marker: a candidate at the hard line, idle, with another under the soft line, is due; busy, it is not', async () => {
+    const c = coordOf({ designation: () => OPUS });
+    const pass = renewalReadingsOf(acctDeps([], [], { limits: { 'lane-a': lim(40), 'lane-b': lim(90), 'lane-c': lim(40) } }), withEdges(c), []);
+    const mark = (state: 'working' | 'done'): TurnMarkRead => ({ ok: true, sessionId: 'lane-b-project-a', state, event: 'Stop', at: 1, turnAt: null,
+      stopAt: null, bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], crons: null, graceUntil: null });
+    const on = gen({ sessionId: 'lane-a-project-a', lane: 'lane-b' });
+    expect((await pass.w1(on, base(usage(200_000), mark('done')))).w1?.accountLoadMove).toEqual(TRUE);
+    expect((await pass.w1(on, base(usage(200_000), mark('working')))).w1?.accountLoadMove).toEqual(FALSE);
+    expect((await pass.w1(on, base(usage(200_000), { ok: false, reason: 'absent' }))).w1?.accountLoadMove)
+      .toEqual({ kind: 'unmeasured', why: 'turn marker absent' });
+  });
+
+  it('the pool answer is asked once per pass and only for the Overlord; the limits, the shares and the edges are read once per pass', async () => {
+    const calls: string[] = [];
+    const c = coordOf({ designation: () => OPUS });
+    const pass = renewalReadingsOf(acctDeps(calls), withEdges(c), []);
+    await pass.w1(gen({ id: 1 }), base());
+    await pass.w1(gen({ id: 2 }), base());
+    const coordinator = await pass.w1(gen({ id: 3, role: 'coordinator', sessionId: 'lane-b-project-b' }), base());
+    expect(calls).toEqual([`limits:${NOW_S}`, 'shares', 'pool-answer:lane-a-project-a']);
+    expect(c.calls.filter((x) => x === 'edges' || x === 'designation')).toEqual(['designation', 'edges']);
+    expect(pick(coordinator.w1)).toEqual({ accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined });
+  });
+
+  it('the designation first (fix round 1, I): no designation or a rebind reads measured false, unreadable reads unmeasured, and none of the three reads anything else', async () => {
+    const run = async (d: DesignationRead) => {
+      const calls: string[] = [];
+      const c = coordOf({ designation: () => d });
+      const r = await renewalReadingsOf(acctDeps(calls), withEdges(c), []).w1(gen({}), base());
+      return { got: pick(r.w1), reads: [...calls, ...c.calls.filter((x) => x === 'edges')] };
+    };
+    const F3 = { accountOutsideSet: FALSE, classUnservable: FALSE, accountLoadMove: FALSE };
+    expect(await run(NONE)).toEqual({ got: F3, reads: [] });
+    expect(await run({ kind: 'not-designated', row: VIEW({ bound: null }) })).toEqual({ got: F3, reads: [] });
+    expect(await run({ ...OPUS, sessionId: 'lane-b-project-b' } as DesignationRead)).toEqual({ got: F3, reads: [] });
+    const U = { kind: 'unmeasured', why: 'designation unreadable' };
+    expect(await run({ kind: 'unmeasured', why: 'locked' })).toEqual({ got: { accountOutsideSet: U, classUnservable: U, accountLoadMove: U }, reads: [] });
+  });
+
+  it('a facts read that throws reads each of the three `<reading> read failed`, logged once per reading, and the other fields read as their ports answer (F17)', async () => {
+    const logs: string[] = [];
+    const c = coordOf({ designation: () => OPUS });
+    const pass = renewalReadingsOf(acctDeps([], logs, { limits: new Error('disk') }), withEdges(c), []);
+    for (const id of [1, 2]) {
+      const r = await pass.w1(gen({ id }), base());
+      expect(pick(r.w1)).toEqual({ accountOutsideSet: { kind: 'unmeasured', why: 'account set read failed' },
+        classUnservable: { kind: 'unmeasured', why: 'class serviceability read failed' }, accountLoadMove: { kind: 'unmeasured', why: 'account load read failed' } });
+      expect(r.w1?.termRaised).toEqual(FALSE);
+    }
+    expect(logs).toHaveLength(3);
+    for (const l of logs) expect(l).toContain('disk');
+  });
+
+  it('with no store edges, or with no runner, no io or no config to build the reads from, the three keep the lane\'s W1 and nothing is read', async () => {
+    const W1 = { accountOutsideSet: undefined, classUnservable: undefined, accountLoadMove: undefined };
+    const calls: string[] = [];
+    const c = coordOf({ designation: () => OPUS });
+    const noEdges = await renewalReadingsOf(acctDeps(calls), c.coord, []).w1(gen({}), base());
+    expect(pick(noEdges.w1), 'no edges').toEqual(W1);
+    expect(calls).toEqual([]);
+    const ran: string[][] = [];
+    const runCcd = async (argv: CcdArgv): Promise<CcdResult> => { ran.push([...argv]); throw new Error('no runner expected'); };
+    const full = { ...deps(), cfg: ACFG, runCcd, fleetState: { ccdVerbs: ['pool-set'] } };
+    const { runCcd: _r, ...noRunner } = full;
+    const { io: _i, ...noIo } = full;
+    const { cfg: _c, ...noCfg } = full;
+    for (const [arm, d] of [['no runner', noRunner], ['no io', noIo], ['no config', noCfg]] as const) {
+      const r = await renewalReadingsOf(d, withEdges(c), []).w1(gen({}), base());
+      expect(pick(r.w1), arm).toEqual(W1);
+    }
+    expect(ran).toEqual([]);
+    expect(c.calls).not.toContain('edges');
+  });
+
+  // Fix round 1 (review 3797 F): the composition hands the wiring the coordination store itself, whose edges read is a method that
+  // needs its object (`this.db`). A stand-in arrow function survives being taken off its object; the real store does not. The central
+  // edge moves `lane-a` into the set, so the load reading sees it as a candidate only if the store's own edges were read.
+  it('over a real coordination store on a fixture database, the central edges are read and the three measure from them', async () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-rr-acct-'), '.ccrc', 'coord.db')));
+    s.db.exec(`INSERT INTO overlord_designation (id, sessionId, generation, term, designatedTerm, model, accountPools, actor, updatedAt)
+      VALUES (1, 'lane-a-project-a', 'generation-a', 1, 1, 'opus', '{"pools":["pool-a"],"untagged":false}', 'actor', 1)`);
+    s.db.exec("INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) VALUES ('account', 'lane-a', 'pool-a', 1, NULL)");
+    expect(s.designationRead()).toMatchObject({ kind: 'designated', sessionId: 'lane-a-project-a' });
+    const logs: string[] = [];
+    const coord: ReadingsCoord = s;
+    const r = await renewalReadingsOf(acctDeps([], logs, { answer: answerLine('serve') }), coord, []).w1(gen({}), base());
+    expect(pick(r.w1)).toEqual({ accountOutsideSet: FALSE, classUnservable: FALSE,
+      accountLoadMove: { kind: 'unmeasured', why: 'turn marker absent' } });
+    expect(logs.filter((l) => /account|class serviceability/.test(l))).toEqual([]);
+  });
+
+  it('wired from the watcher\'s runner, the pool answer is the body\'s composer: `pool-answer --session <id>` behind the pool-set word, never run without it', async () => {
+    for (const verbs of [['pool-set'], []]) {
+      const argvs: string[][] = [];
+      const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
+        argvs.push([...argv]);
+        return { ran: true, ok: true, exitCode: 0, stdout: answerLine('serve'), stderr: '', killed: false, signal: null } as unknown as CcdResult;
+      };
+      const io = { readFileMeasured: async () => ({ ok: false, reason: 'absent' }), readdirMeasured: async () => ({ ok: false, reason: 'absent' }),
+        readdir: async () => null, readFile: async () => null, statMeasured: async () => ({ ok: false, reason: 'absent' }), stat: async () => null } as unknown as FleetIO;
+      const c = coordOf({ designation: () => OPUS });
+      await renewalReadingsOf({ ...deps(), cfg: ACFG, io, runCcd, fleetState: { ccdVerbs: verbs } }, withEdges(c), []).w1(gen({}), base());
+      expect(argvs.filter((a) => a[0] === 'pool-answer'), verbs.join()).toEqual(verbs.length === 0 ? [] : [['pool-answer', '--session', 'lane-a-project-a']]);
+    }
+  });
+
+  it('the account readings\' only ccd read is the body adapter\'s pool-answer composer (the source pin, Review Focus 4)', () => {
+    const file = parsedFile('server/src/continuity/renewalReadingsWiring.ts');
+    const body = file.imports.filter((e) => /overlordBody/.test(e.specifier)).flatMap((e) => e.names).sort();
+    expect(body).toEqual(['bodyRunner', 'ccdPoolAnswer']);
   });
 });
 

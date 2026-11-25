@@ -67,16 +67,19 @@ const STORED_RUN_WALK: Readonly<Record<'work' | 'review', readonly RunState[]>> 
   review: ['dispatched', 'working'],
 };
 let storedRunPrograms = 0;
+/** Each store's claimants' programmes and their last wave (`storedRun`). */
+const storedRunOwned = new WeakMap<CoordStore, Map<string, { program: string; wave: number }>>();
 
 /**
  * A run row opened THROUGH THE STORE, never through `POST /api/runs`, as `coord-abandon.test.ts`'s `wedged` does. A
  * row written before any ingress check, or rebuilt from the registry, is exactly what the stored-row gates exist for,
  * so the fixture must be able to write one the route would refuse.
  *
- * Each call opens its own programme (`id-gate-<n>`), wave 1 of 2, project `demo`. One programme for all calls would
- * break two ways: `openRun` is idempotent per programme, wave and claimant while a run is `planned`, so two calls would
- * fold into one row; and it refuses a second claimant on one programme. A test that needs a second run in the SAME
- * programme opens it with `coord.openRun` itself.
+ * Each claimant gets its own programme (`id-gate-<n>`), project `demo`, and each call its own wave of it. One programme for
+ * all calls would refuse a second claimant on one programme; and since programme lifecycle W1 (R11, D-8993) one claimant
+ * owns one programme, so a claimant's second call is the next wave of its own programme, never the first run of another
+ * (a distinct wave also keeps `openRun`'s idempotent reuse of a `planned` row from folding two calls into one). A test
+ * that needs a second claimant's run in the SAME programme opens it with `coord.openRun` itself.
  *
  * Binding: a `planned` run with a session is bound by `setSession`, a wave-N reclaim's shape. Any other state is bound
  * by `markDispatched` (workspace = the id, branch `ws/<id>`) and then walked forward. This plants no registry row:
@@ -85,9 +88,13 @@ let storedRunPrograms = 0;
 export function storedRun(coord: CoordStore, r: {
   state: RunState; sessionId: string | null; claimedBy: string; kind?: 'work' | 'review'; reviews?: number;
 }): number {
-  storedRunPrograms += 1;
+  const mine = storedRunOwned.get(coord) ?? new Map<string, { program: string; wave: number }>();
+  storedRunOwned.set(coord, mine);
+  const own = mine.get(r.claimedBy) ?? (() => { storedRunPrograms += 1; return { program: `id-gate-${storedRunPrograms}`, wave: 0 }; })();
+  own.wave += 1;
+  mine.set(r.claimedBy, own);
   const opened = coord.openRun({
-    program: `id-gate-${storedRunPrograms}`, title: 'id gate', project: 'demo', wave: 1, waveOf: 2,
+    program: own.program, title: 'id gate', project: 'demo', wave: own.wave, waveOf: null,
     claimedBy: r.claimedBy,
     ...(r.kind === undefined ? {} : { kind: r.kind }),
     ...(r.reviews === undefined ? {} : { reviews: r.reviews }),

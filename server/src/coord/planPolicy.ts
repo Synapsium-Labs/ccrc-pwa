@@ -2,6 +2,7 @@
 // decider the plan store needs (`epicIsDone`); Task 2.3 adds the rest of this file.
 import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { endRecorded, isEnded } from '../../../shared/programmeLifecycle.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
   type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanEpicBody, type PlanPhaseBody,
@@ -15,6 +16,7 @@ import type {
   BindingRow, Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
   PhaseChanges, PhasePatch, PhaseRefWrite, PhaseRow, PlanChanges, StoredPlan, TicketPatch,
 } from './planStore.js';
+import { parseEvidence } from './programmeEdgePolicy.js';
 
 /** An epic is done when no checkpoint is `open`, no ticket is `open` or `started`, and at least one checkpoint is `met` or
  *  one ticket `done` (design §4.1). An epic with nothing in it, or with everything dropped, is not done: a plan declared
@@ -170,9 +172,13 @@ function refBody(r: unknown): PlanPhaseRefBody | string {
 export function parsePlanClose(body: unknown):
   { ok: true; close: PlanCloseBody } | { ok: false; word: 'plan-bad-body' | 'dropped-needs-reason'; detail: string } {
   if (!isObj(body)) return { ok: false, word: 'plan-bad-body', detail: 'the body is not an object' };
-  const x = closed(body, ['outcome', 'why'], 'body');
+  const x = closed(body, ['outcome', 'why', 'evidence'], 'body');
   if (x) return { ok: false, word: 'plan-bad-body', detail: x };
   const { outcome, why } = body;
+  // Programme lifecycle W2 (spec §8): the close is a proposal and carries its evidence; an empty list is the proposal's own
+  // `evidence-required`, a list of the wrong shape is this body's fault.
+  const evidence = parseEvidence(body['evidence']);
+  if (evidence === null) return { ok: false, word: 'plan-bad-body', detail: 'evidence is a list of non-blank lines' };
   if (typeof outcome !== 'string' || !(PLAN_END_OUTCOMES as readonly string[]).includes(outcome)) {
     return { ok: false, word: 'plan-bad-body', detail: 'outcome is not done or abandoned' };
   }
@@ -182,7 +188,7 @@ export function parsePlanClose(body: unknown):
   if (outcome === 'abandoned' && (why === undefined || why.trim() === '')) {
     return { ok: false, word: 'dropped-needs-reason', detail: 'abandoning a plan needs a reason' };
   }
-  return { ok: true, close: { outcome: outcome as PlanEndOutcome, ...(why === undefined ? {} : { why }) } };
+  return { ok: true, close: { outcome: outcome as PlanEndOutcome, ...(why === undefined ? {} : { why }), evidence } };
 }
 
 // ── The single-object verbs' bodies (Task 2.4) ────────────────────────────────────────────────────────────────────────
@@ -614,11 +620,17 @@ export function phaseRefVerdict(move: PlanPhaseRefMoveBody, stored: StoredPlan, 
 /** How a programme's plan ends (design §5.4): by the coordinator's explicit `plan close`, or derived. A wave gap or a failed
  *  last run is never an end. */
 export function programmeEnd(f: {
-  planEnd: PlanEndOutcome | null; programState: ProgramState; epics: readonly { state: EpicState }[]; openTickets: number;
+  programState: string; planEnd: PlanEndOutcome | null; epics: readonly { state: EpicState }[]; openTickets: number;
 }): PlanEndOutcome | null {
-  if (f.planEnd !== null) return f.planEnd;
-  if (f.programState !== 'done') return null;
-  if (f.epics.length === 0) return null;
+  // Programme lifecycle W1 (D-8983): a RECORDED decision syncs as itself: Done as `done`, Abandoned as `abandoned` (never as
+  // completed), a live state as not ended, so a reopen syncs back.
+  if (endRecorded(f.programState, f.planEnd)) return f.programState as PlanEndOutcome;
+  if (!isEnded(f.programState)) return null;
+  // W1 review (C5): a D-51 end the migration kept for the operator's decision (spec §13 step 4, `planEnd` null) syncs
+  // exactly as on `main`, never closing in Linear what nobody decided: `abandoned` never, `done` only when every epic is
+  // settled and no ticket is open. A recorded end with a different `planEnd` (an older build's mismatch) is the boot
+  // re-measure's to repair, and syncs as not ended until it is.
+  if (f.planEnd !== null || f.programState !== 'done' || f.epics.length === 0) return null;
   if (!f.epics.every((e) => e.state === 'done' || e.state === 'dropped')) return null;
   return f.openTickets === 0 ? 'done' : null;
 }

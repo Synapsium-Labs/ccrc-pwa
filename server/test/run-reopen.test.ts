@@ -20,14 +20,18 @@ const programState = (s: CoordStore, slug: string): unknown =>
   (s.db.prepare('SELECT state FROM programs WHERE slug = ?').get(slug) as { state: string }).state;
 
 describe('a re-open is a new id and leaves programs.state alone', () => {
-  it('opening the same wave again after it closed mints a new run, and an archived programme stays archived', () => {
+  it('opening the same wave again after it closed mints a new run; an out-of-vocabulary state refuses it (programme lifecycle W1)', () => {
     const s = store();
     const first = open(s, 'build4', 1);
     expect(s.advance(first, 'failed', 'test-close').ok).toBe(true);
     s.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run('archived', 'build4');
+    // D-8984: a stored value out of vocabulary shows Unknown and takes no run until the operator's repair.
+    expect(s.openRun({ program: 'build4', title: 'T', project: 'ccrc-pwa', wave: 1, waveOf: 3, claimedBy: 'demo-coordinator' }))
+      .toMatchObject({ refused: 'programme-unknown', by: 'archived' });
+    expect(programState(s, 'build4')).toBe('archived');
+    s.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run('active', 'build4');
     const again = open(s, 'build4', 1);
     expect(again).not.toBe(first);
-    expect(programState(s, 'build4')).toBe('archived');
     // CONTROL: the first run stays closed; the new one is the only open run of the programme.
     expect((s.db.prepare('SELECT state FROM runs WHERE id = ?').get(first) as { state: string }).state).toBe('failed');
     expect((s.db.prepare('SELECT state FROM runs WHERE id = ?').get(again) as { state: string }).state).toBe('planned');

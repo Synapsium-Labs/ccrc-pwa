@@ -179,16 +179,16 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     expect(res.json()).toMatchObject({ error: 'not-your-programme' });
   });
 
-  it('an unrepresentable open run claimed by the caller answers 503 run-unreadable, never a bare 500 (review 1328 F3)', async () => {
+  // Programme lifecycle W1 (D-8985): ownership is the binding, one row read whole, so an unrepresentable run of the caller's
+  // no longer reaches the ownership check (review 1328 F3's 503 answered the run series `claimsProgramme` used to read).
+  it('an unrepresentable open run claimed by the caller changes no ownership answer: the raise lands (was 503, review 1328 F3)', async () => {
     const r = await rig();
     r.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
     const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable', detail: expect.stringMatching(/\S/) });
-    expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
-    expect(r.waiting()).toBe(0);
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 1 });
   });
 
   it('a blocking raise pushes once, tagged item-<id> (plan PL3)', async () => {
@@ -423,16 +423,14 @@ describe('the item routes act on the caller\'s own programme\'s items (plan PL3)
     expect(res.statusCode).toBe(400);
   });
 
-  it('an item route answers 503 run-unreadable when the caller\'s run series is unreadable', async () => {
+  it('an item route reads ownership from the binding, so an unreadable run series changes no answer (programme lifecycle W1; was 503)', async () => {
     const r = await rig();
     const id = await raise(r);
     r.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
     const res = await post(r, `/api/items/${id}/withdraw`, as());
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ error: 'run-unreadable' });
-    expect(stateOf(r, id)).toBe('open');
+    expect(res.statusCode).toBe(200);
   });
 
   it('confirm on an open item is refused not-open (409)', async () => {
@@ -823,5 +821,62 @@ describe('parseRaise still refuses an action (D-8076, spec 10)', () => {
     const id = await raise(r, { action: { verb: 'end-run', runId: r.runA, stuckReason: null }, heldUntil: Date.now() + 999_999 });
     expect(r.coord.itemById(id)).toMatchObject({ action: null, heldUntil: null });
     expect(r.coord.itemHistory(id).map((e) => e.actor)).toEqual(['coordinator']);
+  });
+});
+
+// Programme lifecycle W2 (spec §5's propose and withdraw rows, §8; D-8987): the bound coordinator's end proposal, a box-token
+// lane with attribution and ownership by the binding.
+describe('POST /api/programmes/:slug/end-proposal (programme lifecycle W2)', () => {
+  const closeRuns = (r: Rig, slug: string) => { r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = ?").run(slug); };
+  const BODY = { outcome: 'done', why: 'the objective is met', evidence: ['PR 12 landed'] };
+  const propose = (r: Rig, over: Record<string, unknown> = {}, who = 'lane-a', headers: Record<string, string> = HEADERS) =>
+    post(r, '/api/programmes/prog-a/end-proposal', { ...as(who), ...BODY, ...over }, headers);
+
+  it('401 without the token, 403 not-your-programme for another session, and nothing is raised', async () => {
+    const r = await rig();
+    closeRuns(r, 'prog-a');
+    expect((await propose(r, {}, 'lane-a', {})).statusCode).toBe(401);
+    const other = await propose(r, {}, 'lane-b');
+    expect([other.statusCode, other.json().error]).toEqual([403, 'not-your-programme']);
+    expect(r.coord.openEndProposalOf('prog-a')).toBeNull();
+  });
+
+  it('409 programme-runs-open, already-asked, programme-ended; 400 evidence-required', async () => {
+    const r = await rig();
+    expect((await propose(r)).json()).toMatchObject({ error: 'programme-runs-open' });
+    closeRuns(r, 'prog-a');
+    const none = await propose(r, { evidence: [] });
+    expect([none.statusCode, none.json().error]).toEqual([400, 'evidence-required']);
+    const ok = await propose(r);
+    expect(ok.statusCode, ok.body).toBe(200);
+    const again = await propose(r);
+    expect([again.statusCode, again.json().error, again.json().itemId]).toEqual([409, 'already-asked', ok.json().id]);
+    // An end an older build wrote leaves the binding standing: the guard still answers programme-ended.
+    r.coord.db.prepare("UPDATE programs SET state = 'done', planEnd = 'done' WHERE slug = 'prog-a'").run();
+    expect((await propose(r, {}, 'lane-a')).json()).toMatchObject({ error: 'programme-ended' });
+  });
+
+  it('the item: a decide row with the end-programme action, its evidence against the pinned definition of done, or none pinned', async () => {
+    const r = await rig();
+    closeRuns(r, 'prog-a');
+    const res = await propose(r, { evidence: ['PR 12 landed'] });
+    const item = r.coord.itemById(res.json().id as number)!;
+    expect(item).toMatchObject({ kind: 'decide', state: 'open', raisedBy: 'lane-a', action: { verb: 'end-programme', outcome: 'done' },
+      options: ['End the programme', 'Keep it open'] });
+    expect(item.how).toEqual(['No definition of done was pinned; the coordinator\'s evidence:', 'PR 12 landed']);
+    expect(r.waiting()).toBeGreaterThan(0);
+  });
+
+  it('the bound coordinator withdraws it through the item door, recorded as end-withdrawn', async () => {
+    const r = await rig();
+    closeRuns(r, 'prog-a');
+    const id = (await propose(r)).json().id as number;
+    expect((await post(r, `/api/items/${id}/withdraw`, as('lane-b'))).statusCode).toBe(403);
+    const res = await post(r, `/api/items/${id}/withdraw`, as('lane-a'));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.coord.itemById(id)!.state).toBe('withdrawn');
+    const ev = r.coord.db.prepare("SELECT edge, actor FROM programme_events WHERE program = 'prog-a' ORDER BY id DESC LIMIT 1").get();
+    expect(ev).toEqual({ edge: 'end-withdrawn', actor: 'lane-a' });
+    expect((await propose(r)).statusCode).toBe(200);
   });
 });

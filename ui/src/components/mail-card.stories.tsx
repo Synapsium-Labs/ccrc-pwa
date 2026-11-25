@@ -95,3 +95,32 @@ export const Overflow: Story = {
     }),
   },
 };
+
+/** THE CLOSABLE FORM, CLOSED (desktop polish wave 176). CHECK that the card is ONE line at the tap floor (44px): the
+ *  chevron, the sender, the subject, the kind and the time; that a long subject gives way before the sender's name and
+ *  the time; and that Tab reaches the line and Enter opens it. A screen reader says "Mail from …: subject, kind, time"
+ *  and "collapsed". */
+export const Closed: Story = {
+  args: {
+    envelope: envelope({
+      kind: 'question',
+      subject: 'which base should wave 3 absorb before it pushes?',
+      body: 'The radar says main moved twice since the brief.',
+    }),
+    fold: { open: false, onToggle: () => {}, time: '14:02' },
+  },
+};
+
+/** THE CLOSABLE FORM, OPEN. CHECK that the head line stays (chevron turned) and today's card is under it WHOLE: the
+ *  sender and the recipient, the kind, the subject, the run, the artifacts and the body. */
+export const Open: Story = {
+  args: {
+    envelope: envelope({
+      kind: 'question',
+      subject: 'which base should wave 3 absorb before it pushes?',
+      artifacts: ['docs/superpowers/plans/2026-10-02-composite-migration.md'],
+      body: 'The radar says main moved twice since the brief.',
+    }),
+    fold: { open: true, onToggle: () => {}, time: '14:02' },
+  },
+};

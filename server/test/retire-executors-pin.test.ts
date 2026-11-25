@@ -149,6 +149,7 @@ const childRig = async (o: ChildOpts = {}) => {
   const opened = coord.openRun({ program: 'w-pin', title: 'w-pin', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
   if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
   const runId = opened.id;
+  let pinWaves = 1;
   const closed = coord.closeRun({ runId, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-pin', viaClosing: false });
   if (!closed.ok) throw new Error(`closeRun refused: ${JSON.stringify(closed)}`);
   const fields: Record<string, string> = {
@@ -228,7 +229,9 @@ const childRig = async (o: ChildOpts = {}) => {
       writeFileSync(path.join(reg, 'demo-coord.uuid'), 'u-demo-coord');
       for (const [f, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/demo-coord', workspace: 'coord',
         branch: 'ws/demo-coord', base: 'origin/main', started: '1' })) writeFileSync(path.join(reg, `demo-coord.${f}`), v);
-      const r = coord.openRun({ program: 'w-sib', title: 'w-sib', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+      // Programme lifecycle W1 (R11; D-51 gone): w-pin stays live after its run closed, bound to demo-coord, which owns one
+      // programme, so the sibling is that programme's next wave.
+      const r = coord.openRun({ program: 'w-pin', title: 'w-pin', project: 'demo', wave: ++pinWaves, waveOf: null, claimedBy: 'demo-coord' });
       if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
       coord.bindSession(r.id, KID);
       return r.id;
@@ -802,6 +805,10 @@ const expiryRig = async (o: { readonly caps?: readonly string[] | null; readonly
     notifyLog: new NotifyLog(path.join(home, '.ccrc', 'notify.json')),
   };
   await deps.notifyLog!.load();
+  // Programme lifecycle W1 (R11): a session owns at most one live programme, so demo-coord's runs are waves of `w-coord`
+  // and the row's own runs waves of `w-own`, whichever helpers a case calls together.
+  let coordWaves = 0;
+  let ownWaves = 0;
   return {
     reg, coord, deps, argvs, hooks, answers, auditDoc,
     req: { sessionId, archivedAt: ARCH, expiresAt: DUE, ...(o.childOf === undefined ? {} : { childOf: o.childOf, rowUuid: null }) },
@@ -811,30 +818,30 @@ const expiryRig = async (o: { readonly caps?: readonly string[] | null; readonly
     presenceThrows: (): void => { presenceThrows = true; },
     /** An open run naming the row as its worker. */
     bindWorker: (): number => {
-      const r = coord.openRun({ program: 'w-x', title: 'w-x', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+      const r = coord.openRun({ program: 'w-coord', title: 'w-coord', project: 'demo', wave: ++coordWaves, waveOf: null, claimedBy: 'demo-coord' });
       if (!('id' in r)) throw new Error('openRun refused');
       coord.bindSession(r.id, sessionId);
       return r.id;
     },
     /** An open run the row claims: it coordinates. */
     claimRun: (): void => {
-      const r = coord.openRun({ program: 'w-claim', title: 'w-claim', project: 'demo', wave: 1, waveOf: null, claimedBy: sessionId });
+      const r = coord.openRun({ program: 'w-own', title: 'w-own', project: 'demo', wave: ++ownWaves, waveOf: null, claimedBy: sessionId });
       if (!('id' in r)) throw new Error('openRun refused');
     },
     /** A closed review run naming the row, of a work run that is still open: the review conjunct keeps it. */
     reviewOf: (): void => {
-      const work = coord.openRun({ program: 'w-work', title: 'w-work', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+      const work = coord.openRun({ program: 'w-coord', title: 'w-coord', project: 'demo', wave: ++coordWaves, waveOf: null, claimedBy: 'demo-coord' });
       if (!('id' in work)) throw new Error('openRun refused');
-      const rev = coord.openRun({ program: 'w-rev', title: 'w-rev', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord',
+      const rev = coord.openRun({ program: 'w-coord', title: 'w-coord', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord',
         kind: 'review', reviews: work.id });
       if (!('id' in rev)) throw new Error('openRun refused');
       coord.bindSession(rev.id, sessionId);
-      const closed = coord.closeRun({ runId: rev.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-rev', viaClosing: false });
+      const closed = coord.closeRun({ runId: rev.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-coord', viaClosing: false });
       if (!closed.ok) throw new Error('closeRun refused');
     },
     /** A finished run the row itself coordinated. */
     coordinated: (): void => {
-      const r = coord.openRun({ program: 'w-own', title: 'w-own', project: 'demo', wave: 1, waveOf: null, claimedBy: sessionId });
+      const r = coord.openRun({ program: 'w-own', title: 'w-own', project: 'demo', wave: ++ownWaves, waveOf: null, claimedBy: sessionId });
       if (!('id' in r)) throw new Error('openRun refused');
       coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-own', viaClosing: false });
     },
@@ -1229,7 +1236,9 @@ const COLLECT_STEPS: ReadonlyArray<{ readonly step: string; readonly opts?: Para
     clears: [], argv: [CAUDIT] },
   { step: '6 presence', set: (r) => { r.hooks.listing = (n) => { if (n === 2) r.see(true); }; },
     want: { kind: 'answered', step: 6, why: 'presence', detail: 'someone is viewing this session' }, clears: [], argv: [CAUDIT] },
-  { step: '6 the hold', set: (r) => { r.hooks.listing = (n) => { if (n === 2) r.openRun({ sessionId: CID }); }; },
+  // Programme lifecycle W1 (R11; D-51 gone): the minting run's programme stays live, bound to demo-coord, so the run that holds
+  // the id is another coordinator's.
+  { step: '6 the hold', set: (r) => { r.hooks.listing = (n) => { if (n === 2) r.openRun({ sessionId: CID, claimedBy: 'demo-coord-hold' }); }; },
     want: { kind: 'held', step: 6, hold: { kind: 'held', why: 'id-in-open-run' } }, clears: [], argv: [CAUDIT] },
   { step: '6 shadow', opts: { live: false, lastSeenLive: false }, set: () => {},
     want: { kind: 'would-collect' }, clears: [], argv: [CAUDIT] },

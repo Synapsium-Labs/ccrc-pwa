@@ -95,6 +95,11 @@ class AnthropicStream:
         if not self.buffered:
             self._send(sse.frame(name, data))
 
+    def left(self) -> None:
+        """The caller saw the client close its side: counted as gone (D-6835). An answer is still written, as the
+        shim's is (D-4933): a client that only half-closed reads it, and one that has gone discards it."""
+        self.client_gone = True
+
     # ── the stream ──
     def commit(self, status: int = 200) -> None:
         """The commit point: the head (a streaming stream only), then `message_start` with zero usage."""

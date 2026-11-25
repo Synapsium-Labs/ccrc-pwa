@@ -58,6 +58,9 @@ const continuity = (method: HttpMethod, path: string, verbClass: VerbClass, writ
 export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designate: operator('POST', '/api/overlord/designate', OVERLORD, 'admin'),
   retire: operator('DELETE', '/api/overlord/designate', OVERLORD, 'admin'),
+  // Designation B: Rebind the Overlord (a step-up) and Restart the Overlord (a recovery with none, `restart-needs-no-step-up`).
+  rebind: operator('POST', '/api/overlord/rebind', OVERLORD, 'admin'),
+  restart: operator('POST', '/api/overlord/restart', OVERLORD, 'admin'),
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
   model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
   'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),
@@ -65,6 +68,8 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
   pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
   'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
+  // The console's authority witness exchange (authority journal B, §7.6): the account gate with no step-up; it reads and offers.
+  witness: operator('POST', '/api/overlord/witness', OVERLORD, 'view'),
   // Confirm the restore (authority journal C): the guard's state for the banner, and the door behind the step-up.
   'restore-read': operator('GET', '/api/overlord/restore', OVERLORD, 'view'),
   'restore-confirm': operator('POST', '/api/overlord/restore/confirm', OVERLORD, 'admin'),

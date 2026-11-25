@@ -135,6 +135,17 @@ const fixture = async (opts: {
     for (const to of ['dispatched', 'working'] as const) expect(coord.advance(r.id, to, 'coordinator').ok).toBe(true);
     return r.id;
   };
+  /** Programme lifecycle W1 (R11): `openRun` no longer lets one claimant hold runs in a second programme, but the migration
+   *  keeps that state where it found it (spec §13 step 3, `session-in-several`): the claimant still holds the open runs of
+   *  both, and neither programme is bound. Built that way: the run is opened under a stand-in claimant, then its
+   *  `claimedBy` is rewritten to `claimant` and every programme `claimant` now holds a run in is left unbound. */
+  const legacyWorking = (claimant: string, program: string): number => {
+    const id = working(`${claimant}-standin-${program}`, program);
+    coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(claimant, id);
+    coord.db.prepare('UPDATE programs SET coordinator = NULL, coordinatorUuid = NULL, coordinatorSince = NULL ' +
+      'WHERE slug IN (SELECT program FROM runs WHERE claimedBy = ?)').run(claimant);
+    return id;
+  };
   /** One lane pass, after the lifecycle mirror's own sweep (as the tick runs both) — unless `mirror: false`. */
   const pass = async (o: { mirror?: boolean } = {}): Promise<void> => {
     if (o.mirror !== false) await watcher.sweepLifecycle();
@@ -156,7 +167,7 @@ const fixture = async (opts: {
   /** The attention list as the lane last built it, without a tick. */
   const attention = () => (watcher as unknown as { deadCoordinatorAttentionList: readonly { kind: string; claimants: string[]; sentence: string }[] })
     .deadCoordinatorAttentionList.map((a) => [a.kind, a.claimants] as const);
-  return { home, reg, coord, deps, cfg, live, calls, tmuxAsked, plant, working, pass, next, touch, stateOf, feed, anchorOf,
+  return { home, reg, coord, deps, cfg, live, calls, tmuxAsked, plant, working, legacyWorking, pass, next, touch, stateOf, feed, anchorOf,
     restart, crash, journal, attention, acts: () => acts, advance: (ms: number) => { clock += ms; },
     setTmuxDown: (v: boolean) => { tmuxDown = v; }, watcher: () => watcher,
     /** Hold every later `has-session` until the returned release is called. */
@@ -249,7 +260,7 @@ describe('the lane SHIPS SHADOWED', () => {
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
     const r1 = f.working(A, 'alpha');
-    const r2 = f.working(A, 'beta');
+    const r2 = f.legacyWorking(A, 'beta');
     await f.pass(); await walk(f, HOUR - 60_000);
     expect([r1, r2].map(f.stateOf), 'not before the hour').toEqual(['working', 'working']);
     f.next(); await f.pass();
@@ -536,7 +547,7 @@ describe('the act’s own re-measure', () => {
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
     const r1 = f.working(A, 'alpha');
-    const r2 = f.working(A, 'beta');
+    const r2 = f.legacyWorking(A, 'beta');
     await f.pass(); await walk(f, HOUR - 60_000);
     f.next(); await f.pass();
     expect([r1, r2].map(f.stateOf)).toEqual(['failed', 'working']);

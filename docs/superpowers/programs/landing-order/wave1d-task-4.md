@@ -4,7 +4,8 @@ Run 3739, plan `docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.
 
 ## README
 
-Three sentences in **What CI runs**, after "Nothing reaches `main` through the queue without it.": one per decision,
+Three sentences in **What CI runs**, after the sentences on the admin bypass (fix round 1 moved them there; they first
+followed "Nothing reaches `main` through the queue without it."; corrected after review run 3762): one per decision,
 D-9014, D-9015 and D-9016, in the words of the plan's Deviations. Nothing else in that paragraph changed.
 
 ## Mutation table

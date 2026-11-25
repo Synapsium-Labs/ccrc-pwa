@@ -229,7 +229,7 @@ describe('an older page over the stream', () => {
     await held.reached;
     const readsBefore = s.reads.length;
     s.stream.olderPage(b!.older!);
-    expect(answers(s.frames)).toEqual([{ type: 'older-page', events: [], gap: false, end: 'busy' }]);
+    expect(answers(s.frames)).toEqual([{ type: 'older-page', events: [], gap: false, end: 'busy', for: b!.older! }]);
     expect(s.reads.length).toBe(readsBefore);
     held.release();
     await expectAnswerCount(s.frames, 2);
@@ -253,7 +253,7 @@ describe('an older page over the stream', () => {
     expect(answers(s.frames)).toEqual([]);
     // The previous file's continuation, on the stream that now serves the new file.
     const stale = await ask(s, b!.older!);
-    expect(stale).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed' });
+    expect(stale).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed', for: b!.older! });
   });
 
   it('a page that ends while a new backlog is being read is dropped too: what the stream serves is already moving', async () => {
@@ -287,7 +287,7 @@ describe('an older page over the stream', () => {
     renameSync(tmp, s.fileA);
     s.tokens.of = () => TOKEN_B;
     const before = s.reads.length;
-    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed' });
+    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed', for: b!.older! });
     expect(s.reads.length - before).toBe(1);
   });
 
@@ -299,7 +299,7 @@ describe('an older page over the stream', () => {
     expect(rewritten).not.toBe(text);
     writeFileSync(s.fileA, rewritten);
     const before = s.reads.length;
-    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed' });
+    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'changed', for: b!.older! });
     expect(s.reads.length - before).toBe(1);
   });
 
@@ -330,26 +330,31 @@ describe('an older page over the stream', () => {
     const [b] = backlogs(s.frames);
     const page = await ask(s, b!.older!);
     expect(page!.end).toBe('more');
-    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(OLDER_PAGE_LIMITS.eventBytes + CONTINUATION_MAX_CHARS + 128);
+    // Wave 175: the next continuation and the echo of the one asked, each at most CONTINUATION_MAX_CHARS.
+    expect(page!.for).toBe(b!.older!);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(OLDER_PAGE_LIMITS.eventBytes + 2 * CONTINUATION_MAX_CHARS + 128);
   });
 });
 
 describe('a request the stream refuses before any file I/O', () => {
-  const refusedWithNoRead = async (token: (b: Backlog) => string, end: string) => {
+  /** `echoed`: the value has a continuation's length and grammar, so the answer names it (wave 175); a malformed or
+   *  over-long one is never reflected. Stated per case, never derived from the predicate under test. */
+  const refusedWithNoRead = async (token: (b: Backlog) => string, end: string, echoed: boolean) => {
     const s = await open(transcriptOf(120));
     const [b] = backlogs(s.frames);
     const readsBefore = s.reads.length;
-    expect(await ask(s, token(b!))).toEqual({ type: 'older-page', events: [], gap: false, end });
+    const sent = token(b!);
+    expect(await ask(s, sent)).toEqual({ type: 'older-page', events: [], gap: false, end, ...(echoed ? { for: sent } : {}) });
     expect(s.reads.length).toBe(readsBefore);
   };
 
   it('a forged continuation: `invalid`', async () => {
-    await refusedWithNoRead((b) => `${b.older!.slice(0, -1)}${b.older!.endsWith('0') ? '1' : '0'}`, 'invalid');
+    await refusedWithNoRead((b) => `${b.older!.slice(0, -1)}${b.older!.endsWith('0') ? '1' : '0'}`, 'invalid', true);
   });
 
   it('garbage, and the empty string a non-string request is forwarded as: `invalid`', async () => {
-    await refusedWithNoRead(() => 'not a continuation', 'invalid');
-    await refusedWithNoRead(() => '', 'invalid');
+    await refusedWithNoRead(() => 'not a continuation', 'invalid', false);
+    await refusedWithNoRead(() => '', 'invalid', false);
   });
 
   it('one from another session\'s stream: `invalid`', async () => {
@@ -357,11 +362,11 @@ describe('a request the stream refuses before any file I/O', () => {
       const opened = PROCESS_CONTINUATION_KEY.open(b.older!);
       if (!opened.ok) throw new Error('fixture');
       return PROCESS_CONTINUATION_KEY.reissue({ ...opened.value, session: 'claude-b-project-g' }, opened.value.cursor);
-    }, 'invalid');
+    }, 'invalid', true);
   });
 
   it('one from before a restart (another key id): `expired`', async () => {
-    await refusedWithNoRead((b) => b.older!.replace(/^c1\.[0-9a-f]{16}\./, 'c1.0000000000000000.'), 'expired');
+    await refusedWithNoRead((b) => b.older!.replace(/^c1\.[0-9a-f]{16}\./, 'c1.0000000000000000.'), 'expired', true);
   });
 
   it('one for another file of this session: `changed`', async () => {
@@ -369,7 +374,7 @@ describe('a request the stream refuses before any file I/O', () => {
       const opened = PROCESS_CONTINUATION_KEY.open(b.older!);
       if (!opened.ok) throw new Error('fixture');
       return PROCESS_CONTINUATION_KEY.reissue({ ...opened.value, pathTag: PROCESS_CONTINUATION_KEY.tag('path', '/elsewhere.jsonl') }, opened.value.cursor);
-    }, 'changed');
+    }, 'changed', true);
   });
 
   it('one for this file under another identity: `changed`', async () => {
@@ -377,7 +382,36 @@ describe('a request the stream refuses before any file I/O', () => {
       const opened = PROCESS_CONTINUATION_KEY.open(b.older!);
       if (!opened.ok) throw new Error('fixture');
       return PROCESS_CONTINUATION_KEY.reissue({ ...opened.value, identTag: PROCESS_CONTINUATION_KEY.tag('ident', TOKEN_B) }, opened.value.cursor);
-    }, 'changed');
+    }, 'changed', true);
+  });
+
+  it('a value of the grammar one character past the length cap: `invalid`, never reflected (wave 175)', async () => {
+    await refusedWithNoRead(() => {
+      // 85 characters of frame (`c1.`, the key id, two dots, the MAC) around 1964 of payload hex: 2049, one past the cap.
+      const long = `c1.${'0'.repeat(16)}.${'00'.repeat(982)}.${'0'.repeat(64)}`;
+      expect(long.length).toBe(CONTINUATION_MAX_CHARS + 1);
+      expect(long).toMatch(/^c1\.[0-9a-f]{16}\.(?:[0-9a-f]{2})+\.[0-9a-f]{64}$/);
+      return long;
+    }, 'invalid', false);
+  });
+});
+
+describe('every answer names the request it answers (wave 175)', () => {
+  it('a page answer and the start of the file echo the continuation each was asked with', async () => {
+    const s = await open(transcriptOf(120));
+    const [b] = backlogs(s.frames);
+    const first = await ask(s, b!.older!);
+    expect(first).toMatchObject({ end: 'more', for: b!.older! });
+    expect(first!.continuation).not.toBe(b!.older!);
+    const second = await ask(s, first!.continuation!);
+    expect(second).toMatchObject({ end: 'start', for: first!.continuation! });
+  });
+
+  it('a page whose reads carry no identity (`unmeasured`) echoes it too', async () => {
+    const s = await open(transcriptOf(120));
+    const [b] = backlogs(s.frames);
+    s.tokens.of = () => undefined;
+    expect(await ask(s, b!.older!)).toEqual({ type: 'older-page', events: [], gap: false, end: 'unmeasured', for: b!.older! });
   });
 });
 

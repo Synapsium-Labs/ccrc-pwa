@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly twenty-five import lines: twenty-two types, and three values from import-free L0 siblings (D-3021)', () => {
+  it('shared/api.ts has exactly twenty-six import lines: twenty-two types, and four values from import-free L0 siblings (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -209,6 +209,9 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",
       "import type { LandingWrite } from './landingLine.js';",
       "import { hookEventIs, type HookEvent } from './hook-events.js';",
+      // The programme lifecycle (W1, D-8983, D-8993) a fourth value line: the stored states and the open refusals from the
+      // import-free `programmeLifecycle.ts` (it imports nothing), held there because this file is growth-capped.
+      "import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';",
       "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
