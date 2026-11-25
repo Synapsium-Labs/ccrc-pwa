@@ -446,6 +446,22 @@ export function prNumberFromEnv(env: NodeJS.ProcessEnv): number | null {
   return m === null ? null : Number(m[1]);
 }
 
+/** D-9016 (landing-order wave 1d): the sha the armed rows measure HEAD against. In a merge-queue group it is the
+ *  group's parent commit (`QUEUE_BASE`, the workflow's `merge_group.base_sha`), when that is 40 lower-case hex naming
+ *  an ancestor of HEAD, so a stacked entry is measured alone, not summed with the entries ahead of it. Everywhere else,
+ *  and whenever that read fails, it is `merge-base(origin/main, HEAD)`, as before. */
+export function growthBase(env: Record<string, string | undefined>, git: (args: readonly string[]) => string):
+  { base: string; from: 'queue-parent' | 'merge-base' } {
+  const queueBase = env['QUEUE_BASE'] ?? '';
+  if (env['GITHUB_EVENT_NAME'] === 'merge_group' && /^[0-9a-f]{40}$/.test(queueBase)) {
+    try {
+      git(['merge-base', '--is-ancestor', queueBase, 'HEAD']);
+      return { base: queueBase, from: 'queue-parent' };
+    } catch { /* not an ancestor, or unreadable: the merge-base, as on any other run */ }
+  }
+  return { base: git(['merge-base', 'origin/main', 'HEAD']).trim(), from: 'merge-base' };
+}
+
 const isLine = (v: unknown): boolean => typeof v === 'string' && v.trim() !== '' && !/\n/.test(v);
 
 /** `text` as an exemption list. Any problem (not JSON, a wrong shape, a key
@@ -1030,6 +1046,8 @@ export function methodCounts(file: string, cls: string, base: string, head: stri
 
 export interface GrowthSummaryInput {
   base: string;
+  /** D-9016: which base `base` is; the merge-base when not given. */
+  from?: 'queue-parent' | 'merge-base';
   rows: readonly GrowthRow[];
   over: readonly string[];
   methods: { base: number; head: number };
@@ -1048,7 +1066,7 @@ export function growthSummary(i: GrowthSummaryInput): string {
   return [
     '### God-file growth check (D-5848, D-6119)',
     '',
-    `Net code lines against the merge-base \`${i.base.slice(0, 7)}\`${i.armed ? '' : '; reporting only until OA-C2'}.`,
+    `Net code lines against the ${i.from === 'queue-parent' ? 'queue group\'s parent' : 'merge-base'} \`${i.base.slice(0, 7)}\`${i.armed ? '' : '; reporting only until OA-C2'}.`,
     '',
     '| File | Base | Head | Delta |',
     '| --- | ---: | ---: | ---: |',

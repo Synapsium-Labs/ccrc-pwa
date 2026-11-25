@@ -43,7 +43,7 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
-  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  definedDNumbers, growthBase, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
   type Stage, type StageOf,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
@@ -1225,8 +1225,56 @@ describe('growthCheck: the program row, ccd/ccd and its libraries as one total (
   });
 });
 
+describe('growthCheck: in a merge-queue group an entry is measured against its parent (D-9016)', () => {
+  const today = new Date('2026-11-25T12:00:00Z');
+  const FILE = 'server/src/server.ts';
+  it('a stacked entry is measured alone under merge_group, and against the merge-base everywhere else', (ctx) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-queue-'));
+    ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const reader = (args: readonly string[]) => gitRead(args, dir);
+    const grow = (from: number, to: number, m: string) => {
+      mkdirSync(path.join(dir, 'server/src'), { recursive: true });
+      writeFileSync(path.join(dir, FILE), Array.from({ length: to }, (_, i) => `export const a${i} = ${i};\n`).join(''));
+      git('add', '-A');
+      git('commit', '-q', '-m', `${m}: ${from} to ${to}`);
+      return git('rev-parse', 'HEAD');
+    };
+    git('init', '-q');
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
+    const m = grow(0, 10, 'M');
+    git('update-ref', 'refs/remotes/origin/main', m);
+    const a = grow(10, 40, 'A');
+    const b = grow(40, 70, 'B');
+    const measure = (env: Record<string, string | undefined>) => {
+      const r = growthBase(env, reader);
+      const head = git('rev-parse', 'HEAD');
+      const armed = armedGrowth(growthFiles(r.base, head, dir), dir, r.base, head, {}, today);
+      return { ...r, delta: armed.rows.find((row) => row.file === FILE)!.delta, over: armed.over.includes(FILE) };
+    };
+    // The control: a pull request's run at B holds both commits and is measured against M.
+    expect(measure({ GITHUB_EVENT_NAME: 'pull_request', QUEUE_BASE: a })).toEqual({ base: m, from: 'merge-base', delta: 60, over: true });
+    // The queue group for B, whose parent is A's group: B alone, +30.
+    expect(measure({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: a })).toEqual({ base: a, from: 'queue-parent', delta: 30, over: false });
+    // The per-entry limit is unchanged: C grows the file by 41 alone and is over against its parent B.
+    grow(70, 111, 'C');
+    expect(measure({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: b })).toEqual({ base: b, from: 'queue-parent', delta: 41, over: true });
+    // Every QUEUE_BASE the resolver cannot trust falls back to the merge-base.
+    git('checkout', '-q', '-b', 'side', m);
+    const side = grow(10, 11, 'side');
+    git('checkout', '-q', '-');
+    for (const queueBase of [undefined, '', b.slice(0, 39), b.toUpperCase(), side]) {
+      expect(growthBase({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: queueBase }, reader), String(queueBase))
+        .toEqual({ base: m, from: 'merge-base' });
+    }
+  });
+});
+
 /** The base, or why the growth rows cannot measure. */
-function resolveBase(): { base: string } | { skip: string } {
+function resolveBase(): { base: string; from: 'queue-parent' | 'merge-base' } | { skip: string } {
   if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
     return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
   }
@@ -1236,8 +1284,8 @@ function resolveBase(): { base: string } | { skip: string } {
     return { skip: 'no origin/main in this checkout' };
   }
   try {
-    const base = gitRead(['merge-base', 'origin/main', 'HEAD'], ROOT).trim();
-    return { base };
+    // D-9016: a merge-queue group's parent when the workflow hands one over, else the merge-base.
+    return growthBase(process.env, (args) => gitRead(args, ROOT));
   } catch {
     return { skip: 'no merge-base between origin/main and HEAD' };
   }
@@ -1298,7 +1346,7 @@ const measured = 'base' in resolved
       // D-6119: absolute numbers go to the job summary only, never an assertion.
       const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
       const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows: armed.rows, over: armed.over,
-        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
+        methods, armed: GROWTH_ARMED, from: resolved.from, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
       return { ...armed, files, summaryWritten };
     })()
   : null;
@@ -1306,7 +1354,7 @@ const measured = 'base' in resolved
 if (measured === null) {
   console.log(`growth-check: skipped, ${'skip' in resolved ? resolved.skip : ''}`);
 } else {
-  console.log(['growth-check: net code lines against the merge-base',
+  console.log([`growth-check: net code lines against the ${'from' in resolved && resolved.from === 'queue-parent' ? 'queue group\'s parent' : 'merge-base'}`,
     ...measured.rows.map((r) => `  ${r.file.padEnd(42)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
     `GROWTH_OVER: ${overLine(measured.over, measured.exemptions, (f) => f, measured.waivers)}`,
     `Caps (D-8635): ${measured.caps.map((c) => `${c.file} ${c.head} of ${c.cap}`).join(', ') || '(none)'}`,
