@@ -97,11 +97,13 @@ interface ScannedRoute { method: string; routePath: string; file: string }
  *  a `app.delete(...)` added tomorrow must be swept, not silently skipped. */
 function scanRoutes(file: string): ScannedRoute[] {
   const src = readFileSync(path.join(srcRoot, file), 'utf8');
-  return [...src.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)]
+  const scanned = file === 'review/routes.ts' ? src.replace(/\bscope\./g, 'app.') : src;
+  return [...scanned.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)]
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWENTY-EIGHT files register routes since the Overlord's inbox doors (`server/src/coord/overlordInboxRoutes.ts`, Overlord W1 inbox: its three box-token routes); TWENTY-SEVEN since the one-time pass's door (`server/src/coord/delegationBackfillRoutes.ts`, session helpers S2, D-8874: its two session-gated routes on one path); TWENTY-SIX since the approval census's read (`server/src/coord/approvalCensusRoutes.ts`, approvals PR 1, Task 1.4: its one session-gated route); TWENTY-FIVE since the replay quiz's record path (`server/src/continuity/quizRoutes.ts`, Overlord W1a quiz record); TWENTY-FOUR since the Models sheet's write door (`server/src/laneModelsRoutes.ts`, model-class-advance R4: its one session-gated route); TWENTY-THREE since the decision-model doors (`server/src/coord/decisionModelRoutes.ts`, Overlord W2 decision model B: six routes on five paths, session-gated, registered from `server.ts`); TWENTY-TWO since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
+/** TWENTY-NINE files register routes since the draft review's read door (`server/src/review/routes.ts`, X3 R1: its one capability route,
+ *  gate reason 9); TWENTY-EIGHT since the Overlord's inbox doors (`server/src/coord/overlordInboxRoutes.ts`, Overlord W1 inbox: its three box-token routes); TWENTY-SEVEN since the one-time pass's door (`server/src/coord/delegationBackfillRoutes.ts`, session helpers S2, D-8874: its two session-gated routes on one path); TWENTY-SIX since the approval census's read (`server/src/coord/approvalCensusRoutes.ts`, approvals PR 1, Task 1.4: its one session-gated route); TWENTY-FIVE since the replay quiz's record path (`server/src/continuity/quizRoutes.ts`, Overlord W1a quiz record); TWENTY-FOUR since the Models sheet's write door (`server/src/laneModelsRoutes.ts`, model-class-advance R4: its one session-gated route); TWENTY-THREE since the decision-model doors (`server/src/coord/decisionModelRoutes.ts`, Overlord W2 decision model B: six routes on five paths, session-gated, registered from `server.ts`); TWENTY-TWO since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
  *  box-token route, registered from `registerCoordRoutes` and written in a file of its own); THIRTEEN since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
@@ -142,6 +144,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('laneModelsRoutes.ts'),
   ...scanRoutes('coord/delegationBackfillRoutes.ts'),
   ...scanRoutes('coord/approvalCensusRoutes.ts'),
+  ...scanRoutes('review/routes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -777,10 +780,13 @@ describe('the scanner is looking at something', () => {
     // 304 since the Overlord's inbox doors (Overlord W1, inbox piece), in `coord/overlordInboxRoutes.ts`, a routes file of its own:
     // `GET /api/overlord/inbox`, `GET /api/overlord/messages/:id` and `POST /api/overlord/messages/:id/acknowledge`, three box-token
     // machine lanes IN EXEMPT: the HTTP half 298 -> 301, the gated count stays 190 (301 - 111), the exempt-HTTP count 108 -> 111.
-    // 306 since Rebind and Restart the Overlord (Overlord W1 designation B), in `coord/overlordRoutes.ts`: `POST /api/overlord/rebind`
+    // 305 with the draft-review read door (X3 R1), in `review/routes.ts`: class 9, not a box-token lane. The HTTP half 301 -> 302,
+    // the gated count stays 190 (302 - 112), the exempt-HTTP count 111 -> 112.
+    expect(scanRoutes('review/routes.ts').map(key)).toEqual(['POST /api/review/open']);
+    // 307 since Rebind and Restart the Overlord (Overlord W1 designation B), in `coord/overlordRoutes.ts`: `POST /api/overlord/rebind`
     // and `POST /api/overlord/restart`, each session-gated (the account gate, Rebind with a step-up) and NOT EXEMPT, no box token:
-    // the HTTP half 301 -> 303, the gated count 190 -> 192, the exempt-HTTP count stays 111.
-    expect(ROUTES.length).toBe(306);
+    // the HTTP half 302 -> 304, the gated count 190 -> 192, the exempt-HTTP count stays 112.
+    expect(ROUTES.length).toBe(307);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -971,7 +977,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 306 scanned + the static wildcard when the bundle is built.
+    // 307 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -985,6 +991,17 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
 // ── EXEMPT, in both directions ───────────────────────────────────────────
 
 describe('EXEMPT is complete in both directions', () => {
+  it('admits the capability read without a session under the armed gate', () => {
+    const decision = authVerdict({ method: 'POST', routeOptions: { url: '/api/review/open' }, headers: {} },
+      { enabled: true, secret: SECRET_UNREAD, store: new SessionStore(path.join(mkTmp('review-gate-'), 'sessions')) }, 0);
+    expect(decision).toEqual({ allow: true, verdict: 'ok', reason: 'exempt', device: null });
+  });
+
+  it('documents nine exemption classes', () => {
+    const source = readFileSync(path.join(srcRoot, 'auth/gate.ts'), 'utf8');
+    expect(source).toContain('THE NINE REASONS, and there are only nine:');
+  });
+
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
@@ -1012,7 +1029,7 @@ describe('EXEMPT is complete in both directions', () => {
     }
   });
 
-  it('exempts exactly the eight classes the plan names — nothing has crept in', () => {
+  it('exempts exactly the nine classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
     // that edits this list with a reviewer looking at it. 30 = /health + the 15
     // hard-token coordination lanes + /api/notify + login + status + the SPA shell
@@ -1151,6 +1168,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/questions/:id/release',
       'POST /api/questions/:id/rule',
       'POST /api/reader-lab/probe/:nonce/:name',
+      'POST /api/review/open',
       'POST /api/runs',
       'POST /api/runs/:id/advance',
       'POST /api/runs/:id/close',
@@ -1760,7 +1778,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 303 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 304 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1824,7 +1842,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 303 HTTP routes, not the 111 exempt.
+          //    is not itself flag-aware — the assertion that covers all 304 HTTP routes, not the 112 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

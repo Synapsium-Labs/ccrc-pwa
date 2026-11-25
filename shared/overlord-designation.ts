@@ -15,6 +15,10 @@ export type OverlordModelClass = (typeof OVERLORD_MODEL_CLASSES)[number];
 export const PENDING_KINDS = ['designate', 'rebind'] as const;
 export type PendingKind = (typeof PENDING_KINDS)[number];
 
+/** The designation's states the one sequence stamps (Overlord §10.4; sequence plan question 5): an attempt `pending`, a binding
+ *  `live`, an attempt `failed` and a binding or attempt `retired`. The sequence's kind table reads this list, never a copy. */
+export const DESIGNATION_SEQUENCE_STATES = ['pending', 'live', 'failed', 'retired'] as const;
+
 /** How an attempt ended without going live; written on the row, read by the console and the board. */
 export const ATTEMPT_OUTCOME_MAP = {
   'overlord-sandbox-unmet': 'a property of the sandbox check failed at the first start',

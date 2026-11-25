@@ -288,11 +288,18 @@ programme the operator wants Idle still reads Done is one deploy, not several.
 1. `RUNG_CELL_MAP` gains `programme-lifecycle` (full only); `overlordDoors.ts` rows for every programme edge the
    operator has (start, pause, resume, end, confirm, decline, reopen, repair, hand over, re-file, withdraw a placeholder).
    No decision-model row, no call-record entry, no step-up. An archive row (spec §10): the archive door for a
-   coordinator with no programme (no live programme, no open run, re-measured at the act) and for archive-end; no pick
-   row (the pick is the operator's, spec §10). Tests: refused at chat and advise, allowed at full; the event's
+   coordinator with no programme (no live programme, no open run, re-measured at the act) and for archive-end. A start
+   row (R12, spec §10): the Overlord starts a new top-level session as a new programme's coordinator, or as the
+   coordinator of a programme that has none, through the operator's create routes and the pick's guards. Tests: refused at chat and advise, allowed at full; the event's
    `actorKind` is `overlord`; no call record row and no operator item is written for an Overlord act; below full, a
    proposal's item says it waits on the operator; the archive row archives a coordinator with no programme and refuses
    one that owns a live programme or claims an open run (red with the re-measure removed).
+   The start row: a new programme and its coordinator in one act, with `started`, `joined` and `coordinator` events,
+   actor the Overlord; a pick of a programme with a live coordinator refused `programme-has-coordinator`; a create
+   refusal (pool, disk floor) answered in the route's words with no programme left behind (the start rolls back).
+   Children stay the coordinator's (R12): no Overlord door opens a run, dispatches, reclaims, archives, keeps or
+   releases a child, or answers a child; a test lists `overlordDoors.ts`'s rows and refuses any child-workspace act,
+   and the archive row refuses a `.child` session (`is-child`).
 2. `OVERLORD_OPERATOR_DOORS` and CLAUDE.md's sentence updated in the same commit.
 
 ## Deviations found
@@ -357,6 +364,9 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   permission (no decision-model row, no step-up), and an Overlord act is recorded in the programme's history like any
   other, with no call-record entry or Seen to clear (the operator's amendment of 2026-11-24: maximum autonomy, no
   unnecessary admin burden).
+  Amended (R12, 2026-11-24): the Overlord may start a new top-level session as a new programme's coordinator, or as the
+  coordinator of a programme that has none; it delegates child workspaces to coordinators and has no door that acts on
+  a child.
 - **D-8989 (2026-11-24)** — the-programme-tells-its-story. `programme_events` (append-only and never deleted, one row per
   decision, mint, coordinator change, filing, withdrawal, end proposal and coordinator exit or return, each with actor
   kind, actor, why and detail; a coordinator change also carries the incoming session and uuid) and `GET /api/programmes/:slug/history`, which merges them, and those of placeholders

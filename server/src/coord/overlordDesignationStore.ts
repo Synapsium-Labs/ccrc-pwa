@@ -1,22 +1,31 @@
 // The Overlord's designation row and its writers (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Task 1, questions 1 and 8, rulings X2, X3, X3b, X5, X7).
 // Ring L3, context C5. ONE table, `overlord_designation` (migration 83), its ONE row (`id = 1`), and the only functions that
-// write it: `designatePending`, `rebindPending` (designation B), `bindPendingGeneration`, `goLive`, `failPending`, `retire` and `stopDone`, the Settings doors'
-// `setModelClass` and `setAccountSet` (designation C), plus the one reader,
-// `designationRead`. Each writer is one `tx(db, …)`, synchronous, and never throws on a state it can name (it answers).
+// write it: `designatePending`, `rebindPending` (designation B), `bindPendingGeneration`, `goLive`, `failPending`, `retire`,
+// `applyDesignationRestoreInTx`, `stopDone`, and the Settings doors' `setModelClass` and `setAccountSet` (designation C).
+// `designationRead` is the one reader. Writes are synchronous, each in one `tx(db, …)` (the caller's transaction for Confirm).
 //
 // THE AUTHORITY DUTIES (the journal's "THE CALLER'S DUTIES", `overlordAuthorityJournal.ts#OverlordAuthorityJournal`): a writer
 // that records an authority move calls `appendInTx` BEFORE it writes the row, checks the answer, and on `{ok:false}` writes no
 // row and answers `{ok:false, authority, detail}`; `row-only` (a narrowing the journal could not append) writes the row and
 // appends nothing. Every `from` it states is the row's own value read in the same transaction. A refusal RETURNS from the
 // transaction (it never throws), so a record already appended in it keeps its head row.
+//
+// THE SEQUENCE (Overlord §10.4; sequence plan Task 2): `designatePending`, `goLive`, `failPending`, `retire` and
+// `applyDesignationRestoreInTx` stamp designation state changes after the row write, in the same transaction. A refused stamp
+// throws `SequenceStampRefused`. Ordinary stamped writers check their lines before appending; after a durable append, any
+// throw calls the receipt after rollback is attempted, without replacing the original error. Confirm's append precedes this
+// store's restore writer; Confirm's own catch fences after rollback if that append succeeded. In both paths the durable record
+// can outlive the rolled-back rows and stamps.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
+import { sequenceLineVerdict } from './overlordSequence.js';
+import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
 import type { OverlordAuthorityJournal, AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
 import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
 import {
-  ATTEMPT_OUTCOME_MAP, PENDING_KINDS, parseAccountPools, parseOverlordModel,
+  ATTEMPT_OUTCOME_MAP, DESIGNATION_SEQUENCE_STATES, PENDING_KINDS, parseAccountPools, parseOverlordModel,
   type AttemptOutcome, type DesignationRead, type DesignationView, type OverlordModelClass, type PendingKind,
 } from '../../../shared/overlord-designation.js';
 import type { PoolSet } from '../../../shared/poolset.js';
@@ -130,17 +139,51 @@ function held(db: DatabaseSync): { row: DesignationView | null } | RowUnreadable
   return typeof row === 'string' ? { ok: false, reason: 'unmeasured', detail: row } : { row };
 }
 
-type Appended = { ok: true; journalled: boolean } | AuthorityRefused;
+type Appended = { ok: true; journalled: true; postAppendFailed: () => void } | { ok: true; journalled: false } | AuthorityRefused;
 /** One record, BEFORE the row; the journal's answer checked (`row-only` goes on, `journalled: false`, a refusal stops). */
 function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAuthorityMove): Appended {
   const a = journal.appendInTx(db, entry);
-  return a.ok ? { ok: true, journalled: a.kind === 'appended' } : { ok: false, authority: a.error, detail: a.detail };
+  if (!a.ok) return { ok: false, authority: a.error, detail: a.detail };
+  return a.kind === 'appended'
+    ? { ok: true, journalled: true, postAppendFailed: a.postAppendFailed }
+    : { ok: true, journalled: false };
+}
+
+/** A stamped writer's transaction: only a durable append arms the fence. An ordinary refusal still returns and commits. */
+function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {
+  let postAppendFailed: (() => void) | undefined;
+  try {
+    return tx(db, () => write((entry) => {
+      const a = append(db, journal, entry);
+      if (a.ok && a.journalled) postAppendFailed = a.postAppendFailed;
+      return a;
+    }));
+  } catch (error) {
+    // Like tx's rollback, notification is best effort: a faulty receipt must not replace the transaction error.
+    try { postAppendFailed?.(); } catch { /* preserve the first error */ }
+    throw error;
+  }
 }
 
 /** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
 const SET_ACTOR = 'actor = ?, actorKind = ?, actorIssuer = ?, actorStrength = ?';
 
 const withId = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
+
+/** A designation line that could not be stamped, thrown inside the writer's transaction so the row rolls back with it. */
+export class SequenceStampRefused extends Error {}
+type DesignationState = (typeof DESIGNATION_SEQUENCE_STATES)[number];
+/** One line: the session the move concerns, its state, and the actor the writer writes to the row (`undefined` never reads). */
+const designationLine = (id: string, state: DesignationState, actor: ActorWire | undefined, at: number): SequenceLineInput =>
+  ({ kind: 'designation', id, state, actor: actor?.subject ?? '', actorKind: actor?.kind ?? ('' as ActorWire['kind']), at });
+/** Before an append: a line the verdict refuses stops the writer before any record is written. */
+function checkLines(lines: readonly SequenceLineInput[]): void {
+  for (const l of lines) { const v = sequenceLineVerdict(l); if (!v.ok) throw new SequenceStampRefused(`${v.refusal}: designation ${l.id} -> ${l.state}`); }
+}
+/** After the row write, in the same transaction. */
+function stampLines(db: DatabaseSync, lines: readonly SequenceLineInput[]): void {
+  for (const l of lines) { const s = stampSequenceInTx(db, l); if (!s.ok) throw new SequenceStampRefused(`${s.error}: ${s.detail}`); }
+}
 
 // ── designatePending ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -159,15 +202,17 @@ export type DesignateResult = { ok: true; changed: true } | { ok: false; reason:
 // guard is already damaged (`journal-append` or `diverged`, each calling `writerFailed`); a throw would be worse, the record being a file.
 export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i: DesignateInput): DesignateResult {
   if (actorRefused(i.actor)) return ACTOR_REFUSED;
-  return tx(db, (): DesignateResult => {
+  return txWithAuthorityStamp(db, journal, (add): DesignateResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const row = h.row;
     if (row !== null && (row.bound !== null || row.pending !== null)) return { ok: false, reason: 'exists' };
-    const set = append(db, journal, { kind: 'authority-account-set', opKey: `${i.opKey}-set`,
+    const lines = [designationLine(i.sessionId, 'pending', i.actor, i.at)];
+    checkLines(lines);
+    const set = add({ kind: 'authority-account-set', opKey: `${i.opKey}-set`,
       from: row === null ? NARROWEST_SET : row.accountPools, to: i.accountPools });
     if (!set.ok) return set;
-    const model = append(db, journal, { kind: 'authority-model-class', opKey: `${i.opKey}-model`,
+    const model = add({ kind: 'authority-model-class', opKey: `${i.opKey}-model`,
       from: row === null ? NARROWEST_MODEL : row.model, to: i.model });
     if (!model.ok) return model;
     db.prepare(
@@ -181,6 +226,7 @@ export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i
       + 'actorIssuer = excluded.actorIssuer, actorStrength = excluded.actorStrength, updatedAt = excluded.updatedAt',
     ).run(i.sessionId, i.at, i.deadlineAt, ...actorCols(i.actor), i.model, JSON.stringify({ pools: i.accountPools.pools, untagged: i.accountPools.untagged }),
       ...actorCols(i.actor), i.at);
+    stampLines(db, lines);
     return { ok: true, changed: true };
   });
 }
@@ -220,9 +266,12 @@ export function rebindPending(db: DatabaseSync, i: RebindInput): RebindResult {
     if ('ok' in h) return h;
     if (h.row === null || h.row.bound === null) return { ok: false, reason: 'not-found' };
     if (h.row.pending !== null) return { ok: false, reason: 'attempt-pending' };
+    const lines = [designationLine(i.sessionId, 'pending', i.actor, i.at)];
+    checkLines(lines);
     db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingGeneration = NULL, pendingKind = 'rebind', pendingSince = ?, "
       + `pendingDeadlineAt = ?, ${PENDING_ACTOR_COLUMNS.map((c) => `${c} = ?`).join(', ')}, updatedAt = ? WHERE id = 1`)
       .run(i.sessionId, i.at, i.deadlineAt, ...actorCols(i.actor), i.at);
+    stampLines(db, lines);
     return { ok: true, changed: true };
   });
 }
@@ -238,21 +287,24 @@ export type OverlordMailRepoint = (to: string, from: string) => { changed: numbe
 
 /** The pending attempt becomes the binding. Only for the pending id; anything else changes nothing. Appends the go-live record
  *  with the raised term first (its opKey is the term: `go-live-op-key-is-the-term`), then binds, clears the pending slot and the
- *  last attempt (`golive-clears-last-attempt`), and re-stamps the body's live generation (X5), all in this transaction.
- *  `designate`: `authority-designate`, and `designatedTerm` takes the term. `rebind` (plan Task 6): `authority-rebind` naming the
- *  old body, `designatedTerm` kept (§3.3.12), the old id onto `pastIds` and `stopsOwed`, its live generation ended before the new
- *  body's is re-stamped, and its queued `overlord` mail repointed; `previous` names it for the caller's drain. A refused append,
- *  or a step that throws, rolls the whole move back and the attempt stays pending (question 10). */
+ *  last attempt (`golive-clears-last-attempt`), re-stamps the body's live generation (X5) and stamps its designation lines, all
+ *  in this transaction. `designate`: `authority-designate`, `designatedTerm` takes the term, and the body's line is `live`.
+ *  `rebind` (plan Task 6): `authority-rebind` naming the old body, `designatedTerm` kept (§3.3.12), the old id onto `pastIds`
+ *  and `stopsOwed`, its live generation ended before the new body's is re-stamped, its queued `overlord` mail repointed, and two
+ *  lines, the new body `live` and the old one `retired`; `previous` names it for the caller's drain. A refused append, or a step
+ *  that throws, rolls the whole move back and the attempt stays pending (question 10). */
 export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: string, generation: string, at: number,
   repoint?: OverlordMailRepoint): GoLiveResult {
-  return tx(db, (): GoLiveResult => {
+  return txWithAuthorityStamp(db, journal, (add): GoLiveResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const p = h.row?.pending ?? null;
     if (h.row === null || p === null || p.sessionId !== sessionId) return { ok: true, changed: false };
     const term = h.row.term + 1;
-    if (p.kind === 'rebind') return goLiveRebind(db, journal, h.row, sessionId, generation, term, at, repoint);
-    const a = append(db, journal, { kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
+    if (p.kind === 'rebind') return goLiveRebind(db, add, h.row, p.actorDetail, sessionId, generation, term, at, repoint);
+    const lines = [designationLine(sessionId, 'live', p.actorDetail, at)]; // the attempt's actor, which the binding copies
+    checkLines(lines);
+    const a = add({ kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
     if (!a.ok) return a;
     db.prepare(
       // The binding names the operator who started it (X2): the attempt's four actor columns, copied before the clear (the
@@ -262,26 +314,31 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
       + 'attemptAt = NULL, updatedAt = ? WHERE id = 1',
     ).run(sessionId, generation, term, term, at);
     restampOverlordGeneration(db, sessionId, term);
+    stampLines(db, lines);
     return { ok: true, changed: true, term, previous: null };
   });
 }
 
 /** `goLive`'s rebind arm, inside its transaction (the CHECK keeps a pending rebind beside a binding; a row without one changes
  *  nothing). A repoint that throws throws out of the transaction, which rolls the record and the row back together. */
-function goLiveRebind(db: DatabaseSync, journal: AuthorityAppender, row: DesignationView, sessionId: string, generation: string,
-  term: number, at: number, repoint: OverlordMailRepoint | undefined): GoLiveResult {
+function goLiveRebind(db: DatabaseSync, add: (entry: OverlordAuthorityMove) => Appended, row: DesignationView, actor: ActorWire | undefined,
+  sessionId: string, generation: string, term: number, at: number, repoint: OverlordMailRepoint | undefined): GoLiveResult {
   const old = row.bound?.sessionId;
   if (old === undefined) return { ok: true, changed: false };
-  const a = append(db, journal, { kind: 'authority-rebind', opKey: `go-live-term-${term}`, term, sessionId, generation, previousSessionId: old });
+  // The attempt's actor on both lines: the binding copies it, and the old body is retired by the same move.
+  const lines = [designationLine(sessionId, 'live', actor, at), designationLine(old, 'retired', actor, at)];
+  checkLines(lines);
+  const a = add({ kind: 'authority-rebind', opKey: `go-live-term-${term}`, term, sessionId, generation, previousSessionId: old });
   if (!a.ok) return a;
   db.prepare(
     'UPDATE overlord_designation SET sessionId = ?, generation = ?, term = ?, pastIds = ?, stopsOwed = ?, actor = pendingActor, '
     + `actorKind = pendingActorKind, actorIssuer = pendingActorIssuer, actorStrength = pendingActorStrength, ${CLEAR_PENDING}, `
     + 'attemptId = NULL, attemptOutcome = NULL, attemptAt = NULL, updatedAt = ? WHERE id = 1',
   ).run(sessionId, generation, term, JSON.stringify(withId(row.pastIds, old)), JSON.stringify(withId(row.stopsOwed, old)), at);
-  endOverlordGeneration(db, old); // first, so the new body's re-stamp finds no other live `overlord` row (X5)
+  endOverlordGeneration(db, old, at); // first, so the new body's re-stamp finds no other live `overlord` row (X5)
   restampOverlordGeneration(db, sessionId, term);
   repoint?.(sessionId, old);
+  stampLines(db, lines);
   return { ok: true, changed: true, term, previous: old };
 }
 
@@ -302,12 +359,21 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
     const owed = owesStop ? withId(h.row.stopsOwed, sessionId) : h.row.stopsOwed;
     db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
       .run(sessionId, outcome, at, JSON.stringify(owed), at);
-    endOverlordGeneration(db, sessionId); // the failed attempt's body never went live: its generation ends here (N3)
+    endOverlordGeneration(db, sessionId, at); // the failed attempt's body never went live: its generation ends here (N3)
+    stampLines(db, [designationLine(sessionId, 'failed', p.actorDetail, at)]); // no append: the attempt's actor, as its row recorded it
     return { ok: true, changed: true };
   });
 }
 
 // ── retire ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Retire and a clearing Confirm close the same designation states, in the same order. */
+function retirementLines(row: DesignationView, actor: ActorWire, at: number): SequenceLineInput[] {
+  const { bound, pending } = row;
+  if (bound === null) return pending === null ? [] : [designationLine(pending.sessionId, 'retired', actor, at)];
+  // A pending attempt it cancels is `failed`, then the binding `retired` (sequence plan review F12).
+  return [...(pending === null ? [] : [designationLine(pending.sessionId, 'failed', actor, at)]), designationLine(bound.sessionId, 'retired', actor, at)];
+}
 
 export interface RetireInput { actor: RecordedActor; at: number; opKey: string }
 export type RetireResult =
@@ -320,25 +386,28 @@ export type RetireResult =
  *  (`not-in-transaction`) writes nothing. `owed` is the ids this call put on `stopsOwed`. The retiring actor is the row's. */
 export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireInput): RetireResult {
   if (actorRefused(i.actor)) return ACTOR_REFUSED;
-  return tx(db, (): RetireResult => {
+  return txWithAuthorityStamp(db, journal, (add): RetireResult => {
     const h = held(db);
     if ('ok' in h) return h;
     const row = h.row;
     if (row === null || (row.bound === null && row.pending === null)) return { ok: true, changed: false };
     const p = row.pending;
+    const lines = retirementLines(row, i.actor, i.at);
+    checkLines(lines);
     if (row.bound === null) {
       const id = p!.sessionId;
       db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, ${SET_ACTOR}, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
         .run(...actorCols(i.actor), id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
-      endOverlordGeneration(db, id); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
+      endOverlordGeneration(db, id, i.at); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
+      stampLines(db, lines); // no append, no term raised
       return { ok: true, changed: true, term: row.term, owed: [id] };
     }
     const bound = row.bound.sessionId;
     const term = row.term + 1;
-    const a = append(db, journal, { kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
+    const a = add({ kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
-    endOverlordGeneration(db, bound); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
-    if (p !== null) endOverlordGeneration(db, p.sessionId); // and the pending body's it cancels (review 2366 N3)
+    endOverlordGeneration(db, bound, i.at); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
+    if (p !== null) endOverlordGeneration(db, p.sessionId, i.at); // and the pending body's it cancels (review 2366 N3)
     const owed = p === null ? [bound] : withId([bound], p.sessionId);
     const stops = owed.reduce<readonly string[]>(withId, row.stopsOwed);
     const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at: i.at };
@@ -346,6 +415,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
       + 'attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1')
       .run(term, JSON.stringify(withId(row.pastIds, bound)), JSON.stringify(stops), ...actorCols(i.actor),
         la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, i.at);
+    stampLines(db, lines);
     return { ok: true, changed: true, term, owed };
   });
 }
@@ -378,7 +448,7 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
   const pools = JSON.stringify({ pools: r.accountPools.pools, untagged: r.accountPools.untagged });
   if (row === null) {
     const journalOnly = r.binding.kind === 'cleared' ? r.pastIdsJoin.reduce<string[]>(withId, []) : [];
-    for (const bodyId of journalOnly) endOverlordGeneration(db, bodyId);
+    for (const bodyId of journalOnly) endOverlordGeneration(db, bodyId, at);
     db.prepare('INSERT INTO overlord_designation (id, term, designatedTerm, model, accountPools, pastIds, stopsOwed, actor, actorKind, '
       + 'actorIssuer, actorStrength, updatedAt) VALUES (1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<string[]>(withId, [])), JSON.stringify(journalOnly),
@@ -392,15 +462,19 @@ export function applyDesignationRestoreInTx(db: DatabaseSync, r: DesignationRest
     return { owed: [] };
   }
   const p = row.pending;
+  const lines = retirementLines(row, actor, at);
+  checkLines(lines);
   const owed: string[] = [];
   for (const id of [row.bound?.sessionId, p?.sessionId, ...r.pastIdsJoin]) if (id !== undefined && !owed.includes(id)) owed.push(id);
-  for (const owedId of owed) endOverlordGeneration(db, owedId);
+  for (const owedId of owed) endOverlordGeneration(db, owedId, at);
   const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at };
   db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, model = ?, accountPools = ?, `
     + `pastIds = ?, stopsOwed = ?, ${SET_ACTOR}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1`)
     .run(r.term, r.model, pools, JSON.stringify(r.pastIdsJoin.reduce<readonly string[]>(withId, row.pastIds)),
       JSON.stringify(owed.reduce<readonly string[]>(withId, row.stopsOwed)), ...actorCols(actor),
       la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, at);
+  // Confirm's own post-append failure path fences if this stamp rolls the transaction back.
+  stampLines(db, lines);
   return { owed };
 }
 

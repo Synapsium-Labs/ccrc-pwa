@@ -66,6 +66,7 @@
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { RENEWAL_LANE_PERIOD_MS, RENEWAL_MODE_DEFAULT, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
+import { OVERLORD_OPERATOR_MARK } from '../../../shared/operatorMessages.js';
 import { familyClassOf } from '../../../shared/models.js';
 import { orgRelation } from '../../../shared/accountOrg.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
@@ -308,6 +309,13 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     recorded.push(line);
     deps.log(line);
   };
+  // A step whose line the sequence refused is not written, told apart from a compare-and-set miss: one line each (Overlord
+  // §10.4; sequence plan review F11). Every step of this pass goes through it.
+  const stepper: Pick<GenerationsCoord, 'stepGeneration'> = { stepGeneration: (id, ...rest) => {
+    const w = coord.stepGeneration(id, ...rest);
+    if (!w.changed && w.why === 'stamp-refused') deps.log(`ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`);
+    return w;
+  } };
   // Every read that failed, each with what it stopped at the point it failed (review 2006 N3); `unread` is the first.
   const failures: Failure[] = [];
   const fail = (what: NonNullable<GenerationsResult['unread']>, detail: string, stops: string): void => {
@@ -496,7 +504,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   else {
     const feed = cardReadFeed(coord, carded.rows, live);
     for (const f of feed.failed) fail('card-reads', f, 'that generation\'s card read waits for the next pass');
-    cardRead += applyFedEvents(coord, feed.events, live, now, onStep, D.generationStep);
+    cardRead += applyFedEvents(stepper, feed.events, live, now, onStep, D.generationStep);
   }
 
   // ---- THE PROBES: each generation's graded round fed, its next round opened, its `probe-failed` input kept for THREE.
@@ -552,7 +560,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       else if (w.kind === 'empty') { emptyRounds += 1; deps.emptyTries.set(g.id, new Map(tried).set(s.open.kind, key)); }
       else if (w.kind === 'write-failed') fail('probes', 'continuity_probes could not be written', `generation ${g.id}'s round waits for the next pass, and`);
     }
-    probesFed += applyFedEvents(coord, events, live, now, onStep, D.generationStep);
+    probesFed += applyFedEvents(stepper, events, live, now, onStep, D.generationStep);
     for (const id of [...deps.emptyTries.keys()]) if (!forProbes.rows.some((g) => g.id === id)) deps.emptyTries.delete(id);
   }
 
@@ -639,7 +647,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       const from = effectiveGeneration(g, live).state;
       const step = D.generationStep(genViewOf(g, live), e);
       if (!step.changed) continue;
-      if (!coord.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
+      if (!stepper.stepGeneration(g.id, genExpectOf(g), step.next, live, now).changed) break;
       const again = coord.liveGenerations();
       const next = again.ok ? again.rows.find((x) => x.id === g.id) : undefined;
       // Feeding a soft due spends one of the soft budget's renewals, stamped on the accumulator (ruling R4): live only, since
@@ -726,9 +734,9 @@ function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, iden
 
 /** `softRenewalMay`'s inputs from stored columns and measured readings (ruling R4, slug gather-in-the-act-lane): the observed
  *  times (`softTimesOf`), the soft renewals of the identity's line within the budget's window of observed time (the
- *  accumulator carries across mints), the hold table's drain, and, for a coordinator, the `operator-at-programme` mark of
- *  its programmes (`operatorQuietOf`; the hand-offs piece). A count that could not be read is not a count, so the decider
- *  waits `unmeasured`. */
+ *  accumulator carries across mints), the hold table's drain, and the operator's quiet (`operatorQuietOf`; the hand-offs piece):
+ *  a coordinator's programmes' marks, the Overlord's `@overlord` mark (renewal readings PR F). A count that could not be read
+ *  is not a count, so the decider waits `unmeasured`. */
 function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindingsOf'>, g: GenRow, r: GenReadings | undefined,
   overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly MarkReading[] | 'unmeasured'): SoftInputs {
   const inWindow = softRenewalsInWindowOf(coord, g);
@@ -738,7 +746,7 @@ function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindings
     hibernateHold: r?.drain ?? { held: true, reason: 'unmeasured' },
     readersRunning: g.role === 'coordinator' ? na : later('W1'),
     operatorQuietObservedMs: g.role === 'coordinator' ? operatorQuietOf(coordinatorProgrammes(coord, g.identity), marks)
-      : g.role === 'overlord' ? later('W1') : na,
+      : g.role === 'overlord' ? operatorQuietOf([OVERLORD_OPERATOR_MARK], marks) : na,
     placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
     ...r?.soft,
     mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),

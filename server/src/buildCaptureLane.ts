@@ -14,17 +14,23 @@
 // naming the act only the operator can do for any such build that has none (`untrustedBuildItemsToRaise`), and settles
 // every other open item (`untrustedBuildItemsToSettle`).
 //
+// THE COPY (capture runner spec 2026-11-22 §2.2, D7). A box that holds no checked copy of the build refuses the capture
+// `build-absent`; the pass then copies the fleet's own copy over the admin lane (`BuildCopyTransport`) and sends the capture
+// again. WHEN is `shared/claudeBuildTrust.ts#captureNextAct`'s decision, read after each act; this file only carries it out,
+// and no adapter sequences two ops.
+//
 // NO VERDICT IS NOT A FAILURE. A box that is not there, a runner that is not built, a throw or an answer off its shape keeps
 // the build `queued`, its retry clock stamped, so it is tried again after the spacing. ONLY A JOB THAT WENT OUT IS AN
-// ATTEMPT: a throw, an off-shape answer or `unanswered` counts one; `no-test-box` and `no-runner` sent nothing, so they count
-// none and the row records why (`notSent`), which the console says instead of "sent N times". Only a verdict the reader
-// accepted moves the row, and a `fail` that gives up raises ONE push notice opening Settings, keyed by build and attempt
-// (`hasNotice`, read before the write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
+// ATTEMPT: a throw, an off-shape answer or `unanswered` counts one; a not-sent word (`BuildCaptureNotSent`, a failed copy's
+// included) counts no capture attempt, and the row records why (`notSent`). Only a verdict the reader accepted moves the
+// row. A `fail` that gives up raises ONE push notice opening Settings, keyed by build and attempt (`hasNotice`, read before
+// the write), so a restart never repeats it and an operator's re-capture that fails again raises its own.
 //
 // `watch.ts` owns one of these and calls `sweep()` from its tick beside the roll, never awaited.
 import {
-  BUILD_CAPTURE_OUTPUT_MAX, capturesToRetry, givenUpToTell, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds,
-  type BuildCaptureJob, type BuildCaptureNotSent, type ClaudeBuildRecord,
+  BUILD_CAPTURE_OUTPUT_MAX, captureNextAct, capturesToRetry, captureTryOf, givenUpToTell, nextCaptureJob,
+  readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob, type BuildCaptureNotSent, type BuildCopyFailure,
+  type CapturePassStep, type ClaudeBuildRecord,
 } from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import {
@@ -35,8 +41,8 @@ import { notify, type NoticeDeps } from './notice.js';
 /** The lane's clock: once a minute. A new build is sent on the first pass after a session runs it. */
 export const BUILD_CAPTURE_SWEEP_MS = 60_000;
 
-/** Why the transport brought back nothing it could judge. `no-test-box`: no box answers, and nothing was sent. `no-runner`:
- *  the box has no capture runner, and nothing was sent. `unanswered`: the job went out and no answer came back. */
+/** Why the transport brought back nothing it could judge: a not-sent word (nothing was sent), or `unanswered` (the job went
+ *  out and no answer came back). */
 export type BuildCaptureUnavailable = BuildCaptureNotSent | 'unanswered';
 
 /** What the transport answers: the runner's answer, unread (the lane reads it through `readBuildCaptureResult`), or why
@@ -45,9 +51,18 @@ export type BuildCaptureAnswer =
   | { readonly kind: 'answered'; readonly result: unknown }
   | { readonly kind: 'unavailable'; readonly why: BuildCaptureUnavailable };
 
-/** THE PORT: one job to the test box, over the existing test box connection. A rejection reads as `unanswered`. */
+/** THE PORT: one capture job to the test box through the fleet agent. A rejection reads as `unanswered`. */
 export interface BuildCaptureTransport {
   capture(job: BuildCaptureJob): Promise<BuildCaptureAnswer>;
+}
+
+/** What the copy came to: the build is placed on the box (`copied`), or why not. */
+export type BuildCopyAnswer = 'copied' | BuildCopyFailure;
+
+/** THE COPY PORT (spec §2.2): the fleet's own copy of one build, read-only, to the test box's capture store, hashed at both
+ *  ends. Never rejects; a rejection reads as `copy-failed`. */
+export interface BuildCopyTransport {
+  copy(job: BuildCaptureJob): Promise<BuildCopyAnswer>;
 }
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {
@@ -55,6 +70,8 @@ export interface BuildCaptureLaneDeps extends NoticeDeps {
     | 'recordClaudeBuildVerdict' | 'requeueClaudeBuild' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem' | 'raiseItem'> | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
+  /** Absent: a `build-absent` refusal is answered `no-admin-lane`, and nothing is copied. */
+  readonly buildCopy?: BuildCopyTransport | undefined;
 }
 
 export class BuildCaptureLane {
@@ -99,12 +116,17 @@ export class BuildCaptureLane {
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined || build === null) return;
-    // One pass at a time (`inflight`), so the try is stamped after the answer: it says whether a job actually went out.
-    let answer: BuildCaptureAnswer;
-    try { answer = await transport.capture({ build }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
-    const sentNothing = answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : null;
-    if (!coord.markClaudeBuildAttempt(build, at, sentNothing ?? 'sent')) return;
-    if (answer.kind === 'unavailable') return;
+    // One pass at a time (`inflight`), so the try is stamped after the pass's acts: it says whether a job actually went out.
+    // Each act is the decider's (`captureNextAct`): the capture, and after a `build-absent` the copy and the capture again.
+    const steps: CapturePassStep[] = [];
+    let answer: BuildCaptureAnswer | null = null;
+    for (let act = captureNextAct(steps); act !== 'stop'; act = captureNextAct(steps)) {
+      if (act === 'copy') { steps.push(await this.copy(d.buildCopy, build)); continue; }
+      try { answer = await transport.capture({ build }); } catch { answer = { kind: 'unavailable', why: 'unanswered' }; }
+      steps.push(answer.kind === 'unavailable' && answer.why !== 'unanswered' ? answer.why : 'sent');
+    }
+    if (!coord.markClaudeBuildAttempt(build, at, captureTryOf(steps))) return;
+    if (answer === null || answer.kind === 'unavailable') return;
     const result = readBuildCaptureResult(answer.result, build);
     if (result === null) {
       console.warn(`ccrc-server: build capture: the answer for ${build} is not a capture result — it stays queued`);
@@ -117,6 +139,12 @@ export class BuildCaptureLane {
     if (row === undefined || !givenUpToTell(row, versions)) return;
     this.raiseItems(coord, after, versions, at);
     this.pushGivenUp(d, coord, row);
+  }
+
+  /** The copy, once: the port's answer, `no-admin-lane` with no port, `copy-failed` for a rejection. */
+  private async copy(port: BuildCopyTransport | undefined, build: string): Promise<BuildCopyAnswer> {
+    if (port === undefined) return 'no-admin-lane';
+    try { return await port.copy({ build }); } catch { return 'copy-failed'; }
   }
 
   /** Each pass, the open untrusted-build items whose build ccrc has not given up on settle, each with its note (L1's

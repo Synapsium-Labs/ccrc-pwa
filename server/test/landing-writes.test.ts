@@ -33,12 +33,14 @@ const facts = (o: Opts): LandingMutationFacts => ({
   project: 'project-a', flags: { operatorPaused: false, mainRedHold: false }, entries: o.entries,
   projections: o.entries.map((x) => ({ id: x.id, value: o.unreadableProjection?.includes(x.id) ? { kind: 'unreadable' as const }
     : { kind: 'readable' as const, quarantine: o.quarantined?.includes(x.id) ? 'stale-episode-head' as const : null } })),
+  stateWords: o.entries.map((x) => ({ id: x.id, value: x.state })),
   dependencies: o.entries.map((x) => ({ id: x.id, value: o.unreadableDeps?.includes(x.id) ? { kind: 'unreadable' as const }
     : { kind: 'readable' as const, afterIds: x.afterIds } })),
   recovery: { subjects: o.recovery ?? [], hold: o.recovery?.length ? { reason: 'landing-recovery-unresolved', subjectIds: o.recovery.map((s) => s.id) } : null },
   nextId: o.nextId === undefined ? 900 : o.nextId, foreignIds: o.foreign ?? [],
   coordinators: o.entries.map((x) => ({ id: x.id, value: o.unreadableRun?.includes(x.id) ? { kind: 'unreadable' as const }
     : x.runId === null ? { kind: 'no-run' as const } : { kind: 'run' as const, runId: x.runId, claimedBy: 'coord' } })),
+  terminalRepairs: [], creations: [],
 });
 const recovered = (id: number, pr: number, projection: LandingRecoverySubject['projection'], project = 'project-a'): LandingRecoverySubject => ({
   id, project, pr, creation: { kind: 'not-recorded' }, historical: { binding: { kind: 'no-run' }, observedSeq: 1 }, projection,

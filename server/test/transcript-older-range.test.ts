@@ -226,15 +226,15 @@ describe('readOlderRange: refusals', () => {
     expect(await readOlderRange(memIO(data), 'f', lineStart(8), lim(4))).toEqual({ ok: false, reason: 'invalid-boundary' });
   });
 
-  it('a LATER read shortened after an earlier read succeeded refuses invalid-boundary and discards the framed records', async () => {
-    // 'aa\nbb\ncc\ndd\n', windows of 3 from the end: read 1 [9,12) frames 'dd'; then the file is cut to 7 bytes, so read 2
-    // [6,9) answers one byte where three were asked.
+  it('a LATER read shortened after an earlier read succeeded refuses invalid-boundary, after exactly these reads', async () => {
+    // 'aa\nbb\ncc\ndd\n', windows of 3 from the end: read 1 [9,12) reads 'dd\n', which frames nothing until the bytes before
+    // it are read; then the file is cut to 7 bytes, so read 2 [6,9) answers one byte where three were asked.
     const io = shrinkingIO(enc.encode('aa\nbb\ncc\ndd\n'), 1, 7);
     expect(await readOlderRange(io, 'f', lineStart(12), lim(3, 4))).toEqual({ ok: false, reason: 'invalid-boundary' });
     expect(io.reads).toEqual([[9, 3], [6, 3]]);
   });
 
-  it('a file shrunk BELOW a later read\'s offset answers the adapter\'s own unreadable, and discards the framed records', async () => {
+  it('a file shrunk BELOW a later read\'s offset answers the adapter\'s own unreadable, after exactly these reads', async () => {
     const io = shrinkingIO(enc.encode('aa\nbb\ncc\ndd\n'), 1, 5);
     expect(await readOlderRange(io, 'f', lineStart(12), lim(3, 4))).toEqual({ ok: false, reason: 'unreadable' });
     expect(io.reads).toEqual([[9, 3], [6, 3]]);
@@ -245,6 +245,7 @@ describe('readOlderRange: refusals', () => {
     expect(await readOlderRange(memIO(data), 'f', lineStart(data.length), lim(64))).toEqual({ ok: false, reason: 'invalid-boundary' });
     for (const limits of [lim(64), lim(4, 4)]) {
       const { items } = await pageAllFrom(data, { kind: 'skip-record', before: data.length }, limits);
+      expect(items.filter((i) => 'gap' in i)).toEqual([]);
       expect(records(items).map(text)).toEqual(['aa', 'bb']);
       for (const r of records(items)) expect(text(r)).not.toContain('unterminated');
     }

@@ -20,6 +20,7 @@ import type { AuthorityAppend } from '../../src/coord/overlordAuthorityJournal.j
 import { mkTmp } from '../tmpHelpers.js';
 import { gateActorOf } from '../../src/accounts/audit.js';
 import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
+import { designationFenceCases } from '../overlordDesignationFenceCases.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
@@ -666,9 +667,9 @@ function pendingCase(act: (db: DatabaseSync, id: string, now: number) => void, m
   } finally { db.close(); }
 }
 const RETIRE_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
-    { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound);', new: '' },
-    { id: 'E2 a pending-only retire leaves the pending body\'s generation live', old: 'endOverlordGeneration(db, id);', new: '' },
-    { id: 'E3 a live retire leaves the pending body\'s generation live', old: 'if (p !== null) endOverlordGeneration(db, p.sessionId);', new: '' },
+    { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound, i.at);', new: '' },
+    { id: 'E2 a pending-only retire leaves the pending body\'s generation live', old: 'endOverlordGeneration(db, id, i.at);', new: '' },
+    { id: 'E3 a live retire leaves the pending body\'s generation live', old: 'if (p !== null) endOverlordGeneration(db, p.sessionId, i.at);', new: '' },
   ], suite: retireEndsGenerationCases };
 
 /** A failed pending attempt whose body started: `failPending` ends its generation (review 2366 N3). */
@@ -680,7 +681,7 @@ export function failPendingEndsGenerationCases(m: DesignationStoreModule): Recor
   };
 }
 const FAIL_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
-    { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId);', new: '' },
+    { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId, at);', new: '' },
   ], suite: failPendingEndsGenerationCases };
 
 // ------------------------------------------------------------------------- designation B: rebind, Restart, the deadline sweep
@@ -881,6 +882,27 @@ const DEADLINE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants
     { id: 'T11 the drain names no ids', old: "{ kind: 'drain', ids: read.row.stopsOwed }", new: "{ kind: 'drain', ids: [] }" },
     { id: 'T12 an unreadable row is read', old: "if (read.kind === 'unmeasured' || read.row === null) return { kind: 'none' };", new: "if (read.row === null) return { kind: 'none' };" },
   ], suite: pendingDeadlineCases };
+// Keep the same transaction and append, but take away a writer's immediate rollback fence.
+const withoutFence = (arm: string) => ({
+  id: `${arm} runs without the rollback fence`,
+  old: `return txWithAuthorityStamp(db, journal, (add): ${arm} => {`,
+  new: `return tx(db, (): ${arm} => {\n    const add = (entry: OverlordAuthorityMove) => append(db, journal, entry);`,
+});
+const FENCE_DECLARATION = '  let postAppendFailed: (() => void) | undefined;';
+const FENCE_FUNCTION = 'function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {';
+const FENCE_CALL = 'try { postAppendFailed?.(); } catch { /* preserve the first error */ }';
+const FENCE_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
+    ...['DesignateResult', 'GoLiveResult', 'RetireResult'].map(withoutFence),
+    { id: 'F1 drops the receipt call', old: FENCE_CALL, new: '' },
+    // Replay a real receipt even in a transaction that appended nothing: pending-only retire must not fence.
+    { id: 'F2 fences on a throw with no append', old: `${FENCE_FUNCTION}\n${FENCE_DECLARATION}`,
+      new: `${FENCE_DECLARATION.trim()}\n${FENCE_FUNCTION}` },
+    { id: 'F4 only fences on stamp refusals', old: FENCE_CALL, new: `if (error instanceof SequenceStampRefused) { ${FENCE_CALL} }` },
+    { id: 'F5 lets a throwing receipt replace the original error', old: FENCE_CALL, new: 'postAppendFailed?.();' },
+    { id: 'F6 a row-only live retire skips its sequence lines',
+      old: 'stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };',
+      new: 'if (a.journalled) stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };' },
+  ], suite: designationFenceCases };
 
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
@@ -896,4 +918,5 @@ export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#rebindVerdict': REBIND_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#restartVerdict': RESTART_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#pendingDeadlineOf': DEADLINE_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignationStore.ts#txWithAuthorityStamp': FENCE_SET as MutantSet<never>,
 };

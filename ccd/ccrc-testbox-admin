@@ -56,6 +56,9 @@ TBA_HERE="$(cd "${TBA_HERE%/*}" && pwd)"
 . "$TBA_HERE/ccrc" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/ccrc, so no setting can be read" >&2; exit 1; }
 # shellcheck source=testbox-knobs
 . "$TBA_HERE/testbox-knobs" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-knobs, so no setting can be checked" >&2; exit 1; }
+# The build capture's copy sub, `build-copy` (capture runner spec 2026-11-22 §2.2): its own file, read here.
+# shellcheck source=testbox-build-copy
+. "$TBA_HERE/testbox-build-copy" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-build-copy" >&2; exit 1; }
 PROG="ccrc testbox-admin"
 
 TBA_DIR="$HOME/.ccrc"
@@ -71,13 +74,14 @@ TBA_ROWS="$TBA_DIR/testbox-rows"
 
 # ── the closed vocabularies: shared/testbox-admin.ts, word for word ────────────────────────────────────────────
 TBA_SUBS=(status read key probe pin preflight connect settings-fleet settings-box cancel parity repair apply-release disconnect key-rotate key-revoke
-  tools-home)
+  tools-home build-copy)
 TBA_CODES=(busy unsupported-os no-access-key foreign-key unreachable auth-refused host-key-unknown host-key-changed
   fingerprint-mismatch from-mismatch no-root no-sudo os-mismatch systemd-too-old no-nftables not-xfs-reflink
   address-not-ip no-egress other-release verify-failed copy-failed box-value-refused install-refused install-failed
   pair-failed status-not-ok pairing-keys-in-ccrc-env key-in-ccrc-env runs-in-progress idle-deadline cancelled
   gh-signed-out parity-differs not-connected box-side-skipped unpair-failed address-not-private box-already-set interrupted
-  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed)
+  new-key-refused old-line-kept revoked-box-skipped revoked-unpair-failed tools-home-failed build-not-on-fleet build-not-regular
+  build-too-large build-hash-mismatch build-copy-failed build-store-refused)
 # The long subs whose parent asks them for a precheck before it detaches (`settings-box` only with --when-idle).
 TBA_PRECHECK_SUBS=(connect settings-box repair apply-release parity)
 TBA_PHASES_ALL=(verify copy settings install pair check wait legs record)
@@ -125,22 +129,8 @@ _tba_phases() {   # <sub> -> its phases in order, one per line; nothing for a su
   esac
 }
 
-# The sub table: one row per field, `flag grammar required repeatable`. Nothing for a sub that takes no field; rc 1 for
-# a word that is no sub. `required` is 1, 0, or `+`: one of the sub's `+` fields must be given (D-8336: a settings call changes a
-# value, resets one to its default, or both).
-_tba_fields() {   # <sub>
-  case "${1-}" in
-    status|read|probe|preflight|cancel|repair|apply-release|key-rotate|key-revoke|tools-home) ;;
-    key) printf '%s\n' '--address address 1 0' '--port port 0 0' '--login user 0 0' '--source address 0 0' ;;
-    pin) printf '%s\n' '--fingerprint fingerprint 1 0' ;;
-    connect) printf '%s\n' '--set setting-box 1 1' '--repo repo 1 1' ;;
-    settings-fleet) printf '%s\n' '--set setting-fleet + 1' '--unset unset-fleet + 1' ;;
-    settings-box) printf '%s\n' '--set setting-box + 1' '--unset unset-box + 1' '--when-idle true 0 0' ;;
-    parity) printf '%s\n' '--pr pr 0 1' ;;
-    disconnect) printf '%s\n' '--replace true 0 0' ;;
-    *) return 1 ;;
-  esac
-}
+# shellcheck source=testbox-admin-fields
+. "$TBA_HERE/testbox-admin-fields" || { echo "ccrc testbox-admin: cannot load $TBA_HERE/testbox-admin-fields, so no argument can be checked" >&2; exit 1; }
 
 # ── the grammars: the bash twin of shared/testbox-admin.ts's ─────────────────────────────────────────────────
 _tba_word_ok() {   # <v> -> 0 iff it can ride one word: non-empty, no control byte, not `-`-led, no `..` segment
@@ -268,6 +258,7 @@ _tba_parse() {
       user) _tba_word_ok "$val" && _tba_is_user "$val" || { TBA_BAD="$name"; return 1; } ;;
       fingerprint) _tba_word_ok "$val" && _tba_is_fingerprint "$val" || { TBA_BAD="$name"; return 1; } ;;
       true) [ "$val" = true ] || { TBA_BAD="$name"; return 1; }; [ "$name" != --when-idle ] || TBA_WHENIDLE=1 ;;
+      version) _tba_word_ok "$val" && _tba_is_claude_version "$val" || { TBA_BAD="$name"; return 1; } ;;
       pr)
         _tba_is_pr "$val" || { TBA_BAD="$name"; return 1; }
         [ -z "${keys[pr:$val]:-}" ] && [ "${cnt[$name]}" -le 20 ] || { TBA_BAD="$name"; return 1; }
@@ -561,8 +552,8 @@ _tba_ssh_class() {
   elif grep -qiE 'Permission denied|Too many authentication failures' "$f" 2>/dev/null; then echo auth-refused
   else echo unreachable; fi
 }
-# `_tba_ssh <command word>...` — run one command on the box. stdout is the command's; stdin passes through (a secret
-# rides it and nothing else); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
+# `_tba_ssh <command word>...` — run one command on the box. stdout is the command's; stdin passes through (a secret, or
+# the build copy's bytes, rides it); ssh's stderr is read for a code and dropped. rc is the command's, and 255 sets
 # TBA_SSH_CODE to a closed code. rc 97 with TBA_SSH_CODE `not-connected` or `no-access-key` when ccrc has no
 # connection or no key to use. Under a sudo login every command is `sudo -n --` prefixed; each word is quoted for the
 # box's shell with `printf %q`. TBA_SSH_NOSUDO=1 drops the prefix for the one read that sudo's environment reset would

@@ -50,6 +50,7 @@ interface Fixture {
   start(source: string, uuid: string, at?: number, sessionId?: string, rowIncarnation?: string): number;
   /** The pass's latch raise (renewal readings PR C), when a case sets one: absent, the pass has none. */
   latch?: GenerationsDeps['latch'];
+  canRenew?: boolean;
 }
 
 function fixture(): Fixture {
@@ -73,7 +74,7 @@ function fixture(): Fixture {
   };
   const f: Fixture = {
     s, t, logs, registry,
-    pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt }),
+    pass: (readings = new Map(), proc = 'p1', listedAt = t.ports.clock.wall() + 1) => generationsPass(deps(proc), { registry, readings, listedAt, canRenew: f.canRenew === true }),
     start: (source, uuid, at = t.ports.clock.wall(), sessionId = COORD, rowIncarnation = 'inc-1') => {
       n += 1;
       const r = s.insertStart({ sessionId, reportId: `r-${n}`, uuid, source, model: 'claude-opus-5-5', rowIncarnation,
@@ -709,6 +710,29 @@ describe('the card read (the card piece, PR B, Task 5)', () => {
     expect(f.pass()).toMatchObject({ cardRead: 0 });
   });
 
+  it('a refused live card step leaves the card and generation untouched and is logged through the store delegate', () => {
+    const f = fixture();
+    f.s.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    f.start('startup', U1);
+    f.pass();
+    const id = live(f.s)[0]!.id;
+    const before = card(f.s);
+    readCard(f, 'snap-1', HASH_A);
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_card_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'probing' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass()).toMatchObject({ cardRead: 0, unread: null });
+      expect(card(f.s)).toEqual(before);
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_card_step');
+    }
+    expect(f.pass()).toMatchObject({ cardRead: 1, unread: null });
+    expect(card(f.s)).toEqual([{ n: 1, state: 'probing', shadowState: null, cardHash: HASH_A, snapshotId: 'snap-1' }]);
+  });
+
   it('shadow: the effective state is the shadow column, so the read moves `shadowState` and `state` stays active (review 1902 F6)', () => {
     const f = fixture();
     f.start('startup', U1);
@@ -979,6 +1003,47 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(f.pass()).toMatchObject({ probesFed: 1 });
     expect(gen(f)).toMatchObject({ state: 'active', probeRounds: 0, proven: true });
     expect(f.pass()).toMatchObject({ probesFed: 0, roundsOpened: 0 });
+  });
+
+  it('a refused live probe step is logged and the passed round can be fed again', () => {
+    const f = probing();
+    const { id } = gen(f);
+    answer(f, 'pass');
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_probe_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'active' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass()).toMatchObject({ probesFed: 0 });
+      expect(gen(f)).toMatchObject({ state: 'probing', proven: false });
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_probe_step');
+    }
+    expect(f.pass()).toMatchObject({ probesFed: 1 });
+    expect(gen(f)).toMatchObject({ state: 'active', proven: true });
+  });
+
+  it('a refused live due step is logged without starting the renewal walk', () => {
+    const f = probing();
+    answer(f, 'pass');
+    expect(f.pass()).toMatchObject({ probesFed: 1 });
+    const { id } = gen(f);
+    f.canRenew = true;
+    const overCap = at(f, usage(260_000, 1_000_000), turn('idle'));
+    f.s.db.exec(`CREATE TEMP TRIGGER refuse_due_step BEFORE INSERT ON overlord_sequence
+      WHEN NEW.kind = 'generation' AND NEW.state = 'draining' BEGIN SELECT RAISE(ABORT, 'fixture refuses the step'); END`);
+    try {
+      expect(f.pass(overCap)).toMatchObject({ due: 1 });
+      expect(gen(f)).toMatchObject({ state: 'active', dueWhy: 'hard-cap' });
+      expect(f.logs.filter((l) => l.includes('the sequence refused its line'))).toEqual([
+        `ccrc-server: generations: generation ${id}'s step was not written: the sequence refused its line`,
+      ]);
+    } finally {
+      f.s.db.exec('DROP TRIGGER refuse_due_step');
+    }
+    f.pass(overCap);
+    expect(gen(f)).toMatchObject({ state: 'draining' });
   });
 
   it('one failed round: a second round opens only after the card is read again; two failed rounds degrade it (recorded, no item raised)', () => {
@@ -1444,7 +1509,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // Renewal readings PR C: the mint's stamp and the latch's decider (L1). The latch itself is a port the wiring binds.
       './renewalReadings.js',
       // Designation B: the deadline sweep's decider (L1); it sends nothing, and the pass only decides with it.
-      '../coord/overlordDesignation.js'];
+      '../coord/overlordDesignation.js',
+      // Renewal readings PR F: the `@overlord` mark's key (L0, imports nothing), read through `operatorQuietOf`.
+      '../../../shared/operatorMessages.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
