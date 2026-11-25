@@ -1286,8 +1286,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           // call an unexpected response, and whose body carries the gate's own `error` word, is the account gate's refusal.
           const slot = docsAnswerFromError(err);
           const body: unknown = err instanceof ApiError ? err.body : null;
-          const gated = typeof body === 'object' && body !== null && 'error' in body;
-          if (slot.s === 'unexpected-response' && gated) throw err;
+          if (slot.s === 'unexpected-response' && typeof body === 'object' && body !== null && 'error' in body) throw err;
           return slot;
         }
       };
@@ -1295,11 +1294,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         labels: () => read<DocsFoldersLabelsResponse>(docsApi.folders(), ['folders'], { headers: marker }),
         // The ONE caller of the paths URL: Settings' Docs folders section (`docs-ring.test.ts`).
         paths: () => read<DocsFoldersPathsResponse>(docsApi.folderPaths(), ['folders'], { headers: marker }),
-        add: (label, path) => readWrite<DocsFolderAddResponse>(docsApi.folderAdd(), ['label'], {
-          method: 'POST',
-          headers: { ...marker, 'content-type': 'application/json' },
-          body: JSON.stringify({ label, path }),
-        }),
+        add: (label, path) => readWrite<DocsFolderAddResponse>(docsApi.folderAdd(), ['label'],
+          { method: 'POST', headers: { ...marker, 'content-type': 'application/json' }, body: JSON.stringify({ label, path }) }),
         remove: (label) => readWrite<DocsFolderRemoveResponse>(docsApi.folderRemove(label), ['label'], { method: 'DELETE', headers: marker }),
         tree: (label, signal) => read<DocsFolderTreeResponse>(docsApi.folderTree(label), ['tree'], { headers: marker, signal }),
         file: (label, section, path, fp, signal) =>
