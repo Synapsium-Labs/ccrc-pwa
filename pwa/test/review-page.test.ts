@@ -7,7 +7,8 @@ import path from 'node:path';
 import { REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_SHARED_AT_HEADER, reviewDate } from '../../shared/docsReview';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  LAB_GROUND, LAB_IMAGE_COLOUR, LAB_KEYS, LAB_SWATCH_COLOUR, labEngineOf, labOsClassOf, labResultText, startReviewPage,
+  LAB_GROUND, LAB_IMAGE_COLOUR, LAB_KEYS, LAB_SWATCH_COLOUR, MAX_RESTORES, RESTORE_WINDOW_MS, labDeviceWords, labEngineWord,
+  labResultText, startReviewPage,
   type LabAnswers,
 } from '../src/review/main';
 import { LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY } from '../src/review/labFixture';
@@ -49,8 +50,12 @@ const settle = (): Promise<void> => new Promise((resolve) => { setTimeout(resolv
 const button = (): HTMLButtonElement | null => document.querySelector('button');
 
 let fetchSpy: ReturnType<typeof vi.fn>;
+/** The injected clock the restore bound reads (milliseconds); a row moves it by hand, so no row waits in real time. */
+let clock = 0;
+const now = (): number => clock;
 
 beforeEach(() => {
+  clock = 0;
   fetchSpy = vi.fn(async () => answer(200));
   vi.stubGlobal('fetch', fetchSpy);
   window.sessionStorage.clear();
@@ -64,7 +69,7 @@ afterEach(() => {
 
 async function open(): Promise<HTMLElement> {
   const root = mount(`#${TOKEN}`);
-  startReviewPage(window);
+  startReviewPage(window, now);
   button()!.click();
   await vi.waitFor(() => expect(document.querySelector('iframe')).not.toBeNull());
   return root;
@@ -269,11 +274,244 @@ describe('the review page (M-X3.10)', () => {
   });
 });
 
+// ---- the page restores its own copy, bounded at three within ten seconds (D-9029) -----------------------------------------------
+// A link with no `target` inside a copy is blocked from leaving, but Chromium navigates the FRAME to its error page, so the copy
+// is gone. The page keeps the copy's text and, when the frame element fires a `load` that the page did not cause, sets the same
+// `srcdoc` again and shows one sentence beside the frame; at most three times within ten seconds of the injected clock `now`
+// (spaced taps are restored every time), then it stops for good and says so. jsdom fires its own
+// (trusted, asynchronous) `load` for a frame's FIRST `srcdoc` draw only: setting the same `srcdoc` again reloads nothing in jsdom.
+// So `drawn(n)` waits until n trusted loads have arrived (counted by a capture listener on the document), and a row plays the
+// load of each restore itself with `ownLoad`, the load the page's own draw would cause in a browser. `navigates` is the load the
+// page did NOT cause, the copy leaving its frame. Both are untrusted events dispatched on the frame element.
+
+const RESTORED = 'That link opens outside this page. Use the links listed above.';
+const RESTORED_NO_LINKS = 'That link cannot open from this page.';
+const STOPPED = 'This copy kept leaving its frame, so it is no longer redrawn. Open the link you were sent to read it again.';
+
+const navigates = (frame: HTMLIFrameElement): void => { frame.dispatchEvent(new Event('load')); };
+const ownLoad = navigates; // the same event: the page tells a draw's own load from a navigation by what it expects, never by the event
+
+/** Counts the trusted `load` events of every frame (jsdom's own, for the draws the page makes), until `stop()`. */
+function watchLoads(): { drawn: (n: number) => Promise<void>; own: () => number; stop: () => void } {
+  let n = 0;
+  const on = (e: Event): void => { if (e.isTrusted) n += 1; };
+  document.addEventListener('load', on, true);
+  return {
+    drawn: (total) => vi.waitFor(() => expect(n).toBe(total)),
+    own: () => n,
+    stop: () => { document.removeEventListener('load', on, true); },
+  };
+}
+
+/** Records every value set on an iframe's `srcdoc`, until `stop()`. */
+function recordSrcdoc(): { readonly sets: string[]; stop: () => void } {
+  const sets: string[] = [];
+  const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'srcdoc')!;
+  Object.defineProperty(HTMLIFrameElement.prototype, 'srcdoc', {
+    configurable: true, get: original.get,
+    set(this: HTMLIFrameElement, v: string) { sets.push(v); original.set!.call(this, v); },
+  });
+  return { sets, stop: () => { Object.defineProperty(HTMLIFrameElement.prototype, 'srcdoc', original); } };
+}
+
+describe('the page restores its own copy, at most three times within ten seconds (D-9029)', () => {
+  let rec: ReturnType<typeof recordSrcdoc>;
+  let loads: ReturnType<typeof watchLoads>;
+  beforeEach(() => { rec = recordSrcdoc(); loads = watchLoads(); });
+  afterEach(() => { rec.stop(); loads.stop(); });
+
+  const frameOf = (): HTMLIFrameElement => document.querySelector('iframe.review-frame') as HTMLIFrameElement;
+  const note = (): string | null => document.querySelector('.review-restore-note')?.textContent ?? null;
+
+  it('draws no sentence at the first draw, nor at its own load', async () => {
+    await open();
+    await loads.drawn(1); // the first draw's own load
+    expect(rec.sets).toEqual([COPY]);
+    expect(note()).toBeNull();
+    expect(frameOf().getAttribute('data-restores')).toBe('0');
+  });
+
+  it('a navigation the page did not cause puts the copy back: the same srcdoc, the sandbox untouched, one sentence beside the frame', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    navigates(frame);
+    expect(rec.sets).toEqual([COPY, COPY]);
+    expect(frame.srcdoc).toBe(COPY);
+    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(note()).toBe(RESTORED);
+    expect(frame.nextElementSibling?.className).toBe('review-restore-note');
+    expect(frame.nextElementSibling?.getAttribute('role')).toBe('status');
+    expect(frame.getAttribute('data-restores')).toBe('1');
+  });
+
+  it('keeps nothing and asks for nothing: no new request, no storage, cookie or history entry, no token, no message channel', async () => {
+    const adds = vi.spyOn(window, 'addEventListener');
+    const posts = vi.spyOn(window, 'postMessage');
+    const pushes = vi.spyOn(window.history, 'pushState');
+    const replaces = vi.spyOn(window.history, 'replaceState');
+    try {
+      await open();
+      const frame = frameOf();
+      const asked = fetchSpy.mock.calls.length;
+      const addsBefore = adds.mock.calls.length;
+      const replacesBefore = replaces.mock.calls.length;
+      await loads.drawn(1);
+      navigates(frame);
+      ownLoad(frame);
+      navigates(frame);
+      ownLoad(frame);
+      expect(fetchSpy.mock.calls.length, 'the restore made no request').toBe(asked);
+      expect(adds.mock.calls.length, 'the restore added no listener to the window').toBe(addsBefore);
+      expect(adds.mock.calls.map((c) => c[0])).not.toContain('message');
+      expect(posts).not.toHaveBeenCalled();
+      expect(pushes).not.toHaveBeenCalled();
+      expect(replaces.mock.calls.length, 'the restore wrote no history entry').toBe(replacesBefore);
+      expect(window.sessionStorage.length).toBe(0);
+      expect(window.localStorage.length).toBe(0);
+      expect(document.cookie).toBe('');
+      expect(window.history.state).toBeNull();
+      expect(document.documentElement.outerHTML).not.toContain(TOKEN);
+      expect(window.location.href).not.toContain(TOKEN);
+    } finally {
+      adds.mockRestore();
+      posts.mockRestore();
+      pushes.mockRestore();
+      replaces.mockRestore();
+    }
+  });
+
+  it('the page\'s own draws are not navigations: the first draw\'s load and each restore\'s load cause no restore', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1); // the first draw's own load arrived, and caused no restore
+    expect(rec.sets).toHaveLength(1);
+    navigates(frame);
+    expect(rec.sets, 'one navigation, one restore').toHaveLength(2);
+    ownLoad(frame); // the restore's own load arrives
+    expect(rec.sets, 'the restore\'s own load causes no second restore').toHaveLength(2);
+    expect(frame.getAttribute('data-restores')).toBe('1');
+    navigates(frame);
+    expect(rec.sets).toHaveLength(3);
+    ownLoad(frame);
+    expect(rec.sets).toHaveLength(3);
+    expect(frame.getAttribute('data-restores')).toBe('2');
+  });
+
+  it('the bound is three restores within ten seconds', () => {
+    expect([MAX_RESTORES, RESTORE_WINDOW_MS]).toEqual([3, 10_000]);
+  });
+
+  it('a copy that leaves its frame again and again, fast, is restored exactly three times, then left as it is, with the stop sentence', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    for (let i = 1; i <= 3; i += 1) {
+      clock += 100; // fast taps: well under ten seconds in all
+      navigates(frame);
+      expect(note(), `restore ${i}`).toBe(RESTORED);
+      expect(rec.sets, `restore ${i}`).toHaveLength(1 + i);
+      ownLoad(frame);
+    }
+    expect(frame.getAttribute('data-restores')).toBe('3');
+    navigates(frame); // the fourth time
+    expect(rec.sets, 'no fourth restore').toHaveLength(4);
+    expect(note()).toBe(STOPPED);
+    expect(frame.getAttribute('data-restores')).toBe('3');
+    expect(frame.getAttribute('sandbox')).toBe('');
+    navigates(frame); // and the fifth: still left as it is
+    await settle();
+    expect(rec.sets).toHaveLength(4);
+    expect(rec.sets, 'the page drew nothing after the third restore').toHaveLength(4);
+    expect(note()).toBe(STOPPED);
+    expect(document.querySelectorAll('.review-restore-note')).toHaveLength(1);
+  });
+
+  it('spaced taps are restored every time: four taps, each more than ten seconds after the last, give four restores and a fifth still restores', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    for (let i = 1; i <= 5; i += 1) {
+      clock += 10_001; // a literal, so a changed constant reds this row too
+      navigates(frame);
+      expect(frame.getAttribute('data-restores'), `tap ${i}`).toBe(String(i));
+      expect(frame.srcdoc, `tap ${i}`).toBe(COPY);
+      expect(rec.sets, `tap ${i}`).toHaveLength(1 + i);
+      expect(note(), `tap ${i}`).toBe(RESTORED);
+      ownLoad(frame);
+    }
+    expect(note()).not.toBe(STOPPED);
+    expect(document.querySelectorAll('.review-restore-note')).toHaveLength(1);
+  });
+
+  it('the window is exclusive at its far edge: a fourth navigation 9 999 ms after the first restore is stopped', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    for (const t of [0, 1, 2]) {
+      clock = t;
+      navigates(frame);
+      ownLoad(frame);
+    }
+    expect(frame.getAttribute('data-restores')).toBe('3');
+    clock = 9_999;
+    navigates(frame);
+    expect(note()).toBe(STOPPED);
+    expect(rec.sets, 'no fourth restore').toHaveLength(4);
+    expect(frame.getAttribute('data-restores')).toBe('3');
+  });
+
+  it('a navigation exactly ten seconds after the first restore is restored: that restore has left the window', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    for (const t of [0, 1, 2]) {
+      clock = t;
+      navigates(frame);
+      ownLoad(frame);
+    }
+    clock = 10_000; // a literal, so a changed constant reds this row too
+    navigates(frame);
+    expect(note()).toBe(RESTORED);
+    expect(rec.sets, 'a fourth restore').toHaveLength(5);
+    expect(frame.getAttribute('data-restores')).toBe('4');
+  });
+
+  it('once stopped the stop is final: after the window passes, a navigation restores nothing and keeps the stop sentence', async () => {
+    await open();
+    const frame = frameOf();
+    await loads.drawn(1);
+    for (let i = 1; i <= 3; i += 1) {
+      navigates(frame);
+      ownLoad(frame);
+    }
+    navigates(frame);
+    expect(note()).toBe(STOPPED);
+    expect(rec.sets).toHaveLength(4);
+    clock += RESTORE_WINDOW_MS * 3;
+    navigates(frame);
+    await settle();
+    expect(rec.sets, 'no restore after the stop, however long after').toHaveLength(4);
+    expect(note()).toBe(STOPPED);
+    expect(frame.getAttribute('data-restores')).toBe('3');
+    expect(document.querySelectorAll('.review-restore-note')).toHaveLength(1);
+  });
+
+  it('says "That link cannot open from this page." when the page lists no links above the copy', async () => {
+    fetchSpy.mockImplementation(async () => answer(200, '<!doctype html><p>no links</p>'));
+    await open();
+    expect(document.querySelector('.review-links')).toBeNull();
+    await loads.drawn(1);
+    navigates(frameOf());
+    expect(note()).toBe(RESTORED_NO_LINKS);
+  });
+});
+
 // ---- lab mode (X3 R2.3, M-X3.16; coordinator's ruling on review finding N1) ---------------------------------------------
 // `/review#lab` is the measurement page: it clears the fragment as usual, makes no request of any kind, and mounts the
-// committed fixture's two copies through the same frame code a copy uses. Six lines, each answered by the operator
-// against a reference the page draws; the script and link lines hold until both load markers read "Drew" (the reader
-// lab's rule: every check has a positive signal that it ran).
+// committed fixture's two copies through the same frame code a copy uses. Seven lines, each answered by the operator
+// against a reference the page draws; an "Unchanged" on the script and link lines holds until both load markers read
+// "Drew" (the reader lab's rule: every check has a positive signal that it ran), and a "Changed" or "Cannot tell" never holds.
 
 const CHROME_LINUX = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const EDGE_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0';
@@ -289,67 +527,114 @@ const CHROME_ANDROID_PHONE = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebK
 const CHROME_ANDROID_TABLET = 'Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const JSDOM_UA = 'Mozilla/5.0 (linux) AppleWebKit/537.36 (KHTML, like Gecko) jsdom/26.1.0';
 
-const KEYS = ['inline-style', 'data-image', 'data-font', 'nested-frame', 'script-off', 'link-inert'] as const;
+const KEYS = ['inline-style', 'data-image', 'data-font', 'nested-frame', 'script-off', 'link-inert', 'link-self'] as const;
 const NOT_MEASURED = 'Not measured';
 
-describe('the engine and OS words of the measurement result (R2.3)', () => {
+describe('the engine and OS words of the measurement result (R2.3, D-9028: deviceOf is the one parser)', () => {
   it.each([
-    ['desktop Chrome', CHROME_LINUX, 0, 'Chromium', 'desktop'],
-    ['desktop Edge', EDGE_WINDOWS, 0, 'Chromium', 'desktop'],
-    ['desktop Firefox', FIREFOX_LINUX, 0, 'Firefox', 'desktop'],
-    ['desktop Safari', SAFARI_MAC, 0, 'WebKit', 'desktop'],
-    ['iPhone Safari', SAFARI_IPHONE, 5, 'WebKit', 'phone'],
-    ['iPhone Chrome (CriOS)', CHROME_IPHONE, 5, 'WebKit', 'phone'],
-    ['iPhone Firefox (FxiOS)', FIREFOX_IPHONE, 5, 'WebKit', 'phone'],
-    ['iPad with an iPad user agent', SAFARI_IPAD, 5, 'WebKit', 'tablet'],
-    ['iPad with a Mac user agent and touch points', SAFARI_MAC, 5, 'WebKit', 'tablet'],
-    ['a Mac with one touch point is not an iPad', SAFARI_MAC, 1, 'WebKit', 'desktop'],
-    ['Android Chrome phone', CHROME_ANDROID_PHONE, 5, 'Chromium', 'phone'],
-    ['Android Chrome tablet', CHROME_ANDROID_TABLET, 5, 'Chromium', 'tablet'],
-    ['Android Firefox phone', FIREFOX_ANDROID_PHONE, 5, 'Firefox', 'phone'],
-    ['Android Firefox tablet', FIREFOX_ANDROID_TABLET, 5, 'Firefox', 'tablet'],
-    ['jsdom', JSDOM_UA, 0, 'unknown', 'desktop'],
-    ['an empty user agent', '', 0, 'unknown', 'desktop'],
-  ] as const)('%s reads %s / %s', (_name, ua, touch, engine, os) => {
-    expect(labEngineOf(ua, touch)).toBe(engine);
-    expect(labOsClassOf(ua, touch)).toBe(os);
+    ['desktop Chrome', CHROME_LINUX, 'Chromium', 'Linux'],
+    ['desktop Edge', EDGE_WINDOWS, 'Chromium', 'Windows'],
+    ['desktop Firefox', FIREFOX_LINUX, 'Firefox', 'Linux'],
+    ['desktop Safari', SAFARI_MAC, 'WebKit', 'macOS'],
+    ['iPhone Safari', SAFARI_IPHONE, 'WebKit', 'iOS'],
+    ['iPhone Chrome (CriOS)', CHROME_IPHONE, 'WebKit', 'iOS'],
+    ['iPhone Firefox (FxiOS)', FIREFOX_IPHONE, 'WebKit', 'iOS'],
+    ['iPad Safari', SAFARI_IPAD, 'WebKit', 'iOS'],
+    ['Android Chrome phone', CHROME_ANDROID_PHONE, 'Chromium', 'Android'],
+    ['Android Chrome tablet', CHROME_ANDROID_TABLET, 'Chromium', 'Android'],
+    ['Android Firefox phone', FIREFOX_ANDROID_PHONE, 'Firefox', 'Android'],
+    ['Android Firefox tablet', FIREFOX_ANDROID_TABLET, 'Firefox', 'Android'],
+    ['jsdom', JSDOM_UA, 'WebKit', 'other'],
+    ['an empty user agent', '', 'unknown', 'other'],
+  ] as const)('%s reads %s / %s', (_name, ua, engine, os) => {
+    expect(labDeviceWords(ua)).toEqual({ engine, os });
+  });
+
+  it('maps each engine class of the reader lab to the word of M-X3.16, and drops the version', () => {
+    expect(labEngineWord('Blink 141')).toBe('Chromium');
+    expect(labEngineWord('Gecko 140')).toBe('Firefox');
+    expect(labEngineWord('WebKit 19')).toBe('WebKit');
+    expect(labEngineWord('WebKit')).toBe('WebKit');
+    expect(labEngineWord('unknown')).toBe('unknown');
+    expect(labEngineWord('')).toBe('unknown');
+    expect(labEngineWord('Trident 11')).toBe('unknown');
+  });
+
+  it('keeps no user-agent parser of its own: the entry reads `deviceOf` and no regular expression over the user agent', () => {
+    const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'review', 'main.ts'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    expect(source).toMatch(/^import \{ deviceOf, type LabFeatures \} from '\.\.\/readerLab\/device';$/m);
+    expect(source).not.toMatch(/\/(?:iPhone|iPad|Android|Firefox|Chrome|Macintosh)/);
+    expect(source).not.toMatch(/\blabEngineOf\b|\blabOsClassOf\b/);
   });
 });
 
 describe('the result block (R2.3)', () => {
-  it('is one header line and the six keys in the fixed order, each with its word', () => {
+  it('is one header line and the seven keys in the fixed order, each with its word', () => {
     const answers: LabAnswers = {
       'inline-style': 'drew', 'data-image': 'did-not-draw', 'data-font': 'cannot-tell', 'nested-frame': 'drew',
-      'script-off': 'unchanged', 'link-inert': 'changed',
+      'script-off': 'unchanged', 'link-inert': 'changed', 'link-self': 'restored',
     };
-    expect(labResultText('Chromium', 'desktop', answers).split('\n')).toEqual([
-      'review-lab 1 · Chromium · desktop',
+    expect(labResultText('Chromium', 'Linux', answers).split('\n')).toEqual([
+      'review-lab 1 · Chromium · Linux',
       'inline-style: drew',
       'data-image: did-not-draw',
       'data-font: cannot-tell',
       'nested-frame: drew',
       'script-off: unchanged',
       'link-inert: changed',
+      'link-self: restored',
     ]);
     expect([...LAB_KEYS]).toEqual([...KEYS]);
+    expect(KEYS).toHaveLength(7);
+  });
+
+  it('link-self: "kept" and "restored" pass and wait for both load markers; "gone" and "cannot-tell" never wait', () => {
+    const word = (a: LabAnswers): string => labResultText('Chromium', 'Linux', a).split('\n')[7] ?? '';
+    for (const pass of ['kept', 'restored'] as const) {
+      expect(word({ 'link-self': pass }), `${pass}, no markers`).toBe('link-self: not-measured');
+      expect(word({ 'link-self': pass, 'inline-style': 'drew' })).toBe('link-self: not-measured');
+      expect(word({ 'link-self': pass, 'nested-frame': 'drew' })).toBe('link-self: not-measured');
+      expect(word({ 'link-self': pass, 'inline-style': 'drew', 'nested-frame': 'did-not-draw' })).toBe('link-self: not-measured');
+      expect(word({ 'link-self': pass, 'inline-style': 'drew', 'nested-frame': 'drew' })).toBe(`link-self: ${pass}`);
+    }
+    for (const fail of ['gone', 'cannot-tell'] as const) {
+      expect(word({ 'link-self': fail }), `${fail}, no markers`).toBe(`link-self: ${fail}`);
+      expect(word({ 'link-self': fail, 'inline-style': 'did-not-draw' })).toBe(`link-self: ${fail}`);
+      expect(word({ 'link-self': fail, 'inline-style': 'drew', 'nested-frame': 'drew' })).toBe(`link-self: ${fail}`);
+    }
+    expect(word({})).toBe('link-self: not-measured');
   });
 
   it('reads not-measured for a line nobody answered', () => {
-    expect(labResultText('unknown', 'phone', {}).split('\n')).toEqual([
-      'review-lab 1 · unknown · phone',
+    expect(labResultText('unknown', 'other', {}).split('\n')).toEqual([
+      'review-lab 1 · unknown · other',
       ...KEYS.map((k) => `${k}: not-measured`),
     ]);
   });
 
-  it('holds the script and link lines to not-measured until both load markers read drew', () => {
+  it('holds an "unchanged" on the script and link lines to not-measured until both load markers read drew', () => {
     const answers: LabAnswers = { 'script-off': 'unchanged', 'link-inert': 'unchanged' };
-    const words = (a: LabAnswers): string[] => labResultText('Chromium', 'desktop', a).split('\n').slice(5);
+    const words = (a: LabAnswers): string[] => labResultText('Chromium', 'Linux', a).split('\n').slice(5, 7);
     expect(words(answers)).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
     expect(words({ ...answers, 'inline-style': 'drew' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
     expect(words({ ...answers, 'nested-frame': 'drew' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
     expect(words({ ...answers, 'inline-style': 'drew', 'nested-frame': 'did-not-draw' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
     expect(words({ ...answers, 'inline-style': 'cannot-tell', 'nested-frame': 'drew' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
     expect(words({ ...answers, 'inline-style': 'drew', 'nested-frame': 'drew' })).toEqual(['script-off: unchanged', 'link-inert: unchanged']);
+  });
+
+  it('never holds a "changed" or a "cannot-tell", whatever the load markers read: a canary that ran is recorded (review I1)', () => {
+    const words = (a: LabAnswers): string[] => labResultText('Chromium', 'Linux', a).split('\n').slice(5, 7);
+    // The canary ran: the operator saw its red block and may have marked a load marker "Did not draw", or answered none.
+    expect(words({ 'script-off': 'changed', 'link-inert': 'changed', 'inline-style': 'did-not-draw' }))
+      .toEqual(['script-off: changed', 'link-inert: changed']);
+    expect(words({ 'script-off': 'changed', 'inline-style': 'did-not-draw', 'nested-frame': 'did-not-draw' }))
+      .toEqual(['script-off: changed', 'link-inert: not-measured']);
+    expect(words({ 'script-off': 'changed' })).toEqual(['script-off: changed', 'link-inert: not-measured']);
+    expect(words({ 'script-off': 'cannot-tell', 'link-inert': 'cannot-tell' })).toEqual(['script-off: cannot-tell', 'link-inert: cannot-tell']);
+    // An unanswered marker still holds an "unchanged".
+    expect(words({ 'script-off': 'unchanged', 'inline-style': 'drew' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
+    expect(words({ 'link-inert': 'unchanged', 'nested-frame': 'drew' })).toEqual(['script-off: not-measured', 'link-inert: not-measured']);
   });
 });
 
@@ -372,7 +657,7 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
 
   const lab = (): HTMLElement => {
     const root = mount('#lab');
-    startReviewPage(window);
+    startReviewPage(window, now);
     return root;
   };
   const row = (key: string): HTMLElement => document.querySelector(`.review-lab-row[data-key="${key}"]`) as HTMLElement;
@@ -429,14 +714,15 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     for (const f of frames) expect(f.className).toContain('review-frame');
   });
 
-  it('draws six lines in the fixed order, each with its key, three answer buttons and "Not measured"', () => {
+  it('draws seven lines in the fixed order, each with its key, its answer buttons and "Not measured"', () => {
     lab();
     expect([...document.querySelectorAll('.review-lab-row')].map((r) => r.getAttribute('data-key'))).toEqual([...KEYS]);
     for (const k of KEYS) expect(status(k), k).toBe(NOT_MEASURED);
     for (const k of KEYS.slice(0, 4)) expect(labels(k), k).toEqual(['Drew', 'Did not draw', 'Cannot tell']);
-    for (const k of KEYS.slice(4)) expect(labels(k), k).toEqual(['Unchanged', 'Changed', 'Cannot tell']);
-    // The only controls are those 18 buttons.
-    expect(document.querySelectorAll('button, a, input, select, textarea')).toHaveLength(18);
+    for (const k of ['script-off', 'link-inert']) expect(labels(k), k).toEqual(['Unchanged', 'Changed', 'Cannot tell']);
+    expect(labels('link-self')).toEqual(['Copy still here', 'Copy came back with the sentence', 'Copy gone', 'Cannot tell']);
+    // The only controls are those 22 buttons.
+    expect(document.querySelectorAll('button, a, input, select, textarea')).toHaveLength(22);
   });
 
   it('draws a reference beside each line, by the page itself: the swatches in the expected colours, a sample in the fixture font', () => {
@@ -451,7 +737,12 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     expect(colourOf('inline-style')).toEqual([rgb(LAB_GROUND)]);
     expect(colourOf('data-image')).toEqual([rgb(LAB_IMAGE_COLOUR)]);
     expect(colourOf('nested-frame')).toEqual([rgb(LAB_SWATCH_COLOUR)]);
-    expect(colourOf('script-off')).toEqual([rgb(LAB_GROUND), rgb(LAB_SWATCH_COLOUR)]);
+    // The script line's reference is the failure itself: the pure red block reading SCRIPT RAN, which the canary would add.
+    expect(colourOf('script-off')).toEqual([]);
+    const failure = row('script-off').querySelector('.review-lab-ref .review-lab-failure') as HTMLElement;
+    expect(failure.textContent).toBe('SCRIPT RAN');
+    expect(failure.style.backgroundColor).toBe(rgb('#ff0000'));
+    expect(row('script-off').textContent).toContain('no red block reading SCRIPT RAN');
     const sample = row('data-font').querySelector('.review-lab-ref .review-lab-sample') as HTMLElement;
     expect(sample.textContent).toBe('Review lab sample 0123 Hamburgefonstiv');
     expect(sample.style.fontFamily).toContain('ReviewLabRef');
@@ -475,7 +766,7 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     expect([...row('data-image').querySelectorAll('button')].map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true']);
   });
 
-  it('holds the script and link lines while either load marker is unanswered or answered other than "Drew" (M-X3.16 positive signal)', () => {
+  it('holds an "Unchanged" on the script and link lines while either load marker is unanswered or answered other than "Drew" (M-X3.16 positive signal)', () => {
     lab();
     tap('script-off', 'Unchanged');
     tap('link-inert', 'Unchanged');
@@ -491,10 +782,14 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     expect(status('script-off')).toMatch(/^Held/);
   });
 
-  it('takes the held answers once both load markers read "Drew", and holds them again when one changes', () => {
+  it('takes an "Unchanged" once both load markers read "Drew" and holds it again when one changes; a "Changed" is never held', () => {
     lab();
     tap('script-off', 'Unchanged');
     tap('link-inert', 'Changed');
+    // The "Changed" counts at once, with both markers unanswered; the "Unchanged" waits.
+    expect(status('link-inert')).toBe('Changed');
+    expect(word('link-inert')).toBe('link-inert: changed');
+    expect(word('script-off')).toBe('script-off: not-measured');
     tap('inline-style', 'Drew');
     tap('nested-frame', 'Drew');
     expect(status('script-off')).toBe('Unchanged');
@@ -503,8 +798,73 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     expect(word('link-inert')).toBe('link-inert: changed');
     tap('inline-style', 'Cannot tell');
     expect(word('script-off')).toBe('script-off: not-measured');
-    expect(word('link-inert')).toBe('link-inert: not-measured');
+    expect(word('link-inert')).toBe('link-inert: changed');
     expect(status('script-off')).toMatch(/^Held/);
+  });
+
+  it('link-self: "Copy still here" and "Copy came back with the sentence" are held like "Unchanged"; "Copy gone" and "Cannot tell" count at once (D-9029)', () => {
+    lab();
+    tap('link-self', 'Copy still here');
+    expect(status('link-self')).toMatch(/^Held \(Copy still here\)/);
+    expect(word('link-self')).toBe('link-self: not-measured');
+    tap('link-self', 'Copy came back with the sentence');
+    expect(status('link-self')).toMatch(/^Held \(Copy came back with the sentence\)/);
+    expect(word('link-self')).toBe('link-self: not-measured');
+    tap('inline-style', 'Drew');
+    expect(word('link-self')).toBe('link-self: not-measured');
+    tap('nested-frame', 'Drew');
+    expect(status('link-self')).toBe('Copy came back with the sentence');
+    expect(word('link-self')).toBe('link-self: restored');
+    tap('link-self', 'Copy still here');
+    expect(word('link-self')).toBe('link-self: kept');
+    tap('inline-style', 'Cannot tell');
+    expect(word('link-self')).toBe('link-self: not-measured');
+    tap('link-self', 'Copy gone');
+    expect(status('link-self')).toBe('Copy gone');
+    expect(word('link-self')).toBe('link-self: gone');
+    tap('link-self', 'Cannot tell');
+    expect(word('link-self')).toBe('link-self: cannot-tell');
+  });
+
+  it('records a canary that ran: "Changed" on script-off stands with a load marker answered "Did not draw" (review I1)', () => {
+    lab();
+    tap('inline-style', 'Did not draw');
+    tap('script-off', 'Changed');
+    expect(word('script-off')).toBe('script-off: changed');
+    expect(status('script-off')).toBe('Changed');
+    tap('script-off', 'Cannot tell');
+    expect(word('script-off')).toBe('script-off: cannot-tell');
+  });
+
+  it('says what can be tapped, what an unchanged frame looks like, the popup sentence, and where the inner frame is (review M1-M4)', () => {
+    lab();
+    const link = row('link-inert').textContent ?? '';
+    expect(link).toContain('"a link" in the Markdown copy');
+    expect(link).toContain('Links in this page');
+    expect(link).toMatch(/inner frame have no address/);
+    expect(link).toContain('A link that opens a new tab is a popup the empty sandbox blocks; the frame itself must still show its copy.');
+    expect(link).toMatch(/unchanged frame still shows its copy/);
+    // The link-self line says where its link is (the mockup copy's list, near its end, scrolled to inside that frame), what to
+    // tap, and what each answer looks like (D-9029).
+    const self = row('link-self').textContent ?? '';
+    // Before the tap instruction, the line has the operator check that no sentence stands before any tap (R2.3 review, M3).
+    expect(self).toContain('Before you tap anything, look under the mockup copy’s frame: no sentence stands there.');
+    expect(self).toContain('If a sentence already stands there before any tap, answer "Copy gone"');
+    expect(self.indexOf('Before you tap anything')).toBeLessThan(self.indexOf('Scroll inside the mockup copy’s frame to its list'));
+    expect(self).toContain('Scroll inside the mockup copy’s frame to its list "Links in this page"');
+    expect(self).toContain('near the end of the frame');
+    expect(self).toContain('page.md');
+    expect(self).toContain('a link written with no target');
+    expect(self).toContain('"Copy still here": the frame shows its copy as before');
+    expect(self).toContain('"Copy came back with the sentence"');
+    expect(self).toContain('That link cannot open from this page.');
+    expect(self).toContain('"Copy gone"');
+    expect(self).toContain('inline-style and nested-frame both read Drew');
+    const script = row('script-off').textContent ?? '';
+    expect(script).toContain('Each copy shows no red block reading SCRIPT RAN');
+    expect(script).not.toMatch(/red anywhere/i);
+    expect(script).toMatch(/crimson/);
+    for (const k of ['nested-frame', 'data-font']) expect(row(k).textContent, k).toContain('Scroll inside the mockup copy’s frame to its inner frame');
   });
 
   it('shows one copyable result block: a pre, its header from the user agent, the keys in order, and no clipboard or storage write', () => {
@@ -513,17 +873,18 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
     try {
       lab();
       expect(document.querySelectorAll('pre')).toHaveLength(1);
-      expect(resultLines()).toEqual(['review-lab 1 · Chromium · desktop', ...KEYS.map((k) => `${k}: not-measured`)]);
+      expect(resultLines()).toEqual(['review-lab 1 · Chromium · Linux', ...KEYS.map((k) => `${k}: not-measured`)]);
       tap('inline-style', 'Drew');
       tap('data-image', 'Drew');
       tap('data-font', 'Did not draw');
       tap('nested-frame', 'Drew');
       tap('script-off', 'Unchanged');
       tap('link-inert', 'Unchanged');
+      tap('link-self', 'Copy came back with the sentence');
       expect(document.querySelector('pre.review-lab-result')?.textContent).toBe([
-        'review-lab 1 · Chromium · desktop',
+        'review-lab 1 · Chromium · Linux',
         'inline-style: drew', 'data-image: drew', 'data-font: did-not-draw', 'nested-frame: drew',
-        'script-off: unchanged', 'link-inert: unchanged',
+        'script-off: unchanged', 'link-inert: unchanged', 'link-self: restored',
       ].join('\n'));
       expect(writeText).not.toHaveBeenCalled();
       expect(window.sessionStorage.length).toBe(0);
@@ -535,16 +896,60 @@ describe('lab mode: /review#lab (R2.3, M-X3.16)', () => {
   });
 
   it('names the engine and the OS class from the user agent in the first line of the block', () => {
-    for (const [ua, touch, header] of [
-      [FIREFOX_LINUX, 0, 'review-lab 1 · Firefox · desktop'],
-      [SAFARI_IPHONE, 5, 'review-lab 1 · WebKit · phone'],
-      [SAFARI_MAC, 5, 'review-lab 1 · WebKit · tablet'],
-      [JSDOM_UA, 0, 'review-lab 1 · unknown · desktop'],
+    for (const [ua, header] of [
+      [FIREFOX_LINUX, 'review-lab 1 · Firefox · Linux'],
+      [SAFARI_IPHONE, 'review-lab 1 · WebKit · iOS'],
+      [SAFARI_MAC, 'review-lab 1 · WebKit · macOS'],
+      [CHROME_ANDROID_PHONE, 'review-lab 1 · Chromium · Android'],
+      [EDGE_WINDOWS, 'review-lab 1 · Chromium · Windows'],
+      ['', 'review-lab 1 · unknown · other'],
     ] as const) {
       vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua);
-      Object.defineProperty(window.navigator, 'maxTouchPoints', { value: touch, configurable: true });
       lab();
       expect(resultLines()[0]).toBe(header);
+    }
+  });
+
+  it('each lab frame restores its own copy on its own, bounded at three within ten seconds per frame (the clock does not move here), with the sentence beside that frame only (D-9029)', async () => {
+    const rec = recordSrcdoc();
+    const loads = watchLoads();
+    try {
+      lab();
+      const [md, mock] = [...document.querySelectorAll('iframe')] as HTMLIFrameElement[];
+      expect(rec.sets).toEqual([LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY]);
+      await loads.drawn(2); // both first draws' own loads
+      expect(rec.sets).toHaveLength(2);
+      const noteOf = (f: HTMLIFrameElement): string | null => f.parentElement?.querySelector('.review-restore-note')?.textContent ?? null;
+      expect([noteOf(md!), noteOf(mock!)]).toEqual([null, null]);
+      // The mockup copy leaves its frame once: only it is put back, with the sentence for a page that lists no links.
+      navigates(mock!);
+      expect(rec.sets).toEqual([LAB_MARKDOWN_COPY, LAB_MOCKUP_COPY, LAB_MOCKUP_COPY]);
+      expect([noteOf(md!), noteOf(mock!)]).toEqual([null, RESTORED_NO_LINKS]);
+      expect([md!.getAttribute('data-restores'), mock!.getAttribute('data-restores')]).toEqual(['0', '1']);
+      ownLoad(mock!);
+      expect(rec.sets).toHaveLength(3);
+      // The Markdown copy leaves its frame again and again: three restores, then it is left as it is, and the mockup's count
+      // is its own (one restore so far, so one more is still allowed there).
+      for (let i = 1; i <= 3; i += 1) {
+        navigates(md!);
+        ownLoad(md!);
+      }
+      expect(rec.sets.filter((s) => s === LAB_MARKDOWN_COPY)).toHaveLength(4);
+      navigates(md!);
+      expect(rec.sets.filter((s) => s === LAB_MARKDOWN_COPY)).toHaveLength(4);
+      expect(noteOf(md!)).toBe(STOPPED);
+      expect(md!.getAttribute('data-restores')).toBe('3');
+      expect(noteOf(mock!)).toBe(RESTORED_NO_LINKS);
+      navigates(mock!);
+      expect(rec.sets.filter((s) => s === LAB_MOCKUP_COPY)).toHaveLength(3);
+      expect(mock!.getAttribute('data-restores')).toBe('2');
+      expect([md!.getAttribute('sandbox'), mock!.getAttribute('sandbox')]).toEqual(['', '']);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(xhrOpen).not.toHaveBeenCalled();
+      expect(beacon).not.toHaveBeenCalled();
+    } finally {
+      rec.stop();
+      loads.stop();
     }
   });
 

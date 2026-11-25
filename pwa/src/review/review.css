@@ -113,6 +113,16 @@ a:focus-visible {
   background: #ffffff;
 }
 
+/* The one sentence under a copy the page put back, or stopped putting back (D-9029). */
+.review-restore-note {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--review-line);
+  border-radius: 8px;
+  background: var(--review-banner-bg);
+  font-weight: 600;
+}
+
 /* Lab mode (X3 R2.3, `/review#lab`): the measurement page. Two short frames, then six lines, each with its reference and
    its three answers, then the result block. Same palette, same 16px gutter, no horizontal scroll. */
 .review-lab-title {
@@ -185,6 +195,14 @@ a:focus-visible {
 .review-lab-swatch-wide {
   width: 120px;
   height: 24px;
+}
+
+/* The page's reference for the canary's block: the same pure red and white words the fixture's script would add. */
+.review-lab-failure {
+  display: inline-block;
+  padding: 4px 8px;
+  color: #ffffff;
+  font: 700 1rem/1.25 sans-serif;
 }
 
 .review-lab-sample {

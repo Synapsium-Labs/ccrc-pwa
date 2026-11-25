@@ -412,6 +412,8 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R2-M14 | `src/review/labFixture.ts` | a copy's `DOCS_EXPORT_CSP` meta removed from the fixture | `review-lab-fixture`: the fixture no longer equals the builder's bytes (re-pass I3) |
 | NDR-X3-R2-M15 | `reader-lab-scans.test.ts` | rule 3's allowance accepts any value in `main.ts` | `reader-lab-scans` planted control: `'allow-scripts'` in `main.ts` must red (re-pass m13) |
 | NDR-X3-R2-M16 | `vite.config.ts` | `reviewPageWithoutManifest` dropped, so the PWA plugin's manifest link stays in the built page | `review-built` manifest row (R2.1 finding: a blocked request under the page's policy, and lab mode makes none); the same row pins that the shell keeps its own link |
+| NDR-X3-R2-M17 | `src/review/main.ts` | the restore window ignored, so three restores in the copy's life stop it (D-9029) | `review-page` spaced-taps row and the exactly-ten-seconds row |
+| NDR-X3-R2-M18 | `src/review/main.ts` | the stop not final, so a navigation after the window passes restores again (D-9029) | `review-page` final-stop row |
 | NDR-X3-R3-M1 | `review/routes.ts` | the list accepts any section | `review-routes` bad-query row (F15) |
 | NDR-X3-R3-M2 | `review/routes.ts` | pin of an unknown id answers 200 | `review-routes` unknown-share row (F15) |
 | NDR-X3-R3-M3 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
@@ -488,6 +490,33 @@ Three departures, defined by fix round 1 of run 2633 from this wave's issued blo
 - **D-8835 (2026-11-20)** — review-source-ref-spellings. Departs from this plan's Task R1.1, its `isReviewSource` interface: "`parseDocsRef` for `branch` and `servedRef`". `parseDocsRef` takes either spelling, bare or qualified, so `main` and `refs/heads/main` would both pass as `branch`, and a store keyed by the string would hold two live shares of one file on one branch, against spec §3.7's "At most one live share per project, section, path and branch" (R1.1's Opus review). What changes: `branch` is checked with `isDocsBareRef` and `servedRef` with `isDocsQualifiedRef`, the spellings the docs reader's own pin parser takes for a draft's branch and a served ref (`server/src/docs/policy.ts`); both are still `shared/docs.ts`'s grammars, so the rule "built only from the docs grammars" holds. R1.4's served-ref row already records `refs/remotes/origin/b`. Lands with R1.
 
 - **D-8836 (2026-11-20)** — draft-review-retained-byte-admission. Clarifies the departure from a strict instantaneous reading of the draft-review design's T11: “One live share per file, at most 64 live shares, at most 256 MiB stored, each snapshot at most `DOCS_EXPORT_MAX_BYTES` (10 MiB), at most 100 comments a share of at most 2000 characters each.” The plan's R1.2 explicitly admits a same-size re-share at a full store, and §4 requires staging the new bytes before unlinking the old copy. The cap is tested at admission, net only of the current version that this call replaces. Staging can briefly hold both; if the superseded copy's unlink fails, that copy stays charged on subsequent admissions until cleanup is durable, just like an orphan or a failed staging write. The coordinator directed R1.3 to count every retained snapshot byte. An unlinked copy held by a reader's open descriptor is not a retained directory entry; §4 lets that send finish. The per-copy cap, the 64 live slots, and the commit and unlink order do not change. A sparse fixture checks the refusal and recovery at the actual cap without filling the disk (R1-M63–66).
+
+- **D-9027 (2026-11-25)** — review-browser-harness-own-module. Departs from this plan's Task R2.3, its Modify list: "`pwa/browser/app.ts` (a `reviewServer` mode answering `/review`, `/review.html` and `/api/review/*` with exactly R2.2's headers and R1.5's bodies, served from a store the test seeds, and an option for a context with `serviceWorkers: 'allow'`)", and the matching "Waves and file ownership" cell, "`pwa/browser/app.ts` (a server mode and a service-worker context)".
+  - Why: `app.ts` was held by another run's open pull request, and the service-worker context option already exists there (`AppView.serviceWorkers`). `app.ts`'s own header says a second thing a browser row needs is "a module of its own".
+  - What changes: the review server is `pwa/browser/reviewServer.ts`, a test harness that imports `sharedDist` from `app.ts` and changes nothing in it.
+  - The coordinator's two conditions, agreed when it ruled on this departure: every header and body comes from `shared/docsReview.ts` (`REVIEW_PAGE_HEADERS`, `REVIEW_OPEN_HEADERS` and the answer-header names), never a second copy; and no shipped code reaches the file. Results state which guard proves the second. Lands with R2.
+- **D-9028 (2026-11-25)** — review-page-reads-the-lab-device-classes. Departs from this plan's Task R2.1 Files: "(no React; imports only `shared/docsReview.ts`, and R2.3's `./labFixture`)".
+  - Why: the measurement page's result block names an engine and an OS class. The reader lab's `pwa/src/readerLab/device.ts#deviceOf`, a pure module that imports nothing, already owns both. A second user-agent parser in the review page would be a second owner of one fact, and the two disagreed on an iPad that reports a Mac user agent (R2.3's review, I2).
+  - What changes: `pwa/src/review/main.ts` also imports `../readerLab/device`. Its result block's `<OS class>` is `deviceOf`'s OS word (Android, iOS, macOS, Windows, Linux, other: the reader lab design's own vocabulary). Its `<engine>` is M-X3.16's word, mapped from `deviceOf`'s engine class: Blink is Chromium, Gecko is Firefox, WebKit is WebKit, else unknown.
+  - The page still imports no React, no app shell and nothing that makes a request. Lands with R2.
+- **D-9029 (2026-11-25)** — review-page-restores-its-copy. Departs from the draft-review design's §3.5: "Inside the frame every link is inert: `frame-src` falls back to `'none'`, which blocks the frame's own navigations, and the empty sandbox blocks popups." It also departs from this plan's Task R2.3, the measurement page's six lines and six keys: "one line per check with a reference beside it: … and the frame unchanged after a tap on the copy's link", with the result block's "one fixed key per line (`inline-style`, `data-image`, `data-font`, `nested-frame`, `script-off`, `link-inert`)".
+  - Measured (R2.3's browser leg, Chromium 153, the page's exact policy): a link with no `target` sends no request, but the frame navigates to the engine's error page and the copy is gone. Export's mockup "Links in this page" writes such a link for a repository permalink.
+  - Carries out the coordinator's ruling on R2's stop report, and the design's intent that a link inside the copy does nothing and the reviewer keeps reading.
+  - What changes:
+    - The page keeps the copy's text in memory. On a frame load it did not cause (told apart by a count of its own draws whose load has not yet arrived, raised before each draw), it restores the copy with one sentence. A restore draws the copy afresh, so it opens at its top.
+    - The bound is a rate: at most three restores within any ten seconds (the coordinator's second ruling, which replaced "three per opened copy"). A fourth navigation inside that window stops for good: the page tells the reviewer to open the link they were sent and redraws no more. So a reader's spaced taps (ones that never put a fourth navigation within ten seconds of the third-last restore, on average more than about 3.4 seconds apart) never cost the copy, and a copy that drives its own frame quickly is still stopped. The bound holds for copies not made by Export too, since the store keeps whatever the owner's create sends. The page reads an injected clock, so no test waits in real time.
+    - A restore keeps the token dropped and makes no request, no write and no view.
+    - The measurement page gains a seventh line and key, `link-self`, after `link-inert`: a tap on the no-target permalink leaves the reader with the copy, kept or restored (both pass; "copy gone" fails). `link-inert` keeps its meaning (the `_blank` link).
+    - The committed mockup fixture gains a link that Export writes as such a permalink.
+    - §3.5 takes a dated note quoting its sentence; the sentence is not rewritten.
+  - Measured further (the D-9029 review round, Chromium 153, the real flow, the page's exact policy; no request left in any case and the top page stayed `/review`):
+    - An in-page fragment link (`href="#…"`) navigates the frame too: in a srcdoc frame the fragment resolves against the page's own address, so the tap is a navigation to another document, which `frame-src 'none'` refuses. The page restores the copy, but the target does not scroll (its offset was the same before and after). In-page links (headings, a contents list, footnote references and their back links) therefore do nothing inside a copy.
+    - A footnote reference and its back link, tapped four times quickly, gave three restores and then the stop.
+    - A Markdown repository permalink (Export's `ExportLink` shape) is restored like the mockup's.
+  - **Named residual.** A tap before any draw's own load (the first draw or a restore) cannot be told from that draw: the navigation's load would be taken as the draw's, so the copy could be lost with no stop sentence, and after a restore the restore sentence stays up. A tap before the first load could not be reached in Chromium, even with a copy near the size cap; a tap before a restore's load is unmeasured, and so is every other engine. The page cannot close it within its rules (it never reads the frame). The operator's device item says to report an empty frame.
+  - **Bound to R3 (the coordinator's ruling, no longer a candidate).** A copy that Export builds for review holds no link that can navigate the frame: repository permalinks and other outside links are written so that a tap is refused in place and the reader uses "Links in this copy", and in-page fragment links are written as inert text with their target still visible. No release hands out a link before that wave. Working in-page links would need the review page's policy loosened (a base element is forbidden by Export's own policy), which is the operator's call; the coordinator reports it as a known limit of review copies.
+  - Lands with R2.
+- **Note on Task R2.3 (2026-11-25; D-9029).** The measurement page has seven lines and seven keys, `link-self` after `link-inert`, as D-9029 states. The result block's first line and the six earlier keys keep their meanings.
 
 ## Results (design wave X3, run 2633)
 
@@ -641,6 +670,38 @@ For the coordinator to confirm: the reader lab's one anchor joins D-8767 (the re
 
 Wave 46, ticket `x3-r2`, base `main` at `bce2bc52fd`. Deviation numbers issued: D-9027 to D-9029.
 
+**R2.1** (the page, its Vite entry and D-8767). The implementer was Sonnet · high; red first (module not found, 13 docs-scans and 3 reader-lab-scans rows), then green.
+- **The page.** `pwa/review.html` and `pwa/src/review/main.ts`, with no React. The page reads the fragment, then clears it with `replaceState(null, '', '/review')` before anything else, the root lookup included (the review's M3). It shows one button, "Open draft". Only the tap posts the token, once, in the JSON body, with the marker header, `credentials: 'omit'`, `no-store` and `no-referrer`. A malformed token makes no request.
+  - On a 200 it draws the banner, the `https:` links (an inert `DOMParser` parse, each link once, as `rel="noreferrer noopener" target="_blank"`) and the frame. The frame's `sandbox` is the empty string, set before its `srcdoc` and before it is attached.
+  - Any other answer, a missing or non-numeric shared-at header, a body that is not UTF-8 (`fatal: true`) or a network error shows the one failure sentence.
+  - Technical choice: a failure removes the button, so a transient error needs the original link again. A 429 `busy` therefore reads as the failure sentence too, which is what §3.5's "on any failure" says (the review's M5, kept).
+- **The build.** `build.rollupOptions.input` is `{ index, review }`, so the shell keeps its `index` key and its `assets/index-*` names. Workbox `globIgnores` gains `review.html`.
+- **Finding: the PWA plugin's manifest link.** The PWA plugin's `transformIndexHtml` added `<link rel="manifest">` to the review page too, and under its policy that is a blocked request. A build-only plugin (`reviewPageWithoutManifest`, enforced post and listed after VitePWA) takes the link out of `review.html` alone. Its row was red before the plugin existed. It was red again as mutation R2-M16 (1 failure: the link back in the page), then green after a byte-compared restore, 7 of 7. The same row pins that the shell keeps its own link (the coordinator's condition).
+  - Measured side effect: the second input splits a shared `docs-*` chunk out of the shell, so the shell gains one modulepreload. `fonts-built` and `reader-built` pass.
+- **The scans.** `docs-scans` gains `PARSER_HOMES`: one `new DOMParser(` and one `.parseFromString(` each in `docs/mockup/parse.ts` and `review/main.ts`. `reader-lab-scans` gains `FRAME_HOMES` (rule 2) and, in rule 3, the empty-string sandbox in `review/main.ts` only. Each allowance has planted controls: `other.ts` is red, and so are `'allow-scripts'` and `LAB_SANDBOX` in `main.ts`. No other rule needed an allowance.
+- **D-8767.** Its amendments are written into the base, rich-docs and reader lab specs, each marked "(amended 2026-11-25; draft review, X3, D-8767)". Each was checked as a single hit. The ring table's C9 PWA column gains `review/**`, under claim 7004's holder's yes to the exact cell.
+- **Mutation rows (the implementer's).** Each was made with the Edit tool, run alone, then restored and compared byte for byte:
+  - R2-M2, the hash kept: 2 failures (`expected '#Tk3_-…' to be ''`).
+  - R2-M3, a post on load: 6 failures.
+  - R2-M4, the token in `sessionStorage`: 1 failure.
+  - R2-M5, `allow-scripts`: 1 failure in `review-page` and 2 in rule 3.
+  - R2-M7, `globIgnores` without the page: the precache row (`expected [ 'review.html' ] to deeply equal []`).
+  - R2-M10, rule 2 widened to the directory: 1 failure.
+  - R2-M15, rule 3 accepting any value: 1 failure.
+- **Review.** One Opus · high review found no critical issue and one important one: the shared-at header name was spelled in the page and twice on the server.
+  - The fix (I1): the three answer-header names and the read door's answer headers (`REVIEW_OPEN_HEADERS`) are defined once in `shared/docsReview.ts`. The door, the page, the page's tests and R2.3's harness read them.
+  - Minors taken:
+    - the root lookup after the hash (M3);
+    - rows that pin the token's absence from `outerHTML` and from every console line, and the order sandbox, then bytes, then attach (M4);
+    - built-page rows that pin every URL as `data:` or `/assets/` and the page's import closure as free of the shell's entry chunk and React (M1, with an anti-vacuity count);
+    - the shell's manifest link (M2).
+  - M6 holds while R2 lands as one PR: the amendments name R2.3's fixture and anchor. M7 is the scan's known blind spots, which the jsdom sandbox row covers.
+- **Local runs, foreground and unpiped.** All on the tree after the review's fixes:
+  - `review-page` and `review-built` together: 58 of 58 (the main thread);
+  - `review-built`: 9 of 9;
+  - the implementer's earlier runs: `docs-scans`, `reader-lab-scans`, `fonts-built` and `reader-built` all passed, and the pwa typecheck exited 0;
+  - the server review files and the rings: 262 of 262 across 15 files.
+
 **R2.2** (the page routes, the static filter, the service-worker denylist). The implementer was Sonnet · high; red first, then green.
 - **Headers, one home.** The page's policy and its four other headers live once in L0, `shared/docsReview.ts` (`REVIEW_PAGE_CSP`, `REVIEW_PAGE_HEADERS`), so the page route and the browser harness (R2.3) read one copy. This is a technical choice: `shared/docsReview.ts` is R1's file and is not in R2's Files list.
 - **The route.** `GET /review` reads `review.html` from the PWA root on each request and sends the bytes itself. It never calls `sendFile`. It reads per request, not once at registration, so a tree replaced under a running server never pairs an old page with new hashed assets. A null root or an unreadable file is a `no-store` 404, never the shell.
@@ -670,3 +731,58 @@ Wave 46, ticket `x3-r2`, base `main` at `bce2bc52fd`. Deviation numbers issued: 
   - service-worker denylist: 21 of 21, and the review vocabulary with the rings: 141 of 141 (both the implementer's, before the review's fixes, which touched neither);
   - the server source typecheck: exit 0 (the implementer's, before the review's fixes, which changed only `pwaStatic.ts`'s filter and doc).
 - **Process note (reported to the coordinator; its ruling: cite only unpiped figures).** Four main-thread runs were piped through `tail`, against the brief's rule: the auth-gate and census group twice (514 of 515, then 151 of 151) and the auth-gate file twice. A piped run's exit status is the pipe's, so none of them is cited above: every figure above is from an unpiped run.
+
+**R1 timeout carry** (the coordinator's carry: an R1 row of `review-routes.test.ts`, "refuses and disposes an open that crosses idle expiry", timed out once in a merge-queue run). Its own commit, after R2.2's.
+- **Reproduced locally** at one hang in about 50 to 150 repeats of the row, then pinned with probes.
+  - The row read only the last open's status, never its body, so `close()` could begin while that response was still in flight.
+  - Fastify closes the connections that are idle at that moment, once. This keep-alive connection went idle a moment later and stayed open until Fastify's keep-alive timeout, 72 s by default, past the test's 20 s.
+  - The response itself ended and finished normally. The file system was healthy: a probe `stat` answered in 1 ms, and no store operation was pending. The client's 3 s abort never fired.
+  - The door is not at fault and is unchanged.
+- **Who holds what.** No read slot is held by an idle keep-alive connection: the door releases both slots on the response's finish. A reviewer who closes a tab mid-read releases both slots at once, on the socket's `close`, as R1's abort rows pin. The send-idle timer only bounds a send that stops making progress.
+- **The fix, in the test only.** The row reads the body to its end (`'draft bytes'`) before `close()`, with the same assertions: no longer timeout, no retry, no skip.
+  - 400 repeats pass.
+  - Mutation rows: the door's post-open expiry refusal removed reds the row (a 200 with the bytes); the stream's disposal removed reds it too (the stream not destroyed). After a byte-compared restore the file passes 33 of 33.
+- **The same shape elsewhere.** The whole file was checked for a response whose body is never read before the app closes. Three more rows had it, all in R2.2's page-route tests: the policy row, the four header rows and the HTML row. Each now reads the page's bytes to their end. R1's read-door rows already read every body. The general pattern, which can hang any server test under load, was passed by the coordinator to the owner of the queue's test runs.
+
+**R2.3** (the measurement page and the real browser). The implementers were Sonnet · high, in four passes: part 1, part 2, and one fix round after each Opus · high review. The D-9029 pass came after the coordinator's ruling on the stop.
+- **The fixture.** `pwa/test/fixtures/review-lab/` holds a Markdown page, a mockup page, its stylesheet, a 64 x 16 PNG and the repository's own Geist woff2 with its OFL licence beside it. From D-9029 on, the mockup links a sibling page, which Export writes as a repository permalink with no `target`.
+  - `labFixture.ts` is `buildExport`'s output for both, plus one canary each. The canary sets a global and appends its own pure red "SCRIPT RAN" block, touching no marker element (part 1's review, I1).
+  - Its test rebuilds both with the production builder and compares byte for byte. Its write mode, `CCRC_WRITE_FIXTURE=1`, refuses under `CI`.
+  - The file's head and the test's failure message state the coordinator's standing consent: any change that moves Export's bytes (its builder, its stylesheet or `@ccrc/ui`'s tokens) regenerates the file with the one command and commits it with that change. No consent is needed, and the file is never edited by hand.
+  - A one-byte hand edit reds the equality row (3 of 9 failed, "first difference at 2"), and the file was then restored and compared.
+- **The fixture's cost (accepted by the coordinator as a known cost).** `labFixture.ts` is 243,687 bytes. The built page's entry chunk is 247,733 bytes raw, 114,380 gzip and 99,461 brotli, and every reviewer downloads it.
+  - It is a static import because lab mode makes no request at all, so a lazy chunk is not used. A lazy chunk is a candidate follow-up, which would first need the plan's "no request" sentence amended.
+- **Lab mode** (`/review#lab`). It clears the fragment, makes no request of any kind and mounts both copies through the page's own frame code.
+  - There are seven lines (D-9029), each with a reference beside it. The script and link lines hold a passing answer only once both load markers read "Drew"; a failing answer counts at once (part 1's review, I1).
+  - The result block reads `review-lab 1 · <engine> · <OS class>`, then seven `key: word` lines. The engine and the OS class come from the reader lab's `deviceOf` (D-9028).
+  - The reader lab gains one anchor, "Draft review frame (M-X3.16)", inside a sentence, with its census entry, an INLINE entry checked by a row of its own.
+  - Red-first was not observed for two guards, the anchor's census entry and `labFixture.ts`'s scan allowance: both were written before their first run. The witnesses are mutations: the anchor removed (2 of 13 red), and the allowance widened to the directory (2 of 34 red).
+- **The browser harness (D-9027).** `pwa/browser/reviewServer.ts` answers `/review`, `/review.html`, `/review/` and the read door. Every header and body comes from `shared/docsReview.ts`: `REVIEW_PAGE_HEADERS`, `REVIEW_OPEN_HEADERS`, the answer-header names and `REVIEW_NOT_FOUND`, which the real routes now send too (part 2's review, I1).
+  - A row compares the harness's 404 with the shared body; a changed body reds it.
+  - No shipped code reaches the harness. No existing guard proved it, so `review-built.test.ts` gains a row: no `pwa/src` file imports anything under `pwa/browser/`, with a planted import as control, and no built file names the harness. The harness keeps two copies of `app.ts`'s content-type table and `/health` body, because `app.ts` was held by another run.
+- **The browser rows** (Chromium only: the leg launches Chromium).
+  - M-X3.16, first: every line drew, and the canary is present and did not run. Recorded for Chromium 153.0.8010.12: `inline-style drew`, `data-image drew`, `nested-frame drew`, `data-font drew`, `script-off unchanged`, `link-inert unchanged`, `link-self restored`, no request to `/api/`. The result block's head reads `review-lab 1 · Chromium · Linux`.
+  - A hostile snapshot runs neither its script nor its `onerror`, and the frame's `document.cookie` throws `SecurityError` against a set cookie.
+  - A 10 MiB snapshot opens with its last element in the frame.
+  - The listed link opens a new tab with no `Referer`.
+  - The installed-PWA row: a navigation to `/review` reaches the server with the page's policy, while a shell route is answered by the worker (the control).
+- **The stop and D-9029.** Part 2's review asked for a frame navigating itself. Measured: a no-target link sends no request but takes the frame to the engine's error page, losing the copy; `_top` and `_blank` keep it. The coordinator ruled the bounded restore.
+  - Measured after the fix: a no-target tap is restored (restores 1, the sentence shown, no request, top page `/review`); `_top` and `_blank` cause no restore; four taps give three restores and then the stop sentence.
+  - Mutations, each red (jsdom figures; the browser witness of the first was a piped run and is not cited):
+    - the restore removed: 4 jsdom rows red;
+    - the bound removed: 2 jsdom rows red, and in the browser the count went to 4;
+    - the own-draw counter removed: 8 jsdom rows red.
+- **The second stop and the rate bound.** The review of the D-9029 round found that a real Markdown copy holds in-page fragment links and footnotes as well as permalinks. Measured (D-9029's entry has the detail): a fragment tap is restored but does not scroll, and quick footnote taps cost the copy after three. The coordinator ruled both remedies: R3 is bound to write review copies with no link that can navigate the frame, and the bound became three restores within any ten seconds, the stop final once reached. A restore draws the copy afresh, so it opens at its top.
+  - The page reads an injected clock (`startReviewPage(win, now)`, by default the window's `performance.now()`); the jsdom rows move it by hand, and the browser rows install Playwright's clock on the context (playwright-core 1.64.1) and pause it for fast taps or move it 11 seconds between spaced taps. No row waits in real time.
+  - Measured in Chromium 153.0.8010.12 (my runs, unpiped): four spaced taps give four restores with the copy back each time; four fast taps give three restores, then the frame stays on the error page with the stop sentence; a fast footnote pair the same; no request left, the top page stayed `/review` and no tab opened in any of them.
+  - Mutations, each red then restored (the restored file compared identical): the window ignored (R2-M17, the comparison made `t - past < Infinity`, so every past restore counts), 2 jsdom rows red; the stop not final (R2-M18, `stopped` recomputed on each navigation), 1 jsdom row red. The constant itself is pinned by its own row (`[3, 10_000]`), and the spaced and boundary rows move the clock by literal values: the window set to 20 seconds red 2 rows, the pin and the exactly-ten-seconds row.
+  - The Opus review of this round found the residual wider than first written (a tap before a restore's own load as well as the first), and the wording loose in places; all taken.
+  - Figures on the round's tree: the pwa typecheck exit 0; `review-page`, `review-lab-fixture` and `review-built` 85 of 85; the browser file 12 of 12 (after the review split the two restore-bound rows into rows of their own).
+- **The busy answer: a decision, kept as the spec says.** A 429 `busy` shows the same one sentence and drops the token, like every other failure. A separate busy sentence would tell a stranger which tokens are real, because the per-share limit only answers for a live share (the coordinator's ruling).
+- **Bound to R3.** Export writes review copies with no link that can navigate the frame (D-9029, the coordinator's second ruling).
+- **Process notes, each reported to the coordinator.**
+  - Part 1's implementer piped a few runs through `cut` and sent one run's output to a scratch file.
+  - Part 2's reviewer and part 1's reviewer each piped one jsdom run through `tail`.
+  - D-9029's implementer piped one mutation browser run through `grep`.
+  - None of those runs' figures is cited here. Runs that the queue held past the tool's limit were moved to the background by the harness and read when they finished.
+  - **The arrangement changed (the coordinator's ruling, after the third piped run):** restating the rule in each brief had not held. From D-9029's commit on, implementers only write and edit code and tests. Every test run, mutation run and build is run by the main thread, in the foreground, unpiped, and read as it prints. An implementer running a suite would be a stop.

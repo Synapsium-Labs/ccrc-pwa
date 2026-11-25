@@ -50,6 +50,10 @@ export const REVIEW_SHARED_AT_HEADER = 'x-ccrc-review-shared-at';
 export const REVIEW_VERSION_HEADER = 'x-ccrc-review-version';
 export const REVIEW_IDLE_DAYS_HEADER = 'x-ccrc-review-idle-days';
 
+/** The one refusal body of the read door and of the page's two 404 routes (design §3.5: one identical 404). One home:
+ *  the routes send it and the browser harness (X3 R2.3) answers with it (R2.3 review, I1). */
+export const REVIEW_NOT_FOUND = Object.freeze({ ok: false, error: 'not-found' } as const);
+
 /** The headers every read-door answer carries, a 200 and every refusal alike (design §3.5, M-X3.11). One home: the
  *  door and the browser harness (X3 R2.3) both read it. */
 export const REVIEW_OPEN_HEADERS: Readonly<Record<string, string>> = Object.freeze({
@@ -59,7 +63,26 @@ export const REVIEW_OPEN_HEADERS: Readonly<Record<string, string>> = Object.free
   'content-disposition': 'attachment',
 });
 
+/** The read door's 200 content type: the snapshot's bytes are sent as an opaque download, never as a page. One home:
+ *  the door and the browser harness (X3 R2.3) both read it (R2.3 review, M1). */
+export const REVIEW_OPEN_CONTENT_TYPE = 'application/octet-stream';
+
+/** The idle-days header's value, in days, derived from the idle limit (`REVIEW_IDLE_MS`) so the two never disagree. The
+ *  server writes `String(REVIEW_IDLE_DAYS)` (R2.3 review, M1). */
+export const REVIEW_IDLE_DAYS = REVIEW_IDLE_MS / 86400000;
+
 // ---- The review page's response headers --------------------------------------------------------------------------
+
+/** The review page's content type, on its 200 (`GET /review`). One home: the page route and the browser harness
+ *  (X3 R2.3) both read it (R2.3 review, M1). */
+export const REVIEW_PAGE_CONTENT_TYPE = 'text/html; charset=utf-8';
+
+/** The headers of the page's 404s (`GET /review` with no built page, `/review.html`, `/review/`): never cached, so a
+ *  mistyped address never lands under the app shell's policy. One home: the routes and the browser harness both read it
+ *  (R2.3 review, M1). */
+export const REVIEW_PAGE_NOT_FOUND_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'cache-control': 'no-store',
+});
 
 /** The review page's content security policy, sent as a response header (draft-review design §3.5, "The review
  *  page"). `script-src 'self'` names no inline script; a srcdoc frame inherits and intersects this policy, so the

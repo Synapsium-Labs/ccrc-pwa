@@ -10,7 +10,7 @@
 //   header policy is `script-src 'self'`; no manifest link and no service-worker registration, because the plugin
 //   injects both into the shell; and the `data:,` icon, so no favicon request is made;
 // - the shell is still built, with its entry script under `assets/index-*.js`.
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -121,6 +121,30 @@ describe('the built review page (M-X3.12, N8, R2.1)', () => {
     expect(seen.size, [...seen].join(', ')).toBeGreaterThan(1);
     expect([...seen].filter((f) => /^index-/.test(f))).toEqual([]);
     for (const f of seen) expect(read(path.join('assets', f)), f).not.toMatch(/react\.(?:production|development)|__SECRET_INTERNALS|react-dom/);
+  });
+
+  // D-9027's condition: the review server in `browser/reviewServer.ts` is test harness only. No shipped source imports
+  // anything under `pwa/browser/` (each relative specifier of every `src` file is resolved and must stay out of it), and
+  // no built file names the harness. A planted import shows the scan sees one.
+  it('no shipped code reaches the browser harness (D-9027)', () => {
+    const BROWSER = path.join(PWA, 'browser') + path.sep;
+    const specifiers = (text: string): string[] =>
+      [...text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'](\.{1,2}\/[^"']+)["']/g)].map((m) => m[1]!);
+    const reaching = (file: string, text: string): string[] =>
+      specifiers(text).filter((s) => (path.resolve(path.dirname(file), s) + path.sep).startsWith(BROWSER)
+        || path.resolve(path.dirname(file), s).startsWith(BROWSER));
+    const walk = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+      const p = path.join(dir, n);
+      return statSync(p).isDirectory() ? walk(p) : /\.(?:ts|tsx|mts)$/.test(n) ? [p] : [];
+    });
+    const files = walk(path.join(PWA, 'src'));
+    expect(files.length).toBeGreaterThan(100);
+    expect(files.flatMap((f) => reaching(f, readFileSync(f, 'utf8')).map((s) => `${path.relative(PWA, f)} ${s}`))).toEqual([]);
+    const planted = path.join(PWA, 'src', 'review', 'main.ts');
+    expect(reaching(planted, "import { serveReview } from '../../browser/reviewServer';\n")).toEqual(['../../browser/reviewServer']);
+    for (const name of readdirSync(path.join(out, 'assets'))) {
+      expect(read(path.join('assets', name)), name).not.toMatch(/reviewServer|startReviewServer/);
+    }
   });
 
   it('the shell is still built, and its entry script is assets/index-*.js', () => {

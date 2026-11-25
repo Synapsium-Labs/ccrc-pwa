@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
-  isReviewToken, REVIEW_IDLE_DAYS_HEADER, REVIEW_IDLE_MS, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
-  REVIEW_OPEN_HEADERS, REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE, REVIEW_PAGE_HEADERS, REVIEW_SEND_IDLE_MS,
+  isReviewToken, REVIEW_IDLE_DAYS, REVIEW_IDLE_DAYS_HEADER, REVIEW_MARKER_HEADER, REVIEW_MARKER_VALUE, REVIEW_OPEN_BODY_BYTES,
+  REVIEW_NOT_FOUND, REVIEW_OPEN_CONTENT_TYPE, REVIEW_OPEN_HEADERS, REVIEW_OPEN_STREAMS, REVIEW_OPEN_STREAMS_PER_SHARE,
+  REVIEW_PAGE_CONTENT_TYPE, REVIEW_PAGE_HEADERS, REVIEW_PAGE_NOT_FOUND_HEADERS, REVIEW_SEND_IDLE_MS,
   REVIEW_SHARED_AT_HEADER, REVIEW_VERSION_HEADER,
 } from '../../../shared/docsReview.js';
 import { REFUSAL_STATUS } from '../../../shared/refusal.js';
@@ -41,7 +42,8 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
     const failure = (reply: FastifyReply, error: 'not-found' | 'too-large' | 'busy') => {
       headers(reply);
       // The review wire says `busy` for send capacity, not the generic 409 conflict with that word.
-      return reply.code(REFUSAL_STATUS[error === 'busy' ? 'rate-limited' : error]).send({ ok: false, error });
+      return reply.code(REFUSAL_STATUS[error === 'busy' ? 'rate-limited' : error])
+        .send(error === 'not-found' ? REVIEW_NOT_FOUND : { ok: false, error });
     };
     scope.setErrorHandler((error, _req, reply) => {
       if (reply.raw.headersSent || reply.raw.destroyed || reply.raw.writableEnded) return;
@@ -134,8 +136,8 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
       headers(reply);
       reply.header(REVIEW_SHARED_AT_HEADER, String(entry.sharedAt))
         .header(REVIEW_VERSION_HEADER, String(entry.version))
-        .header(REVIEW_IDLE_DAYS_HEADER, String(REVIEW_IDLE_MS / 86400000))
-        .type('application/octet-stream');
+        .header(REVIEW_IDLE_DAYS_HEADER, String(REVIEW_IDLE_DAYS))
+        .type(REVIEW_OPEN_CONTENT_TYPE);
       return reply.send(source.stream);
     });
   });
@@ -158,8 +160,10 @@ export function registerReviewOpenRoute(app: FastifyInstance, access: ReviewAcce
  * on the path. The routes are registered on `app` itself, in the form the source scanners read.
  */
 export function registerReviewPageRoutes(app: FastifyInstance, pwaRoot: string | null): void {
-  const notFound = (reply: FastifyReply) =>
-    reply.code(404).header('cache-control', 'no-store').send({ ok: false, error: 'not-found' });
+  const notFound = (reply: FastifyReply) => {
+    for (const [name, value] of Object.entries(REVIEW_PAGE_NOT_FOUND_HEADERS)) reply.header(name, value);
+    return reply.code(404).send(REVIEW_NOT_FOUND);
+  };
   app.get('/review', async (_req, reply) => {
     if (pwaRoot === null) return notFound(reply);
     let bytes: Buffer;
@@ -169,7 +173,7 @@ export function registerReviewPageRoutes(app: FastifyInstance, pwaRoot: string |
       return notFound(reply);
     }
     for (const [name, value] of Object.entries(REVIEW_PAGE_HEADERS)) reply.header(name, value);
-    return reply.type('text/html; charset=utf-8').send(bytes);
+    return reply.type(REVIEW_PAGE_CONTENT_TYPE).send(bytes);
   });
   app.get('/review.html', async (_req, reply) => {
     return notFound(reply);
