@@ -157,14 +157,15 @@ import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
-  stallCoordBlockedPushText, stallCoordBlockedStep, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallCoordBlockedPushText, stallCoordBlockedStep, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
-  stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
+  stallRunMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallTimerFiredSince, stallTimersOf, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
+import { stallFailedVerdict, stallSessionMail } from './coord/stopFailure.js';
 import {
   parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, stallQuietOf,
   type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,

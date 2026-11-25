@@ -23,11 +23,12 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
-  BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
-  FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
+  BACKLOG_HORIZON_MS, DEAD_GRACE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
+  FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_HELD_MS, COORD_BLOCKED_OLD_MS, COORD_BLOCKED_STRETCH_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
+import { FAILED_IDLE_MS, stallFailedSubject } from '../src/coord/stopFailure.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession, type MailKind } from '../../shared/api.js';

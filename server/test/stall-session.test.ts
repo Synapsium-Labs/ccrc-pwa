@@ -9,13 +9,14 @@
 import { describe, it, expect } from 'vitest';
 import { RUN_STATES } from '../../shared/api.js';
 import {
-  stallSessionHold, stallOrphanDVerdict, stallOrphanEVerdict, stallFailedVerdict, stallMailStuckVerdicts,
+  stallSessionHold, stallOrphanDVerdict, stallOrphanEVerdict, stallMailStuckVerdicts,
   stallSessionMarkerVerdict, stallCoordinatorSubjects, stallOrphanDCandidate, stallMailClass,
-  stallOrphanDSubject, stallOrphanESubject, stallFailedSubject,
-  ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, MAIL_STUCK_MS, BACKLOG_HORIZON_MS,
+  stallOrphanDSubject, stallOrphanESubject,
+  ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_REPEAT_MS, MAIL_STUCK_MS, BACKLOG_HORIZON_MS,
   ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS, AUTO_CONTINUE_RECENT_MS, STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX,
-  STOP_FAILURE_ERRORS, stallVerdict, DELEGATE_CAP_MS,
+  stallVerdict, DELEGATE_CAP_MS,
 } from '../src/coord/stall.js';
+import { FAILED_IDLE_MS, STOP_FAILURE_ERRORS, stallFailedSubject, stallFailedVerdict } from '../src/coord/stopFailure.js';
 import type {
   StallArm, StallArming, StallDeliveryRow, StallHold, StallInput, StallMailRow, StallMode, StallNotice, StallRunRow,
   StallSessionInput, StallSessionRole, StallVerdict, StallWorker, TurnMark, TurnMarkRead,
