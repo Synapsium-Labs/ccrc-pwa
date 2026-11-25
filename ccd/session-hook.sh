@@ -5483,12 +5483,15 @@ fi
 # tool, as the row lists `Agent`) whose `subagent_type` is not a declared reader type (`--agents`'s keys), one naming none
 # included; and a `Skill` call whose name, read by SKILL_NAME_JQ and compared WHOLE, the row does not stage (`stagedSkills`),
 # so `x:ccrc-overlord` is refused. It judges no digest: a mismatch is the server's (question 5), and under skew the running
-# session's argv is the row it was spawned with, so this can only be stricter.
+# session's argv is the row it was spawned with; the arm has no allow path, so it can only deny more, never grant.
 # FAIL-CLOSED, AGAINST THIS FILE'S HEADER, for a recorded reason: the variable says the session runs under a surface, so a row
-# that cannot be read (an absent role, a malformed variable, a file that is not JSON, a row without its flags, or flags that
+# that cannot be read (an absent role, a role word outside the grammar: only the text before the variable's first colon is
+# judged, so `overlord:x:y` reads the overlord row; a file that is not JSON, a row without its flags, or flags that
 # lack `--tools` or `--agents`: malformed, never a usable surface) denies. Before its arms the hook still fails open (an
-# unreadable id, registry or jq exits 0 first), and a timeout lets the call run: this is defence in depth, and the
-# enforcement is Claude Code's own (`--tools` and the deny rules).
+# unreadable id, registry or jq exits 0 first), and a timeout lets the call run. For a tool this is defence in depth behind
+# Claude Code's own `--tools` and deny rules; for an `Agent` call's agent type and a `Skill` name it is the only refusal at
+# the call, since Claude Code offers its built-in agent types and bundled skills whatever the profile (the server's check of
+# the loaded lists is the other cover).
 SURFACE_ARM_JQ='($rows[0][$r] // null) as $row | (.tool_name // "" | tostring) as $t | (.tool_input.subagent_type? // "" | tostring) as $at | skillname as $sk
   | ($row.flags | index("--tools")) as $ti | ($row.flags | index("--agents")) as $ai
   | if $ti == null or $ai == null then error("row") else . end
