@@ -6286,6 +6286,22 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
 
+**A session on a failing provider moves by itself**, the last rung of the
+provider-failure ladder below (`ccd/ccd#_watchdog_provider`, in the fleet limit
+watchdog's pass). On the third counted failure since its last move, still owed,
+it goes to another lane by itself: the limit rescue's act, with the
+arm `provider`, and no key is sent. Every gate of a rescue stands (the pool side,
+the class, `<lane>-disabled`, measured room, the 15 minutes after a move, do not
+bounce, three moves a pass), never one class down, and never a lane that is marked
+failing, one of a provider with two marked lanes, or one the session's measured
+context does not fit. A lane with a good turn since the first failure comes first,
+then another provider, then an unproved lane of its own. It waits for a running
+turn, background work, a dialog, a question and unsent text in the box, at the
+decision and again at the act. With no lane it stays, the nudges go on, and
+`~/.cc-sessions/<id>.provwait` (an epoch) says since when, until a good turn or a
+move. It raises no notice. `ccd swap`, `ccd swap-self` and `ccd prefer` are never
+held by any of it, and `CCRC_LIMIT_WATCHDOG_MIN=0` stops it.
+
 **The provider-failure ladder** (`server/src/coord/providerRetry.ts`, run inside
 the stall watch's pass by `server/src/providerRetryLane.ts`). Any live session
 whose turn ended on a provider error is told to continue by itself: a worker, a

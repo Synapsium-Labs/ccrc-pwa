@@ -294,3 +294,36 @@ Nothing dispatches the arm yet.
   outage, and the server raises it.
 - **D-TBD-provmove-cause** — a cause word of its own, where the watchdog's and the wake move's arms took existing ones: "off a blocked
   account" is false of this move and is said to the session itself. An older server or console reads it as `unknown`.
+
+### C. The decision
+
+10. **The trigger** (`ccd/ccd#_watchdog_provider`, called by `ccd/ccd#_watchdog_one` for a live session with no limit sign): `_provfail_owed`.
+11. **What it waits for, and is asked again next pass, with nothing written**: the pass's cap (`WATCHDOG_PER_PASS`, shared with the
+    forced limit rescues), `SWAP_COOLDOWN`, `SWAPBLOCK_COOLDOWN`, and 5. A programme hold and a manual pin do not hold it, as they do
+    not hold a limit rescue.
+12. **The target**: `_rescue_target` with measured room only, asked once per tier of 1, every lane that is not in the tier or that the
+    session does not fit on the caller's skip list. Only rc 0 is a target, so a move never steps a class down. The home it would
+    return to is judged like any other lane.
+
+| What the tiers answered | The session |
+|---|---|
+| a name | `lastswap` stamped, `provider-rescue <id>: A -> B [home=H] fails=N`, dispatched with the newest failure |
+| no name, and every answer was a measured one | stays; `.provwait`, and one `provider-wait` line |
+| no name, and one answer was "nobody can say" | stays; nothing is written |
+| a dispatch whose unit did not start | `lastswap` put back, so the failures still count |
+
+13. **`$REG/<id>.provwait`**: an epoch, written once by the pass, removed by the pass when the count ends (a good Stop, a move, the
+    2 h), or when the row sleeps or is stopped; it goes with the row (`_reg_purge`). A malformed one is no record. Nothing reads it
+    yet. No strand, no notice.
+14. **What the pass hands the decision** (`ccd/ccd#_provfail_pass`): `PROVFAIL_MARKED` and `PROVFAIL_GOODS`, of the same pass.
+
+### Deviations found (wave 3b, C)
+
+- **D-TBD-provmove-measured** — measured room only, as the watchdog's other forced moves and unlike the tick's limit rescue, which
+  ranks an unmeasured lane last. A lane with a good Stop since the failure has rendered a status line, so it is measured.
+- **D-TBD-provmove-dispatch** — `_dispatch_swap` answers 1 when its unit did not start (it answered 0). The limit watchdog then does
+  not count that dispatch toward the pass's cap; nothing else reads it.
+- **D-TBD-provmove-silent** — a held decision writes no line. The one record such a line could use, the affinity arm's stand-down
+  episode, would change its reason every few seconds beside that arm's own.
+- **D-TBD-provmove-undecided** — "no lane" is claimed only from measured answers. Where a pool side or a class window could not be
+  read the session stays and `.provwait` is not written.
