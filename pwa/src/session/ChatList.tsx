@@ -1123,9 +1123,12 @@ function ChatScroller({
     // A page goes after the local rows a context reset left on top (fix round 2, F1), so the row after them tells it came.
     const [lw, ln] = [leadOf(was), leadOf(items)];
     const top = was.length > lw && items.length > ln && was[lw]!.key !== items[ln]!.key;
-    const shift = top
-      ? prependShift(was.slice(lw).map(keyOf), items.slice(ln).map(keyOf), anchor.current[0]?.key ?? null) + ln - lw
-      : 0;
+    // The lead difference is added to a FOUND shift only: no row in common is a new list, which moves no index (wave 179,
+    // A1: a context reset, then another file with no reset row, moved the index by -2 on a list nothing was put before).
+    const found = top
+      ? prependShift(was.slice(lw).map(keyOf), items.slice(ln).map(keyOf), anchor.current[0]?.key ?? null)
+      : null;
+    const shift = found === null ? 0 : found + ln - lw;
     // A stretch an older page's calls joined (fix round 1, F2): its open state follows it, and the hold reads its new key.
     const joins = top ? renamedAcross(was, items) : null;
     if (joins !== null && joins.size > 0) {

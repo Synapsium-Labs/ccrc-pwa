@@ -305,10 +305,26 @@ describe('the exception: the newest card that asks the session shown something s
       const events = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'older?' }),
         ...fetchMail({ kind: 'question', subject: 'newer?' })];
       render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
-      expect(document.querySelector('.tool-activity-messages')?.textContent).toBe('2 messages, 1 question');
+      expect(document.querySelector('.tool-activity-messages')?.textContent).toBe('2 messages,');
+      expect(document.querySelector('.tool-activity-asks')?.textContent).toBe('1 question');
       expect(document.querySelector('.tool-activity-row')?.textContent).toContain('2 messages, 1 question');
       const under = [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')];
       expect(under.map((h) => h.getAttribute('aria-label')?.split(',')[0])).toEqual(['Mail from coordinator: newer?']);
+    });
+
+    it(`${skin}: an open stretch names no question, since its body draws every card (desktop polish wave 179, B3)`, () => {
+      const events = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'older?' }),
+        ...fetchMail({ kind: 'question', subject: 'newer?' })];
+      render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
+      const row = document.querySelector<HTMLElement>('.tool-activity-row')!;
+      expect(row.textContent).toContain('1 question');
+      fireEvent.click(row);
+      expect(row.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.tool-activity-messages')?.textContent).toBe('2 messages');
+      expect(document.querySelector('.tool-activity-asks'), 'an open stretch still names a question').toBeNull();
+      expect(row.textContent).not.toContain('question');
+      fireEvent.click(row);
+      expect(row.textContent, 'closed again, the sign comes back').toContain('2 messages, 1 question');
     });
   }
 
@@ -404,10 +420,12 @@ describe('a fetched card belongs with its fetch: one stretch, and the row counts
       ...fetchMail({ kind: 'question', subject: 'b' }), ...fetchMail({ kind: 'question', subject: 'c' })], []), SELF), { runs: 'none', wait: NONE, busy: false });
     const row = items.find((r): r is ToolActivityItem => r.kind === 'tool-activity')!;
     expect(hiddenAsks(row.mail, NO_CHOICE)).toBe(2);
-    expect(activityWords(row).messages).toBe('3 messages, 2 questions');
+    expect(activityWords(row)).toMatchObject({ messages: '3 messages', asks: '2 questions' });
     const memo = expansionMemo();
     memo.set(underKey(row.mail[0]!.key), true);
-    expect(activityWords(row, memo.choice).messages).toBe('3 messages, 1 question');
+    expect(activityWords(row, memo.choice)).toMatchObject({ messages: '3 messages', asks: '1 question' });
+    // B3 (desktop polish wave 179): an open row names none.
+    expect(activityWords(row, memo.choice, true)).toMatchObject({ messages: '3 messages', asks: null });
   });
 });
 

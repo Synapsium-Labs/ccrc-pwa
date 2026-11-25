@@ -395,6 +395,33 @@ describe('rows put before the first: an older page (desktop polish wave 175)', (
     expect(topOfRow(key), 'the anchor was read off the page\'s rows, and the reader\'s row was not held').toBeCloseTo(was, 5);
   });
 
+  it('desktop polish wave 179, A1: a context reset, then another transcript with no rotation notice, moves no first index', () => {
+    // The reset row on top (the lead a page goes after), then a backlog onto another file with no row in common and no
+    // reset row: nothing was put before the first row, so virtuoso's first index stays where it was.
+    const reset: ChatEvent = { kind: 'system', uuid: 'local-reset-1', ts: TS, text: 'Session context reset' };
+    const { rerender } = resting([reset, ...session()]);
+    const first = lay.props!.firstItemIndex;
+    const other = session().map((e): ChatEvent => (e.kind === 'tool_result' ? { ...e, toolId: `x-${e.toolId}` }
+      : e.kind === 'tool_use' ? { ...e, uuid: `x-${e.uuid}`, toolId: `x-${e.toolId}` } : { ...e, uuid: `x-${e.uuid}` }));
+    rerender(view(other));
+    expect(rowsIn(lay.scroller!).some((r) => r.dataset.rowKey!.includes('reset')), 'the reset row stayed').toBe(false);
+    expect(lay.props!.firstItemIndex, 'a list nothing was put before had its first index moved').toBe(first);
+  });
+
+  it('desktop polish wave 179, A2: a page under the reset row holds the reader\'s row (the lead read at the call site)', () => {
+    const reset: ChatEvent = { kind: 'system', uuid: 'local-reset-1', ts: TS, text: 'Session context reset' };
+    const events = [reset, ...session()];
+    const { rerender } = resting(events);
+    expect(rowsIn(lay.scroller!).map((r) => r.dataset.rowKey!).slice(0, 2).some((k) => k.includes('reset')),
+      'the list did not open with the reset row').toBe(true);
+    const key = rowsIn(lay.scroller!).find((r) => r.getBoundingClientRect().bottom > 0)!.dataset.rowKey!;
+    const was = topOfRow(key);
+    rerender(view([reset, ...paged(12), ...session()], { ...NO_PAGING, edge: 'more', rows: 12 }));
+    reports(total());
+    settle();
+    expect(topOfRow(key), 'the row the reader was reading moved when a page landed under the reset row').toBeCloseTo(was, 5);
+  });
+
   it('fix round 2, A2: a height change whose frame comes after a page has landed writes nothing: the settle holds once', () => {
     const events = session();
     const { rerender } = resting(events);
