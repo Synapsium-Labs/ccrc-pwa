@@ -220,6 +220,39 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(landingOrder(f.entries, f.flags, f.recovery).order.map((e) => e.id)).toEqual([first.id]);
   });
 
+  it('fix round 1, R1: a withdrawn row with no run is kept at a verified pin of its pull request, unchanged, with no witness, and the run still advances (decision 7)', () => {
+    const detail = JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 });
+    const id = atReview();
+    insertRaw(7, 'withdrawn', null, HEAD2, 1);
+    coord.db.prepare('UPDATE landing_entries SET detail = ? WHERE pr = 7').run(detail);
+    const before = coord.db.prepare('SELECT * FROM landing_entries WHERE pr = 7').get();
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'withdrawn' } });
+    expect(coord.db.prepare('SELECT * FROM landing_entries WHERE pr = 7').get()).toEqual(before);
+    expect(coord.db.prepare('SELECT state, runId, pinnedSha, pinnedAt, detail FROM landing_entries WHERE pr = 7').get())
+      .toEqual({ state: 'withdrawn', runId: null, pinnedSha: HEAD2, pinnedAt: 1, detail });
+    expect(coord.db.prepare('SELECT COUNT(*) AS n FROM landing_projection_witness').get()).toEqual({ n: 0 });
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
+  });
+
+  it('fix round 1, R1 (the store case the review found lost): an unreadable run-bound withdrawn row is kept under its own word at a pin, and the run still advances', () => {
+    const id = atMerging();
+    const first = lineEntries()[0]!;
+    coord.db.prepare("UPDATE landing_entries SET state = 'withdrawn', detail = ? WHERE id = ?")
+      .run(JSON.stringify({ v: 1, by: 'operator', at: 1, word: 'withdrawn', seq: 1 }), first.id);
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'withdrawn' } });
+    step(id, 'awaiting-review');
+    coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE id = ?").run(first.id);
+    const witnesses = coord.db.prepare('SELECT * FROM landing_projection_witness').all();
+    const before = coord.db.prepare('SELECT * FROM landing_entries WHERE id = ?').get(first.id);
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(HEAD2) }))
+      .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'withdrawn' } });
+    expect(coord.db.prepare('SELECT * FROM landing_entries WHERE id = ?').get(first.id)).toEqual(before);
+    expect(coord.db.prepare('SELECT * FROM landing_projection_witness').all()).toEqual(witnesses);
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
+  });
+
   it('a pin onto a row this build cannot read keeps it untouched, and the run still advances (the rollback case)', () => {
     const id = atReview();
     insertRaw(7, 'later', null);
@@ -647,6 +680,12 @@ describe('decideLandingWrite: the owned-pin projection check and the closed-row 
     }
     // a retreat over a withdrawn row keeps it, whoever owns it
     expect(retreat({ current: row({ state: 'withdrawn' }), projection: readable })).toEqual({ act: 'none', write: { kind: 'kept', state: 'withdrawn' } });
+  });
+  it('fix round 1, R1: a withdrawn row with no run is kept at a pin, a run-bound one re-pins, and a closed row re-pins in both forms (decision 7)', () => {
+    expect(pinAgain(row({ state: 'withdrawn', runId: null }), readable)).toEqual({ act: 'none', write: { kind: 'kept', state: 'withdrawn' } });
+    expect(pinAgain(row({ state: 'withdrawn', runId: 5 }), readable)).toEqual({ act: 'repin', id: 3 });
+    expect(pinAgain(row({ state: 'closed', runId: null }), readable)).toEqual({ act: 'repin', id: 3 });
+    expect(pinAgain(row({ state: 'closed', runId: 5 }), readable)).toEqual({ act: 'repin', id: 3 });
   });
   it('a landed row is still kept at a pin, readable or not', () => {
     for (const projection of [readable, unreadable]) {

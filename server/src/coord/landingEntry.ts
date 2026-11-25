@@ -67,9 +67,11 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
     // Wave 5i (D-8626): only over a projection that reads with no marker. A closed row whose pin metadata does not read (a
     // terminal repair retired it without restoring anything) stays closed: a re-pin would write a witness and a pinned row
     // over a setter or a handoff nobody can read, inventing the metadata that was never there.
-    // Wave 5j-a (decision 7, D-9047): a `withdrawn` row re-pins the same way. A withdrawal is not a ban: the run's next
-    // verified pin brings it back, and an unreadable withdrawn row keeps its own word.
-    if (current.state === 'closed' || current.state === 'withdrawn') {
+    // Wave 5j-a (decision 7, D-9047): a run-bound `withdrawn` row re-pins the same way. A withdrawal is not a ban: the
+    // run's next verified pin brings it back, and an unreadable withdrawn row keeps its own word. A withdrawn row with no
+    // run (a run field that is not a number) cannot re-enter (decision 7, section 4.3): it is kept under its own word and
+    // the run still advances. A closed row re-pins with or without a run: closed is GitHub's word, withdrawn the operator's.
+    if (current.state === 'closed' || (current.state === 'withdrawn' && typeof current.runId === 'number')) {
       return f.projection?.kind === 'readable' && f.projection.quarantine === null ? { act: 'repin', id: current.id }
         : { act: 'none', write: { kind: 'kept', state: current.state } };
     }
