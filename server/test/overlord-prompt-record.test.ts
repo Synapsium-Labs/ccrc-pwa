@@ -3,6 +3,7 @@
 // `CoordStore`, a real `OperatorModelStore` (an issuer double for the privacy journal) and the real account gate, armed, with a
 // real sign-in; the mail lane's operator-message branch (`sweepMail`), driven the way `mail-sweep.test.ts` drives it; and the
 // pure deciders' cases (`sim/operatorModelSets.ts`, the same cases the mutation floors judge). Fixture HOMEs only; neutral names.
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -766,25 +767,28 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     });
   });
 
+  // The lane's sequence lines go to a bare database here; these cases are about the delivery, and a line it cannot write is logged.
+  const laneDb = new DatabaseSync(':memory:');
+
   it('settleOperatorNudge: a replay (the ack was refused earlier) moves nothing and tries the ack again', () => {
     const om = store();
     const ack = vi.fn(() => ({ ok: true as const, state: 'acked' as const }));
-    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: om, now: 5, warn: () => {} }, { id: 3, deliveredAt: 4 }, 7);
+    settleOperatorNudge({ coord: { markAcked: ack, db: laneDb }, operatorModel: om, now: 5, warn: () => {} }, { id: 3, deliveredAt: 4 }, 7);
     expect(om.moveMessage).not.toHaveBeenCalled();
     expect(ack).toHaveBeenCalledWith(3, 5);
-    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: om, now: 5, warn: () => {} }, { id: 3, deliveredAt: null }, 7);
+    settleOperatorNudge({ coord: { markAcked: ack, db: laneDb }, operatorModel: om, now: 5, warn: () => {} }, { id: 3, deliveredAt: null }, 7);
     expect(om.moveMessage).toHaveBeenCalledTimes(1);
   });
 
   it('settleOperatorNudge: a replay over a row still queued (the earlier move was refused) moves it to delivered; an unreadable state moves nothing and warns', () => {
     const ack = vi.fn(() => ({ ok: true as const, state: 'acked' as const }));
     const queued = store('queued');
-    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: queued, now: 5, warn: () => {} }, { id: 3, deliveredAt: 4 }, 7);
+    settleOperatorNudge({ coord: { markAcked: ack, db: laneDb }, operatorModel: queued, now: 5, warn: () => {} }, { id: 3, deliveredAt: 4 }, 7);
     expect(queued.moveMessage).toHaveBeenCalledWith(7, 'deliver', 'mail-lane', 5);
     expect(ack).toHaveBeenCalledWith(3, 5);
     const lines: string[] = [];
     const unread = { ...store(), messageStateOf: vi.fn(() => ({ kind: 'unmeasured' as const, why: 'fixture' })) };
-    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: unread, now: 6, warn: (l) => lines.push(l) }, { id: 4, deliveredAt: 4 }, 8);
+    settleOperatorNudge({ coord: { markAcked: ack, db: laneDb }, operatorModel: unread, now: 6, warn: (l) => lines.push(l) }, { id: 4, deliveredAt: 4 }, 8);
     expect(unread.moveMessage).not.toHaveBeenCalled();
     expect(lines.some((l) => l.includes('message 8') && l.includes('unmeasured'))).toBe(true);
     expect(ack).toHaveBeenCalledWith(4, 6);

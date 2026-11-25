@@ -192,7 +192,7 @@ describe('runOperatorModelBootPass', () => {
     return Number(w.coord.db.prepare('INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)').run(mailId, S, state, 'e').lastInsertRowid);
   };
   const queueMove = (w: World, id: number): void => { expect(w.store.moveMessage(id, 'queue', 'route', 2_000).ok).toBe(true); };
-  const ackStub = (w: World) => ({ markAcked: (deliveryId: number) => { w.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked' WHERE id = ?").run(deliveryId); return { ok: true as const, state: 'acked' as const }; } });
+  const ackStub = (w: World) => ({ db: w.coord.db, markAcked: (deliveryId: number) => { w.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked' WHERE id = ?").run(deliveryId); return { ok: true as const, state: 'acked' as const }; } });
 
   it('F3: a queued row whose nudge delivery is ACKED is moved to delivered; an unacked one stays queued', () => {
     const w = world();
