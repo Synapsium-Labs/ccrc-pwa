@@ -1,4 +1,4 @@
-import { OUTSTANDING_DELIVERY_STATES, lifecycleIsDead } from '../../../shared/api.js';
+import { OUTSTANDING_DELIVERY_STATES, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import { isProviderRetryMail, providerRetryDueOf } from '../../../shared/provider-retry.js';
 import { isProviderFailure } from './stopFailure.js';
 import {
@@ -98,7 +98,7 @@ function nudgeHold(input: ProviderRetryInput, now: number): StallHold | null {
   const w = input.session.worker;
   if (w.present !== true) return 'absent';
   if (input.archived || input.hibernated || w.lifecycle === 'restarting') return 'lifecycle';
-  if (w.lifecycle !== null && lifecycleIsDead(w.lifecycle as Parameters<typeof lifecycleIsDead>[0])) return 'lifecycle';
+  if (isSessionLifecycle(w.lifecycle) && lifecycleIsDead(w.lifecycle)) return 'lifecycle';
   if (w.askRow.kind === 'unmeasured') return 'unmeasured';
   if (w.hookAsk.kind === 'ask' || w.hookAsk.kind === 'approval') return 'ask';
   if (w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering')) return 'ask';
