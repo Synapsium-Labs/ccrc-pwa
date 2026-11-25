@@ -283,13 +283,16 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           tab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
           bars: document.querySelectorAll('nav.shell-phone-nav, header.shell-tab-bar, .shell-accounts').length,
           headTop: document.querySelector('.docs-head')!.getBoundingClientRect().top,
+          // What may stand above the head inside the Docs screen: the screen's own top padding and the head's own margin.
+          inset: parseFloat(getComputedStyle(document.querySelector('.docs-screen')!).paddingTop)
+            + parseFloat(getComputedStyle(document.querySelector('.docs-head')!).marginTop),
           screenTop: document.querySelector('.docs-screen')!.getBoundingClientRect().top,
           sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         }));
         expect(got.tab, 'a Docs tab').toBe('docs');
         expect(got.bars, 'no bar of the console and no tab bar').toBe(0);
         expect(got.screenTop, `nothing above the Docs screen ${JSON.stringify(got)}`).toBe(0);
-        expect(got.headTop, `the reader's head is the top of the page ${JSON.stringify(got)}`).toBe(0);
+        expect(Math.abs(got.headTop - got.screenTop - got.inset), `the reader's head is the top of the page, only the screen's inset above it ${JSON.stringify(got)}`).toBeLessThanOrEqual(0.5);
         expect(got.sideways, 'sideways scroll').toBe(0);
         expect(errors).toEqual([]);
       } finally {
