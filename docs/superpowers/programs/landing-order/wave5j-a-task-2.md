@@ -42,8 +42,9 @@ on the new source; the source was restored from saved copies and checked by sha2
   - The one-overlay-writer pin is unchanged.
 - `single-definition/core-vocab.test.ts` (`HANDLE_HOLDERS` gains `landingDoorsTx.ts`): the file is under a recently
   lapsed claim of another session at this commit, so the line is added last, by claim or by peer packet, as the brief
-  says. The case is red on this commit alone. Departure, by its slug: `landing-doors-holder-pin-order` (the holder list
-  gains the new file one commit after the file itself; fix round 1, R4). The tip is green.
+  says. The case is red from this commit until the holder line lands, three commits later (`fba44c2421` adds the
+  file, `db84435f21` the line). Departure: `landing-doors-holder-pin-order`, D-9072 (fix round 1, R4; review run
+  3806, F1, counted the commits). The tip is green.
 
 ## Said here
 
