@@ -304,3 +304,31 @@ describe('failPending of a rebind attempt', () => {
     expect(rebind(db, { sessionId: C, at: NOW + 4 })).toEqual({ ok: true, changed: true });
   });
 });
+
+describe('the one sequence (Overlord §10.4): a rebind\'s designation lines', () => {
+  const lines = (db: DatabaseSync): unknown[] =>
+    db.prepare("SELECT id, state, actor, actorKind, at FROM overlord_sequence WHERE kind = 'designation' ORDER BY seq").all();
+  const OP = { actor: 'operator-a 01234567', actorKind: 'operator' };
+  const AS_LIVE = [{ id: A, state: 'pending', ...OP, at: NOW }, { id: A, state: 'live', ...OP, at: NOW + 1 }];
+  it('rebindPending stamps the new body pending; its go-live stamps it live and the old body retired, in that order', () => {
+    const db = openDb(); const f = fake(db);
+    liveA(db, f);
+    expect(rebind(db).ok).toBe(true);
+    expect(lines(db)).toEqual([...AS_LIVE, { id: B, state: 'pending', ...OP, at: NOW + 2 }]);
+    expect(goLive(db, f, B, GEN_B, NOW + 3)).toMatchObject({ ok: true, changed: true, previous: A });
+    expect(lines(db)).toEqual([...AS_LIVE, { id: B, state: 'pending', ...OP, at: NOW + 2 },
+      { id: B, state: 'live', ...OP, at: NOW + 3 }, { id: A, state: 'retired', ...OP, at: NOW + 3 }]);
+  });
+  it('a refused rebind and a refused go-live stamp nothing; a failed rebind stamps its body failed', () => {
+    const db = openDb(); const f = fake(db);
+    liveA(db, f);
+    expect(rebind(db).ok).toBe(true);
+    expect(rebind(db, { sessionId: C }).ok).toBe(false);
+    const before = lines(db);
+    f.answer = () => refuse();
+    expect(goLive(db, f, B, GEN_B, NOW + 3)).toMatchObject({ ok: false });
+    expect(lines(db)).toEqual(before);
+    expect(failPending(db, B, 'deadline-passed', NOW + 4, true)).toEqual({ ok: true, changed: true });
+    expect(lines(db)).toEqual([...before, { id: B, state: 'failed', ...OP, at: NOW + 4 }]);
+  });
+});

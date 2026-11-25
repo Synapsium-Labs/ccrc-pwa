@@ -55,6 +55,8 @@ by slug, for the coordinator to fold into the ledger. No D-number is defined her
 | `deadline-read-again-after-a-restart-by-construction` | A test of the deadline read again after a server restart. | The sweep keeps no state: each pass reads the row and the stored report again. The start-loads cases build a fresh port per step over the same store, and the wiring cases (`overlord-lane-wiring.test.ts`) read it through the watcher's own pass; no case restarts a server. |
 | `rebind-go-live-old-stop-failure-cased-on-the-fail-path` | A test of the settle's drain when the old body's stop fails after a rebind's go-live. | The drain is the one `drainOwedStops`; a stop that fails or throws staying owed is pinned on the fail-pending path, not on the rebind arm. |
 | `tests-after-the-code` | Red first. | The production code was written before its tests, so red was measured by removing each guard from the finished code (under Measured). Commit `bb14555f62` is typed `test(` and carries production lines (the generation fix, two door rows, Restart's attribution, four refusal kebabs, the CLAUDE.md sentence), and `f38c5d038c` puts an in-file extraction (`askedWake`, `createBody`, `createSteps`, `readAccountFacts`) in the same commit as new behaviour. The PR is squash-merged. |
+| `rebind-stamps-its-designation-lines` (the merge with sequence A) | Sequence A's writer bullet: designation B's rebind arms stamp the one sequence inside their own transactions. | `rebindPending` stamps the new body `pending`; a rebind's go-live, now inside sequence A's `txWithAuthorityStamp`, checks its two lines before the append and stamps them after the row write: the new body `live`, then the old body `retired`, both with the attempt's actor. A failed or cancelled rebind stamps `failed` through `failPending` and `retire` as they stand. Both writers are stampers in `sequence-stamp-census.test.ts`. |
+| `restamp-stays-identity-only` (the merge with sequence A) | Sequence A's census: the rebind moves `restampOverlordGeneration` to the stampers. | The rebind ends the old body's generation through `endOverlordGeneration`, which stamps it `ended` (with sequence A's `at`, and this PR's widening to the body's own identity), and `restampOverlordGeneration` still moves only the identity and term, so it stays a non-stamper; its census reason says so. |
 | `restart-first-prompt-may-race-the-ensure` | Restart sends the first prompt after the ensure. | It does, as designate does after its create; a prompt the new pane is not ready for answers `prompted: false`, and nothing retries it. |
 
 ## The carry pointer the sweep leans on (sandbox B's relied-on contract)
@@ -97,26 +99,29 @@ either. No gate is built for it (the coordinator's ruling).
 - No migration, no ccd verb, no capability word, no new refusal word (`overlord-attempt-pending` was already in
   `OVERLORD_REFUSALS`), no change to `shared/api.ts`.
 - The gate counts in `auth/gate.ts` and its census (303 HTTP, 306 scanned, 192 gated) and the id-taking argv census (56 calls)
-  are this base's numbers, applied on each holder's yes to the exact diff. They are re-derived once, in the merge on the final
-  base the coordinator names. The flag-aware test's title still says thirty-five (its holder's note; nothing asserts it).
+  were applied on each holder's yes to the exact diff, and re-derived in fix round 1's one merge with main `09f11a16b638392a5e1837a32ca4f7eeeb937ba0`:
+  main had not moved either file, and both censuses pass on the merged tree at those numbers. Authority B and #3286 change the
+  gate file and its test and had not merged; that conflict is settled at landing on a base the coordinator names. The
+  flag-aware test's title still says thirty-five (its holder's note; nothing asserts it).
 
 ## Measured
 
 Each file through `ccrc test`, one at a time, fixture stores and fake ports only, on this branch's commits. No whole-suite
 run; CI and the merge queue are the arbiters for everything else.
 
-- New and touched suites, each green: `overlord-rebind` (27), `overlord-restart-deadline` (33), `overlord-rebind-route` (32),
+- New and touched suites, each green: `overlord-rebind` (29), `overlord-restart-deadline` (33), `overlord-rebind-route` (32),
   `overlord-lane-port` (15), `overlord-lane-wiring` (3), `overlord-body` (45), `overlord-designate-route` (51), `overlord-settings-doors` (60),
-  `continuity-start-loads-route` (60), `continuity-renewal-acts` (36), `continuity-generations-lane` (109), `sandbox-settle` (12).
+  `continuity-start-loads-route` (60), `continuity-renewal-acts` (36), `continuity-generations-lane` (112, with main's cases), `sandbox-settle` (12).
 - Censuses, each green: `auth-gate` (391), `box-token-census` (70), `overlord-doors-census` (32), `overlord-gate-census` (33),
-  `overlord-gate-doors` (42), `id-argv-census` (11), `verb-gate` (25), `mail-routes` (61), `single-definition/writers-map` (49);
+  `overlord-gate-doors` (42), `id-argv-census` (11), `verb-gate` (25), `mail-routes` (61), `single-definition/writers-map` (49), `sequence-stamp-census` (6);
   every `rings/*` and `single-definition/*` file (56 files), each alone.
 - Mutation, scoped to BASELINE, the floors check, `sandboxCheck.ts#sandboxSettle` (T2 and T7 rewritten for the rebind arm) and
   the three new sets `rebindVerdict` (10 mutants), `restartVerdict` (7) and `pendingDeadlineOf` (12), each at floor 1: 6 of 6
   tests, every mutant killed. The whole mutation-floors file was not run.
-- By hand, each guard removed in place, its suite run, the file restored byte for byte. M16 to M22 are fix round 1's: the five
+- By hand, each guard removed in place, its suite run, the file restored byte for byte. M16 to M24 are fix round 1's: the five
   wiring seams review 3695 F2 found unpinned (each killed by `overlord-lane-wiring.test.ts`, which builds the production server
-  with a real watcher), Restart while pending (F1) and the gate before the body's parse (A1).
+  with a real watcher), Restart while pending (F1), the gate before the body's parse (A1), and the rebind's two sequence stamps
+  the merge with main added.
 
 | Guard removed | Suite | Red cases |
 |---|---|---|
@@ -142,6 +147,8 @@ run; CI and the merge queue are the arbiters for everything else.
 | M20 the production go-live adapter drops `previous` | `overlord-lane-wiring` | 2 |
 | M21 Restart ignores a pending attempt | `overlord-rebind-route` | 1 |
 | M22 Rebind parses its body before the gate | `overlord-rebind-route` | 1 |
+| M23 `rebindPending` stamps no line | `overlord-rebind` | 1 |
+| M24 a rebind's go-live stamps no lines | `overlord-rebind` | 1 |
 
   The before-renew case keeps the step the watcher hands the production `renewalActsOf` (a pass-through wrapper over the
   module, which still builds the real acts) and asks it as a renewal would; no case drives a whole Overlord renewal through the
