@@ -205,6 +205,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "coordinatesProgramme, which claimsProgramme delegates to (D-8985, D-8993): the programme row's bound coordinator against the writing session, so an Idle programme keeps its owner: the programme binding, no session is asked which run is its" },
   { file: 'server/src/coord/programmeLifecycleStore.ts', text: '`SELECT r.program FROM runs r JOIN programs p ON p.slug = r.program WHERE r.claimedBy = ? AND r.state NOT IN ${TERMINAL_',
     why: "foreignOpenClaimOf (R11 rule 4, D-8993), asked by the start, the open and the reclaim heir: whether a claimant holds an open run in a programme it does not own, naming that programme: a programme ownership refusal, no run is returned or bound" },
+  { file: 'server/src/coord/programmeLifecycleStore.ts', text: '`SELECT 1 AS x FROM runs WHERE program = ? AND claimedBy = ? AND state NOT IN ${TERMINAL_SQL} LIMIT 1`',
+    why: "heirOwnsAnotherOf (R11 rule 4's one exception, spec §13, W3): whether a hand-over's heir holds an open run of the programme it is given, so a conflict's party may keep it: a yes/no programme ownership read, no run is returned or bound" },
   { file: 'server/src/coord/programmeLifecycleActs.ts', text: '`SELECT 1 AS x FROM runs WHERE claimedBy = ? AND state NOT IN ${TERMINAL_SQL} LIMIT 1`',
     why: "coordinatorsWithoutProgrammeOf (R11, W2): whether a coordinator that owns no programme still claims ANY open run, to leave it off the 'Coordinators with no programme' list: a yes/no read, no run is returned or bound" },
   { file: 'server/src/coord/store.ts', text: '"SELECT CAST(id AS TEXT) AS idText, state FROM runs " +"WHERE program = ? AND wave = ? AND (waveOf IS ?) " +"AND claimed',

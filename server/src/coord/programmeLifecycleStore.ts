@@ -523,9 +523,17 @@ export function openRunOwnershipOf(db: DatabaseSync, program: string, claimedBy:
 }
 
 /** Does this heir own another live real programme, or claim an open run in a programme other than `program` that it does not
- *  own (R11 rule 4, D-8993)? Names it; null admits. Its unfiled placeholder does not count: `moveBindingInTx` withdraws it. */
-export function heirOwnsAnotherOf(db: DatabaseSync, to: string, toUuid: string | null, program: string): string | null {
-  return ownedLiveProgrammeOf(db, to, toUuid, program) ?? foreignOpenClaimOf(db, to, program);
+ *  own (R11 rule 4, D-8993)? Names it; null admits. Its unfiled placeholder does not count: `moveBindingInTx` withdraws it.
+ *  `party` is the hand-over door's (spec §13, rule 4's one exception; W3): a migration conflict's party, which holds open
+ *  runs in several programmes and owns none, may be given one whose open runs it holds, so its other claims do not count
+ *  (its ownership still does). Without it no conflict could be resolved by giving the party the programme it keeps. */
+export function heirOwnsAnotherOf(db: DatabaseSync, to: string, toUuid: string | null, program: string, party = false): string | null {
+  const owned = ownedLiveProgrammeOf(db, to, toUuid, program);
+  if (owned !== null) return owned;
+  const holds = party && db.prepare(
+    `SELECT 1 AS x FROM runs WHERE program = ? AND claimedBy = ? AND state NOT IN ${TERMINAL_SQL} LIMIT 1`,
+  ).get(program, to) !== undefined;
+  return holds ? null : foreignOpenClaimOf(db, to, program);
 }
 
 /** The binding's half of a move between sessions (`to` null: a release), inside the transaction that moves the claims (D-8985).

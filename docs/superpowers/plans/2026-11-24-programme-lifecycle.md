@@ -270,6 +270,32 @@ programme the operator wants Idle still reads Done is one deploy, not several.
    resolves each conflict with a hand-over (1 measured on 2026-11-24: one session holding open runs in two
    programmes).
 
+### W3 notes (build, 2026-11-25)
+
+- **Where the code sits.** The decisions are `programmeDecisionsPolicy.ts` (L1: `parseDecisions`, `entryPlan`, `entryRow`,
+  `conflictGroups`, `decisionsAnswer`), asking the state door's own deciders (`edgeDecision`, `endOver`); the handler is
+  `programmeLifecycleRoutes.ts#decisions` (L4), registered from `ledgersRoutes.ts`, writing each entry through
+  `CoordStore#decideProgramme` (`decideInTx`). The vocabulary is in `shared/programmeLifecycle.ts`.
+- **The body** is `{decisions: [{slug, to, why}], apply?}`. A shape fault (not a list, an empty one, over
+  `PROGRAMME_DECISIONS_MAX`, a missing slug, a `to` outside the six) refuses the whole file 400 `bad-request`, naming the
+  entry, with nothing written. Every refusal spec §13 lists is its entry's own outcome, in the preview and in the apply;
+  it holds back no other entry. A repeated slug refuses each of its entries (`duplicate-entry`), so no reading of which was
+  meant is guessed; the reserved row is `reserved-programme`.
+- **A preview's word** for an entry the apply would write is `would-apply`; the apply's is `applied` (D-8990, amended). A
+  `mismatch` names the decision written or to write in `edge` (null for none): `to: idle` on a Paused programme with an open
+  run takes the resume and shows Active.
+- **Narrow readings.** `paused` on an ended programme is refused `programme-ended`: spec §13 gives reopen edges to `active`,
+  `idle` and `open` alone, and §5 has no pause of an ended programme. A recorded end is never moved to the other end (a
+  reopen comes first). An end the migration kept (`planEnd` null) is recorded by the file's `done` or `abandoned`, whichever
+  it names. `done` and `abandoned` over open runs are refused even where the stored state is already that end.
+- **The counts** are over the real programmes the file names, each once, as their entries show them (a refused one as it
+  stands), so `listed` and `unlisted` together are every real programme. A mail goes to a coordinator an end releases, in
+  the end's transaction, as W2's doors do.
+- **W2's hand-over could not resolve the conflict this wave lists**, and is fixed here: R11 rule 4's one exception (spec §13)
+  admitted a party only when it held runs in no other programme, so a `session-in-several` party was refused each of its
+  programmes because of the other. `heirOwnsAnotherOf`'s `party`, set by the hand-over door alone, admits an heir that holds
+  open runs of the programme it is given and owns none; the reclaim, archive and stop doors keep the rule (D-8993, amended).
+
 ## W4: join at spawn (one PR, server, ccd text, skill)
 
 1. **`programmeJoin.ts#joinDecision`** (L1), its "who joins" input being `roleOf`'s answer and its history input
@@ -471,6 +497,9 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   /api/programmes/decisions` (preview, then apply with a step-up, idempotent), right after the model and the doors
   deploy together; its answer reports unlisted rows and placeholders apart from R9's counts. The file and its slugs never
   enter the repository.
+  Amended in the W3 build: the answer's outcome words are spec §13's four and one more, `would-apply`, a preview's word for an
+  entry the apply would write, so no preview reads `applied`; and `paused` on an ended programme is refused
+  `programme-ended`, never a reopen and a pause in one entry.
 - **D-8991 (2026-11-24)** — the-plain-role-retired. A non-child top-level session that is not the Overlord, an auditor
   or a replay is `coordinator`; `coordinator-or-plain`, its undecided profile and the `plain` role row go. The
   renderer auditor and replay reuse stays. The plain auto-memory door refuses `role-retired` for one release.
@@ -498,7 +527,9 @@ programme the operator wants Idle still reads Done is one deploy, not several.
   heir that owns another programme.
   A coordinator left owning nothing is told by mail, listed as a coordinator with no programme, never minted a new one
   and never archived automatically: the operator or the Overlord starts one for it, hands it one, or archives it. The
-  migration never invents an owner. Overturns this spec's earlier "one lead and any number of members" and R2's "no
+  migration never invents an owner. Amended in the W3 build: rule 4's one exception is asked by the hand-over door as
+  `party`: an heir that holds open runs of the programme it is given and owns no live programme is admitted, its claims in
+  the conflict's other programmes notwithstanding; every other caller refuses it. Overturns this spec's earlier "one lead and any number of members" and R2's "no
   rule ties one session to one programme".
 - **D-9020 (2026-11-25)** — lifecycle-w2-door-words-and-credentials. The W2 build and its review departed from the plan
   and spec §14 in four places. (1) The end proposal answers a caller that is not the bound coordinator
