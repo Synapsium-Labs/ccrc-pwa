@@ -11,7 +11,8 @@ coordinator folds it in. No deviation number was allocated: departures are recor
   `SequenceLine` is the production wire line (`shared/overlord-sequence.ts#SequenceWireLine`), so the simulator's lines gain
   `actorKind` and `known`; `SimSequence.append` fills them (`server`, `true`), and three hand-built line helpers in the
   simulator suites gained them (one of them in the timer day, by the timers worker's yes). Characterization: the same 117
-  simulator cases passed before and after the move commit.
+  cases passed before and after the move commit (`796e65d641`), each run locally over six files: `overlord-sequence` (29),
+  `sim/generation-day` (39), `sim/run` (20), `sim/stall-coord-blocked-day` (11), `sim/timer-day` (7) and `sim/world` (11).
 - `INVARIANT_MAP` holds Table 11.7a's eighteen rows. `server/test/single-definition/invariant-table.test.ts` reads the
   spec's table and checks the names both ways, in order.
 - `invariantVerdict` answers one of six arms per row. A row with no predicate reads `not-applicable` with a reason:
@@ -22,7 +23,8 @@ coordinator folds it in. No deviation number was allocated: departures are recor
 **Task 5, the predicates and the gatherer.**
 - First, Confirm the restore's database side moved unchanged from the private `rowsSide` in `overlordRestoreState.ts` to
   `overlordRestoreRows.ts#restoreRowsSide` (L3), with two characterization cases committed before the move and green on
-  main (`server/test/overlord-restore-rows.test.ts`); Confirm's four suites (78 cases) stayed green.
+  main (`server/test/overlord-restore-rows.test.ts`); after the move, 78 cases stayed green, run locally over four files:
+  `overlord-restore-rows` (2), `overlord-restore` (55), `overlord-restore-generation` (10) and `overlord-restore-route` (11).
 - The four W1 predicates, pure and total, each a first-match table over its domain:
   - **I2, structural arm:** a reach-stamped ask or item with not exactly one bound outbox row; a bound row whose source
     has no stamp. A bound row of a source kind I2 does not name is unmeasured. Subject `ask:<id>` / `item:<id>`.
@@ -35,7 +37,9 @@ coordinator folds it in. No deviation number was allocated: departures are recor
     actor may be a session is unmeasured; a designation line it cannot name makes the binding unknown until the next
     known one. With no designation line before a session line, the current binding decides when none follows, else the
     line is unmeasured. Subject `seq:<n>`.
-  - **I7:** read only under a `coherent` guard (else `unmeasured` with the guard's cause), comparing Confirm's own two
+  - **I7:** no authority field is wider than the journal's, and the term and the model class equal the journal's (call
+    1286: neither has a width, so a row the journal does not witness is I7's subject in either direction). Read only under
+    a `coherent` guard (else `unmeasured` with the guard's cause), comparing Confirm's own two
     sides (`restoreRowsSide` and `journalSideOf` over the fold), each reading an absent side as the narrowest (ruling F8),
     on both sides alike, so a box with no rung on either side holds. Violated: the rows bind and the journal does not,
     or bind another session or generation; the term differs; the model class differs; the account set has a pool the
@@ -43,7 +47,8 @@ coordinator folds it in. No deviation number was allocated: departures are recor
     standing, or stands at a wider cap. Subject: the field (`latch:<cause>` for a latch).
   - **I17:** a fired timer with no mail id, naming no mail, or naming a mail not from `timer` or not to its setter; a
     cancelled timer with a mail id; a state word this build cannot name is unmeasured. Joined by `mailId`, never the
-    subject. A role timer (setter `overlord`, its mail to `overlord`) holds, measured with the timers worker.
+    subject. A role timer (setter `overlord`, its mail to `overlord`) holds, measured with the timers worker. The spec's
+    "the setter's stamp still matches" part is not built: the row names it Later in its `waitsOn`.
 - `invariantFacts.ts#gatherInvariantInput` reads the window (every retained line above the prune floor) and the four rows'
   facts inside one `tx()` that writes nothing, with no await between two reads; the journal is read in the same span. A
   table not migrated reads `absent`; a failed read `unmeasured`; a failure to open the span makes every arm `unmeasured`.
@@ -82,7 +87,10 @@ coordinator folds it in. No deviation number was allocated: departures are recor
   decision-model row (Later).
 - Responses A and private store B are on main: their rows read `predicate-not-built` with their tickets (call 1219).
 - The sequence kinds on main were `generation`, `designation` and `message`; the other run adds `ladder-rung` and
-  `ladder-latch`. `stampReach` still has no live caller, so I2 holds over no rows.
+  `ladder-latch`. The plan said `stampReach` had no live caller; on main it has several (the ask release, the item raise and
+  set-blocking paths, and the held drain, in `pushOutboxStore.ts` and `pushSender.ts`), so I2 reads real rows from the merge
+  (review 3843 F6). The review found no healthy-box input that reads violated: the stamp and its bound row are written in
+  one transaction, and a one-per-source index keeps one row.
 - The latest migration was 127; the timers piece (#3388) also takes 128, so this entry is renumbered at the merge.
 - Main absorbed before the first push: `8886cf49c382e4627751bb11fe64f18da66e0a82` (the push probe answered two conflicts, and
   the coordinator said yes). The merge commit holds exactly the two both-sides resolutions and nothing else: in
@@ -108,7 +116,17 @@ coordinator folds it in. No deviation number was allocated: departures are recor
   Absent (a test, a script), `sweepInvariants` returns at once: no pass runs, nothing is recorded, and PR C's read will
   answer that no pass has run, never a pass.
 - `designation-baseline-is-a-dependency`: the gatherer takes the kept designation line's read as a dependency; with none
-  wired, I5 reads unmeasured, never a pass or a violation.
+  wired, I5 reads unmeasured, never a pass or a violation. I wire it, in this pull request, at the later merge of main
+  (call 1240): one line in `index.ts` passing the other sequence run's read as it is (call 1286 on F9: no second rule),
+  with a case that goes red when the line is dropped, and the case review 3843 gives against the real read (below the
+  floor a live line for a, then a's retire, then a pending for b; a later session line from a must not read holds).
+- `three-predicates-deferred-by-ruling`: I8, I13's message half and I18 read `not-applicable` (`predicate-not-built`)
+  though plan question 11 says a predicate joins with its tables when they are on main at build. Call 1219 waived it for
+  these three on purpose, and call 1286 confirms it: the card behind I8 is still a placeholder, I13's message half needs the
+  private store's entries (W2), and the responses plan assigns I18's seal predicate to responses B. A `not-applicable` row
+  never reads as a pass and records nothing, so the monitor is smaller, not wrong. Their tickets,
+  `invariant-message-predicates` (I8 and I13's message half) and `invariant-i18-seal-predicate` (I18), are entries of this
+  programme's plan, among its follow-ups; the coordinator records them in the ledger at its next fold.
 - `gather-reads-the-whole-window`: the window is every retained line above the floor, read each pass the head moves (see
   the measurement below).
 - `ladder-row-case-in-the-monitor-suite`: the plan's seams case for the new cause row is in `invariant-lane.test.ts`,
@@ -138,6 +156,20 @@ Every mutant is killed (`server/test/sim/mutation-floors.test.ts`, each set run 
 Before: no floor for any of these keys (the floors test answers `expected value must be number`, every mutant already
 killed). After: every key at 1, green.
 
+Review 3843 F13: E5 used to remove its guard, so it died on a TypeError (an unmeasured verdict has no `unmeasured` list),
+not on what it names. It now resolves an unmeasured verdict's open row, and the resolve-nothing case kills it by its
+assertion (`expected [ 7 ] to deeply equal []`, measured by hand). The nine sets ran again after the fix round: 12 of 12
+green (the nine sets, the baseline, the names check and the merge-base floor check).
+
+By hand, outside the floors file (each mutant applied, the named cases run, the file restored with no diff):
+
+| Mutant | Where | Red |
+|---|---|---|
+| the arming read always true | `invariantLane.ts#invariantMonitorOver` | 5 of the 6 arming-binding cases in `invariant-lane.test.ts` (all but the live row) |
+| the arming read from another lane's row | the same | 2 of 6 (every other lane live; the live row) |
+| a pass remembered before its record (the tip before the fix) | `invariantLane.ts#InvariantMonitor.pass` | the refused-latch, lost-record and failed-shadow-record retries |
+| I17's mail found by its subject | `invariantFacts.ts`, the I17 read | the cut-subject case in `invariant-facts.test.ts` |
+
 ## What runs on a box from the merge
 
 With the `invariants` row at its seed, `shadow`:
@@ -146,16 +178,25 @@ With the `invariants` row at its seed, `shadow`:
 - a gather reads, inside one transaction that writes nothing: every retained sequence line above the prune floor; the
   reach-stamped asks and items and the bound outbox rows; the designation row; the ladder rows; the authority journal file
   and the guard's state; every fired or cancelled timer and the mail rows they name;
-- the write-locked span, measured on fixture databases (median of 21 gathers, the worst in brackets): 5,000 lines and 200
-  fired timers, 6.6 ms (58 ms); 50,000 and 2,000, 69 ms (159 ms); 180,000 and 5,000, 331 ms (456 ms). The sequence keeps 90
-  days; at the few hundred lines a day the kinds on main stamp, the window stays near the first two figures;
+- I2 reads real rows from the merge: the reach stamp has live callers on main (see "Where main differed"). I5 reads
+  `unmeasured` until its read is wired; I7 and I17 read their tables;
+- the write-locked span, measured once, by hand, with a script not committed, on fixture databases (median of 21 gathers,
+  the worst in brackets): 5,000 lines and 200 fired timers, 6.6 ms (58 ms); 50,000 and 2,000, 69 ms (159 ms); 180,000 and
+  5,000, 331 ms (456 ms). Only the lines and the timers were sized: the authority journal was absent and I2's asks, items
+  and outbox rows were empty, so the journal's verified read and I2's reads are not in these figures. The sequence keeps 90
+  days. An earlier draft of this note said the window stays near the first two figures at "a few hundred lines a day"; no
+  measured rate stands behind that figure, so it is withdrawn: the window on a real box is not measured here. Until I5's
+  read is wired, the whole window is read each due pass though only I5 reads lines, so that cost buys no verdict yet;
+- the pass is remembered only when every step succeeded, so a failed open read, resolve, raise or record is retried by
+  the next pass, a minute later (review 3843 F8);
 - it records each new finding as a `shadow` row and logs one line when a verdict word moves. It raises no latch and no
   item: nothing reaches the operator until the row is set Live.
 
 ## The first full run
 
-The first full run on the pushed tip (`2e77441905`) was red in four server shards, on five cases this branch's own named
-runs had not included; each is fixed in one commit, and each file ran green alone after it:
+The first full run on the pushed tip (`2e77441905`), Actions run 45659873610, was red in four server shards (3, 9, 11 and
+12), on five cases in the four files below, which this branch's own named runs had not included; each is fixed in one
+commit (`b3f5708511`), and each file ran green alone after it:
 - `programme-lifecycle-migration.test.ts` pinned the lifecycle's migration as the last entry, and
   `limit-samples-store.test.ts` rolled a database back to its slot past every later migration: migration 128 moved both by
   one, and the roll-back now undoes 128 too (its table and its lane-arm seed row).
@@ -166,8 +207,26 @@ runs had not included; each is fixed in one commit, and each file ran green alon
   rows named `operator_messages` in their descriptive `tables` list. They now say "the private store's messages"; no code
   reads that list.
 
-The two face mood floors that failed on the test box (it could not resolve `@ccrc/ui`) ran green in that full run's
-`server 9/12` job, with the rest of `mutation-floors.test.ts`.
+The two face mood floors that failed on the test box (it could not resolve `@ccrc/ui`) ran green in the `server 9/12` job
+of both full runs, 45659873610 and 45666226732 (the second on `b3f5708511`, green), with the rest of
+`mutation-floors.test.ts` (369 cases).
+
+## Review round 1 (review 3843 at `b3f5708511`, call 1286)
+
+The review found no defect in today's code: shadow raises nothing by any path, and every mutant is killed. The fix round:
+- F1: the production arming binding (`invariantMonitorOver`) now has six cases on a migrated temp database: the seeded
+  row, every other lane live, an unknown stored word, an absent row and an unreadable row raise nothing; a live row
+  raises. The by-hand mutants are in the table above.
+- F8: a pass is remembered only when every step succeeded, so a refused latch, a failed record or a failed resolve is
+  retried a minute later, not up to ten minutes later. The refused-latch case retries with no clock advance.
+- F10: the gatherer's unmeasured and malformed journal arms; I17 over the timer lane's own packed mail with a cut subject;
+  a latch raised with its record lost, recorded as standing by the next pass.
+- F13: mutant E5 replaced (above). F7: the monotone claim narrowed in `invariants.ts` and its case added. F3: I7's row and
+  header say the term and the model class equal the journal's, with the ahead-and-behind case. F12: the Shadow lanes
+  card says what the monitor does: a pass a minute, the invariants read again when the sequence moves, the mode changes
+  or ten minutes pass.
+- F2 waived (slug `three-predicates-deferred-by-ruling`); F9 is settled for the wiring merge (`designation-baseline-is-a-dependency`);
+  F14 needs nothing (the repository lands by squash).
 
 ## Known limits
 
@@ -176,7 +235,9 @@ The two face mood floors that failed on the test box (it could not resolve `@ccr
   the box would show I5's row as `unmeasured` with its reason (`the kept designation line has no reader in this build`),
   never `holds` and never `violated`: no finding row, no log line past the first verdict word, no latch and no item.
 - A finding over a line the retention lane prunes resolves on the next pass (the subject is no longer listed), though it
-  was not measured holding.
+  was not measured holding. So does a finding over a timer the timers lane purges after 90 days (review 3843 F11). In
+  both, a live finding's item stays open: the operator sees the item and no open finding.
 - The gather re-reads the whole window each pass the head moves; an incremental walk from a cursor is the obvious next
   step if the window grows past the measured figures.
-- I2's state arm, I7's decision-model rows, I11's rung arm, I8, I13's message half and I18 are Later, each named in its row.
+- I2's state arm, I7's decision-model rows, I11's rung arm, I17's setter-stamp arm, I8, I13's message half and I18 are
+  Later, each named in its row.

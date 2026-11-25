@@ -298,9 +298,9 @@ export const LANE_ARM_TEXT = {
     },
     [INVARIANTS_LANE]: {
       legend: 'Invariant monitor',
-      shadowNote: 'Every minute the monitor checks the Overlord\'s invariants and records each violation it finds, marked '
-        + 'shadow; it raises no latch and no item. Read its record at GET /api/overlord/invariants once that door ships, at '
-        + 'least seven days of it, before setting this Live.',
+      shadowNote: 'The monitor runs a pass once a minute. It reads the Overlord\'s invariants again when the sequence moves, the '
+        + 'mode changes or ten minutes pass, and records each violation it finds, marked shadow; it raises no latch and no item. '
+        + 'Read its record at GET /api/overlord/invariants once that door ships, at least seven days of it, before setting this Live.',
       liveNote: 'Each new violation the monitor finds raises the ladder\'s invariant-violation latch, which caps the Overlord '
         + 'at advise, and one blocking item on Waiting on you; a violation already open raises neither again.',
       gate: null,

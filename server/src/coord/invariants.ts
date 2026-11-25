@@ -10,7 +10,9 @@
 //
 // NO FOLD OF `unmeasured` (Review Focus 4 and 6). An input the gatherer could not read makes its row `unmeasured`; a subject a
 // predicate could not measure is listed beside the findings, never a pass and never a violation. Adding an unknown line, an
-// unmeasured fact or a `known: false` line never removes a finding and never turns an arm into `holds`.
+// unmeasured fact or a `known: false` line never turns an arm into `holds`, and never removes a finding, with one exception in
+// the safe direction (review 3843 F7): a designation line this build cannot name makes I5's binding unknown, so a session line
+// it found violated may read unmeasured instead.
 import type { SequenceWireLine } from '../../../shared/overlord-sequence.js';
 import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import { rungRank } from '../../../shared/overlord-ladder.js';
@@ -55,7 +57,7 @@ export const INVARIANT_MAP = {
   },
   I6: { says: 'a lineage\'s class never loses a member of O1 to O6', tables: ['classes'], waitsOn: 'W3, the classes', w1: 'tables-absent' },
   I7: {
-    says: 'after a restore, no authority field is wider than the journal\'s',
+    says: 'after a restore, no authority field is wider than the journal\'s, and the term and the model class equal the journal\'s',
     tables: ['the authority journal', 'overlord_designation', 'overlord_ladder', 'overlord_latches'],
     waitsOn: 'the decision-model rows: after authority journal C', w1: 'runs',
   },
@@ -79,7 +81,7 @@ export const INVARIANT_MAP = {
   I16: { says: 'a drill, the replay body and the auditor cause no effect', tables: ['drills'], waitsOn: 'W3, the drills', w1: 'tables-absent' },
   I17: {
     says: 'a timer fires at most once, with the one mail naming it, to its setter',
-    tables: ['continuity_timers', 'mail'], waitsOn: null, w1: 'runs',
+    tables: ['continuity_timers', 'mail'], waitsOn: 'the arm that the setter\'s stamp still matches: Later', w1: 'runs',
   },
   I18: {
     says: 'a response row is sealed once, after its window, from what the server received',
@@ -229,10 +231,12 @@ export const i5Term: LivePredicate<I5Facts> = (lines, f) => {
   return measuredVerdict(findings, unmeasured);
 };
 
-/** I7 (ruled, F2; call 1219): read only while the authority guard reads `coherent`, else `unmeasured` with its cause. Compares
- *  the database's acted-on authority fields with the journal's fold, each side as Confirm the restore reads it (an absent side
- *  reads the narrowest value, ruling F8, on both sides alike). Violated when: the database binds and the journal does not, or
- *  binds another session or generation; the term differs; the model class differs; the account set has a pool the journal's
+/** I7 (ruled, F2; call 1219; call 1286): read only while the authority guard reads `coherent`, else `unmeasured` with its cause.
+ *  No authority field is wider than the journal's, and the term and the model class equal the journal's: neither has a width,
+ *  so a row the journal does not witness is I7's subject in either direction. Compares the database's acted-on authority
+ *  fields with the journal's fold, each side as Confirm the restore reads it (an absent side reads the narrowest value, ruling
+ *  F8, on both sides alike). Violated when: the database binds and the journal does not, or binds another session or
+ *  generation; the term differs; the model class differs; the account set has a pool the journal's
  *  lacks, or is `untagged` where the journal's is not; the rung ranks above the journal's; a latch the journal holds is not
  *  standing, or stands at a cap above the journal's. Decision-model rows are not compared (Later). Subject: the field. */
 export const i7Authority: LivePredicate<I7Facts> = (_lines, f) => {
