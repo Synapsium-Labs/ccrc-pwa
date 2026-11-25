@@ -859,7 +859,9 @@ describe('Build 7 nouns', () => {
       // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
       'landingControlTx.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
-      'advisorStore.ts']);
+      'advisorStore.ts',
+      // The history of limits (Overlord W1 serviceability B): the sampler's SQL takes a handle by argument.
+      'limitSamplesStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

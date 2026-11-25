@@ -165,10 +165,12 @@ programme's own worker — is refused `gh pr merge` like a worker, and has the o
 4. the coordinator's conflict-sync mail (D-9011): a mail whose subject begins `conflict-sync:` names the PR and one
    base sha for a conflict the coordinator measured, and the worker's own probe of that commit agrees: `git
    merge-tree --write-tree --name-only --no-messages HEAD <base>`, after one fetch, exits 1 with a tree id on
-   stdout's first line. It is for a worker that is still at `working`, before its wave-done, and has used the one
-   absorption triggers 1 and 2 give its PR: main moved again, the branch conflicts, and without a merge its
-   checks cannot run. After a wave-done it does not apply: there the worker may not push (clause 9), and trigger 3
-   is the edge.
+   stdout's first line. It is for a worker that is at `working`, before the wave-done of the round it is in, and
+   has used the one absorption triggers 1 and 2 give its PR: main moved again, the branch conflicts, and without a
+   merge its checks cannot run. A worker sent back for a fix round is at `working` again, and the mail licenses its
+   absorption there, until that round's wave-done (amended 2026-11-25: the sentence said "before its wave-done"
+   and "after a wave-done", which shut out every fix round; the clause and the hook say "this round's"). After
+   that round's wave-done it does not apply: there the worker may not push (clause 9), and trigger 3 is the edge.
 
 Triggers 1 and 2 each license at most one absorption per PR; a second occurrence before the first absorption
 lands is not a second license. Trigger 3 is bounded by the coordinator's naming. Trigger 4 licenses one absorption

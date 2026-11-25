@@ -16,6 +16,7 @@
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
 import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
+import { LIMIT_SAMPLE_MS } from '../../shared/loadLines.js';
 
 /** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
 export const OUTBOX_LANE_PERIOD_MS = 30_000;
@@ -215,7 +216,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -465,6 +466,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
   { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The limit sampler (Overlord W1 serviceability PR B, `limitSampler.ts`; index question 8): every five minutes, the tick's own
+  // reading of every Anthropic account into `limit_samples`, one row per reading; it adds no read. A thrown pass is caught here.
+  { name: 'limitSamples', cadenceMs: LIMIT_SAMPLE_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the limit sampler failed' },
   // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
   // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`
   // on the maintenance count, holds an armed row that drifted, and asks nothing of a row that is off, so every row ships quiet.

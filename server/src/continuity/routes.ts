@@ -94,7 +94,7 @@ export interface SandboxSettlePort {
 /** What one settle did (review 3325 F6, review 3346 F1 and F2): the act it decided, `none` included, so a negative is seen
  *  evaluated. `none` is the decider's (a stale start, another session or generation, no pending designate); `no-report` a
  *  newest start with no stored report; `stale` evidence that changed during the registry read; `unread` a designation or
- *  newest start that could not be read; `refused` a go-live the store refused. A failed check is `fail-pending` (recorded,
+ *  newest start that could not be read, before or after that read (review 3366 F5); `refused` a go-live the store refused. A failed check is `fail-pending` (recorded,
  *  its owed stop drained), `fail-refused` or `fail-threw` (the record was refused or threw: the body is stopped through the
  *  drain as unrecorded, no stop owed), or `fail-noop` (no longer pending: nothing stopped). `threw` a step that threw. */
 export interface SettleOutcome {
@@ -1183,6 +1183,8 @@ export function settleLoads(port: SandboxSettlePort, coord: Pick<CoordStore, 'st
     } catch (e) {
       console.warn(`ccrc-server: the sandbox settle for ${id} threw: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // A settle that decided nothing on evidence it could not trust says so (review 3366 F5); it still acts on nothing.
+    if (act === 'stale' || act === 'unread') console.warn(`ccrc-server: the sandbox settle for ${id} (start ${startId}) decided nothing: ${SETTLE_IDLE_WHY[act]}`);
     const outcome = { sessionId: id, startId, act };
     port.settled?.(outcome);
     return outcome;
@@ -1204,6 +1206,12 @@ export async function settleFactOf(port: Pick<SandboxSettlePort, 'expected' | 'w
   return { kind: 'reported', sessionId: id, startId: n.start.id, generation: n.start.rowIncarnation, held };
 }
 
+/** Why a settle that read evidence it could not trust decided nothing: the words of its one log line. */
+const SETTLE_IDLE_WHY = {
+  stale: 'its evidence changed during the registry read',
+  unread: 'the expected surface, the designation or the newest start could not be read',
+} as const;
+
 async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'startLoadsOfNewestStart'>, id: string, startId: number,
   wall: () => number): Promise<SettleOutcome['act']> {
   const expected = port.expected();
@@ -1217,7 +1225,9 @@ async function settleOnce(port: SandboxSettlePort, coord: Pick<CoordStore, 'star
   const workspace = await port.workspaceOf(id);
   // The start and loads doors write outside the serialiser: evidence that changed during that await is obsolete (review 3346 F3).
   const after = coord.startLoadsOfNewestStart(id);
-  if (!after.ok || !settleEvidenceStands({ designation: read, newest: n }, { designation: port.read(), newest: after.newest })) return 'stale';
+  const again = port.read();
+  if (!after.ok || again.kind === 'unmeasured') return 'unread';
+  if (!settleEvidenceStands({ designation: read, newest: n }, { designation: again, newest: after.newest })) return 'stale';
   const verdict = sandboxVerdict(expected, n.report, workspace, n.carry);
   const act = sandboxSettle(read, startId, n.start, verdict);
   if (act.kind === 'go-live') {

@@ -51,4 +51,5 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/approvalCensusRoutes.ts': { reason: "the approval census's read, its one session-gated GET (approvals PR 1, Task 1.4)", since: '2026-11-18' },
   'server/src/coord/approvalParkDoor.ts': { reason: "the operator door's approval arm, its step-up ladder over the request and reply (approvals PR 3)", since: '2026-11-19' },
   'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },
+  'server/src/poolRunwayRoute.ts': { reason: "the operator's runway read, GET /api/pools/runway (Overlord W1 serviceability B)", since: '2026-11-22' },
 };

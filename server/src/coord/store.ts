@@ -34,6 +34,8 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
+import * as limitSamples from './limitSamplesStore.js';
+import type { LimitSample } from '../poolRunway.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
@@ -6521,6 +6523,10 @@ export class CoordStore {
 
   /** Every `claude_builds` row, newest build first (`coord/claudeBuildsStore.ts`). Throws when the table cannot be read. */
   claudeBuilds(): ClaudeBuildRecord[] { return builds.claudeBuildRecords(this.db); }
+  /** C57's history of limits (`coord/limitSamplesStore.ts`): the sampler's insert and prune, and the runway's read. */
+  insertLimitSamples(rows: readonly LimitSample[], sampledAt: number): number { return limitSamples.insertLimitSamples(this.db, rows, sampledAt); }
+  pruneLimitSamples(beforeS: number): number { return limitSamples.pruneLimitSamples(this.db, beforeS); }
+  limitSamplesSince(accounts: readonly string[], sinceS: number): LimitSample[] { return limitSamples.limitSamplesSince(this.db, accounts, sinceS); }
   /** One `queued` row per build that has none; answers the builds recorded. */
   noteClaudeBuildsSeen(seen: readonly string[], now: number): string[] { return builds.noteClaudeBuildsSeen(this.db, seen, now); }
   /** The queue tried a `queued` build: a job went out, or why none could. */

@@ -7,10 +7,11 @@
 //
 // D-8290 (plan docs/superpowers/plans/2026-11-11-live-probe-budget.md): the third kind, `probe`, a live Claude Code
 // test. Its rule is the pristine build's: at most one running at a time, so two probes requested at once run one after
-// the other. The probe desk (`probes.ts`) keeps its own queue of probes alone; this file decides it.
+// the other. The probe desk (`probes.ts`) keeps its own queue of probes alone; this file decides it. The fourth, `capture`
+// (build capture runner spec 2026-11-22), is the capture desk's, under the same rule: one capture at a time.
 
-export type QueueKind = 'run' | 'pristine' | 'probe';
-export const QUEUE_KIND_MAP: Record<QueueKind, true> = { run: true, pristine: true, probe: true };
+export type QueueKind = 'run' | 'pristine' | 'probe' | 'capture';
+export const QUEUE_KIND_MAP: Record<QueueKind, true> = { run: true, pristine: true, probe: true, capture: true };
 
 export interface QueueEntry {
   readonly id: string;
@@ -45,7 +46,7 @@ export function enqueue(s: QueueState, e: QueueEntry): QueueState | null {
 /** Whether `e` may start now beside `running`. */
 function mayStart(running: readonly QueueEntry[], e: QueueEntry, limits: QueueLimits): boolean {
   if (running.length >= limits.runs) return false;
-  if (e.kind === 'pristine' || e.kind === 'probe') return !running.some((r) => r.kind === e.kind);
+  if (e.kind !== 'run') return !running.some((r) => r.kind === e.kind);
   return running.filter((r) => r.kind === 'run' && r.session === e.session).length < limits.sessionRuns;
 }
 
