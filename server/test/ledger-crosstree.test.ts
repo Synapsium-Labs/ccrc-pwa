@@ -489,6 +489,12 @@ describe('selfAssignedCollisions: numbers from the self-assigned era', () => {
       [f(P, shared + def(10007, 'theirs'))], new Set([Q])))
       .toEqual([{ n: 10007, files: [P, Q] }]);
   });
+  it('the branch adds a number to a file on the base it changed: its copy counts, and a clash with the base reds', () => {
+    const shared = '# a long-running plan\n';
+    expect(selfAssignedCollisions([f(P, shared + def(10007, 'mine'))],
+      [f(P, shared), f(Q, def(10007, 'theirs'))], new Set([P])))
+      .toEqual([{ n: 10007, files: [P, Q] }]);
+  });
   it('a path the branch did not change is judged by the base copy, even when the branch copy differs', () => {
     expect(selfAssignedCollisions([f(P, def(10007, 'stale'))], [f(P, def(10007, 'current'))], NONE)).toEqual([]);
   });
