@@ -303,7 +303,13 @@ const plansAt = (ref: string): { path: string; text: string }[] => {
   return out;
 };
 
-const readPlansAt = (ref: string): { path: string; text: string }[] => {
+const readPlansAt = (ref: string): { path: string; text: string }[] =>
+  readPlanBlobsAt(ref, (file) => !LEGACY_PER_PLAN_LEDGERS.has(file));
+
+/** The `.md` plans of REF that `keep` admits, read as `plansAt` reads them. The filter is an argument so that the
+ *  characterization case below can pass a frozen copy of the exclusion list, which `LEGACY_PER_PLAN_LEDGERS` is not:
+ *  that list may only shrink, and a recorded hash must not move when it does (wave 1f fix round 1, R5). */
+const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] => {
   const listing = execFileSync('git',
     ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
@@ -312,7 +318,7 @@ const readPlansAt = (ref: string): { path: string; text: string }[] => {
     const sp = line.indexOf(' ');
     const sha = line.slice(0, sp);
     const file = line.slice(sp + 1).split('/').pop()!;
-    if (!file.endsWith('.md') || LEGACY_PER_PLAN_LEDGERS.has(file)) continue;
+    if (!file.endsWith('.md') || !keep(file)) continue;
     wanted.push({ sha, path: file });
   }
   // D-9068: every blob of the tree through ONE `git cat-file --batch`, where a process per plan cost about ten
@@ -462,7 +468,7 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       .toEqual([]);
   });
 
-  // CHARACTERIZATION of the plan read (landing-order wave 1f, D-9068): what `plansAt` answers for one fixed commit,
+  // CHARACTERIZATION of the plan read (landing-order wave 1f, D-9068): what the plan read answers for one fixed commit,
   // every path and every text, in order, as one sha256. Recorded from the one-process-per-blob read before the read
   // became one `git cat-file --batch` per tree, so the batch read is held to the same bytes. A fixed commit, not
   // HEAD: HEAD's plans change with every pull request that adds one, and a recorded hash of them would go stale. The
@@ -471,7 +477,11 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const ref = '25ed1ee2ddd0bc60afca0f518e95974f2c554c9e';
     expect(() => execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
       { cwd: ROOT, stdio: 'pipe' }), `${ref} is unreachable — this checkout is too shallow`).not.toThrow();
-    const list = plansAt(ref);
+    // The exclusion list as it stood when the hash was recorded, frozen here: a later removal from
+    // LEGACY_PER_PLAN_LEDGERS changes what `plansAt` reads, not what this case measures (R5).
+    const frozen = new Set(['2026-08-07-smart-branch-naming.md', '2026-08-08-build7-core.md',
+      '2026-08-08-build7-surfaces.md']);
+    const list = readPlanBlobsAt(ref, (file) => !frozen.has(file));
     expect(list.length).toBe(PLANS_AT_FIXED_COUNT);
     const sha = createHash('sha256');
     for (const p of list) sha.update(`${p.path}\0${p.text}\0`);

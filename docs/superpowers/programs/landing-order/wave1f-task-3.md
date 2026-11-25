@@ -45,8 +45,9 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave1f-known-limits.md`, 
 
 ## Why 64 (Review Focus 3)
 
-Node exits on its own with 1 to 13 (an uncaught exception is 1), and a process killed by a signal reads in the shell
-as 128 plus the signal's number (129 and up); the step's shell gives 126 or 127 to a command it could not start. 64
+The codes Node documents for its own exits are 1 to 14 (an uncaught exception is 1, and 14 is a failed snapshot build:
+this note said 1 to 13 until fix round 1's R2), and a process killed by a signal reads in the shell as 128 plus the
+signal's number (129 and up); the step's shell gives 126 or 127 to a command it could not start. 64
 is none of those, so only the script's own `process.exit(SUPERSEDED_EXIT)` reads as superseded. Measured with the new
 step line under `bash --noprofile --norc -eo pipefail`:
 

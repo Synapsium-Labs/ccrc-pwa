@@ -1554,7 +1554,7 @@ jobs:
     # shard expects about 12 minutes with its setup: 8 minutes under 20, and
     # no file alone is larger than a shard.
     # FOUR SHARDS (D-9026). At three, the second shard took 916 s to 1,211 s
-    # in the six merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25
+    # in the ten merge-queue runs created from 00:17Z to 01:58Z on 2026-11-25
     # that ran the suite, and was cancelled twice at the 20-minute limit
     # while every file passed (runs 45516946367 and 45527962041), each
     # ejecting a green entry. `FILE_MS` named 82 of the 118 files, and

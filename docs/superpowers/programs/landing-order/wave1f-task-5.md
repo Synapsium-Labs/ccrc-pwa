@@ -47,14 +47,28 @@ No full suite ran locally.
 
 ## The mutation rows
 
-All ten were measured, each red, restored from a saved copy with its sha256 checked, then green. They are recorded
+All fourteen were measured (ten in the build, four in fix round 1), each red, restored from a saved copy with its sha256 checked, then green. They are recorded
 in the task notes:
 
 | Rows | Note |
 |---|---|
 | 1F-01 to 1F-04 | `wave1f-task-1.md` |
 | 1F-05 to 1F-09 | `wave1f-task-3.md` |
-| 1F-10 | `wave1f-task-4.md` |
+| 1F-10 | `wave1f-task-4.md` (re-measured red on the case as fix round 1 left it, below) |
+| 1F-11 to 1F-14 | this note, below (fix round 1, R6) |
+
+### Rows 1F-11 to 1F-14 (fix round 1, R6)
+
+Four text pins the wave added had no row. Each measured the same way as the others: the target saved, its sha256 taken,
+the mutation applied, `ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/conflict-sync-text.test.ts`
+from `server/` on the test box (red), the saved copy restored and its sha256 checked, the suite again (green).
+
+| Row | Mutation | Red assertion | sha256 restored | Green after |
+|---|---|---|---|---|
+| 1F-11 | README: "before the wave-done of the round the worker is in" back to "before the worker's wave-done of that round only" | case 3: `README.md lacks: before the wave-done of the round the worker is in`, 1 failed of 5 | `02fb8618…25f38`, matched | 5/5 |
+| 1F-12 | run care: the tip line becomes `tip=<the branch tip>` | case 5: `lacks: tip=$(gh pr view <pr> --json headRefOid --jq .headRefOid)`, 1 failed of 5 | `a0d9cf48…26b6`, matched | 5/5 |
+| 1F-13 | run care: "The probe's own exit status" loses "own" | case 5: ``lacks: The probe's own exit status is the `probe exit` line``, 1 failed of 5 | `a0d9cf48…26b6`, matched | 5/5 |
+| 1F-14 | run care: "The paths are for the reader: the worker's own probe is what measures, so" becomes "The paths are for the reader, so" | case 5: `lacks: The paths are for the reader: the worker's own probe is what measures`, 1 failed of 5 | `a0d9cf48…26b6`, matched | 5/5 |
 
 ## Departures from the plan, by slug
 
@@ -64,3 +78,6 @@ in the task notes:
   because a block scalar runs on across them. Task 3's note.
 - `plans-characterization-fixed-commit`: the characterization reads a fixed commit on `main`, not `HEAD`, so its
   recorded hash never goes stale. Task 4's note.
+- `plans-read-filter-param` (fix round 1, R5): the plan read takes its exclusion filter as an argument
+  (`readPlanBlobsAt(ref, keep)`, which `readPlansAt` calls with the legacy list), so the characterization case can
+  pass a frozen copy of that list. It changes the reader's shape, not only the case. `wave1f-fix-round-1.md`.

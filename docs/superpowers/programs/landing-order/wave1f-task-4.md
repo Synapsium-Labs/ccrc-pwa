@@ -9,7 +9,8 @@ nothing ships" took 16.6 s, green; the deviation case "is looking at two real tr
 timed out at 20 s (23.8 s), one failed of 34, as the brief said it would.
 
 Then each case was timed by phase, with a temporary instrumentation (`performance.now()` around each phase, printed
-once) that was removed with `git checkout` of both files before any edit:
+once) that was removed with `git checkout` of both files before any edit. That run was at a one-minute load of
+about 11 (read right after it), the plain run before it at about 9; the harness comment states both (fix round 1, R4):
 
 | Case | Phase | Time |
 |---|---|---|
@@ -41,11 +42,16 @@ the process per plan.
 - **After:** the characterization case passes byte for byte, so the batch read is kept (the brief's third
   judgement: no byte of what the scan reads changed). The cross-tree case took 2.2 s.
 
+Fix round 1 (R5) made the characterization independent of `LEGACY_PER_PLAN_LEDGERS`, a list that may only shrink:
+the case now reads through `readPlanBlobsAt(ref, keep)` with a frozen copy of the three names, so the recorded 962 and
+hash stay true if that list loses an entry. Measured in `wave1f-fix-round-1.md`.
+
 ## Step 3: the budgets
 
 - "no override names a function nothing ships": 60 s, the case's last argument, with a comment above it naming the
-  phase times, the date, the box and load, and the two queue runs (45563248418, 45565143100) and the pull request
-  (#3362) the second one removed.
+  phase times, the date, the box and both loads, and the two queue runs (45563248418, 45565143100) and the pull
+  request (#3362) the second one removed. 60 s is about 2.7 times the slowest of those runs' file times (22.6 s); the
+  comment said "about three times" until fix round 1 (R4).
 - "is looking at two real trees, each with a real ledger in it": left at the suite's limit, because Step 2 brought it
   under 5 s on the test box (below). A comment above it says so, with the times before and after.
 

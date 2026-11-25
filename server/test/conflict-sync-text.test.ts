@@ -104,7 +104,7 @@ describe('the conflict-sync mail: one spelling in four files (landing-order wave
     has('wave-lifecycle-run-care.md', runCare, 'git rev-parse origin/main');
     // The shell block itself, not only the prose that names it: the probe's
     // last line and the rev-parse line are neighbours inside the fence
-    // (review 3738 F1). Flattened, the fence's close follows the rev-parse.
+    // (review 3738 F1).
     // The tip is the pull request's head as GitHub reads it, and the probe's
     // own exit status is captured on its own line: the call's status is the
     // last command's, so without `rc` the rev-parse line answers for the probe

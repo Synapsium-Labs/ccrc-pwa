@@ -18,8 +18,9 @@
 // The workflow's step ends the job, with exit 1, on 64 alone, and reads any other non-zero exit as a script that
 // failed: it prints `queue-live: unmeasured (the script failed, exit <n>)` and lets the job run. So a script that
 // cannot run fails open instead of ending every long job of every group, whose fix would have to land through that
-// same queue. 64 is no code Node exits with on its own (1 to 13, 128 plus a signal's number for a signal) and no code
-// the step's shell gives a command it could not start (126, 127), so only this script's own exit reads as superseded.
+// same queue. 64 is none of the codes Node documents for its own exits (1 to 14), nor 128 plus a signal's number for a
+// signal, nor a code the step's shell gives a command it could not start (126, 127), so only this script's own exit
+// reads as superseded.
 // It cancels nothing and needs no permission beyond the job's own read-only token: a job already running when its
 // group is superseded runs to its end, which is the residual the plan names.
 //
