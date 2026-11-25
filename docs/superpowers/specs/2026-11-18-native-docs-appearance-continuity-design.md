@@ -357,6 +357,8 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 
 **Open-to-`ready` amendment (2026-11-24; D-9018).** Desktop Chromium: for each skin, the hosted nine-open median may add at most 30 ms over its same-session paired BASE. A mode-only mount retains the separate 1.10× guard; both measurements use D-9017's interleaved procedure. F records the paired figure on a phone engine, where more than 100 ms added stops and returns to the coordinator. This does not change the srcdoc, geometry or live-update budgets.
 
+**Live-follow measurement amendment (2026-11-25; D-9030).** The 100 ms ceiling in the table above and AP-5 is unchanged for both emulated device modes. The ordinary browser leg checks complete, ordered writes, no writes on no-ops, and the unchanged frame, position and redraw behavior. It uses the existing liveness wait. The `CCRC_MEASURE=1` run asserts the wall-clock ceiling only when the one-minute load is below 4 at the start and end of the row.
+
 ## 10. The library's part
 
 This section is written for the library programme to plan from. It names the library by role, the shared rendering library, and proposes no new name. Its release, signed tag and ccrc's re-pin are the operator's.

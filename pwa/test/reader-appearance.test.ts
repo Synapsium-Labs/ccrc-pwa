@@ -104,14 +104,14 @@ describe('readerAppearanceOf', () => {
     expect(out.dropped).toBeNull();
   });
 
-  it('text as read: the raw contract carries each token exactly as read, and the verdict (not ccrc) drops the outer spaces', () => {
+  it('text as read: only the library verdict normalizes the colour and trims outer skin spaces', () => {
     const spy = vi.mocked(parseAppearance);
     spy.mockClear();
     const out = readerAppearanceOf(readerOf({ '--bg-page': '#2E3440', '--r-md': ' 10px' }), 'dark');
     const raw = spy.mock.calls.at(-1)?.[0] as { colour: Record<string, string>; skin: Record<string, string> };
     expect(raw.colour.bg).toBe('#2E3440');
     expect(raw.skin.radius).toBe(' 10px');
-    expect(out.value.colour?.bg).toBe('#2E3440');
+    expect(out.value.colour?.bg).toBe('#2e3440');
     expect(out.value.skin?.radius).toBe('10px');
     expect(out.refused).toEqual([]);
   });

@@ -39,7 +39,7 @@ describe('the asset texts', () => {
     expect(sha256(mermaid)).toBe(FRAME_MANIFEST.mermaid.sha256);
   }, 60_000);
 
-  it('each asset\'s ?raw specifier is its manifest path', () => {
+  it('imports only the manifest paths as raw text and the two host faces inline', () => {
     const file = path.join(__dirname, '..', 'src', 'docs', 'reader', 'assets.ts');
     const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const specifiers: string[] = [];
@@ -53,8 +53,8 @@ describe('the asset texts', () => {
     walk(sf);
     const want = (['guard', 'bootstrap', 'enhance', 'css', 'mermaid'] as const)
       .map((k) => `@synapsium-labs/pinax-lib/assets/${FRAME_MANIFEST[k].path}?raw`);
-    expect(specifiers).toHaveLength(5);
-    expect([...specifiers].sort()).toEqual([...want].sort());
+    const faces = ['@/fonts/Geist-Variable.woff2?inline', '@/fonts/GeistMono-Variable.woff2?inline'];
+    expect([...specifiers].sort()).toEqual([...want, ...faces].sort());
   });
 });
 

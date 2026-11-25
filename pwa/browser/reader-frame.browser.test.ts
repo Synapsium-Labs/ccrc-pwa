@@ -31,7 +31,7 @@ import path from 'node:path';
 import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Route } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, REFINED, SKINS } from '@ccrc/ui';
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/pinax-lib/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
@@ -51,6 +51,8 @@ import { onePixelPng, resolveChrome, startOrigins, type OriginAnswer, type Origi
 
 const PROJECT = 'demo';
 const SECTION = DOC_SECTION_SLUGS[0]!;
+/** Every skin the PWA offers, read from its catalogue: the worst case's watchdog budget holds once per skin (AP-7). */
+const SKIN_IDS = SKINS.map((s) => s.id);
 /** Built, never typed: an ESC, a line separator, and a script close that would end the seed's element if it were raw. */
 const ESC = String.fromCharCode(27);
 const LS = String.fromCharCode(0x2028);
@@ -1589,7 +1591,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(problems, 'the reader is one pane tall and only its frame scrolls, at both sizes').toEqual([]);
   }, 180_000);
 
-  it('the worst case renders inside the watchdog', async () => {
+  it.each(SKIN_IDS)('%s: the worst case renders inside the watchdog', async (skin) => {
     const files = FILES.get('worst.md');
     expect(typeof files === 'string' && Buffer.byteLength(files, 'utf8')).toBe(WORST_BYTES);
     const images = [...FILES].filter(([p]) => p.startsWith('pix-'));
@@ -1597,7 +1599,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(images.reduce((n, [, b]) => n + sizeOf(b), 0), '30 images totalling the budget').toBe(READER_IMAGE_BUDGET_BYTES);
     expect(sniffRaster('png', images[0]?.[1] as Uint8Array)).toBe('match');
     const t0 = Date.now();
-    const { s, outcome } = await open('worst.md');
+    const { s, outcome } = await open('worst.md', { skin });
     const wall = Date.now() - t0;
     expect(outcome, 'ready inside the watchdog, not the fallback').toBe('ready');
     const m = await s.page.evaluate(() => {
@@ -1617,7 +1619,7 @@ describe('W8a reader frame in Chrome', () => {
       imgs: document.querySelectorAll('img').length, decoded: [...document.querySelectorAll('img')].filter((i) => i.naturalWidth === 1).length,
       elements: document.querySelectorAll('*').length,
     }));
-    console.log(`T10-FIGURES worst ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
+    console.log(`T10-FIGURES worst ${skin} ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
     expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256).length,
       DRAW === 'after-ready' ? 'no head script is the Mermaid text (it loads after ready)' : 'the Mermaid text is inlined once (the gate passed)')
       .toBe(DRAW === 'after-ready' ? 0 : 1);

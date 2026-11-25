@@ -6,7 +6,7 @@
 // the reader does not draw, it is option 1's row; at 600 and wider it is the full head. So, at 412 x 915 with the reader up:
 //   - the head is the one bar, and the console's part above the frame (the bar and the gap under it) is at most
 //     CONSOLE_PART_MAX px, in either skin;
-//   - in Refined, the phone's skin, the title's top is at most ONE_BAR_TITLE_MAX px below the top of the page, the
+//   - in either skin (each phone case runs once per skin, AP-7), the title's top is at most ONE_BAR_TITLE_MAX px below the top of the page, the
 //     frame draws no bar of its own, and the title is the document's own h1;
 //   - every control on the bar is at least one tap (44 x 44), and the bar, the mockup's 1 px divider inside it, is one
 //     tap tall (its border box, as getBoundingClientRect reads it), with the 2 px reading line inside its bottom edge;
@@ -34,7 +34,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, REFINED, SKINS } from '@ccrc/ui';
 import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
 import { DOCS_HEAD_TEXT, DOCS_TOOL_TEXT } from '../src/docs/docsText';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
@@ -64,6 +64,8 @@ const CONSOLE_PART_MAX = 48;
 /** The floor every control on the row reaches (`--tap-min`). */
 const TAP = 44;
 const PHONE = { width: 412, height: 915 } as const;
+/** Every skin the PWA offers, read from its catalogue: the geometry budgets (AP-7) hold once per skin. */
+const SKIN_IDS = SKINS.map((s) => s.id);
 
 /** A plain-text leaf: no reader draws it, so option 1's row stays. `notes.txt` is deliberately not a registered highlight grammar. */
 const TEXT_NAME = 'notes.txt';
@@ -173,9 +175,9 @@ async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME, contentC
  *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
  *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
  *  console; a second `fallback`, a timeout and every other outcome throw as before. */
-async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME, doc = DOC): Promise<OpenedApp> {
+async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME, doc = DOC, origin = server!.origin): Promise<OpenedApp> {
   const app = await openView(view, tree, leaf, 'markdown', doc);
-  const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}`;
+  const url = `${origin}/docs/${PROJECT}/${SECTION}/${leaf}`;
   const start = async (): Promise<unknown> => {
     await app.page.goto(url, { waitUntil: 'load' });
     const up = await app.page.waitForFunction((note) => {
@@ -274,12 +276,66 @@ async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = C
   }
 }
 
+const GEOMETRY_BASE_DIST = process.env['CCRC_READER_GEOMETRY_BASE_DIST'];
+it.runIf(GEOMETRY_BASE_DIST !== undefined)('AP-1 AP-2 AP-7: hosted reading geometry matches the same-library BASE in both skins', async () => {
+  const base = await serveDist(GEOMETRY_BASE_DIST!);
+  // Same fixture in both builds; title and byline each fit on one line in both sets of faces.
+  const doc = HEADED_DOC.replace(`# ${TITLE}\n\n`, `# ${TITLE}\n\n**Spec** · 2026-10-19\n\n`);
+  const tree = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: Buffer.byteLength(doc) } })] });
+  try {
+    const failures: unknown[] = [];
+    for (const { id: skin } of SKINS) for (const [width, height] of [[412, 915], [600, 960], [768, 1024], [1280, 800]] as const) {
+      const metrics = async (origin: string) => {
+        const app = await openLeaf({ skin, width, height }, tree, NAME, doc, origin);
+        try {
+          const head = await measure(app.page);
+          const frame = await (await app.page.locator('.docs-reader iframe').elementHandle())?.contentFrame();
+          if (!frame) throw new Error('reader frame absent');
+          const { titleLines, bylineLines, ...lengths } = await frame.evaluate((title) => {
+            const root = document.querySelector('[data-docreader-root]');
+            const h1 = [...(root?.querySelectorAll('h1') ?? [])].find((e) => e.textContent?.trim() === title);
+            const byline = root?.querySelector('.byline');
+            const prose = [...(root?.querySelectorAll('p') ?? [])].find((e) => e.textContent?.startsWith('A path names one document at one ref'));
+            if (!root || !h1 || !byline || !prose || !prose.getClientRects().length) throw new Error('reading geometry fixture absent');
+            const bar = root.querySelector('.topbar');
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:absolute;visibility:hidden;width:var(--measure);height:var(--gut);padding-left:var(--pad);box-sizing:content-box';
+            root.append(probe);
+            const cs = getComputedStyle(probe);
+            const [measure, gutter, padding] = [cs.width, cs.height, cs.paddingLeft].map(Number.parseFloat);
+            probe.remove();
+            const rect = (el: Element) => el.getBoundingClientRect();
+            const lines = (el: Element) => {
+              const range = document.createRange(); range.selectNodeContents(el);
+              return new Set([...range.getClientRects()].map((r) => Math.round((r.top + r.bottom) * 5))).size;
+            };
+            return { barHeight: bar ? rect(bar).height : 0, measure: measure!, gutter: gutter!, padding: padding!,
+              rootLeft: parseFloat(getComputedStyle(root).paddingLeft), rootRight: parseFloat(getComputedStyle(root).paddingRight),
+              proseSize: parseFloat(getComputedStyle(prose).fontSize), titleHeight: rect(h1).height, bylineHeight: rect(byline).height,
+              titleBlock: rect(byline).bottom - rect(h1).top, titleLines: lines(h1), bylineLines: lines(byline.querySelector('dd') ?? byline) };
+          }, TITLE);
+          expect(app.errors).toEqual([]);
+          return { head: head.head, titleLines, bylineLines, lengths: { ...lengths, above: head.above, frameTop: head.frameTop } };
+        } finally { await app.ctx.close(); }
+      };
+      const baseline = await metrics(base.origin);
+      const hosted = await metrics(server!.origin);
+      const deltas = Object.fromEntries((Object.keys(baseline.lengths) as (keyof typeof baseline.lengths)[]).map((key) =>
+        [key, Math.abs(hosted.lengths[key] - baseline.lengths[key])]));
+      console.log(`FRAME-GEOMETRY-COMPARISON ${JSON.stringify({ skin, width, height, baseline, hosted, deltas })}`);
+      if (baseline.head !== hosted.head || Object.values(deltas).some((n) => !Number.isFinite(n) || n > 1)
+        || [baseline, hosted].some((r) => r.titleLines !== 1 || r.bylineLines !== 1)) failures.push({ skin, width, deltas });
+    }
+    expect(failures, 'same head mode; all lengths within one px; title and byline stay on one line').toEqual([]);
+  } finally { await base.close(); }
+}, 180_000);
+
 describe('a phone draws the one bar above a ready reader (the take-up plan, refinements (f), (g), (l))', () => {
-  it(`412 x 915, Refined: the title is at most ${ONE_BAR_TITLE_MAX} px down, ${CONSOLE_PART_MAX} of them the console's`, async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)(`412 x 915, %s: the title is at most ${ONE_BAR_TITLE_MAX} px down, ${CONSOLE_PART_MAX} of them the console's`, async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       const f = await measure(page);
-      console.log(`L11-FIGURE refined 412x915 ${JSON.stringify(f)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 ${JSON.stringify(f)}`);
       expect(f.head).toBe('one-bar');
       expect(f.screenTop, 'nothing of the console draws above the Docs screen').toBe(0);
       expect(f.frameScroll, 'the frame is at its top').toBe(0);
@@ -290,18 +346,8 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     });
   }, 120_000);
 
-  it(`412 x 915, Instrument: the one bar, and at most ${CONSOLE_PART_MAX} px of the console above the frame`, async () => {
-    await at({ ...PHONE, skin: INSTRUMENT }, async ({ page }) => {
-      await oneBar(page);
-      const f = await measure(page);
-      console.log(`L11-FIGURE instrument 412x915 ${JSON.stringify(f)}`);
-      expect(f.head).toBe('one-bar');
-      expect(f.frameTop - f.screenTop, 'the bar and the gap under it').toBeLessThanOrEqual(CONSOLE_PART_MAX);
-    });
-  }, 120_000);
-
-  it(`412 x 915, Refined, a ${LONG_TITLE.length}-character title: the bar cuts it inside the title, the frame's h1 is where the short one is, and aaOverTitle is recorded (fix round 1, F3)`, async () => {
-    const app = await openLeaf({ ...PHONE, skin: REFINED }, LONG_TREE, NAME, LONG_DOC);
+  it.each(SKIN_IDS)(`412 x 915, %s, a ${LONG_TITLE.length}-character title: the bar cuts it inside the title, the frame's h1 is where the short one is, and aaOverTitle is recorded (fix round 1, F3)`, async (skin) => {
+    const app = await openLeaf({ ...PHONE, skin }, LONG_TREE, NAME, LONG_DOC);
     try {
       await oneBar(app.page);
       const f = await measure(app.page, LONG_TITLE);
@@ -328,7 +374,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         }
         return { aa: box === null ? null : { left: box.left, right: box.right, top: box.top, bottom: box.bottom }, first };
       }, LONG_TITLE);
-      console.log(`L11-FIGURE refined 412x915 long-title ${JSON.stringify({ chars: LONG_TITLE.length, ...f, ...bar, aaBox: aa.aa, firstLine: aa.first })}`);
+      console.log(`L11-FIGURE ${skin} 412x915 long-title ${JSON.stringify({ chars: LONG_TITLE.length, ...f, ...bar, aaBox: aa.aa, firstLine: aa.first })}`);
       expect(aa.aa, "the frame's own Aa is drawn, so aaOverTitle false is a reading, not an absence").not.toBeNull();
       expect(aa.first, "the h1's first line has a box").not.toBeNull();
       expect(f.head).toBe('one-bar');
@@ -344,9 +390,9 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     }
   }, 120_000);
 
-  it("412 x 915, Refined, a Mermaid fence on the host-bar mount (the on-request arm): its Render control is inside the trimmed frame, below ccrc's bar and reachable, and a tap draws the figure (fix round 1, A7)", async () => {
+  it.each(SKIN_IDS)("412 x 915, %s, a Mermaid fence on the host-bar mount (the on-request arm): its Render control is inside the trimmed frame, below ccrc's bar and reachable, and a tap draws the figure (fix round 1, A7)", async (skin) => {
     expect(MERMAID_DOC).not.toBe(DOC);
-    const app = await openLeaf({ ...PHONE, skin: REFINED }, MERMAID_TREE, NAME, MERMAID_DOC);
+    const app = await openLeaf({ ...PHONE, skin }, MERMAID_TREE, NAME, MERMAID_DOC);
     try {
       await oneBar(app.page);
       const handle = await app.page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
@@ -366,7 +412,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       const cy = inFrame.y + inFrame.height / 2;
       const hit = await app.page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.tagName ?? null, [cx, cy]);
       const place = { control: inFrame, frame: frameBox, barBottom, viewportH: PHONE.height, hit };
-      console.log(`L11-FIGURE refined 412x915 mermaid-render ${JSON.stringify(place)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 mermaid-render ${JSON.stringify(place)}`);
       expect(inFrame.y, 'the control starts below ccrc\'s bar').toBeGreaterThanOrEqual(barBottom);
       expect(inFrame.y, 'and inside the frame').toBeGreaterThanOrEqual(frameBox.y);
       expect(inFrame.x).toBeGreaterThanOrEqual(frameBox.x);
@@ -386,20 +432,20 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     }
   }, 180_000);
 
-  it('599 x 915: still the one bar (the compact width ends at 600)', async () => {
-    await at({ width: 599, height: 915, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 599 x 915: still the one bar (the compact width ends at 600)', async (skin) => {
+    await at({ width: 599, height: 915, skin }, async ({ page }) => {
       await oneBar(page);
       const f = await measure(page);
-      console.log(`L11-FIGURE refined 599x915 ${JSON.stringify(f)}`);
+      console.log(`L11-FIGURE ${skin} 599x915 ${JSON.stringify(f)}`);
       expect(f.head).toBe('one-bar');
     });
   }, 120_000);
 
-  it('412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))', async () => {
+  it.each(SKIN_IDS)('%s, 412 x 915: the frame does not move when the row becomes the one bar at ready (refinement (f))', async (skin) => {
     // Every animation frame from the page's start records the head's kind and the reader iframe's top whenever either
     // changes, so the row's last top over a mounted frame (before ready) and the one bar's first top (at ready) are
     // both seen, however short "Formatting…" is.
-    const app = await openView({ ...PHONE, skin: REFINED });
+    const app = await openView({ ...PHONE, skin });
     try {
       const { page } = app;
       await page.addInitScript(() => {
@@ -423,7 +469,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       await page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
       await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 90_000 });
       const samples = await page.evaluate(() => (window as unknown as { __swap: { head: string; top: number; formatting: boolean }[] }).__swap);
-      console.log(`L11-FIGURE refined 412x915 swap ${JSON.stringify(samples)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 swap ${JSON.stringify(samples)}`);
       const before = samples.filter((s) => s.head === 'compact').at(-1);
       const after = samples.find((s) => s.head === 'one-bar');
       expect(before, 'option 1\'s row was drawn over the mounted frame before ready').toBeDefined();
@@ -434,8 +480,8 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     }
   }, 120_000);
 
-  it('412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 412 x 915: back, the title, Quick jump and Contents, each at least one tap; the bar one tap tall with its divider; the reading line inside it', async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       const row = await page.evaluate(() => {
         const bar = document.querySelector('.docs-one-bar .docs-compact-bar');
@@ -454,7 +500,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           read: read === null ? null : rect(read),
         };
       });
-      console.log(`L11-FIGURE refined 412x915 bar ${JSON.stringify(row)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 bar ${JSON.stringify(row)}`);
       expect(row, 'the one bar is drawn').not.toBeNull();
       const r = row!;
       expect(r.buttons.map((b) => b.name)).toEqual([DOCS_HEAD_TEXT.back, 'title', DOCS_TOOL_TEXT.jump, DOCS_TOOL_TEXT.contents]);
@@ -505,7 +551,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           };
         }));
       }
-      console.log(`L11-FIGURE refined 412x915 focus-ring ${JSON.stringify(rings)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 focus-ring ${JSON.stringify(rings)}`);
       const seen = rings as { focused: string; lineOnTop: boolean; hitInFocused: boolean; readOverOutline: boolean }[];
       expect(seen.map((r) => r.focused), 'Tab reaches the title, then the first tool').toEqual(['docs-title', 'docs-tool']);
       for (const ring of seen) {
@@ -526,14 +572,14 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         line.style.pointerEvents = '';
         return { focusVisible: t.matches(':focus-visible'), lineOnTop: hit === line, ground: getComputedStyle(t).backgroundColor };
       });
-      console.log(`L11-FIGURE refined 412x915 pressed-title ${JSON.stringify(pressed)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 pressed-title ${JSON.stringify(pressed)}`);
       expect(pressed.focusVisible, 'a pointer opened it: no keyboard ring').toBe(false);
       expect(pressed.lineOnTop, 'the reading line stays drawn over an open title\'s pressed ground').toBe(true);
     });
   }, 120_000);
 
-  it("412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons", async () => {
-    const app = await openLeaf({ ...PHONE, skin: REFINED }, HEADED_TREE, NAME, HEADED_DOC);
+  it.each(SKIN_IDS)("%s, 412 x 915: Quick jump and Contents toggle the frame's tools from ccrc's buttons", async (skin) => {
+    const app = await openLeaf({ ...PHONE, skin }, HEADED_TREE, NAME, HEADED_DOC);
     try {
       const { page } = app;
       await page.waitForSelector('.docs-head.docs-one-bar', { timeout: 30_000 });
@@ -607,17 +653,17 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       await tap(jump, 'out-of-jump');
       expect(await inJump(), 'the second tap takes it out').toBe(false);
       const toolFocus = await page.evaluate(() => (window as unknown as { __toolFocus: number }).__toolFocus);
-      console.log(`L11-FIGURE refined 412x915 tools-focus ${JSON.stringify({ toolFocus })}`);
+      console.log(`L11-FIGURE ${skin} 412x915 tools-focus ${JSON.stringify({ toolFocus })}`);
       expect(toolFocus, 'no press on a tool took the focus in ccrc\'s page, so the frame kept it (#2903)').toBe(0);
-      console.log('L11-FIGURE refined 412x915 tools {"contents":"toggles","jump":"toggles"}');
+      console.log(`L11-FIGURE ${skin} 412x915 tools {"contents":"toggles","jump":"toggles"}`);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
     }
   }, 120_000);
 
-  it("412 x 915: the reading line follows the frame's scroll", async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)("%s, 412 x 915: the reading line follows the frame's scroll", async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       const handle = await page.locator('.docs-reader iframe').elementHandle({ timeout: 30_000 });
       const frame = (await handle?.contentFrame())!;
@@ -634,13 +680,13 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
         return Math.abs(read - bar) <= 1;
       }, undefined, { timeout: 2000 });
       const end = await widths();
-      console.log(`L11-FIGURE refined 412x915 reading-line ${JSON.stringify({ top, end })}`);
+      console.log(`L11-FIGURE ${skin} 412x915 reading-line ${JSON.stringify({ top, end })}`);
       expect(Math.abs(end.read - end.bar), 'at the end the line is the bar\'s width').toBeLessThanOrEqual(1);
     });
   }, 120_000);
 
-  it('412 x 915: the title opens the details panel; Escape closes it, focus back on the title (refinement (k))', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 412 x 915: the title opens the details panel; Escape closes it, focus back on the title (refinement (k))', async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       const title = page.locator('.docs-one-bar .docs-title');
       expect(await page.locator('.docs-truth').isVisible(), 'the truth line is behind the tap').toBe(false);
@@ -656,7 +702,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
       await panel.getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit }).focus();
       expect(await page.evaluate(() => document.activeElement?.closest('.docs-more-panel') !== null), 'focus is in the panel').toBe(true);
       const f = await measure(page);
-      console.log(`L11-FIGURE refined 412x915 panel-open ${JSON.stringify(f)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 panel-open ${JSON.stringify(f)}`);
       expect(f.frameTop, 'the frame stays under the open panel').toBeGreaterThan(CONSOLE_PART_MAX);
       await page.keyboard.press('Escape');
       expect(await title.getAttribute('aria-expanded')).toBe('false');
@@ -665,8 +711,8 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     });
   }, 120_000);
 
-  it('412 x 915: a draft in a ref view of a long branch; the ref is cut, the draft badge is whole and inside the title (refinement (g))', async () => {
-    const app = await openView({ ...PHONE, skin: REFINED }, draftTree());
+  it.each(SKIN_IDS)('%s, 412 x 915: a draft in a ref view of a long branch; the ref is cut, the draft badge is whole and inside the title (refinement (g))', async (skin) => {
+    const app = await openView({ ...PHONE, skin }, draftTree());
     try {
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
       await app.page.waitForFunction(() => document.querySelector('.docs-one-bar .docs-compact-where .docs-badge') !== null, undefined, { timeout: 60_000 });
@@ -684,7 +730,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           words: badge?.textContent ?? null,
         };
       });
-      console.log(`L11-FIGURE refined 412x915 long-branch-draft ${JSON.stringify(got)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 long-branch-draft ${JSON.stringify(got)}`);
       expect(got.textCut, 'the long ref overflows and is cut').toBe(true);
       expect(got.badgeWhole, 'the badge is not cut').toBe(true);
       expect(got.label).not.toBeNull();
@@ -702,9 +748,9 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     }
   }, 120_000);
 
-  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the title (refinement (g))', async () => {
+  it.each(SKIN_IDS)('%s, 412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the title (refinement (g))', async (skin) => {
     const leaf = `${LONG_DIR}/${NAME}`;
-    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
+    const app = await openView({ ...PHONE, skin }, draftTree(leaf), leaf);
     try {
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
       await app.page.waitForFunction(() => document.querySelector('.docs-one-bar .docs-compact-where-ref') !== null, undefined, { timeout: 60_000 });
@@ -724,7 +770,7 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
           refText: ref?.textContent ?? null,
         };
       });
-      console.log(`L11-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 long-directory-ref ${JSON.stringify(got)}`);
       expect(got.ref, 'the ref is drawn').not.toBeNull();
       expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
       expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
@@ -738,28 +784,28 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
     }
   }, 120_000);
 
-  it('mounted at 412 x 915, then turned to 915 x 412: the one bar stays, its tools still there (refinement (f))', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, mounted at 412 x 915, then turned to 915 x 412: the one bar stays, its tools still there (refinement (f))', async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       await page.setViewportSize({ width: 915, height: 412 });
       await page.waitForFunction(() => innerWidth === 915 && innerHeight === 412, undefined, { timeout: 10_000 });
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       const f = await measure(page);
-      console.log(`L11-FIGURE refined 412x915-then-915x412 ${JSON.stringify(f)}`);
+      console.log(`L11-FIGURE ${skin} 412x915-then-915x412 ${JSON.stringify(f)}`);
       expect(await page.locator('.docs-head.docs-one-bar').count(), 'the one bar stays').toBe(1);
       expect(await page.getByRole('button', { name: DOCS_TOOL_TEXT.jump }).isVisible(), 'Quick jump is still drawn').toBe(true);
       expect(f.frameBar, 'the frame keeps ccrc\'s bar').toBe(false);
     });
   }, 120_000);
 
-  it('mounted at 412 x 915, then widened to 1280 x 915: the phone-born one bar persists without a full row', async () => {
-    await at({ ...PHONE, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, mounted at 412 x 915, then widened to 1280 x 915: the phone-born one bar persists without a full row', async (skin) => {
+    await at({ ...PHONE, skin }, async ({ page }) => {
       await oneBar(page);
       await page.setViewportSize({ width: 1280, height: 915 });
       await page.waitForFunction(() => innerWidth === 1280, undefined, { timeout: 10_000 });
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       const f = await measure(page);
-      console.log(`L11-FIGURE refined 412x915-then-1280x915 ${JSON.stringify(f)}`);
+      console.log(`L11-FIGURE ${skin} 412x915-then-1280x915 ${JSON.stringify(f)}`);
       expect(await page.locator('.docs-head.docs-one-bar').count(), 'the one bar persists').toBe(1);
       expect(await page.getByRole('button', { name: DOCS_TOOL_TEXT.jump }).isVisible(), 'Quick jump is still drawn').toBe(true);
       expect(await page.locator('.docs-head.docs-full').count(), 'no full head is mounted').toBe(0);
@@ -771,8 +817,8 @@ describe('a phone draws the one bar above a ready reader (the take-up plan, refi
 
 describe("option 1's row stays where the reader is not up (refinement (f))", () => {
   /** Opens the text leaf at 412 x 915 (no reader draws it), runs `check`, closes the context whatever happens. */
-  async function onText(check: (app: OpenedApp) => Promise<void>): Promise<void> {
-    const app = await openView({ ...PHONE, skin: REFINED }, TEXT_TREE, TEXT_NAME, 'text');
+  async function onText(skin: string, check: (app: OpenedApp) => Promise<void>): Promise<void> {
+    const app = await openView({ ...PHONE, skin }, TEXT_TREE, TEXT_NAME, 'text');
     try {
       const fileAnswer = app.page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/file'), { timeout: 30_000 });
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${TEXT_NAME}`, { waitUntil: 'load' });
@@ -791,8 +837,8 @@ describe("option 1's row stays where the reader is not up (refinement (f))", () 
     }
   }
 
-  it('412 x 915: back, Share, Export and Page details, each at least one tap, on a row one tap tall', async () => {
-    await onText(async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 412 x 915: back, Share, Export and Page details, each at least one tap, on a row one tap tall', async (skin) => {
+    await onText(skin, async ({ page }) => {
       const row = await page.evaluate(() => {
         const bar = document.querySelector('.docs-compact-bar');
         if (bar === null) return null;
@@ -807,7 +853,7 @@ describe("option 1's row stays where the reader is not up (refinement (f))", () 
           lines: [...bar.querySelectorAll('.docs-compact-where, .docs-compact-name')].map((e) => box(e).h),
         };
       });
-      console.log(`L11-FIGURE refined 412x915 text-row ${JSON.stringify(row)}`);
+      console.log(`L11-FIGURE ${skin} 412x915 text-row ${JSON.stringify(row)}`);
       expect(row, 'the compact row is drawn').not.toBeNull();
       const r = row!;
       expect(r.buttons.map((b) => b.name).slice(0, 3)).toEqual([DOCS_HEAD_TEXT.back, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export]);
@@ -824,8 +870,8 @@ describe("option 1's row stays where the reader is not up (refinement (f))", () 
     });
   }, 120_000);
 
-  it('412 x 915: Page details opens the truth line under the row, above the text; Escape closes it, focus back on the button (refinement (d))', async () => {
-    await onText(async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 412 x 915: Page details opens the truth line under the row, above the text; Escape closes it, focus back on the button (refinement (d))', async (skin) => {
+    await onText(skin, async ({ page }) => {
       const more = page.locator('.docs-compact-bar .docs-more');
       expect(await more.count(), 'Page details is on the row').toBe(1);
       expect(await page.locator('.docs-truth').isVisible(), 'the truth line is behind the tap').toBe(false);
@@ -841,7 +887,7 @@ describe("option 1's row stays where the reader is not up (refinement (f))", () 
       expect(await page.locator('.docs-more-panel').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
       const panelBottom = await bottomOf('.docs-more-panel');
       const bodyTop = await page.evaluate(() => document.querySelector('pre.doc-plain')!.getBoundingClientRect().top);
-      console.log(`L11-FIGURE refined 412x915 text-panel-open ${JSON.stringify({ closedHeadBottom, panelBottom, bodyTop })}`);
+      console.log(`L11-FIGURE ${skin} 412x915 text-panel-open ${JSON.stringify({ closedHeadBottom, panelBottom, bodyTop })}`);
       expect(bodyTop, 'the text begins at or below the open panel').toBeGreaterThanOrEqual(panelBottom - 0.5);
       expect(bodyTop, 'the text is below the closed header').toBeGreaterThan(closedHeadBottom);
       await page.keyboard.press('Escape');
@@ -947,10 +993,10 @@ describe('the desk head (desk-nav Part B)', () => {
     });
   }, 120_000);
 
-  it("at 600 the action words give way first (fix round 2): the actions are icons on the crumbs' line, each keeping its name, and the page's name shows", async () => {
-    await at({ width: 600, height: 960, skin: REFINED }, async ({ page }) => {
+  it.each(SKIN_IDS)("%s, at 600 the action words give way first (fix round 2): the actions are icons on the crumbs' line, each keeping its name, and the page's name shows", async (skin) => {
+    await at({ width: 600, height: 960, skin }, async ({ page }) => {
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE refined 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words })}`);
+      console.log(`PHH-FIGURE ${skin} 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words })}`);
       expect(r.words.length).toBe(3);
       expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
       expect(r.folded, 'the middle crumbs are folded').toBe(true);
@@ -961,15 +1007,15 @@ describe('the desk head (desk-nav Part B)', () => {
     }, DEEP_TREE, DEEP);
   }, 120_000);
 
-  it.each([
+  it.each(SKIN_IDS.flatMap((skin) => ([
     [600, 960, true],
     [768, 1024, true],
     [1280, 800, false],
-  ] as const)('%i x %i: the full head, no sideways scroll; crumbs folded: %s', async (width, height, folded) => {
-    await at({ width, height, skin: REFINED }, async ({ page }) => {
+  ] as const).map(([w, h, folded]) => [skin, w, h, folded] as const)))('%s, %i x %i: the full head, no sideways scroll; crumbs folded: %s', async (skin, width, height, folded) => {
+    await at({ width, height, skin }, async ({ page }) => {
       const f = await measure(page);
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE refined ${width}x${height} ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
       expect(f.frameBar, 'a frame mounted at a desk width keeps its own bar').toBe(true);
       expect(await page.locator('.docs-more').count()).toBe(0);
@@ -980,11 +1026,11 @@ describe('the desk head (desk-nav Part B)', () => {
     }, DEEP_TREE, DEEP);
   }, 120_000);
 
-  it('600 x 960 under a mouse: the truth line is dense there too, on at most two lines (its facts wrap rather than clip, F2), and nothing scrolls sideways', async () => {
-    await at({ width: 600, height: 960, skin: REFINED, pointer: 'fine' }, async ({ page }) => {
+  it.each(SKIN_IDS)('%s, 600 x 960 under a mouse: the truth line is dense there too, on at most two lines (its facts wrap rather than clip, F2), and nothing scrolls sideways', async (skin) => {
+    await at({ width: 600, height: 960, skin, pointer: 'fine' }, async ({ page }) => {
       const f = await measure(page);
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE refined 600x960 mouse ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
+      console.log(`PHH-FIGURE ${skin} 600x960 mouse ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
       expect(r.fine, 'a mouse').toBe(true);
       expect(r.truth!.height, 'two dense lines at most').toBeLessThanOrEqual(2 * DENSE + 0.5);
@@ -994,13 +1040,13 @@ describe('the desk head (desk-nav Part B)', () => {
     }, DEEP_TREE, DEEP);
   }, 120_000);
 
-  it('a row narrower than the container query hides the action words, and each action keeps its name', async () => {
+  it.each(SKIN_IDS)('%s, a row narrower than the container query hides the action words, and each action keeps its name', async (skin) => {
     // No leaf at 600 px or wider has a row under the query's 530 px in either skin, so the head is narrowed here by hand
     // to 500 px: the container query keys on the row's own width, whatever narrows it.
-    await at({ width: 1280, height: 800, skin: REFINED }, async ({ page }) => {
+    await at({ width: 1280, height: 800, skin }, async ({ page }) => {
       await page.evaluate(() => { (document.querySelector('.docs-head.docs-full') as HTMLElement).style.width = '500px'; });
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE refined 1280x800 narrowed-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
+      console.log(`PHH-FIGURE ${skin} 1280x800 narrowed-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
       expect(r.rowW).toBeLessThan(530);
       expect(r.words.length).toBe(3);
       expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
@@ -1008,8 +1054,8 @@ describe('the desk head (desk-nav Part B)', () => {
     });
   }, 120_000);
 
-  it('412 x 915: a listing below 600 px draws the head as main draws it, its figure equal to the base (F2(b))', async () => {
-    const app = await openView({ width: 412, height: 915, skin: REFINED }, DEEP_TREE, DEEP);
+  it.each(SKIN_IDS)('%s, 412 x 915: a listing below 600 px draws the head as main draws it, its figure equal to the base (F2(b))', async (skin) => {
+    const app = await openView({ width: 412, height: 915, skin }, DEEP_TREE, DEEP);
     try {
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${LONG_DIR}/`, { waitUntil: 'load' });
       await app.page.waitForFunction(() => document.querySelector('.docs-head .docs-actions') !== null, undefined, { timeout: 30_000 });
@@ -1025,7 +1071,7 @@ describe('the desk head (desk-nav Part B)', () => {
           bar: top('.docs-head-bar'), truth: top('.docs-truth'), actions: top('.docs-head > .docs-actions'),
         };
       });
-      console.log(`PHH-FIGURE refined 412x915 listing ${JSON.stringify(got)}`);
+      console.log(`PHH-FIGURE ${skin} 412x915 listing ${JSON.stringify(got)}`);
       expect(got.full, 'no desk head below 600 px').toBe(false);
       expect(got.kids).toEqual(['docs-head-bar', 'docs-truth', 'docs-actions']);
       // The base (main at 435773d66) measured this listing's head at 224.5 px, its truth line at 92.5 and its actions at
@@ -1467,14 +1513,14 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 120_000);
 
-  it.each([
+  it.each(SKIN_IDS.flatMap((skin) => ([
     [1280, 800],
     [915, 412],
-  ] as const)('a touch laptop keeps the floor: %i x %i under a coarse pointer, every control in the row and the truth line one tap tall', async (width, height) => {
-    await at({ width, height, skin: REFINED, touch: true }, async ({ page }) => {
+  ] as const).map(([w, h]) => [skin, w, h] as const)))('a touch laptop keeps the floor, %s: %i x %i under a coarse pointer, every control in the row and the truth line one tap tall', async (skin, width, height) => {
+    await at({ width, height, skin, touch: true }, async ({ page }) => {
       const f = await measure(page);
       const r = await rowFigure(page);
-      console.log(`PHH-FIGURE refined ${width}x${height} touch ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} touch ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
       expect(f.frameBar, 'a frame mounted at this width keeps its own bar').toBe(true);
       expect(r.fine, 'a coarse pointer').toBe(false);
