@@ -19,7 +19,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 1c | 1, the fourth trigger | worker clause 16 gains the coordinator's conflict-sync mail as a fourth trigger, bounded to one named commit per mail before a wave-done; the hook's advisory, one README paragraph and the coordinator's run-care reference say the same; the coordinator skill's contract is not reworded | skills, hook (fleet box first) | — | — | ruled by the operator 2026-11-24 (item 641); planned the same day (`docs/superpowers/plans/2026-11-24-landing-order-wave1c-conflict-sync.md`, D-9011 to D-9013; Decisions, 2026-11-24 20:04); the plan merged (#3341, `45329e5b`) and run 3698 was dispatched on 2026-11-25; building |
-| 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); to dispatch once the plan is on `main` |
+| 1d | 2, the queue's own CI | a server shard's deadline clears its slow-runner case; a superseded queue group's jobs end when they start; in a queue group the growth check measures an entry against its parent | CI (the repository's workflow and tests) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.md`, D-9014 to D-9016; Decisions, 2026-11-25 01:40); to dispatch after wave 1e, which changes the same workflow file |
+| 1e | 2, the queue's own CI | no browser shard of a queue run expects more than about 12 minutes: the file-time table is refreshed, one 870 s file runs as two, and the leg runs as four shards; its deadline stays 20 | CI (the workflow, the browser leg's sequencer and one browser test file) | — | — | planned 2026-11-25 (`docs/superpowers/plans/2026-11-25-landing-order-wave1e-browser-shards.md`, D-9026; Decisions, 2026-11-25 02:40); built before 1d; to dispatch once the plan is on `main` |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116; amended by #1753 with the operator's per-project allowance, D-7249); run 1144 (the run's wave 8) dispatched 2026-10-29, once wave 3e had merged and another programme's worker, on the operator's instruction, released its claim on `ccd/session-hook.sh`; block 7309–7318; PR #1863; fix round 1 after review 1184; accepted on `e0a57a94` after review run 1195 and merged through the native queue as `d3250900` (Decisions, 2026-10-29 09:41); D-7309–D-7315 defined after the merge; deploy and live check wait (Next-wave brief) |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
@@ -2360,6 +2361,23 @@ carries it (spec §5.1, amended 2026-09-24).
     it predicted had ended. A settings question goes to the operator only after the batch in flight has ended and
     after every act in the coordinator's own rights has been tried; here that act was cancelling a queue run
     whose queue branch is gone, checked run by run.
+- **2026-11-25 02:40 — wave 1e is planned and goes before wave 1d: the browser shards.** The coordinator's own
+  call (call 1035), on a second report from another programme's coordinator.
+  - **Measured.** Of the fourteen merge-queue runs created from 00:17Z to 01:58Z, six ran the browser suite. In
+    those six the second of the three browser shards took 916 s to 1,211 s and was cancelled twice at its
+    20-minute deadline with every file green, each time removing a green entry. The runner was not slow: that
+    shard's timed files ran at a median of 1.05 times their stored figure. The file-time table the sharder
+    balances by was last refreshed at 82 files and the suite has 118, and one file had grown from 360 s to 870 s.
+  - **Decided.** Not a longer deadline: D-8167 already ruled that this leg is kept under its deadline by balance
+    and a shard. Wave 1e refreshes the table, moves that one file's 22 tests into two files, and runs four shards
+    (D-9026). Simulated by the sharder's own rule on the run's own times, a shard then expects about 660 s. The
+    wave-1d plan's first decision (D-9014) is unchanged: the server shards' slow case was the runner, on one
+    selection size, so there the deadline is what moves.
+  - **Order.** 1e is built first: it is the smaller change and the more frequent cause, and both waves change
+    `ci.yml`. 1d is dispatched when 1e's workflow hunk is fixed.
+  - **Also seen, and not a wave's work:** one queue run failed in its dependency job after 46 seconds on three
+    `bad pack header` answers to the checkout's fetch. That is the host's, and the landing reference's second door
+    (re-read the verdict, re-enqueue once) covers it.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -3032,6 +3050,11 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   that, each against `main` as it then stands.
 - **Wave 1c is building** (run 3698). Its review reads the worker's one merge of `main` against both parents: the
   clause's file changed on `main` while the wave was building.
-- **Wave 1d is planned** (the same entry): the merge queue's own CI. Dispatch it once its plan is on `main`. It
+- **Wave 1e is planned and goes first** (Decisions, 2026-11-25 02:40): the browser shards. Dispatch it once its
+  plan is on `main`. Its pull request changes `.github/`, so it runs the full suite; the wave-done names the four
+  browser shards' durations if they ran. The file-time table is still refreshed by hand: a source the leg
+  derives for itself is a later wave's.
+- **Wave 1d is planned** (Decisions, 2026-11-25 01:40): the merge queue's own CI. Dispatch it once 1e's workflow
+  hunk is fixed, and name that hunk's commit in its brief. It
   changes `.github/`, so its pull request runs the full suite, and its own queue run is the first to meet its
   liveness step in the fail-open arm, because the script is fetched from the default branch.
