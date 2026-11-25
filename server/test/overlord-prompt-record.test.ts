@@ -542,7 +542,7 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     return { h, coord, w };
   };
   const store = (state: 'recorded' | 'queued' | 'delivered' | 'picked-up' = 'delivered') => ({
-    moveMessage: vi.fn(() => ({ ok: true as const, value: { changed: true, state: 'delivered' as const } })),
+    moveMessage: vi.fn(() => ({ ok: true as const, value: { changed: true, state: 'delivered' as const, from: state } })),
     messageStateOf: vi.fn(() => ({ kind: 'measured' as const, value: state })),
   });
 

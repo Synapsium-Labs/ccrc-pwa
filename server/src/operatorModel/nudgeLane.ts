@@ -14,7 +14,8 @@ const BEFORE_DELIVERED: ReadonlySet<string> = new Set(['recorded', 'queued']);
 /** What the branch needs: the delivery writer's ack, the private store's one move (absent in a watcher with no store), the
  *  lane's clock reading and its log. */
 export interface NudgeLaneDeps {
-  readonly coord: Pick<WatcherCoordPort, 'markAcked' | 'db'>;
+  /** `db` is where the message's sequence line goes; absent (a fixture lane), the missing line is logged (`messageLine.ts`). */
+  readonly coord: Pick<WatcherCoordPort, 'markAcked'> & { readonly db?: WatcherCoordPort['db'] };
   readonly operatorModel: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf'> | undefined;
   readonly now: number;
   readonly warn: (line: string) => void;
@@ -73,7 +74,7 @@ export function settleNudge(
  *  while the lane's send is in flight (whose `markDelivered` is then refused as terminal), settles the row as the lane's own ack
  *  does, so a self-ack never leaves it `queued` until a boot. Called after an ack that landed; any other mail is left alone. */
 export function settleAckedOperatorNudge(
-  deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'mailOrigin' | 'db'> }, mailId: number,
+  deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'mailOrigin'> & { readonly db?: WatcherCoordPort['db'] } }, mailId: number,
 ): void {
   const origin = deps.coord.mailOrigin(mailId);
   if (origin === null || !isOperatorMessageMail(origin)) return;
@@ -81,7 +82,7 @@ export function settleAckedOperatorNudge(
 }
 
 /** The `deliver` move, made at once when `due`, else only while the row, read text-free, is still `recorded` or `queued`. */
-function deliverWhileQueued(deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: Pick<WatcherCoordPort, 'db'> }, messageId: number, due: boolean): void {
+function deliverWhileQueued(deps: Omit<NudgeLaneDeps, 'coord'> & { readonly coord: { readonly db?: WatcherCoordPort['db'] } }, messageId: number, due: boolean): void {
   const om = deps.operatorModel;
   if (om === undefined) return;
   if (!due) {
