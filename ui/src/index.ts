@@ -95,7 +95,9 @@ export { TaskCard } from './components/task-card';
 export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
 export {
   ToolCard,
+  NO_RESULT_WORD,
   askCardLines,
+  askQuestions,
   askState,
   ASK_WORD,
   ASK_GLYPH,

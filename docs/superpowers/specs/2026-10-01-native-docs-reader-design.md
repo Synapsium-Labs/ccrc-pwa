@@ -26,9 +26,9 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 
 ### Goals
 
-1. **Each install reads its own projects' docs.** That means whatever ccd's projects root holds on that install's fleet box, behind that install's own session gate.
+1. **Each install reads its own projects' docs.** The Docs reader reads whatever ccd's projects root holds on that install's fleet box, behind that install's session gate. Draft review reads a frozen snapshot from the owner's server, not a project tree; the read door requires the snapshot's capability instead of a session (amended 2026-11-20; draft review, X3, D-8765).
 2. **Reading docs stops needing a tailnet, a forwarder and a standalone server.** The reader uses the server-to-agent link ccrc already has.
-3. **ccrc never bundles, mirrors or redistributes documents.** The repository is public. Docs stay in the operator's repositories and reach only the operator's signed-in browser. The one way document bytes leave that browser is a file the operator explicitly saves with Export (amended 2026-10-13, §4.17). It is built in the browser from what the page already holds, ccrc stores nothing for it, and Share sends only a GitHub URL.
+3. **ccrc does not bundle documents into the product or mirror project repositories.** The repository is public. Ordinary Docs reads stay session-gated. Export still builds a file from what the browser already holds; ccrc stores nothing for Export, and Share sends only a GitHub URL (amended 2026-10-13, §4.17). Draft review is a separate, explicit exception: the owner's server can retain a frozen snapshot for a bounded time and serve it to a capability holder. R1 adds the store and read door, not the page or the owner's action (amended 2026-11-20; draft review, X3, D-8765).
 4. **A page says exactly what it served.** It shows the full refname, the commit, why that ref was chosen, and whether a draft overlays it. A `?ref=` that cannot be served is an honest error, never a 200 showing something else.
 5. **Docs never starves the console.** Every docs byte shares the agent socket with the terminals, so docs traffic is bounded to keep it from doing so.
 
@@ -40,13 +40,13 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 - **More than one fleet node.** This build has one agent link. The seam for more is reserved and not built: the `/docs/@<node>` page segment and node-keyed internals (§3.12).
 - **Editing docs.** The reader writes nothing in any working tree, index or local ref.
 - **Offline reading.** Offline, a Docs page shows the shell and its failure state only.
-- **Share links that ccrc hosts** (amended 2026-10-13). Share sends a GitHub URL only. Expiring links served by ccrc, and Export of a section or directory as a bundle, are deferred (§4.13).
+- **ccrc-hosted links from Share.** Share sends a GitHub URL only (amended 2026-10-13). Expiring links are the separate draft-review action, not a new kind of Share link. R1 cannot issue them. Export of a section or directory as a bundle stays deferred (§4.13) (amended 2026-11-20; draft review, X3, D-8765).
 
 ### Decision log
 
 | Id | Decision | Chosen | Why |
 |---|---|---|---|
-| `product` | What ccrc ships | A session-gated Docs reader for each install's own project docs. It never bundles docs. | The standalone server it replaces sat outside ccrc's authentication, and its `?ref=` drove unbounded fetches: T3's reasons. ccrc already owns a gate, a link to the fleet and ccd. A public AGPL repository must not carry anyone's documents. |
+| `product` | What ccrc ships | A session-gated Docs reader for each install's own project docs. R1 adds a separate capability-gated read door for stored review snapshots, not a public project reader; the review page and the owner's action ship later (amended 2026-11-20; draft review, X3, D-8765). | The standalone server it replaces sat outside ccrc's authentication, and its `?ref=` drove unbounded fetches: T3's reasons. ccrc already owns a gate, a link to the fleet and ccd. A public AGPL repository must not carry anyone's documents. |
 | `sections` | What is addressable | `specs`, `plans`, `product-design`, `conventions`, and nothing else (`DOC_SECTIONS`) | These are the four sections the old preview served. Ledgers and the rest of `docs/` stay out (non-goals). |
 | `features` | What carries over from the old preview | `?ref=` previews, drafts, HTML mockups. Amended 2026-10-13: Share and Export (`sharing`, `share-drafts`, `share-export`) | They are why an operator reads docs through a server rather than GitHub: unmerged branches, uncommitted specs, design mockups. |
 | `approach` | How it is built | A native feature: four narrow verbs in ccd (three reads and `docs-fetch`). `EXEC_COMMANDS` stays `['tmux','ccd']`. No proxy to the old server. | The exec surface is closed by design (`agent/src/whitelist.ts:192`). A proxy would put an unauthenticated listener's raw HTML on the ccrc origin. |
@@ -2284,7 +2284,7 @@ Only the colours change; the layout does not move. The content-keyed store makes
 - **No ProjectCard Docs link** in this programme; the index and the session rows cover it.
 
 Deferred by the Share and Export amendment (2026-10-13):
-- **Expiring share links** (operator, 2026-10-06: later, as their own designed wave with a threat model). Nothing is designed for them.
+- **Expiring review links** are designed separately in the [Native Docs draft-review spec](2026-11-18-native-docs-draft-review-design.md). R1 adds the private snapshot store and capability read door. The review page comes in R2; only R3's explicit owner action issues links. The questions below are the original threat-model notes (amended 2026-11-20; draft review, X3, D-8765).
   - **What keeps the option open.** Share's result is a discriminated union, so a link kind with an expiry can be added as one more arm. The export builder is pure, and its `ccrc-docs-export/1` generator meta versions the format. Share and Export spend no page key, route or census entry, and write no durable state.
   - **Questions recorded for the threat model.** Drafts served at a public URL. Revocation storage, against `coord.db`'s rule of refusing to start rather than open empty. A snapshot at share time, against a live read through ccd: a live read would be an unauthenticated path to a fleet exec. Inlined hidden assets (§5.6.9) in a public snapshot.
 - **Export of a section, directory or project as a bundle** (decision 6). A bundle is a different artefact with different limits.
@@ -3601,7 +3601,7 @@ All of this text is public. Use placeholders only (`<your-origin>`, `<project>`,
    - rendering: client-side Markdown with no raw HTML; HTML mockups only in a sandboxed srcdoc frame, pre-scanned, with scripts off until tapped and external origins loaded only by a per-view tap; SVG only as an image;
    - Share and Export (amended 2026-10-13): what Share sends (a GitHub permalink at the commit the page opened), when it refuses, and the access note; what an Export holds (the leaf as shown, its provenance and its inlined images, and nothing of ccrc's); Download against Export; drafts under the banner; a mockup export as a static snapshot;
    - limits: the §2 and §6 caps, and the lanes;
-   - offline and auth: shell only when offline; every route is session-gated, never exempt, and uses no box token;
+   - offline and auth: shell only when offline; the ordinary Docs routes remain session-gated, never exempt, and use no box token. The README's auth census records gate reason 9 for R1's `POST /api/review/open`: the body token is the credential, and the door reads neither session nor box token. The review page is a later class 9 entry, not an R1 route (amended 2026-11-20; draft review, X3, D-8765);
    - requirements: python3 3.8+ on the fleet box and a ccd advertising `docs-v1`, measured by doctor's `docs` and `docs-sw`;
    - the failure list, which is `DOCS_FAILURES`.
 2. **`### Moving off a standalone docs server`:** 7.4 as one-line bullets, opening with the Step 1 warning.

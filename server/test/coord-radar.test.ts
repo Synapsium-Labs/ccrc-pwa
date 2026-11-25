@@ -43,7 +43,7 @@ describe('parseProbe: the files', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.doc).toEqual({
-      project: 'proj-a', at: iso(0), baseRef: 'main',
+      project: 'proj-a', at: iso(0), baseRef: 'main', baseSha: sha(9),
       heads: [
         { pr: 12, head: sha(12), branch: 'ws/alpha', id: 'lane-a-proj-a-alpha', base: { state: 'clean' } },
         { pr: 13, head: sha(13), branch: 'feature/x', id: null, base: { state: 'conflict', paths: ['README.md'], pathsCut: false } },
@@ -53,6 +53,16 @@ describe('parseProbe: the files', () => {
       pairs: [{ a: 12, b: 14, answer: { state: 'conflict', paths: ['src/x.ts'], pathsCut: false } }],
       pairHeads: [14, 12], pairsCut: false,
     });
+  });
+
+  it('baseSha is the producer base.sha, and the per-session output is unchanged by it', () => {
+    expect(okDoc(worked()).baseSha).toBe(sha(9));
+    const doc = okDoc(worked());
+    const rows = [{ id: 'lane-a-proj-a-alpha', branch: 'ws/alpha', pr: null }];
+    const landings = sessionLandingsOf(doc, rows, NOW, new Set());
+    expect(landings.get('lane-a-proj-a-alpha')).not.toHaveProperty('baseSha');
+    expect([...landings.get('lane-a-proj-a-alpha')!.base ? Object.keys(landings.get('lane-a-proj-a-alpha')!) : []].sort())
+      .toEqual(['at', 'base', 'baseRef', 'conflicts', 'cut', 'head', 'paired', 'pr', 'unmeasuredWith']);
   });
 
   it('the failed-fetch example answers unmeasured, never ok', () => {

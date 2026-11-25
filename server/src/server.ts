@@ -80,8 +80,11 @@ import { queueSystemMail } from './coord/rundefsTx.js';
 import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
-import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { registerReviewOpenRoute } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+import { openReviewStore } from './review/store.js';
+import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
@@ -95,6 +98,7 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
+import { expectedSurfaceOf } from './continuity/sandboxCheck.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
 import { witnessPorts } from './continuity/witnessPorts.js';
 import { liveStateOf, markOperatorPrompt } from './continuity/promptHandoffs.js';
@@ -111,7 +115,7 @@ import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
-import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { NO_OVERLORD_STORE, drainOwedStops, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
 import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
@@ -199,6 +203,12 @@ export function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   const o = raw as Record<string, unknown>;
   // H2 (D-8872): one finished helper's report, asked by its agent id (`isHelperId`, the one rule); anything else is null.
   if (o['type'] === 'helper-report') return isHelperId(o['id']) ? { type: 'helper-report', id: o['id'] } : null;
+  // Desktop polish wave 171: one older chat page, asked by the opaque continuation the stream last sent. Anything but a
+  // string forwards as '' so the stream answers `invalid` rather than leaving the request unanswered; the stream's codec
+  // bounds the length before it parses anything.
+  if (o['type'] === 'older-page') {
+    return { type: 'older-page', continuation: typeof o['continuation'] === 'string' ? o['continuation'] : '' };
+  }
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
@@ -374,6 +384,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
 /** `Deps` and `CollectLaneDeps` are declared in the type-only `deps.ts` (ARCH-03, D-6003); re-exported here so
  *  every caller that names them from `server.ts` still compiles. */
 export type { CollectLaneDeps, Deps } from './deps.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    reviewSweep: ReturnType<typeof startReviewSweep> | null;
+  }
+}
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
  *  module — src/ in dev, dist/server/src/ compiled — to the first package.json. */
@@ -2271,6 +2287,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     privateTrackerKeys: deps.cfg.privateTrackerKeys, gate, notice, bus, build: deps.build?.version ?? null,
   });
+  // The Overlord's designation store and body (designation A), built once: the designation doors below and the continuity routes'
+  // settle step (W1 sandbox B) share one body, with the stop route's own path as `stopCreated`, and so one owed-stop drain.
+  const designationStore = deps.coord !== undefined && deps.overlordAuthority !== undefined ? { coord: deps.coord, journal: deps.overlordAuthority } : undefined;
+  const overlordStore = designationStore ?? NO_OVERLORD_STORE;
+  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  const overlordBody = ccdOverlordBody({
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+    // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
+    stop: stopCreatedOf({
+      read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
+      identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
+    }),
+    projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
+    projectsChanged: () => projectWalk.drop(),
+  });
   // The Overlord's inbox doors (W1 inbox piece): box-token lanes behind the gate above, each read counted and recorded by the one runner.
   registerOverlordInboxRoutes(app, {
     mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(),
@@ -2279,6 +2311,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
+    // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
+    settle: designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
+      expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
+      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
+      failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
+      drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
+      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } },
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
@@ -2386,25 +2425,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerFaceRoutes(app, { coord: deps.coord });
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
-  const overlordStore = deps.coord !== undefined && deps.overlordAuthority !== undefined
-    ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
-  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore,
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
-    body: ccdOverlordBody({
-      runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
-      generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
-      // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
-      stop: stopCreatedOf({
-        read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
-        identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
-      }),
-      projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
-      projectsChanged: () => projectWalk.drop(),
-    }),
+    body: overlordBody,
     facts: {
       ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
       roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
@@ -2437,6 +2463,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         const m = asSessionClientMsg(JSON.parse(String(raw)));
         if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
+        else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }
     });
     socket.on('close', () => {
@@ -4582,5 +4609,38 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `<ccrcDir>`, and a caller that removes that directory after close (a test's teardown) raced it (`ENOTEMPTY`).
   // `serverCapsNow` never rejects, so this never fails a close.
   if (watcher) app.addHook('onClose', async () => { watcher.stop(); await watcher.serverCapsSettled(); });
+
+  // A manually assembled server without the injected clock has no review lane. Keep the route registered, but do
+  // not open a store or start work it cannot safely age. Both production assemblies supply the process clock.
+  const reviewClock = deps.time?.clock;
+  const review = reviewClock === undefined
+    ? { ok: false as const, why: 'clock-unwired' as const }
+    : deps.review?.store === undefined
+      ? await openReviewStore(deps.cfg.reviewStoreDir, deps.review?.fs)
+      : { ok: true as const, store: deps.review.store };
+  const reviewAccess = review.ok && reviewClock !== undefined
+    ? { store: review.store, wall: () => reviewClock.wall() }
+    : null;
+  registerReviewOpenRoute(app, reviewAccess);
+  const reviewAbort = new AbortController();
+  const node = docs.readers.primary;
+  const reviewSweep = reviewAccess === null ? null : startReviewSweep(reviewAccess.store, {
+    tree: async (project, servedRef) => {
+      try {
+        // The Docs plugin already verified both primary entries. Use its flight, lane and caches.
+        const run = await readTree(docs.readers.byNode.get(node)!, docs.lanes.byNode.get(node)!,
+          { node, project }, { kind: 'qualified', ref: servedRef }, reviewAbort.signal);
+        return run.kind === 'ran' && run.value.ok ? { ok: true, tree: run.value.answer } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    },
+  }, reviewAccess.wall);
+  app.decorate('reviewSweep', reviewSweep);
+  if (!review.ok) console.warn(`ccrc-server: draft review unavailable (${review.why})`);
+  if (reviewSweep !== null) app.addHook('onClose', async () => {
+    reviewAbort.abort();
+    await reviewSweep.stop();
+  });
   return app;
 }

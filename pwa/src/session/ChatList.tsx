@@ -27,8 +27,11 @@ import {
 import { PendingBubble } from './PendingBubble';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
-import { groupToolRun, type TranscriptItem } from './toolSummary';
-import { TranscriptRowContext } from './transcriptRow';
+import { heightMove, holdShift } from './footFollow';
+import { foldToolActivity, rowScope, waitKey, waitOf, type LiveWait, type RowScope, type TranscriptItem } from './toolActivity';
+import { ToolActivityRow } from './ToolActivityRow';
+import { groupToolRun } from './toolSummary';
+import { TranscriptRowContext, useExpansionMemo, type ExpansionMemo } from './transcriptRow';
 import './chat.css';
 
 /** Animated "Claude is working this turn" pulse — mirrors the terminal's
@@ -57,6 +60,7 @@ function ChatItemBody({
   answerLabel,
   onAnswer,
   day,
+  settled,
 }: {
   item: ChatItem;
   /** Session id — threaded down to clip thumbnails (`clipUrl(id, name)`). */
@@ -64,6 +68,8 @@ function ChatItemBody({
   onRetry?: (key: string) => void;
   onDiscard?: (key: string) => void;
   askPending?: boolean;
+  /** A tool call's turn is over (`RowScope.past`): one with no result is drawn as having none, never as running. */
+  settled?: boolean;
   /** D-6326: an inline ask surface is mounted below the transcript (the desk), so a live ask card points at it. It also holds a
    *  failed bubble's Retry (R89, passed to `PendingBubble` as `sendHeld`): Retry is a send, deferred while the card is up. */
   askBelow?: boolean;
@@ -81,7 +87,7 @@ function ChatItemBody({
     case 'tool':
       return (
         <ToolCard
-          use={item.use} result={item.result} renderWell={renderToolWell(item.use)}
+          use={item.use} result={item.result} settled={settled} renderWell={renderToolWell(item.use)}
           askPending={askPending} askBelow={askBelow} answerLabel={answerLabel} onAnswer={onAnswer}
         />
       );
@@ -119,36 +125,66 @@ function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
   );
 }
 
-/** THE LIST THE TRANSCRIPT SHOWS (D-5475, W2 Task S13b). The set's declarative `transcriptGrouping` says whether
- *  runs of tool entries fold into one row; this applies the one shared `groupToolRun` when it does, BEFORE the list
- *  is handed to Virtuoso, because a fold changes the count, the indices and the seeded heights, which no per-item row
- *  can. Data, not logic: nothing here compares a skin id (D-5469), and outside a frame (most suites) nothing folds. */
-function transcriptOf(grouping: SkinSet['transcriptGrouping'] | undefined, items: ChatItem[]): TranscriptItem[] {
-  return grouping === 'tool-runs' ? groupToolRun(items) : items;
+/** THE LIST THE TRANSCRIPT SHOWS (D-5475, W2 Task S13b; desktop polish wave 168). The set's declarative fields say
+ *  how it folds: `toolActivity` folds each stretch of a turn's tool activity into one row (`foldToolActivity`), and
+ *  `transcriptGrouping` folds runs of tool entries (`groupToolRun`) — at the top level, or inside each activity row when
+ *  both are on. Applied BEFORE the list is handed to Virtuoso, because a fold changes the count, the indices and the
+ *  seeded heights, which no per-item row can. Data, not logic: nothing here compares a skin id (D-5469), and outside a
+ *  frame (most suites) nothing folds. */
+function transcriptOf(set: SkinSet | null, items: ChatItem[], wait: LiveWait, busy: boolean): TranscriptItem[] {
+  const runs = set?.transcriptGrouping ?? 'none';
+  if (set?.toolActivity === 'stretches') return foldToolActivity(items, { runs, wait, busy });
+  return runs === 'tool-runs' ? groupToolRun(items) : items;
 }
 
-/** What one transcript row is drawn from: the set, the row, and every prop a plain item's body reads. */
-type RowViewProps = Omit<Parameters<typeof ChatItemBody>[0], 'item'> & { set: SkinSet | null; item: TranscriptItem };
+/** What one transcript row is drawn from: the set, the row, the list's expansion memo, and every prop a plain item's
+ *  body reads. */
+type RowViewProps = Omit<Parameters<typeof ChatItemBody>[0], 'item' | 'settled'> & {
+  set: SkinSet | null;
+  item: TranscriptItem;
+  expansion: ExpansionMemo;
+  /** The tool-activity row this row is drawn inside, if any (`rowScope`). */
+  scope?: RowScope;
+};
+
+/** The fallback of a row that threw while rendering. */
+const rowFallback = (): ReactNode => <p className="msg-plain-note">This item could not be shown.</p>;
 
 /** One transcript row, drawn through the set's `TranscriptRow` part when it has one. The part takes no props
- *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item. With no part,
- *  a plain item renders as it always has, and a group (which only a set with a row part asks for) as its entries. */
+ *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item and for a row
+ *  inside a tool-activity row. With no part, a plain item renders as it always has, a tool-activity row as the shared
+ *  `ToolActivityRow`, and a group (which only a set with a row part asks for) as its entries. */
 function TranscriptRowView({
   set,
   item,
+  expansion,
+  scope,
   ...rest
 }: RowViewProps): ReactNode {
-  const renderItem = (it: ChatItem): ReactNode => <ChatItemView {...rest} item={it} />;
+  // Inside a tool-activity row, its scope rules its cards (review 3478 F1, F4): the live wait's pending state reaches the
+  // one call the fold singled out and no other, and a past stretch's calls are settled. Outside one, as before.
+  const inner = item.kind === 'tool-activity' ? rowScope(item) : scope;
+  const renderItem = (it: ChatItem): ReactNode => (
+    <ChatItemView
+      {...rest} item={it} settled={inner?.past === true}
+      askPending={inner === undefined ? rest.askPending : rest.askPending === true && it.key === inner.asked}
+    />
+  );
+  const renderRow = (it: TranscriptItem): ReactNode => (
+    <TranscriptRowView {...rest} set={set} item={it} expansion={expansion} scope={inner} />
+  );
   const Row = set?.TranscriptRow ?? null;
-  if (Row === null) return item.kind === 'tool-group' ? item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>) : renderItem(item);
+  let body: ReactNode;
+  if (Row !== null) body = <Row />;
+  else if (item.kind === 'tool-activity') body = <ToolActivityRow item={item} />;
+  else if (item.kind === 'tool-group') return item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>);
+  else return renderItem(item);
   return (
-    <TranscriptRowContext.Provider value={{ item, renderItem }}>
-      <RenderBoundary
-        where="chat item"
-        resetKey={item.key}
-        fallback={() => <p className="msg-plain-note">This item could not be shown.</p>}
-      >
-        <Row />
+    <TranscriptRowContext.Provider
+      value={{ item, renderItem, renderRow, expansion, answer: { onAnswer: rest.onAnswer, answerLabel: rest.answerLabel, askBelow: rest.askBelow } }}
+    >
+      <RenderBoundary where="chat item" resetKey={item.key} fallback={rowFallback}>
+        {body}
       </RenderBoundary>
     </TranscriptRowContext.Provider>
   );
@@ -167,6 +203,9 @@ export interface ChatListProps {
    *  two sources the ask card's state axis is derived from; the other is the
    *  card's own `tool_result`. */
   askPending?: boolean;
+  /** What the live wait is (`liveWaitOf` of the screen's `askSource`), which a tool-activity row ties to a call only when
+   *  it identifies one (review 3478 F2). Absent, `askPending` alone says a wait that names no call. */
+  askWait?: LiveWait;
   /** D-6326: the inline ask surface is mounted (the desk): a live ask card says where it is instead of offering Answer. It also
    *  holds a failed bubble's Retry (R89, `PendingBubble`'s `sendHeld`): Retry is a send, deferred while the card is up. */
   askBelow?: boolean;
@@ -191,13 +230,16 @@ export function ChatListInner({
   onRetry,
   onDiscard,
   askPending,
+  askWait,
   askBelow,
   answerLabel,
   onAnswer,
   day,
 }: ChatListProps): ReactNode {
   const set = useFrameSet();
-  const items = transcriptOf(set?.transcriptGrouping, buildChatItems(events, pending, busy));
+  const items = transcriptOf(set, buildChatItems(events, pending, busy), waitOf(askWait, askPending === true), busy);
+  // The reader's open rows, for as long as this session's view is open.
+  const expansion = useExpansionMemo(id);
   return (
     <div className="chat-inner">
       {items.map((item) => (
@@ -205,6 +247,7 @@ export function ChatListInner({
           <TranscriptRowView
             set={set}
             item={item}
+            expansion={expansion}
             id={id}
             onRetry={onRetry}
             onDiscard={onDiscard}
@@ -275,6 +318,14 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'divider': return { bucket: 'divider', lines: 1 };
     // One collapsed line, however many calls it folds (D-5475); open, it is never sampled (`inOpeningForm`).
     case 'tool-group': return { bucket: 'group', lines: 1 };
+    // One collapsed line, and the first entry that wants the reader drawn under it as its own card (desktop polish
+    // wave 168); open, it is never sampled (`inOpeningForm`).
+    // A live wait's line is one line more.
+    case 'tool-activity': {
+      const first = item.attention[0];
+      const card = first === undefined ? 0 : shapeOf(first.entry, m).lines;
+      return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card };
+    }
     case 'message': return messageShape(item.event, m);
     case 'tool': {
       const ask = askCardLines(item.use, item.result);
@@ -485,7 +536,8 @@ const MeasuredItem = memo(function MeasuredItem({ meter, ...row }: RowViewProps 
     const node = el.current;
     return node === null ? undefined : meter.observe(node, () => current.current);
   }, [meter]);
-  return <div ref={el} className="chat-item"><TranscriptRowView {...row} /></div>;
+  // `data-row-key`: the row's identity, by which the list holds the reader's place (`onHeight`), never by its index.
+  return <div ref={el} className="chat-item" data-row-key={row.item.key}><TranscriptRowView {...row} /></div>;
 }, sameRowProps);
 
 /** Ordinary prose for the probe, so its average glyph is an ordinary one. */
@@ -703,20 +755,26 @@ function ChatScroller({
   onRetry,
   onDiscard,
   askPending,
+  askWait,
   askBelow,
   answerLabel,
   onAnswer,
   day,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
-  // The GROUPED list when the set folds tool runs (D-5475): every index below — the count, the keys, the seeded
-  // sizes and Jump to latest's last item — is this list's, never the ungrouped one's.
+  // The FOLDED list when the set folds tool activity or tool runs (D-5475, desktop polish wave 168): every index below —
+  // the count, the keys, the seeded sizes and Jump to latest's last item — is this list's, never the unfolded one's.
   const set = useFrameSet();
-  const grouping = set?.transcriptGrouping;
+  // Keyed by the wait's words, not its object: a screen render hands over an equal wait in a new object.
+  const wait = waitOf(askWait, askPending === true);
+  const waitIs = waitKey(wait);
   const items = useMemo(
-    () => transcriptOf(grouping, buildChatItems(events, pending, busy)),
-    [events, pending, busy, grouping],
+    () => transcriptOf(set, buildChatItems(events, pending, busy), wait, busy),
+    [events, pending, busy, set, waitIs], // `wait` is read through its key
   );
+  // The reader's open tool-activity rows, for as long as this session's view is open: the list's, not a row's, because
+  // virtuoso unmounts a row scrolled out of reach.
+  const expansion = useExpansionMemo(id);
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
 
@@ -742,6 +800,7 @@ function ChatScroller({
     setAtBottom(bottom);
   }, [column]);
 
+
   // READ ONCE PER MOUNT, as a lazy initial state — storage is read and parsed
   // here and on no later render. Virtuoso takes `defaultItemHeight` and the
   // snapshot when it initialises; handing it different numbers later changes
@@ -750,6 +809,112 @@ function ChatScroller({
   const [meter] = useState(() => new RowMeter(() => column.measures()));
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());
+
+  // A HEIGHT CHANGE NO NEW ITEM EXPLAINS (review 3450 F5, review 3478 F5 and F6, review 3607 F1). `heightMove` decides
+  // (why, and when which, is said there); this measures and acts. Measured here, for it:
+  //  - the reader's taps on a disclosure in the list (anything with `aria-expanded`: a tool-activity row, a run group, a
+  //    card);
+  //  - the list MOVING, as the scroller itself reports it: the time of its last scroll event, whatever caused it (a
+  //    wheel, a fling, a smooth scroll, a key, a drag, code), except the scroll event the hold's own write owes;
+  //  - whether an item came or went at either end of the list since the last change (appends are the foot follow's,
+  //    items added at the top the older-history work's);
+  //  - the row crossing the top of the view, by its KEY (`data-row-key`), read a frame after every scroll, so a `hold`
+  //    puts that row back where the reader last saw it, and a regrouped list can never make it hold another.
+  const scroller = useRef<HTMLElement | null>(null);
+  const lastTap = useRef<number | null>(null);
+  const lastMove = useRef<number | null>(null);
+  /** Where the hold's own write left the scroller, until the scroll event it owes arrives. */
+  const ownWrite = useRef<number | null>(null);
+  const anchor = useRef<{ key: string; top: number } | null>(null);
+  /** Where the row `key` stands, from the scroller's top, or null when it is not drawn. */
+  const topOf = useCallback((el: HTMLElement, key: string): number | null => {
+    const row = el.querySelector(`[data-row-key="${CSS.escape(key)}"]`);
+    return row === null ? null : row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+  }, []);
+  const readAnchor = useCallback((): void => {
+    const el = scroller.current;
+    if (el === null) return;
+    // Measured from the scroller's own top, so a move of the scroller itself (a strip or the inline card above or below
+    // it changing) is never taken for a move of the rows inside it.
+    const top = el.getBoundingClientRect().top;
+    const row = [...el.querySelectorAll<HTMLElement>('[data-row-key]')].find((r) => r.getBoundingClientRect().bottom > top);
+    const at = row === undefined ? null : topOf(el, row.dataset.rowKey!);
+    anchor.current = row === undefined || at === null ? null : { key: row.dataset.rowKey!, top: at };
+  }, [topOf]);
+  // Read a frame after a scroll, never in it: the list lays out the rows a scroll brings into reach after the scroll
+  // event, and can move what is drawn by a pixel or two as it does (measured in Chrome).
+  const readSoon = useRef(false);
+  const onScroll = useCallback((): void => {
+    const el = scroller.current;
+    const own = ownWrite.current;
+    ownWrite.current = null;
+    // The scroll event the hold's own write owes is neither the list moving nor a new place to hold: the hold keeps the
+    // place it put back as its baseline, so what it could not put back (under a pixel, a rounded position) is put back
+    // with the next change rather than becoming the new zero (review 3607 A3).
+    if (el !== null && own !== null && Math.abs(el.scrollTop - own) < 1) return;
+    lastMove.current = performance.now();
+    if (readSoon.current) return;
+    readSoon.current = true;
+    requestAnimationFrame(() => {
+      readSoon.current = false;
+      readAnchor();
+    });
+  }, [readAnchor]);
+  const onTap = useCallback((e: Event): void => {
+    if (e.target instanceof Element && e.target.closest('[aria-expanded]') !== null) lastTap.current = performance.now();
+  }, []);
+  const onScroller = useCallback((el: HTMLElement | Window | null): void => {
+    const old = scroller.current;
+    old?.removeEventListener('click', onTap, true);
+    old?.removeEventListener('scroll', onScroll);
+    scroller.current = el instanceof HTMLElement ? el : null;
+    const now = scroller.current;
+    now?.addEventListener('click', onTap, true);
+    now?.addEventListener('scroll', onScroll, { passive: true });
+  }, [onTap, onScroll]);
+  const lastHeight = useRef<number | null>(null);
+  const edges = useRef<string | null>(null);
+  const shown = useRef(items);
+  shown.current = items;
+  const onHeight = useCallback((height: number): void => {
+    const before = lastHeight.current;
+    lastHeight.current = height;
+    const list = shown.current;
+    const now = `${list.length}:${list[0]?.key ?? ''}:${list[list.length - 1]?.key ?? ''}`;
+    const newItem = edges.current !== null && edges.current !== now;
+    edges.current = now;
+    const el = scroller.current;
+    if (el === null) return;
+    const at = performance.now();
+    const move = heightMove({
+      pinned: pinned.current, before, scrollTop: el.scrollTop, clientHeight: el.clientHeight, band: band ?? 0,
+      sinceTap: lastTap.current === null ? null : at - lastTap.current,
+      sinceMove: lastMove.current === null ? null : at - lastMove.current,
+      newItem,
+    });
+    if (move === 'foot') {
+      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      return;
+    }
+    // A frame later, after any correction of the list's own or the browser's: the hold compares where the row stood
+    // before the change with where it stands now, so a change something else already put back is put back by nothing
+    // more (one correction per change), and a list that moved in between is not set back (review 3607 F1). A `none`, or
+    // a hold the list's movement cancelled, re-reads it, so the change it let through is the reader's new place.
+    requestAnimationFrame(() => {
+      const a = anchor.current;
+      const now = a === null ? null : topOf(el, a.key);
+      if (move === 'hold' && a !== null && now !== null) {
+        const moved = lastMove.current !== null && lastMove.current >= at;
+        const shift = holdShift(a.top, now, moved);
+        if (shift !== 0) {
+          el.scrollTop += shift;
+          ownWrite.current = el.scrollTop;
+        }
+        if (!moved) return;
+      }
+      readAnchor();
+    });
+  }, [band, readAnchor, topOf]);
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -795,6 +960,7 @@ function ChatScroller({
         meter={meter}
         set={set}
         item={item}
+        expansion={expansion}
         id={id}
         onRetry={onRetry}
         onDiscard={onDiscard}
@@ -803,7 +969,7 @@ function ChatScroller({
         day={day}
       />
     );
-  }, [items, meter, set, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
+  }, [items, meter, set, expansion, id, onRetry, onDiscard, askPending, askBelow, answerLabel, onAnswer, day]);
 
   return (
     <>
@@ -830,6 +996,8 @@ function ChatScroller({
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
         atBottomStateChange={onAtBottom}
+        totalListHeightChanged={onHeight}
+        scrollerRef={onScroller}
         // At the newest turn while its foot is inside the pill's band, so Jump
         // to latest never sits on a failed send's Retry or Discard (D-5464).
         {...(band !== undefined ? { atBottomThreshold: band } : {})}

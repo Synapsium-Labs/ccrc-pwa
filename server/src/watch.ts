@@ -5,7 +5,8 @@ import { timed } from './perf/recorder.js';
 import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
 import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
-import { readRadarPass } from './coord/lineageRead.js';
+import { allFailed, readRadarPass } from './coord/lineageRead.js';
+import type { LandingControlRead } from './coord/radar.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
@@ -24,7 +25,7 @@ import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.j
 import { anthropicLaneOf } from '../../shared/roster.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, inventoryBuilds, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -182,15 +183,18 @@ import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { overlapsPass } from './coord/overlapsLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
+import { iso } from './continuity/card.js';
 import { renewalHoldsMail } from './continuity/renewalFeed.js';
 import { renewalActsOf } from './continuity/renewalWiring.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
+import { runSequenceRetentionLane } from './coord/sequenceRetentionLane.js';
 import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { skewRunningOf } from './continuity/sandboxCheck.js';
 import { ADVISOR_COUNT_LANE_ROW, advisorCountPass } from './continuity/advisorLane.js';
 import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
@@ -819,9 +823,15 @@ export class FleetWatcher {
   /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. Keyed by the
    *  raw name; `sweepRadar` prints it through `printableDetail`, so a listed name cannot forge a log line. */
   private radarSaid = new Map<string, string>();
+  /** The control apply's own warning latches (never the probe keys above): per project, and the inventory's. */
+  private controlSaid = new Map<string, string>();
+  private inventorySaid = 'ok';
   /** The radar lane's pass counter: the latest pass to start is the only one that may commit `landings` or speak. A pass the
    *  runner abandoned and later released finds a newer count and returns, so it never overwrites a newer map. */
   private radarGen = 0;
+  /** Wave 5i: the LATEST pass's control bundle per project (failures included), `sweepRadar` its one writer. */
+  private landingControls = new Map<string, LandingControlRead>();
+  private landingControlsAt = 0;
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -2008,6 +2018,16 @@ export class FleetWatcher {
   /** The radar lane's map, for the two one-shot assemblies of `server.ts` (the REST fleet and the cold frame): a copy. */
   currentLandings(): Map<string, SessionLanding> { return new Map(this.landings); }
 
+  /** The latest pass's control bundle of one project, a copy, or `undefined` when none was measured or (on a remote box) the
+   *  agent link is down: a prior connection's bundle is never handed out. Values only; the binding's freshness is the decider's. */
+  currentLandingControl(project: string, nowMs = Date.now()): LandingControlRead | undefined {
+    if (this.deps.cfg.fleetMode === 'remote' && !this.deps.fleetState?.connected) return undefined;
+    // A cached failure never ages by itself: a pass older than the radar's freshness owner allows answers nothing (the route holds).
+    if (!freshWithin(iso(this.landingControlsAt), RADAR_PROBE_FRESH_S, nowMs)) return undefined;
+    const c = this.landingControls.get(project);
+    return c === undefined ? undefined : structuredClone(c);
+  }
+
   /** The landing radar lane, one pass (landing order wave 4b; `coord/radar.ts`, `coord/lineageRead.ts`). `records` is the
    *  tick's registry listing, null when it cannot be listed. An unlistable registry or `landing` directory only RE-AGES
    *  the kept map, and a proven absence of that directory empties it. A listed one builds a NEW map from the projects
@@ -2020,9 +2040,17 @@ export class FleetWatcher {
       if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${printableDetail(key)}`} is ${reason}`);
       this.radarSaid.set(key, reason);
     };
-    if (records === null) { this.landings = reaged(); this.radarUnreadNow = 'listing'; return; }
+    if (records === null) {
+      this.landings = reaged();
+      this.radarUnreadNow = 'listing';
+    }
+    // Wave 5i: the store inventory joins the registry's projects, so a project with no session is read too. A failed inventory
+    // reads the registry's projects only and applies nothing.
+    const inventory = this.deps.coord?.landingReadProjects();
+    const known = inventory?.ok ? inventory.projects : [];
+    if (records === null && known.length === 0) { this.landingControls = new Map(); return; }
     const heads = this.currentHeadBranches();
-    const { byProject, stray } = radarRowsOf(records, (r) => {
+    const { byProject, stray } = radarRowsOf(records ?? [], (r) => {
       const pr = sessionPrOf(r, this.prStates);
       // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
       // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
@@ -2031,20 +2059,42 @@ export class FleetWatcher {
         pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
       };
     });
+    const wanted = new Set(this.deps.coord === undefined ? [] : [...byProject.keys(), ...known]);
     const pass = await readRadarPass(
-      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2, wanted);
     if (gen !== this.radarGen) return;
-    said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
-    if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); this.radarUnreadNow = pass.reason === 'absent' ? new Set() : 'listing'; return; }
-    const next = new Map<string, SessionLanding>();
-    const unread = new Set<string>();
-    for (const [project, read] of pass.reads) {
-      said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
-      if (!read.ok) { if (read.reason !== 'absent') unread.add(project); continue; }
-      for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
+    if (records !== null) {
+      said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
+      if (!pass.ok) {
+        this.landings = pass.reason === 'absent' ? new Map() : reaged();
+        this.radarUnreadNow = pass.reason === 'absent' ? new Set() : 'listing';
+      } else {
+        const next = new Map<string, SessionLanding>();
+        const unread = new Set<string>();
+        for (const [project, read] of pass.reads) {
+          said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
+          if (!read.ok) { if (read.reason !== 'absent') unread.add(project); continue; }
+          for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
+        }
+        this.landings = next;
+        this.radarUnreadNow = unread;
+      }
     }
-    this.landings = next;
-    this.radarUnreadNow = unread;
+    // A failed listing is explicit unavailable evidence for every wanted project (`allFailed`), never a retained green.
+    const controls = pass.ok ? pass.controls : new Map([...wanted].map((p) => [p, allFailed({ ok: false, reason: pass.reason })]));
+    // One synchronous apply per project, right after the generation check: the store owns the flag and the cue.
+    this.landingControls = controls;
+    this.landingControlsAt = nowMs;
+    const inventoryWhy = inventory === undefined || inventory.ok ? 'ok' : inventory.error;
+    if (this.inventorySaid !== inventoryWhy && inventoryWhy !== 'ok') console.warn(`ccrc-server: the landing control inventory is unavailable (${inventoryWhy}); no control applied`);
+    this.inventorySaid = inventoryWhy;
+    if (inventory?.ok !== true) return;
+    for (const [project, control] of controls) {
+      const r = this.deps.coord!.applyLandingControl({ project, control, nowMs });
+      const why = r.kind === 'failure' ? r.failure.error : 'ok';
+      if (this.controlSaid.get(project) !== why && r.kind === 'failure') console.warn(`ccrc-server: the landing control of ${printableDetail(project)} was not applied (${why})`);
+      this.controlSaid.set(project, why);
+    }
   }
 
   /** The projects whose last radar read failed, or 'listing' (Overlord W2 overlaps, the review's F11 b): a copy. */
@@ -2928,6 +2978,7 @@ export class FleetWatcher {
       void this.sweepAdvisorCount(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepSequenceRetention().catch(() => { /* one bad sweep must not kill the poll */ }); // the sequence's 90 days (§10.4)
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
@@ -6351,6 +6402,14 @@ export class FleetWatcher {
           buildAgreement: () => inventoryBuildAgreement(coord),
           anthropicLane: (lane) => anthropicLaneOf(cfg.roster, lane),
         },
+        // The skew notice (W1 sandbox B): the body's liveness from its fleet-state row (`skewRunningOf`), both builds from the node inventory,
+        // and one feed row and push per session and build pair, its once-only key read back through `hasNotice`.
+        skew: {
+          running: (id) => skewRunningOf(this.currentFleet()?.find((r) => r.id === id)),
+          builds: () => { const b = inventoryBuilds(coord); const w = (i: typeof b.own) => (i === null ? null : i.version ?? i.sha.slice(0, 9)); return { fleet: w(b.fleet), server: w(b.own) }; },
+          noticed: (id, key) => coord.hasNotice('coord', id, key),
+          raise: (id, key, body) => this.pushOne({ kind: 'coord', sessionId: id, project: '', title: 'The Overlord is down while the builds differ', body, runId: null, recordAlways: true, dedupeKey: key }, this.activeProjects),
+        },
         now: () => this.deps.time.clock.wall(),
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route, wrapper: r.unmeasured.includes('wrapper') ? null : r.wrapper,
         ...(r.advisorSpawn === undefined ? {} : { advisorSpawn: r.advisorSpawn }) })));
@@ -6404,6 +6463,13 @@ export class FleetWatcher {
     if (!coord) return;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
       registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+  }
+
+  /** The sequence's retention lane (Overlord §10.4, Table 11.5b; `coord/sequenceRetentionLane.ts`): one prune pass. */
+  async sweepSequenceRetention(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('sequenceRetention', () => { runSequenceRetentionLane({ coord, clock: this.deps.time.clock, log: (line) => console.warn(line) }); });
   }
 
   /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */

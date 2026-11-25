@@ -15,30 +15,15 @@ export function isSafeSessionId(id: string): boolean {
 
 /** One clip filename: no directory part, no dots to climb with. Exported so the
  *  prompt and clip routes validate against the same shape the writer produces.
- *  The extension half is DERIVED from `CLIP_EXTS` rather than spelled again —
- *  a name this refuses is a name the clip route cannot serve, so the two lists
- *  drifting apart would strand a staged file behind a 400. */
+ *  The extension half is DERIVED from `CLIP_EXT_ALT`, the stored extension's
+ *  shape (lower-case letters and digits, 1 to `CLIP_EXT_MAX`), rather than
+ *  spelled again — a name this refuses is a name the clip route cannot serve,
+ *  so the two drifting apart would strand a staged file behind a 400. */
 export const CLIP_NAME_RE = new RegExp(`^clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})$`);
 
-/**
- * Content-Type for the clip route, keyed by the (real) extension `clipName`
- * wrote. It lives beside the writer, not in the route, so that `clip.test.ts`
- * can hold it against `CLIP_EXTS` — an admitted extension with no entry here
- * would be served as `application/octet-stream`, which is a silent download
- * prompt instead of the document the user tapped.
- *
- * Nothing here is a script type, and nothing ever should be: these are bytes a
- * client uploaded, served back from the app's OWN origin. `text/html` or
- * `image/svg+xml` in this table would make the clip route a same-origin script
- * host. The route also sends `nosniff`, so a browser cannot promote one of
- * these to HTML on its own.
- */
-export const CLIP_MIME: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-  md: 'text/markdown', txt: 'text/plain', log: 'text/plain',
-  csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json',
-  yaml: 'text/yaml', yml: 'text/yaml', rtf: 'application/rtf', pdf: 'application/pdf',
-};
+/** The serve table itself lives in `shared/clipServe.ts`; re-exported here under
+ *  its own name so the serve route's import is unchanged. */
+export { CLIP_MIME } from '../../shared/clipServe.js';
 
 /**
  * The part of an uploaded file's OWN name worth carrying into the clip name.

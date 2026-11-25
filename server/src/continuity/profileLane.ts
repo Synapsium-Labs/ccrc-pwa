@@ -47,6 +47,8 @@ import type { SessionRecord } from '../registry.js';
 import { designationFactFrom, roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
 import { plainAutoMemoryOf, profileDigestWriteOf, profileFor } from './profileFor.js';
+import { skewNoticeOf } from './sandboxCheck.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import { advisorFor, coordinatorAdvisorOf, droppedOn, utcDayOf, type AdvisorFacts } from './advisorPolicy.js';
 import type { AdvisorDay } from '../coord/advisorStore.js';
 
@@ -121,6 +123,16 @@ export interface ProfileLaneDeps {
   /** A row's gate (`laneArmGate`), unless a test opens one; nothing in the server passes it. */
   readonly gate?: (lane: LaneArmLane) => string | null;
   readonly memory: ProfileLaneMemory;
+  /** The skew notice's reads and its one raise (W1 sandbox B, question 5; `skewNoticeOf`). Absent, the pass raises none. */
+  readonly skew?: {
+    /** Whether the session runs: false for a dead row, `unmeasured` when the fleet state does not list it. */
+    running(id: string): boolean | 'unmeasured';
+    /** The fleet node's and the server's builds, as the inventory names them (a tag, else a short sha), or null. */
+    builds(): { readonly fleet: string | null; readonly server: string | null };
+    /** Whether a notice with this once-only key was raised (`CoordStore.hasNotice`), and the raise that records it. */
+    noticed(id: string, key: string): boolean;
+    raise(id: string, key: string, body: string): void;
+  };
   /** The wall clock (epoch ms) the advisor's UTC day is taken from (the time port). Required for the same reason. */
   readonly now: () => number;
 }
@@ -169,7 +181,8 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   // The designation is read once a pass; unmeasured, no row is written (a pending Overlord read as plain would be given a
   // plain profile): every row counts with `roleUnread`, which the pass line journals once.
   let designation: ReturnType<typeof designationFactFrom>;
-  try { designation = designationFactFrom(coord.designationRead()); } catch { designation = 'unmeasured'; }
+  let designationRaw: DesignationRead | null = null;
+  try { designationRaw = coord.designationRead(); designation = designationFactFrom(designationRaw); } catch { designation = 'unmeasured'; }
   // The advisor's facts, read once a pass: the Settings row, today's counts, and whether this box takes the field.
   const advisorCap = deps.act !== null && capSupported(deps.act.fleetState, ADVISOR_ROUTE_CAP);
   const advisorSetting = advisorCap ? coordinatorAdvisorOf(coord.coordinatorAdvisorSettings()) : null;
@@ -252,7 +265,29 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     memoryUnread, advisorUnread,
   };
   logPass(deps, result, failures);
+  skewPass(deps, rows, designationRaw, builds);
   return result;
+}
+
+/** The skew notice (W1 sandbox B, question 5, slug `dead-overlord-waits-for-build-agreement`): the designated Overlord's body
+ *  (the plan's scope; a pending attempt is not judged, review 3346 F5) is down while its route carries `profiledigest` and the
+ *  two boxes run different builds, where a digest mismatch can keep ccd from respawning it (review 3325 F1: nothing here
+ *  reads a refusal). `skewNoticeOf` decides; this raises its one notice, keyed once per session and build pair in the feed
+ *  (`hasNotice`), so a restart does not raise it again. A designation it cannot read raises nothing. */
+function skewPass(deps: ProfileLaneDeps, rows: readonly ProfileRow[], read: DesignationRead | null, seen: BuildAgreement | null): void {
+  const s = deps.skew;
+  if (s === undefined || read === null || read.kind === 'unmeasured') return;
+  if (read.kind !== 'designated') return;
+  const id = read.sessionId;
+  try {
+    const route = rows.find((r) => r.id === id)?.route ?? null;
+    const pair = s.builds();
+    const n = skewNoticeOf({ sessionId: id, running: s.running(id), digestStands: route?.fields.profiledigest !== undefined,
+      agreement: seen ?? deps.reads.buildAgreement(), fleetBuild: pair.fleet, serverBuild: pair.server, noticed: (key) => s.noticed(id, key) });
+    if (n !== null) s.raise(id, n.key, n.body);
+  } catch (e) {
+    deps.log(`ccrc-server: launch-profile: the skew notice could not be read: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** The facts `advisorFor` decides from for one row. The usage sidecar (the main loop's measured model) is read only for a

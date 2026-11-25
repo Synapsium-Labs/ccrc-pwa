@@ -2250,3 +2250,91 @@ button.metachip:active {
 @media (min-width: 1280px) {
   .chat-coord-goals-word { display: inline; }
 }
+
+/* The tool-activity row (desktop polish wave 168, `ToolActivityRow`): one stretch of a turn's tool activity as one
+   collapsed line, in both skins. The line never wraps and never overflows its column: the flags (what the reader can act
+   on) never shrink, and the compact details give way to them in order: the newest call's summary first (it takes only
+   what is left), then the title, then the count and the running state, each cut with an ellipsis. Measured at 360 in
+   both skins with a running stretch carrying two flags (`browser/tool-activity.browser.test.ts`). */
+.tool-activity {
+  min-width: 0;
+  max-width: 100%;
+}
+.tool-activity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: none;
+  background: none;
+  color: var(--ink-secondary);
+  text-align: left;
+  cursor: pointer;
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tool-activity-chev {
+  flex: none;
+  transition: transform var(--dur-base) var(--curve-swift);
+}
+.tool-activity-row[aria-expanded='true'] .tool-activity-chev { transform: rotate(90deg); }
+.tool-activity-title { flex: 0 100 auto; color: var(--ink-primary); }
+.tool-activity-title,
+.tool-activity-calls,
+.tool-activity-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-activity-sep { flex: none; color: var(--ink-tertiary); }
+.tool-activity-calls { flex: 0 1 auto; font-variant-numeric: tabular-nums; }
+.tool-activity-state { flex: 0 1 auto; color: var(--status-busy-text); }
+.tool-activity-attention-count { display: inline-flex; flex: none; gap: var(--sp-1); }
+.tool-activity-flag {
+  padding: 2px var(--sp-1);
+  border-radius: var(--radius-sm);
+  color: var(--status-attention-text);
+  background: var(--status-attention-tint);
+}
+.tool-activity-latest {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-tertiary);
+}
+/* The first entry that wants the reader, drawn under the collapsed line, and the opened stretch: one column held to the
+   reading column, as Refined's opened group is (a long command never widens the scroller). */
+.tool-activity-first,
+.tool-activity-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+/* The opened stretch sits one step in from its row, so its rows read as the row's contents. */
+.tool-activity-body { padding-left: var(--sp-3); }
+.tool-activity-wait {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0 var(--sp-3);
+  color: var(--status-attention-text);
+  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-mono);
+}
+.tool-activity-answer {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-primary);
+  font: inherit;
+  cursor: pointer;
+}

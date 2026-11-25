@@ -55,12 +55,12 @@ export class CaptureDesk {
 
   private now(): number { return (this.d.now ?? Date.now)(); }
 
-  /** Why the desk takes no capture of `f` now, in order: the role, the runner, the build's bytes, the write guard. */
+  /** Check role, build, runner and write guard. A missing build comes first even without a runner, so the server can copy it. */
   private standing(f: CaptureSubmit): CaptureRefusal | null {
     if (this.d.role !== 'test-box') return 'not-test-box';
-    if (this.d.runner === null) return 'no-runner';
     const paths = capturePaths(this.d.root, f.captureId, f.build);
     if (!this.d.buildPresent(paths.buildFile)) return 'build-absent';
+    if (this.d.runner === null) return 'no-runner';
     const fleet = this.d.fleetDirs().map((x) => this.d.realPath(x));
     // Every path the capture writes passes the probe desk's write guard, judged as it leads.
     return captureWrites(paths).map((p) => writeRefusal(this.d.realPath(p), fleet)).some((r) => r !== null) ? 'path-refused' : null;

@@ -55,7 +55,7 @@ import {
 } from '../../shared/programmeFacts.js';
 import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
-import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_NOT_SENT_MAP, BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import { CAP_BOUNDS } from '../../shared/runCap.js';
 import { HOST_UNMEASURED_WHYS } from '../../shared/pressure.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
@@ -77,6 +77,7 @@ import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
+import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { ACTOR_ISSUERS } from '../../shared/overlord-identity.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmQuizState, isLaneArmRefusal } from '../../shared/lane-arm.js';
@@ -699,9 +700,8 @@ describe('the rejection table is total, in both directions', () => {
       // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
       'unknown-build',
       'not-failed',
-      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
-      'no-test-box',
-      'no-runner',
+      // D-8289 — the same record's `notSent` CHECK vocabulary: why a capture try sent nothing. A row fact, not a refusal.
+      ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP),
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
@@ -733,6 +733,24 @@ describe('the rejection table is total, in both directions', () => {
       'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'not-ran',            // coord/landed.ts#landedCallStep: the act word for a `pr-state --pr` call that did not run (landing order wave 5i), a pure-decider discriminant, not a refusal code
+      'main-health',        // coord/lineageRead.ts: the main-health reading's tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
+      'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
+      'creation-unrecorded',// coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'recipient-missing',  // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'episode-unreadable', // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'run-not-merging',    // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'composition-not-clean',// shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'head-mismatch',      // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'base-mismatch',      // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'health-unmeasured',  // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'empty-or-blocked',   // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'projection-unreadable',// shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'opt-in-unknown',     // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'main-red',           // shared/landingLine.ts#LandingBindingReason, used in coord/landingLine.ts: a binding reason word (landing order wave 5i), not a mail or run refusal code
+      'retained-fields',    // coord/landingEntry.ts: the terminal repair's field-retention word (landing order wave 5i), not a mail or run refusal code
+      'episode-changed',    // coord/landingNext.ts and coord/landingControlTx.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
+      'no-send',            // coord/landingNext.ts#nextLandingNoticeOf: the cue builder's refusal kind (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
@@ -1312,8 +1330,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE BLOCK WAKE (D-8126): `coord/coordCalls.ts` names `blockWakeDue`'s three answers and the two words of a fact that has
         // not reached its condition as literals. They decide a parked thread's wake on the block-wake lane, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
-        || isBlockWakeKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, linking refusal or block-wake word`).toBe(true);
+        || isBlockWakeKebab(tok)
+        // THE ONE SEQUENCE (Overlord W1, §10.4): `coord/overlordSequence.ts` names why a line may not be written
+        // (`'unknown-kind'`, ...) and `coord/overlordSequenceStore.ts` the writer's two failures (`'not-in-transaction'`,
+        // `'write-failed'`). Each is a stamped writer's internal answer, never a `refused` or `reject.code`. Admitted through
+        // the store's guard, derived from `LINE_REFUSALS` and `STAMP_FAILURES`, never NOT_CODES.
+        || isSequenceStampKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
     }
   });
 });
