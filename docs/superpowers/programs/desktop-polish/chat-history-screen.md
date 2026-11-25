@@ -26,6 +26,10 @@ half merged as #3284 (wave 171, `chat-paging.md`). Each claim is labelled **meas
   position against the list's own writes, not from input events alone (F1, A7); a page of calls only that joins the top
   stretch keeps it open and holds the reader (F2); an expired place is said (A5); a busy answer is asked again on its
   own (A6); the rest as §8's fix round table and §9 say.
+- **Fix round 2** (review 3769): a page after a context reset is told as a page, by the first row after the reset's own
+  rows, so it settles like any other (F1); opening the chat again while its top says the older rows cannot be loaded
+  connects as a first open does, so a backlog brings a continuation and the words are true (F2); the frames queued before
+  a page write nothing while it settles (A2); and the guards the review's mutants left green are pinned (A1, A3).
 
 ## 2. The wire: one field, two send sites (the only server change)
 
@@ -93,7 +97,17 @@ the place the reader had before the rows came: a reader at the foot is taken bac
 back by its key.
 
 **The anchor is a row and the rows under it** (eight, in order): when the join replaces the row crossing the top (the
-first time divider goes, a stretch takes the page's calls), the first of the others still drawn is held.
+first time divider goes, a stretch takes the page's calls), the first of the others still drawn is held. A read of the
+anchor still owed to the frame after a scroll when a page comes is made in the page's render, off the rows still drawn
+(fix round 2, A2), and the frames queued before the page (a scroll's read, a height change's hold) do nothing while it
+settles: virtuoso writes the scroller until it is quiet, and the settle holds once after it.
+
+**How the list tells a page came** (fix round 2, F1): by the first row after the rows a page goes after
+(`olderPages.ts#leadOf`): the "Session context reset" row a rotation leaves on top, and its time divider, which a page
+never changes (`rowsFrom`). Before, it compared the list's first row, so after a context reset no page was seen: no
+settle, no join, and the near-top load chained page after page with the reader still at the top. Measured in Chrome on
+the head the review read: the reader's row moved 24,100px at 390 and 15,206px at 1280 after the first page, seven pages
+asked, to the transcript's start; after, 0px for each of three pages, three asked.
 
 **A stretch that takes an older page's calls** changes its key (`activity-<first entry's key>`) but is the same stretch,
 grown at its top (`stretchJoin.ts`, read off the two lists, never off the key's spelling): it keeps its open or closed
@@ -138,7 +152,7 @@ unpins the reader (they asked for the top), so the hold keeps the row they were 
 | `unreadable` | Older messages cannot be loaded now: the transcript could not be read. | Try again |
 | `unmeasured` | Older messages cannot be loaded now: the transcript could not be measured. | Try again |
 | gap | One or more records here were too long to load and are left out. | a dashed rule, at the gap's place |
-| `expired` (the wire's `expired` or `invalid`) | Older messages are there but cannot be loaded here now. Reopen this chat to load them. | none: asking again cannot help. It stands until a backlog brings a continuation (fix round 1, A5: a reconnect after a server restart resumes with no backlog, so a silent end read as nothing older) |
+| `expired` (the wire's `expired` or `invalid`) | Older messages are there but cannot be loaded here now. Reopen this chat to load them. | none: asking again cannot help. It stands until a backlog brings a continuation (fix round 1, A5: a reconnect after a server restart resumes with no backlog, so a silent end read as nothing older). Opening the chat again brings one (fix round 2, F2): a screen opened while the top reads this connects as a first open does, without its resume position, until that open's backlog comes (`olderPages.ts#opensFresh`); a reconnect of the open screen, and an open in any other state, resume as before |
 | `none` | nothing: no control, today's view (an older server, or a stream that cannot page) | |
 
 "Available here" never claims the session began there: a context reset, a swap or retention can each leave earlier
@@ -238,7 +252,8 @@ none.** Pinned with room: the heap the held rows cost stays under 4 MiB per thou
 ### Fix round 1 (review 3734, rulings in mail 35269 and 35294)
 
 Reproduced first, in Chrome, on the head the review read (phosphor; the reader's input before the page, the movement
-after it landed, none of it announced by an input event):
+after it landed; F1's three announced by no input event, A7's by a wheel, so A7 is decided by the input arm, not the
+position check: fix round 2, A5):
 
 | Case | Before the fix | After |
 |---|---|---|
@@ -255,7 +270,7 @@ scroll where it is, so a settle with Jump to latest under way ends at the foot. 
 within 0.50px (mean 0.31px over 32), so nothing the list writes itself is read as the reader moving.
 
 Mutants, each applied alone to the committed source, run against its named files, restored and hash-checked: ten in
-jsdom (the settle's position check; the own-write record; A3's drop; A5's word; A6's retries and the store's timer; A4's
+jsdom (the settle's position check, cut whole: its distance comparison alone was unguarded in jsdom, fix round 2, A3; the own-write record; A3's drop; A5's word; A6's retries and the store's timer; A4's
 marker time and the top case's repeat; F2's renames and the open carry), all killed; three in Chrome (A1's window end,
 F2's settle of a join, F2's open carry), each turning its own cases red (A1 in all four views).
 
@@ -263,6 +278,48 @@ The whole suites on the fix round's code, in four parts each: pwa, 605 files, 18
 (`mockup-policy`) whose worker the test slice's memory cap killed under the box's load, green alone (153 of 153); the
 browser suite, all 120 files, 4,332 passed, 52 skipped and 1 expected to fail, nothing unrun. No server file changed in
 this round.
+
+### Fix round 2 (review 3769, the coordinator's mail 35550)
+
+| Item | Before | After | Pinned |
+|---|---|---|---|
+| F1, three pages after a context reset (Refined, phosphor, 390 and 1280) | the reader's row moved 24,100px (390) and 15,206px (1280) after the first page; seven pages asked, to the start | 0px each page; three pages asked for three | Chrome, red with the check back on the first row; `leadOf` in jsdom |
+| F2, the chat opened again while its top reads `expired` | resumed with no backlog: the words stood | a first open's connect, a backlog, Load older again | jsdom (the store, its socket addresses): reopened fresh; a drop before that backlog asks fresh again; the open screen's reconnect resumes; every other state resumes. Chrome cannot show the bug: its routed socket sends a backlog on every connect |
+| A1, the fling and the thumb cases | glided after the page's row was drawn | start in the frame the page grows the list | Chrome, red with round 1's "moved" cut (366px, 302px) |
+| A2, a scroll's or a height change's frame after a page | could read the anchor off the page's rows, or write the scroller while virtuoso compensated | the owed read made in the page's render; both frames do nothing while it settles | jsdom, three cases, each red with its guard cut |
+| A3, the settle's distance comparison | green in jsdom with it cut to the null arm | a move after the list's own write, no input, is left where it went | jsdom, and Chrome (the fling and the thumb, 366px and 302px) |
+| A3, one of the two methods wrapped | green with only `scrollBy` wrapped | a `scrollTo` write is the list's own | jsdom |
+| A3, the retry timer's own re-check | green | a reader who left and opened the chat within the pause is asked nothing they did not ask | jsdom (leaving the screen does not clear the timer; without the re-check the old timer asked on the new socket) |
+
+**The absorb of #3358** (wave 176, the compact mail rows; merged to main first, resolved as mails 35524 and 35550 ask).
+The list is built (keys made unique as it is built), its one gap divider kept, then the mail fold, then the live-from
+index measured on that folded list, which reads a lone prompt by its event and a run of prompts as live when any prompt
+is, then the tool fold; both list builds go through `itemsOf`. The tool fold keeps its position array beside the tool
+entries only, and wave 176's members list (calls and joined cards) feeds the inner rows; no position is read off it. The
+hold, the prepend shift and the join reader all read that one list, after the mail fold. The join reader follows a run
+of prompts the way it follows a stretch (a run is keyed by its first prompt, so a page of same-day prompts renames it, and
+a lone prompt there becomes a run), and follows a lone fetched card that a join takes into a stretch to that stretch, for
+the hold; the open state carries only within a stretch or a run, since a card's own choice is keyed by the card. A card
+drawn under a closed stretch's row makes the stretch's height the reader's choice, and a join's growth there is
+virtuoso's own write, read by position as any other: not the reader moving. Pinned in Chrome: an open run at the top
+given a page of 28 same-day prompts (Refined 390, Instrument 1280) stays open under its new key with the message under
+it 0px off; with the run reader cut, it closes and the message moves 1,182px. In jsdom: the run's growth, the lone prompt
+becoming a run, a closed run, the lone card into a stretch (its open state never the stretch's), and the live-from index
+over a run that straddles the older rows' boundary.
+
+Mutants this round, each applied alone, run against its file, restored and hash-checked: in jsdom, F2's fresh open and
+its clear, the timer's re-check, the distance comparison, the `scrollTo` wrap, the height frame's guard, the scroll
+frame's guard and the owed read, eight, and for the absorb the run's live read, the join reader's run, lone and card arms
+and the open carry's group check, five: thirteen, all killed; in Chrome, F1's lead, the distance comparison, round 1's
+"moved" and the join reader's run arm, four, each turning its own cases red.
+
+The whole suites on the merged code (the head commit adds only this note), in four parts each through the test slice:
+pwa, 622 files, 19,166 passed and 2 skipped, with `mockup-policy`'s worker killed by the slice's memory cap under the
+box's load (green alone, 153 of 153); the browser suite, all 123 files under `pwa/browser`, 4,371 passed, 52 skipped and
+1 expected to fail, with 7 cases red in 6 files during the slice's memory-cap kills (`model-sheet-labels`, `chat-links`,
+`project-linking-card`, `tool-activity`, `docs-mockup`, `testbox-connect`: timeouts and a crashed page), each file green
+alone (16, 14, 12, 48, 23 and 20 of their cases). The named jsdom files, with wave 176's: 11 files, 283 passed. Nothing
+unrun. No server file changed in this round.
 
 ## 9. Limits
 
@@ -277,6 +334,11 @@ this round.
   reads as the foot leaving them (`footLeft`, `movedUp` needs a fall of more than 1px). Exactly: a reader whose distance
   from the foot ends in `[band, band + 1]` px with no scroll after it. Accepted by the coordinator (fix round 1, A2).
 - Older rows display only: an older call without a result is drawn settled even if it is still running.
+- A reader who is moving when a page lands keeps virtuoso's own estimate error: the settle makes no write once the list
+  moved (the ruled design, fix round 1, F1), so the rows land where virtuoso's estimates put them, up to the 451px
+  measured at rest (§4). Writing there re-created the 366px and 302px set-backs (fix round 2, A6).
+- Opening the chat again while its top reads `expired` replaces the rows on screen with the fresh backlog: the older rows
+  held are dropped with it, and come back by paging (fix round 2, F2).
 - No echo (the wave 171 server): after a void, the first answer is dropped whichever request it answers, so case A costs
   one extra round trip. A `more` answer whose continuation is the request outstanding's is the request before's, a page
   already applied, and is dropped (fix round 1, A3, the coordinator's ruling 35294). Counting the given-up request as
@@ -289,9 +351,8 @@ this round.
 
 ## 10. Peer hunks, by leave
 
-- `chatItems.ts`, `toolActivity.ts`, `ui/src/index.ts` (claim 6989, wave 176): each PR carries its own hunks; whoever
-  lands second moves `liveFromOf` after wave 176's `foldMailRows`, on the list the fold receives, and gives its two new
-  kinds their sources (a run of mail prompts is live when any of its prompts is).
+- `chatItems.ts`, `toolActivity.ts`, `ChatList.tsx`, `ui/src/index.ts` (wave 176, #3358): it landed first, and this
+  branch absorbed main in fix round 2 (§8), `liveFromOf` after `foldMailRows` as planned.
 - `SessionScreen.tsx` (claim 6923, wave 173): three hunks, the holder's leave; no overlap with #3283.
 - `pwa/test/tool-activity.test.tsx` (claim 6989, leave 34946): one case's scroll-up now moves the scroller up from a
   measured foot, as a reader's does (§8, the first full run). What jsdom no longer pins there: a reader's input with no
@@ -304,3 +365,6 @@ this round.
 - A real phone's keyboard opening and closing, on both phone systems (the operator's own check). The 300px shrink is the
   shape, measured in Chrome.
 - The wave 171 server (no echo) in a browser: the fallback is pinned in the store's suites only.
+- iOS WebKit's momentum scrolling (fix round 2, A4): while the reader scrolls there, virtuoso defers its compensation
+  into a CSS offset and commits it with `scrollBy` later, so the settle's reading of a fling there is unmeasured; the
+  fling was measured in Chrome at 390px only.
