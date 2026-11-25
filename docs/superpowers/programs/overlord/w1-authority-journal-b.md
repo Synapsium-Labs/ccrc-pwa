@@ -220,7 +220,26 @@ passed 39, and the agent carrier file passed 19 in the local test slice. None of
 
 ## Merges of main on the carrying branch
 
-- Main `b4677c29ce` (the Docs tab, #3289): the carried tip `077a0c56a2` merged onto it, conflicting in the app shell's imports only.
-- Main `2f140376dd` (the history door, #3348): conflicting in the session gate's test only; 307 routes, 304 HTTP, 191 gated, 113 exempt.
-- Main `ba0b0f4015` (serviceability B, #3367): ten files; 308 routes, 305 HTTP, 192 gated, 113 exempt; the lane tail ends
-  `limitSamples`, `decisionAnchors`, `authorityWitness`; the ladder keeps the 95% load row and the witness row, in the cause map's order.
+- Main at `b4677c29ce`, which brought #3289 (the Docs tab): the carried tip `077a0c56a2` merged onto it, conflicting in the app
+  shell's imports only.
+- Main at `2f140376dd`, which brought #3348 (the history door): conflicting in the session gate's test only; 307 routes, 304 HTTP,
+  191 gated, 113 exempt.
+- Main at `ba0b0f4015`, which brought #3367 (serviceability B): ten files; 308 routes, 305 HTTP, 192 gated, 113 exempt; the lane
+  tail ends `limitSamples`, `decisionAnchors`, `authorityWitness`; the ladder keeps the 95% load row and the witness row, in the
+  cause map's order. Two test files that merged clean built the ladder's inputs from one side only; each now carries both rows.
+
+## The shell's witness pins, measured
+
+The Docs tab file's console case counts witness asks through one repeat of the exchange's interval (only `setInterval` is
+faked): 1 at mount, 2 after a repeat, still 2 after a repeat while signed out, 3 on sign-in. Each mutant of the shell's effect
+turns that case red, and only that case (46 others green):
+
+| Mutant of the effect | Counts while signed out, then back |
+| --- | --- |
+| Sign-in term removed from the condition, kept in the dependencies | 4, then 5 |
+| Sign-in term removed from both | 3, then 3 |
+| Starts the exchange but never returns its stop | 3, then 4 |
+
+A composed-server case (`overlord-ladder-witness-composed.test.ts`) pins the two wiring pieces for the ladder: without the
+`no-witness-since-boot` input the row reads `unmeasured`, not `standing`; without the witness fallback to the exchange a recorded
+witness leaves the narrowing `no-witness-yet`, not `done`.

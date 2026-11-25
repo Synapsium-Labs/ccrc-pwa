@@ -11,7 +11,7 @@ import type { IsolationRead } from '../../shared/isolation.js';
 import { SERVER_CAPS } from '../../shared/api.js';
 import { ISOLATION_NOT_WIRED } from '../src/isolationWord.js';
 
-// @ts-expect-error Both condition keys need a reader.
+// @ts-expect-error Every condition key needs a reader (seven at this tree).
 const incompleteInputs: LadderConditionInputs = { 'generation-degraded': () => 'lifted' };
 void incompleteInputs;
 
