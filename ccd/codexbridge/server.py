@@ -59,8 +59,7 @@ for a few seconds used to end the turn. While nothing is committed to the client
 `absorb` decides which failure, how long to wait and when to stop, and says why. When it stops, the failure is answered
 exactly as it always was. Only Claude Code's own request (`inbound.from_claude_code`) is held like this: any other caller
 of the lane (the models canary, say) has its own deadline and gets the failure at once. The wait ends at once when the
-drain cuts the stream or the client closes (`Hooks.client_gone`, the shim's own peek; a shim that hands none over gets
-no retry), and nothing is posted for either. An absorbed failure is counted in the parity row's `absorbed` and has its
+drain cuts the stream or the client closes (`client_closed`), and nothing is posted for either. An absorbed failure is counted in the parity row's `absorbed` and has its
 own row in the request record (`reqrecord.ABSORBED`); it is no outcome, `stats.request` does not count the retry again,
 and it is not recorded in the status file, so a failure that passed never reads as the lane's last error; the failure
 that ended the attempts is recorded, whether the bounds ran out or the client left. What is counted per POST or per upstream
@@ -136,6 +135,7 @@ import os
 import random
 import re
 import signal
+import socket
 import sys
 import threading
 import time
@@ -220,7 +220,6 @@ class Hooks(NamedTuple):
     decode_body: Callable
     apply_effort: Callable  # (data) -> (data, the output_config it popped)
     server_class: type
-    client_gone: Optional[Callable] = None  # (the client's socket) -> whether it closed; an older shim hands over none
 
 
 # ── the start ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -602,6 +601,20 @@ class _Feed:
             return out, self.end
 
 
+def client_closed(connection: socket.socket) -> bool:
+    """Whether the client has closed `connection`, by a peek of one byte that neither consumes nor blocks: `b""` is its
+    FIN, any error but "nothing to read" a reset. The rule is the shim's (`Handler._client_gone`, D-4933), its limits
+    included: a half-closed client reads as gone, and a pipelining one, which Claude Code is not, as still there. The
+    bridge has its own copy because the two files are placed apart: the shim by the installer, this package read from
+    the tree. A hook would be absent for a release whenever they differ, and these retries silently off."""
+    try:
+        return connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 # ── the in-flight registry (the drain) ───────────────────────────────────────────────────────────────────────────
 class _Flight:
     def __init__(self) -> None:
@@ -912,7 +925,7 @@ class _Request:
         self.replay = replay  # D-8619: the same tally, on the message's first row
         self.session = req.session_id
         self.subagent = inbound._header(self.h.headers, inbound.AGENT_HEADER) is not None
-        self.absorbs = st.hooks.client_gone is not None and inbound.from_claude_code(self.h.headers)
+        self.absorbs = inbound.from_claude_code(self.h.headers)
         self.history = data.get("messages")
         self.cache_key = req.cache_key
         out.model = req.model
@@ -1172,7 +1185,7 @@ class _Request:
         while True:
             if out.closed:  # cut by the drain
                 return False
-            if self.state.hooks.client_gone(self.h.connection):
+            if client_closed(self.h.connection):
                 out.left()
                 return False
             left = until - time.monotonic()

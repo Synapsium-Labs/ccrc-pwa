@@ -37,7 +37,7 @@ and answers exactly the error it answers today once the bounds are spent.
   plus one attempt, and the wedge (4 x 870 s) cannot come back. The connect bound (30 s) and the idle bound (300 s) are both
   past it.
 - **It stops** when the stream is closed (the drain's cut) or the client's socket has closed, asked every `WAIT_TICK_S`
-  through `Hooks.client_gone`, the shim's own peek (D-4933), now the one function `_connection_closed`.
+  by `server.py#client_closed`, a one-byte peek under the shim's rule (D-4933).
 - **Counted once.** `stats.request`, the outcomes and the status file see only the failure that is answered. Each absorbed
   one is counted in the parity row's `absorbed` (by `overloaded`, `unavailable`, `transport`), beside `fallbacks`, and is a
   request-record row with the outcome `absorbed`. `parity_effort` and `markers` count each body sent, as they do for the
@@ -68,5 +68,7 @@ counter). Each guard was removed in turn and its case measured red; the pull req
      it at once. A refused, reset or dropped connection is absorbed.
   3. A client that leaves during the wait, and a drain that cuts it, leave the failure recorded in the status file: it was
      not overcome. It is counted `client-gone` or `drain-cut`, never `5xx`.
-  4. `Hooks.client_gone` is optional, and a bridge given none absorbs nothing. The shim is placed by the installer and the
-     package is read from the tree, so the two can be one release apart for a moment.
+  4. `client_closed` is a second copy of the shim's peek (`Handler._client_gone`), legitimately different because the two
+     files are placed apart: the installer places the shim and the package is read from the tree, so a hook passed between
+     them would be missing whenever they are one release apart, and the retries silently off. The shim's copy serves its
+     `litellm` mode only.

@@ -164,9 +164,9 @@ THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through 
 THE DIRECT-MODE SERVER (Task 8).
   serve            {fault?} -> no line: the LAST op of its action. It loads `<pkg>/ccgpt-proxy.py` by path, unchanged
                    (`spec_from_file_location` under a module name other than `__main__`, so its `__main__` block does
-                   not run; the environment carries the three variables its top level reads), takes its six hooks,
+                   not run; the environment carries the three variables its top level reads), takes its five hooks,
                    copying none: `Hooks(m._read_request_body, m._content_encoding, m._decode_body, <apply_effort>,
-                   m._Server, m._connection_closed)`, where <apply_effort> is this op's two-line wrapper (the one stated copy; Task 9's
+                   m._Server)`, where <apply_effort> is this op's two-line wrapper (the one stated copy; Task 9's
                    lives in `_run_direct`), which reads `output_config` before `_apply_effort` pops it. Only when
                    `consts` carries `ccgpt_auth.<NAME>` keys, it calls `server.load_auth_lib(CCRC_CODEX_AUTH_LIB)`
                    and sets each on the module that call returned (otherwise the bridge loads the library at its
@@ -177,7 +177,6 @@ THE DIRECT-MODE SERVER (Task 8).
                    `fault: "eof-is-timeout"` wraps backend.post so the upstream body's end raises
                    backend.UpstreamTimeout("read") in place of ending: the socket's own idle bound, firing before the
                    parsed-event bound whatever the scheduling, for the idle case.
-                   `fault: "no-client-gone"` drops the sixth hook, as a shim placed before it existed does.
   refresher        {authDir, lib, lane, close?, waitS} -> {"returned", "count", "alive"}: `server._refresher` on a
                    thread of its own, over a BridgeConfig carrying only `lane`, `authDir` and `lib` (the fields the
                    refresher reads) and a fresh `server._Flight`, closed first when `close` is true; its stop event is
@@ -975,7 +974,7 @@ def _serve(op, pkg, cb, auth_consts):
         return shim._apply_effort(data), oc
 
     hooks = server.Hooks(shim._read_request_body, shim._content_encoding, shim._decode_body, apply_effort,
-                         shim._Server, shim._connection_closed)
+                         shim._Server)
     if auth_consts:
         lib = server.load_auth_lib(os.environ["CCRC_CODEX_AUTH_LIB"])
         for name, value in auth_consts.items():
@@ -1001,8 +1000,6 @@ def _serve(op, pkg, cb, auth_consts):
             return up._replace(chunks=chunks())
 
         cb.backend.post = post
-    elif op.get("fault") == "no-client-gone":
-        hooks = hooks._replace(client_gone=None)
     elif op.get("fault") is not None:
         _usage("unknown fault " + json.dumps(op.get("fault")))
     return server.serve(server.config_from_env(os.environ), hooks)

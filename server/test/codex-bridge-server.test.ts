@@ -2951,16 +2951,12 @@ describe.skipIf(!PY)('a short upstream failure is absorbed before the commit poi
     }, { consts: { ...QUICK, 'server.PING_S': 0.1 } });
   });
 
-  it('a request that is not Claude Code\'s, or a shim with no client-gone hook, is answered at once', async () => {
+  it('a request that is not Claude Code\'s is answered at once', async () => {
     await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
       const a = await call(bridge, '/v1/messages', { body: messages(), headers: { 'anthropic-beta': 'structured-outputs-2025-11-13' } });
       expect(a.status).toBe(529);
       expect(up.requests).toHaveLength(1);
     }, { consts: QUICK });
-    await withBridge([overloaded(), ok()], async ({ bridge, up }) => {
-      expect((await send(bridge)).status).toBe(529);
-      expect(up.requests).toHaveLength(1);
-    }, { consts: QUICK, serve: { fault: 'no-client-gone' } });
   });
 
   it('the 401 refresh and the 400 fallback stay as they are around it', async () => {
