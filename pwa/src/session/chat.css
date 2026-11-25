@@ -2255,15 +2255,16 @@ button.metachip:active {
    collapsed line, in both skins, that never overflows its column. What cannot shrink: the chevron, the separators, the
    flags (what the reader can act on) and, on a closed stretch that holds a hidden question, the words that name it
    ("1 question", `.tool-activity-asks`, desktop polish wave 179 B2). What gives way, in order: the newest call's
-   summary first (it takes only what is left), then the title, then the count, the messages and the running state, each
-   cut with an ellipsis, and only when it stands alone on a line too short for it. The row wraps (`flex-wrap: wrap`): the
-   title, the counts and the running state take their own width as their basis, so a line breaks before any of them is cut
-   (desktop polish wave 179, fix round 1, F3: a zero basis let the line fill and crushed them to 2px at Instrument 390 with
-   "waiting on you", where main drew 14, 14 and 44px), and only the summary, with a zero basis, takes what is left of its
-   line. At a phone's width a closed stretch with the question words and two flags takes two lines, inside the tap floor's
-   44px, which is the one line the list prices the row at (`itemHeight.ts`). Measured at 320, 360 and 390 in both skins
-   (`browser/tool-activity.browser.test.ts`, with two flags; `browser/mail-rows.browser.test.ts`, with the question words
-   and a third flag). */
+   summary first (it takes only what is left), then the title, then the calls count and the running state, each cut with
+   an ellipsis. The row wraps (`flex-wrap: wrap`), and a part's basis is what it holds on its line before the line breaks:
+   the message count its own width (never cut where it fits a line), the calls count and the running state 5ch each,
+   grown back to their own width as the line allows, the title and the summary nothing (desktop polish wave 179, fix round
+   1, F3: zero bases let the line fill and crushed the counts and the running state to 2px at Instrument 390 with
+   "waiting on you", where main drew 14, 14 and 44px; main drew the title 0px at every phone width). At a phone's width a
+   closed stretch with the question words and two flags takes two lines, inside the tap floor's 44px, which is the one line
+   the list prices the row at. Measured at 320, 360 and 390 in both skins (`browser/tool-activity.browser.test.ts`, with
+   two flags; `browser/mail-rows.browser.test.ts`, with the question words and a third flag, each part against main's
+   width). */
 .tool-activity {
   min-width: 0;
   max-width: 100%;

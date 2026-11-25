@@ -316,8 +316,9 @@ and the open carry's group check, five: thirteen, all killed; in Chrome, F1's le
 
 The whole suites on the merged code (the head commit adds only this note), in four parts each through the test slice:
 pwa, 622 files (the sum of the four parts' counts; how each part's count was read was not recorded, and on `main` at
-64ccd3b57f the files vitest's include collects, less `browser/**`, number 617 by `git ls-tree`; wave 179 reports vitest's
-own `Test Files` line of one whole run), 19,166 passed and 2 skipped, with `mockup-policy`'s worker killed by the slice's memory cap under the
+64ccd3b57f the files vitest's include collects, less `browser/**`, number 617 `*.test.ts(x)` by `git ls-tree` plus the 5
+`*.test-d.tsx` type-test files it collects too, 622, so the count was right; wave 179 reports vitest's own `Test Files` line
+of one whole run), 19,166 passed and 2 skipped, with `mockup-policy`'s worker killed by the slice's memory cap under the
 box's load (green alone, 153 of 153); the browser suite, all 123 files under `pwa/browser`, 4,371 passed, 52 skipped and
 1 expected to fail, with 7 cases red in 6 files during the slice's memory-cap kills (`model-sheet-labels`, `chat-links`,
 `project-linking-card`, `tool-activity`, `docs-mockup`, `testbox-connect`: timeouts and a crashed page), each file green
@@ -380,36 +381,61 @@ What the reviews of #3361 left in the scroll back, built on `main` after it merg
 
 | Item | Before | After | Pinned by |
 |---|---|---|---|
-| A1, the shift after a transcript change | `prependShift` answered 0 both for "the first rows are the same" and for "no row in common", and the list added the lead difference after either: a context reset, then a backlog onto another file with no rotation notice, moved virtuoso's first index by 2 on a list nothing was put before | "No row in common" is its own answer (`null`); the list adds the lead difference to a found shift only | `foot-follow.test.ts` (the answer), `hold-wiring.test.tsx` (the list, red first: the first index moved from 1000000000 to 1000000002) |
+| A1, the shift after a transcript change | `prependShift` answered 0 both for "the first rows are the same" and for "no row in common", and the list added the lead difference after either: a context reset, then a backlog onto another file with no rotation notice, moved virtuoso's first index by 2 on a list nothing was put before | "No row in common" is its own answer (`null`); the list adds the lead difference to a found shift only; and (fix round 1, F1) the working pulse and a pending send, which belong to no file and outlive a change of it, are never that row: `chatItems.ts#fromNoFile` names them where they are built, the list hands them to `prependShift` as null keys, and a null never matches | `foot-follow.test.ts` (the answer, and null keys), `hold-wiring.test.tsx` (the list idle, busy and with a send pending, each red first: the first index moved from 1000000000 to 1000000002; and a new list that opens with the reset row) |
 | A2a, the build order | a mutant measuring the live-from index before the mail fold survived every jsdom file | A list-level case: older rows holding a run of prompts that crosses the boundary, then a live call, which reads as running | `chat-history.test.tsx`, both skins |
 | A2b, the reset lead at the call site | a mutant forcing both leads to 0 survived jsdom (only Chrome killed it) | A case that opens with the reset row, lands a page under it and holds the reader's row | `hold-wiring.test.tsx` |
-| A3, a list that is only the reset row and its divider | unmeasured | measured, and pinned as it is (the coordinator's ruling (a), mail 35942): see below | `chat-history.browser.test.ts` |
+| A3, a list that is only the reset row and its divider | unmeasured | measured idle and busy, and pinned as the list's own rule has it (the coordinator's ruling (a) on fix round 1, mail 36263): see below | `chat-history.browser.test.ts`, `hold-wiring.test.tsx` |
 | A4, reopening a chat whose older edge reads `expired` | unmeasured on screen | measured: no defect of the reopen; see below | `chat-history.browser.test.ts` |
 
-**A3.** The list fits the view, so the reader is at the foot with the scroller at 0 and the reset row in view. When a page
-lands, the list computes no shift and no settle (the lead covers the whole list), and the foot follow takes the reader to
-the new foot one frame after the page lands: the reset row, the only row they were reading, leaves the view above, and the
-foot shows the newest rows of the page, as any prepend at the foot does. On the way, at 390 px the view stands 108 px
-(Refined) and 147 px (Instrument) short of the foot for about five frames, then snaps to it; at 1280 px one frame flickers
-(the height 3354 then 2205 px, the first drawn row changing). **Accepted as a limit** (ruling (a)): it is the foot follow
-catching up after the page lands. Holding the reset row in view (b) and settling at the foot with no intermediate snap (c)
-were considered and left out, each a change to the foot follow or the prepend settle. Pinned: before the page, scrollTop 0
-and the reset row in view; at rest, within 2 px of the foot, the page's rows drawn, and nothing moving over the last 8 sampled frames (scrollTop, height, first and last drawn row identical; the list's settle
-waits `SETTLE_FRAMES`, 2 quiet frames, so a view left short of the foot goes red).
-The snap's size and the row's departure are printed, never asserted.
+**A3, as fix round 1 found it** (the first text of this section was wrong; corrected here). The list fits the view, so
+before the press the scroller is at 0, the reset row is whole in view, and the reader is pinned at the foot. While they
+are, nothing asks a page: the near-top load asks only for a reader who left the foot (`ChatList.tsx#nearTop`, "a list too
+short to scroll offers the control instead"), and the control is the only other caller, so on a reset-only list that fits
+the view **no page lands without the press**, and a reader who never presses stays pinned. Pressing Load older un-pins the
+reader by design (`ChatList.tsx#loadFromControl`: the reader asked for the top, so the foot no longer holds them). Then, in
+both states:
 
-| View | Short of the foot after the page | Frames short | Then |
-|---|---|---|---|
-| Refined 390 | up to 108 px | 4 | snaps 108 px to the foot |
-| Instrument 390 | up to 147 px | 5 | snaps 147 px to the foot |
-| Refined 1280 | 154 px | 1 | the flicker: height 3354 then 2205 px, scrollTop 2600 then 1605, the first drawn row changes |
-| Instrument 1280 | 161 px | 1 | the flicker: height 3353 then 2204 px, scrollTop 2600 then 1612 |
+1. The first page goes under the reset row. Nothing was put before the first row, so virtuoso's first index does not move
+   (1000000000 before and after) and no settle runs (the scroller stays at 0); the page's rows draw under the reset row.
+2. The reader is un-pinned and near the top, so the list asks the next page by itself. That page goes above the first
+   page's rows, under the reset row: a real prepend (the first index moves by 26), and its settle holds the row in view
+   (`rm87` at 236.5 px before and after, in every view). Exactly two pages are asked.
+3. At rest nothing moves, and the reader is on the first page's rows, off the foot:
+
+| View | Idle: from the foot at rest | Busy: from the foot at rest |
+|---|---|---|
+| Refined 390 | 2,495 px | 2,704 px |
+| Instrument 390 | 2,522 px | 2,650 px |
+| Refined 1280 | 1,500 px | 1,536 px |
+| Instrument 1280 | 1,508 px | 1,543 px |
+
+**What changes for a reader.** Idle, a reset-only list behaved this way on `main` already. Measured on the reviewed head's
+source (2,054, 2,136, 2,081 and 1,508 px from the foot, the case's idle variant green there), whose path here is `main`'s by
+reading: idle, neither of round 0's A1 changes is reached (no lead difference, no shift found). Only the busy state changes.
+On the reviewed head, busy, the working pulse below the reset row was taken for a row in common: the rotation itself moved
+the first index by 26 (1000000026 before the press), the first page moved it back by 25, and the hold's anchor was the pulse
+at the foot, so holding it put the reader at the foot, 108 px (Refined) and 147 px (Instrument) short of it for about five
+frames at 390, then a snap. That accident is the only reason busy ended at the foot, and it is why the first text of this
+section gave the wrong cause ("no shift and no settle, the foot follow alone") and why the coordinator's first ruling
+(mail 35942: pin the reader at the foot, the snap a stated limit) rested on a false premise. **That ruling is withdrawn**
+(mail 36263), and the limit about a late snap no longer applies: with F1 neither state snaps. Holding the reader at the
+foot after a press (changing the foot follow against the control's stated rule) and backing F1 out for this shape were
+considered and refused (the ruling).
+
+Pinned in Chrome at 390 and 1280 in both skins, idle and busy: before the press scrollTop 0, the reset row whole in view,
+no page asked; after the first page the first index unchanged, the scroller at 0, the page's rows under the reset row;
+across the second page the row in view within 1 px, and two pages asked, not a chain; at rest the last 8 sampled frames
+identical and the reader on the first page's rows, not at the foot (the distance printed, never bound). In jsdom
+(`hold-wiring.test.tsx`), idle and busy: a page under a reset-only list moves no first index. The busy variant is red on
+the reviewed head's source (`expected 1000000001 to be 1000000026`), so the case guards F1 too.
 
 **A4.** The harness gained one opt-in hook (`AppFixture.onSessionSocket`, off by default; no existing case changes its
 routing): a case answers each session connect itself, told whether the connect resumes (`?since=`). A resuming connect gets
 no backlog and a fresh one a backlog, as the server does. The chat is opened, paged once, its edge brought to `expired` by
 a stubbed answer, left for another screen inside the app and returned to by history, with no reload. The return connects
-fresh (`opensFresh`). In all four views (Refined and Instrument, 390 and 1280 px): no frame draws a cached older row before
+fresh (`opensFresh`). The page is asserted before the edge is switched (fix round 1, F4): an answer with rows sent, and a
+row older than the fresh backlog's first drawn (the list draws 1,200 px above the view, so the page's newest rows are);
+before, the precondition was only printed. In all four views (Refined and Instrument, 390 and 1280 px): no frame draws a cached older row before
 the fresh backlog replaces them (no flash); no empty frame once rows are drawn; the reader ends at the foot (0 to 1 px from
 it); at 1280 the first drawn frame is already at rest. At 390 rows move 196 px (Refined) and 273 px (Instrument) over about
 five frames after the first drawn frame, and before it the scroller stands mounted with no rows for about four frames
@@ -431,7 +457,10 @@ for a first open and from the return for a reopen; every open ends 0 to 1 px fro
 
 So the reopen is no worse than a first open: the same at 1280; at 390 three frames longer to rest, with rows moving a
 third as far. Pinned as invariants only: the reopen connects fresh, the fresh backlog's live rows are drawn, the edge no
-longer reads `expired`, and no cached older row is drawn; the first open draws rows and ends at the foot.
+longer reads `expired`, and no cached older row is drawn, bounded by the reopen's own backlog's first row (fix round 1,
+M5: the reopen's backlog carries three live rows, so it starts three events after the first open's, `em142` not `em139`;
+the oldest row drawn in any frame was `em160`); the first open draws rows and ends at the foot. Re-measured on the fix
+round's head: frames to rest 3 against 2 at 390, 0 against 0 at 1280; biggest move 299.5 and 241.5 px against about 618.
 
 **Mutants** (each applied alone, run against its file, restored):
 
@@ -440,6 +469,9 @@ longer reads `expired`, and no cached older row is drawn; the first open draws r
 | A1, the lead difference added after either answer | `hold-wiring`: "A1: a context reset, then another transcript with no rotation notice, moves no first index" |
 | A2a, the live-from index measured on the list before the mail fold | `chat-history`: "Refined/Instrument: a run of prompts across the boundary, then a live call: the call still reads as running" |
 | A2b, both leads forced to 0 at the call site | `hold-wiring`: "A2: a page under the reset row holds the reader's row" (the row moved 1200 px) |
+| F1, the list hands the working pulse and a pending send to `prependShift` as keys | `hold-wiring`: "A1 ... (busy (the working pulse trails))" and "(with a send pending)" |
+| M1, the lead of a new list added on no row in common (`found === null ? ln : …`) | `hold-wiring`: "fix round 1 (M1): a new list that opens with the reset row moves no first index" (it survived 243 cases in review 3838) |
+| A3, the reviewed head's `ChatList.tsx`, `chatItems.ts` and `footFollow.ts` | `chat-history` (Chrome): the four busy cases, "the first page under the reset row moved virtuoso's first index" (idle green, as on `main`) |
 
 **Suites.** Through the runner, on this wave's code (eafe13d2da; the head adds only the notes). The **first full pwa
 run was red**: three census cases, from B2's stylesheet. The shape census's registered pair, the stretch row with the mail

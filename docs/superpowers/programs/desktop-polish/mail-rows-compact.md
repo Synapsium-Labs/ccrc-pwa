@@ -183,6 +183,11 @@ The after-stretch figure includes the one question card drawn open under its row
   (D-4950's note in `chatItems.ts`).
 - Runs are rare in practice: a prompt is usually followed by the session's own fetch. They fold back-to-back prompts,
   such as replays of an unacked delivery or prompts typed while the last was being read.
+- **A card drawn under its row once in a view can come back open on a later page** (wave 179, fix round 1; found by
+  review 3838's panel, a corner): the under-row marks live in the list's memo for the whole view (`underRow`, so nothing
+  moves under the reader), so a card the view once drew under its closed row, then lost with a fresh backlog, is drawn
+  under the row again, open, when a later older page brings it back, though an older page's question never opens by
+  default (B1). Not pinned; stated here as a limit.
 - **Every form that opens with the lane's head is drawn as "Mail arrived"** (accepted as a limit, wave 179): the inbox
   wake (a count of unread mail, or the codec's refusal) and the spot-probe notice fold into the same line as the generic
   nudge, though neither of them is one piece of mail arriving. Their own words are one tap away, in the line's full
@@ -265,8 +270,8 @@ What the second review of #3358 (run 3763) and the coordinator's later rulings l
 
 | Item | Change | Pinned by |
 |---|---|---|
-| B1, an older page's question (the coordinator's ruling on review 3795) | `foldMailRows` takes the older rows' boundary as `liveFrom`, measured by the list (`ChatList.tsx#itemsOf`, on the list the fold receives) and never inside the fold: only a card on the live side can be the newest asking card, so an older page's question never opens by default and is never drawn under a closed row. It still asks, so a closed stretch holding it names it | `mail-rows.test.tsx`: the fold with and without the boundary; in both skins, an older page holding a question changes nothing that is open and draws nothing under a row; a live question still opens, under its row, with an older question above it |
-| B2, the question words cut at phone width | The row draws the question words in their own span (`toolActivity.ts#activityWords`' `asks`, `.tool-activity-asks`), which never shrinks; the label and the plain counts give way first; the row is `flex-wrap: wrap` with zero-basis parts grown back to their content in the old give-way order, so it wraps to a second line before the question words are cut (`chat.css`) | `mail-rows.browser.test.ts`, Refined and Instrument at 320, 360 and 390 px, plain and with a "waiting on you" flag: "1 question" whole, inside the row and the column; and the wrap, in both skins at 390 px with the stretch narrowed to 230 px and wide gaps (so the fixed parts cannot share one line): the row grows past one line (56 px Refined, 53 Instrument), the question words whole and inside the row and the column, nothing overflowing |
+| B1, an older page's question (the coordinator's ruling on review 3795) | `foldMailRows` takes the older rows' boundary as `liveFrom`, measured by the list (`ChatList.tsx#itemsOf`, on the list the fold receives) and never inside the fold: only a card on the live side can be the newest asking card, so an older page's question never opens by default and is never drawn under a closed row. It still asks, so a closed stretch holding it names it | `mail-rows.test.tsx`: the fold with and without the boundary; the boundary row itself is live (a question that is the first live item opens; fix round 1, M2); in both skins, an older page holding a question changes nothing that is open and draws nothing under a row, and its closed stretch still names it, "1 question" (fix round 1, M3); a live question still opens, under its row, with an older question above it |
+| B2, the question words cut at phone width | The row draws the question words in their own span (`toolActivity.ts#activityWords`' `asks`, `.tool-activity-asks`), which never shrinks, and the row is `flex-wrap: wrap`. **At a phone's width the row does wrap** (fix round 1, F3; the first text here said no real width needed it, which was false): with the question words and two flags it takes two lines, inside the tap floor's 44 px, the one line the list prices it at. The line breaks before the label, the counts or the running word are crushed: the calls count and the running word take a `5ch` basis that grows back to their own width, the message count its own width, the label a zero basis, and the summary what is left (`chat.css`) | `mail-rows.browser.test.ts`, Refined and Instrument at 320, 360 and 390 px, plain and with a "waiting on you" flag: "1 question" whole, inside the row and the column; the height 44 px; the message count whole; the label, the calls count and the running word each at least as wide as `main` drew it at that width (or whole); with "waiting on you", the break onto a second line, read off the parts' own lines. And a second wrap, in both skins at 390 px with the stretch narrowed to 230 px and wide gaps: the row grows past the tap floor (56 px Refined, 53 Instrument), the question words whole and inside the row and the column, nothing overflowing |
 | B3, an open stretch still said "1 question" | `activityWords(item, choice, open)`: an open row names no question; its body draws every card | `mail-rows.test.tsx`, both skins: open, no question words; closed again, the sign is back |
 | B4, the row barrier pinned less than its comment | Two cases, one changing only a card's `opens` and one only its `asks`, alone and inside its stretch's row; the comment on the old case now says it pins a newer card in the stretch, not a card's own fields | `mail-rows.test.tsx` |
 | B5, rendered pins | A question then a status in one wake, inside one stretch; a card the reader closed under the row, then a newer question in the same stretch; the under-row marks surviving a recycled row (the row unmounted and drawn again over the same memo). The Chrome file's header now says what catches what (below) | `mail-rows.test.tsx` |
@@ -274,10 +279,33 @@ What the second review of #3358 (run 3763) and the coordinator's later rulings l
 | C, this note | Section 1's line count for `ChatList.tsx`, section 3's day rule, the module header of `mailRows.ts` (it named `askWord`, which does not exist; it now names `hiddenAsks` and `activityWords`), and the limit of section 7 on the inbox wake and the probe notice | |
 
 **B2 red first.** On the base (the words in one span), the plain case was red in all four phone views, the question words
-cut by 73 px (Refined 360), 55 (Refined 390), 56 (Instrument 360) and 37 (Instrument 390). With the words split and no
+cut by 73 px (Refined 360), 55 (Refined 390), 56 (Instrument 360) and 37 (Instrument 390). At 320 the red-first run was
+not recorded (the 320 cases came later); measured in fix round 1 with `main`'s stylesheet and row swapped in, the span that
+held the question words was cut at 320 in both skins (60.7 px Refined, 65 px Instrument, plain; 0 and 1.2 px waiting). With the words split and no
 CSS change, the plain cases were green (the new span does not shrink), and the case with a "waiting on you" flag was red:
 the row overflowed its own box by 53, 23, 32 and 2 px in the same views. With the CSS, all green, and
 `tool-activity.browser.test.ts` (48 cases, the 360 px fit with two flags among them) green unchanged.
+
+**B2 in fix round 1 (review 3838 F3 and the coordinator's ruling on it).** The reviewer measured the waiting phone rows
+breaking onto a second line at an unchanged 44 px, and the zero bases crushing the label, both counts and the running word
+to about 2 px at Instrument 390, where `main` drew 14, 14 and 44 px. The ruling: nothing on the row a person could read on
+`main` becomes unreadable; each part at least as wide as on `main` at the same width, or whole; the question words still the
+last to shrink; and, if that cannot hold inside 44 px, the widths mailed. It holds. `main`'s widths, measured in Chrome with
+`main`'s stylesheet, row and words swapped in (one nowrap line, 44 px; the label 0 px at every phone width):
+
+| View | Calls count and running word on `main` (plain / waiting) | Message count and question words, one span on `main` | Now (plain and waiting): two lines, 44 px |
+|---|---|---|---|
+| Refined 320 | 19.3 / 0 px | 60.7 / 0 px | calls 44.1, running whole (50.4), messages and "1 question" whole |
+| Refined 360 | 27.1 / 5.2 | 85.2 / 16.2 | calls and running whole, label 19.3 |
+| Refined 390 | 32.9 / 11 | 103.5 / 34.5 | calls and running 45.4, messages and "1 question" whole |
+| Instrument 320 | 20.7 / 0.4 | 65 / 1.2 | calls 43.5, running whole (46.2) |
+| Instrument 360 | 28.5 / 8.2 | 89.4 / 25.7 | calls and running 38 |
+| Instrument 390 | 34.3 / 14 | 107.8 / 44 | every part whole but the label (14.2) |
+
+Tried first and measured: every part with its own width as basis takes three lines (53 to 56 px) in six of the twelve
+views; the label alone with a zero basis leaves Refined 320 waiting at three lines (56 px); a `8ch` basis for the message
+count cuts "2 messages," at Refined 360 and 390 plain, where `main` showed it whole. The case's old `wrapped` measure
+compared the question words with the title and read no break; it is gone, and the break is read off each part's own line.
 
 **What the Chrome file's measure cases catch (B5's header).** Measured with each mutant applied alone: a prompt line that
 stopped being compact (`isMailPrompt` false) is red in all four views on the prompt-row count and over the bound (16073 px
@@ -298,7 +326,10 @@ NOT caught by the bound (4229 px at 390, 4150 at 1280, both under it): the asser
 | B5b a card the reader closed leaves the row | "Refined/Instrument: a card the reader closed under the row stays there, closed" (and "the list prices what the row draws") |
 | B5c the row clears its under-row marks when it unmounts | "the under-row marks survive a recycled row", alone |
 | B6 no space after the card's subject (`ui`, `mail-card.tsx`) | with the old subject ending in `?`: survived (2 of 2 green); with the new subject: "Refined/Instrument: every mail line ... holds the words it shows in its name" |
-| B2 the row cannot wrap (`flex-wrap` removed from the row) | "refined/instrument, phosphor, 390px, stretch narrowed to 230px with wide gaps: wraps, the question words whole": one line (44 px), the row overflowing by 271 and 250 px |
+| B2 the row cannot wrap (`flex-wrap` removed from the row) | "refined/instrument, phosphor, 390px, stretch narrowed to 230px with wide gaps: wraps, the question words whole": one line (44 px), the row overflowing by 271 and 250 px; in fix round 1 (`flex-wrap: nowrap` on the row), all twelve phone cases red too, 14 of 14 |
+| F3, round 0's stylesheet (every shrinking part a zero basis) | all twelve phone cases, plain and waiting, each part's width against `main`'s |
+| M2, the boundary row read as older (`i > liveFrom`) | "wave 179, fix round 1 (M2): the boundary row itself is live, so a question that is the first live item opens" (it survived 243 cases in review 3838) |
+| M3, a card's asking gated by the boundary | "Refined/Instrument: wave 179, fix round 1 (M3): a closed stretch still names the question an older page holds" |
 
 B1 and B2 were red first. B3's test was written after its change, and B4, B5 and B6 pin what `main` already does, so
 each of those is proven by its mutant instead.
