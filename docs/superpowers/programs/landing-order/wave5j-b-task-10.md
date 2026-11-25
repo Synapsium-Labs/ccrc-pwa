@@ -35,6 +35,14 @@ restored from its saved copy and its sha256 checked, all inside one `ccrc test` 
 temp root. Each red below is a real test failure in the vitest tally, not a run that found no test. All 34 were killed and
 every file restored equal. The green after: every file named here ran green in the 5j-b gate afterwards.
 
+Which commit these name (review run 3864's F1): every sha256 below, and every suite count in this note, is of commit
+`b4ed8c2cb9`, where the table was measured. Since then the two merges of main (`5c6eb61061`, `d0a3e7c0d9`) and the D-9093
+comment edit (`511f196a96`) changed four of the mutated files, `store.ts`, `routes.ts`, `landingWrites.ts` and
+`auth/gate.ts`, so their hashes no longer describe the tip; `landingDoorsTx.ts`, `landingControlTx.ts` and
+`landingEntry.ts` still match. The suites have grown since too (`auth-gate` 399 here, 416 at `511f196a96`). Fix round
+1 does not re-hash: a hash at its tip would be stale at the next commit. Rows B34 to B36 are in
+`wave5j-b-fix-round-1.md`, with the commit they name.
+
 - **B1**: the withdraw apply arm also clears every other entry's afterIds. `server/src/coord/store.ts`, sha256 `2e5d2c0dc7a6e395d1470f8b89d4078bc95049b1af92a7c3e532e07265e161b9`, restored and equal: yes. Red: `landing-subtractive.test.ts` -t `subtractive only`: 6 failed, 8 passed, 10 skipped (24).
 - **B2**: the withdraw answer adds `head: null`. `server/src/coord/routes.ts`, sha256 `4cb68dca22d131259b8099617fdf64a6b47f754d0fc6d687702699eaba8f3f1a`, restored and equal: yes. Red: `landing-doors-route.test.ts` -t `no door answers`: 1 failed, 12 skipped (13); `landing-subtractive.test.ts` -t `subtractive only`: 12 failed, 2 passed, 10 skipped (24).
 - **B3**: the control statement also clears operatorPaused on a green transition. `server/src/coord/landingControlTx.ts`, sha256 `ea89666a8b276411a2578533c34a669c3a2f17b056422c09c669cd5a95bb5df4`, restored and equal: yes. Red: `landing-control.test.ts` -t `door-written: a pause placed between`: 1 failed, 60 skipped (61).
@@ -78,7 +86,7 @@ has no notice to queue, and stays green).
 
 ## The gate (Step 3)
 
-One file per process, from `server/`, in one slot: `landing-journal` 76, `landing-journal-store` 90, `landing-entry-store`
+At commit `b4ed8c2cb9`, one file per process, from `server/`, in one slot: `landing-journal` 76, `landing-journal-store` 90, `landing-entry-store`
 65, `landing-entry-census` 40, `landing-read-route` 32, `landing-writes-route` 36, `landing-line-order` 68,
 `landing-control` 61, `landing-terminal-damage` 64, `auth-gate` 399, `box-token-census` 80, `coord-pause-route` 27,
 `coordinator-skill` 290, `refusal-status` 28, `mail-routes` 61, `growth-check` 62 (3 skipped), `citations` 4, `anchors` 9,

@@ -15,8 +15,10 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, Task 9,
 - The census pins: `coord-pause-route.test.ts`'s `SESSION_ONLY` gains both paths (its comment holds no closing square
   bracket and no quoted string); `coordinator-skill.test.ts`'s census `EXEMPT` gains both routes with a reason; nothing
   is added to the skill text. `auth-gate.test.ts`: the landing write doors case now asserts that neither literal names
-  `/api/landing/entries` or `/api/landing/order`; the `coord/routes.ts` tally rises 78 to 80 and the total 309 to 311,
-  each with a dated comment.
+  `/api/landing/entries` or `/api/landing/order`; the `coord/routes.ts` tally rises 78 to 80 and the total by 2, each
+  with a dated comment. At the tip `511f196a96`, over main `5b14086b57` (the base the two merges of main left), the total
+  reads 324 to 326 (the figures this note first gave, 309 to 311, were counted on the first base `31d5d9ae26`; review
+  run 3864's F2).
 - `CLAUDE.md` blocks 3, 4 and 5 and README blocks R4 and R5, byte for byte as section 9 gives them. Each old block was
   measured first: exactly once in its file at the base `31d5d9ae26`, at `origin/main` `bc65307b1a` and in the worktree.
 - New `landing-doors-route.test.ts`: dark (pause, resume and withdraw each 200 with no credential, actor `flag-off`);
@@ -41,8 +43,9 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, Task 9,
 ## What the first run found, and the fixes
 
 - `auth-gate.test.ts`'s sweep also checks four prose sites against the counts it derives: the scanner-meta comment
-  (309 to 311 scanned), the property loop's and the third probe's HTTP count (306 to 308), and `gate.ts`'s docstring
-  (306 to 308). The plan named the two tallies only. `server/src/auth/gate.ts` was free once claim 7164 was released, so
+  (324 to 326 scanned at the tip over `5b14086b57`; 309 to 311 on the first base), the property loop's and the third
+  probe's HTTP count (321 to 323 at the tip; 306 to 308 on the first base), and `gate.ts`'s docstring (321 to 323 at
+  the tip; 306 to 308 on the first base). The plan named the two tallies only. `server/src/auth/gate.ts` was free once claim 7164 was released, so
   this branch claimed it (7173) and changed only that number in its docstring. Issued as
   **D-9094** `landing-doors-gate-count-prose` (the plan's Task 9 file list lacks `gate.ts` and the four prose counts).
 - `box-token-census.test.ts` harvests the `SESSION_ONLY` literal as text, and the first comment written there held an
