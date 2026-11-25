@@ -22,6 +22,10 @@ half merged as #3284 (wave 171, `chat-paging.md`). Each claim is labelled **meas
   followed at once, not by a smooth scroll.
 - **No cap on rows held** (§7): 20,000 rows cost 5.7 MiB of heap and a live append is drawn in about 40ms. Pinned with
   room.
+- **Fix round 1** (review 3734): a page that lands never sets back movement made after it, read from the scroller's
+  position against the list's own writes, not from input events alone (F1, A7); a page of calls only that joins the top
+  stretch keeps it open and holds the reader (F2); an expired place is said (A5); a busy answer is asked again on its
+  own (A6); the rest as §8's fix round table and §9 say.
 
 ## 2. The wire: one field, two send sites (the only server change)
 
@@ -77,16 +81,29 @@ render that hands them over, by how far a row the reader can see moved (`footFol
 a divider can go and a stretch can take the page's calls, so the count of rows added is not how far the rows below moved).
 Virtuoso then moves the scroller itself, from its size estimates, over a few frames, and lands rows away from where they
 were: **measured 451px** after a page of thirty records at 390px. So while it moves (`adjusting`) the hold reads and
-writes nothing and the near-top load waits; once the scroller has been quiet for two frames, `settlePrepend` decides
-through `heightMove` (with the place the reader had before the rows came) and makes one write by key. A reader at the
-foot is taken back to it; a reader who moved meanwhile (a wheel, a touch, a pointer press or a key since the page came)
-is left where they moved.
+writes nothing and the near-top load waits; once the scroller has been quiet for two frames, `settlePrepend` makes at
+most one write. **First, a list that moved after the page landed is left where it went, whoever was where then** (fix
+round 1, F1 and A7): the list moving is the reader moving. It is measured by the scroller's position, not by input
+events alone: the list reads where each of its own instant writes left the scroller (virtuoso moves it only through the
+element's `scrollTo` and `scrollBy`, which `ownWrites` wraps on that element to note the position, every call going
+through unchanged), and a scroll event during the settle that finds the scroller anywhere else is movement no input event
+announced: a fling's momentum after the finger lifted, a scrollbar thumb dragged, Jump to latest's smooth scroll. A
+wheel, a touch, a pointer press or a key since the page came counts too. Otherwise it decides through `heightMove`, with
+the place the reader had before the rows came: a reader at the foot is taken back to it, anyone else has their row put
+back by its key.
 
 **The anchor is a row and the rows under it** (eight, in order): when the join replaces the row crossing the top (the
 first time divider goes, a stretch takes the page's calls), the first of the others still drawn is held.
 
-**A stretch that takes an older page's calls** changes its key (`activity-<first entry's key>`) but keeps its open or
-closed state, the rule a stretch has as it grows (`keepOpenAcross`, read off the two lists, not the key's spelling).
+**A stretch that takes an older page's calls** changes its key (`activity-<first entry's key>`) but is the same stretch,
+grown at its top (`stretchJoin.ts`, read off the two lists, never off the key's spelling): it keeps its open or closed
+state (`keepOpenAcross`), and the hold keeps the reader's place by the stretch's FOOT, which growth at its top does not
+move, following every join since the anchor was read. A page made only of calls renames the top stretch and adds no
+row, so virtuoso's first index stays; it settles exactly as a prepend does (`adjusting`, then the one correction), and the
+near-top load waits for it (fix round 1, F2). Before, nothing settled: an open stretch closed across that join, and a
+closed stretch gaining a failure card grew 50px above the reader unheld; measured in Chrome, virtuoso's own correction of
+the renamed row's height (a scroll event) made the hold read the list as moving, and three pages chained before the list
+reported a height at all.
 
 **Older rows are display only.** The store's `older-page` arm touches only the rows and the paging. The tool-activity fold
 takes `liveFrom`, the first item drawn from a live row (`olderPages.ts#liveFromOf`): nothing before it runs, waits or
@@ -115,13 +132,14 @@ unpins the reader (they asked for the top), so the hold keeps the row they were 
 | `more` | none | Load older messages |
 | `loading` | none (announced once) | Loading older messages… (the same button, `aria-disabled`, keeps focus) |
 | `start` | This is the oldest message available here. | none (the sentence takes focus if the button had it) |
-| `busy` | Another page of older messages was still loading. | Try again |
+| `busy` | Another page of older messages was still loading. | Try again, after the request was asked again on its own three times, 800ms apart, one at a time, the top saying Loading meanwhile (fix round 1, A6) |
 | `changed` | Older messages cannot be loaded now: the transcript changed. | none |
 | `absent` | Older messages cannot be loaded now: the transcript is no longer there. | none |
 | `unreadable` | Older messages cannot be loaded now: the transcript could not be read. | Try again |
 | `unmeasured` | Older messages cannot be loaded now: the transcript could not be measured. | Try again |
 | gap | One or more records here were too long to load and are left out. | a dashed rule, at the gap's place |
-| `none`, and `invalid` or `expired` | nothing: no control, today's view (a continuation the server no longer accepts is dropped quietly, and the next backlog brings one) | |
+| `expired` (the wire's `expired` or `invalid`) | Older messages are there but cannot be loaded here now. Reopen this chat to load them. | none: asking again cannot help. It stands until a backlog brings a continuation (fix round 1, A5: a reconnect after a server restart resumes with no backlog, so a silent end read as nothing older) |
+| `none` | nothing: no control, today's view (an older server, or a stream that cannot page) | |
 
 "Available here" never claims the session began there: a context reset, a swap or retention can each leave earlier
 messages outside this transcript. **The gap's place:** a page that skips a record answers no events (both of the
@@ -143,7 +161,13 @@ leaving is virtuoso's word, as before. The chat list keeps a reader at the foot 
 `heightMove`'s `foot` (a change while the reader was at the foot, measured against the list before it), and
 `footFollow.ts#footLeft`, when virtuoso says the reader left the foot: the foot left the reader unless they moved the
 scroller up from where the foot last stood or tapped a disclosure, so growth below them and a view that shrinks (a phone
-keyboard) take them back. **A person sees one difference:** an append at the foot is followed at once, not by a smooth
+keyboard) take them back. A tap that shrank the list and left the reader at its foot did not move them off it, so its
+window ends there: a reader at the foot who closes the newest stretch still follows a live row (fix round 1, A1). A tap
+that grows the list keeps its window, which is what keeps a tapped header in view (the 40-tap probe). Position decides it:
+measured in Chrome, Instrument draws an open stretch's every call, so a 33-call stretch open at the foot is 1,838px tall
+and its header out of view; closing it there leaves the reader 1,770px above the new foot, at the header, which is
+leaving the foot by position, and is kept as a leave. The case pinned is the one a reader can tap: a stretch whose
+header is in view at the foot (`chat-foot.browser.test.ts`, both skins, 390 and 1280). **A person sees one difference:** an append at the foot is followed at once, not by a smooth
 scroll.
 
 **Where the foot stood** is written by virtuoso's at-the-foot report and by a scroll event that lands within the pill's
@@ -211,14 +235,54 @@ none.** Pinned with room: the heap the held rows cost stays under 4 MiB per thou
   tests-inclusive project compiles clean run directly). Compilers: pwa (with ui), ui, and the server's test project
   clean.
 
+### Fix round 1 (review 3734, rulings in mail 35269 and 35294)
+
+Reproduced first, in Chrome, on the head the review read (phosphor; the reader's input before the page, the movement
+after it landed, none of it announced by an input event):
+
+| Case | Before the fix | After |
+|---|---|---|
+| F1, a fling's momentum (Refined, 390) | set back 366px | 0px |
+| F1, a scrollbar thumb dragged, then held still (Refined, 1280) | set back 302px | 0px |
+| F1, Jump to latest pressed while a page was out (Refined, 1280) | 1,651px from the foot | 2px (Jump to latest's own 3px band) |
+| A7, at the foot when the page came, then moved up 300px (Refined, 390) | 0px from the foot (thrown back) | 300px, where they went, the row read 0px off |
+| F2, a page of calls only into an open top stretch (Refined, 390) | not reproduced before; the mutant that drops the open state's carry closes it | open, the row under it 0px off |
+| F2, the same into a closed stretch that gains a failure card | 50px, the card's height | 0px |
+| A1, a reader at the foot closes the newest stretch, a live row 150ms later (both skins, 390 and 1280) | red in all four with the fix cut | at the foot, no pill |
+
+The Jump to latest case was not the settle's write alone: virtuoso's instant write for the page's rows stops a smooth
+scroll where it is, so a settle with Jump to latest under way ends at the foot. The repeated prepends still hold the row
+within 0.50px (mean 0.31px over 32), so nothing the list writes itself is read as the reader moving.
+
+Mutants, each applied alone to the committed source, run against its named files, restored and hash-checked: ten in
+jsdom (the settle's position check; the own-write record; A3's drop; A5's word; A6's retries and the store's timer; A4's
+marker time and the top case's repeat; F2's renames and the open carry), all killed; three in Chrome (A1's window end,
+F2's settle of a join, F2's open carry), each turning its own cases red (A1 in all four views).
+
+The whole suites on the fix round's code, in four parts each: pwa, 605 files, 18,702 passed and 2 skipped, with one file
+(`mockup-policy`) whose worker the test slice's memory cap killed under the box's load, green alone (153 of 153); the
+browser suite, all 120 files, 4,332 passed, 52 skipped and 1 expected to fail, nothing unrun. No server file changed in
+this round.
+
 ## 9. Limits
 
 - Two separate records equal in every field the parser gives are one identity across frames (§3).
-- A repeated row key is counted from the newest end, so a page that brings an older record sharing a later row's uuid
-  renames that later row (`~1`). Measured none in 72,842 records here.
+- A repeated row key is counted from the newest end, so a prepended page renames no row already shown: an older row
+  sharing a shown row's key is the one that gets `~n`. What does rename shown rows is a LIVE append sharing a key (calls
+  with an empty `toolId` all key as `''`): the older rows sharing it are renamed, so they remount, lose their entry in
+  the expansion memo and change the hold's anchor key. Measured no repeated key in 72,842 records here (fix round 1, A8,
+  correcting this line, which had the rule backwards).
+- A reader who stops scrolling within the one pixel where the foot band (`band + 1`) and virtuoso's not-at-the-foot
+  threshold overlap is taken back to the foot: the scroll that put them there wrote where the foot stands, so the leave
+  reads as the foot leaving them (`footLeft`, `movedUp` needs a fall of more than 1px). Exactly: a reader whose distance
+  from the foot ends in `[band, band + 1]` px with no scroll after it. Accepted by the coordinator (fix round 1, A2).
 - Older rows display only: an older call without a result is drawn settled even if it is still running.
 - No echo (the wave 171 server): after a void, the first answer is dropped whichever request it answers, so case A costs
-  one extra round trip.
+  one extra round trip. A `more` answer whose continuation is the request outstanding's is the request before's, a page
+  already applied, and is dropped (fix round 1, A3, the coordinator's ruling 35294). Counting the given-up request as
+  voided instead was rejected, and must not come back: the server drops a page read across a backlog, so the voided
+  request's answer usually never comes, the count never returns to zero, and every later answer is dropped, so older
+  pages stop loading until the next backlog.
 - The list reads an index below virtuoso's first index as a data index (`rowAt`): no virtuoso sends one, and the suites'
   stand-in lists count rows from 0. Done so the nineteen jsdom stand-ins need no edit.
 - The screen subscribes to `older` with one more selector, one more of the route-keyed store's CodeQL notes.
@@ -229,6 +293,10 @@ none.** Pinned with room: the heap the held rows cost stays under 4 MiB per thou
   lands second moves `liveFromOf` after wave 176's `foldMailRows`, on the list the fold receives, and gives its two new
   kinds their sources (a run of mail prompts is live when any of its prompts is).
 - `SessionScreen.tsx` (claim 6923, wave 173): three hunks, the holder's leave; no overlap with #3283.
+- `pwa/test/tool-activity.test.tsx` (claim 6989, leave 34946): one case's scroll-up now moves the scroller up from a
+  measured foot, as a reader's does (§8, the first full run). What jsdom no longer pins there: a reader's input with no
+  upward move counting as leaving the foot. Chrome pins the foot's rule instead (`chat-foot.browser.test.ts`). (Fix round
+  1, A11.)
 
 ## 11. Unmeasured
 
