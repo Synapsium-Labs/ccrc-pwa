@@ -286,13 +286,14 @@ this round.
 | F1, three pages after a context reset (Refined, phosphor, 390 and 1280) | the reader's row moved 24,100px (390) and 15,206px (1280) after the first page; seven pages asked, to the start | 0px each page; three pages asked for three | Chrome, red with the check back on the first row; `leadOf` in jsdom |
 | F2, the chat opened again while its top reads `expired` | resumed with no backlog: the words stood | a first open's connect, a backlog, Load older again | jsdom (the store, its socket addresses): reopened fresh; a drop before that backlog asks fresh again; the open screen's reconnect resumes; every other state resumes. Chrome cannot show the bug: its routed socket sends a backlog on every connect |
 | A1, the fling and the thumb cases | glided after the page's row was drawn | start in the frame the page grows the list | Chrome, red with round 1's "moved" cut (366px, 302px) |
-| A2, a scroll's or a height change's frame after a page | could read the anchor off the page's rows, or write the scroller while virtuoso compensated | the owed read made in the page's render; both frames do nothing while it settles | jsdom, three cases, each red with its guard cut |
+| A2, a scroll's or a height change's frame after a page | could read the anchor off the page's rows, or write the scroller while virtuoso compensated | the owed read made in the page's render; both frames do nothing while it settles | jsdom, two cases (the scroll frame's and the height change's, `hold-wiring.test.tsx`), each red with its guard cut; three guards, the owed read among them (corrected by wave 179: this cell said three cases) |
 | A3, the settle's distance comparison | green in jsdom with it cut to the null arm | a move after the list's own write, no input, is left where it went | jsdom, and Chrome (the fling and the thumb, 366px and 302px) |
 | A3, one of the two methods wrapped | green with only `scrollBy` wrapped | a `scrollTo` write is the list's own | jsdom |
 | A3, the retry timer's own re-check | green | a reader who left and opened the chat within the pause is asked nothing they did not ask | jsdom (leaving the screen does not clear the timer; without the re-check the old timer asked on the new socket) |
 
 **The absorb of #3358** (wave 176, the compact mail rows; merged to main first, resolved as mails 35524 and 35550 ask).
-The list is built (keys made unique as it is built), its one gap divider kept, then the mail fold, then the live-from
+The list is built (keys made unique as it is built), its one gap divider kept (the absorb's merge commit on the wave's
+branch, d0881e707c, says "dropped": the list keeps one divider at a gap and drops only its repeat, `ChatList.tsx#oneDividerAtGap`), then the mail fold, then the live-from
 index measured on that folded list, which reads a lone prompt by its event and a run of prompts as live when any prompt
 is, then the tool fold; both list builds go through `itemsOf`. The tool fold keeps its position array beside the tool
 entries only, and wave 176's members list (calls and joined cards) feeds the inner rows; no position is read off it. The
@@ -314,7 +315,9 @@ and the open carry's group check, five: thirteen, all killed; in Chrome, F1's le
 "moved" and the join reader's run arm, four, each turning its own cases red.
 
 The whole suites on the merged code (the head commit adds only this note), in four parts each through the test slice:
-pwa, 622 files, 19,166 passed and 2 skipped, with `mockup-policy`'s worker killed by the slice's memory cap under the
+pwa, 622 files (the sum of the four parts' counts; how each part's count was read was not recorded, and on `main` at
+64ccd3b57f the files vitest's include collects, less `browser/**`, number 617 by `git ls-tree`; wave 179 reports vitest's
+own `Test Files` line of one whole run), 19,166 passed and 2 skipped, with `mockup-policy`'s worker killed by the slice's memory cap under the
 box's load (green alone, 153 of 153); the browser suite, all 123 files under `pwa/browser`, 4,371 passed, 52 skipped and
 1 expected to fail, with 7 cases red in 6 files during the slice's memory-cap kills (`model-sheet-labels`, `chat-links`,
 `project-linking-card`, `tool-activity`, `docs-mockup`, `testbox-connect`: timeouts and a crashed page), each file green
@@ -339,6 +342,8 @@ unrun. No server file changed in this round.
   measured at rest (§4). Writing there re-created the 366px and 302px set-backs (fix round 2, A6).
 - Opening the chat again while its top reads `expired` replaces the rows on screen with the fresh backlog: the older rows
   held are dropped with it, and come back by paging (fix round 2, F2).
+- The `expired` words do not tell the reader that the pages they loaded are replaced when they reopen the chat: they
+  say older messages are there and that reopening loads them. Stated as this limit, not worded on screen (wave 179).
 - No echo (the wave 171 server): after a void, the first answer is dropped whichever request it answers, so case A costs
   one extra round trip. A `more` answer whose continuation is the request outstanding's is the request before's, a page
   already applied, and is dropped (fix round 1, A3, the coordinator's ruling 35294). Counting the given-up request as

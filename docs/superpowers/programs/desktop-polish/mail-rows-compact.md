@@ -33,7 +33,7 @@ On a 30-wake coordinator transcript the mail rows took **24611px before and 3869
 | The memo keeps a choice in either direction (`choice`) | `pwa/src/session/transcriptRow.tsx` | L4 |
 | The row barrier compares the new lists | `pwa/src/session/sameRow.ts` | L1 |
 | The `mail-line` height bucket | `pwa/src/session/itemHeight.ts` | L1 |
-| The chat list: render cases, the fold at the two `transcriptOf` call sites, the prices | `pwa/src/session/ChatList.tsx` (32 lines, held by wave 175, carried by its leave) | L4 |
+| The chat list: render cases, the fold at the two `transcriptOf` call sites, the prices | `pwa/src/session/ChatList.tsx` (49 lines against its base, 36 added and 13 removed, measured with `git diff --stat` over the merge commit 3e08b98dfc against its first parent; fix round 1 added the shape function's third argument, the reader's choices, and the height meter's memo, so a row is sampled as drawn; held by wave 175, carried by its leave. Corrected by wave 179: this row said 32) | L4 |
 | `MailCard`'s closable form (`fold`), `MailPromptLine`, `MailPromptText`, stories | `ui/src/components/mail-card.*`, `ui/src/components/mail-prompt-line.*` | design system |
 
 Nothing changed in what the server types, mail delivery, acknowledgement, the envelope's parsing, which results make a
@@ -75,7 +75,7 @@ to start "Notice." failed that case alone, the fixture case staying green; the f
 | Which card opens by default | A card whose envelope `kind` is `question` AND whose `toId` is the session shown AND which is the newest card of the chat that asks (`opensByDefault`), whatever ordinary mail follows it | `question` is the envelope's one word for a mail that asks for an answer; `toId` is the session the delivery was made to, so a card read about another session asks nothing of this one. "The newest that asks", not "the newest, if it asks", is the coordinator's ruling on review 3737 F2 (the first build read the brief the other way): a question followed by a status mail is open |
 | What "nothing a person would read" is | By item kind, one record over every kind (`SAYS_NOTHING`): a timestamp divider and a prompt say nothing; a message (the person's, the session's, a system row), a mail card, a tool call, a task card, a pending send and the working pulse are read | A divider is a time, which the run's line carries itself; a run that swallowed a tool call would move the session's own act out of its place. A new kind is a compile error until placed |
 | Dividers in a run | A divider between two members goes inside the run (drawn in the opened list as the chat draws one); one after the last member stays outside | Keeps every time visible where it was |
-| Runs across a day | A prompt on another local day than the run's first ends the run (`sameDay`), with or without a divider between them | Review 3737 A3: a run's line shows clock times only, so "23:50 to 00:10" would hide the day; the day's divider stays in the chat |
+| Runs across a day | A prompt on another local day than the run's first ends the run (`sameDay`), whether or not a time divider stands between them. A divider comes from a quiet gap only (ten minutes, `chatItems.ts`), never from a change of day, so two prompts a minute either side of midnight are two lines with no divider between them | Review 3737 A3: a run's line shows clock times only, so "23:50 to 00:10" would hide the day. (Corrected by wave 179: this row said the day's divider stays in the chat; there is no day divider) |
 | Which cards join a stretch | Only a card from the live lane (its event is a `tool_result`, the session's own fetch), and only when a stretch is open before it. A legacy typed card is a user turn, a prompt, and still ends one | "Belongs with the fetch that produced it" |
 | What a closed stretch draws under its row (`underRow`) | The card that opens by default, always; and every card drawn there earlier in this view, open or closed as the reader left it, in the stretch's order, so two can show. A card the reader only opened or closed inside the body never appears there. The row draws `underRow`'s cards, and the list prices the same list (`shapeOf`) | The coordinator's ruling on review 3737 F1 and A4. A card drawn there is marked in the list's memo (`under:<key>`) when it is drawn |
 | A closed stretch holding a question that is not drawn under it | Its count names it: "2 messages, 1 question" (`hiddenAsks`) | The ruling on F2: a closed stretch never hides an asking card without a sign |
@@ -183,6 +183,10 @@ The after-stretch figure includes the one question card drawn open under its row
   (D-4950's note in `chatItems.ts`).
 - Runs are rare in practice: a prompt is usually followed by the session's own fetch. They fold back-to-back prompts,
   such as replays of an unacked delivery or prompts typed while the last was being read.
+- **Every form that opens with the lane's head is drawn as "Mail arrived"** (accepted as a limit, wave 179): the inbox
+  wake (a count of unread mail, or the codec's refusal) and the spot-probe notice fold into the same line as the generic
+  nudge, though neither of them is one piece of mail arriving. Their own words are one tap away, in the line's full
+  text.
 
 ## 8. The peer arrangement with wave 175 (run 3690)
 
@@ -211,7 +215,7 @@ The coordinator's rulings, and what changed (measured unless marked):
 | F2 | The card that opens by default is the newest that asks something of the session shown, whatever mail follows it; a closed stretch never hides an asking card without a sign | `foldMailRows` marks `asks` and `opens` (the newest asking card); the row's count says "2 messages, 1 question" for asking cards not drawn under it (`hiddenAsks`) |
 | F1 | The default card is always drawn under a closed stretch; a card drawn there earlier stays, open or closed as left; so two can show, in order; the list prices what the row draws, from one function | `underRow` replaces `surfacedOf` (and the item's `surfaced` field, so the row barrier compares one fewer field); the row marks each card it draws there (`under:<key>` in the memo); `shapeOf` reads the memo |
 | A4 | A card only opened or closed in the body never appears under the row | `underRow` reads the drawn mark, never the open choice |
-| A3 | A day divider ends a run | `sameDay`: a prompt on another local day ends the run, with or without a divider |
+| A3 | A day divider ends a run | `sameDay`: a prompt on another local day ends the run, with or without a divider (a divider comes from a quiet gap only, never from a day change: wave 179) |
 | A2 | Accepted as a limit | The note says it (section 2) and a case pins it |
 | A1, A5 | Accepted as a limit; correct the note; price a kept-open card as drawn | Section 7 rewritten; `shapeOf` prices a card by `openOf`, and the meter samples a row with the reader's choices. The opening estimate keeps no choice: the memo is made fresh with the list, so at the opening it holds none (the mutant that dropped it there was equivalent, and the wiring was taken out) |
 | A6, A7 | Add the guards | Cases for both halves of the run branch in `sameRow`, the run arm of the prompt count, a run's one time when its ends are the same minute, a card with no readable time, `aria-controls` on the card, and a run's member divider drawn as the chat's |

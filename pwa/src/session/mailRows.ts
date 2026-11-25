@@ -70,8 +70,9 @@ export const SAYS_NOTHING: Readonly<Record<ChatItem['kind'], boolean>> = {
 };
 
 /** THE DAY RULE OF A RUN (review 3737 A3): a run never spans two days. A prompt on another local day than the run's
- *  first ends it, so the day's divider between them stays in the chat, and a run's clock times always read in one
- *  day. */
+ *  first ends it, so a run's clock times always read in one day. It ends the run whether or not a time divider stands
+ *  between the two: a divider comes from a quiet gap only (`chatItems.ts`, ten quiet minutes), never from a change of
+ *  day, so prompts a minute either side of midnight are two lines with no divider between them. */
 export function sameDay(a: MailPromptItem, b: MailPromptItem): boolean {
   return dayKey(Date.parse(a.event.ts)) === dayKey(Date.parse(b.event.ts));
 }
