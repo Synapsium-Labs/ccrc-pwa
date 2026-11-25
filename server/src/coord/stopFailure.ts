@@ -15,28 +15,31 @@ import {
  */
 
 // ── StopFailure's error tokens (§5.2) ────────────────────────────────────────────────────────────────────────
-/** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in §5.2's three classes.
- *  `retry`: a self-mail, then the coordinator on a repeat. `account`: a hold, because the limit, swap and authdead
+/** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in four classes.
+ *  `provider`: the provider's own failure, `providerRetry.ts`'s ladder (D-TBD-provider-retry-armed): never this arm's, so no
+ *  coordinator is asked to mend one. `retry`: a self-mail, then the coordinator on a repeat. `account`: a hold, because the limit, swap and authdead
  *  machinery owns it. `request`: the coordinator, because a retry fails the same way. It is one total Record, and
  *  the classifier reads it through `hasOwnProperty`, so an inherited name is never a token. */
 const STOP_FAILURE_ERROR_MAP = {
-  server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
+  server_error: 'provider', overloaded: 'provider', max_output_tokens: 'retry', unknown: 'retry',
   rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
   account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
   invalid_request: 'request', model_not_found: 'request',
 } as const;
 export type StopFailureError = keyof typeof STOP_FAILURE_ERROR_MAP;
-export type StopFailureClass = 'retry' | 'account' | 'request';
+export type StopFailureClass = 'provider' | 'retry' | 'account' | 'request';
 export const STOP_FAILURE_ERRORS: Readonly<Record<StopFailureError, StopFailureClass>> = STOP_FAILURE_ERROR_MAP;
 /** The tokens a failing PROVIDER sends (measured, 2.1.332: HTTP 529, 503 and 500, a connection dropped before or inside the
  *  answer and one refused all send `server_error`). The session hook counts exactly these (`failAts`). */
-export const PROVIDER_FAILURE_ERRORS: readonly StopFailureError[] = ['server_error', 'overloaded'];
+export const PROVIDER_FAILURE_ERRORS: readonly StopFailureError[] = (Object.keys(STOP_FAILURE_ERROR_MAP) as StopFailureError[])
+  .filter((e) => STOP_FAILURE_ERROR_MAP[e] === 'provider');
 /** null for a token this build cannot classify (never guessed): the failed arm holds `failed-unknown`. */
 export function stopFailureClass(err: string | null): StopFailureClass | null {
   if (err === null || !Object.prototype.hasOwnProperty.call(STOP_FAILURE_ERROR_MAP, err)) return null;
   return STOP_FAILURE_ERROR_MAP[err as StopFailureError];
 }
 
+export const isProviderFailure = (err: string | null): boolean => stopFailureClass(err) === 'provider';
 /** failed. *Chosen*. */
 export const FAILED_IDLE_MS = 10 * 60_000;
 
@@ -69,6 +72,7 @@ function stallPriorFailure(input: StallSessionInput, stopAt: number, subject: st
  *  Per `STOP_FAILURE_ERRORS` class:
  *  - an unclassifiable token holds `failed-unknown` (the lane warns once, and it is never guessed);
  *  - `account` holds `failed-account`;
+ *  - `provider` is none here: `providerRetry.ts#providerRetryVerdict` owns it, for every session;
  *  - `retry` mails the session itself, or goes to rung 2 `repeat` after a prior failure in the window;
  *  - `request` goes to rung 2 `request`.
  *  Rung 2 goes to a run worker's claimant, or to the operator when there is none, when coordination is paused, or
@@ -89,6 +93,7 @@ function stallFailedInner(input: StallSessionInput, now: number): StallVerdict {
   const cls = stopFailureClass(m.err);
   if (cls === null) return holdVerdict('failed-unknown');
   if (cls === 'account') return holdVerdict('failed-account');
+  if (cls === 'provider') return VERDICT_NONE;   // `providerRetry.ts`'s
   const err = m.err ?? '';
   const subject = stallFailedSubject(err, m.stopAt);
   if (cls === 'retry' && !stallPriorFailure(input, m.stopAt, subject)) {

@@ -474,15 +474,15 @@ describe('orphan E (§5.2): run workers and coordinators, a wake-bearing task th
 
 describe('failed (§5.2): run workers and coordinators, a turn that ended on an API error', () => {
   const S = NOW - 20 * MIN;
-  /** A StopFailure 20 min ago with `server_error`. The pane has read idle since one second after it. */
+  /** A StopFailure 20 min ago with `max_output_tokens`. The pane has read idle since one second after it. */
   function fInput(markOver: Partial<TurnMark> = {}, over: Over = {}): StallSessionInput {
     return sessionInput({
       worker: workerAt('idle', S + 1_000),
-      mark: mark({ state: 'failed', event: 'StopFailure', at: S, turnAt: S - 5 * MIN, stopAt: S, err: 'server_error', ...markOver }),
+      mark: mark({ state: 'failed', event: 'StopFailure', at: S, turnAt: S - 5 * MIN, stopAt: S, err: 'max_output_tokens', ...markOver }),
       ...over,
     });
   }
-  const f1 = (err = 'server_error', key = S): StallVerdict => ({ act: 'notify', arm: 'failed', rung: 1, key, to: 'worker', err });
+  const f1 = (err = 'max_output_tokens', key = S): StallVerdict => ({ act: 'notify', arm: 'failed', rung: 1, key, to: 'worker', err });
   const f2c = (because: 'repeat' | 'request', err: string, key = S): StallVerdict =>
     ({ act: 'notify', arm: 'failed', rung: 2, key, to: 'coordinator', coordinatorId: COORD, err, because });
   const f2o = (because: 'repeat' | 'request', err: string, key = S): StallVerdict =>
@@ -491,7 +491,7 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
   const tokens = (cls: string): string[] => Object.entries(STOP_FAILURE_ERRORS).filter(([, c]) => c === cls).map(([e]) => e);
 
   it('failed: a retry-class error fires rung 1 to the session itself, keyed on stopAt', () => {
-    expect(tokens('retry')).toHaveLength(4);
+    expect(tokens('retry')).toHaveLength(2);
     for (const err of tokens('retry')) expect(stallFailedVerdict(fInput({ err }), NOW), err).toEqual(f1(err));
   });
   it('failed: fires for a coordinator too, and never for another session', () => {
@@ -518,7 +518,7 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
   });
   it('failed: fires from exactly FAILED_IDLE_MS, and on shell', () => {
     const edge = NOW - FAILED_IDLE_MS;
-    expect(stallFailedVerdict(fInput({ at: edge, stopAt: edge }), NOW)).toEqual(f1('server_error', edge));
+    expect(stallFailedVerdict(fInput({ at: edge, stopAt: edge }), NOW)).toEqual(f1('max_output_tokens', edge));
     expect(stallFailedVerdict(fInput({}, { worker: workerAt('shell', S + 1_000) }), NOW)).toEqual(f1());
   });
   it('failed: an account-class error holds failed-account, the limit, swap and authdead machinery owns it', () => {
@@ -537,10 +537,10 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
     expect(stallFailedVerdict(fInput({ err: 'invalid_request' }, { role: 'coordinator', sessionId: COORD }), NOW), 'a coordinator').toEqual(f2o('request', 'invalid_request'));
   });
   it('failed: a retry-class repeat inside the window goes to rung 2', () => {
-    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H)] }), NOW)).toEqual(f2c('repeat', 'server_error'));
-    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H, 'shadow')] }), NOW), 'a shadow row records the failure too').toEqual(f2c('repeat', 'server_error'));
-    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - FAILED_REPEAT_MS)] }), NOW), 'the lower bound is inclusive').toEqual(f2c('repeat', 'server_error'));
-    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H)], coordinationPaused: true }), NOW), 'paused').toEqual(f2o('repeat', 'server_error'));
+    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H)] }), NOW)).toEqual(f2c('repeat', 'max_output_tokens'));
+    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H, 'shadow')] }), NOW), 'a shadow row records the failure too').toEqual(f2c('repeat', 'max_output_tokens'));
+    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - FAILED_REPEAT_MS)] }), NOW), 'the lower bound is inclusive').toEqual(f2c('repeat', 'max_output_tokens'));
+    expect(stallFailedVerdict(fInput({}, { notices: [prior(S - H)], coordinationPaused: true }), NOW), 'paused').toEqual(f2o('repeat', 'max_output_tokens'));
   });
   it('failed: the 3 h row, a failure before the repeat window is no repeat', () => {
     expect(stallFailedVerdict(fInput({}, { notices: [prior(S - 3 * H)] }), NOW)).toEqual(f1());
@@ -555,14 +555,14 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
     const c = fInput({}, { role: 'coordinator', sessionId: COORD });
     const priorSubject = stallFailedSubject('overloaded', S - H - 15 * MIN);
     const withMail = (at: number, subject = priorSubject, fromId = WATCH): StallSessionInput => ({ ...c, mail: [mailRow(603, at, fromId, COORD, subject)] });
-    expect(stallFailedVerdict(withMail(S - H), NOW)).toEqual(f2o('repeat', 'server_error'));
+    expect(stallFailedVerdict(withMail(S - H), NOW)).toEqual(f2o('repeat', 'max_output_tokens'));
     expect(stallFailedVerdict(withMail(S - 3 * H), NOW), 'the 3 h row, run-less').toEqual(f1());
     expect(stallFailedVerdict(withMail(S - H, `${STALL_ORPHANED_PREFIX} another episode`), NOW), 'an orphan mail is no failure').toEqual(f1());
     expect(stallFailedVerdict(withMail(S - H, priorSubject, WORKER), NOW), 'the same words from a session').toEqual(f1());
   });
   it('failed: run-less rung 1 is done by the watch mail with this failure exact subject', () => {
     const c = fInput({}, { role: 'coordinator', sessionId: COORD });
-    const subject = stallFailedSubject('server_error', S);
+    const subject = stallFailedSubject('max_output_tokens', S);
     expect(stallFailedVerdict({ ...c, mail: [mailRow(604, NOW - 5 * MIN, WATCH, COORD, subject)] }, NOW)).toEqual(NONE);
   });
   it('failed: mail-disabled holds rung 1 and a coordinator-bound rung 2, and an operator-bound rung 2 and a shadow rung stand', () => {
@@ -577,7 +577,7 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
     // self-mail, which leaves the lane's 24 h mail read FAILED_REPEAT_MS after its own stop at the latest. Past this
     // bound the classification would outlive its evidence, so the arm answers none, as orphan D bounds itself.
     const edge = NOW - (BACKLOG_HORIZON_MS - FAILED_REPEAT_MS);
-    expect(stallFailedVerdict(fInput({ at: edge, stopAt: edge }), NOW), 'at the bound').toEqual(f1('server_error', edge));
+    expect(stallFailedVerdict(fInput({ at: edge, stopAt: edge }), NOW), 'at the bound').toEqual(f1('max_output_tokens', edge));
     expect(stallFailedVerdict(fInput({ at: edge - 1, stopAt: edge - 1 }), NOW), 'one ms past it').toEqual(NONE);
     expect(stallFailedVerdict(fInput({ at: edge - 1, stopAt: edge - 1, err: 'invalid_request' }), NOW), 'rung 2 too').toEqual(NONE);
   });
@@ -595,11 +595,11 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
   it('failed: a run-less prior failure is the watch mail to THIS session, outside this failure subject, inside the window', () => {
     const c = fInput({}, { role: 'coordinator', sessionId: COORD });
     const priorSubject = stallFailedSubject('overloaded', S - H - 15 * MIN);
-    const ownSubject = stallFailedSubject('server_error', S);
+    const ownSubject = stallFailedSubject('max_output_tokens', S);
     const withMail = (at: number, subject: string, toId = COORD): StallSessionInput => ({ ...c, mail: [mailRow(603, at, WATCH, toId, subject)] });
     expect(stallFailedVerdict(withMail(S - H, priorSubject, WORKER), NOW), 'to another session').toEqual(f1());
     expect(stallFailedVerdict(withMail(S - H, ownSubject), NOW), 'this failure own subject, however early').toEqual(NONE);
-    expect(stallFailedVerdict(withMail(S - FAILED_REPEAT_MS, priorSubject), NOW), 'exactly at the window start').toEqual(f2o('repeat', 'server_error'));
+    expect(stallFailedVerdict(withMail(S - FAILED_REPEAT_MS, priorSubject), NOW), 'exactly at the window start').toEqual(f2o('repeat', 'max_output_tokens'));
     expect(stallFailedVerdict(withMail(S, priorSubject), NOW), 'exactly at the stop').toEqual(f1());
     expect(stallFailedVerdict(withMail(S + 5 * MIN, priorSubject), NOW), 'after the stop').toEqual(f1());
   });
@@ -758,7 +758,7 @@ describe('marker-unreadable for a coordinator (coordinator-marker-unreadable (D-
 describe('hold 2b: the session verdicts hold where the run verdict caps (session-arms-are-separate-verdicts (D-3637))', () => {
   const IDLE = NOW - 3 * H;
   const w = workerAt('idle', IDLE, { dialogPending: true });
-  const failedMark = mark({ state: 'failed', event: 'StopFailure', at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, err: 'server_error', bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });
+  const failedMark = mark({ state: 'failed', event: 'StopFailure', at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, err: 'max_output_tokens', bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });
   const doneMark = mark({ at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });
   const run = runRow();
   const runInput: StallInput = {
@@ -882,7 +882,7 @@ describe('a refused id: every session verdict holds it unmeasured, and mail-stuc
   const REFUSED: StallWorker = { present: 'refused' };
   /** A Stop 30 min ago that left a monitor and a subagent running, and a StopFailure 20 min ago: each draws E or failed on a present, idle worker. */
   const eMark = mark({ at: NOW - 30 * MIN, turnAt: NOW - 50 * MIN, stopAt: NOW - 30 * MIN, bg: 2, bgKinds: ['monitor', 'subagent'], bgIds: ['b989ocn62', 'm1'] });
-  const fMark = mark({ state: 'failed', event: 'StopFailure', at: NOW - 20 * MIN, turnAt: NOW - 25 * MIN, stopAt: NOW - 20 * MIN, err: 'server_error' });
+  const fMark = mark({ state: 'failed', event: 'StopFailure', at: NOW - 20 * MIN, turnAt: NOW - 25 * MIN, stopAt: NOW - 20 * MIN, err: 'max_output_tokens' });
   const dMark = mark({
     event: 'SessionStart', at: NOW - 2 * H, turnAt: NOW - 3 * H - 20 * MIN, stopAt: NOW - 3 * H, restartAt: NOW - 2 * H,
     lostBg: 2, lostKinds: ['shell', 'subagent'], lostIds: ['b1', 'a2'],

@@ -1471,7 +1471,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
   });
 
   it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon (D-3752))', async () => {
-    // A prior failed: self-mail at S2 - 1 h, a server_error at S2. The repeat goes to the operator and never wakes the
+    // A prior failed: self-mail at S2 - 1 h, a max_output_tokens at S2 (a provider error is the provider-failure ladder's). The repeat goes to the operator and never wakes the
     // session. A day later the prior mail is out of the lane's read, and the arm must not re-read the standing failure
     // as a first one and type a retry nudge into the pane.
     const { h, coord, w, sent } = await rig();
@@ -1483,7 +1483,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     coord.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: COORD, runId: null, kind: 'status',
       subject: stallFailedSubject('overloaded', PRIOR_AT - 600_000), body: 'b', artifacts: [] });
     seedLiveState(h.home, { startedAt: STARTED_AT });
-    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error', at: S2, stopAt: S2 });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'max_output_tokens', at: S2, stopAt: S2 });
     const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
     const sessions = [fleetRow(WORKER), fleetRow(COORD)];
     const failedMail = (): MailRow[] => operatorMail(coord).filter((m) => m.toId === COORD && m.subject.startsWith(STALL_FAILED_PREFIX));
@@ -1694,7 +1694,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });
     seedLiveState(h.home, { startedAt: STARTED_AT });
-    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error' });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'max_output_tokens' });
     const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
     at(IDLE_AT + FAILED_IDLE_MS);
     await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], W2, both);

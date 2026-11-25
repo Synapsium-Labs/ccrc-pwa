@@ -68,10 +68,11 @@ describe('the arms, holds and markers are derived from their Records', () => {
       'coord-blocked',
     ]);
   });
-  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once', () => {
+  it('waves 1 and 2 have fifteen holds, wave 1 first, and the timer hold (Overlord §3.3.12, C65) is the sixteenth, once; a provider retry owed is the seventeenth', () => {
     expect(STALL_HOLDS).toEqual([
       'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
       'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown', 'timer',
+      'provider-retry',
     ]);
     expect(STALL_HOLDS.filter((h) => h === 'timer')).toHaveLength(1);
   });
@@ -444,9 +445,9 @@ describe('wave 2: rungRecipient is one total per-arm table (planning departure r
 });
 
 describe('wave 2: STOP_FAILURE_ERRORS classifies the thirteen StopFailure tokens (§5.2)', () => {
-  it('is the spec’s three groups, and nothing else', () => {
+  it('is the spec’s three groups and the provider’s own, and nothing else', () => {
     expect(STOP_FAILURE_ERRORS).toEqual({
-      server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
+      server_error: 'provider', overloaded: 'provider', max_output_tokens: 'retry', unknown: 'retry',
       rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
       account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
       invalid_request: 'request', model_not_found: 'request',

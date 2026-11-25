@@ -99,6 +99,7 @@ import { TmpCensusBeat } from './tmpSweepLane.js';
 import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
+import { ProviderRetryLane } from './providerRetryLane.js';
 import { DiskLaneStallLane } from './diskLaneStallLane.js';
 import { PressureLane } from './pressureLane.js';
 import { VisibilityLane, type TeamLinkInputs } from './linking/visibilityLane.js';
@@ -236,6 +237,7 @@ import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
 import type { overlordReadGate } from './coord/overlordGateRun.js';
 import { isInboxWakeMail } from '../../shared/overlordInbox.js';
+import { isProviderRetryMail } from '../../shared/provider-retry.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
@@ -1130,6 +1132,8 @@ export class FleetWatcher {
    *  `readiness: null` on the wire rather than omitting the key. */
   /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
+  /** The provider-failure ladder, run inside the stall pass on the facts that pass read (`providerRetryLane.ts`). */
+  private readonly providerRetry = new ProviderRetryLane(() => this.deps);
   /** D-8955: a cleanup lane that stops finishing anything while the disk is under pressure raises one item and one push. */
   private readonly diskLaneStall = new DiskLaneStallLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
@@ -3521,8 +3525,9 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed. A
+        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`).
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -7110,7 +7115,8 @@ export class FleetWatcher {
    * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
    *   marker and orphan D (slug `coordinators-draw-orphan-d` (D-3749)), all RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)),
    *   so none can stand in a worker's proof (b);
-   * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
+   * - every other registry row: orphan D, only once its marker records a restart that lost tasks; and the
+   *   provider-failure ladder (`providerRetryLane.ts`), which judges every kind above too.
    *
    * Reads (slug `three-reads-per-candidate` (D-3642)): at most three agent reads per worker — the live file, the turn
    * marker and the raw hookstate — and two per coordinator. The pane pid and the registry uuid are the tick's
@@ -7151,6 +7157,7 @@ export class FleetWatcher {
       const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       // D-8285: a disabled watch reads no marker, so the heartbeat is cleared rather than left to age into a false quiet.
       if (arming.disabled) { this.workerSeen.replace(new Map()); return; }
+      this.providerRetry.begin(arming, r.levelSource);
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<WatcherCoordPort['stallCandidates']>;
       try {
@@ -7205,6 +7212,7 @@ export class FleetWatcher {
           console.warn(`ccrc-server: stall-watch session ${r.id} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
+      this.providerRetry.end((id) => tick.panePids.has(id), now);
     } catch (err) {
       // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `stallCoordinatorSubjects`, `pruneStallMemory`)
       // would reach the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
@@ -7345,7 +7353,7 @@ export class FleetWatcher {
       w2: {
         mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
         absentSince: this.stallAbsentSince.get(id) ?? null, deadSince: this.stallDeadSince.get(id) ?? null,
-        markUnreadableSince,
+        markUnreadableSince, providerRetryOwed: this.providerRetry.holdsQuiet(mark),
       },
     };
     let v = stallVerdict(input, now);
@@ -7364,6 +7372,7 @@ export class FleetWatcher {
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
     }
+    this.providerRetry.judge(store, si, s, tick.records.find((x) => x.id === id), now);
   }
 
   /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)): its notices are keyed on
@@ -7422,6 +7431,7 @@ export class FleetWatcher {
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
+    this.providerRetry.judge(store, si, s, tick.records.find((x) => x.id === id), now);
     // coord-blocked (D-6942): the same session facts, with the claimant's child marker from this tick's rows
     // (`unlisted` when none), the active runs it claims and the episode remembered from the last sweep. L1 decides
     // the verdict and the next episode; this only keeps the episode and applies the verdict, run-less.
@@ -7469,8 +7479,8 @@ export class FleetWatcher {
     if (input !== null) this.applyStallSession(store, si, project, stallCoordBallMailStep(input, now), now);
   }
 
-  /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
-   *  rows whose marker reads done with lostBg > 0"). ONE read, the marker judged with no live file, and the live
+  /** A registry row that is no run's worker or coordinator: orphan D (spec §5.2, "Candidates are the registry
+   *  rows whose marker reads done with lostBg > 0") and the provider-failure ladder (`providerRetryLane.ts`), no other arm. ONE read, the marker judged with no live file, and the live
    *  file only for a marker that records a restart which lost background tasks. That gate is L1's
    *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
    *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
@@ -7488,7 +7498,7 @@ export class FleetWatcher {
     // registry rows are long-dead sessions, so they cost no agent read.
     if (!tick.panePids.get(r.id)) return;
     const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, ident.uuid, null);
-    if (!mark.ok || !stallOrphanDCandidate(mark)) return;
+    if (!mark.ok || !(stallOrphanDCandidate(mark) || this.providerRetry.candidate(r.id, mark))) return;
     const s = sessions.find((x) => x.id === r.id);
     const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
     // A row of `records` is never refused: the listing builds no refused row.
@@ -7504,6 +7514,7 @@ export class FleetWatcher {
       coordinationPaused: paused,
     };
     this.applyStallSession(store, si, s?.project ?? r.project, stallOrphanDVerdict(si, now), now);
+    this.providerRetry.judge(store, si, s, r, now);
   }
 
   /** The registry uuid this sweep reads a marker and a hookstate against, off the tick's own rows. No row: `null`

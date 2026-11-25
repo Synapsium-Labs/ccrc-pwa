@@ -87,6 +87,7 @@ const STALL_HOLD_MAP = {
   'failed-account': 'the turn ended on an account-class StopFailure: the limit, swap and authdead machinery owns it',
   'failed-unknown': 'the turn ended on a StopFailure token this build cannot classify: never guessed into a self-wake',
   timer: 'a timer the worker set itself is pending, or fired less than one quiet period ago, below TIMER_HOLD_CAP_MS from the ladder\'s start (the quiet arm\'s r1 only; never a backoff, C65)',
+  'provider-retry': 'the worker owes a retry after a provider failure, and `providerRetry.ts` nudges it: no quiet rung asks its coordinator about a provider',
 } as const;
 export type StallHold = keyof typeof STALL_HOLD_MAP;
 export const STALL_HOLDS = Object.keys(STALL_HOLD_MAP) as StallHold[];
@@ -592,7 +593,9 @@ export function stallQuietMs(input: StallInput): number {
 }
 /** Wave 2's facts about the subject's worker (`w2-facts-separate-object` (D-3629)): `StallFacts` is unchanged. `absentSince`,
  *  `deadSince` and `markUnreadableSince` are the lane's in-memory first-seen times. They restart with the server. */
-export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null }
+export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null;
+  /** `providerRetry.ts#providerRetryHoldsQuiet`'s answer; absent reads as false. */
+  readonly providerRetryOwed?: boolean }
 export type StallR3Cause = 'still-silent' | 'coordinator-dead' | 'no-coordinator' | 'coordination-paused';
 /** Total over the r3 causes, for `isStallKebab`. */
 const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
@@ -1124,7 +1127,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  (6) restart grace;
  *  (7) frozen;
  *  (8) delegates;
- *  (9) the coordinator's ball: coord-deaf, the cap, or none;
+ *  (9) the coordinator's ball: coord-deaf, the cap, or none; then a worker owing a provider retry holds `provider-retry`;
  *  (10) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
  *      ladder.
  *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict` (D-3645)). A wave-2 arm
@@ -1222,6 +1225,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     const ballAge = ballFrom === null ? 0 : now - ballFrom;
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
+  if (w2?.providerRetryOwed === true) return holdVerdict('provider-retry');
   // (10) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
   if (!w2Live || w2 === undefined || okMark === null || view === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   if (view.state === 'working') return holdVerdict('busy');
