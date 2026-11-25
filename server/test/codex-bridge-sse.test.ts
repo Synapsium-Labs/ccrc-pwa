@@ -21,7 +21,7 @@ it('this box has a usable python3', () => {
  *  exists only from 3.10, so the allowlist is fixed here). A module outside it is a red case, never a silent pass. */
 const STDLIB_ALLOWED = [
   'http.client', 'http.server', 'json', 'sqlite3', 'ssl', 'socket', 'threading', 'hashlib', 'hmac', 'os', 'sys',
-  'time', 'math', 'uuid', 'base64', 'platform', 'signal', 'importlib.util', 'typing', 're', 'datetime', 'errno',
+  'time', 'math', 'random', 'uuid', 'base64', 'platform', 'signal', 'importlib.util', 'typing', 're', 'datetime', 'errno',
   'stat',
 ];
 

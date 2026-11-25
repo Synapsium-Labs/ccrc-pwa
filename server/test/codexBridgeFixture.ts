@@ -109,13 +109,15 @@ export function runBridgeDriver(
  *    (default 0) before it ends it: a silent upstream.
  *  - `body`: a JSON body (a string is sent as it is), for an error answer.
  *  - `holdHeadMs`: the request is read and NOTHING is written for this long, the head included: an upstream that
- *    accepted the connection and never answers. The answer then follows as scripted. */
+ *    accepted the connection and never answers. The answer then follows as scripted.
+ *  - `drop`: the request is read and the connection closed with nothing written, so the client gets no answer. */
 export type ResponsesAnswer = {
   status: number;
   headers?: Record<string, string | null>;
   sse?: string | { chunks: string[]; delayMs?: number; holdOpenMs?: number };
   body?: unknown;
   holdHeadMs?: number;
+  drop?: true;
 };
 
 /** The queue `fakeResponses` answers from; an unscripted request is answered 500 with a JSON error body. */
@@ -228,7 +230,8 @@ export async function fakeResponses(
         return;
       }
       const a = queue.shift() ?? { status: 500, body: { error: { type: 'server_error', code: 'fake_responses_unscripted' } } };
-      if (a.holdHeadMs) later(a.holdHeadMs, () => { if (!res.destroyed) answer(res, a); });
+      if (a.drop) req.socket.destroy();
+      else if (a.holdHeadMs) later(a.holdHeadMs, () => { if (!res.destroyed) answer(res, a); });
       else answer(res, a);
     });
   });

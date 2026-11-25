@@ -177,6 +177,7 @@ THE DIRECT-MODE SERVER (Task 8).
                    `fault: "eof-is-timeout"` wraps backend.post so the upstream body's end raises
                    backend.UpstreamTimeout("read") in place of ending: the socket's own idle bound, firing before the
                    parsed-event bound whatever the scheduling, for the idle case.
+                   `fault: "no-client-gone"` drops the sixth hook, as a shim placed before it existed does.
   refresher        {authDir, lib, lane, close?, waitS} -> {"returned", "count", "alive"}: `server._refresher` on a
                    thread of its own, over a BridgeConfig carrying only `lane`, `authDir` and `lib` (the fields the
                    refresher reads) and a fresh `server._Flight`, closed first when `close` is true; its stop event is
@@ -1000,6 +1001,8 @@ def _serve(op, pkg, cb, auth_consts):
             return up._replace(chunks=chunks())
 
         cb.backend.post = post
+    elif op.get("fault") == "no-client-gone":
+        hooks = hooks._replace(client_gone=None)
     elif op.get("fault") is not None:
         _usage("unknown fault " + json.dumps(op.get("fault")))
     return server.serve(server.config_from_env(os.environ), hooks)

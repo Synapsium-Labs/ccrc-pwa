@@ -223,7 +223,7 @@ operator's trial recordings replace the other 24.
 | Context overflow | 400 with exactly `prompt is too long: N tokens > M maximum` | Claude Code 2.1.300 parses that text and compacts. Today it gets an opaque 400. |
 | Usage limit (`…_usage_limit_exceeded`) | 429 `rate_limit_error`; the lane's status reads `limit-paused` | |
 | Not eligible | 403 `permission_error`; status `ineligible`; never a sign-in loop | |
-| Upstream unavailable | 529 or 503, retryable | |
+| Upstream unavailable | 529 or 503, retryable | A short one is first tried again by the bridge, before the commit point, for at most 120 s (D-TBD-bridge-absorb, plan 2026-11-25). |
 | Unsupported capability | 400 naming the field; a drift counter | |
 | Expired or invalid token | one library refresh, then 401; status `needs-signin` | |
 | Policy refusal | 400, not retried | Today it is a 500, which Claude Code retries. |

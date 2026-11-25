@@ -133,6 +133,7 @@ import importlib.util
 import json
 import math
 import os
+import random
 import re
 import signal
 import sys
@@ -1163,7 +1164,7 @@ class _Request:
         ans.ended()
         now = time.monotonic()
         wait = absorb.delay(self.absorbed, took_s=now - ans.posted, spent_s=now - self.first_post,
-                            retry_after_s=None if retry_after is None else float(retry_after))
+                            retry_after_s=None if retry_after is None else float(retry_after), rand=random.random)
         if wait is None:
             return False
         until = now + wait

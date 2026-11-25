@@ -972,6 +972,8 @@ const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(key
 const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
 /** D-8622: the request markers, in backend.MARKERS' order (D-8632's last). */
 const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
+/** D-TBD-bridge-absorb: absorb.WORDS. */
+const ABSORBED = ['overloaded', 'unavailable', 'transport'];
 /** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
 function parityRow(over: Record<string, unknown> = {}): Line {
   return {
@@ -979,7 +981,8 @@ function parityRow(over: Record<string, unknown> = {}): Line {
     served: { same: 0, other: 0, absent: 0 }, servedOther: {}, servedTier: {}, inputTransformations: {},
     responsesWithTransformations: 0, replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), reasoningMs: zeros(BUCKETS),
     totalMs: zeros(BUCKETS),
-    markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 }, ...over,
+    markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 },
+    absorbed: zeros(ABSORBED), ...over,
   };
 }
 const hist = (counts: Record<string, number>): Record<string, number> => ({ ...zeros(BUCKETS), ...counts });
@@ -1286,6 +1289,43 @@ describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)',
       'backend/model-c': parityRow({
         markers: { ...zeros(MARKERS), 'bridge-turn-state': 5 }, turnState: { captured: 0, echoed: 2 },
       }),
+    });
+  });
+});
+
+// D-TBD-bridge-absorb: the failures the bridge tried again, a fixed vocabulary like `fallbacks`.
+describe.skipIf(!PY)('the parity section: the absorbed failures (D-TBD-bridge-absorb)', () => {
+  it('each is counted once per call under its word, and any other word counts nothing and makes no row', async () => {
+    const { home, file } = lane('cb-parity-absorbed-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_absorbed', ['backend', MODEL, 'overloaded']),
+      call('parity_absorbed', ['backend', MODEL, 'overloaded']),
+      call('parity_absorbed', ['backend', MODEL, 'transport']),
+      call('parity_absorbed', ['backend', 'model-b', 'rate']),
+      call('parity_absorbed', ['backend', 'model-b', null]),
+      { op: 'stats-snapshot' },
+    ]);
+    const doc = rest.at(-1)!.doc;
+    expect(doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ absorbed: { overloaded: 2, unavailable: 0, transport: 1 } }) });
+    expect([doc.outcomes, doc.names, doc.unexplained]).toEqual([{}, {}, {}]);
+  });
+
+  it('a restart carries the counts and re-checks them; a row from before them loads zero-filled', async () => {
+    const { home, file } = lane('cb-parity-absorbed-load-');
+    const good = parityRow({ absorbed: { overloaded: 3, unavailable: 2, transport: 1 } });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.absorbed;
+    writeFileSync(file, JSON.stringify({
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: { [ROUTE_KEY]: good, 'backend/model-b': before, 'backend/model-c': { absorbed: { overloaded: -1, transport: 4, rate: 9 } } },
+    }), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good, 'backend/model-b': parityRow({ responses: 2 }),
+      'backend/model-c': parityRow({ absorbed: { overloaded: 0, unavailable: 0, transport: 4 } }),
     });
   });
 });
