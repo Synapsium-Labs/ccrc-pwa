@@ -9,7 +9,7 @@
 // modified time of the file read, and only a fingerprinted file read (the show answer) carries it: a range read's prepare
 // answer carries none, so the truth line says its first clause alone there (a known limit).
 import {
-  DOC_SECTION_SLUGS, DOCS_CLASS_CAP, DOCS_RANGE_MAX_BYTES, contentClass, statPin,
+  DOC_SECTION_SLUGS, DOCS_CLASS_CAP, DOCS_RANGE_MAX_BYTES, contentClass, isDocsMtimeNs, statPin,
   type DocSectionSlug, type DocsFailure, type DocsFolderAddResponse, type DocsFolderEntry, type DocsFolderFileResponse, type DocsFolderLabelRow,
   type DocsFolderRemoveResponse, type DocsFolderTreeOk, type DocsFolderTreeResponse, type DocsFoldersLabelsResponse,
   type DocsFoldersPathsResponse, type DocsRangeFrame, type DocsRangePin, type DocsRangePrepared,
@@ -40,14 +40,16 @@ export interface DocsFolderLoaders {
 
 /** What the index shows of the outside folders, from the labels read: the rows, or one quiet line. The index never shows an
  *  error banner for them and never a group with nothing in it. `null`: no read answered yet. The smallest honest behaviour:
- *  a refused read (sign-in dark, or no session) says so in one note; any other failure says the folders could not be read;
- *  an empty registry draws nothing. */
+ *  a refused read (sign-in dark, or no session) says so in one note; a fleet box that cannot do folders (`unsupported`, or
+ *  its caps not yet read: `caps-unknown`) has none, so it draws nothing, as an empty registry does (review 3783 A4); any
+ *  other failure says the folders could not be read. */
 export type FolderIndexSlot =
   | { readonly s: 'ok'; readonly rows: readonly DocsFolderLabelRow[] }
   | { readonly s: 'quiet'; readonly text: string };
 
 export function folderIndexSlot(a: DocsAnswer<DocsFoldersLabelsResponse>): FolderIndexSlot {
   if (a.s === 'ok') return { s: 'ok', rows: a.value.folders };
+  if (a.s === 'failed' && (a.body.failure === 'unsupported' || a.body.failure === 'caps-unknown')) return { s: 'ok', rows: [] };
   const dark = a.s === 'auth' || (a.s === 'failed' && (a.body.failure === 'auth-off' || a.body.failure === 'unauthenticated'));
   return { s: 'quiet', text: dark ? DOCS_FOLDER_TEXT.indexNeedsSignIn : DOCS_FOLDER_TEXT.indexUnread };
 }
@@ -155,10 +157,10 @@ export function folderReadPlan(entry: DocsFolderEntry): FolderReadPlan {
   return range === null ? { mode: 'none', why: 'unpinned' } : { mode: 'range', range, size: entry.size };
 }
 
-/** A listed modified time as the truth line writes it: UTC, to the minute. `null` for a time outside the grammar (a time
- *  before 1970 is negative and never matches), so the line says nothing rather than a wrong time. */
+/** A listed modified time as the truth line writes it: UTC, to the minute. `null` for a time outside the wire's one grammar
+ *  (`isDocsMtimeNs`; a time before 1970 is negative and never matches), so the line says nothing rather than a wrong time. */
 export function folderTimeText(mtimeNs: string | null): string | null {
-  if (mtimeNs === null || !/^(0|[1-9][0-9]{0,18})$/.test(mtimeNs)) return null;
+  if (mtimeNs === null || !isDocsMtimeNs(mtimeNs)) return null;
   const ms = Number(BigInt(mtimeNs) / 1000000n);
   const d = new Date(ms);
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';

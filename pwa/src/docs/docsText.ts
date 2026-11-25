@@ -199,7 +199,6 @@ export const DOCS_FOLDER_TEXT = {
   removeFailed: 'The folder could not be removed. Try again.',
   settingsReading: 'Reading the folders…',
   settingsEmpty: 'No outside folders yet.',
-  settingsUnread: 'The folders could not be read right now. Try again in a moment.',
   unreadableState: 'unreadable',
   labelField: 'Label',
   pathField: 'Absolute path on the fleet box',

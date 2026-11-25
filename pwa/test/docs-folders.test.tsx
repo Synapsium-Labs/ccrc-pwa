@@ -194,6 +194,24 @@ describe('index: folders listed after projects', () => {
     await screen.findByText('demo');
   });
 
+  // Review 3783 A4: a box that cannot do folders has none, so it draws neither a group nor a line on every visit.
+  it.each(['unsupported', 'caps-unknown'] as const)('a box answering %s draws no folder group and no line', async (word) => {
+    const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: word } }) });
+    open('/docs', f);
+    await screen.findByText('demo');
+    await waitFor(() => expect(f.calls).toContain('labels'));
+    expect(document.querySelector('.docs-folders')).toBeNull();
+    expect(document.querySelector('.docs-folders-quiet')).toBeNull();
+    expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.indexUnread);
+  });
+
+  it('a real transient failure of the labels read keeps its one quiet line', async () => {
+    const f = fakeFolders({ labels: async () => ({ s: 'failed', body: { ok: false, failure: 'helper-failed' } }) });
+    open('/docs', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.indexUnread);
+    expect(document.querySelector('.docs-folders')).toBeNull();
+  });
+
   it('an empty registry draws nothing', async () => {
     const f = fakeFolders({ labels: async () => ok({ ok: true as const, folders: [] }) });
     open('/docs', f);
@@ -448,6 +466,39 @@ describe('folder leaf: rendered as a draft is, with the folder\'s own links', ()
     open('/docs/~notes/specs/n.txt', f);
     await waitFor(() => expect(document.querySelector('pre.doc-plain')?.textContent).toBe('plain words'));
   });
+
+  // Review 3783 F1: a folder page keeps its listing while it stays on one folder, so a file a session wrote after that
+  // listing, reached by an in-app link, must not be called absent from the older listing.
+  it('a file made after the listing opens by an in-app move: the tree is read again before a path is called absent', async () => {
+    let lists = 0;
+    const later: DocsFolderTreeOk = { ...TREE, entries: [...TREE.entries, file('specs', 'new.md')] };
+    const f = fakeFolders({ tree: async () => { lists += 1; return ok({ ok: true as const, tree: lists === 1 ? TREE : later }); } });
+    open('/docs/~notes/specs', f);
+    await screen.findByText('a.md');
+    act(() => { navigate('/docs/~notes/specs/new.md'); });
+    await screen.findByText('hello folder');
+    expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.missing);
+    expect(lists).toBe(2);
+  });
+
+  it('a path that is truly absent says so after one more listing, and reads no more', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs', f);
+    await screen.findByText('a.md');
+    act(() => { navigate('/docs/~notes/specs/gone.md'); });
+    await screen.findByText(DOCS_FOLDER_TEXT.missing);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(f.calls.filter((c) => c === 'tree'), 'one more listing, never a loop').toHaveLength(2);
+    expect(screen.queryByRole('button', { name: DOCS_FOLDER_TEXT.retry })).toBeNull();
+  });
+
+  it('an absent path opened first is judged by the listing that page read: no second listing', async () => {
+    const f = fakeFolders();
+    open('/docs/~notes/specs/gone.md', f);
+    await screen.findByText(DOCS_FOLDER_TEXT.missing);
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(f.calls.filter((c) => c === 'tree')).toHaveLength(1);
+  });
 });
 
 describe('settings: the Docs folders card sits on the Integrations section', () => {
@@ -573,7 +624,7 @@ describe('settings: Docs folders section', () => {
     await screen.findByText(FOLDER_PATH);
     fireEvent.click(within(document.querySelector('li[data-folder="notes"]') as HTMLElement).getByRole('button', { name: DOCS_FOLDER_TEXT.remove }));
     await screen.findByText(DOCS_FAILURE_SENTENCE['unknown-folder']);
-    expect(bodyText()).not.toContain(DOCS_FOLDER_TEXT.settingsUnread);
+    expect(bodyText()).not.toMatch(/could not be read/);
     cleanup();
     const gate = fakeFolders({ remove: async () => { throw new ApiError(403, { ok: false, error: 'unauthenticated' }); } });
     render(<DocsFoldersSection folders={gate.folders} />);

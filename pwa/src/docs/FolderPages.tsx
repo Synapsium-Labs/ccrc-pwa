@@ -285,8 +285,16 @@ export function FolderPage(p: {
   // on another page, and a successful read gives it back (`folderRangeVisit`'s `rangeRead`).
   const spent = useRef(false);
   useEffect(() => { spent.current = false; }, [key]);
+  // A path is called absent only by a listing that answered after the navigation that asked for it (review 3783 F1): the
+  // page keeps one listing while it stays on one folder, so a file written since, reached by an in-app link, would be
+  // judged by the old one. `asked` is how many listings had answered, or were on their way, when this path was asked for;
+  // a missing path judged by no newer listing reads the tree once more first. Once per path: the next answer is newer.
+  const asked = useRef({ key, reads });
+  if (asked.current.key !== key) asked.current = { key, reads: reads + (slot.s === 'loading' ? 1 : 0) };
+  const stale = slot.s === 'ok' && loc.kind === 'folder-path' && (leaf === null || leaf.kind === 'missing') && reads <= asked.current.reads;
+  useEffect(() => { if (stale) reload(); }, [stale, reload]);
   let body: ReactNode;
-  if (slot.s === 'loading') body = <p className="docs-loading">{DOCS_FOLDER_TEXT.loading}</p>;
+  if (slot.s === 'loading' || stale) body = <p className="docs-loading">{DOCS_FOLDER_TEXT.loading}</p>;
   else if (slot.s !== 'ok') body = <DocsFailureView answer={slot} onRetry={reload} />;
   else if (loc.kind === 'folder') body = <FolderRootPage loc={loc} tree={slot.tree} />;
   else if (loc.kind === 'folder-section') body = <FolderListingPage key={loc.section} label={loc.label} tree={slot.tree} section={loc.section} dir="" />;
