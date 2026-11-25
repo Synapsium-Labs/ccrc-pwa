@@ -21,7 +21,8 @@ export function readDefinitionFilesAt(
   }
   if (blobs.length === 0) return [];
   const out = execFileSync('git', ['cat-file', '--batch'],
-    { cwd: root, input: blobs.map((b) => b.sha).join('\n') + '\n', maxBuffer: 1 << 28, stdio: ['pipe', 'pipe', 'pipe'] });
+    { cwd: root, input: blobs.map((b) => b.sha).join('\n') + '\n', maxBuffer: 1 << 30, stdio: ['pipe', 'pipe', 'pipe'] });
+  // A gigabyte, as D-9068 sized it: the three directories weighed about 117 MB on 2026-11-25, plans 98 MB of it.
   // Framing: `<sha> blob <size>\n<size bytes>\n` per object, in input order.
   let at = 0;
   return blobs.map((b) => {
