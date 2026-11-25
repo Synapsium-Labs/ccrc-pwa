@@ -14,8 +14,12 @@ import { ladderConditionInputs, ladderRead, NO_WITNESS_YET, type LadderCondition
 import type { AccountFacts } from '../src/coord/overlordDesignation.js';
 import type { AccountLimits } from '../src/limits.js';
 
+const otherConditions = {
+  'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted',
+  'shared-user': () => 'lifted', 'launch-profile-unengaged': () => 'lifted',
+} satisfies Omit<LadderConditionInputs, 'load-past-95'>;
 // @ts-expect-error The 95% row cannot ship without its input.
-const missing: LadderConditionInputs = { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted' };
+const missing: LadderConditionInputs = otherConditions;
 void missing;
 
 const NOW = 2_000_000_000;
@@ -41,8 +45,7 @@ function ladderWith(designationRead: () => DesignationRead, facts: () => Account
   const coord = new CoordStore(db);
   const accountFacts = vi.fn(facts);
   const inputs = ladderConditionInputs({ coord: { designationRead } as never, serverCaps: ALL_WORDS, accountFacts });
-  const only = { 'generation-degraded': () => 'lifted' as const, 'off-model': () => 'lifted' as const, 'rung-word-missing': () => 'lifted' as const,
-    'load-past-95': inputs['load-past-95'] };
+  const only = { ...otherConditions, 'load-past-95': inputs['load-past-95'] };
   const r = ladderRead(coord, only, NO_WITNESS_YET, ALL_WORDS);
   db.close();
   if (r.kind !== 'measured') throw new Error(r.why);
