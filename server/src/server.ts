@@ -2484,7 +2484,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
-  const drawerMarks = new DrawerInterruptThrottle();   // the drawer's input marks as a typed prompt does, once per session per 2 s
+  const drawerMarks = new DrawerInterruptThrottle(undefined, { earlierAdmits: true });   // the drawer's input marks as a typed prompt does, once per session per 2 s; a wall clock stepped back admits
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -2814,7 +2814,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11).
     const owned = compactRefusal(field, (lane) => deps.coord !== undefined && laneArmRowViewOf(lane, deps.coord.laneArmSetting(lane)).live);
     if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
-    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    const res = await deps.runCcd(CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    if (!res.ok) return ccd502(reply, res);
+    if (deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // the pick was applied: marks as a typed prompt does
+    return { ok: true };
   });
 
   /**
@@ -3013,6 +3016,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await moveDialogTab(sendDeps, id, req.body ?? null);
     answeredFrame(id, 'dialog/tab', res);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // the pane moved: marks as a typed prompt does
     if (res.ok) return res;
     return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
@@ -3044,6 +3048,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
     recordInterrupt({ notice }, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // Escape was sent: marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
