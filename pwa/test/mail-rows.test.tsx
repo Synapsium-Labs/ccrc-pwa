@@ -23,7 +23,8 @@ import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
 import { REFINED_SET } from '../src/skins/refined/parts';
 import type { SkinSet } from '../src/skins/types';
 import { activityWords, foldToolActivity, type ToolActivityItem } from '../src/session/toolActivity';
-import { expansionMemo } from '../src/session/transcriptRow';
+import { TranscriptRowContext, expansionMemo, type ExpansionMemo } from '../src/session/transcriptRow';
+import { ToolActivityRow } from '../src/session/ToolActivityRow';
 import { NO_PAGING, type OlderPaging } from '../src/session/olderPages';
 import { sameTranscriptItem } from '../src/session/sameRow';
 import { namesWithoutTheirLabel } from './labelInName';
@@ -479,6 +480,70 @@ describe('a fetched card belongs with its fetch: one stretch, and the row counts
     expect(activityWords(row, memo.choice)).toMatchObject({ messages: '3 messages', asks: '1 question' });
     // B3 (desktop polish wave 179): an open row names none.
     expect(activityWords(row, memo.choice, true)).toMatchObject({ messages: '3 messages', asks: null });
+  });
+});
+
+describe('rendered pins the review found missing (desktop polish wave 179, B5)', () => {
+  const heads = (sel: string): [string, string][] => [...document.querySelectorAll(`${sel} .mail-card-head`)]
+    .map((h) => [h.getAttribute('aria-label')!.split(',')[0]!, h.getAttribute('aria-expanded')!]);
+  const UNDER = '.tool-activity-first[data-attention="mail"]';
+
+  for (const [skin, set] of SETS) {
+    const view = (events: ChatEvent[]) => (
+      <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>
+    );
+
+    it(`${skin}: a question then a status in one wake, inside one stretch: the question under the closed row, open`, () => {
+      render(view([user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'which?' }),
+        ...fetchMail({ subject: 'status' }), ...call('Bash', 'mail ack 17')]));
+      expect(document.querySelectorAll('.tool-activity-row')).toHaveLength(1);
+      expect(heads(UNDER)).toEqual([['Mail from coordinator: which?', 'true']]);
+      const row = document.querySelector<HTMLElement>('.tool-activity-row')!;
+      expect(row.textContent).toContain('2 messages');
+      expect(row.textContent, 'the question is drawn under the row, so the row names none').not.toContain('question');
+      fireEvent.click(row);
+      expect(heads('.tool-activity-body')).toEqual([
+        ['Mail from coordinator: which?', 'true'], ['Mail from coordinator: status', 'false'],
+      ]);
+    });
+
+    it(`${skin}: a card the reader closed under the row stays there, closed, when a newer question joins the stretch`, () => {
+      const asked = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'first?' })];
+      const { rerender } = render(view(asked));
+      expect(heads(UNDER)).toEqual([['Mail from coordinator: first?', 'true']]);
+      fireEvent.click(screen.getByRole('button', { name: /^Mail from coordinator: first\?/ }));
+      expect(heads(UNDER)).toEqual([['Mail from coordinator: first?', 'false']]);
+      rerender(view([...asked, ...fetchMail({ kind: 'question', subject: 'second?' })]));
+      expect(document.querySelectorAll('.tool-activity-row')).toHaveLength(1);
+      expect(heads(UNDER), 'the card the reader closed left the row, or opened again').toEqual([
+        ['Mail from coordinator: first?', 'false'], ['Mail from coordinator: second?', 'true'],
+      ]);
+    });
+  }
+
+  it('the under-row marks survive a recycled row: unmounted and drawn again, the card drawn there stays', () => {
+    // The virtual list unmounts a row scrolled out of reach and draws it again; the marks live in the list's memo.
+    const memo = expansionMemo();
+    const stretch = (events: ChatEvent[]) => foldToolActivity(foldMailRows(buildChatItems(events, []), SELF),
+      { runs: 'none', wait: NONE, busy: false }).find((i): i is ToolActivityItem => i.kind === 'tool-activity')!;
+    const draw = (item: ToolActivityItem, expansion: ExpansionMemo) => (
+      <TranscriptRowContext.Provider value={{
+        item, expansion, answer: {},
+        renderItem: (it) => (it.kind === 'mail' ? <MailRow item={it} expansion={expansion} /> : <p>{it.key}</p>),
+        renderRow: (it) => <p>{it.key}</p>,
+      }}>
+        <ToolActivityRow item={item} />
+      </TranscriptRowContext.Provider>
+    );
+    const asked = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'first?' })];
+    const first = render(draw(stretch(asked), memo));
+    expect(heads(UNDER)).toEqual([['Mail from coordinator: first?', 'true']]);
+    first.unmount();
+    // Recycled: drawn again, now with a newer question in the stretch, which takes the default.
+    render(draw(stretch([...asked, ...fetchMail({ kind: 'question', subject: 'second?' })]), memo));
+    expect(heads(UNDER), 'the card drawn under the row before it was recycled is gone').toEqual([
+      ['Mail from coordinator: first?', 'true'], ['Mail from coordinator: second?', 'true'],
+    ]);
   });
 });
 
