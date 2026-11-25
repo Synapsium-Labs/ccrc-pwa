@@ -44,6 +44,17 @@ export const pageStorage = (): EnumerableStoragePort | null => {
   }
 };
 
+/** This browser tab's own store, `window.sessionStorage`, or `null` where there is none or naming it throws. It is kept
+ *  across a reload of the tab and dropped with the tab, so it holds what one tab is (the Docs tab's mark, `tabMark.ts`),
+ *  never a choice the device keeps. */
+export const tabStorage = (): StoragePort | null => {
+  try {
+    return window.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
 /** The page's store as an enumerable port, or `null` for one condition only: "no storage here" (there is no window, or
  *  naming the store throws). It is `pageStorage`, the one guard, and declares no body of its own. */
 export function enumerablePageStorage(): EnumerableStoragePort | null {

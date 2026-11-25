@@ -25,6 +25,11 @@
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
 // vitest.browser.config.ts browser/reader-frame.browser.test.ts )`, through `ccrc test`.
+//
+// Every session opens its leaf inside the console, as a console tab's reload does (`AppView.tab`): since desktop polish wave
+// 174 a Docs address loaded first in a fresh tab is a Docs tab, the reader alone (`isDocsTab`). A Docs tab's own cases
+// (`SessionOptions.tab`) hold it to the same: the reader fills its pane and only the frame scrolls, and the mount yields
+// focus to a host control the reader of the page holds (fix round 3).
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -535,6 +540,8 @@ interface SessionOptions {
   readonly index?: (html: string) => string;
   /** Let the context run the built app's service worker (lab 10 alone; `app.ts`'s `AppView.serviceWorkers`). */
   readonly serviceWorkers?: 'allow';
+  /** `docs`: the leaf loads first in a fresh tab, a Docs tab. Absent, it loads inside the console (`AppView.tab`). */
+  readonly tab?: 'docs';
 }
 
 interface Session {
@@ -558,6 +565,7 @@ async function openSession(opts: SessionOptions = {}, using: Browser = browser):
   const app = await openApp(using, {
     width: opts.openWidth ?? opts.width ?? 1280, skin: opts.skin ?? REFINED, theme: 'light',
     ...(opts.serviceWorkers === undefined ? {} : { serviceWorkers: opts.serviceWorkers }),
+    ...(opts.tab === 'docs' ? {} : { tab: 'console' as const }),
   }, { api: {}, fleetFrames: [] });
   sessions.push(app);
   const { ctx, page } = app;
@@ -1537,10 +1545,11 @@ describe('W8a reader frame in Chrome', () => {
     expect(figures.filter((f) => f.render !== 0 || f.svgs !== 0), 'no Render button, no drawing').toEqual([]);
   }, 120_000);
 
-  it('the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844', async () => {
+  it.each(['the console', 'a Docs tab'] as const)('the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844, in %s', async (where) => {
     const problems: string[] = [];
     for (const [w, h] of [[1280, 800], [390, 844]] as const) {
-      const { s, outcome } = await open('long.md', { width: w, height: h });
+      const { s, outcome } = await open('long.md', { width: w, height: h, ...(where === 'a Docs tab' ? { tab: 'docs' as const } : {}) });
+      if (where === 'a Docs tab') expect(await s.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), `${w}x${h}: a Docs tab`).toBe('docs');
       expect(outcome, `${w}x${h}: the reader is up`).toBe('ready');
       const m = await s.page.evaluate(() => {
         const reader = document.querySelector('.docs-reader');
@@ -1738,6 +1747,69 @@ describe('W8a reader frame in Chrome', () => {
         };
       });
       expect(landed, 'one Tab goes to the next stop of the one bar, not into the frame').toEqual({ inFrame: false, inHead: true, at: next });
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 120_000);
+
+    // A Docs tab (desktop polish wave 174, fix round 3): the reader alone, the window's width its pane's. At a desk its bar's
+    // link back is the first stop after the skip link, then the head; on a phone it has no bar, and the head is the top.
+    it.each(DEEP_DIRS.flatMap((dirs) => [INSTRUMENT, REFINED].map((skin) => [skin, dirs] as const)))('a Docs tab, desk-born, %s, %i directories, 900 x 800: back keeps the focus a reader of the page gave it, the frame is not focused at insertion, and the next Tab stop is the first crumb, seen whole', async (skin, dirs) => {
+      const s = await openSession({ width: 900, height: 800, skin, tab: 'docs' });
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl(deepPath(dirs)));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      expect(await s.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), 'a Docs tab').toBe('docs');
+      await s.page.locator('.docs-full .docs-back').waitFor({ timeout: 30_000 });
+      // The crumbs unfolded where the row folded them, as in the console's case; at this width the row may have room for all.
+      const more = s.page.locator('.docs-full .docs-crumbs-more');
+      if (await more.count() > 0) {
+        await more.click({ timeout: 30_000 });
+        await tabTo(s.page, '.docs-full .docs-back', 'Shift+Tab');
+      } else {
+        await tabTo(s.page, '.docs-full .docs-back', 'Tab');
+      }
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      expect(await activeOf(s.page), 'back still holds the focus at ready').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      await sleep(800);
+      expect(await activeOf(s.page), 'and a moment later').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      await s.page.keyboard.press('Tab');
+      const first = await s.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        return { text: a.textContent ?? '', seen: Math.max(0, Math.min(b.right, nav.right) - Math.max(b.left, nav.left)), w: b.width };
+      });
+      expect(first.text, 'the first Tab stop after back is the first crumb').toBe(DOCS_HEAD_TEXT.index);
+      expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 180_000);
+
+    it('a Docs tab, phone-born, back: the very same element holds the focus across the swap to the one bar, the frame is not focused at insertion, and Tab goes to the next stop of the one bar', async () => {
+      const s = await openSession({ ...PHONE_VIEW, tab: 'docs' });
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect(await s.page.evaluate(() => document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null), 'a Docs tab').toBe('docs');
+      expect(await s.page.locator('header.shell-tab-bar, nav.shell-phone-nav').count(), 'no bar on a phone').toBe(0);
+      await s.page.locator('.docs-compact .docs-compact-bar').waitFor({ timeout: 30_000 });
+      await tabTo(s.page, '.docs-compact .docs-compact-bar .docs-back', 'Tab');
+      const handle = await s.page.evaluateHandle(() => document.activeElement);
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      const kept = await s.page.evaluate((el) => ({
+        same: document.activeElement === el, connected: el instanceof Element && el.isConnected,
+        back: el instanceof Element && el.matches('.docs-one-bar .docs-compact-bar > .docs-back'),
+      }), handle);
+      expect(kept, 'the very same element holds the focus, and it is the one bar\'s back').toEqual({ same: true, connected: true, back: true });
+      const next = await nextStopAfter(s.page, ':focus');
+      expect(next, 'the one bar has a stop after back, and it is the title').toBe('button.docs-title');
+      await s.page.keyboard.press('Tab');
+      const at = await s.page.evaluate(() => { const a = document.activeElement; return a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}`; });
+      expect(at, 'one Tab goes to the next stop of the one bar, not into the frame').toBe(next);
       expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 

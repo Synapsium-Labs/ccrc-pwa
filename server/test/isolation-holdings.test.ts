@@ -37,10 +37,12 @@ describe('serverHoldings', () => {
     const home = box();
     const list = serverHoldings(loadConfig({ CCRC_HOME: home }), '/code', {}, 'linux');
     const by = Object.fromEntries(list.map((h) => [h.name, h]));
-    for (const n of ['ccrcDir', 'coordDbPath', 'operatorModelDbPath', 'mailTokenPath', 'authSecretPath', 'sessionsPath', 'passkeysPath', 'accountsPath']) {
+    // The draft review store (X3 R1) holds the operator's snapshots and the share index: a read reaches document bytes.
+    for (const n of ['ccrcDir', 'coordDbPath', 'operatorModelDbPath', 'mailTokenPath', 'authSecretPath', 'sessionsPath', 'passkeysPath', 'accountsPath', 'reviewStoreDir']) {
       expect(by[n]?.concern, n).toBe('secret');
     }
     expect(by.ccrcDir!.path).toBe(path.join(home, '.ccrc'));
+    expect(by.reviewStoreDir!.path).toBe(path.join(home, '.ccrc', 'review-shares'));
     expect(by.codeRoot).toEqual({ name: 'codeRoot', path: '/code', concern: 'control' });
     expect(by.unit!.path).toBe(path.join(home, '.config/systemd/user/ccrc.service'));
     expect(by.unitDropIns!.path).toBe(path.join(home, '.config/systemd/user/ccrc.service.d'));

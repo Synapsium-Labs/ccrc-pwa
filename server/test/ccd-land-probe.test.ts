@@ -2225,6 +2225,39 @@ describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)'
     expectTargetUntouched(s, 'lander=coordinator');
     expect(fs.lstatSync(path.join(fx.reg, 'landing')).isSymbolicLink()).toBe(true);
   });
+
+  /** A real `$REG/landing` whose `proj-a` entry is a symlink to a target outside it, the target seeded with `lander` and
+   *  `enabled` of known bytes (wave 5i, carried from review 1357: `remove_own` checks the project directory too). */
+  function symlinkedProjectDir(): { before: string[]; after: () => string[]; target: string; files: Record<string, string> } {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    const target = path.join(h.home, 'project-target');
+    const files: Record<string, string> = { lander: '{"seed":"planted lander"}\n', enabled: '{"seed":"planted enabled"}\n' };
+    fs.mkdirSync(target, { recursive: true });
+    for (const [n, bytes] of Object.entries(files)) fs.writeFileSync(path.join(target, n), bytes);
+    const tree = (): string[] => (fs.readdirSync(target, { recursive: true }) as string[]).map(String).sort();
+    fs.mkdirSync(path.join(fx.reg, 'landing'), { recursive: true });
+    fs.symlinkSync(target, path.join(fx.reg, 'landing', fx.project));
+    return { before: tree(), after: tree, target, files };
+  }
+  function expectProjectTargetUntouched(s: ReturnType<typeof symlinkedProjectDir>, why: string): void {
+    expect(s.before).toEqual(['enabled', 'lander']);
+    expect(s.after(), `${why}: the listing`).toEqual(s.before);
+    for (const [n, bytes] of Object.entries(s.files)) expect(fs.readFileSync(path.join(s.target, n), 'utf8'), `${why}: ${n}`).toBe(bytes);
+    expect(fs.lstatSync(path.join(fx.reg, 'landing', fx.project)).isSymbolicLink()).toBe(true);
+  }
+
+  it('K8 a project directory that is a symlink keeps the lander and enabled files in its target (the removal arm: lander=none)', () => {
+    const s = symlinkedProjectDir();
+    fx.conf(fx.project, 'lander=none\n');
+    expect(fx.run().status).toBe(0);
+    expectProjectTargetUntouched(s, 'lander=none');
+  });
+
+  it('K8b a project directory that is a symlink keeps them with no conf at all (the sweep of directories without a conf)', () => {
+    const s = symlinkedProjectDir();
+    expect(fx.run().status).toBe(0);
+    expectProjectTargetUntouched(s, 'missing conf');
+  });
 });
 
 describe('ccd-land-probe: the tick measures the least recently measured project first (review 1125 N6, D-7268)', () => {

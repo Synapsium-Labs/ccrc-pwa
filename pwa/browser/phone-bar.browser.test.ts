@@ -140,8 +140,11 @@ interface Insets { readonly top?: number; readonly bottom?: number }
 /** A notched phone: a 47 px status bar and a 34 px home indicator. */
 const NOTCHED: Insets = { top: 47, bottom: 34 };
 
-async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE, theme = 'light') {
-  const opened = await openApp(browser!, { skin, theme, width }, fixture);
+/** Each page is the console's: a Docs address loads as a console tab's reload (`AppView.tab`), since one loaded first in a
+ *  fresh tab is a Docs tab, the reader alone (desktop polish wave 174; its own case is below). `docsTab` opens it so. */
+async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE, theme = 'light', docsTab = false) {
+  const asConsole = path.startsWith('/docs') && !docsTab;
+  const opened = await openApp(browser!, { skin, theme, width, ...(asConsole ? { tab: 'console' as const } : {}) }, fixture);
   if (insets !== undefined) {
     const cdp = await opened.ctx.newCDPSession(opened.page);
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
@@ -262,6 +265,28 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
         } finally {
           await ctx.close();
         }
+      }
+    });
+
+    // A Docs tab (desktop polish wave 174, fix round 3): a Docs address loaded first in a fresh tab is the reader alone, so
+    // it places no bar, and nothing of the console stands above the reader's head: the head is the page's top.
+    it(`at ${width}: a Docs tab places no bar, and the reader's head is the top of the page`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/docs', '.docs-head', undefined, FIXTURE, 'light', true);
+      try {
+        const got = await page.evaluate(() => ({
+          tab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
+          bars: document.querySelectorAll('nav.shell-phone-nav, header.shell-tab-bar, .shell-accounts').length,
+          headTop: document.querySelector('.docs-head')!.getBoundingClientRect().top,
+          screenTop: document.querySelector('.docs-screen')!.getBoundingClientRect().top,
+          sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        }));
+        expect(got.tab, 'a Docs tab').toBe('docs');
+        expect(got.bars, 'no bar of the console and no tab bar').toBe(0);
+        expect(got.screenTop, `nothing above the Docs screen ${JSON.stringify(got)}`).toBe(0);
+        expect(got.sideways, 'sideways scroll').toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
       }
     });
 

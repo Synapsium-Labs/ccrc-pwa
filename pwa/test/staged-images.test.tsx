@@ -150,7 +150,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={five} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByText(/Four attachments per message/)).toBeInTheDocument();
+    expect(await screen.findByText(/4 attachments per message/)).toBeInTheDocument();
     expect(screen.queryByTestId('img-s4.png')).not.toBeInTheDocument();
   });
 
@@ -211,7 +211,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={[shot()]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/images, text, PDF and RTF only/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no extension the server can store/i);
   });
 
   // — Object-URL lifetime. `release()` hands the URLs to the PendingSend, which
@@ -256,63 +256,45 @@ describe('useStagedImages', () => {
   });
 });
 
-// THE REJECTIONS THAT HAPPEN BEFORE ANY UPLOAD, and the two no-op doors.
-// `add` refuses by NAME (and, for a nameless clipboard image, by type) before
-// it stages anything, so a file the server would refuse never costs a request
-// — and the refusal has to be said in the one place the reader is looking,
-// since there is no chip to carry it. None of these arms had a case when this
-// block was written (measured by coverage of `useAttachImage.ts`).
-//
-// The refused file is a ZIP container. A PDF used to stand in here, and since
-// documents attach (#152) a PDF is STAGED — the document cases below pin that
-// — so the stand-in is one the admitted list deliberately leaves out.
-describe('a file the tray will not stage at all', () => {
+// THE ONE REJECTION THAT HAPPENS BEFORE ANY UPLOAD. Any file attaches
+// (2026-11-24), so `add` no longer refuses by name or type: a ZIP and a file
+// with no name the OS typed are staged like any document, and the per-file
+// limit is the only thing it refuses before a request (pinned with the rest
+// of the limits in `attach-any-file.test.tsx`).
+describe('a file the old list refused', () => {
   const zip = (): File => new File(['PK'], 'bundle.zip', { type: 'application/zip' });
   const typeless = (): File => new File(['??'], 'mystery', { type: '' });
 
-  it('names the type it refused, and makes no request', async () => {
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
-    render(<><Harness files={[zip()]} /><ToastHost /></>);
+  it('stages an archive as a document chip, uploaded as it arrived', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    const file = zip();
+    render(<><Harness files={[file]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('application/zip');
-    expect(screen.getByRole('alert')).toHaveTextContent(/images, text, PDF and RTF only/);
-    expect(upload, 'a type the server refuses must not cost a request').not.toHaveBeenCalled();
-    expect(screen.queryByTestId('img-bundle.zip'), 'a refused file was staged anyway').toBeNull();
+    await waitFor(() => expect(screen.getByTestId('state-bundle.zip')).toHaveTextContent('staged'));
+    expect(upload).toHaveBeenCalledWith(ID, file);
+    expect(screen.getByTestId('preview-bundle.zip')).toHaveTextContent('');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('a file whose type the OS did not report says "that", never an empty gap', async () => {
-    // A drop from some file managers carries no MIME type at all, and
-    // `Can't attach  — PNG…` reads as a bug rather than a refusal.
-    render(<><Harness files={[typeless()]} /><ToastHost /></>);
+  it('stages a file with no extension under its name plus .noext', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    render(<Harness files={[typeless()]} />);
     fireEvent.click(screen.getByText('add'));
-    expect(await screen.findByRole('alert')).toHaveTextContent("Can't attach that —");
+
+    await waitFor(() => expect(screen.getByTestId('state-mystery.noext')).toHaveTextContent('staged'));
+    expect((upload.mock.calls[0]![1] as File).name).toBe('mystery.noext');
   });
 
-  it('a batch of only refused files stages nothing and commits nothing', async () => {
-    // The early return. Without it the hook commits the list it already had,
-    // which re-renders the tray and — under the same tick's second `add` —
-    // was how an upload went missing before the `listRef` fix.
-    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
-    render(<><Harness files={[zip(), typeless()]} /><ToastHost /></>);
-    fireEvent.click(screen.getByText('add'));
-    // TWO toasts, one per refused file — each names its own type, which is
-    // the point: a batch refusal that said "some files" would not tell the
-    // reader which to convert.
-    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
-    expect(upload).not.toHaveBeenCalled();
-    expect(screen.queryAllByTestId(/^state-/), 'something was staged').toEqual([]);
-  });
-
-  it('a MIXED batch stages the image and refuses the rest', async () => {
-    // The `continue`, which is the arm that matters: a drop of a folder's
-    // worth of files must not be all-or-nothing.
+  it('a MIXED batch stages every file', async () => {
+    // The batch is never all-or-nothing: a drop of a folder's worth of files
+    // stages each one.
     vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
     render(<><Harness files={[zip(), shot('kept.png')]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
     await waitFor(() => expect(screen.getByTestId('state-kept.png')).toHaveTextContent('staged'));
-    expect(screen.getByRole('alert')).toHaveTextContent('application/zip');
+    await waitFor(() => expect(screen.getByTestId('state-bundle.zip')).toHaveTextContent('staged'));
   });
 });
 

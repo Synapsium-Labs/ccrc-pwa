@@ -305,7 +305,7 @@ expect(queuedSubjects(), 'superseded async results cannot mail').toEqual(subject
 
 ### Task 7: Strengthen ownership proofs, record departures and prepare one reviewable tip
 
-**Files:** Modify `server/test/landing-entry-census.test.ts`; extend existing area guards under `server/test/single-definition/` only where the new owners need a pin; record task evidence/departure slugs in `docs/superpowers/plans/2026-11-14-landing-order-wave5i-line-head/` task notes. The coordinator, on its own ledger PR, owns the approved spec amendments, programme ledger, central plan/departure-number definitions and approval/landing records; the worker does not edit those documents or allocate IDs. No speculative new policy document.
+**Files:** Modify `server/test/landing-entry-census.test.ts`; extend existing area guards under `server/test/single-definition/` only where the new owners need a pin; record task evidence/departure slugs in task notes (as built: `docs/superpowers/programs/landing-order/wave5i-task-<n>.md`, the layout `main` enforces since D-8719; this line first named a folder beside the plan). The coordinator, on its own ledger PR, owns the approved spec amendments, programme ledger, central plan/departure-number definitions and approval/landing records; the worker does not edit those documents or allocate IDs. No speculative new policy document.
 
 **Interfaces — consumes:** `parseSource`, `ParsedFile.calls/argSpans/bindings`, `symbolOf`, `callsIn`, existing SQL writer scans, new Task 1–6 symbols and actual mutation evidence.
 
@@ -541,6 +541,34 @@ numbers and records them.
 - **D-8627 (2026-11-14)** — `projection-repair-word`: An unreadable projection answers recovery repair instead of promising that restart fixes damaged retained data. Replay/restart fences keep their existing separate recovery contract. Approved additive vocabulary in item 312; not yet implemented.
 - **D-8628 (2026-11-14)** — `next-cue-episode`: The once-only cue identity binds exact entry/pin or creation episode, full head/base and recipient; mail and DB eligibility are committed atomically through existing owners. Returning to an already-told recipient does not re-arm the same identity. Approved as written in item 312; not yet implemented.
 - **D-8629 (2026-11-14)** — `bounded-control-snapshot`: The existing bounded FleetIO ranges and metadata rechecks produce a cue snapshot under the existing freshness window, not an atomic no-follow handle or proof about later GitHub main. Fresh canonical landing checks remain mandatory. Measured-limit acceptance approved in item 312; no implementation measurement is claimed.
+
+**As built (2026-11-25).** Wave 5i landed in #2837 at `1ce1b9ccdfaa038ecf2788aaac121c275bbdd3aa`. Its worker
+reported the departures below by slug in `docs/superpowers/programs/landing-order/wave5i-task-1.md` to
+`wave5i-task-7.md` and the two fix-round notes there; the coordinator issued the fourteen numbers together on
+2026-11-25 and defines them here. The wave's third review (run 3685) read the tip that carries them and confirmed
+no finding.
+
+- **D-9031 (2026-11-25)** — `gate-literal`: the hold gate's false arm in `landingEntry.ts` spells its two words literally, not as an `Extract` of the mutation-code type, so a word added to the vocabulary cannot drop out of the gate unseen.
+- **D-9032 (2026-11-25)** — `probe-reasons`: the radar's probe read keeps the control reader's failure reasons (`oversize`, and `unmeasured` from an older peer) where the earlier reader folded them into `unreadable`. The lane only prints the reason. A probe costs one more measured stat.
+- **D-9033 (2026-11-25)** — `shared-api-import`: `landingLine.ts` value-imports `freshWithin` and `RADAR_PROBE_FRESH_S` from the shared kernel, the one owner of freshness, and its purity pin lists both.
+- **D-9034 (2026-11-25)** — `flag-not-gate`: `landingBindingOf` reads `mainRedHold` as a fact and decides health from the fresh evidence, so green evidence with a flag not yet cleared binds ready; the flag clears on the same evidence in the control transaction.
+- **D-9035 (2026-11-25)** — `subjects-whole-union`: `landingReadProjects` lists every project any journal subject names, not only those with an unresolved subject. SQL cannot tell the two apart, and the extra read costs no call to the fleet box.
+- **D-9036 (2026-11-25)** — `no-verdict-for-terminal-rows`: a row whose stored state word is already terminal gets no terminal-repair verdict, damaged or not.
+- **D-9037 (2026-11-25)** — `control-tx-takes-port`: `applyLandingControlTx` takes the watcher's coordination port, because the notice bodies it reuses take it. It receives no other private store field than the one facts closure.
+- **D-9038 (2026-11-25)** — `control-tx-module`: the body of `CoordStore.applyLandingControl`'s transaction lives in the same-ring file `landingControlTx.ts`. The guard, the owned synchronous transaction, the catch and the fence stay in the store, which calls it once. It is no wrapper, holds no state and opens no transaction of its own.
+- **D-9039 (2026-11-25)** — `control-tx-handle-holder`: `landingControlTx.ts` is a member of `HANDLE_HOLDERS` in the single-definition suite, for the one `mainRedHold` statement it runs inside the store's transaction. No other port consumer gained the handle.
+- **D-9040 (2026-11-25)** — `new-l1-view-file`: the order-and-binding view the landing read answers lives in a new pure file, `coord/landingReadView.ts`, outside the plan's file list, so the route decides nothing.
+- **D-9041 (2026-11-25)** — `order-reads-stored-words`: `landingOrder` and `landingViewOf` take an optional `stateWords` argument, the stored state word of each entry. With it, an edge to an exactly identified target whose stored word is terminal is not outstanding merely because display damage folds the row to unknown. Omitted, the earlier display-only rule holds exactly.
+- **D-9042 (2026-11-25)** — `retreat-reads-stored-word`: `decideLandingWrite` takes a required `storedState` (the stored word of the current entry, `'unrecognised'` for a word the vocabulary lacks, null with no row), so an owned row whose projection does not read refuses a retreat before any equal-head or stale-head branch.
+- **D-9043 (2026-11-25)** — `facts-state-words`: `LandingMutationFacts` carries `stateWords: { id: number; value: LandingEntryState | 'unrecognised' }[]`, one record per entry of the project, read from the stored column before the display fold. One producer (the facts fold in `landingEntry.ts`); its readers are the binding, the order, the read view and the write decision. It never says a row reads.
+- **D-9044 (2026-11-25)** — `read-view-effective-hold`: `GET /api/landing` answers `mainRedHold`, and `order.paused` with it, as recomputed on the read from the watcher's latest control snapshot by the transition the store's writer uses, not as the stored flag. The plan described only an added `binding`. One value decides the pause and the binding, so a read cannot contradict itself; the route writes nothing (accepted 2026-11-25, the programme ledger's Decisions).
+
+Recorded without a number, because none changes what the line does: `node-modules-install` (the worker installed the
+server package's dependencies, no manifest changed); `health-ancestors` (the ancestor proof covers the lander marker
+only, as planned); `tests-beyond-the-list` and `facts-literals` (fixture literals in suites outside the task's list
+took the new fields); `related-selection-substituted` (the related selection for `rundefsTx.ts` is killed for memory
+in the test slice, so its focused callers ran); `shared-landing-line-untouched` (no edit was needed);
+`port-member-deferred` (superseded when Task 6 added the member); `run-absent-word` (withdrawn in fix round 2).
 
 ## Where things stand
 

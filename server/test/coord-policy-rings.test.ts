@@ -108,7 +108,10 @@ describe('the coordination policy files have no runtime path to node:sqlite (D-5
   const POLICY = ['childReclaim.ts', 'close.ts', 'kickoff.ts', 'expireArchived.ts', 'collectTempRoot.ts', 'rundefs.ts',
     'rundefsTx.ts', 'tx.ts', 'landingEntry.ts', 'landed.ts', 'landingLine.ts', 'landingWrites.ts', 'landingJournalPolicy.ts', 'landingJournalPort.ts',
     // L4 (context C4): the one action over the store's writer; it reaches the store only through its injected port.
-    'landingWritesAct.ts'];
+    'landingWritesAct.ts',
+    // wave 5i: the next-to-land cue's decider, the read-side binding view, and the transaction body of applyLandingControl
+    // (it holds the handle structurally and takes node:sqlite as no import)
+    'landingNext.ts', 'landingReadView.ts', 'landingControlTx.ts'];
   for (const f of POLICY) {
     it(`coord/${f}`, () => {
       expect(existsSync(coord(f)), `coord/${f} is gone — a moved file must turn this red, not disarm it`).toBe(true);

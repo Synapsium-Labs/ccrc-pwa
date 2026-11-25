@@ -9,13 +9,19 @@
 // PR A: `fittedCeilingOf` (the soft ceiling, from the probes' `fittedCeiling`) and the daily backstop
 // (`backstopInstantBefore`, `backstopDueOf`). PR C: the designation's two readings (`termRaisedOf`, `classChangedOf`), the
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
-// (`probesFailedTwiceOf`). The later pull requests of the plan add the other mappers here.
-import type { GenerationState } from '../../../shared/continuity.js';
+// (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
+// `notLocalAskOf`, what that reading asks the resolver about. The later pull requests of the plan add the other mappers here.
+import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { TurnMarkRead } from '../coord/stall.js';
 import type { GenEvent } from './generationMachine.js';
 import { fittedCeiling, type SpotProbe } from './probes.js';
+import { modelDriftOf, readersRunning, type Read, type ReaderEventIn, type SidecarClass } from './hookReports.js';
+import { familyClassOf } from '../../../shared/models.js';
+import type { ModelSwitchHow } from '../../../shared/continuity-reports.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { hardCapTokens, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
 /** The `RenewalInputs` fields the lane reads `W1` until their producers are wired (`renewalInputsOf`'s defaults). The
@@ -148,6 +154,53 @@ export function designatedClassAtMint(d: DesignationRead, identity: string): str
   return d.row.model;
 }
 
+// PR E (Task 8): the door process's two readings, `modelDrift` (hard) and the soft `readersRunning`, the Overlord's only. The
+// deciders are door process B1's (`hookReports.ts#modelDriftOf`, `#readersRunning`), passed through unchanged: these mappers
+// only shape their inputs and map their `Read<T>` to a `Reading<T>`, keeping every unmeasured reason.
+
+/** The status line sidecar's read as the gather takes it (`usage.ts#UsageRead`), declared by this consumer. */
+export type SidecarRead =
+  | { readonly kind: 'reading'; readonly usage: { readonly class: string | null; readonly ts: number; readonly stale: boolean } }
+  | { readonly kind: ReadFailure | 'malformed' };
+/** One reported model switch as the hook report store reads it (`ModelSwitchRow`), narrowed to what drift reads. */
+export interface SwitchRowIn { readonly how: ModelSwitchHow; readonly to: string | null }
+
+/** The sidecar as `modelDriftOf` takes it (review 2183 F15: the freshness decision is L1's, not the wiring's), and why it is no
+ *  evidence when it is not fresh. Only a sidecar written after the generation's start is this generation's: one written before
+ *  it (the sidecar's `ts`, seconds, and the start's report, both on the fleet node's clock) is read as stale, so a renewal that
+ *  changes the class is never judged drifted by the reading its predecessor left (slug drift-sidecar-must-postdate-the-start).
+ *  An absent, unreadable or malformed sidecar is absent to the decider, and keeps its own word in `why`. */
+export function modelDriftInputOf(usage: SidecarRead, startReportedAt: number): { readonly sidecar: SidecarClass; readonly why: string | null } {
+  if (usage.kind !== 'reading') return { sidecar: { kind: 'absent' }, why: `usage ${usage.kind}` };
+  if (usage.usage.stale) return { sidecar: { kind: 'stale' }, why: 'usage stale' };
+  if (usage.usage.ts * 1000 <= startReportedAt) return { sidecar: { kind: 'stale' }, why: 'usage from before the start' };
+  return { sidecar: { kind: 'fresh', class: usage.usage.class }, why: null };
+}
+
+/** Table 3.3.11b "The model drifted" (hard; Overlord): `modelDriftOf` over the start's class, the switches reported since the
+ *  start (by the server's clock, `modelSwitchesSinceStart`) and the sidecar (`modelDriftInputOf`). Its measured answer passes
+ *  through; its unmeasured answer keeps its detail, with the sidecar's own word beside it when the sidecar was no evidence. */
+export function modelDriftReadingOf(i: {
+  readonly startModel: string | null; readonly startReportedAt: number; readonly switches: Read<readonly SwitchRowIn[]>; readonly usage: SidecarRead;
+}): Reading<boolean> {
+  const switches = i.switches.ok
+    ? { ok: true as const, value: i.switches.value.map((s) => ({ how: s.how, toClass: s.to === null ? null : familyClassOf(s.to) })) }
+    : i.switches;
+  const side = modelDriftInputOf(i.usage, i.startReportedAt);
+  const a = modelDriftOf({ startClass: i.startModel === null ? null : familyClassOf(i.startModel), switches, sidecarClass: side.sidecar });
+  if (a.ok) return { kind: 'measured', value: a.value };
+  return unmeasured(side.why === null ? a.detail : `${a.detail} (${side.why})`);
+}
+
+/** The soft `readersRunning` (R19's break: no reader running): `readersRunning` over the reader events since the generation's
+ *  start, which `since` names on the server's clock (the start row's receipt, the events' `receivedAt`'s). A failed read is
+ *  unmeasured with its detail, never zero. */
+export function readersRunningReadingOf(read: Read<{ readonly since: number; readonly events: readonly ReaderEventIn[] }>, nowMs: number): Reading<number> {
+  if (!read.ok) return unmeasured(read.detail);
+  const a = readersRunning({ events: { ok: true, value: read.value.events }, generationStartedAt: read.value.since, now: nowMs });
+  return a.ok ? { kind: 'measured', value: a.value } : unmeasured(a.detail);
+}
+
 /** Table 7.5a "Probes failed twice after a renewal" (latch, cap `chat`): a live Overlord step from `probing` to `degraded` on
  *  a second failed round. `view` is the row BEFORE the step: `degrade` resets `probeRounds` to 0, so the row after it would
  *  never latch (review 2183 F8). A shadow walk (`shadowState`), a coordinator, a first failed round, a passed round and a
@@ -158,4 +211,83 @@ export function probesFailedTwiceOf(i: {
 }): boolean {
   return i.role === 'overlord' && i.column === 'state' && i.from === 'probing' && i.event.kind === 'probes' && !i.event.passed
     && i.view.probeRounds >= 1 && i.next === 'degraded';
+}
+
+/** The isolation word's carrier for this reading (`IsolationReader.wakingHostKey`), declared by the consumer: compared in
+ *  memory, within one call of `notLocalOf`, and never stored, served or logged (isolation question 16). */
+export type Carrier = { readonly digest: string; readonly keyEpoch: number } | 'unmeasured';
+/** The part of the transcript resolver's answer (`TranscriptResolution`) this reading reads, declared by the consumer: the
+ *  resolver's answer satisfies it structurally, and this module imports nothing from `server/src/transcript/resolve.ts`. */
+export type TranscriptAnswer = { readonly kind: 'found' } | { readonly kind: 'fallback'; readonly complete: boolean };
+/** The measured search of every place the resolver's own-account search looks (`resolve.ts#uuidGlobPlaces`), declared by the
+ *  consumer (review 3718 F3): the listing of the account's projects root, then one answer per place it named, each from a read
+ *  that tells a proven absence from an unreadable one. `present` is a file at that place. */
+export type AbsenceProbe = { readonly listing: 'listed' | ReadFailure; readonly places: readonly ('present' | ReadFailure)[] };
+/** The resolver's answer, or why it was not asked (`notLocalAskOf`'s reasons, or no config dir). `measured`: the measured search,
+ *  taken in this pass when the resolver answered a complete absence, else null; `observedAt`: the wall clock when the last answer
+ *  was in hand (fix round 1, F1; fix round 2, F3). */
+export type TranscriptAsk =
+  | { readonly kind: 'asked'; readonly answer: TranscriptAnswer; readonly measured: AbsenceProbe | null; readonly observedAt: number }
+  | { readonly kind: 'unread'; readonly why: string };
+
+/** What to ask the resolver about, or why not to ask (fix round 1, F2): the start's conversation under the generation's own account,
+ *  and only when the registry row agrees with both. A registry row on another account (a swap between its flip and the swap's new
+ *  start) or on another conversation (a successor the generation does not hold) would ask the wrong question, so the reading is
+ *  unmeasured with its own reason, never true or false. */
+export type NotLocalAsk = { readonly kind: 'ask'; readonly account: string; readonly uuid: string } | { readonly kind: 'unread'; readonly why: string };
+export function notLocalAskOf(i: {
+  readonly startUuid: string; readonly who: { readonly uuid: string; readonly account: string } | 'no-row' | 'unmeasured'; readonly lane: string | null;
+}): NotLocalAsk {
+  if (i.who === 'no-row') return { kind: 'unread', why: 'no registry row' };
+  if (i.who === 'unmeasured') return { kind: 'unread', why: 'identity unmeasured' };
+  if (i.lane === null) return { kind: 'unread', why: 'generation account unknown' };
+  if (i.who.account !== i.lane) return { kind: 'unread', why: "registry account differs from the generation's" };
+  if (i.who.uuid !== i.startUuid) return { kind: 'unread', why: "registry conversation differs from the start's" };
+  return { kind: 'ask', account: i.lane, uuid: i.startUuid };
+}
+
+/** Table 3.3.11b "The conversation is not local" (hard; Overlord and coordinator, C50): the conversation of the generation's
+ *  own start is absent on the host that runs the session. First match (plan Task 4):
+ *  1. the start unread, or no row for the generation's `startId`: unmeasured (the uuid asked about is the start's);
+ *  2. the ask not made: unmeasured with its reason;
+ *  3. the carrier unmeasured on either side of the ask (`host unmeasured`), or changed between the two reads, digest or key
+ *     epoch (`host changed during the read`): unmeasured, so an answer from another host is never read as this one's;
+ *  4. found, at any rung: local (`false`). `foreign` is never asked, so a copy under another account is never "here";
+ *  5. a search that could not look everywhere (`complete: false`): unmeasured, never absence;
+ *  6. the absence not confirmed by the measured search: unmeasured. No search (`measured` null): the resolver's answer may be its
+ *     memory, which can outlive the file appearing at another spelling (review 3696, F1), and its `complete` folds an unreadable
+ *     read into absence (review 3718, F3). The projects listing unreadable: unmeasured. A file at any place: local (`false`). Any
+ *     place unreadable: unmeasured. So an absence is believed only when every read of it was a proven absence;
+ *  7. absent on the measured search, and the start `resume` or `compact`: not local (`true`) at once, since the conversation
+ *     existed before this start (plan fix round 1, F3);
+ *  8. absent and any other source, with the turn marker unread: unmeasured with the marker's reason;
+ *  9. absent and no turn of this generation stopped yet (the last stop null or before the start): local when no turn is running,
+ *     since a fresh conversation writes nothing before its first turn (question 4); unmeasured while the first turn runs, since its
+ *     first append may not have landed (review 3696, F1's race);
+ *  10. absent after a turn of its own stopped, observed no later than the marker's last event: unmeasured (F1);
+ *  11. otherwise: not local. */
+export function notLocalOf(i: {
+  readonly ask: TranscriptAsk; readonly start: { readonly ok: true; readonly row: StartRow | null } | { readonly ok: false; readonly detail: string };
+  readonly before: Carrier; readonly after: Carrier; readonly turn: TurnMarkRead; readonly startReportedAt: number;
+}): Reading<boolean> {
+  if (!i.start.ok) return unmeasured(`start unread: ${i.start.detail}`);
+  if (i.start.row === null) return unmeasured('start row absent');
+  if (i.ask.kind === 'unread') return unmeasured(i.ask.why);
+  if (i.before === 'unmeasured' || i.after === 'unmeasured') return unmeasured('host unmeasured');
+  if (i.before.digest !== i.after.digest || i.before.keyEpoch !== i.after.keyEpoch) return unmeasured('host changed during the read');
+  const a = i.ask.answer;
+  if (a.kind === 'found') return { kind: 'measured', value: false };
+  if (!a.complete) return unmeasured('transcript search incomplete');
+  const m = i.ask.measured;
+  if (m === null) return unmeasured('absence not measured');
+  if (m.listing === 'unreadable') return unmeasured('projects listing unreadable');
+  if (m.places.includes('present')) return { kind: 'measured', value: false };
+  if (m.places.includes('unreadable')) return unmeasured('a transcript place unreadable');
+  if (i.start.row.source === 'resume' || i.start.row.source === 'compact') return { kind: 'measured', value: true };
+  if (!i.turn.ok) return unmeasured(`turn marker ${i.turn.reason}`);
+  if (i.turn.stopAt === null || i.turn.stopAt < i.startReportedAt) {
+    return i.turn.state === 'working' ? unmeasured('first turn still running') : { kind: 'measured', value: false };
+  }
+  if (i.turn.at >= i.ask.observedAt) return unmeasured('absence older than the turn marker');
+  return { kind: 'measured', value: true };
 }

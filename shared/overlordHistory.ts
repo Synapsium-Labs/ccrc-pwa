@@ -60,8 +60,9 @@ const REQUEST_REFUSAL_MAP: Record<OverlordHistoryRequestRefusal, true> = {
 /** Every `OverlordHistoryRequestRefusal`, derived from the type. */
 export const OVERLORD_HISTORY_REQUEST_REFUSALS = Object.keys(REQUEST_REFUSAL_MAP) as OverlordHistoryRequestRefusal[];
 
-/** The request's bound, in UTF-8 bytes of its body's JSON (the agent measures the frame less its envelope keys `t`, `id`
- *  and `op`). The server's door answers a larger body 413 before any agent is asked. */
+/** The request's bound, in UTF-8 bytes of its body's JSON and of the typed request's JSON (the agent's body is the typed
+ *  request the server sends, less the frame's envelope keys `t`, `id` and `op`). The door's route bound is this plus room
+ *  for the caller's pair, and a larger body is 413 before any agent is asked. */
 export const OVERLORD_HISTORY_REQUEST_MAX_BYTES = 8192;
 /** The most arguments a request carries, and the longest one. */
 export const OVERLORD_HISTORY_ARGS_MAX = 32;
@@ -93,17 +94,27 @@ export function readOverlordHistoryRequest(raw: unknown):
   { readonly ok: true; readonly request: OverlordHistoryRequest } | { readonly ok: false; readonly refusal: OverlordHistoryRequestRefusal } {
   const no = (refusal: OverlordHistoryRequestRefusal) => ({ ok: false, refusal }) as const;
   if (!isObj(raw)) return no('not-object');
+  const target = targetOf(raw['target']);
+  const agents = raw['agents'] ?? false;
+  const args = raw['args'] ?? [];
+  // The bound measures the body as sent AND the request as it is typed (verb, target, agents, args, in that order, the
+  // defaults filled in and the target canonical). The agent reads the typed request the server sends, so its body is the
+  // typed form, while the server's door hands this reader a body that may leave `agents` or `args` out: measuring the
+  // typed form too means any request the door passes on reads alike at the agent (review 3730 F2). A body the door
+  // refuses for its own extra keys never reaches the agent.
   let text: string;
-  try { text = JSON.stringify(raw); } catch { return no('not-object'); }
+  let typed: string;
+  try {
+    text = JSON.stringify(raw);
+    typed = JSON.stringify({ verb: raw['verb'], target: typeof target === 'string' ? raw['target'] : target, agents, args });
+  } catch { return no('not-object'); }
   if (utf8Bytes(text) > OVERLORD_HISTORY_REQUEST_MAX_BYTES) return no('oversize');
+  if (utf8Bytes(typed) > OVERLORD_HISTORY_REQUEST_MAX_BYTES) return no('oversize');
   if (Object.prototype.hasOwnProperty.call(raw, 'regex')) return no('regex');
   const verb = raw['verb'];
   if (typeof verb !== 'string' || !Object.prototype.hasOwnProperty.call(HISTORY_VERB_MAP, verb)) return no('bad-verb');
-  const target = targetOf(raw['target']);
   if (typeof target === 'string') return no(target);
-  const agents = raw['agents'] ?? false;
   if (typeof agents !== 'boolean') return no('bad-agents');
-  const args = raw['args'] ?? [];
   if (!Array.isArray(args) || args.length > OVERLORD_HISTORY_ARGS_MAX) return no('bad-args');
   for (const a of args) if (typeof a !== 'string' || a.length > OVERLORD_HISTORY_ARG_MAX_CHARS) return no('bad-args');
   const words = args as string[];
@@ -218,6 +229,9 @@ export const OVERLORD_HISTORY_ANSWER_MAX_BYTES = 65_536;
 /** The most items a `rows` answer reads back. */
 export const OVERLORD_HISTORY_ITEMS_MAX = 1000;
 const SCOPE_ID_MAX = 512;
+/** The most families a scope names: lib.mjs's SCOPE_FAMILIES_JSON_MAX (the scope counts the rest in `families_total`), a
+ *  hand copy that overlord-history-door.test.ts checks against lib (review 3730 F7). */
+export const OVERLORD_HISTORY_SCOPE_FAMILIES_MAX = 3;
 
 const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const has = (map: Record<string, true>, v: unknown): boolean =>
@@ -229,8 +243,9 @@ function scopeOf(v: unknown): OverlordHistoryScope | null {
   const project = v['project'];
   const families = v['families'];
   if (typeof id !== 'string' || id.length === 0 || id.length > SCOPE_ID_MAX) return null;
-  if (project !== null && typeof project !== 'string') return null;
-  if (!Array.isArray(families) || !count(v['families_total']) || !count(v['transcripts'])) return null;
+  if (project !== null && (typeof project !== 'string' || project.length > SCOPE_ID_MAX)) return null;
+  if (!Array.isArray(families) || families.length > OVERLORD_HISTORY_SCOPE_FAMILIES_MAX) return null;
+  if (!count(v['families_total']) || !count(v['transcripts'])) return null;
   const fams: { ccrc_id: string; generation: string; first_seen_ms: number }[] = [];
   for (const f of families) {
     if (!isObj(f) || typeof f['ccrc_id'] !== 'string' || typeof f['generation'] !== 'string' || !count(f['first_seen_ms'])) return null;
@@ -249,9 +264,13 @@ function rowsOf(x: Record<string, unknown>): OverlordHistoryAnswer | null {
   let text: string;
   try { text = JSON.stringify(items); } catch { return null; }
   if (utf8Bytes(text) > OVERLORD_HISTORY_ANSWER_MAX_BYTES) return null;
-  return {
+  const answer: OverlordHistoryAnswer = {
     outcome: 'rows', exit, items: items as OverlordHistoryItem[], shown: x['shown'] as number, total: x['total'] as number, scope,
   };
+  // The whole answer's bound, measured on the answer as read (the agent measures its posted message, which holds at least
+  // this, before it reads it), so the server holds no answer past it whatever the frame carried (review 3730 F7).
+  if (utf8Bytes(JSON.stringify(answer)) > OVERLORD_HISTORY_ANSWER_MAX_BYTES) return null;
+  return answer;
 }
 
 /** THE ONE READER of the agent's `overlord-history` answer (a wire boundary: validated, never trusted): the typed

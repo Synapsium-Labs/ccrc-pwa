@@ -6,7 +6,9 @@ written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with
 and with `main` `b501698a` the same day (step 6 is #166's; stage 2's wave is re-planned, §9); stage 2 amended
 2026-09-29, when its wave was re-planned on `main` `6da36f0b` and three reviews of that plan were applied (§4, §5.2,
 §6, §9, §11, §12; the operator's four rulings of that day are §11's); wave 5i's P1–P6 and invariant
-amendments A/B approved as written on 2026-11-14 (item 312; §5.5, §7, §11), not yet implemented ·
+amendments A/B approved as written on 2026-11-14 (item 312; §5.5, §7, §11), not yet implemented; worker
+clause 16's fourth trigger, the coordinator's conflict-sync mail, ruled by the operator on 2026-11-24 (item 641;
+§5.1, §11; D-9011 to D-9013), not yet implemented ·
 **Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -127,7 +129,7 @@ is none.
 | Actor | May | May not, and what holds it |
 |---|---|---|
 | **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a programme wave, or whose workspace carries the child marker**, a reviewer's included, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
-| **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds; pause the line | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
+| **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds (the pause is the operator's alone since wave 5j's plan, decision 2: a coordinator reads the pause and does not set it) | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
 | **ccd** | the read-only probe on a timer; compose a candidate; delete its own candidate refs; lineage | move a worker's branch; merge; push or delete anything outside `refs/heads/ccrc/land/*` (pinned) |
 | **Server** | hold the line; mail "next to land"; re-measure what ccd wrote; refuse bad transitions | run git or `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`); take a run to `working` on its own; choose a successor |
 | **Operator** | pause, withdraw, declare order; merge by hand (recorded as an inversion when out of order); break-glass through the admin bypass from their own shell or GitHub's UI (R9) | — |
@@ -144,7 +146,8 @@ programme's own worker — is refused `gh pr merge` like a worker, and has the o
 
 ### 5.1 Stage 1 — stop manufacturing churn (skills, hook, one CLI; no server change)
 
-**Worker clause 16** (the pin moves from 15 to 16). A worker absorbs `origin/main` only on one of three triggers:
+**Worker clause 16** (the pin moves from 15 to 16). A worker absorbs `origin/main` only on one of four triggers
+(three until 2026-11-24; the fourth is the operator's ruling of that day, §11 item 23):
 
 1. its own probe says the branch conflicts: `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`,
    after one fetch, exits 1 with a 40-hex tree id on stdout's first line. Exit 0 is clean; any other answer is
@@ -158,10 +161,21 @@ programme's own worker — is refused `gh pr merge` like a worker, and has the o
    coordinator names it next to land (a land-sync). Both arrive on the `merging → working` edge as a fix-round
    mail, because worker clause 9 forbids pushing after wave-done; the worker absorbs, re-gates and sends a fresh
    wave-done. From stage 4 on, a land-sync whose only change is a clean merge of main is accepted by lineage
-   with no new review, and the next `advance → merging` re-pins the landing entry.
+   with no new review, and the next `advance → merging` re-pins the landing entry;
+4. the coordinator's conflict-sync mail (D-9011): a mail whose subject begins `conflict-sync:` names the PR and one
+   base sha for a conflict the coordinator measured, and the worker's own probe of that commit agrees: `git
+   merge-tree --write-tree --name-only --no-messages HEAD <base>`, after one fetch, exits 1 with a tree id on
+   stdout's first line. It is for a worker that is at `working`, before the wave-done of the round it is in, and
+   has used the one absorption triggers 1 and 2 give its PR: main moved again, the branch conflicts, and without a
+   merge its checks cannot run. A worker sent back for a fix round is at `working` again, and the mail licenses its
+   absorption there, until that round's wave-done (amended 2026-11-25: the sentence said "before its wave-done"
+   and "after a wave-done", which shut out every fix round; the clause and the hook say "this round's"). After
+   that round's wave-done it does not apply: there the worker may not push (clause 9), and trigger 3 is the edge.
 
 Triggers 1 and 2 each license at most one absorption per PR; a second occurrence before the first absorption
-lands is not a second license. Trigger 3 is bounded by the coordinator's naming. Under every trigger: `git merge`
+lands is not a second license. Trigger 3 is bounded by the coordinator's naming. Trigger 4 licenses one absorption
+of exactly the named commit per mail (D-9012): a newer `main` is not the named commit, a probe that answers clean
+or unmeasured licenses nothing, and the worker says so in a reply rather than absorbing. Under every trigger: `git merge`
 only, never a rebase, a force-push or `update-branch` by any route including `gh api -X PUT`; a generated stamp is
 never hand-resolved (take either side of the stamp line only, resolve every other hunk of the file as the source it
 is, then run the regenerator — taking either side of the whole file drops the other side's hunks); a red that main also shows is reported once as
@@ -169,7 +183,10 @@ is, then run the regenerator — taking either side of the whole file drops the 
 
 **Coordinator clause 15** (14 → 15). The coordinator never calls `update-branch`, never writes rulesets,
 protection, auto-merge or `allow_update_branch`, sends a rebase-check only on a conflict it has measured, sends
-a land-sync only to the PR it named next in a strict repository, never merges main into any workspace but its
+a land-sync only to the PR it named next in a strict repository, sends a conflict-sync (trigger 4) only on a
+conflict it has measured against the base it names, one mail per measured conflict, recorded as a call (D-9013;
+the clause's own words already cover it, "any other conflict-sync request only on a conflict it has measured",
+so its pin does not change), never merges main into any workspace but its
 own, and commits programme-ledger documents on its own ledger PR, never inside a feature PR (the ledger file was
 the hottest overlap file in three repositories).
 
@@ -183,7 +200,7 @@ re-measured against `main` `b501698a`.)
 
 **The hook reaches sessions the skills do not.** `ccd/session-hook.sh`'s PreToolUse arm (matcher `*`) sees every
 Bash call. On a command that merges, pulls or rebases `main` into the current branch, or asks GitHub to with
-`update-branch`, it emits `additionalContext` naming the three triggers and the probe command. It never denies.
+`update-branch`, it emits `additionalContext` naming the triggers (four, from D-9011's wave) and the probe command. It never denies.
 This covers the 27% of sync episodes in sessions with no skill.
 
 **The regenerator gets a CLI.** `ccd/ccd`'s line 2 carries a digest of the file's body with the marker line
@@ -514,6 +531,13 @@ wedge-release class), registered in `server/src/coord/routes.ts` so the two scan
 see them: pause the project's line, and withdraw an entry with a coordinator notice. The pinned property:
 a session-only route may pause the line or remove an entry, including the head, but never chooses or reorders
 which entry becomes head — the successor is whatever the recorded order and the radar already say.
+**Amended 2026-11-25 (D-9047, wave 5j's plan):** a withdrawal also brings nothing forward. An order edge to a
+withdrawn entry stays outstanding, so an entry declared after the withdrawn one waits, named in the line's read,
+until a session declares its order again without that entry (an act the feed always records) or the entry
+re-enters through its run and then lands or is closed. Before, an edge to any terminal entry was met, so
+withdrawing the middle of a stack freed the entry above it to land the withdrawn commits. A landed or closed
+target is still met. The pause, the resume and the withdrawal work alike: with sign-in armed the gate demands a
+session, and with sign-in dark each works and records that (D-9049).
 `landing-subtractive.test.ts` pins that; `coord-pause-route.test.ts`'s `SESSION_ONLY` set and
 `box-token-census.test.ts` gain the routes in both directions, with `CLAUDE.md`'s box-token bullet.
 
@@ -1024,6 +1048,18 @@ Decided on wave 5i's plan, 2026-11-14 (item 312, approved as written):
     (§5.5, §7; D-8625 to D-8629). The coordinator records these amendments on its ledger PR #2801, lands the
     plan through the normal gates, and only then dispatches run 1850 for its seven tasks. This approval changes
     no runtime state, waives no landing safeguard and authorises neither live arming nor waves 5j/5k.
+
+Decided on a second merge of `main`, 2026-11-24 (item 641):
+
+23. **A coordinator may allow a further merge of `main` itself.** Wave 5i's PR had used the one absorption
+    triggers 1 and 2 give a PR, `main` had moved, and the branch conflicted, so its checks could not run. The
+    worker held, rightly, on clause 16 as written. Asked whether to allow the merge once, to allow it and change
+    the rule, or to rebuild the branch, the operator answered: "Yes, and change the rule so a coordinator can
+    allow this itself from now on". §5.1 gains trigger 4, the coordinator's conflict-sync mail (D-9011 to
+    D-9013). It waives nothing else: `git merge` only, one named commit per mail, the worker's own probe must
+    agree, and the PR's checks and its review gate the result as before. Until the wave that carries the new
+    clause has reached every home through the updater, a worker's installed clause is the old one, and a further
+    merge there still needs the operator's word.
 
 ## 12. Failure modes named
 
