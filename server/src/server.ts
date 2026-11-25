@@ -12,6 +12,8 @@ import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
 import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
+import { loadFactsOf } from './accountLoad.js';
+import { registerPoolRunwayRoute } from './poolRunwayRoute.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
@@ -2257,7 +2259,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); } }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -3763,6 +3765,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       accounts,
     };
   });
+  // The operator's runway read (serviceability PR B; the home plan's question 6): session-gated, masked, read-only.
+  registerPoolRunwayRoute(app, { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), coord: deps.coord, clock: { wall: () => deps.time.clock.wall() } });
 
   /**
    * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the
