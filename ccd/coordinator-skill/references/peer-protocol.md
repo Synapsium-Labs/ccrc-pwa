@@ -183,8 +183,8 @@ and no token:
 On a fork, add the project as `upstream` and `git fetch upstream main`: the
 helper and the guard then measure `upstream/main` by themselves (`--ref`
 overrides). The helper counts only committed definitions, so take the wave's
-whole block in one call, give each worker a disjoint slice in its brief, and
-define them in the same commit. Until a wave's definitions are on this
+whole block in one call and give each worker a disjoint slice in its brief; a
+worker defines its slice in the commit that first uses it. Until a wave's definitions are on this
 session's branch the helper prints that wave's block again, so start each new
 block past the highest number this programme already handed out (note each
 block in the ledger), or past what the helper prints, whichever is higher. A worker
