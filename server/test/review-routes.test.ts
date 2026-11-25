@@ -283,7 +283,13 @@ describe('draft review read door', () => {
       expect(f.views).not.toHaveBeenCalled();
       spy.mockRestore();
       const fresh = await f.save('fresh.md');
-      expect((await f.open(fresh.token)).status).toBe(200);
+      // The body is read to its end, so the server has ended this response before `close()` begins. Read only the
+      // status and `close()` can start while the response is still in flight: Fastify closes the connections that are
+      // idle at that moment, once, so this one, idle a moment later, stays open until its keep-alive timeout, past the
+      // test's limit (measured: one hang in about 50 to 150 repeats, 2026-11-25; the X3 R2 carry).
+      const freshOpen = await f.open(fresh.token);
+      expect(freshOpen.status).toBe(200);
+      expect(await freshOpen.text()).toBe('draft bytes');
     } finally {
       release();
       if (pending) await Promise.allSettled([pending]);
@@ -449,6 +455,8 @@ describe('draft review page routes', () => {
       expect(script).toBe("script-src 'self'");
       expect(script).not.toContain("'unsafe-inline'");
       expect(csp).not.toMatch(/allow-/);
+      // Read to its end before close: an unread keep-alive answer can hold close() past the test's limit (R1 carry).
+      expect(await response.text()).toBe(PAGE_BYTES);
     } finally { await f.close(); }
   });
 
@@ -461,6 +469,7 @@ describe('draft review page routes', () => {
       const response = await f.get('/review');
       expect(response.status).toBe(200);
       expect(response.headers.get(name)).toBe(value);
+      expect(await response.text()).toBe(PAGE_BYTES);
     } finally { await f.close(); }
   });
 
@@ -493,6 +502,7 @@ describe('draft review page routes', () => {
     try {
       const response = await f.get('/review');
       expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await response.text()).toBe(PAGE_BYTES);
     } finally { await f.close(); }
   });
 
