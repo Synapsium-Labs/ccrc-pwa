@@ -1469,9 +1469,12 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
         + `exec '${REAL[tool]}' "$@"\n`;
       sh('chmod', rec('chmod', 'TB_FAIL_CHMOD'));
       for (const t of ['mkdir', 'mv', 'install']) sh(t, rec(t, null));
-      sh('mktemp', `o=$('${REAL['mktemp']}' "$@") || exit $?\n`
+      sh('mktemp', `[ -n "\${TB_DROPPED-}" ] || [ -z "\${TB_FAIL_MKTEMP-}" ] || { echo 'mktemp failed' >> '${log}'; exit 1; }\n`
+        + `o=$('${REAL['mktemp']}' "$@") || exit $?\n`
         + `printf 'mktemp %s %s %s\\n' "\${TB_DROPPED:-0}" "$o" "$('${REAL['stat']}' -c %a "$o")" >> '${log}'\n`
         + `[ -z "\${TB_DROPPED-}" ] || printf 'writer-cwd %s\\n' "$PWD" >> '${log}'\n`
+        // A termination of the copy's shell at the instant root's stage exists and before its path is known to the shell.
+        + `[ -n "\${TB_DROPPED-}" ] || [ -z "\${TB_TERM_AT_STAGE-}" ] || { kill -TERM "$PPID"; echo terminated-at-stage >> '${log}'; }\n`
         + 'printf \'%s\\n\' "$o"\n');
       sh('chown', `printf 'chown %s %s\\n' "\${TB_DROPPED:-0}" "$*" >> '${log}'\nexit 1\n`);
       sh('setpriv', `'${REAL['ls']}' /proc/$$/fd > '${log}.fds'\nprintf 'setpriv-stdin %s\\n' "$(readlink /proc/$$/fd/0)" >> '${log}'\nprintf 'setpriv %s\\n' "$*" >> '${log}'\n`
@@ -1686,6 +1689,46 @@ describe.skipIf(!HAS_KEYGEN || !HAS_FLOCK || !HAS_NODE)('ccrc testbox-admin buil
       expect(await exited).not.toBe(0);
       expect(readdirSync(b.tmp)).toEqual([]);
       expect(handedOver(b)).toEqual([]);
+    });
+
+    // Ticket capture-copy-termination-stage-flake (the merge queue, run 45527959477): the case above failed once with the
+    // stage left behind. A termination can arrive at any instant once the stage exists, the instant it is made included, before
+    // the shell holds its path; the copy's shell stands ready for one before it makes the stage, so no instant leaves a stage.
+    it('P2: a termination at the instant the stage is made, before the shell holds its path, still removes the stage', () => {
+      const b = box();
+      const r = runCopy(b, { env: { TB_TERM_AT_STAGE: '1' } });
+      expect(shimLog(b), 'the termination was delivered at the stage').toContain('terminated-at-stage');
+      expect(r.rc).not.toBe(0);
+      expect(readdirSync(b.tmp), 'no stage is left').toEqual([]);
+      expect(shimLog(b).filter((l) => l === 'cat 0'), 'nothing was streamed').toEqual([]);
+      expect(handedOver(b)).toEqual([]);
+    });
+
+    // Standing ready before the stage exists means the exit's clean-up runs on exits that come before any stage: it then
+    // removes nothing, and never a path the shell inherited under the stage's name.
+    it('P2: a stage that cannot be made exits with nothing removed, not even a path inherited under the stage\'s name', () => {
+      const b = box();
+      const kept = join(b.h.home, 'elsewhere');
+      mkdirSync(kept);
+      writeFileSync(join(kept, 'kept'), 'K\n');
+      const r = runCopy(b, { env: { TB_FAIL_MKTEMP: '1', s: kept } });
+      expect(shimLog(b)).toContain('mktemp failed');
+      expect(r.rc).not.toBe(0);
+      expect(readFileSync(join(kept, 'kept'), 'utf8'), 'the inherited path is untouched').toBe('K\n');
+      expect(readdirSync(b.tmp)).toEqual([]);
+    });
+
+    // The one instant a fixture cannot reach: a termination after the clean-up stands and before the stage is asked for. There
+    // the clean-up must name no path at all, so the stage's name is cleared before the clean-up stands; pinned on the text.
+    it('P2: the stage\'s name is cleared before the clean-up stands, and the stage is made only once the shell stands ready', () => {
+      const prog = sh(fixture(), '. "$1"; printf %s "$TBA_BUILD_COPY_SH"', [VERB]).out;
+      const at = (needle: string): number => { const i = prog.indexOf(needle); expect(i, needle).toBeGreaterThanOrEqual(0); return i; };
+      const cleared = at('umask 077; s=; ');
+      const exitTrap = at(`trap 'rm -rf -- "$s"' EXIT; `);
+      const termTrap = at(`trap 'exit 1' HUP INT TERM; `);
+      const made = at('s=$(mktemp -d ');
+      expect(prog.slice(0, cleared), 'no earlier use of the stage\'s name').not.toMatch(/\bs=|\$s\b|"\$s/);
+      expect([cleared < exitTrap, exitTrap < termTrap, termTrap < made]).toEqual([true, true, true]);
     });
 
     // P3: the hash that gates the install is of the very bytes handed over.

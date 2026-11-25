@@ -93,6 +93,16 @@ model, and its replay's verdict comes back. A pass makes the build trusted. A fa
   never treats the name as a directory, so the link's target is never opened, followed, written or removed. The writer's
   answer, the verb's answer (`"replaced":"link"`) and one server log line say a link was replaced. Measured: a rename that
   may treat the name as a directory places the build inside a directory a link names. The directory checks stay refusals.
+- **A termination at any instant leaves no stage (ticket capture-copy-termination-stage-flake).** PR 2's case "a
+  termination during the stream removes the stage" failed once in the merge queue (run 45527959477, on another PR), with
+  the copy ended non-zero and its stage left. It was the product, not an early read: the copy's shell made the stage and
+  only then stood ready for a termination, so one arriving in between took the default action and left the stage (root's
+  only, empty, in root's temporary folder). The test's read was not early: the shell removes the stage before it exits.
+  The property now: the shell stands ready for a termination before it makes the stage, so no instant from the stage's
+  making on leaves it, and the stage's name is cleared before that readiness stands, so it never removes anything else.
+  Measured: the queue's case passed 20 of 20 alone and 20 of 20 beside four CPU-bound loops before the fix, so the window is
+  narrow; after the fix it passed 20 of 20 beside the same loops. A termination delivered at the instant the stage is made,
+  by the test's stand-in for the stage-making tool, left the stage every time before the fix and never after it.
 
 ## Departures, by slug
 
@@ -210,8 +220,10 @@ Fix round 1 (review 3687), each removed in turn against the files named:
 | the launcher building the pane's command anywhere but the builder | the five refusal cases: a tmux call is made |
 | the build started as one word through the default shell | the launcher's start case (the two words); on a private tmux server with a login-refusing default shell, the build gone at once |
 | the start program left out of the pane's command | the launcher's start case |
+| the shell ready for a termination before it makes the stage (the stage made first, as before) | a termination at the instant the stage is made leaves no stage; the order's text pin |
+| the stage's name cleared before the clean-up stands | the order's text pin (the one instant no fixture reaches: after the clean-up stands, before the stage is asked for) |
 
-All 20 were killed. The real-tmux case with a login-refusing shell skips in this session's lane (its socket path is too
+All 22 were killed (the last row on the program's text, as said). The real-tmux case with a login-refusing shell skips in this session's lane (its socket path is too
 long here) and runs in CI; its red without the cure was measured at the launcher, on a private tmux server with such a
 shell, by a script outside the test wrapper: with the cure the build was alive a second after the start, without it gone.
 
