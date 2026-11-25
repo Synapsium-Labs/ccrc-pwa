@@ -350,3 +350,20 @@ cases passed, 1 expected to fail, 52 skipped, none failed. On a scratch merge of
 (after #3370, the coordinator's heads-up 35952): the changed and neighbouring jsdom files, 11 files and 686 cases, and the
 two changed browser files, `chat-history` and `mail-rows`, 68 cases: all green. The merge probe against `main` was clean,
 so nothing was absorbed.
+
+**Suites in fix round 1** (review 3838; through the runner). On this round's code (4414799ca7; the head adds only the
+notes): the changed and neighbouring jsdom files first, 9 files and 259 cases, green; the census files, 10, green; pwa's
+typecheck clean. Then the whole pwa set in four parts of 154, 160, 157 and 151 files (622): parts three and four green
+(3,800 and 4,797 cases); parts one and two green but for one file each while the slice's memory cap killed processes (2
+and 4 kills): one `command-registry` case timed out at 5 s, and `mockup-policy`'s worker was killed. Each file then ran
+alone: `command-registry` green, 28 of 28; `mockup-policy` killed by the cap again at 142 of 153 in an ordinary slot, then
+green in a heavy one, 153 of 153. Every file under `pwa/browser` (123) in four parts of 31, 31, 31 and 30, on a scratch
+merge of this branch's head with `main` at 3b6695cc8f (`main` changed no package file): parts one, three and four green
+(1,317 passed and 12 skipped; 1,134; 998); part two green but for two files that never started. `docs-export` and
+`docs-mockup-export` read the design system's stylesheets as raw text, and the scratch tree's linked packages resolved
+them into this worktree, outside the scratch tree's allow list ("Denied ID"). Both files then ran on the same merge
+commit checked out in this worktree: green, 38 of 38. In all: 123 files, 4,404 cases passed, 1 expected to fail, 52
+skipped, none failed. The memory cap killed processes in three parts (19, 32 and 15 kills) and failed no case. The
+shared browser build was missing from 18:44 to 18:47 UTC (the coordinator's heads-up 36327): no run of this round
+launched in that window (this round's Chrome cases and mutants ended by 18:37; the four browser parts started at 18:57,
+19:14, 19:24 and 19:40). The merge probe against `main` at 3b6695cc8f was clean, so nothing was absorbed.
