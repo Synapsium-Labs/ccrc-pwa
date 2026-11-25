@@ -11,7 +11,6 @@
 // class a generation is minted under (`designatedClassAtMint`) and the `probes-failed-twice` latch's decider
 // (`probesFailedTwiceOf`). PR B: `notLocalOf`, from the transcript resolver's answer on the host that runs the session, and
 // `notLocalAskOf`, what that reading asks the resolver about. The later pull requests of the plan add the other mappers here.
-import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import type { GenerationState, StartRow } from '../../../shared/continuity.js';
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';

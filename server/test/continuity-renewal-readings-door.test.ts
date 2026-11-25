@@ -85,6 +85,7 @@ function coordOf(door: Partial<Door> | null = {}) {
     backstopRead: () => ({ ok: true, backstop: { hour: 4, zone: 'UTC', isDefault: true, setAt: 0 } }),
     designationRead: () => ({ kind: 'not-designated', row: null }),
     raiseLatch: () => { throw new Error('no latch here'); },
+    startById: () => { throw new Error('no start read here'); },
   };
   if (door === null) return { coord, calls };
   return { calls, coord: { ...coord,

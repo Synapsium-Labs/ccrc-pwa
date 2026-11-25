@@ -16,7 +16,7 @@ import type { LatchRaiseInput } from '../src/coord/overlordLadderStore.js';
 import type { CcrcConfig } from '../src/config.js';
 import type { GenRow, StartRead } from '../src/continuity/continuityStore.js';
 import type { SessionRecord } from '../src/registry.js';
-import type { ResolveOpts, TranscriptResolution } from '../src/transcript/resolve.js';
+import { GLOB_STAT_CONCURRENCY, type ResolveOpts, type TranscriptResolution } from '../src/transcript/resolve.js';
 import type { WakingHostKey } from '../src/isolationWord.js';
 import type { TurnMarkRead } from '../src/coord/stall.js';
 import type { GenReadings } from '../src/continuity/generationsLane.js';
@@ -327,10 +327,12 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
     expect((await renewalReadingsOf(d(), fresh.coord, [REC()]).w1(gen({}), base(undefined, turned))).w1?.notLocal).toEqual(TRUE);
   });
 
-  it('a search that could not look everywhere reads unmeasured after a turn (the case a guessed path would have read as not local)', async () => {
+  it('a search that could not look everywhere reads unmeasured after a turn (the case a guessed path would have read as not local), and takes no measured search (3742 F1)', async () => {
     const { coord } = coordOf({ start: () => startRead('startup') });
-    const r = await renewalReadingsOf(deps([], { answer: SEARCH_CUT }), coord, [REC()]).w1(gen({}), base(undefined, turned));
+    const reads: string[] = [];
+    const r = await renewalReadingsOf(deps([], { answer: SEARCH_CUT, reads }), coord, [REC()]).w1(gen({}), base(undefined, turned));
     expect(r.w1?.notLocal).toEqual({ kind: 'unmeasured', why: 'transcript search incomplete' });
+    expect(reads).toEqual([]);
   });
 
   it('no registry row, an unmeasured identity or an account with no config dir is never asked, and reads unmeasured with its reason', async () => {
@@ -401,6 +403,26 @@ describe('renewalReadingsOf (PR B: notLocal)', () => {
     expect(reads).toEqual([]);
     await renewalReadingsOf(deps([], { reads, answer: ABSENT_HERE }), coord, [REC()]).w1(gen({}), base());
     expect(reads).toEqual([ROOT, placeIn('p'), placeIn('q')]);
+  });
+
+  it('the measured search holds its stats to the resolver\'s bound: forty directories, never more than GLOB_STAT_CONCURRENCY in flight (3742 F3)', async () => {
+    const { coord } = coordOf({ start: () => startRead('resume') });
+    const names = Array.from({ length: 40 }, (_, i) => `d${String(i).padStart(2, '0')}`);
+    let inFlight = 0;
+    let most = 0;
+    let stats = 0;
+    const io = {
+      readdirMeasured: async () => ({ ok: true, entries: names }),
+      statMeasured: async () => {
+        inFlight += 1; stats += 1; most = Math.max(most, inFlight);
+        await new Promise((r) => setTimeout(r, 1));
+        inFlight -= 1;
+        return { ok: false, reason: 'absent' };
+      },
+    } as unknown as FleetIO;
+    const r = await renewalReadingsOf({ ...deps([], { answer: ABSENT_HERE, disk: false }), io }, coord, [REC()]).w1(gen({}), base());
+    expect(r.w1?.notLocal).toEqual(TRUE);
+    expect([stats, most]).toEqual([40, GLOB_STAT_CONCURRENCY]);
   });
 
   it('an unreadable read in the measured search makes the absence unmeasured: the projects listing, or one place with the rest absent (3718 F3)', async () => {
