@@ -851,9 +851,10 @@ describe('Build 7 nouns', () => {
     // handle by `import type` and takes it in its deps, built once in `index.ts`.
     // The admission wake (D-6095, capacity Task 4): `admissionWakeTx.ts` is its one write, the observation row, the mail and
     // the woken stamp in one transaction, in `rundefsTx.ts`' idiom (`queueStallNotice`), beside it while that file is frozen.
+    // The one sequence (Overlord W1, §10.4): `overlordSequenceStore.ts` is `overlord_sequence`'s SQL, in the same idiom.
     const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
-      'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts',
+      'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts', 'overlordSequenceStore.ts',
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
       'advisorStore.ts']);

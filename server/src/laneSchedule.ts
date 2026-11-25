@@ -215,7 +215,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'authorityWitness';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'authorityWitness';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -434,6 +434,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.
   { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
+  // The sequence's retention lane (Overlord spec §10.4, Table 11.5b's 90 days by the wall clock; `coord/sequenceRetentionLane.ts`):
+  // one pass at a time, hourly; a pass deletes at most SEQUENCE_PRUNE_BATCH lines, so a long-stopped server catches up over a
+  // few passes. The throttle is monotonic, as every row's is; the verdict reads the wall clock through the time port.
+  { name: 'sequenceRetention', cadenceMs: 60 * 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the sequence retention lane failed' },
   // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).

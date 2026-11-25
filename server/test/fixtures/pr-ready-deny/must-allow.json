@@ -1,0 +1,21 @@
+[
+  "gh pr ready 42 --undo",
+  "gh pr ready --undo 42",
+  "gh pr create --draft --title 'wave 2' --body-file /tmp/body.md",
+  "gh pr create --draft --fill",
+  "gh pr view 42 --json isDraft,state",
+  "gh pr readyx 42",
+  "gh pr checks 42 --required",
+  "echo already done",
+  "echo gh pr ready 42",
+  "git commit -m 'the coordinator runs gh pr ready 42 once the review passes'",
+  "git commit -m \"never gh pr ready from a worker\"",
+  "grep -n 'gh pr ready' ccd/coordinator-skill/SKILL.md",
+  "rg \"gh pr ready\" docs",
+  "cat <<'EOF' > /tmp/body.md\ngh pr ready 42\nEOF",
+  "git commit -F - <<'EOF'\ndocs: say when the coordinator runs gh pr ready\n\nThe worker keeps its PR a draft.\nEOF",
+  "# gh pr ready 42\necho ok",
+  "ready=1; echo $ready",
+  "gh pr ready 42 --undo=true",
+  "gh pr ready -R owner-a/repo-a --undo 42"
+]

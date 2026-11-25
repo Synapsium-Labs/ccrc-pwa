@@ -1,0 +1,18 @@
+[
+  "gh pr create --draft --fill",
+  "gh pr create --fill --draft",
+  "gh pr create -d --fill",
+  "gh pr create --fill -d",
+  "gh pr create --draft=true --fill",
+  "gh pr new --draft --fill",
+  "gh -R owner-a/repo-a pr create --draft --body-file /tmp/b.md",
+  "gh pr create --draft --title 'a; b' --fill",
+  "git commit -m 'open it with gh pr create later'",
+  "echo gh pr create --fill",
+  "grep -rn 'gh pr create' docs",
+  "mkdir -p new-dir",
+  "gh issue create --title x",
+  "gh repo create owner-a/repo-a --private",
+  "cat <<'EOF' > /tmp/body.md\ngh pr create --fill\nEOF",
+  "npm run create"
+]

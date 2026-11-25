@@ -45,6 +45,11 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/claimCollisions.ts',
   'server/src/coord/programmePairsStore.ts',
   'server/src/coord/overlapsLane.ts',
+  // The one sequence (Overlord W1, §10.4): its retention lane reads the wall clock through the port, and its decider and store
+  // read none, so a later direct read in any of the three is red here.
+  'server/src/coord/sequenceRetentionLane.ts',
+  'server/src/coord/overlordSequence.ts',
+  'server/src/coord/overlordSequenceStore.ts',
   // Overlord W1, the renewal readings: the backstop's vocabulary reads no clock; its instant takes `now` as an argument.
   'shared/renewal-readings.ts',
   // Overlord W2, the decision-model port (plan w2-decision-model.md question 14): `coord/` is not a time-port family, so each

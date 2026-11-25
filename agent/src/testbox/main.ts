@@ -12,7 +12,7 @@
 // once the service has bound its address: the release it runs from and its process id, which the box's updater reads
 // as its form of "the new release answers", with no token and no network. Neither is a frame (D-8912). A stop removes
 // both files here; the unit's `RuntimeDirectory=` removes the directory at every stop, a takeover's exit included.
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
@@ -24,6 +24,7 @@ import { readTestboxFrame } from '../../../shared/testbox.js';
 import { startedAsProgram } from './entry.js';
 import { BOX_PATHS, encodeReady, READY_FILE, type BoxPaths } from './boxFiles.js';
 import { boxFs, type BoxFs } from './boxFs.js';
+import { captureDirsRoot, staleCaptureDirs } from './capture.js';
 import { CaptureDesk } from './captureDesk.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe, reflinkProbeDir } from './fsprobe.js';
@@ -216,6 +217,20 @@ export function captureDeskFor(cfg: TestboxConfig, home: string = os.homedir()):
   });
 }
 
+/** The stale capture directories at the service's start (L5, once): each entry of `<root>/captures/` that is a capture id
+ *  (`capture.ts#staleCaptureDirs`) is removed, each in its own try so one failure stops neither the others nor the start.
+ *  An absent captures directory is nothing to do. Answers the names it removed. */
+export function sweepStaleCaptures(root: string, remove: (dir: string) => void = (d) => rmSync(d, { recursive: true, force: true })): string[] {
+  const base = captureDirsRoot(root);
+  let names: string[];
+  try { names = readdirSync(base); } catch { return []; }
+  const removed: string[] = [];
+  for (const name of staleCaptureDirs(names)) {
+    try { remove(path.join(base, name)); removed.push(name); } catch (e) { console.warn(`ccrc-testbox: stale capture directory ${name} not removed: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+  return removed;
+}
+
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
@@ -292,6 +307,7 @@ async function main(): Promise<void> {
   const refused = listenRefusal(cfg.listen.host);
   if (refused !== null) throw new Error(`CCRC_TESTBOX_LISTEN: ${refused}`);
   const token = readToken(cfg.tokenFile);
+  sweepStaleCaptures(cfg.root);
   const service = serviceFor(cfg, release);
   // D-8907: a drain request that stands now closes admission before the service queues or starts anything.
   const drain = drainerOf(service);

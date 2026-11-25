@@ -8,6 +8,8 @@ import {
   appendFileSync, constants as FS, existsSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runMutants } from './sim/mutate.js';
 import { NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../src/appendOnlyFile.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { tx } from '../src/coord/tx.js';
@@ -51,7 +53,7 @@ interface Fx {
 }
 
 /** A fixture: its own `coord.db`, its own `~/.ccrc` stand-in, a guard told the boot verdict, and a fault switch on the port. */
-function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
+function fx(opts: { content?: string; wall?: () => number; Journal?: typeof OverlordAuthorityJournal } = {}): Fx {
   const dir = mkTmp('ccrc-overlord-authority-');
   const leaf = path.join(dir, OVERLORD_AUTHORITY_BASENAME);
   if (opts.content !== undefined) writeFileSync(leaf, opts.content);
@@ -82,7 +84,8 @@ function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
     appended: () => { appendedReports.n++; },
   };
   const clock = fakeTime({ wallMs: Date.parse('2026-11-16T10:00:00.000Z') }).ports.clock;
-  journal = new OverlordAuthorityJournal(file, { clock: opts.wall === undefined ? clock : { ...clock, wall: opts.wall } }, spy);
+  const Journal = opts.Journal ?? OverlordAuthorityJournal;
+  journal = new Journal(file, { clock: opts.wall === undefined ? clock : { ...clock, wall: opts.wall } }, spy);
   guard.bootVerdict(journal.measure(db));
   return {
     dir, leaf, db, guard, failures, journal, fault, appendedReports,
@@ -224,6 +227,34 @@ describe('appendInTx\'s decision table, the guard in each state', () => {
 });
 
 describe('the post-append failure in a running server (review F1)', () => {
+  it('the successful append receipt fences the real guard before another append measures the mismatch', async () => {
+    function receiptFences(Journal: typeof OverlordAuthorityJournal): void {
+      const f = fx({ Journal });
+      try {
+        const receipt: { report?: () => void } = {};
+        expect(() => f.inTx(WIDEN, (answer) => {
+          if (!answer.ok || answer.kind !== 'appended') throw new Error('expected an appended receipt');
+          receipt.report = answer.postAppendFailed;
+          throw new Error('caller row failed');
+        })).toThrow(/^caller row failed$/);
+        expect(f.head()).toBeUndefined();
+        expect(f.lines()).toHaveLength(1);
+        expect(f.guard.state()).toEqual({ kind: 'coherent' });
+        expect(f.failures).toEqual([]);
+        receipt.report!();
+        expect(f.guard.state(), 'receipt must fence the guard').toEqual({ kind: 'rolled-back', cause: 'trailing' });
+        expect(f.failures).toEqual(['trailing']);
+      } finally { f.db.close(); }
+    }
+    receiptFences(OverlordAuthorityJournal);
+    const report = await runMutants<{ OverlordAuthorityJournal: typeof OverlordAuthorityJournal }>({
+      modulePath: fileURLToPath(new URL('../src/coord/overlordAuthorityJournal.ts', import.meta.url)),
+      mutants: [{ id: 'F3 the receipt does not notify the guard', old: "postAppendFailed: () => this.guard.writerFailed('trailing')",
+        new: 'postAppendFailed: () => {}' }],
+      suite: (m) => ({ receipt: () => receiptFences(m.OverlordAuthorityJournal) }),
+    });
+    expect(report.results).toMatchObject([{ status: 'killed', detail: expect.stringContaining('receipt must fence the guard') }]);
+  });
   it('a caller\'s own row that throws after appended leaves the line and rolls the head row back; the next append sees trailing', () => {
     const f = fx();
     expect(() => f.inTx(WIDEN, () => { throw new Error('the caller\'s row failed'); })).toThrow(/caller/);

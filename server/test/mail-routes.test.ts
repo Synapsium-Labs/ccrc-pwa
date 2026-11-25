@@ -57,7 +57,7 @@ import {
 } from '../../shared/programmeFacts.js';
 import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
-import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
+import { BUILD_CAPTURE_NOT_SENT_MAP, BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import { CAP_BOUNDS } from '../../shared/runCap.js';
 import { HOST_UNMEASURED_WHYS } from '../../shared/pressure.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
@@ -79,6 +79,7 @@ import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
+import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { ACTOR_ISSUERS } from '../../shared/overlord-identity.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmQuizState, isLaneArmRefusal } from '../../shared/lane-arm.js';
@@ -701,9 +702,8 @@ describe('the rejection table is total, in both directions', () => {
       // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
       'unknown-build',
       'not-failed',
-      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
-      'no-test-box',
-      'no-runner',
+      // D-8289 — the same record's `notSent` CHECK vocabulary: why a capture try sent nothing. A row fact, not a refusal.
+      ...Object.keys(BUILD_CAPTURE_NOT_SENT_MAP),
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
@@ -1319,8 +1319,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE BLOCK WAKE (D-8126): `coord/coordCalls.ts` names `blockWakeDue`'s three answers and the two words of a fact that has
         // not reached its condition as literals. They decide a parked thread's wake on the block-wake lane, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
-        || isBlockWakeKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, linking refusal or block-wake word`).toBe(true);
+        || isBlockWakeKebab(tok)
+        // THE ONE SEQUENCE (Overlord W1, §10.4): `coord/overlordSequence.ts` names why a line may not be written
+        // (`'unknown-kind'`, ...) and `coord/overlordSequenceStore.ts` the writer's two failures (`'not-in-transaction'`,
+        // `'write-failed'`). Each is a stamped writer's internal answer, never a `refused` or `reject.code`. Admitted through
+        // the store's guard, derived from `LINE_REFUSALS` and `STAMP_FAILURES`, never NOT_CODES.
+        || isSequenceStampKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, linking refusal, block-wake word or sequence stamp word`).toBe(true);
     }
   });
 });

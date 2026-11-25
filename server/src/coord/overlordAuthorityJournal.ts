@@ -68,7 +68,8 @@ export interface AuthorityGuardPort {
 
 /** `appendInTx`'s answer. None is an HTTP refusal: a door maps them (X2's door mapping). */
 export type AuthorityAppend =
-  | { ok: true; kind: 'appended'; record: ChainedJournalRecord<OverlordAuthorityEntry> }
+  /** The caller reports a later transaction failure through the same guard, if the durable record outlives its head row. */
+  | { ok: true; kind: 'appended'; record: ChainedJournalRecord<OverlordAuthorityEntry>; postAppendFailed(): void }
   /** An operator narrowing while the journal is not coherent: write the row, append nothing, leave the head row. */
   | { ok: true; kind: 'row-only'; state: Exclude<AuthorityState, { kind: 'coherent' }> }
   | { ok: false; error: AuthorityAppendError; detail: string };
@@ -233,6 +234,8 @@ export class OverlordAuthorityJournal {
    * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
    * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
    * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
+   * The stamped designation writers call `postAppendFailed` after rollback is attempted if their transaction throws after
+   * `appended`, then propagate the original error. The receipt fences the guard while the durable record outlives its head row.
    *
    * The ONE retained-origin exception (ladder Q20): `journalPendingInTx` may state the retained `recordFrom` when recording
    * an already-applied narrowing. The fold must see the chain from its last recorded value. Catch-up only stamps the record's
@@ -319,7 +322,7 @@ export class OverlordAuthorityJournal {
           if (rec === null) throw new Error('apply reached with no appended record');
           writeHeadRow(db, rec);
           this.guard.appended?.();
-          return { ok: true, kind: 'appended', record: rec };
+          return { ok: true, kind: 'appended', record: rec, postAppendFailed: () => this.guard.writerFailed('trailing') };
         },
       }, phase);
     } catch (err) {
