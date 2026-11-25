@@ -1282,10 +1282,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         try {
           return await readDocsEnvelope<T>(await request(path, init, unlimited), fields);
         } catch (err) {
+          // The one classifier first: a docs word, a 401, a pre-Docs 404 and a network failure are its slots. What it can only
+          // call an unexpected response, and whose body carries the gate's own `error` word, is the account gate's refusal.
+          const slot = docsAnswerFromError(err);
           const body: unknown = err instanceof ApiError ? err.body : null;
-          const o = typeof body === 'object' && body !== null ? (body as { error?: unknown; failure?: unknown }) : null;
-          if (o !== null && typeof o.error === 'string' && typeof o.failure !== 'string' && o.error !== 'not-found') throw err;
-          return docsAnswerFromError(err);
+          const gated = typeof body === 'object' && body !== null && 'error' in body;
+          if (slot.s === 'unexpected-response' && gated) throw err;
+          return slot;
         }
       };
       const folders: DocsFolderLoaders = {

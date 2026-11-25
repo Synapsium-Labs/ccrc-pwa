@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, harnessBin, type CcdHarness } from './ccdWsHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 /** One ccd (or helper) run: its exit code and both streams, never trimmed. */
 export interface DocsRun { code: number; stdout: string; stderr: string }
@@ -52,7 +53,7 @@ export function runCcdDocs(
 export function runCcdDocsEntry(
   h: CcdHarness, args: readonly string[], env: NodeJS.ProcessEnv = {}, cwd: string = h.home,
 ): DocsRun {
-  const r = spawnSync('bash', ['-p', CCD, ...args], {
+  const r = spawnSyncGroup('bash', ['-p', CCD, ...args], {
     cwd, encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }),
   });

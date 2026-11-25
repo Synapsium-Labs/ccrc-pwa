@@ -215,7 +215,7 @@ export const DOCS_FOLDER_TEXT = {
     'unauthenticated': 'Sign in, then add the folder again.',
     'unsupported': "The fleet box does not support outside folders yet. Update it, then try again.",
   } satisfies Record<DocsFolderGateWord, string>,
-  gateRefusalOther: 'The box refused that. Try again.',
+  gateRefusalOther: 'The box refused that change to the Docs folders. Try again.',
   entryKind: {
     file: 'file', symlink: 'symbolic link', special: 'special file', hardlink: 'hard link',
     'foreign-owner': "another user's file", 'other-device': 'another file system', unreadable: 'unreadable',

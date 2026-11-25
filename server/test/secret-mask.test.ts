@@ -1278,6 +1278,13 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/docs/:project/history': 'repository content (commit subjects and author names), not session text',
     '/api/docs/:project/range': 'repository content (one file in frames, base64), not session text',
+    // The outside-folder reads (X2 P2.3): operator data and file text read from a folder the operator registered, never
+    // session text. Only the paths door answers an absolute path, and it answers it to Settings alone.
+    '/api/docs-folders': "each outside folder's label and state word: no path, no session text (X2 P2.3)",
+    '/api/docs-folders/paths': "each outside folder's label, state word and absolute path on the fleet box, for Settings only: operator data, no session text (X2 P2.3)",
+    '/api/docs-folders/:label/tree': "a listing of an outside folder's six sections (relative paths, sizes, times, fingerprints): no session text (X2 P2.3)",
+    '/api/docs-folders/:label/file': "one file's text from an outside folder: operator content, not session text (X2 P2.3)",
+    '/api/docs-folders/:label/range': "one file from an outside folder in frames, base64: operator content, not session text (X2 P2.3)",
     // The reader lab's door (reader lab plan, RL-a; D-7967): the run read answers its opener counts by the lab's closed
     // names and classes, and the probe answers an empty 204. Neither carries session text.
     '/api/reader-lab/runs/:nonce': "a run's counts by probe name and request class, from the lab's closed vocabulary; no session text",

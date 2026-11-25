@@ -506,7 +506,9 @@ describe('docs-folder registry has one writer (X2 P2.1)', () => {
     expect(mutatingCallers(py), 'a caller of the opener that mutates anything').toEqual([]);
     // (c) the name is quoted once in ccd/ccd, as the constant.
     const { readFileSync: read } = await import('node:fs');
-    const ccd = read(path.join(ccrcRoot, 'ccd', 'ccd'), 'utf8');
+    // The script's path is `ccdWsHelpers.ts`'s alone (core-vocab's "one path to the ccd script"), read here by import.
+    const { CCD } = await import('../ccdWsHelpers.js');
+    const ccd = read(CCD, 'utf8');
     const hits = quotedName(ccd);
     expect(hits, 'the registry name is spelled once in ccd/ccd').toHaveLength(1);
     expect(hits[0]!.trim()).toMatch(/^FOLDER_REGISTRY_NAME\s*=\s*'docs-folders'$/);

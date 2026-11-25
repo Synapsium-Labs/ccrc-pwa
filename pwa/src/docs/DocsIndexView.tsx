@@ -9,7 +9,7 @@ import { docsLocation } from './docsLinks';
 import { DOCS_FOLDER_TEXT, DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
 import { presentSectionCounts, sectionCountsText } from './docsTree';
 import type { FolderIndexSlot } from './folderPage';
-import { DocsPageLink } from './DocsTreeView';
+import { DocsPageLink, RowButton } from './DocsTreeView';
 
 /** A non-ready state in words (spec 4.4). `linked-worktree` and `shared-repo` are "part of <owner>" instead. */
 const INDEX_STATE_TEXT: Readonly<Record<Exclude<DocsIndexRow['state'], 'ready' | 'linked-worktree' | 'shared-repo'>, string>> = {
@@ -73,10 +73,19 @@ function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly str
   } else {
     state = INDEX_STATE_TEXT[row.state];
   }
+  return <OffRow name={row.project} state={row.state} note={dup}>{state}</OffRow>;
+}
+
+/** A row that opens nothing, with its name and the words that say why: a project in a state Docs cannot open, and an outside
+ *  folder whose registry entry is unreadable. `state` is the row's `data-state`; `children` is the words, and any note after
+ *  them. */
+function OffRow(p: {
+  readonly name: string; readonly state: string; readonly children: ReactNode; readonly note?: ReactNode;
+}): ReactNode {
   return (
-    <div className="docs-row docs-row-off" data-state={row.state}>
-      <span className="docs-row-name">{row.project}</span> <span className="docs-row-state">{state}</span>
-      {dup !== null && <> {dup}</>}
+    <div className="docs-row docs-row-off" data-state={p.state}>
+      <span className="docs-row-name">{p.name}</span> <span className="docs-row-state">{p.children}</span>
+      {p.note != null && <> {p.note}</>}
     </div>
   );
 }
@@ -97,16 +106,8 @@ function FoldersGroup(p: { readonly slot: FolderIndexSlot | null; readonly needl
         {rows.map((r) => (
           <li key={r.label}>
             {r.state === 'ok'
-              ? (
-                <button type="button" className="docs-row" data-folder={r.label} onClick={() => navigate(docsPageUrl({ kind: 'folder', label: r.label }))}>
-                  <span className="docs-row-name">~{r.label}</span>
-                </button>
-              )
-              : (
-                <div className="docs-row docs-row-off" data-folder={r.label} data-state="unreadable">
-                  <span className="docs-row-name">~{r.label}</span> <span className="docs-row-state">{DOCS_FOLDER_TEXT.unreadableState}</span>
-                </div>
-              )}
+              ? <RowButton href={docsPageUrl({ kind: 'folder', label: r.label })}><span className="docs-row-name">~{r.label}</span></RowButton>
+              : <OffRow name={'~' + r.label} state="unreadable">{DOCS_FOLDER_TEXT.unreadableState}</OffRow>}
           </li>
         ))}
       </ul>

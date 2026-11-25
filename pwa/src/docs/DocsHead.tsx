@@ -30,7 +30,7 @@ import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { FLEET_PATH } from '../lib/routes';
 import { useFollowLink } from '../lib/useTabLink';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
-import { Icon, useNow, type IconName } from '@ccrc/ui';
+import { Button, Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
@@ -756,9 +756,9 @@ function OffActions(p: { readonly off: readonly FolderOffAction[] }): ReactNode 
     <ul className="docs-actions docs-folder-actions">
       {p.off.map((a) => (
         <li key={a.action}>
-          <button type="button" className="docs-action" disabled aria-describedby={'docs-off-' + a.action} data-action={a.action}>
+          <Button variant="ghost" className="docs-off-action" disabled aria-describedby={'docs-off-' + a.action} data-action={a.action}>
             {DOCS_FOLDER_TEXT.actionLabel[a.action]}
-          </button>{' '}
+          </Button>{' '}
           <small id={'docs-off-' + a.action} className="docs-action-off">{a.reason}</small>
         </li>
       ))}
@@ -855,6 +855,16 @@ export function DocsHead(p: ProjectHeadProps | {
   return <ProjectHead {...p} />;
 }
 
+/** The stacked heads' one line: back, then the crumbs. The project head's stacked form and an outside folder's head draw it. */
+function HeadBar(p: { readonly page: DocsPageLocation | DocsFolderLocation; readonly crumbs: readonly DocsCrumb[] }): ReactNode {
+  return (
+    <div className="docs-head-bar">
+      <BackButton page={p.page} />
+      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+    </div>
+  );
+}
+
 /** An outside folder's head: back, the crumbs (the folder as `~label`), the truth line ("Not in a repository" and the file's
  *  time), and the five actions, all off with their reasons. A folder has no export, reader bar, Aa menu, plain view or Page
  *  details (they read a repository's file, its reader frame and its pin), so none is drawn. */
@@ -862,10 +872,7 @@ function FolderHead(p: { readonly page: DocsFolderLocation; readonly mtimeNs: st
   const crumbs = docsCrumbs(p.page);
   return (
     <header className="docs-head docs-folder-head" data-folder={p.page.label}>
-      <div className="docs-head-bar">
-        <BackButton page={p.page} />
-        <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-      </div>
+      <HeadBar page={p.page} crumbs={crumbs} />
       <TruthLine folder={{ mtimeNs: p.mtimeNs }} />
       <Actions off={folderActions()} />
     </header>
@@ -966,10 +973,7 @@ function ProjectHead(p: {
   if (fullHeadFormFor(compactWidth) === 'stacked') {
     return (
       <header className="docs-head">
-        <div className="docs-head-bar">
-          <BackButton page={page} />
-          <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-        </div>
+        <HeadBar page={page} crumbs={crumbs} />
         {listed !== null && (
           <>
             <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />

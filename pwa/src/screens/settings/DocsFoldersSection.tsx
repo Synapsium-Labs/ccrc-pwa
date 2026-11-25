@@ -173,12 +173,10 @@ export function DocsFoldersSection(p: { folders?: DocsFolderLoaders; stepUpDeps?
           <label htmlFor={labelId} className="settings-note">{DOCS_FOLDER_TEXT.labelField}</label>
           <TextInput id={labelId} value={label} aria-invalid={label.trim() !== '' && !labelOk} onChange={(e) => setLabel(e.target.value)} />
           <label htmlFor={pathId} className="settings-note">{DOCS_FOLDER_TEXT.pathField}</label>
-          <div className="linear-add-line">
-            <TextInput id={pathId} value={path} onChange={(e) => setPath(e.target.value)} />
-            <Button type="submit" variant="primary" size="fit" disabled={busy || !labelOk || path.trim() === ''}>
-              {DOCS_FOLDER_TEXT.add}
-            </Button>
-          </div>
+          <TextInput id={pathId} value={path} onChange={(e) => setPath(e.target.value)} />
+          <Button type="submit" variant="primary" size="fit" disabled={busy || !labelOk || path.trim() === ''}>
+            {DOCS_FOLDER_TEXT.add}
+          </Button>
         </form>
         <ConfirmItsYou stepUp={stepUp} subject={DOCS_FOLDER_TEXT.stepUpSubject} />
       </>

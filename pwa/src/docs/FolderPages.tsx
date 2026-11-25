@@ -20,17 +20,16 @@ import {
   type DocsShowOk, type DocsTreeOk,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
-import { navigate } from '../lib/router';
 import type { MarkdownParser } from '../lib/markdownRunner';
-import { DocsAssetContext, svgDataUrl } from './DocImage';
+import { DocsAssetContext } from './DocImage';
 import type { DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
-import { RangeSource } from './DocsLeaf';
+import { DocsFailureView } from './DocsFailureView';
+import { RangeSource, SvgImage } from './DocsLeaf';
 import { DocsHead } from './DocsHead';
-import {
-  DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, pluralS, slotSentence,
-} from './docsText';
-import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, leafName } from './docsTree';
+import { DirRow, RowButton } from './DocsTreeView';
+import { DOCS_FOLDER_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, fillSentence, kib, pluralS } from './docsText';
+import { CLASS_GLYPH, SECTION_LABEL, leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import {
   folderListing, folderPathKind, folderRangeLoader, folderRangeVisit, folderReadPlan, folderSectionRows,
@@ -38,11 +37,6 @@ import {
 } from './folderPage';
 import { showBytes } from './objectUrls';
 import { RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
-
-/** One `.docs-row` button; a tap navigates with a history entry. */
-function RowButton(p: { readonly href: string; readonly children: ReactNode }): ReactNode {
-  return <button type="button" className="docs-row" onClick={() => navigate(p.href)}>{p.children}</button>;
-}
 
 /** A folder page's answer slot: the listing, or why there is none. */
 type FolderTreeSlot = { s: 'loading' } | { s: 'ok'; tree: DocsFolderTreeOk } | DocsNotOk;
@@ -68,17 +62,6 @@ function useFolderTree(label: string, folders: DocsFolderLoaders): { slot: Folde
   }, [label, folders, nonce]);
   useEffect(() => onAuthRegained(() => { if (latest.current.s === 'auth') setNonce((n) => n + 1); }), []);
   return { slot, reload: useCallback(() => setNonce((n) => n + 1), []), reads };
-}
-
-/** A refusal in words, with Retry where another try could help. */
-function FolderNote(p: { readonly answer: DocsNotOk; readonly onRetry: () => void }): ReactNode {
-  const text = p.answer.s === 'failed' ? failureSentence(p.answer.body) : slotSentence(p.answer);
-  return (
-    <div className="docs-fail" role="alert">
-      <p className="docs-note">{text}</p>
-      {p.answer.s !== 'auth' && <button type="button" className="docs-fail-action" onClick={p.onRetry}>{DOCS_FOLDER_TEXT.retry}</button>}
-    </div>
-  );
 }
 
 /** The folder's root page: the sections it has entries in. */
@@ -118,12 +101,10 @@ function FolderListingPage(p: {
       {listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}
       <ul className="docs-rows">
         {listing.folders.filter((f) => shown(f.name)).map((f) => (
-          <li key={'d:' + f.name}>
-            <RowButton href={docsPageUrl({ kind: 'folder-path', label, section, path: prefix + f.name, dirSlash: true })}>
-              <span className="docs-row-glyph" aria-hidden="true">{FOLDER_GLYPH}</span>
-              <span className="docs-row-name">{f.name}/</span> <span className="docs-row-count">{f.count}</span>
-            </RowButton>
-          </li>
+          <DirRow
+            key={'d:' + f.name} name={f.name} count={f.count}
+            href={docsPageUrl({ kind: 'folder-path', label, section, path: prefix + f.name, dirSlash: true })}
+          />
         ))}
         {listing.files.filter((e) => shown(leafName(e.path))).map((e) => (
           <li key={'f:' + e.path}>
@@ -198,7 +179,7 @@ function FolderBody(p: {
     const pinKey = ['folder', link.project, show.section, show.path, show.sha256].join('\u0000');
     return <DocMarkdown key={pinKey} text={src.text} pinKey={pinKey} parser={parser} link={link} />;
   }
-  if (cls === 'svg') return <img className="docs-svg-img" src={svgDataUrl(bytes)} alt={leafName(show.path)} />;
+  if (cls === 'svg') return <SvgImage bytes={bytes} name={leafName(show.path)} />;
   return <RangeSource read={{ bytes, digest: show.sha256 }} path={show.path} />;
 }
 
@@ -280,7 +261,7 @@ function FolderLeafBody(p: {
   if (slot.s === 'loading') return <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
   if (slot.s !== 'ok' || show === null) {
     const changed = slot.s === 'failed' && DOCS_RELIST_WORDS.has(slot.body.failure);
-    return <FolderNote answer={slot as DocsNotOk} onRetry={changed ? onRelist : () => setNonce((n) => n + 1)} />;
+    return <DocsFailureView answer={slot as DocsNotOk} onRetry={changed ? onRelist : () => setNonce((n) => n + 1)} />;
   }
   return <FolderBody show={show} link={link} parser={parser} />;
 }
@@ -306,7 +287,7 @@ export function FolderPage(p: {
   useEffect(() => { spent.current = false; }, [key]);
   let body: ReactNode;
   if (slot.s === 'loading') body = <p className="docs-loading">{DOCS_FOLDER_TEXT.loading}</p>;
-  else if (slot.s !== 'ok') body = <FolderNote answer={slot} onRetry={reload} />;
+  else if (slot.s !== 'ok') body = <DocsFailureView answer={slot} onRetry={reload} />;
   else if (loc.kind === 'folder') body = <FolderRootPage loc={loc} tree={slot.tree} />;
   else if (loc.kind === 'folder-section') body = <FolderListingPage key={loc.section} label={loc.label} tree={slot.tree} section={loc.section} dir="" />;
   else {

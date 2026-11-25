@@ -38,11 +38,9 @@ const ROOT = path.resolve(here, '..', '..');
 const readRel = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
 
 /** Every docs verb has a helper deadline and a runner row: the list is shared/docs.ts's, never a copy (X2 P1: the
- *  range verb joined it rather than keeping a deadline of its own), and the two folder verbs (X2 P2.1, P2.2), which
- *  shared/docs.ts does not name (it lists the verbs the docs routes send; the folder doors are P2.3's), beside it. */
-const FOLDER_BUDGET_VERBS = ['docs-folder', 'docs-folder-read'] as const;
-type DocsBudgetVerb = DocsVerb | (typeof FOLDER_BUDGET_VERBS)[number];
-const DOCS_BUDGET_VERBS: readonly DocsBudgetVerb[] = [...new Set<DocsBudgetVerb>([...DOCS_VERBS, ...FOLDER_BUDGET_VERBS])];
+ *  range verb joined it rather than keeping a deadline of its own; the two folder verbs joined it in X2 P2.3). */
+const DOCS_BUDGET_VERBS = DOCS_VERBS;
+type DocsBudgetVerb = DocsVerb;
 
 /** The one match of `re` (a `g` regex) in `text`; throws on zero or on more than one. */
 function exactlyOne(text: string, re: RegExp, what: string): RegExpMatchArray {
