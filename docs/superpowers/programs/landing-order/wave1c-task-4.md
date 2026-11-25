@@ -55,6 +55,8 @@ the clause, so the verbatim census reds. Green after each restore: the reader ru
 - `typecheck-tests`: could not run. On the test box it fails before any test with `Cannot find module
   'typescript'` from `pwa/package.json` (the box's checkout has no pwa dependencies); this worktree has
   no `pwa` or `ui` dependencies either. The server's tests-inclusive typecheck
-  (`tsc --noEmit -p test/tsconfig.tests.json`) ran instead; its result is in the wave-done. The pull
-  request's own run is the arbiter for `typecheck-tests`.
+  (`tsc --noEmit -p test/tsconfig.tests.json`) was tried once instead, alone; the test slice killed it
+  for memory, in the wrapper's words: `the test slice's memory cap killed a process during this run
+  (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrctests.slice); exit 137`. The pull
+  request's own run is the arbiter for both.
 - No full suite ran.
