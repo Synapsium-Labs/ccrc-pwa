@@ -217,6 +217,9 @@ export interface CcrcConfig {
    *  remote mode the fleet node's files are read at this same absolute path
    *  over the agent, the same-path assumption `registryDir` already makes. */
   ccrcDir: string;
+  /** The draft review store's directory (`<home>/.ccrc/review-shares`): shared snapshots and their index entries. One
+   *  writer, `server/src/review/store.ts`; never in a backup or the update snapshot, and never restored. */
+  reviewStoreDir: string;
   /** `<home>/ccrc/ccd/ccrc` — the INSTALLED tree's `ccrc`, the tree
    *  `ccrc.service`'s ExecStart runs from; `releaseSource` is read from it. */
   installedCcrcPath: string;
@@ -597,6 +600,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
     buildInfoPath: path.join(home, '.ccrc', 'build.json'),
     ccrcDir: path.join(home, '.ccrc'),
+    reviewStoreDir: path.join(home, '.ccrc', 'review-shares'),
     installedCcrcPath,
     releaseSource: readReleaseSource(env, installedCcrcPath),
     // `||` in effect for both knobs: '' trims to '' and falls to the default,

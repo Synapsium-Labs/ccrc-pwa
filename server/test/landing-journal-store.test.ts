@@ -15,6 +15,7 @@ import type { LandingAdvance } from '../src/coord/landingEntry.js';
 import { landingOrder } from '../src/coord/landingLine.js';
 import type { LandingRecovery } from '../../shared/landingLine.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { tx } from '../src/coord/tx.js';
 import { landingFactsOf } from './landingFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
@@ -237,7 +238,7 @@ describe('boot replay and the journal-first write', () => {
     rawProjection(f, 5, 3);
     f.db.exec('UPDATE landing_entries SET fixesMain = 7 WHERE id = 5');
     const before = journal(f);
-    expect(order(f, 3, { afterIds: [] })).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'restart' });
+    expect(order(f, 3, { afterIds: [] })).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'repair' });
     expect(journal(f)).toBe(before);
   });
 
@@ -893,5 +894,66 @@ describe('failure handling around the guarded entrances (review round)', () => {
     const r = f.store.replayLandingJournal();
     expect(r).toMatchObject({ ok: false, error: 'landing-db-commit', recovery: 'restart' });
     expect(f.store.readLanding(P)).toEqual({ ok: false, error: 'landing-fenced', recovery: 'restart' });
+  });
+});
+
+describe('an ambient landing read does not own the rollback (wave 5i, M18)', () => {
+  /** The entries SELECT of the guarded inner read throws, once armed, until the spies are restored. */
+  const faultSelect = (db: DatabaseSync): void => {
+    const real = db.prepare.bind(db);
+    vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('FROM landing_entries WHERE project = ?')) throw new Error('fixture select fault');
+      return real(sql);
+    }) as DatabaseSync['prepare']);
+  };
+
+  it('a SELECT fault inside a caller-owned transaction throws to the caller, whose rollback leaves the shared connection open', () => {
+    const f = boot();
+    f.db.exec('CREATE TABLE sentinel (x INTEGER)');
+    faultSelect(f.db);
+    const writeSentinel = (): void => { f.db.exec('INSERT INTO sentinel VALUES (1)'); };
+    expect(() => tx(f.db, () => { writeSentinel(); f.store.readLanding(P); })).toThrow('fixture select fault');
+    vi.restoreAllMocks();
+    expect(f.db.prepare('SELECT x FROM sentinel').get()).toBeUndefined();
+    expect(f.db.isOpen).toBe(true);
+    expect(f.db.isTransaction).toBe(false);
+    expect(f.unusable).not.toHaveBeenCalled();
+    // and the line was never fenced by it: the next read is the ordinary one
+    expect(f.store.readLanding(P).ok).toBe(true);
+  });
+
+  it('an ambient read that succeeds answers the facts inside the caller\'s transaction', () => {
+    const f = boot();
+    created(f, 1);
+    const inside = tx(f.db, () => { f.db.exec('CREATE TABLE sentinel (x INTEGER)'); return f.store.readLanding(P); });
+    expect(inside).toMatchObject({ ok: true });
+    expect(f.db.isTransaction).toBe(false);
+  });
+
+  it('a standalone read keeps its typed failure after its own rollback, and the connection stays open', () => {
+    const f = boot();
+    faultSelect(f.db);
+    expect(f.store.readLanding(P)).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'replay' });
+    vi.restoreAllMocks();
+    expect(f.db.isOpen).toBe(true);
+    expect(f.db.isTransaction).toBe(false);
+    expect(f.store.readLanding(P).ok).toBe(true);
+  });
+
+  it('a standalone read whose rollback cannot be proved still closes the connection through the boundary', () => {
+    const f = boot();
+    faultSelect(f.db);
+    failOnce(f.db, 'ROLLBACK');
+    expect(f.store.readLanding(P)).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' });
+    expect(f.db.isOpen).toBe(false);
+  });
+
+  it('an outer landing entrance whose rollback cannot be proved still closes it (the boundary owns the proof)', () => {
+    const f = boot();
+    faultSelect(f.db);
+    failOnce(f.db, 'ROLLBACK');
+    const land = { kind: 'land', project: P, pr: 9, by: 'reader', at: 1, outcome: { word: 'closed' }, expect: null } as const;
+    expect(f.store.advanceLanding(land)).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'restart' });
+    expect(f.db.isOpen).toBe(false);
   });
 });

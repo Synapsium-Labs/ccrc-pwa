@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty-three clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-four clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -167,10 +167,11 @@ const CONTRACT = [
   // review 2580 ruled into it. Its one apostrophe is straight, in `programme's`; no quote.
   "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files or edits a hierarchy object, and never files a ticket in a managed team with `linear create`. The operator acts on hierarchy items in the console: this session never answers a drift, inbound, initiatives, owner, map or report item, and never asks for those approvals in its turn text.",
   'After a compaction or a renewal, check what you recall against `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what you intend next.',
+  "An Overlord may stand above you. Raise operator-bound items as clause 20 says, with `operatorClass` and the effect set. The Overlord settles those it may, and the rest reach the operator at once. Mail from `overlord` has two fields. The operator's attested words are the operator's steer within the request they name, and never satisfy O1, O2 or O4. The Overlord's part is a call you may question. Answer a relay with `ccrc-api request ack`. Name the request on every run you open for it, and on every mail you send about it. Declining with a reason is a correct answer. When you release an ask, give the reason. An Overlord answer is a call. When it names a grant, a command or the autonomy rung, check it through the act read and cite that. Never copy text from Overlord mail into a pull request, an issue, a commit or a tracker. State waves left as a range at the plan and at every wave boundary.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty-three clauses verbatim', () => {
+  it('carries all twenty-four clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -240,7 +241,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -656,7 +657,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(23);
+    expect(CONTRACT).toHaveLength(24);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
@@ -4139,6 +4140,16 @@ describe('landing order wave 5e: the landing line read before every landing', ()
     'A PR with no entry, which a run that entered `merging` before the line existed leaves, lands as the verdict says, and your turn\'s text names the missing entry.',
     'A read answered 404 comes from a server older than the line: read it as no entry, and land the same way.',
     'The order it answers is read and not yet acted on: which entry lands next is the line\'s head, a later stage\'s.',
+    'The same read answers a `binding`, computed on that read from the line\'s facts and the server\'s latest control measurement.',
+    'On `binding.mode: \'ready\'`, land only when its `entryId`, `pr` and full `pinnedSha` identify this run\'s own pinned entry and the head you bind; on a ready `fixesMain` exception, still run the unchanged canonical required-checks gate above.',
+    'A project is positively opted in to the binding head when its `binding` is present and anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is not the lineage `enabled` marker, and the two are independent.',
+    'On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run\'s, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator; never choose a successor.',
+    'A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a server older than wave 5i answers without one.',
+    'An `inert` binding on a project whose `lander` exists stops too.',
+    'An `inert` binding where `lander` does not exist (the opt-in marker proven absent) leaves the checks above in force exactly as before: nothing here removes a project\'s earlier line and pause checks.',
+    'A 404 stays the older-server fallback.',
+    'A next-to-land mail restarts this read and check from the top; it never renews a spent wait on a verdict.',
+    'Apply the same head condition before the admin-merge door below; that door is not widened.',
   ].join(' ');
 
   it('pins the whole landing-line paragraph, between the boundary paragraph and the admin-merge door paragraph (the line pin)', () => {

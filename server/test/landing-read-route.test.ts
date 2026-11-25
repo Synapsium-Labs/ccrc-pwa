@@ -5,7 +5,7 @@
 // Seeding writes rows through the database handle openCoordDb returned, because no route in 5e creates an
 // entry without a run (that is 5f). The helpers live here, never in server/src, so the one-writer census of
 // `pinnedSha` (D-7614) stays at one.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance } from 'fastify';
@@ -17,17 +17,19 @@ import { createLandingJournal } from '../src/coord/landingJournal.js';
 import { landingOrder } from '../src/coord/landingLine.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { landingStoreOver } from './landingFixture.js';
+import { CONTROL_HEAD_SHA, CONTROL_NOW, controlRead, landingStoreOver } from './landingFixture.js';
+import type { FleetWatcher } from '../src/watch.js';
+import type { LandingControlRead } from '../src/coord/radar.js';
 
 const TOKEN = 'f'.repeat(64);
 const tok = { 'x-ccrc-mail-token': TOKEN };
 
-const openApp = async (over: Partial<Deps> = {}) => {
+const openApp = async (over: Partial<Deps> = {}, watcher?: FleetWatcher) => {
   const home = mkTmp('ccrc-landing-read-');
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const db = openCoordDb(dbPath);
   const coord = landingStoreOver(db, dbPath);
-  const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord, ...over });
+  const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord, ...over }, undefined, watcher);
   return { app, coord, db };
 };
 
@@ -103,7 +105,7 @@ describe('GET /api/landing', () => {
     const res = await read(app!, '?project=project-a');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, project: 'project-a', operatorPaused: false, mainRedHold: false,
-      entries: [], order: { paused: false, order: [], head: null }, recovery: { subjects: [], hold: null }, entriesScope: 'open' });
+      entries: [], order: { paused: false, order: [], head: null }, binding: { mode: 'held', reason: 'opt-in-unknown', entryId: null }, recovery: { subjects: [], hold: null }, entriesScope: 'open' });
   });
 
   it('answers every entry still in the line as the wire LandingEntry, shas byte for byte through the masking hook', async () => {
@@ -228,5 +230,109 @@ describe('GET /api/landing', () => {
   it('trims the project as the ledger read does', async () => {
     seedEntry(db, A);
     expect(((await read(app!, '?project=%20project-a%20')).json() as LandingLineView).entries).toEqual([A]);
+  });
+});
+
+// Wave 5i, Task 6: the binding head, computed on this read from current facts, the watcher's latest control snapshot and the
+// route's own now. Routes write nothing and send nothing.
+describe('GET /api/landing: the binding', () => {
+  let app: FastifyInstance | undefined;
+  let db: DatabaseSync;
+  let coord: CoordStore;
+  let snapshot: LandingControlRead | undefined;
+  let H: LandingEntry;
+  let NEXT: LandingEntry;
+  const stubWatcher = { stop: () => undefined, serverCapsSettled: async () => {}, currentLandingControl: (project: string) => (project === 'project-a' ? snapshot : undefined) } as unknown as FleetWatcher;
+  const bindingOf = async (qs = '?project=project-a') => (await read(app!, qs)).json() as LandingLineView & { ok: true };
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(CONTROL_NOW);
+    snapshot = controlRead();
+    const w = await openApp({}, stubWatcher);
+    app = w.app; db = w.db; coord = w.coord;
+    H = { id: 1, project: 'project-a', pr: 7, pinnedSha: CONTROL_HEAD_SHA, handoffCommit: 'd'.repeat(40), runId: openRunId(coord, 1),
+      state: 'pinned', baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false, setBy: 'lane-a-project-a', pinnedAt: 1_000 };
+    NEXT = { ...H, id: 2, pr: 12, pinnedSha: 'c'.repeat(40), runId: openRunId(coord, 2), pinnedAt: 2_000 };
+  });
+  afterEach(async () => { vi.useRealTimers(); if (app) await app.close(); app = undefined; });
+
+  it('a proven marker absence is inert, and no snapshot at all is held, never inert', async () => {
+    seedEntry(db, H);
+    snapshot = controlRead({ lander: { ok: false, reason: 'absent' } });
+    expect((await bindingOf()).binding).toEqual({ mode: 'inert' });
+    snapshot = undefined;
+    expect((await bindingOf()).binding).toEqual({ mode: 'held', reason: 'opt-in-unknown', entryId: 1 });
+  });
+
+  it('a positive coherent opt-in with the selected head ready names its entry, PR, full pinned sha and base', async () => {
+    seedEntry(db, H);
+    expect((await bindingOf()).binding).toMatchObject({ mode: 'ready', entryId: 1, pr: 7, pinnedSha: CONTROL_HEAD_SHA, fixesMain: false });
+  });
+
+  it('order.head reads the stored word: a dependent head behind a damaged terminal target is the head, and behind a damaged pinned one is not', async () => {
+    const raw = (id: number, pr: number, word: string) => db.prepare(
+      "INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, state, setBy, pinnedAt, afterIds) VALUES (?, 'project-a', ?, ?, ?, ?, 'operator', 1, 'not-json')")
+      .run(id, pr, 'f'.repeat(40), 'f'.repeat(40), word);
+    raw(5, 50, 'landed');
+    seedEntry(db, { ...H, afterIds: [5] });
+    expect((await bindingOf()).order).toMatchObject({ paused: false, head: { id: 1, pr: 7 } });
+    db.prepare("UPDATE landing_entries SET state = 'pinned' WHERE id = 5").run();
+    expect((await bindingOf()).order).toMatchObject({ paused: false, head: null });
+  });
+
+  it('?pr= still returns that PR\'s entry, while readiness and order are computed over the whole project', async () => {
+    seedEntry(db, H); seedEntry(db, NEXT);
+    const body = await bindingOf('?project=project-a&pr=12');
+    expect(body.entries.map((e) => e.pr)).toEqual([12]);
+    expect(body.binding).toMatchObject({ mode: 'ready', entryId: 1, pr: 7 });
+    expect(body.order).toMatchObject({ head: { id: 1 } });
+  });
+
+  it('pause, recovery, a dirty selected head and malformed evidence each hold', async () => {
+    seedEntry(db, H);
+    snapshot = controlRead({ lander: { ok: false, reason: 'malformed' } });
+    expect((await bindingOf()).binding).toMatchObject({ mode: 'held', reason: 'opt-in-unknown' });
+    const dirty = controlRead();
+    if (!dirty.probe.ok) throw new Error('fixture');
+    dirty.probe.doc.heads[0]!.base = { state: 'conflict', paths: ['x'], pathsCut: false } as never;
+    snapshot = dirty;
+    expect((await bindingOf()).binding).toMatchObject({ mode: 'held', reason: 'composition-not-clean' });
+    snapshot = controlRead();
+    db.prepare("INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq) VALUES (7, 'project-a', 40, 'no-run', NULL, 3)").run();
+    expect((await bindingOf()).binding).toMatchObject({ mode: 'held', reason: 'recovery' });
+    db.prepare('DELETE FROM landing_subjects').run();
+    seedFlags(db, 'project-a', { operatorPaused: true, mainRedHold: false });
+    expect((await bindingOf()).binding).toMatchObject({ mode: 'held', reason: 'paused' });
+  });
+
+  it('a stale persisted main-red hold beside a fresh green snapshot answers an UNPAUSED order and a ready binding', async () => {
+    seedEntry(db, H); seedFlags(db, 'project-a', { operatorPaused: false, mainRedHold: true });
+    const body = await bindingOf();
+    expect(body.binding).toMatchObject({ mode: 'ready', entryId: 1 });
+    expect(body.order).toMatchObject({ paused: false, head: { id: 1 } });
+    expect(body.mainRedHold).toBe(false);
+  });
+
+  it('a fresh red snapshot beside an unset hold answers a main-red pause and a held binding, from one view of the hold', async () => {
+    seedEntry(db, H);
+    const red = controlRead();
+    if (!red.health.ok) throw new Error('fixture');
+    red.health.doc.state = 'red'; red.health.doc.failing = ['required-a'];
+    snapshot = red;
+    const body = await bindingOf();
+    expect(body.order).toMatchObject({ paused: true, by: ['main-red'] });
+    expect(body.binding).toMatchObject({ mode: 'held', reason: 'main-red' });
+  });
+
+  it('the read writes nothing and queues no mail', async () => {
+    seedEntry(db, H); seedFlags(db, 'project-a', { operatorPaused: false, mainRedHold: true });
+    const apply = vi.spyOn(coord, 'applyLandingControl');
+    const before = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+    await bindingOf();
+    expect(apply).not.toHaveBeenCalled();
+    expect((db.prepare('SELECT total_changes() AS n').get() as { n: number }).n).toBe(before);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(0);
+    expect((db.prepare('SELECT mainRedHold AS h FROM landing_projects').get() as { h: number }).h).toBe(1);
   });
 });

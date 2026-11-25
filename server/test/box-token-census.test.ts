@@ -1188,6 +1188,56 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
   });
 });
 
+// The capability read is a separate surface, not a box-token lane.
+describe('the draft review read surface', () => {
+  const REVIEW_SRC = read('server/src/review/routes.ts');
+  const REVIEW_DOORS = ['POST /api/review/open'];
+  // The plugin's instance is named scope; normalize that receiver for the shared slicer.
+  const normalized = (src: string): string => src.replace(/\bscope\./g, 'app.');
+  const registered = (src: string): string[] => registrationsIn(normalized(src)).map((r) => r.key);
+  const anchor = "}, async (req, reply) => {";
+  const neverRead = (src: string): string[] => {
+    const start = src.indexOf("scope.post('/api/review/open'");
+    expect(start, 'review registration missing').toBeGreaterThan(-1);
+    const end = src.indexOf('\n    });', start);
+    expect(end, 'review registration end missing').toBeGreaterThan(start);
+    const body = src.slice(start, end);
+    return ['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers']
+      .filter((term) => body.includes(term));
+  };
+
+  it('REVIEW_DOORS and registrations agree in both directions, with only the capability door', () => {
+    expect(registered(REVIEW_SRC)).toEqual(REVIEW_DOORS);
+    expect(lanesIn(normalized(REVIEW_SRC))).toEqual([]);
+    expect(GATE_SRC).toContain("  ['POST /api/review/open',");
+    expect(GATE_SRC).toContain('reason 9');
+  });
+
+  it('the open registration never reads session, token, or fleet dependencies', () => {
+    expect(neverRead(REVIEW_SRC)).toEqual([]);
+  });
+
+  it.each(['req.cookies', 'checkMailToken', 'requireMailToken', 'runCcd', 'ReviewTreeReader', 'docs.readers'])
+  ('sees a separately planted %s in the open handler', (term) => {
+    expect(REVIEW_SRC).toContain(anchor);
+    expect(neverRead(REVIEW_SRC.replace(anchor, `${anchor}\n      ${term};`))).toContain(term);
+  });
+
+  it('sees a direct box-token call planted in the open handler', () => {
+    expect(REVIEW_SRC).toContain(anchor);
+    const planted = REVIEW_SRC.replace(anchor, `${anchor}\n      requireMailToken(req, reply);`);
+    expect(lanesIn(normalized(planted))).toEqual(REVIEW_DOORS);
+  });
+
+  it('sees an added registration and a missing listed registration', () => {
+    const added = `${REVIEW_SRC}\nscope.delete('/api/review/extra', async () => {});`;
+    expect(registered(added)).toContain('DELETE /api/review/extra');
+    expect(registered(added)).not.toEqual(REVIEW_DOORS);
+    expect(registered(REVIEW_SRC.replace("scope.post('/api/review/open'", "scope.post('/api/review/other'")))
+      .not.toEqual(REVIEW_DOORS);
+  });
+});
+
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
 // `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its six are session-gated, NOT EXEMPT and

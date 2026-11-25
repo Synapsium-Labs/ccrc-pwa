@@ -856,6 +856,8 @@ describe('Build 7 nouns', () => {
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
       'programmeFactsStore.ts', 'overlordDesignationStore.ts', 'approvalCensusStore.ts', 'overlordGateStore.ts', 'approvalParkStore.ts', 'admissionWakeTx.ts', 'skillRolloutTx.ts', 'overlordSequenceStore.ts',
       'overlordRestoreState.ts', 'lifecycleLaneRows.ts',
+      // Wave 5i: `landingControlTx.ts` runs the main-red hold UPSERT inside `CoordStore.applyLandingControl`'s owned transaction, so it names the handle.
+      'landingControlTx.ts',
       // The coordinator advisor (D-8967): `advisorStore.ts` is its three tables' SQL, `coordCallsStore.ts`'s idiom.
       'advisorStore.ts']);
     const coordFiles = sources(coordDir);

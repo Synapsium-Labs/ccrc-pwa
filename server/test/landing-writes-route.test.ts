@@ -569,7 +569,7 @@ describe('typed write failures reach HTTP with their status and word', () => {
     rawProjection(w, 5, 3, P);
     w.db.prepare("UPDATE landing_entries SET afterIds = '[4,4]' WHERE id = 5").run();
     const before = w.journal();
-    refused(await post(w, 'order', orderBody('lane-b', 3, { fixesMain: true })), 'landing-projection-unreadable', { recovery: 'restart' });
+    refused(await post(w, 'order', orderBody('lane-b', 3, { fixesMain: true })), 'landing-projection-unreadable', { recovery: 'repair' });
     expect(w.journal()).toBe(before);
   });
 
@@ -580,12 +580,12 @@ describe('typed write failures reach HTTP with their status and word', () => {
     expect(w.journal()).toBe('');
   });
 
-  it('landing-projection-unreadable is 503 and keeps its restart recovery on the wire', async () => {
+  it('landing-projection-unreadable is 503 and keeps its repair recovery on the wire', async () => {
     const w = await world();
     rawProjection(w, 5, 3, P);
     w.db.exec('UPDATE landing_entries SET fixesMain = 7 WHERE id = 5');
     const before = w.journal();
-    refused(await post(w, 'order', orderBody('lane-b', 3, { afterIds: [] })), 'landing-projection-unreadable', { recovery: 'restart' });
+    refused(await post(w, 'order', orderBody('lane-b', 3, { afterIds: [] })), 'landing-projection-unreadable', { recovery: 'repair' });
     expect(w.journal()).toBe(before);
     expect(feed(w)).toEqual([]);
   });

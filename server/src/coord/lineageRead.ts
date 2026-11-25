@@ -21,7 +21,11 @@
 import path from 'node:path';
 import type { FleetIO, ReadFailure } from '../io.js';
 import { parseEnabled, parseLineage, type LineageRead, type MarkerRead, type PauseRead } from './lineage.js';
-import { parseProbe, RADAR_PROBE_MAX_BYTES, type ProbeRead } from './radar.js';
+import {
+  parseLander, parseMainHealth, parseProbe, RADAR_PROBE_MAX_BYTES,
+  type ControlFailure, type LandingControlRead, type ProbeRead,
+} from './radar.js';
+import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 import { isSafeProjectSegment } from './ledgerseed.js';
 import { mapBounded } from '../bounded.js';
 
@@ -35,27 +39,56 @@ export interface LandingFacts {
 type LandingIO = Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured'>;
 type RegularRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
-type SizedIO = LandingIO & Pick<FleetIO, 'statMeasured'>;
+type BoundedIO = Pick<FleetIO, 'lstatMeasured' | 'statMeasured' | 'readFileFromBytesMeasured'>;
 
-/** A regular file's bytes. A symlink or any other kind is `unreadable`, never its target's bytes; a failed lstat is
- *  `absent` only when it proved absence (`unmeasured` is an io that cannot answer, and is not absence). With `maxBytes`
- *  (the radar's `probe`, D-7482) the size is measured by `statMeasured` AFTER the kind check and BEFORE any read: a file
- *  over the cap is `unreadable` and is never read, a failed stat keeps its own reason, and the bytes are checked against
- *  the cap again after the read. Without it nothing changes for the other callers. */
+/** The unbounded legacy read keeps its contract: a regular file's bytes, a symlink or any other kind `unreadable`, a
+ *  failed lstat `absent` only when it proved absence (`unmeasured` is an io that cannot answer, and is not absence). */
 export async function readRegular(io: LandingIO, file: string, signal?: AbortSignal): Promise<RegularRead>;
-export async function readRegular(io: SizedIO, file: string, signal: AbortSignal | undefined, maxBytes: number): Promise<RegularRead>;
-export async function readRegular(io: LandingIO | SizedIO, file: string, signal?: AbortSignal, maxBytes?: number): Promise<RegularRead> {
-  const kind = await io.lstatMeasured(file);
-  if (!kind.ok) return { ok: false, reason: kind.reason === 'absent' ? 'absent' : 'unreadable' };
-  if (kind.kind !== 'regular') return { ok: false, reason: 'unreadable' };
-  if (maxBytes !== undefined) {
-    const size = await (io as SizedIO).statMeasured(file);
-    if (!size.ok) return { ok: false, reason: size.reason };
-    if (size.size > maxBytes) return { ok: false, reason: 'unreadable' };
+/** The BOUNDED read (wave 5i; the radar's `probe` since D-7482): the cap is checked on a `statMeasured` that follows the
+ *  kind check, BEFORE any byte moves, so a file over it is `oversize` (with the measured size) and nothing is read. The
+ *  bytes then come in ranges of at most `READ_FROM_MAX_BYTES` through `readFileFromBytesMeasured`, each no longer than
+ *  the size promised, every answer carrying the same size; the whole is decoded ONCE, as strict UTF-8, only after the
+ *  assembled length equals the size and a second stat shows the same size and mtime. Every distinction survives: proven
+ *  absence `absent`, an io that cannot lstat `unmeasured`, any other fault `unreadable`, a file that changed under the
+ *  read `unmeasured` (not a measurement of one file), a short range or invalid UTF-8 `unreadable`. An older peer that
+ *  cannot return bytes answers `unreadable` from `readFileFromBytesMeasured` itself. Residual: metadata rechecks cannot
+ *  prove inode identity across remote range calls, so the result is a cue snapshot, never merge permission. */
+export async function readRegular(io: BoundedIO, file: string, signal: AbortSignal | undefined, maxBytes: number): Promise<{ ok: true; content: string } | ControlFailure>;
+export async function readRegular(
+  io: LandingIO | BoundedIO, file: string, signal?: AbortSignal, maxBytes?: number,
+): Promise<RegularRead | { ok: true; content: string } | ControlFailure> {
+  const lio = io as LandingIO;
+  const kind = await lio.lstatMeasured(file);
+  if (maxBytes === undefined) {
+    if (!kind.ok) return { ok: false, reason: kind.reason === 'absent' ? 'absent' : 'unreadable' };
+    if (kind.kind !== 'regular') return { ok: false, reason: 'unreadable' };
+    return lio.readFileMeasured(file, undefined, signal);
   }
-  const r = await io.readFileMeasured(file, undefined, signal);
-  if (!r.ok) return { ok: false, reason: r.reason };
-  return maxBytes !== undefined && Buffer.byteLength(r.content, 'utf8') > maxBytes ? { ok: false, reason: 'unreadable' } : r;
+  const bio = io as BoundedIO;
+  if (!kind.ok) return { ok: false, reason: kind.reason };
+  if (kind.kind !== 'regular') return { ok: false, reason: 'unreadable' };
+  const first = await bio.statMeasured(file);
+  if (!first.ok) return { ok: false, reason: first.reason };
+  if (first.size > maxBytes) return { ok: false, reason: 'oversize', size: first.size };
+  const chunks: Uint8Array[] = [];
+  let have = 0;
+  while (have < first.size) {
+    const ask = Math.min(READ_FROM_MAX_BYTES, first.size - have);
+    const r = await bio.readFileFromBytesMeasured(file, have, ask, undefined, signal);
+    if (!r.ok) return { ok: false, reason: r.reason };
+    if (r.size !== first.size) return { ok: false, reason: 'unmeasured' };
+    if (r.bytes.length !== ask) return { ok: false, reason: 'unreadable' };
+    chunks.push(r.bytes);
+    have += ask;
+  }
+  const again = await bio.statMeasured(file);
+  if (!again.ok) return { ok: false, reason: again.reason };
+  if (again.size !== first.size || again.mtimeMs !== first.mtimeMs) return { ok: false, reason: 'unmeasured' };
+  try {
+    return { ok: true, content: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) };
+  } catch {
+    return { ok: false, reason: 'unreadable' };
+  }
 }
 
 /** A pause marker, by lstat alone: any entry pauses, a proven absence runs, anything else is not known. */
@@ -96,15 +129,74 @@ export async function listRadarProjects(
   return { ok: true, names: listed.filter(isSafeProjectSegment), refused: listed.filter((n) => !isSafeProjectSegment(n)) };
 }
 
-/** One project's `probe`, through `readRegular` (the one regular-file reader, with the 512 KiB cap measured before the
- *  read, D-7482) and then `parseProbe`, which checks the bytes again. A proven absence is `absent`; every other fault is
- *  `unreadable`, and the parser's own `stale` and `unmeasured` pass through unchanged. */
+/** One project's `probe`, through the bounded `readRegular` (the one regular-file reader, with the 512 KiB cap measured
+ *  before the read, D-7482) and then `parseProbe`, which checks the bytes again. Every failure of the read keeps its own
+ *  reason (`absent`, `oversize`, `unmeasured`, `unreadable`), and the parser's own `unreadable`, `stale` and `unmeasured`
+ *  pass through unchanged. */
 export async function readRadarProbe(
-  io: Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured' | 'statMeasured'>, registryDir: string, project: string,
-  nowMs: number, signal?: AbortSignal,
-): Promise<ProbeRead | { ok: false; reason: ReadFailure }> {
+  io: BoundedIO, registryDir: string, project: string, nowMs: number, signal?: AbortSignal,
+): Promise<ProbeRead | ControlFailure> {
   const r = await readRegular(io, path.join(registryDir, 'landing', project, 'probe'), signal, RADAR_PROBE_MAX_BYTES);
   return r.ok ? parseProbe(r.content, project, nowMs) : r;
+}
+
+/** The lander marker's cap: the producer's document is a few dozen bytes. */
+export const LANDER_MAX_BYTES = 4096;
+
+export type ControlIO = BoundedIO & Pick<FleetIO, 'readdirMeasured'>;
+
+/** One component of the marker's ancestor chain, proved a REAL directory. `lstatMeasured` answers the path's own type
+ *  and says `other` for a directory and for a FIFO alike, so a directory is proved by the listing too: lstat says "not a
+ *  link" and `readdirMeasured` says "listable". A symlink is `absent` for this marker (the producer's own rule: it
+ *  writes and removes only through real directories), an io that cannot lstat is `unmeasured`, a regular file is
+ *  `unreadable`, and a listing fault or an absence the lstat did not show keeps its own reason. */
+async function realDirectory(io: ControlIO, dir: string, signal?: AbortSignal): Promise<ControlFailure | null> {
+  const kind = await io.lstatMeasured(dir);
+  if (!kind.ok) return { ok: false, reason: kind.reason };
+  if (kind.kind === 'symlink') return { ok: false, reason: 'absent' };
+  if (kind.kind === 'regular') return { ok: false, reason: 'unreadable' };
+  const listed = await io.readdirMeasured(dir, undefined, signal);
+  return listed.ok ? null : { ok: false, reason: listed.reason };
+}
+
+/** The chain from the registry boundary (trusted as configured) through `landing/<project>`, component by component. */
+async function markerChain(io: ControlIO, registryDir: string, project: string, signal?: AbortSignal): Promise<ControlFailure | null> {
+  const landing = path.join(registryDir, 'landing');
+  return (await realDirectory(io, landing, signal)) ?? (await realDirectory(io, path.join(landing, project), signal));
+}
+
+/** The lander marker: the chain proved before any byte moves, the bounded read, the chain proved again after it, then the
+ *  parser. A symlinked ancestor is `absent`, never a read of its target. */
+async function readLander(io: ControlIO, registryDir: string, project: string, nowMs: number, signal?: AbortSignal) {
+  const before = await markerChain(io, registryDir, project, signal);
+  if (before !== null) return before;
+  const r = await readRegular(io, path.join(registryDir, 'landing', project, 'lander'), signal, LANDER_MAX_BYTES);
+  if (!r.ok) return r;
+  const after = await markerChain(io, registryDir, project, signal);
+  if (after !== null) return after;
+  return parseLander(r.content, project, nowMs);
+}
+
+async function readHealth(io: ControlIO, registryDir: string, project: string, nowMs: number, signal?: AbortSignal) {
+  const r = await readRegular(io, path.join(registryDir, 'landing', project, 'main-health'), signal, RADAR_PROBE_MAX_BYTES);
+  return r.ok ? parseMainHealth(r.content, project, nowMs) : r;
+}
+
+/** One project's control bundle, around a probe the caller already read (the pass reads each probe once). It decides
+ *  nothing and reads no clock: `nowMs` is the caller's. A name that is no safe project segment joins no path (`refused`).
+ *  Each document keeps its own failure, so a marker fault is never an opted-out marker and a health fault is never green. */
+export async function readLandingControl(
+  io: ControlIO, registryDir: string, project: string, probe: ProbeRead | ControlFailure, nowMs: number, signal?: AbortSignal,
+): Promise<LandingControlRead> {
+  if (!isSafeProjectSegment(project)) {
+    const refused = { ok: false, reason: 'refused' } as const;
+    return { lander: refused, probe, health: refused };
+  }
+  const [lander, health] = await Promise.all([
+    readLander(io, registryDir, project, nowMs, signal),
+    readHealth(io, registryDir, project, nowMs, signal),
+  ]);
+  return { lander, probe, health };
 }
 
 /** At most this many projects' `probe` reads are in flight in one pass (D-7531). */
@@ -112,32 +204,65 @@ export const RADAR_PASS_CONCURRENCY = 8;
 
 /** What one project's read came to in a pass: `readRadarProbe`'s answer, `late` when it had not answered by the pass's
  *  deadline, or `refused` for a listed name that is not a safe project segment (never read, D-7530). */
-export type RadarPassRead = ProbeRead | { ok: false; reason: ReadFailure | 'late' | 'refused' };
+export type RadarPassRead = ProbeRead | ControlFailure;
+
+/** A bundle in which every document failed the same way (a deadline, a refused name, a directory that is not listed). */
+export const allFailed = (f: ControlFailure): LandingControlRead => ({ lander: f, probe: f, health: f });
 
 /** One pass of the radar lane's reads: ONE listing, then each wanted project's `probe` at most `RADAR_PASS_CONCURRENCY`
  *  at a time, under ONE deadline that starts before the listing. A listing or a project that has not answered by
  *  `deadlineMs` is `late` and its read is aborted, so it contributes nothing and never holds the others back: a hung
  *  read frees its slot at the deadline, and a name whose turn comes after it is `late` without any io. A listing that
- *  rejects answers `unreadable`. The timer is a local of this call (a deadline inside one adapter call). */
+ *  rejects answers `unreadable`. The timer is a local of this call (a deadline inside one adapter call).
+ *
+ *  Wave 5i: a project in `controlsWanted` also gets its control bundle in the same slot, around the probe already read
+ *  (each probe is read once). The probe and the control each race the one deadline: a probe that answered stays the
+ *  radar result when the control misses the SAME deadline, and that control is `late` in all three documents (held).
+ *  A wanted project the successful listing does not return is `absent` in all three documents, a refused name is `refused`, and no `controlsWanted` means an empty `controls`. */
 export async function readRadarPass(
-  io: Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured' | 'statMeasured' | 'readdirMeasured'>, registryDir: string,
-  projectsWanted: ReadonlySet<string>, nowMs: number, deadlineMs: number,
-): Promise<{ ok: true; reads: Map<string, RadarPassRead> } | { ok: false; reason: ReadFailure | 'late' }> {
+  io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'lstatMeasured' | 'statMeasured' | 'readdirMeasured'>, registryDir: string,
+  projectsWanted: ReadonlySet<string>, nowMs: number, deadlineMs: number, controlsWanted: ReadonlySet<string> = new Set(),
+): Promise<{ ok: true; reads: Map<string, RadarPassRead>; controls: Map<string, LandingControlRead> } | { ok: false; reason: ReadFailure | 'late' }> {
   const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ ok: false; reason: 'late' }>((resolve) => {
     timer = setTimeout(() => { ac.abort(); resolve({ ok: false, reason: 'late' }); }, deadlineMs);
   });
+  type Bundle = { probe: RadarPassRead; control: LandingControlRead | null };
   try {
     const listing = await Promise.race([
       listRadarProjects(io, registryDir, ac.signal).catch(() => ({ ok: false, reason: 'unreadable' }) as const), late]);
     if (!listing.ok) return listing;
-    const safe = listing.names.filter((n) => projectsWanted.has(n));
-    const answers = await mapBounded(safe, RADAR_PASS_CONCURRENCY, (n): Promise<RadarPassRead> => (ac.signal.aborted ? late
-      : Promise.race([readRadarProbe(io, registryDir, n, nowMs, ac.signal).catch((): RadarPassRead => ({ ok: false, reason: 'unreadable' })), late])));
-    const reads = new Map<string, RadarPassRead>(safe.map((n, i) => [n, answers[i]!] as const));
-    for (const n of listing.refused) if (projectsWanted.has(n)) reads.set(n, { ok: false, reason: 'refused' });
-    return { ok: true, reads };
+    const safe = listing.names.filter((n) => projectsWanted.has(n) || controlsWanted.has(n));
+    const failedBundle = (n: string, f: ControlFailure): Bundle => ({ probe: f, control: controlsWanted.has(n) ? allFailed(f) : null });
+    // The probe and then the control each race the ONE `late` on their own, so an answered probe is never replaced by a
+    // control that misses the same deadline: that control alone is `late` in all three documents (held, no cue).
+    const lateOf = { ok: false, reason: 'late' } as const;
+    const read = async (n: string): Promise<Bundle> => {
+      const probe = await Promise.race([readRadarProbe(io, registryDir, n, nowMs, ac.signal), late]);
+      if (!probe.ok && probe.reason === 'late') return failedBundle(n, lateOf);
+      if (!controlsWanted.has(n)) return { probe, control: null };
+      // A control read that rejects after the probe answered is `unreadable` for the control alone; the probe is kept.
+      const control = await Promise.race([readLandingControl(io, registryDir, n, probe, nowMs, ac.signal), late])
+        .catch(() => allFailed({ ok: false, reason: 'unreadable' }));
+      return { probe, control: 'lander' in control ? control : allFailed(lateOf) };
+    };
+    const answers = await mapBounded(safe, RADAR_PASS_CONCURRENCY, (n): Promise<Bundle> => (ac.signal.aborted
+      ? Promise.resolve(failedBundle(n, lateOf))
+      : read(n).catch((): Bundle => failedBundle(n, { ok: false, reason: 'unreadable' }))));
+    const reads = new Map<string, RadarPassRead>();
+    const controls = new Map<string, LandingControlRead>();
+    safe.forEach((n, i) => {
+      if (projectsWanted.has(n)) reads.set(n, answers[i]!.probe);
+      const c = answers[i]!.control;
+      if (c !== null) controls.set(n, c);
+    });
+    for (const n of listing.refused) {
+      if (projectsWanted.has(n)) reads.set(n, { ok: false, reason: 'refused' });
+      if (controlsWanted.has(n)) controls.set(n, allFailed({ ok: false, reason: 'refused' }));
+    }
+    for (const n of controlsWanted) if (!controls.has(n)) controls.set(n, allFailed({ ok: false, reason: 'absent' }));
+    return { ok: true, reads, controls };
   } finally {
     clearTimeout(timer);
   }
