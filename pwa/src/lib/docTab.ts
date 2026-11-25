@@ -13,7 +13,8 @@
 // within its kind moves in the tab as before. So, at a desk: the console's links to a document open a Docs tab; a Docs
 // tab's links to another document move within it; and a Docs tab's links to a console page (the link back, a session, a
 // run, the reader's own Back at the index) open the console in a new tab rather than drawing it in the Docs tab. Below the
-// desk width nothing opens a tab: a phone keeps documents inside the app, and a narrow Docs tab's link back moves in place.
+// desk width nothing opens a tab: a phone keeps documents inside the app, and a narrow Docs tab, which draws no bar (fix round
+// 3), goes back by the reader's Back at the index, which moves in place.
 //
 // THE WIDTH IS THE SHELL'S OWN DESK TEST (`DESK_QUERY`, `@ccrc/ui`, 900px), asked live, and it decides only whether a
 // click opens a tab: the callers pass its answer in, so this file names no breakpoint. Two readers ask the click rule, both in `useTabLink.ts`: `useTabLink` (an anchor's props)

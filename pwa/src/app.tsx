@@ -277,7 +277,8 @@ export function App(): ReactNode {
       <p className="shell-placeholder-copy">Select a session</p>
     </div>
   );
-  // A Docs tab: the reader alone, the frame's tab bar holding the link back, and the two covers that must still show.
+  // A Docs tab: the reader alone, at a desk the frame's tab bar holding the link back (none below it, `ShellFrame`), and the
+  // two covers that must still show.
   if (docsTab) {
     return (
       <DocsTabContext value={true}>

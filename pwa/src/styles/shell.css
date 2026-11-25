@@ -558,12 +558,12 @@
 }
 
 /* ---- A Docs tab: the reader alone (desktop polish wave 174) -------------
- * A Docs tab (`lib/docTab.ts`, `isDocsTab`: a Docs page at a desk, and below it a tab that has shown only Docs pages since
- * it loaded) draws the reader alone (`ShellFrame`'s `alone`): the skip link, this bar with its one link back to the
- * console, and the detail pane. No skin frame class is on the shell then. The bar is the same at every width; its ground
- * and edge are the desk header's own (`.shell-accounts`), so nothing here is a new contrast identity. At a desk the shell's
- * grid is one column the full width, the bar's row, then the pane, which keeps the desk's own scroll region
- * (`.shell-detail` above); below it the bar and the pane stack, and the page scrolls, as the phone's detail pane does. */
+ * A Docs tab (`lib/docTab.ts`, `isDocsTab`: a tab that has shown only Docs pages since it loaded, whatever its width)
+ * draws the reader alone (`ShellFrame`'s `alone`): the skip link and the detail pane, and at a desk this bar with its one
+ * link back to the console between them. Below the desk width no bar is mounted: the reader's head is the top of the
+ * page, as in the console (fix round 3). No skin frame class is on the shell. The bar's ground and edge are the desk
+ * header's own (`.shell-accounts`), so nothing here is a new contrast identity. At a desk the shell's grid is one column
+ * the full width, the bar's row, then the pane, which keeps the desk's own scroll region (`.shell-detail` above). */
 .app-shell[data-tab='docs'] > .shell-tab-bar {
   display: flex;
   align-items: center;

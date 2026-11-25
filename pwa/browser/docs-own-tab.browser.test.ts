@@ -223,36 +223,37 @@ describe('a Docs tab below the desk width, in a real Chrome', () => {
       }
     }, 180_000);
 
-    it(`${skin} at 390: a Docs address loaded first draws the reader alone, its link back moving in place`, async () => {
+    // Fix round 3: below the desk width a Docs tab draws no bar, so the reader's head is the top of the page, as in the
+    // console, and a phone keeps its one bar. The way back is the head's Back, which at the index moves to the console here.
+    it(`${skin} at 390: a Docs address loaded first draws the reader alone with no bar above its head, and Back at the index moves to the console in place`, async () => {
       const app = await openLeaf(PHONE, skin);
       try {
-        const f = await app.page.evaluate(() => {
-          const bar = document.querySelector('header.shell-tab-bar');
-          const back = bar?.querySelector('a') ?? null;
-          return {
-            docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
-            tabBar: bar === null ? 0 : 1,
-            phoneBar: document.querySelectorAll('.shell-phone-nav').length,
-            backHref: back?.getAttribute('href') ?? null, backTarget: back?.getAttribute('target') ?? null,
-            backHeight: back?.getBoundingClientRect().height ?? 0,
-            screen: document.querySelectorAll('.shell-detail .docs-screen').length,
-            sockets: (window as unknown as { __sockets: number }).__sockets,
-            scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            title: document.title,
-          };
-        });
+        const f = await app.page.evaluate(() => ({
+          docsTab: document.querySelector('.app-shell')?.getAttribute('data-tab') ?? null,
+          tabBar: document.querySelectorAll('header.shell-tab-bar').length,
+          phoneBar: document.querySelectorAll('.shell-phone-nav').length,
+          screenTop: document.querySelector('.shell-detail .docs-screen')?.getBoundingClientRect().top ?? null,
+          screen: document.querySelectorAll('.shell-detail .docs-screen').length,
+          sockets: (window as unknown as { __sockets: number }).__sockets,
+          scrollX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          title: document.title,
+        }));
         console.log(`DOT-FIGURE ${skin} 390 first ${JSON.stringify(f)}`);
         expect(f.docsTab).toBe('docs');
-        expect(f.tabBar).toBe(1);
+        expect(f.tabBar).toBe(0);
         expect(f.phoneBar).toBe(0);
-        expect(f.backHref).toBe('/');
-        expect(f.backTarget).toBeNull();
-        expect(f.backHeight).toBe(44);
+        expect(f.screenTop, 'nothing above the Docs screen').toBe(0);
         expect(f.screen).toBe(1);
         expect(f.sockets).toBe(0);
         expect(f.scrollX).toBe(0);
         expect(f.title).toBe(`${NAME} · ${PROJECT} · Docs · ccrc`);
-        expect(await app.page.getByRole('link', { name: 'Console', exact: true }).count()).toBe(1);
+        expect(await app.page.getByRole('link', { name: /^Console/ }).count(), 'no link back drawn').toBe(0);
+        // The index, then its Back: in place, to the console, and no tab opened.
+        await app.page.goto(`${server!.origin}/docs`, { waitUntil: 'load' });
+        await app.page.getByRole('button', { name: 'Up one level' }).click({ timeout: 30_000 });
+        await app.page.waitForFunction(() => location.pathname === '/fleet', undefined, { timeout: 20_000 });
+        expect(await app.page.evaluate(() => document.querySelector('.app-shell')?.hasAttribute('data-tab') ?? null), 'the console now').toBe(false);
+        expect(app.ctx.pages(), 'no tab opened').toHaveLength(1);
         expect(app.errors).toEqual([]);
       } finally {
         await app.ctx.close();

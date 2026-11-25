@@ -1,5 +1,6 @@
-// A Docs tab's link back to the console (desktop polish wave 174): the tab bar's one link, and the failed-render fallback's
-// way out in a Docs tab (fix round 1, A1), so both go to one place, the console's root, by one rule.
+// A Docs tab's link back to the console (desktop polish wave 174): the tab bar's one link at a desk (below it the frame draws
+// no bar, fix round 3), and the failed-render fallback's way out in a Docs tab (fix round 1, A1), so both go to one place,
+// the console's root, by one rule.
 //
 // A LINK THAT STANDS ALONE IS A CONTROL (fix round 1, A3): an anchor wearing the ghost button (`GHOST_ANCHOR`), which
 // carries the button's tap floor, never the inline `TextLink`. Its behaviour is the tab rule's (`useTabLink`): at a desk it

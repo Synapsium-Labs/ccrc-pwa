@@ -311,7 +311,7 @@ describe('a Docs tab at any width', () => {
       }
     });
 
-    it(`in ${skin}, a Docs address loaded first at a phone width draws the reader alone, and its link back moves in place`, async () => {
+    it(`in ${skin}, a Docs address loaded first at a phone width draws the reader alone, with no bar above its head`, async () => {
       act(() => { setSkin(skin); });
       stubWidth(false);
       await mount(DOC);
@@ -319,22 +319,21 @@ describe('a Docs tab at any width', () => {
       expect(shell().querySelector('.shell-nav')).toBeNull();
       expect(shell().querySelector('.shell-phone-nav')).toBeNull();
       expect(screen.getByRole('main').querySelector('.docs-screen')).not.toBeNull();
+      // Fix round 3: below the desk width the reader's head is the top of the page, as in the console, so the phone keeps
+      // its one bar. The way back is the head's Back, which at the index moves to the console in place (pinned below).
+      const kids = [...shell().children].map((el) => el.className.split(' ')[0]);
+      expect(kids).toEqual(['skip-link', 'shell-detail']);
+      expect(screen.queryByRole('link', { name: /^Console/ })).toBeNull();
       expect(sockets).toEqual([]);
       expect([...mounted]).toEqual([]);
       expect(document.title).toBe('2026-11-18-native-docs-parity-design.md · project-a · Docs · ccrc');
-      const bar = document.querySelector<HTMLElement>('header.shell-tab-bar')!;
-      const back = within(bar).getByRole('link', { name: 'Console' });
-      expect(back).toHaveAttribute('href', '/');
-      expect(back).not.toHaveAttribute('target');
-      const open = vi.spyOn(window, 'open').mockReturnValue(null);
-      await act(async () => { fireEvent.click(back); await new Promise((r) => setTimeout(r, 30)); });
-      expect(open).not.toHaveBeenCalled();
-      // The console's root, which the home then replaces with its place (the fleet's here).
-      expect(['/', '/fleet']).toContain(location.pathname);
-      // It left Docs, so it is the console now, and stays the console when it comes back to a document.
-      expect(shell()).not.toHaveAttribute('data-tab');
-      await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
-      expect(shell()).not.toHaveAttribute('data-tab');
+      // Widened, the bar comes; narrowed again, it goes, and the reader is never remounted.
+      const reader = document.querySelector('.docs-screen');
+      await resize(true);
+      expect(shell().querySelector('header.shell-tab-bar')).not.toBeNull();
+      await resize(false);
+      expect(shell().querySelector('header.shell-tab-bar')).toBeNull();
+      expect(document.querySelector('.docs-screen'), 'the same reader').toBe(reader);
     });
 
     // Characterised on main first: in-app navigation to Docs at a phone width is unchanged.
@@ -442,9 +441,8 @@ describe('a tab’s kind across a reload', () => {
 
   it('a Docs tab that moved to the console in place, then reloaded on a document, is the console', async () => {
     stubWidth(false);
-    await mount(DOC);
-    const bar = document.querySelector<HTMLElement>('header.shell-tab-bar')!;
-    await act(async () => { fireEvent.click(within(bar).getByRole('link', { name: 'Console' })); await new Promise((r) => setTimeout(r, 30)); });
+    await mount('/docs');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
     expect(shell()).not.toHaveAttribute('data-tab');
     await reloadAt(DOC);
     expect(shell()).not.toHaveAttribute('data-tab');

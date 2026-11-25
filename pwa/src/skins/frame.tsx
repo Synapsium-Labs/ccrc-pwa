@@ -109,10 +109,12 @@ export interface ShellFrameProps {
    *  stays beside an open session (desktop-polish PL9; spec 2026-10-31 §2, D23). A phone draws the fleet column whatever this
    *  says: its nav slot is the fleet's screen of the phone swap. */
   nav?: (fleet: ReactNode) => ReactNode;
-  /** A Docs tab's bar (desktop polish wave 174, `isDocsTab`). Given, the frame draws the reader alone: this node in a
-   *  `<header>` above the detail and no part of the set, so no bar, accounts strip, banner stack, fleet column,
-   *  inspector, status bar or phone navigation is mounted, in either skin. The detail is the same keyed `<main>`, and the
-   *  skip link stays first. Absent, the frame is the console's. */
+  /** A Docs tab's bar (desktop polish wave 174, `isDocsTab`). Given, the frame draws the reader alone: no part of the
+   *  set, so no bar, accounts strip, banner stack, fleet column, inspector, status bar or phone navigation is mounted, in
+   *  either skin, and at a desk this node in a `<header>` above the detail. Below the desk width there is no header: the
+   *  reader's own head is the top of the page, as in the console, so a phone keeps its one bar and the title's bound, and
+   *  the way back is the head's Back, which at the Docs index moves to the console in place (fix round 3). The detail is
+   *  the same keyed `<main>` at every width, and the skip link stays first. Absent, the frame is the console's. */
   alone?: ReactNode;
 }
 
@@ -159,7 +161,7 @@ export function ShellFrame({ set, view, detailRef, children, nav, alone }: Shell
         <a key="skip" className="skip-link" href={`#${CONTENT_ID}`} onClick={skipToContent}>
           Skip to content
         </a>
-        {alone !== undefined && (
+        {alone !== undefined && desk && (
           <header key="tab-bar" className="shell-tab-bar">
             {alone}
           </header>
