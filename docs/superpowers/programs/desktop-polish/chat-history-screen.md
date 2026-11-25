@@ -144,6 +144,30 @@ scroller up from where the foot last stood or tapped a disclosure, so growth bel
 keyboard) take them back. **A person sees one difference:** an append at the foot is followed at once, not by a smooth
 scroll.
 
+**Where the foot stood** is written by virtuoso's at-the-foot report and by a scroll event that lands within the pill's
+band of the foot, never by one above it. This list's scroll listener runs before virtuoso reports the reader left, so
+writing it on every scroll moved it to where the reader went: measured, a reader scrolled up was then taken back to the
+foot by a view shrink (Refined, 301px). Written only at the report, it went stale while rows measured under a reader at
+the foot, and an append then left them 67-91px above it. Both measured red in Chrome before the rule above.
+
+**What the follow did, proved in Chrome** (`chat-foot.browser.test.ts`, phosphor, both skins, 390 and 1280, unless named):
+
+| The ruling's case | Result |
+|---|---|
+| At the foot: a row appended; the last row growing in ten 12px steps; a picture in the last rows loading 400ms late; a tool stretch at the foot gaining a call | At the foot after each, no pill |
+| Scrolled up: the same four | The row in view within 1px, the pill still up |
+| The view shrinking by 300px and growing back, at the foot and scrolled up | At the foot both times; the row in view within 1px both times |
+| A window resize (60px narrower) and a new backlog on the same stream, at the foot | At the foot |
+| A skin change through the palette's Switch layout, at the foot | At the foot (desk widths: the palette opens by key there) |
+| Opening a session | At the foot |
+| Jump to latest | As today: its own smooth scroll, ending 3px above the very end (measured the same with virtuoso's follow on), inside the pill's band, the pill gone; an append after it lands at the foot |
+| A page prepended at the foot or scrolled up | `chat-history.browser.test.ts`: live rows during a page load at the foot (stays) and scrolled up (the row kept); the repeated prepends (the row within 0.5px) |
+| The 40-tap probe | 0 of 40 thrown; red with virtuoso's follow on (Instrument 5 of 10 at 390 and 5 of 10 at 1280 in that run) |
+
+**Measured on main's follow for comparison** (this file run with virtuoso's follow restored): besides the taps and Jump
+to latest's 3px, opening the session and a window resize at Instrument 390 left the reader 698px and 746px above the
+foot in that run (the column's settling, under load); both pass with this wave's follow.
+
 ## 7. Memory: no cap
 
 Measured in Chrome (`chat-history.browser.test.ts`), the whole transcript held, against a 30-event view:
