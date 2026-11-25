@@ -102,6 +102,22 @@ function writeRig(options: { gateError?: string; actor?: string; caps?: string[]
 }
 
 describe('ladder write safeguards', () => {
+  // Review 3852 (the F9 sliver): a refused ladder line rolls the row back in the store; the door answers it as it answers the ladder's
+  // other store failures, with its typed `unavailable`, never a bare 500.
+  it('the rung door answers a refused ladder line with its typed refusal, and the rung stays', async () => {
+    const r = writeRig(); r.put('chat'); r.db.exec('DROP TABLE overlord_sequence');
+    const res = await r.post('rung', { rung: 'off' });
+    expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ ok: false, error: 'unavailable', detail: 'the ladder line could not be written' });
+    expect(r.db.prepare('SELECT operatorRung FROM overlord_ladder').get()).toMatchObject({ operatorRung: 'chat' });
+    await r.app.close(); r.db.close();
+  });
+  it('the latch clear door answers a refused ladder line with its typed refusal, and the latch stands', async () => {
+    const r = writeRig(); r.latch(); r.db.exec('DROP TABLE overlord_sequence');
+    const res = await r.post('latches/latch-a/clear');
+    expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ ok: false, error: 'unavailable', detail: 'the ladder line could not be written' });
+    expect(r.db.prepare('SELECT clearedAt FROM overlord_latches').get()).toMatchObject({ clearedAt: null });
+    await r.app.close(); r.db.close();
+  });
   it('refuses Pause if a readable full rung becomes an unknown word before the write', async () => {
     const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'full', 'actor', 1, 1, NULL, NULL)");
