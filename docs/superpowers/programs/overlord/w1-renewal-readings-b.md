@@ -118,9 +118,13 @@ for them; the coordinator folds them into the plan's ledger. Measured on `main` 
 
 Own hunks, with a one-line notice to the holder (Sequence A, run 3297): `server/src/continuity/continuityStore.ts`,
 `server/src/coord/store.ts`, `server/src/coord/ports.ts` and `server/test/sim/mutation-floors.json` (one floor row,
-`renewalReadings.ts#notLocalOf`, and in fix round 1 a second, `renewalReadings.ts#notLocalAskOf`); and, to designation B
-(run 3652), `server/test/runSessionCensus.ts` (one `NOT_BINDING_SITES` row). Whichever of us lands second merges the other's.
-Fix round 2 adds `server/src/transcript/resolve.ts` (the `uuidGlobPlaces` export), which no peer held; this run claimed it.
+`renewalReadings.ts#notLocalOf`, and in fix round 1 a second, `renewalReadings.ts#notLocalAskOf`); and, to designation B (run
+3652), `server/test/runSessionCensus.ts` (one `NOT_BINDING_SITES` row). Whichever of us lands second merges the other's. Fix
+round 2 adds `server/src/transcript/resolve.ts` (the `uuidGlobPlaces` export), which no peer held; this run claimed it. The
+merge with main after Renewal readings F (#3352) adds one line to F's
+`server/test/continuity-renewal-readings-operator.test.ts`: its coord fake gains `startById`, since this PR widens
+`ReadingsCoord`. The new member throws, like its `raiseLatch`, and nothing in that file calls it. Claimed by this run, with a
+notice to F's worker.
 
 ## Measured, not assumed
 
