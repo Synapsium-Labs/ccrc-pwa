@@ -4348,7 +4348,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
     return refuseRoute(reply, 'retired',
-      { detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' });
+      { detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, '
+        + 'from 10000 (ccrc: cd server && npm run next-deviation)' });
   });
 
   /**

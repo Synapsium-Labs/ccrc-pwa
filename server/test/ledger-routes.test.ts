@@ -50,7 +50,7 @@ describe('the ledger routes', () => {
     const res = await alloc(app!, { project: 'demo', count: 3, title: 'block', byId: 'demo-coordinator' });
     expect(res.statusCode).toBe(410);
     expect(res.json()).toEqual({ ok: false, error: 'retired',
-      detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' });
+      detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, from 10000 (ccrc: cd server && npm run next-deviation)' });
     expect((res.json() as { detail: string }).detail).toContain('next-deviation');
     expect((await ledger(app!, '?project=demo')).json()).toEqual(before);
     expect(existsSync(logPath)).toBe(logBefore);

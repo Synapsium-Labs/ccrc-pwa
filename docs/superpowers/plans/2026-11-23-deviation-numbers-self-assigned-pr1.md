@@ -139,7 +139,7 @@ it('the CLI exits 2 and names --ref when the ref does not resolve', () => { /* s
 
 **Interfaces:**
 - The route keeps its path and its box-token check (the EXEMPT row and census stay true until PR 2), then answers
-  `410` with `{ ok: false, error: 'retired', detail: 'deviation numbers are self-assigned: cd server && npm run next-deviation -- <count>' }`.
+  `410` with `{ ok: false, error: 'retired', detail: 'deviation numbers are self-assigned: the highest D-N defined on main and your branch, plus one, from 10000 (ccrc: cd server && npm run next-deviation)' }`.
   It writes nothing: no floor seed, no allocation row, no log line. It answers through `refuseRoute`, so `retired`
   is declared in `shared/refusal.ts` (`GENERIC_REFUSALS`, 410) until PR 2 deletes the route; `not-seeded`, which no
   route sends any more, leaves `GENERIC_REFUSALS`, `REFUSAL_STATUS` and `CLAIM_REFUSE_CODES` here (council cycle 3).
