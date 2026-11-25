@@ -21,7 +21,7 @@ import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
 import {
-  callerStandingOf, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
+  callerStandingOf, cardFactFrom, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
   type CallerStanding, type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
   type WitnessVerdict,
 } from './overlordGate.js';
@@ -146,7 +146,7 @@ function plainFacts(deps: OverlordGateDeps, door: OverlordDoorRow, live: GenRow 
   let card: GateFacts['card'] = 'none';
   if (reads.card) {
     const c = live === null ? { ok: true as const, read: null } : attempt<CardReadRead>(() => deps.cardRead(live.startId), (detail) => ({ ok: false, detail }));
-    card = !c.ok ? { kind: 'unmeasured', why: c.detail } : c.read === null ? 'none' : c.read.current ? 'read-current' : 'read-stale';
+    card = cardFactFrom(c);
   }
   const authority: GateFacts['authority'] = reads.authority
     ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';

@@ -225,6 +225,13 @@ export const isOverlordGateKebab = (word: string): boolean =>
 const refuse = (word: GateWord, step: GateStep, detail: string, record: GateRecord = null, why: FenceWhy | null = null): GateVerdict =>
   ({ kind: 'refuse', word, detail, step, record, why });
 
+/** The card fact (step 8's, and the timer line's hold, Overlord W1): the live generation's card read, mapped once. No live
+ *  generation is `none`; a read that failed is unmeasured with its detail. */
+export function cardFactFrom(read: { readonly ok: true; readonly read: { readonly current: boolean } | null } | { readonly ok: false; readonly detail: string }):
+  GateFacts['card'] {
+  return !read.ok ? { kind: 'unmeasured', why: read.detail } : read.read === null ? 'none' : read.read.current ? 'read-current' : 'read-stale';
+}
+
 /** The generation states in which a renewal is under way (step 9): the generation is not serving. */
 const RENEWING_STATES: Readonly<Record<GenerationState, boolean>> = {
   active: false, degraded: false,
