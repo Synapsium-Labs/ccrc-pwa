@@ -27,18 +27,6 @@ import { build } from 'vite';
 await build({ configFile: 'vite.config.ts', logLevel: 'error', build: { outDir: process.argv[1], emptyOutDir: true } });
 `;
 
-beforeAll(() => {
-  out = mkdtempSync(path.join(tmpdir(), 'ccrc-review-built-'));
-  const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' };
-  if (process.env['HOME'] !== undefined) env['HOME'] = process.env['HOME'];
-  execFileSync(process.execPath, ['--input-type=module', '-e', BUILDER, out],
-    { cwd: PWA, env, encoding: 'utf8', timeout: 170_000, stdio: ['ignore', 'pipe', 'pipe'] });
-}, 240_000);
-
-afterAll(() => {
-  if (out) rmSync(out, { recursive: true, force: true });
-});
-
 const read = (name: string): string => readFileSync(path.join(out, name), 'utf8');
 
 /** The urls `sw.js` hands to `precacheAndRoute`, as the build wrote them (relative to the shell root). */
@@ -48,11 +36,32 @@ const precached = (): string[] => {
   return [...manifest![1]!.matchAll(/url:"([^"]+)"/g)].map((m) => m[1]!);
 };
 
-/** Every `<script ...>...</script>` of a built page: its attribute text and its body. */
+/** Every `<script ...>...</script>` of a built page: its attribute text and its body. The end tag is matched in any case and
+ *  with whitespace or attributes before its bracket (`</script >`), so no block hides behind that spelling (a code-scanning
+ *  finding on the first version, which missed the end tag written with a space). */
 const scripts = (html: string): Array<{ attrs: string; body: string }> =>
-  [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map((m) => ({ attrs: m[1]!, body: m[2]! }));
+  [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)].map((m) => ({ attrs: m[1]!, body: m[2]! }));
+
+describe('the script matcher', () => {
+  it('reads a block whose end tag has a space before its bracket', () => {
+    expect(scripts('<script src="/a.js">x</script >')).toEqual([{ attrs: ' src="/a.js"', body: 'x' }]);
+  });
+});
 
 describe('the built review page (M-X3.12, N8, R2.1)', () => {
+  // The build is this describe's alone, so the matcher's row above needs none.
+  beforeAll(() => {
+    out = mkdtempSync(path.join(tmpdir(), 'ccrc-review-built-'));
+    const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' };
+    if (process.env['HOME'] !== undefined) env['HOME'] = process.env['HOME'];
+    execFileSync(process.execPath, ['--input-type=module', '-e', BUILDER, out],
+      { cwd: PWA, env, encoding: 'utf8', timeout: 170_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  }, 240_000);
+
+  afterAll(() => {
+    if (out) rmSync(out, { recursive: true, force: true });
+  });
+
   it('the built tree holds review.html', () => {
     expect(readdirSync(out)).toContain('review.html');
   });

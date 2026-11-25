@@ -84,8 +84,18 @@ const CANARY = '<script>window.__reviewLabCanary=1;var d=document.createElement(
 /** What React writes for a `srcDoc` attribute value: the five characters it escapes. */
 const escapeAttr = (s: string): string => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+/** A script element's code: the tag around it taken off, in any case and with anything before the end tag's bracket (a
+ *  code-scanning finding on the first version, which took off only the exact lower-case tags). */
+const scriptCode = (element: string): string => element.replace(/^<script\b[^>]*>/i, '').replace(/<\/script\b[^>]*>$/i, '');
 const MARKDOWN_BEFORE = '</body>';
 const MOCKUP_BEFORE = escapeAttr('</body>');
+
+describe('the canary strip', () => {
+  it('takes the tag off a mixed-case script and an end tag with a space before its bracket', () => {
+    expect(scriptCode('<SCRIPT>a=1</Script>')).toBe('a=1');
+    expect(scriptCode('<script>b=2</script >')).toBe('b=2');
+  });
+});
 
 function insertBeforeLast(copy: string, marker: string, insertion: string): string {
   const at = copy.lastIndexOf(marker);
@@ -313,7 +323,7 @@ describe('the review lab fixture (R2.3, M-X3.16)', () => {
 
   it('a canary that ran would set its global and add its own pure red SCRIPT RAN block, and change no other element of either copy', () => {
     const e = heldFixture();
-    const code = e.canary.replace(/^<script>/, '').replace(/<\/script>$/, '');
+    const code = scriptCode(e.canary);
     for (const [name, html] of [['Markdown copy', e.markdownCopy], ['mockup copy\'s inner document', innerOf(parseHtml(e.mockupCopy))]] as const) {
       // The document as a frame would parse it, with its one script taken out (a frame under the policy never runs it).
       const doc = parseHtml(html);
