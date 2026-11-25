@@ -569,6 +569,9 @@ const GATE_FILES = [
   'coord/archiveDoor.ts',
   // coord/overlordBody.ts (Overlord W1 designation A): `setRoute` and `keepAwake` vet their id with the predicate before composing.
   'coord/overlordBody.ts',
+  // coord/programmeLifecycleRoutes.ts (programme lifecycle W2): the start's coordinator, the hand-over's heir and a session read's id
+  // are vetted by the predicate before any registry read; it composes no argv.
+  'coord/programmeLifecycleRoutes.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
