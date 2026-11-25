@@ -1,5 +1,6 @@
 import { OUTSTANDING_DELIVERY_STATES, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
-import { isProviderRetryMail, providerRetryDueOf, type ProviderRetryWire } from '../../../shared/provider-retry.js';
+import { isProviderRetryMail, providerRetryDueOf } from '../../../shared/provider-retry.js';
+import { type ProviderRetryWire } from '../../../shared/provider-retry-wire.js';
 import { isProviderFailure } from './stopFailure.js';
 import {
   BACKLOG_HORIZON_MS, isIdleWord, stallCurrentMark, stallNewestDelivery, stallSessionHold, stallSessionLive,

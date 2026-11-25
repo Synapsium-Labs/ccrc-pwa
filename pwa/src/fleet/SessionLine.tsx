@@ -30,7 +30,7 @@ import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import { useFleetStore } from '../stores/fleet';
 import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
-import { providerRetryOf } from '../../../shared/provider-retry';
+import { providerRetryOf } from '../../../shared/provider-retry-wire';
 import './fleet.css';
 
 

@@ -19,7 +19,7 @@ import { readSession } from './sessionReading.js';
 import { RADAR_PROBE_FRESH_S, freshWithin, sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
 import { sessionRoleOf } from './roleOf.js';
 import { providerRetryShown } from './coord/providerRetry.js';
-import type { ProviderRetryWire } from '../../shared/provider-retry.js';
+import type { ProviderRetryWire } from '../../shared/provider-retry-wire.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.

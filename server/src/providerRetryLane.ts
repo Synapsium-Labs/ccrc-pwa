@@ -7,7 +7,8 @@ import type { SessionRecord } from './registry.js';
 import type { FleetSession } from '../../shared/api.js';
 import type { WatcherDeps } from './deps.js';
 import type { WatcherCoordPort } from './coord/ports.js';
-import { PROVIDER_RETRY_BODY, providerRetrySubject, type ProviderRetryWire } from '../../shared/provider-retry.js';
+import { PROVIDER_RETRY_BODY, providerRetrySubject } from '../../shared/provider-retry.js';
+import { type ProviderRetryWire } from '../../shared/provider-retry-wire.js';
 import {
   PROVIDER_RETRY_WITHDRAWN, providerRetryArmed, providerRetryHoldsQuiet, providerRetryMailSince, providerRetryOwed, providerRetryVerdict, providerRetryWire,
 } from './coord/providerRetry.js';

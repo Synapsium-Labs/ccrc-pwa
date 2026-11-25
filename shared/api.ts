@@ -24,7 +24,7 @@ import type { CoordCapNow } from './runCap.js';
 import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';
 import type { LandingWrite } from './landingLine.js';
 import { hookEventIs, type HookEvent } from './hook-events.js';
-import { providerRetryOf, type ProviderRetryWire } from './provider-retry.js';
+import { providerRetryOf, type ProviderRetryWire } from './provider-retry-wire.js';
 import { PROGRAMME_RUN_REFUSAL_MAP, PROGRAMME_STORED_STATES, type ProgrammeLifecycleFields, type ProgrammeRunRefuseCode, type ProgrammesLifecycleAnswer, type ProgrammeStoredState } from './programmeLifecycle.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';

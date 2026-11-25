@@ -2,7 +2,7 @@
 // pure, the clock comes in. One spelling, read by the owners of the words it takes the place of: the row's and the header's status
 // word (`sessionFacts.ts`, `sessionHeaderView.ts`) and the run row's "turn failed" and "quiet" (`runWords.ts#workerSeenNote`).
 import type { FleetSession } from '../../../shared/api';
-import { providerRetryOf } from '../../../shared/provider-retry';
+import { providerRetryOf } from '../../../shared/provider-retry-wire';
 import { resetClock } from '../lib/clock';
 import { paneGone } from './presence';
 

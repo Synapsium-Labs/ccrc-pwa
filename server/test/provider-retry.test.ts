@@ -7,9 +7,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
-import {
-  PROVIDER_RETRY_BODY, PROVIDER_RETRY_PREFIX, isProviderRetryMail, providerRetryDueOf, providerRetryOf, providerRetrySubject, renderProviderRetryLine,
-} from '../../shared/provider-retry.js';
+import { PROVIDER_RETRY_BODY, PROVIDER_RETRY_PREFIX, isProviderRetryMail, providerRetryDueOf, providerRetrySubject, renderProviderRetryLine } from '../../shared/provider-retry.js';
+import { providerRetryOf } from '../../shared/provider-retry-wire.js';
 import { MAIL_TURN_HOLD_MS, decideSendFailure } from '../src/coord/delivery.js';
 import { mailNudgeOf, renderMailNudge, resumeRuleOf } from '../src/coord/envelope.js';
 import { PROVIDER_FAILURE_ERRORS, STOP_FAILURE_ERRORS, stallFailedVerdict } from '../src/coord/stopFailure.js';

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { WAITING_ON_WORKERS } from '../src/fleet/sessionFacts';
 import { reviveFleetSession, TURN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
-import type { ProviderRetryWire } from '../../shared/provider-retry';
+import type { ProviderRetryWire } from '../../shared/provider-retry-wire';
 import { cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers, sessionFacts } from '../src/fleet/sessionFacts';
 import { providerRetryNote } from '../src/fleet/providerRetryWords';
 import { workerSeenNote } from '../src/fleet/runWords';
