@@ -102,9 +102,11 @@ export function ladderActor(actor: unknown, direction: 'brake' | 'widen'): { ok:
   const subject = consoleSubject(actor);
   return subject === null ? { ok: false, reason: 'actor' } : { ok: true, subject };
 }
-/** The kind of a ladder writer's actor, taken from the actor the writer already accepted (sequence plan question 6): a minted
- *  actor's own kind, the console's signed-in actor's kind, `operator` for the console's dark and unmeasured answers (the console
- *  is the operator's), and `server` for a lane. */
+/** The kind of a ladder writer's actor, taken from the actor the writer already accepted: a minted actor's own kind, the console's
+ *  signed-in actor's kind, `operator` for the console's dark and unmeasured answers (the console is the operator's), and `server`
+ *  for a lane. Plan question 6 takes a line's kind from the row being written; the ladder's rows have no kind column, so the kind
+ *  is the writer's input actor's and exists only on the line (a departure, slug `ladder-line-kind-from-the-writers-actor`; every
+ *  latch raise is the server's, `latch-lines-are-the-servers`, call 1220). */
 export function ladderActorKind(actor: BrakeActor): ActorKind {
   if (isRecordedActor(actor)) return actor.kind;
   if (isLaneRaiser(actor)) return 'server';

@@ -88,7 +88,7 @@ export function retentionCut(now: number, oldest: readonly { seq: number; at: nu
 
 /** The kept designation line, the term baseline (review 3740 F2, ruled by the coordinator, call 1077): while a binding stands, the
  *  newest `live` line; with none standing, the newest line. A binding stands when the newest `live` line has no later `retired`
- *  line of the same id. So after a rebind's go-live (which stamps the new body `live`, then the old body `retired`), while a rebind
+ *  line of the same id. So after a rebind's go-live (which stamps the old body `retired`, then the new body `live`), while a rebind
  *  is pending (the new body's `pending` is newest) and after one failed (its `failed` is newest), the standing binding's `live`
  *  line is kept; after a retire with no binding the last line is, as before. `lines` are designation lines in any order, and hold
  *  every line from the newest `live` one on; null for none. */
