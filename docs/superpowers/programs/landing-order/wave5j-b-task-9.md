@@ -43,8 +43,8 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, Task 9,
 - `auth-gate.test.ts`'s sweep also checks four prose sites against the counts it derives: the scanner-meta comment
   (309 to 311 scanned), the property loop's and the third probe's HTTP count (306 to 308), and `gate.ts`'s docstring
   (306 to 308). The plan named the two tallies only. `server/src/auth/gate.ts` was free once claim 7164 was released, so
-  this branch claimed it (7173) and changed only that number in its docstring. Name for the ledger:
-  `D-TBD-landing-doors-gate-count-prose` (the plan's Task 9 file list lacks `gate.ts` and the four prose counts).
+  this branch claimed it (7173) and changed only that number in its docstring. Issued as
+  **D-9094** `landing-doors-gate-count-prose` (the plan's Task 9 file list lacks `gate.ts` and the four prose counts).
 - `box-token-census.test.ts` harvests the `SESSION_ONLY` literal as text, and the first comment written there held an
   apostrophe ("the operator's"), which the harvest read as a quoted path. The comment now has none, as the plan warned.
 - `landing-doors-route.test.ts`'s first identity-conflict fixture reused an existing subject id, and its run-unreadable

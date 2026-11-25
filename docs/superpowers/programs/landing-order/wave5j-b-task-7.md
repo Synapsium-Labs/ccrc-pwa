@@ -41,9 +41,9 @@ Plan: `docs/superpowers/plans/2026-11-25-landing-order-wave5j-doors.md`, Task 7,
 - **The entry notice's last sentence** is the one that applies: the retreat-then-advance sentence for a run-bound entry,
   the cannot-come-back sentence for a run-less one.
 
-## Departure for the coordinator to number
+## Departure (D-9093, issued by the coordinator)
 
-- `D-TBD-withdraw-terminal-mirror`: the withdraw arm needs `LANDING_ENTRY_TERMINAL`'s classification, and
+- **D-9093** `withdraw-terminal-mirror`: the withdraw arm needs `LANDING_ENTRY_TERMINAL`'s classification, and
   `landingWrites.ts` takes no value import (its purity test, `valueImports(p)` is `[]`). The file therefore mirrors the
   map as an exhaustive `Record<LandingEntryState, boolean>` (a new state is a compile error there), and a new
   `landing-writes.test.ts` case drives the withdraw arm over every state in `LANDING_ENTRY_STATES` against the L0 map,

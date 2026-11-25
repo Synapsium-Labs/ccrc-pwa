@@ -880,7 +880,7 @@ Review run 3806 read the first fix round at `621932e57e`: no critical or importa
 
 ## Deviations found
 
-Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last.
+Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last. Two more were issued for departures wave 5j-b's build found (D-9093 and D-9094), defined after them. Wave 5j-b measured `routes.ts` under the growth limit, so D-9052 was not used and no waiver was added.
 
 - **D-9045 (2026-11-25)** — `landing-journal-door-kinds`: the authority journal gains two record kinds, `pause` (project-level, no subject) and `withdraw` (a subject), under `v: 1`.
   - Each new record carries `setBy: 'operator'` and the actor text the existing device actor owner records (`flag-off` dark). The parser accepts that owner's untrimmed output grammar.
@@ -916,3 +916,9 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
 - **D-9072 (2026-11-25)** — `landing-doors-holder-pin-order`: Task 2's commit on the branch does not pass the single-definition directory alone.
   - `landingDoorsTx.ts` imports the database handle's type, so `core-vocab.test.ts`'s `HANDLE_HOLDERS` must name it. That test file was under another session's recently lapsed claim when Task 2 was committed, so its line came in a later commit of the same push.
   - The plan asks each task's commit to pass its named files. The branch tip passes, and only that one commit in between does not. History is not rewritten, and the landing squashes the branch, so no commit on `main` carries it.
+- **D-9093 (2026-11-25)** — `withdraw-terminal-mirror`: the withdraw arm of `landingWrites.ts#decideLandingMutation` needs `LANDING_ENTRY_TERMINAL`'s classification of the stored state word, and `landingWrites.ts` takes no value import (its purity test).
+  - The file mirrors the map as an exhaustive `Record<LandingEntryState, boolean>`, so a new state is a compile error there too.
+  - `landing-writes.test.ts` drives the withdraw arm over every state in `LANDING_ENTRY_STATES` against the L0 map, for the withdrawn entry and for a dependant, so a drift between the two is red.
+  - The alternative, a third facts field computed in `landingFactsOf`, was not taken: the plan names two new facts fields only.
+- **D-9094 (2026-11-25)** — `landing-doors-gate-count-prose`: Task 9's file list named `auth-gate.test.ts`'s two route tallies only. The same suite also checks four prose counts against the routes it derives: its scanner-meta comment, its property loop's and third probe's HTTP counts, and `server/src/auth/gate.ts`'s docstring.
+  - Wave 5j-b raised all four by two with the doors, and `gate.ts` (its docstring count only) joined the wave's files.

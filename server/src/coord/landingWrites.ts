@@ -250,7 +250,7 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
 
 const wordOf = (facts: LandingMutationFacts, id: number): LandingEntryState | 'unrecognised' | undefined =>
   facts.stateWords.find((w) => w.id === id)?.value;
-/** `LANDING_ENTRY_TERMINAL`'s classification, mirrored because this module takes no value import (its purity test). The
+/** `LANDING_ENTRY_TERMINAL`'s classification, mirrored (D-9093) because this module takes no value import (its purity test). The
  *  `Record` makes a new state a compile error here, and `landing-writes.test.ts` drives the withdraw arm over every state
  *  against the L0 map, so the mirror cannot drift silently. */
 const TERMINAL_WORD: Record<LandingEntryState, boolean> = {
