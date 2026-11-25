@@ -46,6 +46,8 @@ describe('FleetIO — every member states its failure contract (D-5969)', () => 
       'testboxAdmin',
       // The `models` op (auto-advance W4, D-8687).
       'models',
+      // The `overlord-history` op's port (Overlord W1 PR B1, the history door).
+      'overlordHistory',
     ]);
   });
 

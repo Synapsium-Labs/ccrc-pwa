@@ -1,5 +1,5 @@
 import {
-  BACKUP_OP, DISK_OP, MODELS_OP, MODELS_OP_REQUEST_TIMEOUT_MS, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_ADMIN_OP, TESTBOX_CAPTURE_OP,
+  BACKUP_OP, DISK_OP, MODELS_OP, MODELS_OP_REQUEST_TIMEOUT_MS, OVERLORD_HISTORY_OP, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_ADMIN_OP, TESTBOX_CAPTURE_OP,
   TESTBOX_CAPTURE_REQUEST_MS, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, buildModelsArgv, isReadFromRange, readModelsOpAnswer,
   readTestboxAdminOpAnswer, readTestboxCaptureReply, readTestboxOpReply, readTestboxToolsSyncReply, testboxAdminRequestTimeoutMs, type ModelsReq, type TailData,
   type TailReset,
@@ -10,6 +10,7 @@ import { readHeadroomBytes, readHostMachine, readHostPsi } from '../../../shared
 import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { ModelClass } from '../../../shared/models.js';
+import { readOverlordHistoryAnswer } from '../../../shared/overlordHistory.js';
 import type { FleetClient } from './client.js';
 import { AgentOpError, LinkNotSentError } from './errors.js';
 
@@ -422,8 +423,35 @@ export function createIo(client: FleetClient): FleetIO {
         return { kind: 'lost' };
       }
     },
+
+    /** The agent's `overlord-history` op (Overlord W1, PR B1; plan w1-board-history.md Task 5, ruled R4): sent only to an
+     *  agent whose ready frame names the op, a re-check at the send that is legitimately different from the door's
+     *  `historyAgentFor` choice, because the link can change between the two. The reply is read by its one reader, and an
+     *  off-shape reply is `lost`. Errors map as the sibling ops' and the runner's do: an older agent's `bad-request` is
+     *  `unsupported`, a frame that never left `not-started`, this server's own wait (a plain `Error('timeout')`, told
+     *  apart by the runner's precedent once both of those are ruled out) `timeout`, and anything else `lost`, the agent's
+     *  own `AgentOpError` `timeout` and an abort included. */
+    async overlordHistory(req, signal) {
+      if (!(client.state.agentOps ?? []).includes(OVERLORD_HISTORY_OP)) return { kind: 'unsupported' };
+      try {
+        const answer = readOverlordHistoryAnswer(
+          await client.request({ t: 'req', op: OVERLORD_HISTORY_OP, ...req }, OVERLORD_HISTORY_REQUEST_TIMEOUT_MS, signal),
+        );
+        return answer === 'off-shape' ? { kind: 'lost' } : { kind: 'answer', answer };
+      } catch (e) {
+        if (e instanceof AgentOpError) return e.code === 'bad-request' ? { kind: 'unsupported' } : { kind: 'lost' };
+        if (e instanceof LinkNotSentError) return { kind: 'not-started' };
+        if (e instanceof Error && e.name === 'Error' && e.message === 'timeout') return { kind: 'timeout' };
+        return { kind: 'lost' };
+      }
+    },
   };
 }
+
+/** The server's wait for one `overlord-history` answer: above the agent's own deadline (`OVERLORD_HISTORY_DEADLINE_MS`,
+ *  20 s, `agent/src/historyOp.ts`), so the agent's `deadline` answer arrives first, and below `ccrc-api`'s `curl -m 30`, so
+ *  the door answers before its caller gives up. `overlord-history-door.test.ts` holds the order. */
+export const OVERLORD_HISTORY_REQUEST_TIMEOUT_MS = 25_000;
 
 /**
  * Opens a tailOpen subscription and keeps it alive across reconnects.
