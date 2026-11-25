@@ -314,10 +314,10 @@ export function overlordCandidatesOf(d: DesignationRead, f: AccountFacts): Candi
   return overlordLoadCandidates(d, d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : [], f);
 }
 
-/** The pass's candidates for one generation: a designation bound to another session (a rebind) does not apply to this one, as
- *  `termRaisedOf` reads it. */
+/** The pass's candidates for one generation: a designation that is not this session's (`boundTo`, the one reader of the binding
+ *  that `termRaisedOf` reads too) does not apply to it, so a rebind reads as no designation. */
 export function boundCandidates(d: DesignationRead, sessionId: string, c: Candidates): Candidates {
-  return d.kind === 'designated' && d.sessionId !== sessionId ? { kind: 'not-designated' } : c;
+  return boundTo(d, sessionId) === false ? { kind: 'not-designated' } : c;
 }
 
 /** The account holds (`overlord_account_holds`, PR H) as this reading takes them, or why they are unread. */

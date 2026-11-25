@@ -329,7 +329,7 @@ const CANDIDATES_SET: MutantSet<RenewalReadingsModule> = {
 const BOUND_SET: MutantSet<RenewalReadingsModule> = {
   modulePath: MODULE,
   mutants: [
-    { id: 'B1 a rebind read as this session\'s', old: "d.kind === 'designated' && d.sessionId !== sessionId", new: 'false' },
+    { id: 'B1 a rebind read as this session\'s', old: "boundTo(d, sessionId) === false ? { kind: 'not-designated' } : c", new: 'c' },
   ],
   suite: candidatesCases,
 };

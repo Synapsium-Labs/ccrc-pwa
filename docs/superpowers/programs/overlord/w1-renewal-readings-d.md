@@ -70,7 +70,7 @@ Three readings of the Overlord's generation leave `W1` and become measured. They
 | `account-load-split-into-load-and-move` | The plan's `accountLoadMoveOf(load, others, turn)` is two L1 functions: `accountLoadOf(account, candidates, nowS)` (the not-a-candidate rule and the F5 guard) and `accountLoadMoveOf(load, turn)` (the idle half). The plan put "not a candidate" in the wiring. It is a decision, so it belongs in L1. |
 | `class-unservable-takes-the-lane-facts` | `classUnservableOf(on, candidates, nowS)` takes the account's lane facts, not a ready `Serviceability`. Calling `serviceability` is the decision, so it stays in L1. It also needs the account's id to tell this account from the others. |
 | `account-readings-candidates-built-in-l1` | `overlordCandidatesOf` composes designation A's `overlordAccounts` with serviceability B's `overlordLoadCandidates`, the same composition `loadLineReading` makes inline. So `renewalReadings.ts` also imports `coord/overlordDesignation.ts` (C5, L1), beside the plan's `poolrule.ts` and `accountLoad.ts` (C1, L1). All three are named in the module's header. |
-| `rebind-reads-the-account-rows-false` | A designation bound to another session makes the three read measured `false` for this generation, as `termRaisedOf` reads a rebind. The plan did not say. |
+| `rebind-reads-the-account-rows-false` | A designation bound to another session makes the three read measured `false` for this generation, as `termRaisedOf` reads a rebind. The plan did not say. `boundCandidates` asks the module's existing `boundTo`, so no new session comparison enters the run/session census. |
 | `designation-checked-before-the-pool-answer` | In each mapper, the designation's arms come before rule 1. This follows Step 1's cases: no designation reads `false` and an unreadable designation reads unmeasured, whatever the pool answer. |
 | `account-reads-from-the-wiring-not-watch` | See "No `watch.ts` line" above. |
 | `pool-answer-composer-shared-with-the-body` | See the body adapter above. |
@@ -170,6 +170,21 @@ Each file was run alone through `ccrc test`:
 - The server's `tsc --noEmit` is clean.
 - The whole test-tree type check (`test/tsconfig.tests.json`) was killed by the slice's 6G memory cap (exit 137). A
   narrow check over the touched files and their imports is clean.
+
+### The pull request's first run
+
+Both readings suites, `continuity-generations-lane`, `sim/generation-day` and `sim/mutation-floors` ran in the pull
+request's run and passed. Three files failed:
+
+- `verb-gate.test.ts`: the moved pool-answer call site resolved no scope, because its signature wrapped onto a line the
+  scanner does not read as a function head. Fixed: the signature is one line, through a `BodyRan` type alias.
+- `run-session-census.test.ts`: `boundCandidates` added a session comparison by hand. Fixed: it asks the existing
+  `boundTo`.
+- `ccrc-install-tree.test.ts` ("repairs a mode someone changed"): timed out at 20 s. It fails the same way on a clean
+  checkout of `main` at `bd4e28b691` on the test box, so it is `main-red` and was left alone.
+
+Both fixes were run alone afterwards: `verb-gate` 25 passed, `run-session-census` 18 passed, the readings suites 107 and
+47, `overlord-body` 39, and the renewal-readings floors green.
 
 ## Known limits
 
