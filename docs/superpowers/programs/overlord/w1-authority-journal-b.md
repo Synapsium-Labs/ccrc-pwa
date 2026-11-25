@@ -50,6 +50,7 @@ the coordinator can allocate numbers when it folds them into the plan.
   in one synchronous task. A lock request that rejects or throws is a failure, not permission to write unlocked.
 - `signed-in-by-shell`: the app shell starts the console exchange unless sign-in is lost, and stops it otherwise; while sign-in is
   dark the door answers `auth-off` and the client records `refused`.
+  Programme call 1060: the shell also starts no exchange in a Docs tab; a tab that stops being one starts it then.
 - `narrowing-nudge-unwired`: `nudgeWitness()` is exported for the console's narrowing doors, but no console control calls the rung,
   Pause or latch doors yet (home B's). The 60 s exchange holds a narrowing within a minute until then.
 - `post-append-nudge-through-the-guard-port`: the writer's port gains an optional `appended?()`, called once after a successful append
@@ -216,3 +217,10 @@ count, not a run of that file. The merge adds no migration: the schema matches t
 For the exact-tail follow-up, its targeted case failed on both controlled changes: an extra row after `authorityWitness`
 and an extra row immediately before it. With both changes removed, the lane schedule file passed 75 cases, the exchange file
 passed 39, and the agent carrier file passed 19 in the local test slice. None of these measurements is a full-suite result.
+
+## Merges of main on the carrying branch
+
+- Main `b4677c29ce` (the Docs tab, #3289): the carried tip `077a0c56a2` merged onto it, conflicting in the app shell's imports only.
+- Main `2f140376dd` (the history door, #3348): conflicting in the session gate's test only; 307 routes, 304 HTTP, 191 gated, 113 exempt.
+- Main `ba0b0f4015` (serviceability B, #3367): ten files; 308 routes, 305 HTTP, 192 gated, 113 exempt; the lane tail ends
+  `limitSamples`, `decisionAnchors`, `authorityWitness`; the ladder keeps the 95% load row and the witness row, in the cause map's order.
