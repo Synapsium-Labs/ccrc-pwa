@@ -27,7 +27,7 @@ wall clock, so after the clock stepped back it admitted nothing until the wall p
 last admitted time now admits too.
 
 Product lines: `server.ts` +7 −2 (four hunks, each on its route's own lines; applied as a packet the holder of the file's other
-claim consented to), `coord/routes.ts` +4 −1 (one import, the call), `interruptlog.ts` +5 −3.
+claim consented to), `coord/routes.ts` +5 −1 (one import; the answer kept in a const, a comment, the call), `interruptlog.ts` +5 −3.
 
 ## The callers census
 
@@ -86,7 +86,29 @@ and real-pass case, and the clock-step drawer case; the rest stood green. With t
 
 ## Mutation table
 
-MUTATION_TABLE_PENDING
+Every mutant was killed: 16 of 16, each against the 50 cases of the mark-paths file.
+
+| # | Mutation | Red cases | Killed by |
+|---|---|---|---|
+| Q1 | the question door's call removed | 16 | every question-door pass and real-pass case, all four forms |
+| Q2 | the question door marks a refused answer too | 4 | each form's refused case |
+| Q3 | the question door marks before the answer | 4 | each form's refused case |
+| T1 | the dialog tab move's call removed | 4 | its two pass cases and its two real-pass cases |
+| T2 | the dialog tab move marks a refused move too | 1 | its refused case |
+| I1 | the interrupt's call removed | 4 | its two pass cases and its two real-pass cases |
+| I2 | the interrupt marks when it answered not-busy | 1 | its refused case |
+| P1 | the picker's call removed | 4 | its two pass cases and its two real-pass cases |
+| P2 | the picker marks whatever ccd answered | 1 | its refused case (ccd failing, 502) |
+| P3 | the picker marks before ccd runs | 1 | its refused case |
+| D1 | the drawer's mark throttle always admits (review 3736's M5) | 1 | two frames inside the window write one mark |
+| D2 | the drawer's throttle built without `earlierAdmits` | 1 | after the wall steps back, the next frame marks |
+| D3 | the earlier-reading rule removed | 2 | the clock-step case and the rule case |
+| D4 | the rule at `<=` (an equal reading admits) | 1 | the rule case |
+| D5 | the rule for every throttle (the interrupt record too) | 1 | the rule case |
+| D6 | the window rule removed | 2 | the window case and the rule case |
+
+Q1 to I2 ran against the picker's first form, P1 to D6 against its final one; the picker's hunk is the only difference, and none of
+Q1 to I2 touches it.
 
 The mark paths have no mutant set with a floor (`mutation-floors.json` names none of these functions), so these were run by hand
 in a scratch copy of the tree, each restored after its run, against the mark-paths file.
