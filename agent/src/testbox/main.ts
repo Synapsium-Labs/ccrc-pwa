@@ -39,7 +39,7 @@ import { pristineSettings } from './pristine.js';
 import { ProbeDesk, type ProbeRunner } from './probeDesk.js';
 import { fileBudgetStore, fleetConfigDirs, realPathOf } from './probeFs.js';
 import { probeRole, probeSettings } from './probes.js';
-import { registrySettings, startRegistry } from './registry.js';
+import { registryCacheDir, registrySettings, startRegistry } from './registry.js';
 import { liveRunIds } from './runs.js';
 import { FRAME_HANDLERS, TestboxService, type Conn, type PristineDeps } from './service.js';
 import { systemctlManager, type SystemManager } from './systemd.js';
@@ -386,7 +386,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
 export async function registryFor(cfg: TestboxConfig): Promise<{ close(): Promise<void> }> {
   const r = registrySettings(cfg.lines, hostPort);
   if (listenClass(r.host) !== 'loopback') throw new Error(`CCRC_TESTBOX_REGISTRY_PROXY: ${r.host} is not a loopback address`);
-  return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: path.join(cfg.root, 'registry'), timeoutMs: cfg.unitMaxMs });
+  return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: registryCacheDir(cfg.root), timeoutMs: cfg.unitMaxMs });
 }
 
 /** The timer's work (L5): the service's tick, after any tick in progress, and beside it, not awaited, the tool sync's

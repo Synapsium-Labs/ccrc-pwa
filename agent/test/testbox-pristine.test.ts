@@ -9,7 +9,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
@@ -24,7 +24,9 @@ import {
   adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, installKey, LIFECYCLE_INPUTS_MAX, lifecycleInputPaths, nodeChanged,
   pristineLists, pristineSettings, retryDelay, seen, type InstallInput,
 } from '../src/testbox/pristine.js';
-import { distFor, integrityMatches, parseRegistryPath, registrySettings, startRegistry, type RunningRegistry } from '../src/testbox/registry.js';
+import {
+  cachedFiles, distFor, dropCached, integrityMatches, parseRegistryPath, registryCacheDir, registrySettings, startRegistry, type RunningRegistry,
+} from '../src/testbox/registry.js';
 import { CLONE_ARGV, INSTALL_ARGV, installStep } from '../src/testbox/runs.js';
 import { TestboxService, type Conn, type ServiceSettings } from '../src/testbox/service.js';
 import { buildInstallSpec, encodeInstallSpec, encodeSpec, buildRunSpec } from '../src/testbox/spec.js';
@@ -120,7 +122,7 @@ function stubBin(dir: string): string {
 
 const SETTINGS = (root: string): ServiceSettings => ({
   root, workers: 3, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: [], runUserPrefix: 'ccrc-tb-',
-  reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, outputDrainMs: 100,
+  reportMaxBytes: 1024, serviceUser: ME, runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 86_400_000, outputDrainMs: 100,
 });
 
 const ROW = (root: string): TestboxRepoRow => ({
@@ -965,6 +967,33 @@ describe('registry.ts: the caching read-only registry proxy', () => {
     } finally {
       up.down = false;
     }
+  });
+
+  it('D-9007: an answer from the cache marks the file served (its mtime), so the service\'s prune keeps what is in use', async () => {
+    const tgz = path.join(cache, 'tarballs', 'dep', 'dep-1.0.0.tgz');
+    expect((await fetch(`${base}/dep/-/dep-1.0.0.tgz`)).status).toBe(200);
+    const long = Date.now() / 1000 - 40 * 86_400;
+    utimesSync(tgz, long, long);
+    const before = Date.now() - 1000;
+    expect((await fetch(`${base}/dep/-/dep-1.0.0.tgz`)).status).toBe(200);
+    expect(statSync(tgz).mtimeMs, 'a cached tarball served is marked').toBeGreaterThanOrEqual(before);
+    const pk = path.join(cache, 'packuments', 'dep.json');
+    utimesSync(pk, long, long);
+    up.down = true;
+    try {
+      expect((await fetch(`${base}/dep`)).status).toBe(200);
+    } finally {
+      up.down = false;
+    }
+    expect(statSync(pk).mtimeMs, 'a kept packument served is marked').toBeGreaterThanOrEqual(before);
+    const listed = cachedFiles(cache).map((f) => path.relative(cache, f.file));
+    expect(listed).toEqual(expect.arrayContaining([path.join('packuments', 'dep.json'), path.join('tarballs', 'dep', 'dep-1.0.0.tgz')]));
+    expect(registryCacheDir('/srv/testbox')).toBe('/srv/testbox/registry');
+    // The prune deletes only inside the cache, whatever it is handed.
+    const outside = path.join(path.dirname(cache), 'outside.tgz');
+    writeFileSync(outside, 'x');
+    dropCached(cache, [outside, path.join(cache, '..', 'outside.tgz')]);
+    expect(existsSync(outside)).toBe(true);
   });
 
   it('a scoped packument reaches the upstream as /@scope%2fdep, and its tarball as /@scope/dep/-/<file>', async () => {

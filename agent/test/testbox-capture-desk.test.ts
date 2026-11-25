@@ -202,7 +202,7 @@ describe('the capture desk runs one capture at a time (spec §2.5)', () => {
 describe('the test service takes capture.submit through the desk (spec §2.5)', () => {
   const SETTINGS = (root: string): ServiceSettings => ({
     root, workers: 2, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: [], runUserPrefix: 'ccrc-tb-',
-    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000,
+    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 86_400_000,
   });
   const service = (captures?: CaptureDesk): TestboxService => new TestboxService({
     settings: SETTINGS(ROOT), rows: [], sys: {} as SystemManager, probe: async () => ({ ok: true }), mirror: {} as MirrorOps,

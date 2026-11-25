@@ -26,7 +26,7 @@ export const SERVICE_KNOBS = [
   'CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS', 'CCRC_TESTBOX_FETCH_EVERY', 'CCRC_TESTBOX_RETENTION',
   'CCRC_TESTBOX_REPORT_MAX', 'CCRC_TESTBOX_TOOLS_DIR', 'CCRC_TESTBOX_ENV_FORWARD', 'CCRC_TESTBOX_RUN_USER_PREFIX',
   'CCRC_TESTBOX_LOG_TAIL', 'CCRC_TESTBOX_SERVICE_USER', 'CCRC_TESTBOX_LISTEN', 'CCRC_TESTBOX_SERVICE_TOKEN_FILE',
-  'CCRC_TESTBOX_UNIT_MAX',
+  'CCRC_TESTBOX_UNIT_MAX', 'CCRC_TESTBOX_REGISTRY_KEEP',
 ] as const;
 export type ServiceKnob = (typeof SERVICE_KNOBS)[number];
 
@@ -39,6 +39,8 @@ export interface TestboxConfig {
   readonly repos: string;
   readonly fetchEveryMs: number;
   readonly retentionMs: number;
+  /** D-9007: a registry proxy cache file not served this long is deleted. */
+  readonly registryKeepMs: number;
   readonly reportMaxBytes: number;
   readonly toolsDir: string;
   readonly envForward: readonly string[];
@@ -142,6 +144,7 @@ export function configFromLines(lines: ReadonlyMap<string, KnobLine>, home: stri
     repos: absPath('CCRC_TESTBOX_REPOS', v('CCRC_TESTBOX_REPOS'), home),
     fetchEveryMs: durationMs('CCRC_TESTBOX_FETCH_EVERY', v('CCRC_TESTBOX_FETCH_EVERY')),
     retentionMs: durationMs('CCRC_TESTBOX_RETENTION', v('CCRC_TESTBOX_RETENTION')),
+    registryKeepMs: durationMs('CCRC_TESTBOX_REGISTRY_KEEP', v('CCRC_TESTBOX_REGISTRY_KEEP')),
     reportMaxBytes: sizeBytes('CCRC_TESTBOX_REPORT_MAX', v('CCRC_TESTBOX_REPORT_MAX')),
     toolsDir: absPath('CCRC_TESTBOX_TOOLS_DIR', v('CCRC_TESTBOX_TOOLS_DIR'), home),
     envForward: envList('CCRC_TESTBOX_ENV_FORWARD', v('CCRC_TESTBOX_ENV_FORWARD')),
