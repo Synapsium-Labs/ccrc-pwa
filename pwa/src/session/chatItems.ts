@@ -39,8 +39,10 @@ export type ChatItem =
   | {
     kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent;
     /** Drawn open until the reader closes it (desktop polish wave 176): false as built, and set by `foldMailRows`
-     *  (`mailRows.ts#opensByDefault`) on the newest mail row when it asks something of the session shown. */
+     *  (`mailRows.ts#opensByDefault`) on the newest card that asks something of the session shown. */
     opens: boolean;
+    /** Whether it asks something of the session shown (`mailRows.ts#asksOf`): false as built, set by `foldMailRows`. */
+    asks: boolean;
   }
   /** The mail lane's own prompt (desktop polish wave 176): a user turn that begins with the mail prompt's fixed head
    *  (`mailRows.ts#isMailPrompt`), drawn as one quiet line, never as a bubble from the person. Derived at render time
@@ -128,7 +130,7 @@ export function buildChatItems(
           // the reconciliation problem spec §2.2 refused a second frame over —
           // and would break the derived-from-one-event property that lets the
           // revival discipline stay unchanged.
-          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e, opens: false });
+          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e, opens: false, asks: false });
         }
       }
       continue;
@@ -191,7 +193,7 @@ export function buildChatItems(
         // shapes: a typed envelope is never a JSON response.
         const parsed = parseMailEnvelope(e.text);
         if (parsed.ok) {
-          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e, opens: false });
+          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e, opens: false, asks: false });
           continue;
         }
         // The mail lane's own prompt (desktop polish wave 176): the one shared head, at the start of the turn, and

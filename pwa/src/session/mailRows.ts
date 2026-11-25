@@ -2,13 +2,16 @@
 // "Can mail receipt blocks also be nicely wrapped up?").
 //
 // WHAT IT DECIDES, AND NOTHING ELSE. Which user turn is the mail lane's own prompt (`isMailPrompt`); which fetched card
-// opens by default (`opensByDefault`); and which prompts read as one run (`foldMailRows`, by `SAYS_NOTHING`). What the
-// rows say is `promptWords` and `cardTime`. Drawing them is `MailRow.tsx`'s, and the design system's `MailCard` and
-// `MailPromptLine`. Nothing here changes what the server types, what makes a card, or the order of anything.
+// opens by default (`opensByDefault`); which prompts read as one run (`foldMailRows`, by `SAYS_NOTHING` and the day
+// rule); and which cards a closed tool stretch draws under its row (`underRow`, what the row draws and what the list
+// prices). What the rows say is `promptWords`, `cardTime` and `askWord`. Drawing them is `MailRow.tsx`'s, and the design
+// system's `MailCard` and `MailPromptLine`. Nothing here changes what the server types, what makes a card, or the order
+// of anything.
 //
 // L1: pure, no I/O, no React.
 import type { MailEnvelope } from '../../../shared/api';
 import { injectedPromptOf } from '../../../shared/injected-prompts.mjs';
+import { dayKey } from '../lib/clock';
 import { timeOf } from '../lib/format';
 import type { ChatItem } from './chatItems';
 import type { MessageEvent } from './MessageBubble';
@@ -22,7 +25,11 @@ export type MailPromptsItem = Extract<ChatItem, { kind: 'mail-prompts' }>;
  *  turn, at a word boundary), and nothing looser. A person's message that mentions mail, quotes the prompt lower down,
  *  pastes it after other words or starts with nearly the same words stays an ordinary bubble. Every form the server
  *  types today opens with that head: the generic nudge, the operator-message nudge, the inbox wake and the spot-probe
- *  notice. */
+ *  notice.
+ *
+ *  A LIMIT, RULED (review 3737 A2): the head is the contract, so a person's message that begins with the lane's whole
+ *  head and then adds words of their own ("ccrc-mail: you have new mail. Then stop wave 3.") is folded as a prompt too;
+ *  its words are one tap away, in the line's full text. */
 export function isMailPrompt(event: MessageEvent): boolean {
   return event.kind === 'user' && injectedPromptOf(event.text) === 'mail-nudge';
 }
@@ -35,12 +42,12 @@ export function asksOf(envelope: MailEnvelope, self: string): boolean {
   return envelope.kind === 'question' && envelope.toId === self;
 }
 
-/** Whether a mail card opens by default: it asks something of the session shown (`asksOf`) AND it is the newest mail
- *  row of the chat, so the question waiting now is never hidden behind a tap, and an older one (answered or
- *  superseded by later mail) opens closed like every other card. One the reader has already seen open by default stays
- *  open for the view (`MailRow.tsx#useOpen`). */
-export function opensByDefault(envelope: MailEnvelope, self: string, newest: boolean): boolean {
-  return newest && asksOf(envelope, self);
+/** Whether a mail card opens by default: it asks something of the session shown (`asksOf`) AND it is the newest card
+ *  that does, whatever ordinary mail follows it (the coordinator's ruling on review 3737 F2), so the question waiting
+ *  now is never hidden behind a tap, and an older question opens closed like every other card. One the reader has
+ *  already seen open by default stays open for the view (`MailRow.tsx#useOpen`). */
+export function opensByDefault(envelope: MailEnvelope, self: string, newestAsking: boolean): boolean {
+  return newestAsking && asksOf(envelope, self);
 }
 
 /** THE ONE RULE OF A RUN: what an item between two mail prompts is to a person reading the chat, by its kind. `true`:
@@ -61,18 +68,26 @@ export const SAYS_NOTHING: Readonly<Record<ChatItem['kind'], boolean>> = {
   working: false,
 };
 
+/** THE DAY RULE OF A RUN (review 3737 A3): a run never spans two days. A prompt on another local day than the run's
+ *  first ends it, so the day's divider between them stays in the chat, and a run's clock times always read in one
+ *  day. */
+export function sameDay(a: MailPromptItem, b: MailPromptItem): boolean {
+  return dayKey(Date.parse(a.event.ts)) === dayKey(Date.parse(b.event.ts));
+}
+
 /** The pass over the built items that the chat draws from (after `buildChatItems`, before the tool fold): each mail
- *  card's `opens` (`opensByDefault`, the newest mail row only), and each maximal run of two or more mail prompts with
- *  nothing between them but what `SAYS_NOTHING` lets through folded into one `mail-prompts` item. A divider between
- *  two members goes inside the run; a divider after the last member stays where it is. Every other item passes through
- *  in order. Pure: `items` is not changed. */
+ *  card's `asks` (`asksOf`) and `opens` (`opensByDefault`, the newest asking card only), and each maximal run of two or
+ *  more mail prompts of one day with nothing between them but what `SAYS_NOTHING` lets through folded into one
+ *  `mail-prompts` item. A divider between two members goes inside the run; a divider after the last member stays where
+ *  it is. Every other item passes through in order. Pure: `items` is not changed. */
 export function foldMailRows(items: readonly ChatItem[], self: string): ChatItem[] {
-  let newest = -1;
-  items.forEach((item, i) => { if (item.kind === 'mail') newest = i; });
+  let newestAsking = -1;
+  items.forEach((item, i) => { if (item.kind === 'mail' && asksOf(item.envelope, self)) newestAsking = i; });
   const marked = items.map((item, i): ChatItem => {
     if (item.kind !== 'mail') return item;
-    const opens = opensByDefault(item.envelope, self, i === newest);
-    return opens === item.opens ? item : { ...item, opens };
+    const asks = asksOf(item.envelope, self);
+    const opens = opensByDefault(item.envelope, self, i === newestAsking);
+    return opens === item.opens && asks === item.asks ? item : { ...item, opens, asks };
   });
 
   const out: ChatItem[] = [];
@@ -88,7 +103,11 @@ export function foldMailRows(items: readonly ChatItem[], self: string): ChatItem
     let end = i; // the index of the run's last prompt
     let j = i + 1;
     while (j < marked.length && SAYS_NOTHING[marked[j]!.kind]) {
-      if (marked[j]!.kind === 'mail-prompt') end = j;
+      const next = marked[j]!;
+      if (next.kind === 'mail-prompt') {
+        if (!sameDay(item, next)) break;
+        end = j;
+      }
       j += 1;
     }
     if (end === i) {
@@ -142,25 +161,39 @@ export function cardTime(item: MailItem): string | null {
   return t === '' ? null : t;
 }
 
-/** The card a closed tool-activity row draws under it, or none: the first of its cards that opens by default, or that
- *  has a recorded choice (the reader opened or closed it, or it was drawn open by default once, `MailRow.tsx`). A card
- *  stays where it was drawn for the rest of the view: when newer mail arrives below, the default moves on, and a card
- *  that left the space under its row then would move every row below it while the list cannot hold the reader's place
- *  (a change that comes with a new item at the end is the foot's, `footFollow.ts#heightMove`). With no choice recorded,
- *  this is what the list prices (`shapeOf`). */
-export function surfacedOf(
-  mail: readonly MailItem[], choice: (key: string) => boolean | undefined,
-): MailItem | null {
-  return mail.find((m) => m.opens || choice(m.key) !== undefined) ?? null;
+/** What the reader has chosen in this view, by row key (`ExpansionMemo#choice`): open, closed, or nothing yet. */
+export type Choice = (key: string) => boolean | undefined;
+
+/** No choice recorded: what a row reads outside a list, and the list's estimate before the reader has done anything. */
+export const NO_CHOICE: Choice = () => undefined;
+
+/** The memo key that records a card drawn under a closed tool-activity row (`underRow`), beside the card's own open
+ *  choice under its plain key. */
+export function underKey(key: string): string {
+  return `under:${key}`;
 }
 
-/** No choice recorded: what the fold and the list's estimate read. */
-export const NO_CHOICE = (): undefined => undefined;
+/** THE CARDS A CLOSED TOOL STRETCH DRAWS UNDER ITS ROW, in the stretch's order (the coordinator's ruling on review 3737
+ *  F1): the card that opens by default now, always; and every card drawn there earlier in this view, open or closed as
+ *  the reader left it, so nothing moves under the reader when the default moves on (a change that comes with a new item
+ *  at the end is the foot's, `footFollow.ts#heightMove`, and the list does not hold the reader's place over it). So two
+ *  can show. A card the reader only opened or closed inside the stretch's body was never drawn under the row, and is not
+ *  drawn there (A4). The one function for both: the row draws this, and the list prices it (`ChatList.tsx#shapeOf`). */
+export function underRow(mail: readonly MailItem[], choice: Choice): MailItem[] {
+  return mail.filter((m) => m.opens || choice(underKey(m.key)) === true);
+}
+
+/** The cards of a stretch that ask something of the session shown and are not drawn under its closed row: what its
+ *  line says it holds besides the count of messages, so a closed stretch never hides a question without a sign. */
+export function hiddenAsks(mail: readonly MailItem[], choice: Choice): number {
+  const under = underRow(mail, choice);
+  return mail.filter((m) => m.asks && !under.includes(m)).length;
+}
 
 /** Whether a row is open: the reader's own choice for it when they made one, else its default. A run takes the reader's
  *  choice for its first prompt when it has none of its own, so a prompt the reader opened stays open when a second
  *  prompt arrives and the two become a run. */
-export function openOf(choice: (key: string) => boolean | undefined, item: MailItem | MailPromptItem | MailPromptsItem): boolean {
+export function openOf(choice: Choice, item: MailItem | MailPromptItem | MailPromptsItem): boolean {
   const own = choice(item.key);
   if (own !== undefined) return own;
   if (item.kind === 'mail') return item.opens;

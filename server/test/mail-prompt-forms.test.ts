@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { INJECTED_PROMPTS } from '../../shared/injected-prompts.mjs';
 import { renderInboxWakeLine, renderSpotProbeLine } from '../../shared/overlordInbox.js';
-import { renderMailNudge, renderOperatorMessageNudge } from '../src/coord/envelope.js';
+import { FIXED_LINE_MAIL, renderMailNudge, renderOperatorMessageNudge } from '../src/coord/envelope.js';
 import fixture from './fixtures/mail-prompt-forms.json' with { type: 'json' };
 
 describe('the mail prompt forms fixture is what the server types', () => {
@@ -24,5 +24,22 @@ describe('the mail prompt forms fixture is what the server types', () => {
   it('each begins with the mail prompt\'s head, followed by a space', () => {
     const head = INJECTED_PROMPTS['mail-nudge'].text;
     for (const [name, text] of Object.entries(fixture.forms)) expect(text.startsWith(`${head} `), name).toBe(true);
+  });
+
+  // Review 3737 A8: the lines the lane can type are the table that chooses them (`FIXED_LINE_MAIL`, read by `mailNudgeOf`)
+  // plus the generic nudge. Every row's line, rendered from the table itself, begins with the head, so a new fixed-line
+  // mail whose line does not is red here before the console draws it as a person's bubble; and each row the table holds
+  // has a form in the fixture the console's tests read.
+  it('every line the lane can type, read from the table that chooses it, begins with the head', () => {
+    const head = INJECTED_PROMPTS['mail-nudge'].text;
+    for (const row of FIXED_LINE_MAIL) {
+      for (const mail of [{ subject: '', body: '' }, { subject: 'operator message 42', body: '{}' }]) {
+        expect(row.line(mail, 0).startsWith(`${head} `), `${row.name} (${JSON.stringify(mail)})`).toBe(true);
+      }
+    }
+    expect(renderMailNudge(fixture.self).startsWith(`${head} `)).toBe(true);
+    const FORM_OF: Record<string, string> = { 'operator-message': 'operatorMessage', 'spot-probe': 'spotProbe', 'inbox-wake': 'inboxWake' };
+    expect(FIXED_LINE_MAIL.map((r) => FORM_OF[r.name] ?? `no fixture form for the row ${r.name}`).sort())
+      .toEqual(Object.keys(FORM_OF).map((k) => FORM_OF[k]!).sort());
   });
 });

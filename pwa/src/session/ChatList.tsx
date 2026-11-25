@@ -20,7 +20,7 @@ import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
 import { buildChatItems, type ChatItem } from './chatItems';
 import { MailRow } from './MailRow';
-import { foldMailRows } from './mailRows';
+import { NO_CHOICE, foldMailRows, openOf, underRow, type Choice } from './mailRows';
 import {
   FALLBACK_ITEM_HEIGHT, NOMINAL_MEASURES, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
   rememberedRows, rowHeights, rowId, wellLines,
@@ -319,8 +319,12 @@ function messageShape(event: MessageEvent, m: Measures): RowShape {
  * IN LINES OF THE COLUMN IT IS DRAWN IN: `m` is how many characters a line
  * holds there (`measuresOf`) — a bubble's at a bubble's width, the rest at a
  * paragraph's.
+ *
+ * AS THE READER HAS LEFT IT (desktop polish wave 176): `choice` is the reader's open and closed rows in this view (the
+ * list's memo), so a mail card is priced open or closed as it is drawn (`openOf`), and a closed tool stretch with the
+ * cards it draws under its row (`underRow`, the row's own function). With no choice, every row in its default form.
  */
-export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): RowShape {
+export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES, choice: Choice = NO_CHOICE): RowShape {
   switch (item.kind) {
     case 'divider': return { bucket: 'divider', lines: 1 };
     // One collapsed line, however many calls it folds (D-5475); open, it is never sampled (`inOpeningForm`).
@@ -331,7 +335,7 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
     case 'tool-activity': {
       const first = item.attention[0];
       const card = first === undefined ? 0 : shapeOf(first.entry, m).lines;
-      const mail = item.surfaced === null ? 0 : shapeOf(item.surfaced, m).lines;
+      const mail = underRow(item.mail, choice).reduce((n, card) => n + shapeOf(card, m, choice).lines, 0);
       return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card + mail };
     }
     case 'message': return messageShape(item.event, m);
@@ -340,9 +344,10 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): R
       return { bucket: 'tool', lines: ask === null ? 1 : ask.reduce((n, row) => n + plainLines(row, m.prose), 0) };
     }
     case 'mail':
-      // Closed, one line (desktop polish wave 176). Open by default: the head line, the sender row, the meta row, one row
-      // per artifact path, then the body's well; a card the reader opened is never sampled (`inOpeningForm`).
-      return item.opens
+      // Closed, one line (desktop polish wave 176). Open (by default, kept open, or opened by the reader): the head line,
+      // the sender row, the meta row, one row per artifact path, then the body's well. An open card is never sampled
+      // (`inOpeningForm`), so this prices it without teaching the model from it.
+      return openOf(choice, item)
         ? { bucket: 'mail', lines: 3 + item.envelope.artifacts.length + wellLines(item.envelope.body) }
         : { bucket: 'mail-line', lines: 1 };
     case 'mail-prompt':
@@ -467,8 +472,12 @@ class RowMeter {
    *  by a turned phone is counted in the new column's lines. */
   private readonly measures: () => Measures;
 
-  constructor(measures: () => Measures) {
+  /** The reader's open rows (the list's memo), so a row is sampled as the shape it is drawn in (`shapeOf`). */
+  private readonly choice: Choice;
+
+  constructor(measures: () => Measures, choice: Choice = NO_CHOICE) {
     this.measures = measures;
+    this.choice = choice;
   }
 
   /** Measure `el` as the row `row()` is at the time; the return stops it. */
@@ -504,7 +513,7 @@ class RowMeter {
     // A row that is not laid out — the screen hidden behind another — measures
     // 0, which is a measurement of nothing.
     if (!(px > 0) || !inOpeningForm(el)) return;
-    const shape = shapeOf(item, this.measures());
+    const shape = shapeOf(item, this.measures(), this.choice);
     const thumbs = shape.attach ?? 0;
     // The thumbnails are their own term: the bubble's sample is the row
     // without them, and the grid's height is a sample of `attach`.
@@ -820,7 +829,7 @@ function ChatScroller({
   // snapshot when it initialises; handing it different numbers later changes
   // nothing it reads. The NEXT visit gets the benefit of this one.
   const [opened] = useState(() => openWith(items, column.measures()));
-  const [meter] = useState(() => new RowMeter(() => column.measures()));
+  const [meter] = useState(() => new RowMeter(() => column.measures(), (k) => expansion.choice(k)));
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());
 

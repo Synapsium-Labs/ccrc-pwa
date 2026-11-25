@@ -16,8 +16,10 @@
 // result of the session's own mail fetch, so it sits among that stretch's calls: it joins the stretch open when it
 // arrives rather than ending it, so one stretch is never cut in two by its own fetch, and the row counts the cards it
 // holds ("2 messages"). A legacy typed card is a user turn, a prompt, and still ends a stretch; a card with no stretch
-// open before it stands alone as before. A card that opens by default (the newest, asking the session shown) is drawn
-// under the closed row, as the first entry that wants the reader is, so a question is never hidden behind a tap.
+// open before it stands alone as before. A card that opens by default (the newest asking the session shown) is drawn
+// under the closed row, as the first entry that wants the reader is, with every card drawn there earlier in the view
+// (`mailRows.ts#underRow`); and the row's count says how many asking cards it holds that are not drawn under it ("2
+// messages, 1 question"), so a question is never hidden behind a tap without a sign (review 3737 F1 and F2).
 //
 // NOTHING THAT WANTS THE READER IS HIDDEN. Unlike `groupToolRun`, a failed call or the question asked now does not end a
 // stretch: it sits inside it in order, and it is listed on the item's `attention`, which the row surfaces while collapsed
@@ -28,7 +30,7 @@
 import { askQuestions } from '@ccrc/ui';
 import type { AskSource } from './askLive';
 import type { ChatItem } from './chatItems';
-import { NO_CHOICE, surfacedOf } from './mailRows';
+import { hiddenAsks, NO_CHOICE, type Choice } from './mailRows';
 import { groupToolRun, toolSummary, type RunItem } from './toolSummary';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -49,11 +51,9 @@ export interface ToolActivityItem {
   key: string;
   /** Every tool entry of the stretch, in transcript order. */
   entries: ToolItem[];
-  /** The fetched mail cards the stretch holds, in transcript order (`joinsStretch`). */
+  /** The fetched mail cards the stretch holds, in transcript order (`joinsStretch`). Which of them the closed row draws
+   *  under it is `mailRows.ts#underRow`, read with the list's memo by the row and by the list's estimate alike. */
   mail: MailItem[];
-  /** The card of `mail` drawn under the closed row when no choice is recorded (`surfacedOf`): what the list prices. The
-   *  row draws `surfacedOf` with the list's memo. */
-  surfaced: MailItem | null;
   /** What the row shows expanded: the entries under the skin's own grouping, in order. */
   inner: RunItem[];
   /** The session is working, this stretch is in the CURRENT turn (after the last user prompt), and one of its calls has
@@ -184,7 +184,6 @@ export function foldToolActivity(items: readonly ChatItem[], fold: ActivityFold)
       key: `activity-${first.key}`,
       entries: stretch,
       mail,
-      surfaced: surfacedOf(mail, NO_CHOICE),
       inner: fold.runs === 'tool-runs' ? groupToolRun(members) : [...members],
       live: fold.busy && current && stretch.some((e) => e.result == null),
       latest: toolSummary(last).sentence,
@@ -261,7 +260,8 @@ export interface ActivityWords {
   readonly title: string;
   /** "1 call", "5 calls". */
   readonly calls: string;
-  /** "1 message", "2 messages": the fetched mail cards the stretch holds, or null when it holds none. */
+  /** "1 message", "2 messages": the fetched mail cards the stretch holds, or null when it holds none; with ", 1
+   *  question" when cards that ask something of the session shown are not drawn under the closed row (`hiddenAsks`). */
   readonly messages: string | null;
   /** "running" while the stretch is live, else null. */
   readonly state: string | null;
@@ -272,14 +272,19 @@ export interface ActivityWords {
   readonly attention: readonly string[];
 }
 
-export function activityWords(item: ToolActivityItem): ActivityWords {
+/** The words of a row. `choice` is the reader's choices in this view (the list's memo), which decide which cards the
+ *  closed row draws under it and so which asking cards it must name; outside a list, none. */
+export function activityWords(item: ToolActivityItem, choice: Choice = NO_CHOICE): ActivityWords {
   const n = item.entries.length;
+  const m = item.mail.length;
+  const asks = hiddenAsks(item.mail, choice);
   const counts = new Map<AttentionKind, number>();
   for (const a of item.attention) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
   return {
     title: 'Tool activity',
     calls: n === 1 ? '1 call' : `${n} calls`,
-    messages: item.mail.length === 0 ? null : item.mail.length === 1 ? '1 message' : `${item.mail.length} messages`,
+    messages: m === 0 ? null
+      : `${m === 1 ? '1 message' : `${m} messages`}${asks === 0 ? '' : asks === 1 ? ', 1 question' : `, ${asks} questions`}`,
     state: item.live ? 'running' : null,
     latest: item.latest,
     attention: [

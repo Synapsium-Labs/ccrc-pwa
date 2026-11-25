@@ -44,15 +44,13 @@ export function sameTranscriptItem(a: TranscriptItem, b: TranscriptItem): boolea
   // element by element; `attention` by its kind and its entry. Every other field is a word or a flag.
   if (a.kind === 'tool-activity' && b.kind === 'tool-activity') {
     if (!sameList(a.entries, b.entries) || !sameList(a.inner, b.inner) || !sameList(a.mail, b.mail)) return false;
-    if ((a.surfaced === null) !== (b.surfaced === null)) return false;
-    if (a.surfaced !== null && b.surfaced !== null && !sameTranscriptItem(a.surfaced, b.surfaced)) return false;
     if (a.attention.length !== b.attention.length) return false;
     for (let i = 0; i < a.attention.length; i += 1) {
       const x = a.attention[i]!;
       const y = b.attention[i]!;
       if (x.kind !== y.kind || !sameTranscriptItem(x.entry, y.entry)) return false;
     }
-    return sameFields(a, b, ['entries', 'inner', 'attention', 'mail', 'surfaced']);
+    return sameFields(a, b, ['entries', 'inner', 'attention', 'mail']);
   }
   // A run of mail prompts (desktop polish wave 176): its members, element by element.
   if (a.kind === 'mail-prompts' && b.kind === 'mail-prompts') {

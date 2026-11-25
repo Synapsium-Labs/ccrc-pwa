@@ -15,7 +15,8 @@ import { ChatListInner, shapeOf } from '../src/session/ChatList';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
 import { MailRow } from '../src/session/MailRow';
 import {
-  SAYS_NOTHING, asksOf, foldMailRows, isMailPrompt, opensByDefault, openOf, promptWords, promptsOf,
+  NO_CHOICE, SAYS_NOTHING, asksOf, foldMailRows, hiddenAsks, isMailPrompt, opensByDefault, openOf, promptWords, promptsOf,
+  underKey, underRow,
 } from '../src/session/mailRows';
 import { SkinSetProvider } from '../src/skins/frame';
 import { INSTRUMENT_SET } from '../src/skins/instrument/parts';
@@ -120,6 +121,17 @@ describe('the mail prompt: the shared head at the start of the turn, and nothing
     });
   }
 
+  it('a limit, ruled (review 3737 A2): the lane\'s whole head and then words of the person\'s own is folded too, its words one tap away', () => {
+    const text = `${HEAD} Then stop wave 3 before it merges.`;
+    const e = user(text);
+    expect(isMailPrompt(e as Extract<ChatEvent, { kind: 'user' }>)).toBe(true);
+    expect(kinds(buildChatItems([e], []))).toEqual(['divider', 'mail-prompt']);
+    render(<ChatListInner id={SELF} events={[e]} pending={[]} />);
+    expect(document.querySelector('.msg-user')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Mail arrived/ }));
+    expect(document.querySelector('.mail-prompt-text')?.textContent).toBe(text);
+  });
+
   it('only a user turn: the session quoting the prompt in its own reply is its own words', () => {
     expect(isMailPrompt(say(renderMailNudge(SELF)) as Extract<ChatEvent, { kind: 'assistant' }>)).toBe(false);
     expect(isMailPrompt({ kind: 'system', uuid: 's', ts: TS(0), text: renderMailNudge(SELF) })).toBe(false);
@@ -184,7 +196,7 @@ describe('a fetched card: closed by default, today\'s card whole when open', () 
 });
 
 describe('the exception: the newest card that asks the session shown something stays open', () => {
-  it('the rule: a question to the session shown, and the newest mail row', () => {
+  it('the rule: a question to the session shown, and the newest card that asks', () => {
     const q = { kind: 'question', toId: SELF } as MailEnvelope;
     expect(asksOf(q, SELF)).toBe(true);
     expect(asksOf({ ...q, kind: 'status' }, SELF)).toBe(false);
@@ -201,9 +213,21 @@ describe('the exception: the newest card that asks the session shown something s
     expect(document.querySelector('.mail-card-body')?.textContent).toBe('Do the wave.');
   });
 
-  it('closed: a question that is no longer the newest mail row, a question to another session, a status', () => {
+  it('a question followed by ordinary mail is still open: the newest card that asks, not the newest card (review 3737 F2)', () => {
+    render(<ChatListInner id={SELF} events={[...fetchMail({ kind: 'question', subject: 'which base?' }), ...fetchMail({ subject: 'later' })]} pending={[]} />);
+    expect(screen.getByRole('button', { name: /^Mail from coordinator: which base\?/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /^Mail from coordinator: later/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('an older question, once a newer one asks, opens closed', () => {
+    const items = foldMailRows(buildChatItems(
+      [...fetchMail({ kind: 'question', subject: 'q' }), ...fetchMail({ subject: 's' }), ...fetchMail({ kind: 'question', subject: 'newer' })], []), SELF);
+    const cards = items.filter((i): i is Extract<ChatItem, { kind: 'mail' }> => i.kind === 'mail');
+    expect(cards.map((c) => [c.envelope.subject, c.opens, c.asks])).toEqual([['q', false, true], ['s', false, false], ['newer', true, true]]);
+  });
+
+  it('closed: a question to another session, a status', () => {
     const cases: [string, ChatEvent[]][] = [
-      ['older question', [...fetchMail({ kind: 'question', subject: 'q' }), ...fetchMail({ subject: 'later' })]],
       ['to another session', fetchMail({ kind: 'question', subject: 'q', toId: 'lane-b-project-a' })],
       ['a status', fetchMail({ subject: 'q' })],
     ];
@@ -223,26 +247,68 @@ describe('the exception: the newest card that asks the session shown something s
     expect(shapeOf(cards[1]!).bucket).toBe('mail');
   });
 
-  it('a question drawn open stays open when newer mail arrives below it, so nothing above the reader shrinks', () => {
+  it('a question drawn open stays open when a newer question arrives below it, so nothing above the reader shrinks', () => {
     const asked = fetchMail({ kind: 'question', subject: 'which base?' });
     const { rerender } = render(<ChatListInner id={SELF} events={asked} pending={[]} />);
-    rerender(<ChatListInner id={SELF} events={[...asked, ...fetchMail({ subject: 'later' })]} pending={[]} />);
+    rerender(<ChatListInner id={SELF} events={[...asked, ...fetchMail({ kind: 'question', subject: 'later' })]} pending={[]} />);
     expect(screen.getByRole('button', { name: /^Mail from coordinator: which base\?/ })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: /^Mail from coordinator: later/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: /^Mail from coordinator: later/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
   for (const [skin, set] of SETS) {
-    it(`${skin}: under a closed row, a question drawn there stays there when newer mail arrives`, () => {
+    it(`${skin}: under a closed row, a question drawn there stays there when a newer question arrives`, () => {
       const asked = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'which?' })];
       const view = (events: ChatEvent[]) => (
         <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>
       );
       const { rerender } = render(view(asked));
-      rerender(view([...asked, say('Asking the operator.'), ...fetchMail({ subject: 'later' })]));
-      const under = document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head');
-      expect(under).toHaveLength(1);
-      expect(under[0]).toHaveAttribute('aria-expanded', 'true');
-      expect(under[0]!.getAttribute('aria-label')).toMatch(/^Mail from coordinator: which\?/);
+      rerender(view([...asked, say('Asking the operator.'), ...fetchMail({ kind: 'question', subject: 'later' })]));
+      const under = [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')];
+      expect(under.map((h) => [h.getAttribute('aria-label')?.split(',')[0], h.getAttribute('aria-expanded')])).toEqual([
+        ['Mail from coordinator: which?', 'true'], ['Mail from coordinator: later', 'true'],
+      ]);
+    });
+
+    it(`${skin}: in one stretch, a newer question joins the one drawn under the row, both shown in order (review 3737 F1)`, () => {
+      // One wake, no prose between the calls: inbox, fetch A, then (live) fetch B. A was drawn open under the closed row;
+      // B is now the card that opens by default, and A stays where it was drawn.
+      const asked = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'first?' })];
+      const view = (events: ChatEvent[]) => (
+        <SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>
+      );
+      const { rerender } = render(view(asked));
+      rerender(view([...asked, ...fetchMail({ kind: 'question', subject: 'second?' }), ...call('Bash', 'mail ack 17')]));
+      expect(document.querySelectorAll('.tool-activity-row')).toHaveLength(1);
+      const under = [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')];
+      expect(under.map((h) => h.getAttribute('aria-label')?.split(',')[0])).toEqual([
+        'Mail from coordinator: first?', 'Mail from coordinator: second?',
+      ]);
+      expect(under.map((h) => h.getAttribute('aria-expanded'))).toEqual(['true', 'true']);
+      // Both are drawn, so the row names no question as hidden.
+      expect(document.querySelector('.tool-activity-messages')?.textContent).toBe('2 messages');
+    });
+
+    it(`${skin}: a card only opened and closed inside the body never appears under the row (review 3737 A4)`, () => {
+      const events = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ subject: 'status' }), ...fetchMail({ kind: 'question', subject: 'asks?' })];
+      render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
+      const row = document.querySelector('.tool-activity-row')!;
+      fireEvent.click(row); // open the stretch
+      const status = screen.getByRole('button', { name: /^Mail from coordinator: status/ });
+      fireEvent.click(status);
+      fireEvent.click(status);
+      fireEvent.click(row); // close it again
+      const under = [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')];
+      expect(under.map((h) => h.getAttribute('aria-label')?.split(',')[0])).toEqual(['Mail from coordinator: asks?']);
+    });
+
+    it(`${skin}: a closed stretch names the questions it holds that are not drawn under it (review 3737 F2)`, () => {
+      const events = [user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question', subject: 'older?' }),
+        ...fetchMail({ kind: 'question', subject: 'newer?' })];
+      render(<SkinSetProvider set={set}><ChatListInner id={SELF} events={events} pending={[]} /></SkinSetProvider>);
+      expect(document.querySelector('.tool-activity-messages')?.textContent).toBe('2 messages, 1 question');
+      expect(document.querySelector('.tool-activity-row')?.textContent).toContain('2 messages, 1 question');
+      const under = [...document.querySelectorAll('.tool-activity-first[data-attention="mail"] .mail-card-head')];
+      expect(under.map((h) => h.getAttribute('aria-label')?.split(',')[0])).toEqual(['Mail from coordinator: newer?']);
     });
   }
 
@@ -309,12 +375,39 @@ describe('a fetched card belongs with its fetch: one stretch, and the row counts
     });
   }
 
-  it('the row prices the surfaced card under it', () => {
-    const items = foldToolActivity(foldMailRows(buildChatItems(
-      [user('Go.'), ...fetchMail({ kind: 'question', body: 'one\ntwo' })], []), SELF), { runs: 'none', wait: NONE, busy: false });
+  it('the list prices what the row draws, from the one function (`underRow`)', () => {
+    const items = foldToolActivity(foldMailRows(buildChatItems([user('Go.'), ...fetchMail({ kind: 'question', subject: 'a', body: 'one\ntwo' }),
+      ...fetchMail({ subject: 'b' }), ...fetchMail({ kind: 'question', subject: 'c', body: 'x' })], []), SELF), { runs: 'none', wait: NONE, busy: false });
     const row = items.find((r): r is ToolActivityItem => r.kind === 'tool-activity')!;
-    expect(row.surfaced).not.toBeNull();
-    expect(shapeOf(row).lines).toBe(1 + shapeOf(row.surfaced!).lines);
+    const [a, b, c] = row.mail;
+    // No choice: the default card alone.
+    expect(underRow(row.mail, NO_CHOICE)).toEqual([c]);
+    expect(shapeOf(row).lines).toBe(1 + shapeOf(c!).lines);
+    // A and B drawn here earlier, A kept open and B closed by the reader: all three, in order, each as it is drawn.
+    const memo = expansionMemo();
+    memo.set(underKey(a!.key), true);
+    memo.set(a!.key, true);
+    memo.set(underKey(b!.key), true);
+    memo.set(b!.key, false);
+    expect(underRow(row.mail, memo.choice).map((m) => m.envelope.subject)).toEqual(['a', 'b', 'c']);
+    expect(shapeOf(row, undefined, memo.choice).lines)
+      .toBe(1 + shapeOf(a!, undefined, memo.choice).lines + 1 + shapeOf(c!, undefined, memo.choice).lines);
+    expect(shapeOf(a!, undefined, memo.choice).bucket).toBe('mail');
+    // An open or closed choice alone, with no mark of being drawn there, does not bring a card under the row (A4).
+    const inside = expansionMemo();
+    inside.set(a!.key, false);
+    expect(underRow(row.mail, inside.choice)).toEqual([c]);
+  });
+
+  it('the hidden questions: the asking cards not drawn under the row, counted in the words', () => {
+    const items = foldToolActivity(foldMailRows(buildChatItems([user('Go.'), ...fetchMail({ kind: 'question', subject: 'a' }),
+      ...fetchMail({ kind: 'question', subject: 'b' }), ...fetchMail({ kind: 'question', subject: 'c' })], []), SELF), { runs: 'none', wait: NONE, busy: false });
+    const row = items.find((r): r is ToolActivityItem => r.kind === 'tool-activity')!;
+    expect(hiddenAsks(row.mail, NO_CHOICE)).toBe(2);
+    expect(activityWords(row).messages).toBe('3 messages, 2 questions');
+    const memo = expansionMemo();
+    memo.set(underKey(row.mail[0]!.key), true);
+    expect(activityWords(row, memo.choice).messages).toBe('3 messages, 1 question');
   });
 });
 
@@ -343,6 +436,37 @@ describe('runs: prompts with nothing a person would read between them are one li
     const items = fold([user(NUDGE, 0), user(NUDGE, 30)]);
     expect(kinds(items)).toEqual(['divider', 'mail-prompts']);
     expect(kinds((items[1] as Extract<ChatItem, { kind: 'mail-prompts' }>).members)).toEqual(['mail-prompt', 'divider', 'mail-prompt']);
+  });
+
+  it('opened, a run draws its members\' divider as the chat does, between the two lines', () => {
+    render(<ChatListInner id={SELF} events={[user(NUDGE, 0), user(NUDGE, 30)]} pending={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Mail arrived 2 times/ }));
+    const parts = [...document.querySelector('.mail-prompt-body')!.children];
+    expect(parts.map((c) => (c.matches('p.ts-divider') ? 'divider' : c.classList.contains('mail-prompt') ? 'line' : c.outerHTML)))
+      .toEqual(['line', 'divider', 'line']);
+    expect(parts[1]!.textContent).toMatch(/ · 10:30$/);
+  });
+
+  it('a run never spans two days: a prompt on the next day starts its own line, the day\'s divider between (review 3737 A3)', () => {
+    const items = fold([user(NUDGE, 0), user(NUDGE, 5), user(NUDGE, 24 * 60)]);
+    expect(kinds(items)).toEqual(['divider', 'mail-prompts', 'divider', 'mail-prompt']);
+    // Even with no quiet gap (so no divider) between them, the local midnight ends the run.
+    const local = (h: number, m: number, d: number): ChatEvent => ({ ...user(NUDGE), ts: new Date(2026, 10, d, h, m).toISOString() });
+    expect(kinds(fold([local(23, 59, 24), local(0, 1, 25)]))).toEqual(['divider', 'mail-prompt', 'mail-prompt']);
+    expect(kinds(fold([local(23, 57, 24), local(23, 59, 24)]))).toEqual(['divider', 'mail-prompts']);
+  });
+
+  it('a run\'s time is one time when its first and last are the same minute', () => {
+    const run = fold([user(NUDGE, 1), user(NUDGE, 1)])[1] as Extract<ChatItem, { kind: 'mail-prompts' }>;
+    expect(promptWords(promptsOf(run))).toEqual({ title: 'Mail arrived', count: '2 times', time: '10:01', label: 'Mail arrived 2 times, 10:01' });
+  });
+
+  it('a run starts a turn as a single prompt does: the stretch before it is past', () => {
+    const NUDGE2 = renderMailNudge(SELF);
+    const events = [user('Go.'), ...call('Read', 'a'), user(NUDGE2), user(NUDGE2), ...call('Read', 'b')];
+    const folded = foldToolActivity(foldMailRows(buildChatItems(events, []), SELF), { runs: 'none', wait: NONE, busy: true });
+    expect(kinds(folded).filter((k) => k !== 'divider')).toEqual(['message', 'tool-activity', 'mail-prompts', 'tool-activity']);
+    expect(folded.filter((r): r is ToolActivityItem => r.kind === 'tool-activity').map((r) => r.past)).toEqual([true, false]);
   });
 
   it('broken by anything a person reads: a message, a reply, a card, a tool call', () => {
@@ -439,6 +563,24 @@ describe('the keyboard and the spoken names', () => {
     }
   });
 
+  it('a card names the body it opens (aria-controls), and only while it is open', () => {
+    render(<ChatListInner id={SELF} events={fetchMail({}, 4)} pending={[]} />);
+    const head = screen.getByRole('button', { name: /^Mail from coordinator/ });
+    expect(head.hasAttribute('aria-controls')).toBe(false);
+    fireEvent.click(head);
+    const open = document.querySelector('.mail-card-open');
+    expect(open?.id).toBeTruthy();
+    expect(head.getAttribute('aria-controls')).toBe(open!.id);
+  });
+
+  it('a card whose record carries no readable time says no time: its line and its name end at its kind', () => {
+    const fetched = fetchMail({}, 4).map((e) => ({ ...e, ts: 'not a time' }) as ChatEvent);
+    render(<ChatListInner id={SELF} events={fetched} pending={[]} />);
+    const head = screen.getByRole('button', { name: /^Mail from coordinator/ });
+    expect(head.getAttribute('aria-label')).toBe('Mail from coordinator: wave-brief, status');
+    expect(head.querySelector('.mail-card-time')).toBeNull();
+  });
+
   // WCAG 2.5.3 as storybook-a11y's axe measures it (label-content-name-mismatch): the words a line shows are an
   // unbroken run of its spoken name, so a voice user who says what they see reaches it. Adjacent spans with no space
   // between them read as one word, and a run's range must say the same word ("to") it speaks.
@@ -463,6 +605,22 @@ describe('the keyboard and the spoken names', () => {
 
 // ---- 7. the row barrier ---------------------------------------------------------------------------------------------
 describe('the row barrier: a build over the same events is the same row', () => {
+  it('a run is another row when one member differs, and when any other field of it does (review 3737 A6)', () => {
+    const NUDGE = renderMailNudge(SELF);
+    const lead = user(NUDGE);
+    const build = (second: ChatEvent) => foldMailRows(buildChatItems([lead, second], []), SELF)
+      .find((i): i is Extract<ChatItem, { kind: 'mail-prompts' }> => i.kind === 'mail-prompts')!;
+    const second = user(NUDGE);
+    const a = build(second);
+    expect(sameTranscriptItem(a, build(second))).toBe(true);
+    // A member replaced under the same key: the lists differ.
+    const other = build({ ...second, text: `${NUDGE} again` } as ChatEvent);
+    expect(other.key).toBe(a.key);
+    expect(sameTranscriptItem(a, other)).toBe(false);
+    // A field beside the members (none today, so a run's own fields are compared once one is added).
+    expect(sameTranscriptItem(a, { ...a, members: [...a.members], extra: 1 } as typeof a)).toBe(false);
+  });
+
   it('a run of prompts, and a stretch holding a card, compared by their lists', () => {
     const NUDGE = renderMailNudge(SELF);
     const events = [user(NUDGE), user(NUDGE), user('Go.'), ...call('Bash', 'mail inbox'), ...fetchMail({ kind: 'question' })];

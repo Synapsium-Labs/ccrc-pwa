@@ -2,11 +2,12 @@
 // virtual list: in both skins at a phone's and a desk's width, over a long coordinator transcript (a wake every few
 // minutes: the lane's prompt, the fetch and its card, the ack, a line of prose, and some prompts that arrived back to
 // back), the closed lines sit at the tap floor and are one line; Tab reaches one and Enter and Space open and close it;
-// the header the reader tapped stays where it was when its row opens and closes; and a row above the reader that
-// changes size (the newest question card closing because newer mail arrived below) moves nothing they read.
+// the header the reader tapped stays where it was when its row opens and closes; and a newer question arriving below
+// leaves the question card the reader saw open as it was, moving nothing they read.
 //
 // It also MEASURES what the mail rows cost a reader, scrolling the whole transcript and summing the rows by what they
-// are, and logs it (`MEASURE …`). The same pass run over a build of `main` is the "before" in the task note.
+// are, and logs it (`MEASURE …`). The same pass run over a build of `main` is the "before" in the task note, and each
+// view's mail rows must come to under a third of it (review 3737 A9), so a fold that stopped folding is red here.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/mail-rows.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -95,6 +96,10 @@ function coordinatorTranscript(lastAsks = true): object[] {
   return events;
 }
 
+/** The mail rows' screen height on a build of `main` at 7b0dc02ff9, the same pass over the same transcript (the task
+ *  note's section 6): the lower of the two skins at each width. */
+const BEFORE_PX: Record<number, number> = { 390: 24_611, 1280: 15_484 };
+
 let dist: string | undefined;
 let server: DistServer | undefined;
 let browser: Browser | undefined;
@@ -180,7 +185,11 @@ describe('the mail rows of a long coordinator transcript (desktop polish wave 17
         await openSession(page, ctx, coordinatorTranscript());
         const m = await measureAll(page);
         console.log(`MEASURE ${named(view)}: ${JSON.stringify(m)}`);
-        expect(m.rows).toBeGreaterThan(0);
+        const px = (kind: string): number => m.sum[kind]?.px ?? 0;
+        const mail = px('prompt') + px('activity') + px('card');
+        // Every wake's prompt is one line, the back-to-back pairs folded into one: one prompt row per wake.
+        expect(m.sum.prompt?.rows, 'prompt rows').toBe(WAKES);
+        expect(mail, `the mail rows came to ${mail}px against ${BEFORE_PX[view.width]}px before`).toBeLessThan(BEFORE_PX[view.width]! / 3);
       } finally {
         await ctx.close();
       }
@@ -216,19 +225,30 @@ describe('the mail rows of a long coordinator transcript (desktop polish wave 17
           expect(l.past, `"${l.label}" passes the column`).toBeLessThanOrEqual(0);
           expect(l.label).toMatch(/^Mail (arrived|from )/);
         }
-        expect(lines.some((l) => /^Mail arrived 2 times, /.test(l.label)) || lines.some((l) => /^Mail arrived, /.test(l.label)),
-          'no prompt line in view').toBe(true);
+        // Mid-list, most wakes have one prompt: a single prompt's line is in view.
+        expect(lines.some((l) => /^Mail arrived, \d\d:\d\d$/.test(l.label)), 'no single prompt line in view').toBe(true);
 
         // 2. The keyboard: Tab reaches a line from the one before it, Enter opens it, Space closes it, with a visible focus.
+        // The target is named before the key: the control after the prompt line in the page's order, which in this
+        // transcript is the wake's tool stretch (the inbox read, the fetch and its card, the ack).
         const prompts = page.locator('.chat-scroller .mail-prompt-line[aria-expanded="false"]');
         await prompts.first().focus();
+        const target = await page.evaluate(() => {
+          const s = document.querySelector<HTMLElement>('.chat-scroller')!;
+          const all = [...s.querySelectorAll<HTMLElement>('button')];
+          const next = all[all.indexOf(document.activeElement as HTMLElement) + 1];
+          if (next === undefined) return null;
+          next.setAttribute('data-tab-target', 'yes');
+          return next.className.split(' ')[0];
+        });
+        expect(target, 'the prompt line has a control after it').toBe('tool-activity-row');
         await page.keyboard.press('Tab');
         const focused = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null;
-          return el === null ? null : { mail: el.matches('.mail-prompt-line, .mail-card-head, .tool-activity-row'), visible: el.matches(':focus-visible') };
+          return el === null ? null : { target: el.getAttribute('data-tab-target') === 'yes', visible: el.matches(':focus-visible') };
         });
         expect(focused, 'Tab left the transcript').not.toBeNull();
-        expect(focused!.mail, 'Tab did not reach the next line of the transcript').toBe(true);
+        expect(focused!.target, 'Tab did not reach the stretch after the prompt line').toBe(true);
         expect(focused!.visible, 'the focused line shows no focus').toBe(true);
         // Focus can scroll the line into view, and the virtual list lays out what the scroll brings into reach: the line
         // is scrolled to first and the list left to settle, so the key reaches the line the reader sees.
@@ -281,53 +301,53 @@ describe('the mail rows of a long coordinator transcript (desktop polish wave 17
       }
     });
 
-    it(`newer mail below leaves the question card the reader saw open, and moves nothing they read: ${named(view)}`, async () => {
+    it(`a newer question below leaves the question card the reader saw open, and moves nothing they read: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
-        // The last wake's question card is the newest mail row, open by default under its closed stretch. Below it, a
-        // long reply the reader is reading. Newer mail arrives at the foot: the question card is no longer the newest,
-        // but the reader has seen it open, so it stays open (`MailRow.tsx#useOpen`). Letting it close moved the
-        // paragraph in view by the card's height in every view (measured before the rule: 5 lines up), because the
-        // list does not hold the reader's place over a change that comes with a new item at the end.
+        // The last wake's question card is the newest asking card, open by default under its closed stretch. Below it,
+        // a long reply the reader is reading. A newer question arrives at the foot: the first card no longer opens by
+        // default, but the reader has seen it open, so it stays open where it was (`MailRow.tsx#useOpen`,
+        // `mailRows.ts#underRow`). Letting it close moved the paragraph in view by the card's height in every view
+        // (measured before the rule: 5 lines up), because the list does not hold the reader's place over a change that
+        // comes with a new item at the end.
         const events = coordinatorTranscript();
         const reply = Array.from({ length: 60 }, (_, i) => `Line ${i} of the reply about which base the next wave should take.`).join('\n\n');
         events.push({ kind: 'assistant', uuid: 'long', ts: at(WAKES * 6), text: reply });
         const send = await openSession(page, ctx, events);
         await scrollTo(page, 'bottom');
         // Read inside the long reply, the open question card wholly above.
-        await page.evaluate(() => {
+        const FIRST = '.mail-card--open:has(.mail-card-head[aria-label*="which base should the next wave take?"])';
+        await page.evaluate((sel) => {
           const s = document.querySelector<HTMLElement>('.chat-scroller')!;
-          const cards = [...s.querySelectorAll<HTMLElement>('.mail-card--open')];
-          const card = cards[cards.length - 1]!;
+          const card = s.querySelector<HTMLElement>(sel)!;
           s.scrollTop += card.getBoundingClientRect().bottom - s.getBoundingClientRect().top + 200;
-        });
+        }, FIRST);
         await page.waitForTimeout(800);
-        const reading = async () => page.evaluate(() => {
+        const reading = async () => page.evaluate((sel) => {
           const s = document.querySelector<HTMLElement>('.chat-scroller')!;
           const top = s.getBoundingClientRect().top;
           const para = [...s.querySelectorAll<HTMLElement>('p')].find((el) => el.getBoundingClientRect().top >= top + 40);
-          const cards = [...s.querySelectorAll<HTMLElement>('.mail-card--open')];
-          const card = cards[cards.length - 1];
+          const card = s.querySelector<HTMLElement>(sel);
           return {
             text: para?.textContent ?? '',
             at: Math.round((para?.getBoundingClientRect().top ?? 0) - top),
-            open: cards.length,
-            cardBottom: card === undefined ? null : Math.round(card.getBoundingClientRect().bottom - top),
+            open: card !== null,
+            cardBottom: card === null ? null : Math.round(card.getBoundingClientRect().bottom - top),
           };
-        });
+        }, FIRST);
         const before = await reading();
         const later: object[] = [];
         k += 1;
         later.push({ kind: 'user', uuid: 'n-late', ts: at(WAKES * 6 + 5), text: NUDGE });
-        call(later, '~/.local/bin/ccrc-api mail fetch 2999', envelope(99, 'status', 'wave-done', BODY), WAKES * 6 + 5);
+        call(later, '~/.local/bin/ccrc-api mail fetch 2999', envelope(99, 'question', 'which tag should the release take?', BODY), WAKES * 6 + 5);
         send({ type: 'events', uuid: 'u-1', events: later, offset: 2 });
         await page.waitForTimeout(1200);
         const after = await reading();
         console.log(`ABOVE ${named(view)}: ${JSON.stringify({ before, after })}`);
         expect(before.text, 'no paragraph in view').not.toBe('');
-        expect(before.open, 'the question card is not open by default').toBeGreaterThan(0);
+        expect(before.open, 'the question card is not open by default').toBe(true);
         expect(before.cardBottom!, 'the open card is not wholly above the reader').toBeLessThanOrEqual(0);
-        expect(after.open, 'the question card the reader saw open closed').toBe(1);
+        expect(after.open, 'the question card the reader saw open closed').toBe(true);
         expect(after.cardBottom, 'the question card above the reader changed size or moved').toBe(before.cardBottom);
         expect(after.text, 'the paragraph in view changed').toBe(before.text);
         expect(Math.abs(after.at - before.at), 'the paragraph in view moved').toBeLessThanOrEqual(1);
