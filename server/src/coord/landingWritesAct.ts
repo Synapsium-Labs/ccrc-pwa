@@ -7,15 +7,16 @@ import {
   landingMutationNotice, type LandingAuthorityCommand, type LandingAuthorityWrite,
 } from './landingWrites.js';
 
+type LandingWriteCommand = Extract<LandingAuthorityCommand, { kind: 'entry' | 'order' }>;
 export interface LandingWritePorts {
-  write: (command: LandingAuthorityCommand, at: number) => LandingAuthorityWrite;
+  write: (command: LandingWriteCommand, at: number) => LandingAuthorityWrite;
   notice: NoticeSink;
 }
 
-export function actLandingWrite(command: LandingAuthorityCommand, at: number, ports: LandingWritePorts): LandingAuthorityWrite {
+export function actLandingWrite(command: LandingWriteCommand, at: number, ports: LandingWritePorts): LandingAuthorityWrite {
   const result = ports.write(command, at);
   if (!result.ok) return result;
-  const owed = landingMutationNotice(command, result);
+  const owed = landingMutationNotice({ command, result });
   if (owed.due) ports.notice(owed.event, 'record-only');
   return result;
 }

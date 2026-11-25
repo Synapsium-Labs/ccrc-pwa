@@ -3911,7 +3911,8 @@ export class CoordStore {
               : { ok: false, error: decision.error } };
           }
           const m = decision.mutation;
-          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator } };
+          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator, released: [] } };
+          if (m.kind === 'unchanged' || m.kind === 'pause' || m.kind === 'withdraw') throw new Error('landing: the door writes are not built yet');
           if (hist.lastSeq >= Number.MAX_SAFE_INTEGER) return { stop: { ok: false, error: 'landing-sequence-overflow' } };
           return { go: { snapshot: held!, mutation: m, record: landingRecordOf(command, m, hist.lastSeq + 1, at) } };
         },
@@ -3925,13 +3926,14 @@ export class CoordStore {
             this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
               "VALUES (?, ?, ?, ?, ?, NULL, 'pinned', ?, ?)").run(mutation.id, mutation.project, mutation.pr, mutation.pinnedSha, mutation.handoffCommit, mutation.setBy, at);
           }
+          if (command.kind === 'pause') throw new Error('landing: the door writes are not built yet');
           const after = this.landingFactsInner(command.project);
           const entry = after.ok ? after.facts.entries.find((e) => e.pr === command.pr) : undefined;
           if (entry === undefined) throw new Error('landing write reads back absent');
           // The order's association is the decision's (readable only); a creation is a no-run entry by construction.
           return mutation.kind === 'order'
-            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator }
-            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' } };
+            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator, released: mutation.released }
+            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' }, released: [] };
         },
       }, phase));
     } catch {
