@@ -14,7 +14,8 @@ replayed the counts, and the raw evidence is not in the tree; it went to the coo
 - **Identity slice** (`agent/src/fileops.ts`, `server/src/io.ts`, `server/src/remote/io.ts`, plus a two-line change to
   the agent's read reply): a bounded byte read that returns bytes may also carry an opaque token naming the file it read,
   measured on the same open handle that read the bytes. **This is live:**
-  - every bounded agent read that returns bytes now takes one extra stat and one hash, and sends one extra reply field;
+  - every bounded agent read that returns bytes now takes one extra stat; when the file's facts are usable and the bytes
+    came back in full it also takes one hash and sends one extra reply field;
   - the local bytes read was replaced for every local-mode caller.
 
   Nothing reads the token yet.
@@ -45,7 +46,10 @@ fixture may lower a cap but never raise it.
 - **Refusals:**
   - A range read that answers fewer bytes than asked is `invalid-boundary`, never a short page.
   - A file that shrank **below** a read's offset is answered `unreadable` by the adapter itself, and that word passes
-    through unchanged. So a file that changed under a page reads as either word, depending on where it was cut.
+    through unchanged. So a file that changed under a page reads as either word, depending on where and when it was
+    cut: a cut below a read's offset, or a cut above it that lands between an adapter's path stat and its handle stat or
+    during its read, answers the adapter's own `unreadable`; only a cut made before a read's path stat reaches the
+    framing's wrapper, as a short successful read. Neither is ever a page.
   - Any failure discards every record the page had framed. The failure words are `ReadFailure` (imported from its one
     home) plus `invalid-boundary`.
 
@@ -73,16 +77,19 @@ the bytes.
 
 ### 3.1 What runs today
 
-**Every bounded agent read that returns bytes takes one extra bigint fstat and one sha256, and its reply carries one
-extra field** (`ident`, 64 hex). The change is additive: `FLEET_PROTO` is unchanged, and `server/src/remote/io.ts` is the
-field's one reader. Every existing remote caller's result carries the token; none reads it.
+**Every bounded agent read that returns bytes takes one extra bigint fstat. When the file's facts are usable and the
+bytes came back in full, it also takes one sha256, and its reply carries one extra field** (`ident`, 64 hex). The change
+is additive: `FLEET_PROTO` is unchanged, and `server/src/remote/io.ts` is the field's one reader. An existing remote
+caller's result carries the token when the agent issued one; none reads it.
 
 **The local bytes read was replaced for every local-mode caller.** Measured by a grep of `server/src`:
 - delegation ingest (`coord/delegation-ingest.ts`);
 - the gitref log read (`coord/gitref.ts`);
 - the slash-command walk (`commands.ts`);
 - workflow reads (`workflows/read.ts`), and the helper scan through the shared back-reader
-  (`workflows/helperScan.ts`). It keeps the same contract, `bytes.length === min(maxBytes, size − offset)`, with these
+  (`workflows/helperScan.ts`).
+
+It keeps the same contract, `bytes.length === min(maxBytes, size − offset)`, with these
 changes (measured, each pinned by a test):
 1. A file that grew between the path stat and the open answers the handle's size and bytes.
 2. A handle that is not a regular file is unreadable before any byte is read.

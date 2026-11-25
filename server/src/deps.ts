@@ -46,7 +46,7 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { TestboxAudit } from './testboxAudit.js';
 import type { TestboxAdminOps } from './testboxAdmin.js';
-import type { BuildCaptureTransport } from './buildCaptureLane.js';
+import type { BuildCaptureTransport, BuildCopyTransport } from './buildCaptureLane.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
@@ -56,6 +56,7 @@ import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
 import type { IsolationReader } from './isolationFacts.js';
+import type { ReviewFs, ReviewStore } from './review/store.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -66,6 +67,8 @@ export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonl
 
 export interface Deps {
   cfg: CcrcConfig;
+  /** Draft review's fixture seam: hand in the open store or the filesystem with which to open it. */
+  review?: { store?: ReviewStore; fs?: ReviewFs };
   /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
   perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -269,6 +272,9 @@ export interface Deps {
   /** D-8289: the capture queue's transport to the test box, built in `index.ts`. Absent (a test, a script): builds are
    *  recorded and no job is sent. */
   buildCapture?: BuildCaptureTransport;
+  /** Build capture runner spec 2026-11-22 §2.2: the copy of a build the test box refused `build-absent`, over the admin lane,
+   *  built in `index.ts`. Absent (a test, a script): such a refusal is recorded `no-admin-lane`, and nothing is copied. */
+  buildCopy?: BuildCopyTransport;
   /** Mid-turn mail (plan Task 4.4): called by `POST /api/mail/:id/ack` after an ack lands, never awaited; `index.ts`
    *  composes it as the watcher's kick of the mailhold row, so a released hold's marker clears at the next tick. Absent
    *  (a test, a script): nothing is kicked, and the projection's own beat clears it. */
@@ -299,6 +305,6 @@ export interface Deps {
 export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
   coord?: WatcherCoordPort;
   /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store; the inbox wake
-   *  reads its unsettled facts, text-free. */
-  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts'>;
+   *  reads its unsettled facts, text-free; the renewal readings count the messages since a start (`turns`). */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf' | 'unsettledFacts' | 'messagesSince'>;
 };

@@ -53,8 +53,10 @@ describe('clipboardFiles', () => {
     expect(files.map((f: File) => f.name)).toEqual(['spec.md', 'notes.rtf']);
   });
 
-  it('still ignores a pasted file of a kind nothing here admits', () => {
-    expect(clipboardFiles(clipboard([shot('application/zip', 'bundle.zip')]))).toEqual([]);
+  // Any file attaches (2026-11-24): a pasted archive is handed over too.
+  it('takes a pasted file of any kind', () => {
+    expect(clipboardFiles(clipboard([shot('application/zip', 'bundle.zip')])).map((f: File) => f.name))
+      .toEqual(['bundle.zip']);
   });
 });
 
@@ -62,24 +64,26 @@ describe('namedUpload', () => {
   it('names an unnamed clipboard file by its real type — the server admits by extension', () => {
     // Safari hands over an empty name; the upload route matches on the extension.
     const named = namedUpload(shot('image/jpeg', ''), 1700000000000);
-    expect(named?.name).toBe('pasted-1700000000000.jpg');
-    expect(named?.type).toBe('image/jpeg');
+    expect(named.name).toBe('pasted-1700000000000.jpg');
+    expect(named.type).toBe('image/jpeg');
   });
 
   it('keeps a name that already carries an accepted extension', () => {
-    expect(namedUpload(shot('image/png', 'Screenshot.png'), 1)?.name).toBe('Screenshot.png');
+    expect(namedUpload(shot('image/png', 'Screenshot.png'), 1).name).toBe('Screenshot.png');
   });
 
   // The name is what the server gates on, so a document keeps its own — that
   // name is also the stem that reaches the prompt, and it is the only thing
   // saying which of four staged documents this one is.
   it('keeps a document name untouched rather than inventing a pasted-<ts> one', () => {
-    expect(namedUpload(shot('text/markdown', 'design-notes.md'), 1)?.name).toBe('design-notes.md');
-    expect(namedUpload(shot('', 'report.pdf'), 1)?.name).toBe('report.pdf');
+    expect(namedUpload(shot('text/markdown', 'design-notes.md'), 1).name).toBe('design-notes.md');
+    expect(namedUpload(shot('', 'report.pdf'), 1).name).toBe('report.pdf');
   });
 
-  it('refuses a type the server would reject rather than mislabelling it', () => {
-    expect(namedUpload(shot('image/gif', 'anim.gif'), 1)).toBeNull();
+  // A GIF is not one of the four pictures, so it is a chip uploaded unchanged,
+  // under its own name — never refused, and never relabelled as a PNG.
+  it('keeps any other named file as it is, rather than refusing it', () => {
+    expect(namedUpload(shot('image/gif', 'anim.gif'), 1).name).toBe('anim.gif');
   });
 });
 

@@ -79,6 +79,9 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   // NOT a session id: `scriptNameFor`'s `<name>-<runId>.js`, a workflow run's script. It is a row so the scan's hit is
   // accounted for, and it bounds nothing, because a run id is never a registry id.
   { file: 'server/src/workflows/read.ts', template: '-<id>.js', overhead: 4 },
+  // NOT a session id: a review tombstone embeds the fixed-width local share id, never the capability token.
+  // Its exact hit is accounted for without changing the session-id cap (the persisted name is pinned by review-store).
+  { file: 'server/src/review/store.ts', template: '<id>.removed.json', overhead: 13 },
   { file: 'ccd/history/sweep.mjs', template: '<id>.<ms>.<pid>.jsonl', overhead: 28 },
   { file: 'ccd/ccd', template: '.<id>.<field>.<pid>.<seq>.tmp', overhead: 40 },
   { file: 'ccd/ccd', template: '.<id>.<pid>.hookstate.tmp', overhead: 23 },

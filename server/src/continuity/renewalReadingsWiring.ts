@@ -10,15 +10,17 @@
 //
 // PR A wires two readings, both the Overlord's only: the fitted ceiling (`closedSpotProbes`, read once per model class per
 // pass) and the daily backstop (`backstopRead`, read once per pass). PR C wires the designation's two, the Overlord's only too
-// (`designationRead`, read once per pass): `termRaised` and `classChanged`. PR B wires `notLocal` for every generation the gather
-// reads, Overlord and coordinator: the generation's own start by its id (`startById`), then the watcher's one memoized
-// transcript resolver (`deps.transcript`, the same instance its name sweep and idle nudge ask) for that start's uuid under the
-// generation's own account (`notLocalAskOf` decides what to ask, and refuses a registry row that has moved), never with `foreign`.
-// A complete absence from that resolver may be its memory (review 3696 F1), and its `complete` folds an unreadable read into
-// absence (review 3718 F3), so it is checked by one measured search of every place the resolver's own-account search looks
+// (`designationRead`, read once per pass): `termRaised` and `classChanged`. PR F wires `turns`, the Overlord's only: the private
+// store's count of the messages recorded since the generation's start (`messagesSince`), passed through, and kept as the lane's
+// `W1` on a box whose private store is not in the deps. PR B wires `notLocal` for every generation the gather reads, Overlord
+// and coordinator: the generation's own start by its id (`startById`), then the watcher's one memoized transcript resolver
+// (`deps.transcript`, the same instance its name sweep and idle nudge ask) for that start's uuid under the generation's own
+// account (`notLocalAskOf` decides what to ask, and refuses a registry row that has moved), never with `foreign`. A complete
+// absence from that resolver may be its memory (review 3696 F1), and its `complete` folds an unreadable read into absence
+// (review 3718 F3), so it is checked by one measured search of every place the resolver's own-account search looks
 // (`uuidGlobPlaces`, over the watcher's io, with the reads that tell absent from unreadable); `notLocalOf` believes an absence
-// only from that search. The isolation word's carrier
-// (`deps.isolation`) is read before the first ask and after the last. A field it does not answer keeps the lane's `W1`.
+// only from that search. The isolation word's carrier (`deps.isolation`) is read before the first read and after the last. A
+// field it does not answer keeps the lane's `W1`.
 //
 // THE LATCH (PR C, Task 6). `latch` is the pass's `GenerationsDeps.latch`: the ladder's one delivery-facing raise
 // (`overlordLadderRead.ts#raiseLatch`), which takes the cap from the cause row, raised by the renewal lane (`laneRaiser`). The
@@ -36,6 +38,7 @@ import { familyClassOf } from '../../../shared/models.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { LadderLatchCause } from '../../../shared/overlord-ladder.js';
 import type { BackstopRead } from '../../../shared/renewal-readings.js';
+import type { OperatorModelStore } from '../operatorModel/store.js';
 import { NO_LADDER_AUTHORITY } from '../coord/overlordAuthorityJournal.js';
 import { raiseLatch } from '../coord/overlordLadderRead.js';
 import { laneRaiser, type AuthorityAppender } from '../coord/overlordLadderStore.js';
@@ -54,6 +57,8 @@ export interface ReadingsDeps {
   /** The authority journal the ladder's writers append to (`NO_LADDER_AUTHORITY` when none is configured, as the ladder's own
    *  doors take it). */
   readonly overlordAuthority?: AuthorityAppender;
+  /** The Overlord's private store, for `turns` (`messagesSince`). Absent (no store open, a test): `turns` keeps its `W1`. */
+  readonly operatorModel?: Pick<OperatorModelStore, 'messagesSince'>;
   /** Where a failed read is logged, once per reading per pass. Absent: `console.warn`. */
   readonly log?: (line: string) => void;
   /** The roster, for the session's own account's config dir (`configDirFor`). */
@@ -158,6 +163,8 @@ export function renewalReadingsOf(deps: ReadingsDeps, coord: ReadingsCoord, reco
         });
         field(w1, 'termRaised', 'designation', () => termRaisedOf(designation ??= coord.designationRead(), g));
         field(w1, 'classChanged', 'designation', () => classChangedOf(designation ??= coord.designationRead(), g));
+        const store = deps.operatorModel;
+        if (store !== undefined) field(w1, 'turns', 'turns', () => store.messagesSince(g.startReportedAt));
       }
       const { cfg, transcript } = deps;
       if (cfg !== undefined && transcript !== undefined) await fieldAsync(w1, 'notLocal', 'not-local', () => notLocal(g, base, cfg, transcript));

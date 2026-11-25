@@ -3,7 +3,10 @@
 // and with none, the standing judged again when a waiting capture starts, and the test service's dispatch of
 // `capture.submit` with and without a desk. Every frame the desk sends passes the frame family's one reader.
 import { describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+import { sweepStaleCaptures } from '../src/testbox/main.js';
 import { CAPTURE_REFUSALS, CAPTURE_REFUSAL_SENTENCE, type CaptureAnswer, type CaptureRefusal, type CaptureSubmit } from '../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../shared/claudeBuildTrust.js';
 import { readTestboxFrame, type ProbeAnswer, type RunLog, type RunSummary } from '../../shared/testbox.js';
@@ -66,10 +69,13 @@ describe('the capture desk refuses, in order, what it will not take (spec §2.3)
     const { r } = refusal(desk({ role: 'not-test-box', runner: null, buildPresent: () => false, fleetDirs: () => [ROOT] }));
     expect(r).toBe('not-test-box');
   });
-  it('no runner refuses next', () => {
-    expect(refusal(desk({ runner: null, buildPresent: () => false, fleetDirs: () => [ROOT] })).r).toBe('no-runner');
+  it('a build whose bytes are not placed refuses next, before the runner is looked at: a box with no runner still gets its build', () => {
+    expect(refusal(desk({ runner: null, buildPresent: () => false, fleetDirs: () => [ROOT] })).r).toBe('build-absent');
   });
-  it('a build whose bytes are not placed refuses next, asking for the build\'s own file', () => {
+  it('no runner refuses once the build is there', () => {
+    expect(refusal(desk({ runner: null, buildPresent: () => true, fleetDirs: () => [ROOT] })).r).toBe('no-runner');
+  });
+  it('a build whose bytes are not placed is asked for by its own file', () => {
     const asked: string[] = [];
     const d = desk({ buildPresent: (f) => { asked.push(f); return false; }, fleetDirs: () => [ROOT] });
     expect(refusal(d).r).toBe('build-absent');
@@ -219,5 +225,32 @@ describe('the test service takes capture.submit through the desk (spec §2.5)', 
     await FRAME_HANDLERS['capture.submit']!(service(), SUBMIT(1), conn);
     expect(conn.refused).toEqual(['capture.submit is not a frame this service takes']);
     expect(conn.frames).toEqual([]);
+  });
+});
+
+describe('the sweep of stale capture directories at the service start (main.ts#sweepStaleCaptures)', () => {
+  const fresh = (): string => realpathSync(mkTmp('ccrc-capsweep-'));
+  it('removes each capture-id directory, keeps the builds store and any other entry', () => {
+    const root = fresh();
+    const caps = path.join(root, 'captures');
+    for (const n of [ID(1), ID(2), 'builds']) mkdirSync(path.join(caps, n), { recursive: true });
+    writeFileSync(path.join(caps, 'builds', '2.1.100'), 'x');
+    writeFileSync(path.join(caps, 'notes.txt'), 'x');
+    expect(sweepStaleCaptures(root).sort()).toEqual([ID(1), ID(2)]);
+    expect(existsSync(path.join(caps, ID(1)))).toBe(false);
+    expect(existsSync(path.join(caps, ID(2)))).toBe(false);
+    expect(existsSync(path.join(caps, 'builds', '2.1.100'))).toBe(true);
+    expect(existsSync(path.join(caps, 'notes.txt'))).toBe(true);
+  });
+  it('an absent captures directory is nothing to do', () => {
+    expect(sweepStaleCaptures(fresh())).toEqual([]);
+  });
+  it('one removal that throws stops neither the others nor the start', () => {
+    const root = fresh();
+    for (const n of [ID(1), ID(2), ID(3)]) mkdirSync(path.join(root, 'captures', n), { recursive: true });
+    const tried: string[] = [];
+    const got = sweepStaleCaptures(root, (d) => { tried.push(path.basename(d)); if (path.basename(d) === ID(2)) throw new Error('EBUSY'); });
+    expect(tried).toEqual([ID(1), ID(2), ID(3)]);
+    expect(got).toEqual([ID(1), ID(3)]);
   });
 });

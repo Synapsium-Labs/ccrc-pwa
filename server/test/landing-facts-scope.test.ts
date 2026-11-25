@@ -53,7 +53,7 @@ describe('landing facts: one project read across two projects', () => {
     db.exec('PRAGMA ignore_check_constraints = ON');
     db.prepare("UPDATE landing_entries SET pr = 0 WHERE id = 4").run();
     db.exec('PRAGMA ignore_check_constraints = OFF');
-    expect(read('project-a')).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'restart' });
+    expect(read('project-a')).toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'repair' });
   });
 });
 
@@ -197,6 +197,20 @@ const EXPECTED_A = {
       }
     }
   ],
+  "stateWords": [
+    {
+      "id": 1,
+      "value": "pinned"
+    },
+    {
+      "id": 2,
+      "value": "landed"
+    },
+    {
+      "id": 5,
+      "value": "ejected"
+    }
+  ],
   "dependencies": [
     {
       "id": 1,
@@ -247,7 +261,9 @@ const EXPECTED_A = {
         "kind": "no-run"
       }
     }
-  ]
+  ],
+  "terminalRepairs": [],
+  "creations": []
 };
 const EXPECTED_B = {
   "project": "project-b",
@@ -364,6 +380,16 @@ const EXPECTED_B = {
       }
     }
   ],
+  "stateWords": [
+    {
+      "id": 3,
+      "value": "pinned"
+    },
+    {
+      "id": 4,
+      "value": "withdrawn"
+    }
+  ],
   "dependencies": [
     {
       "id": 3,
@@ -401,5 +427,7 @@ const EXPECTED_B = {
         "kind": "no-run"
       }
     }
-  ]
+  ],
+  "terminalRepairs": [],
+  "creations": []
 };

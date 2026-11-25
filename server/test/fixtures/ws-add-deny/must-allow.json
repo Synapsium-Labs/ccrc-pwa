@@ -7,7 +7,7 @@
   "echo hi # ccd ws-add project-a",
   "git commit -m \"fix(ccd): ccd ws-add refuses a blank title\"",
   "git commit -F - <<'EOF'\nccd ws-add is the server's to compose\nEOF",
-  "gh pr create --title 'the child ws-add deny' --body-file /tmp/body.md",
+  "gh pr create --draft --title 'the child ws-add deny' --body-file /tmp/body.md",
   "ccd ws-addx project-a",
   "xccd ws-add project-a",
   "ccd ws-list",

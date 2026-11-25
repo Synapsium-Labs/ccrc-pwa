@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
+import { parsedFile } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
@@ -90,5 +91,15 @@ describe('localIO lists names only', () => {
     // Test fakes spread `...localIO` and override `readdir`; an inherited times reader would make the cached registry
     // read list the REAL filesystem and bypass the fake's listing. Local mode keeps names-only keys.
     expect(localIO.readdirWithTimesMeasured).toBeUndefined();
+  });
+});
+
+describe('the landing control readers (wave 5i) use only measured seams', () => {
+  it('lineageRead.ts calls no collapsing sibling, and the byte-range member states its failure contract', () => {
+    // A call census over the parsed file (scan/parse.ts), not a literal pin over its text.
+    const collapsing = new Set(['readFile', 'readFileFrom', 'readdir', 'stat']);
+    const hits = parsedFile('server/src/coord/lineageRead.ts').calls.filter((c) => c.name !== null && collapsing.has(c.name)).map((c) => c.callee);
+    expect(hits).toEqual([]);
+    expect(docs(fleetIoBody()).get('readFileFromBytesMeasured') ?? '').toMatch(/Failure contract:/);
   });
 });

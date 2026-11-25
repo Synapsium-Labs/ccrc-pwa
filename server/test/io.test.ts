@@ -254,7 +254,8 @@ describe('localIO.readFileFromBytesMeasured: one regular handle for bytes, size 
     expect(opens(file)).toBe(1);
   });
 
-  it('the bytes arm opens read-only and NONBLOCKING, so a FIFO raced in after the path stat cannot hang the open', async () => {
+  // Why nonblocking: a FIFO raced in after the path stat must not hang the open. This case pins the flags, not that race.
+  it('the bytes arm opens with the read-only and nonblocking flags', async () => {
     const { file } = fileWith('0123456789');
     expect(sansIdent(await localIO.readFileFromBytesMeasured(file, 0, 4))).toEqual({ ok: true, bytes: u8('0123'), size: 10 });
     const flags = afterOpen.flags.get(file);
