@@ -2252,22 +2252,29 @@ button.metachip:active {
 }
 
 /* The tool-activity row (desktop polish wave 168, `ToolActivityRow`): one stretch of a turn's tool activity as one
-   collapsed line, in both skins. The line never wraps and never overflows its column: the flags (what the reader can act
-   on) never shrink, and the compact details give way to them in order: the newest call's summary first (it takes only
-   what is left), then the title, then the count and the running state, each cut with an ellipsis. Measured at 360 in
-   both skins with a running stretch carrying two flags (`browser/tool-activity.browser.test.ts`). */
+   collapsed line, in both skins, that never overflows its column. What cannot shrink: the chevron, the separators, the
+   flags (what the reader can act on) and, on a closed stretch that holds a hidden question, the words that name it
+   ("1 question", `.tool-activity-asks`, desktop polish wave 179 B2). What gives way, in order: the newest call's
+   summary first (it takes only what is left), then the title, then the count, the messages and the running state, each
+   cut with an ellipsis. If the fixed parts alone do not fit one line, the row wraps to a second line rather than cut the
+   question words or a flag: a nowrap flex row cannot wrap, so the row is `flex-wrap: wrap` and every shrinking part has
+   a zero basis that grows back to its own content width (`max-width: max-content`) by a grow factor that sets the same
+   order (the summary the smallest), so a line breaks only where the fixed parts need it. Measured at 360 and 390 in
+   both skins (`browser/tool-activity.browser.test.ts`, with two flags; `browser/mail-rows.browser.test.ts`, with the
+   question words and a third flag). */
 .tool-activity {
   min-width: 0;
   max-width: 100%;
 }
 .tool-activity-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1) var(--sp-2);
   width: 100%;
   min-width: 0;
   min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
   border: none;
   background: none;
   color: var(--ink-secondary);
@@ -2282,17 +2289,19 @@ button.metachip:active {
   transition: transform var(--dur-base) var(--curve-swift);
 }
 .tool-activity-row[aria-expanded='true'] .tool-activity-chev { transform: rotate(90deg); }
-.tool-activity-title { flex: 0 100 auto; color: var(--ink-primary); }
+.tool-activity-title { flex: 100 1 0; color: var(--ink-primary); }
 .tool-activity-title,
 .tool-activity-calls,
 .tool-activity-state {
   min-width: 0;
+  max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .tool-activity-sep { flex: none; color: var(--ink-tertiary); }
-.tool-activity-calls { flex: 0 1 auto; font-variant-numeric: tabular-nums; }
-.tool-activity-state { flex: 0 1 auto; color: var(--status-busy-text); }
+.tool-activity-calls { flex: 1000 1 0; font-variant-numeric: tabular-nums; }
+.tool-activity-state { flex: 1000 1 0; color: var(--status-busy-text); }
+.tool-activity-asks { flex: none; color: var(--status-attention-text); }
 .tool-activity-attention-count { display: inline-flex; flex: none; gap: var(--sp-1); }
 .tool-activity-flag {
   padding: 2px var(--sp-1);
@@ -2303,6 +2312,7 @@ button.metachip:active {
 .tool-activity-latest {
   flex: 1 1 0;
   min-width: 0;
+  max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink-tertiary);
