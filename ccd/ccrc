@@ -2571,7 +2571,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test|testbox-admin|quiz-record}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|auth|expose|token|restamp|version|watchdog|history|test|testbox-admin|quiz-record}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2826,6 +2826,15 @@ already running).
             box's ccrc.env. Rotating invalidates every logged-in SESSION —
             enrolled passkeys keep working, by design, so a lost device is
             "revoke its passkey in the PWA, THEN run this"
+  auth      on|off: the console's sign-in for a box used at localhost.
+            "on" needs a passphrase (ccrc passwd first), writes CCRC_AUTH,
+            CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE for
+            http://localhost:<port> into this box's ccrc.env, restarts
+            ccrc.service and proves the server answers with sign-in on; "off"
+            removes those lines and proves it off. Either puts the file back
+            if the proof fails. Refuses on a box reached from elsewhere (that
+            is ccrc expose), during an update, and inside a session: the
+            operator's, from their own terminal
   expose    give this box a public name and a real certificate: writes the
             exposure config (its own env file — ccrc.env is never touched)
             and a Caddyfile for a loopback reverse proxy, then prints the
@@ -6235,6 +6244,319 @@ cmd_passwd() {
   echo "$PROG: the gate is still OFF until CCRC_AUTH=on is set in $BOX_ENV_FILE and ccrc.service is restarted — a passphrase on its own changes nothing"
   echo "$PROG: set CCRC_RP_ID and CCRC_ORIGIN in the SAME edit that arms CCRC_AUTH — with the flag on and those two wrong, every /ws/* upgrade and every non-exempt write is refused from the real origin, and the server prints no warning about it at boot"
   echo "$PROG: every logged-in session is now expired. ENROLLED PASSKEYS ARE NOT — they keep working across a rotation, by design. For a lost device: revoke its passkey in the PWA first, THEN run this"
+}
+
+# ── _ccrc_operator_only — the speed bumps an operator-only verb runs first (desktop polish wave 181) ──
+# The irreversible history verbs' three refusals (`decideOpGate`, ccd/history/lib.mjs), here in shell as ONE function,
+# so the next verb that is the operator's alone calls this rather than a copy:
+#   1. CLAUDECODE is set: a Claude Code session's own shell, the Bash tool included.
+#   2. stdin is not a terminal: a session's tool, a pipe, a script, `curl … | bash`.
+#   3. this terminal is a fleet session's pane: TMUX_PANE names a pane (`%<n>`) whose tmux session is `cc-<id>`, read
+#      with `tmux display-message -p -t "$TMUX_PANE" '#S'`, bounded at 2 s as the history verbs bound it. A read that
+#      fails, times out or answers anything else refuses nothing.
+# SPEED BUMPS, NOT WALLS. `env -u CLAUDECODE`, a terminal made with `script`, an unset TMUX_PANE, a script file or another
+# interpreter each run past them. They stop a session doing this by accident, never one that sets out to.
+_ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
+  local what="$1" pane=""
+  [ -z "${CLAUDECODE:-}" ] \
+    || _ccrc_die "'ccrc $what' is the operator's, typed in their own terminal, and it refuses inside a Claude Code session (CLAUDECODE is set). Nothing was changed."
+  [ -t 0 ] \
+    || _ccrc_die "'ccrc $what' is the operator's, typed in their own terminal, and stdin here is not a terminal (a session's tool, a pipe or a script). Nothing was changed."
+  if [ -n "${TMUX_PANE:-}" ] && [[ "$TMUX_PANE" =~ ^%[0-9]+$ ]] && command -v tmux >/dev/null 2>&1; then
+    pane="$(_plat_timeout 2 tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)" || pane=""
+    case "$pane" in
+      cc-?*) _ccrc_die "'ccrc $what' is the operator's, and this terminal is a fleet session's pane (${pane//[![:print:]]/?}), where it refuses. Run it from your own shell. Nothing was changed." ;;
+    esac
+  fi
+  return 0
+}
+
+# ── cmd_auth — the console's sign-in, on or off, for a box used at localhost (desktop polish wave 181) ──
+# `ccrc expose` arms the gate for a box reached from elsewhere, together with an https address. A box used only at
+# http://localhost had the README's hand route alone: set the passphrase, edit ccrc.env, restart, and know that the
+# flag without a passphrase locks the console, and that Safari drops the default Secure cookie there. This verb is
+# that route, measured at every step:
+#   on   writes the four lines of deploy/ccrc.env.example's "localhost dev box" set into ccrc.env —
+#          CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http://localhost:<port>, CCRC_COOKIE_INSECURE=on.
+#        The cookie line is measured, not taste (D-TBD-auth-on): WebKit, Safari's engine, does not keep a Secure
+#        cookie on plain-http localhost, so a login answers 204 and the next request is 401. Chromium keeps either.
+#        A cookie is not port-scoped with or without Secure, and loopback traffic never leaves the machine.
+#   off  removes the CCRC_AUTH line and each other line holding exactly the value `on` writes, which is the shipped
+#        default again (and `ccrc expose`'s shadow refusal no longer fires). A value anyone else set stays, named.
+# The order of every run, and nothing is written before the last refusal:
+#   1. `_ccrc_operator_only`; 2. a server box (no CCRC_ROLE=fleet; ccrc.service installed); 3. ~/.ccrc/update.lock,
+#   held for the whole act (an update's health gate measures this same unit; `ccrc coordination-snapshot`'s rule);
+#   4. PROVABLY loopback-only (`_box_reach`, the reader doctor's update-exposure check asks: no exposure artifact, and
+#   CCRC_HOST measured loopback); 5. every key read as ccrc.service receives it (`_box_unit_env`), and an undecidable
+#   one refuses; 6. on: no foreign CCRC_RP_ID/CCRC_ORIGIN/CCRC_COOKIE_INSECURE, and a USABLE passphrase (the hasher's
+#   `--check`, doctor's own question, which prints no byte of the secret) — never the other order: a gate armed with no
+#   passphrase fails shut; 7. the write (temp file and rename, the mode kept, every other line byte for byte, a comment
+#   always a comment); 8. restart, and the PROOF: the unit active and /api/auth/status answering the new mode within
+#   the update health window; 9. on any failure the original bytes go back, the unit is restarted again, and exit 1.
+# Already in the asked state: said, and nothing is written or restarted.
+AUTH_KEYS=(CCRC_AUTH CCRC_RP_ID CCRC_ORIGIN CCRC_COOKIE_INSECURE)
+_auth_marker() { printf "# ccrc auth on: sign-in at http://localhost:%s ('ccrc auth off' removes these lines)" "$1"; }   # <port>
+_auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
+  case "$1" in
+    CCRC_AUTH) printf 'on' ;;
+    CCRC_RP_ID) printf 'localhost' ;;
+    CCRC_ORIGIN) printf 'http://localhost:%s' "$2" ;;
+    CCRC_COOKIE_INSECURE) printf 'on' ;;
+  esac
+}
+
+# The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
+# it begins `<KEY>=` for one of the four keys; a `#` line is a comment and is copied whatever it names. Every line
+# that is not ours is printed as read, so the only byte added to the rest of the file is a newline after a last line
+# that had none. The value compared is the reader's: one trailing CR dropped, one whole pair of quotes stripped.
+#   on   drops every line of ours (by now each is empty, already ours, or CCRC_AUTH off) and our marker line, then
+#        appends the marker and the four lines.
+#   off  drops our marker line, every CCRC_AUTH line, and each other line of ours whose value is exactly ours.
+_auth_rewrite() {   # <on|off> <src or ""> <dest> <port>
+  local mode="$1" src="$2" dest="$3" port="$4" k
+  {
+    if [ -n "$src" ]; then
+      LC_ALL=C awk -v mode="$mode" -v marker="$(_auth_marker "$port")" \
+        -v w_auth="$(_auth_want CCRC_AUTH "$port")" -v w_rp="$(_auth_want CCRC_RP_ID "$port")" \
+        -v w_origin="$(_auth_want CCRC_ORIGIN "$port")" -v w_cookie="$(_auth_want CCRC_COOKIE_INSECURE "$port")" '
+        function val(s,   v) {
+          v = substr(s, index(s, "=") + 1); sub(/\r$/, "", v)
+          if (length(v) >= 2 && ((substr(v,1,1) == "\"" && substr(v,length(v),1) == "\"") || (substr(v,1,1) == "'"'"'" && substr(v,length(v),1) == "'"'"'"))) v = substr(v, 2, length(v) - 2)
+          return v
+        }
+        {
+          line = $0; t = line; sub(/^[ \t]+/, "", t); c = t; sub(/\r$/, "", c)
+          if (c == marker) next
+          key = ""
+          if (t ~ /^CCRC_AUTH=/) key = "auth"; else if (t ~ /^CCRC_RP_ID=/) key = "rp"
+          else if (t ~ /^CCRC_ORIGIN=/) key = "origin"; else if (t ~ /^CCRC_COOKIE_INSECURE=/) key = "cookie"
+          if (key == "") { print line; next }
+          if (mode == "on") next
+          if (key == "auth") next
+          v = val(t)
+          if ((key == "rp" && v == w_rp) || (key == "origin" && v == w_origin) || (key == "cookie" && v == w_cookie)) next
+          print line
+        }' "$src" || return 1
+    fi
+    if [ "$mode" = on ]; then
+      printf '%s\n' "$(_auth_marker "$port")"
+      for k in "${AUTH_KEYS[@]}"; do printf '%s=%s\n' "$k" "$(_auth_want "$k" "$port")"; done
+    fi
+  } > "$dest"
+}
+
+_auth_join() { local o="" r; for r in "$@"; do o="${o:+$o; }$r"; done; printf '%s' "$o"; }
+
+# One reading of the running server: AUTH_MODE is /api/auth/status's `mode` ("" when it did not answer), AUTH_BUILD
+# what /health says it runs. Both routes are auth-exempt. Nothing read off the network is printed except a version
+# that matched vX.Y.Z.
+AUTH_MODE=""; AUTH_BUILD=""
+_auth_read_server() {   # <host:port>
+  local out v
+  AUTH_MODE=""; AUTH_BUILD=""
+  out="$(curl -s --max-time "$CCRC_HEALTH_TIMEOUT" "http://$1/api/auth/status" 2>/dev/null)" || out=""
+  v="$(printf '%s' "$out" | jq -r '.mode // empty' 2>/dev/null)" || v=""
+  case "$v" in off|passphrase|locked-out) AUTH_MODE="$v" ;; esac
+  out="$(curl -s --max-time "$CCRC_HEALTH_TIMEOUT" "http://$1/health" 2>/dev/null)" || out=""
+  v="$(printf '%s' "$out" | jq -r '.version // empty' 2>/dev/null)" || v=""
+  if [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then AUTH_BUILD="$v"; elif [ -n "$out" ]; then AUTH_BUILD="a build with no release version"; fi
+  return 0
+}
+
+# Restart ccrc.service and wait, within the update health window, for the unit to be active AND the server to answer
+# the wanted mode: `armed` is passphrase or locked-out, `off` is off. rc 0 proved; rc 1 not, AUTH_WHY saying what was
+# last measured. An answer of the OLD mode is not proof: it is the old server, or a server that did not read the file.
+AUTH_WHY=""
+_auth_restart_prove() {   # <armed|off> <host:port>
+  local want="$1" addr="$2" st="" end
+  AUTH_WHY=""
+  _upd_health_s || true
+  _svc_restart ccrc.service || AUTH_WHY="the restart command failed ($(_svc_restart_hint ccrc.service))"
+  end=$((SECONDS + UPD_HEALTH_S))
+  while :; do
+    st="$(_svc_is_active ccrc.service)"
+    if [ "$st" = active ]; then
+      _auth_read_server "$addr"
+      case "$want:$AUTH_MODE" in
+        armed:passphrase|armed:locked-out|off:off) return 0 ;;
+      esac
+    fi
+    [ "$SECONDS" -lt "$end" ] || break
+    sleep 2
+  done
+  AUTH_WHY="after ${UPD_HEALTH_S}s ccrc.service is ${st:-unanswered} and http://$addr/api/auth/status answers ${AUTH_MODE:-nothing}${AUTH_WHY:+; $AUTH_WHY}"
+  return 1
+}
+
+cmd_auth() {
+  local sub="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    -h|--help) usage; exit 0 ;;
+    on|off) ;;
+    '')
+      echo "$PROG: auth: missing subcommand (on|off)" >&2
+      usage >&2
+      exit 2
+      ;;
+    *) _ccrc_usage_die "$sub" ;;
+  esac
+  [ $# -eq 0 ] || _ccrc_usage_die "$1"
+
+  _ccrc_operator_only "auth $sub"
+
+  # A server box: the fleet role runs no console, and a box with no installed ccrc.service has nothing to restart.
+  local role=""
+  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" != fleet ] \
+    || _ccrc_die "auth: this box runs no console ($BOX_ENV_FILE records CCRC_ROLE=fleet); sign-in belongs to the server box. Nothing was changed."
+  [ -f "$BOX_UNIT_DIR/$(_box_unit_file ccrc.service)" ] \
+    || _ccrc_die "auth: ccrc.service is not installed in $BOX_UNIT_DIR, so there is no console service here to restart (a dev checkout runs its server by hand: set the keys in the README's 'The session gate' yourself). Nothing was changed."
+
+  # Held from here to the end of the act, so an update cannot restart or measure this unit in between.
+  local lrc=0
+  _ver_lock_try || lrc=$?
+  case "$lrc" in
+    0) _exit_add '_upd_unlock' ;;
+    1) _ccrc_die "auth: an update or rollback holds ~/.ccrc/update.lock, and it restarts and measures this same service; wait for it to finish, then re-run. Nothing was changed." ;;
+    2) _ccrc_die "auth: ~/.ccrc/update.lock cannot be taken (flock is not on PATH), so a running update could not be ruled out. Nothing was changed." ;;
+    *) _ccrc_die "auth: ~/.ccrc/update.lock could not be taken or measured, so a running update could not be ruled out. Nothing was changed." ;;
+  esac
+
+  # PROVABLY loopback-only, or nothing.
+  _box_reach "$BOX_UNIT_DIR"
+  if [ "${#BRE_REASONS[@]}" -gt 0 ]; then
+    if [ "$sub" = on ]; then
+      _ccrc_die "auth on: this box is reached from elsewhere ($(_auth_join "${BRE_REASONS[@]}")). Arm it with ccrc expose, which sets sign-in together with an https address, or, behind a proxy of your own, by the README's hand route ('The session gate'). Nothing was changed."
+    fi
+    _ccrc_die "auth off: this box is reached from elsewhere ($(_auth_join "${BRE_REASONS[@]}")). There the exposure arms the gate, and turning sign-in off means un-exposing the box (the README's 'Exposure' section), which is not this verb's. Nothing was changed."
+  fi
+  case "$BRE_HOSTRC" in
+    0) ;;
+    3) _ccrc_die "auth $sub: $BRE_HOSTWHY, so whether this box is loopback-only was not measured — $BRE_HOSTFIX. Nothing was changed." ;;
+    *) _ccrc_die "auth $sub: CCRC_HOST could not be read as ccrc.service receives it, so whether this box is loopback-only was not measured. Nothing was changed." ;;
+  esac
+  [ ! -L "$BOX_ENV_FILE" ] \
+    || _ccrc_die "auth $sub: $BOX_ENV_FILE is a symlink, and a rename would replace the link with a file; set the keys by hand (the README's 'The session gate'). Nothing was changed."
+
+  # The port and the four keys, as the unit receives them.
+  local port="" urc=0
+  _box_unit_env CCRC_PORT || urc=$?
+  [ "$urc" -eq 0 ] || _ccrc_die "auth $sub: ${BUE_WHY:-CCRC_PORT could not be read as ccrc.service receives it}, so the address was not measured${BUE_FIX:+ — $BUE_FIX}. Nothing was changed."
+  port="${BUE_VAL:-7788}"
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$port))" -ge 1 ] && [ "$((10#$port))" -le 65535 ] \
+    || _ccrc_die "auth $sub: CCRC_PORT in $BOX_ENV_FILE is not a port number (1 to 65535). Nothing was changed."
+  port="$((10#$port))"
+  local host="127.0.0.1"
+  case "$BRE_HOST" in
+    '') ;;
+    ::1|'[::1]') host='[::1]' ;;
+    *) host="$BRE_HOST" ;;
+  esac
+  local addr="$host:$port"
+
+  local k v auth_cur=() foreign=() same=0
+  for k in "${AUTH_KEYS[@]}"; do
+    urc=0
+    _box_unit_env "$k" || urc=$?
+    [ "$urc" -eq 0 ] || _ccrc_die "auth $sub: ${BUE_WHY:-$k could not be read as ccrc.service receives it}${BUE_FIX:+ — $BUE_FIX}. Nothing was changed."
+    v="$BUE_VAL"; auth_cur+=("$v")
+    [ "$v" != "$(_auth_want "$k" "$port")" ] || same=$((same + 1))
+    if [ "$k" != CCRC_AUTH ] && [ -n "$v" ] && [ "$v" != "$(_auth_want "$k" "$port")" ]; then foreign+=("$k"); fi
+  done
+
+  if [ "$sub" = on ]; then
+    [ "${#foreign[@]}" -eq 0 ] \
+      || _ccrc_die "auth on: $BOX_ENV_FILE already sets ${foreign[*]} to something other than what this verb writes for http://localhost:$port, so this box is configured for another address (a proxy of your own, most likely). Keep the README's hand route there ('The session gate'), or remove those lines and re-run. Nothing was changed."
+    if [ "$same" -eq "${#AUTH_KEYS[@]}" ]; then
+      echo "auth: sign-in is already on for http://localhost:$port in $BOX_ENV_FILE; nothing was changed"
+      _auth_read_server "$addr"
+      case "$AUTH_MODE" in
+        passphrase|locked-out) echo "auth: the server at $addr answers with sign-in on" ;;
+        off) echo "auth: but the server at $addr answers with sign-in OFF — it has not been restarted since; restart it: $(_svc_restart_hint ccrc.service)" ;;
+        *) echo "auth: the server at $addr did not answer; $(_svc_status_hint ccrc.service) says why" ;;
+      esac
+      return 0
+    fi
+    # The passphrase, before anything is written: armed with none, the gate refuses everyone.
+    local secret src="" crc=0 helper="$CCRC_HERE/../deploy/gen-auth-hash.mjs"
+    secret="$(_box_auth_path)" || src=$?
+    [ "${src:-0}" != 3 ] \
+      || _ccrc_die "auth on: $BOX_ENV_FILE sets CCRC_AUTH_SECRET_PATH to a RELATIVE path ($secret), so which passphrase file the server reads cannot be said; make it absolute, or remove the line. Nothing was changed."
+    command -v node >/dev/null 2>&1 \
+      || _ccrc_die "auth on: node is not on PATH, so the passphrase file could not be checked. Nothing was changed."
+    [ -f "$helper" ] \
+      || _ccrc_die "auth on: the passphrase checker is missing ($helper) — is this a complete ccrc install? Nothing was changed."
+    node "$helper" --check "$secret" >/dev/null 2>&1 </dev/null || crc=$?
+    case "$crc" in
+      0) ;;
+      3) _ccrc_die "auth on: there is no passphrase yet ($secret). Set one first: ccrc passwd, then ccrc auth on. Armed with none, the console would refuse everyone. Nothing was changed." ;;
+      4) _ccrc_die "auth on: the passphrase file at $secret cannot be used (it does not parse, or cannot be read), and the server refuses to boot on it once armed. ccrc doctor's auth check says how to replace it. Nothing was changed." ;;
+      5) _ccrc_die "auth on: this box has no server build, and the passphrase file is read by the server's own parser, so it could not be checked. Nothing was changed." ;;
+      *) _ccrc_die "auth on: checking the passphrase file exited $crc, which this verb does not know. Nothing was changed." ;;
+    esac
+  else
+    if [ "${auth_cur[0]}" != on ]; then
+      echo "auth: sign-in is already off in $BOX_ENV_FILE; nothing was changed"
+      return 0
+    fi
+  fi
+
+  # The write. The original stays beside the file, 0600, until the proof passes.
+  local dest="$BOX_ENV_FILE" tmp bak="" had=0 mode="600"
+  mkdir -p "${dest%/*}" || _ccrc_die "auth $sub: cannot create ${dest%/*}. Nothing was changed."
+  tmp="$dest.auth.tmp.$$"
+  _tmp_guard "$tmp"
+  if [ -e "$dest" ]; then
+    had=1
+    mode="$(_plat_mode "$dest" 2>/dev/null)" || mode=""
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] || _ccrc_die "auth $sub: the mode of $dest could not be read, so it could not be kept. Nothing was changed."
+    bak="$dest.auth-restore.$$"
+    ( umask 077; cp -p -- "$dest" "$bak" ) || { rm -f -- "$bak"; _ccrc_die "auth $sub: could not keep a copy of $dest to restore from. Nothing was changed."; }
+  fi
+  if ! ( umask 077; _auth_rewrite "$sub" "$([ "$had" -eq 1 ] && printf '%s' "$dest")" "$tmp" "$port" ) \
+     || ! chmod "$mode" "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "$tmp" "$bak"
+    _ccrc_die "auth $sub: writing $dest failed; it is exactly as it was. Nothing was changed."
+  fi
+
+  local want=armed; [ "$sub" = on ] || want=off
+  if ! _auth_restart_prove "$want" "$addr"; then
+    local why="$AUTH_WHY" back="put back"
+    if [ "$had" -eq 1 ]; then
+      mv -f -- "$bak" "$dest" || back="NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
+    else
+      rm -f -- "$dest" || back="NOT removed: $dest still holds this run's lines"
+    fi
+    # Back to what the box ran before this run: armed iff its CCRC_AUTH was on.
+    local was=off again
+    [ "${auth_cur[0]}" != on ] || was=armed
+    if _auth_restart_prove "$was" "$addr"; then
+      again="it is back as it was, with sign-in ${was/armed/on}"
+    else
+      again="and it did not come back as it was either ($AUTH_WHY); $(_svc_status_hint ccrc.service) says why"
+    fi
+    _ccrc_die "auth $sub: the restarted console did not prove the change: $why. The previous $dest was $back, and ccrc.service was restarted again: $again."
+  fi
+  [ -z "$bak" ] || rm -f -- "$bak"
+
+  if [ "$sub" = on ]; then
+    echo "auth: sign-in is on — CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http://localhost:$port and CCRC_COOKIE_INSECURE=on in $dest"
+    echo "auth: ccrc.service restarted, and the server at $addr answers with sign-in on (${AUTH_BUILD:-its build did not say})"
+    echo "auth: open http://localhost:$port/ — exactly that address. http://127.0.0.1:$port is a different origin: the console signs in and loads there, but every change is refused"
+    echo "auth: sign in with the passphrase you set with ccrc passwd. From another machine, tunnel the port and open the same address there: ssh -L $port:$host:$port <this box>, then http://localhost:$port/"
+    echo "auth: running Claude Code sessions are not processes of ccrc.service (they run in their own units and tmux scope), so the restart left them running"
+    echo "auth: if this console is reached under any other name (a proxy of your own), it signs in there but cannot act: run ccrc auth off, then use the README's hand route ('The session gate')"
+  else
+    local auth_left=()
+    for k in CCRC_RP_ID CCRC_ORIGIN CCRC_COOKIE_INSECURE; do
+      [ -z "$(_box_env_value "$dest" "$k")" ] || auth_left+=("$k")
+    done
+    echo "auth: sign-in is off — the lines ccrc auth on writes are gone from $dest"
+    echo "auth: ccrc.service restarted, and the server at $addr answers with sign-in off (${AUTH_BUILD:-its build did not say})"
+    [ "${#auth_left[@]}" -eq 0 ] || echo "auth: left as they were, because they hold values this verb did not write: ${auth_left[*]}"
+    echo "auth: anyone who can reach http://localhost:$port on this box can drive the console now — the shipped default. ccrc auth on turns sign-in back on"
+  fi
 }
 
 # ── cmd_expose — a public name and a real certificate, sudo never run ─────
@@ -30473,6 +30795,7 @@ case "$VERB" in
   settings) cmd_settings "$@" ;;
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
+  auth)    cmd_auth "$@" ;;
   expose)  cmd_expose "$@" ;;
   token)   cmd_token "$@" ;;
   restamp) cmd_restamp "$@" ;;
