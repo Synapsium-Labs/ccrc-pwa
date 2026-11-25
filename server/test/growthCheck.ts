@@ -22,7 +22,8 @@
 // entry never exempts that PR. The PR number comes from `GITHUB_REF`, paired
 // with its event (`prNumberFromEnv`). An entry waives its own file for its own
 // PR while the measured delta stays at or below its cap, and only when the diff
-// the run measures (merge-base(origin/main, HEAD)..HEAD) leaves the check's own
+// the run measures (base..HEAD, the base from `armedBase`: the merge-base with origin/main, or a merge-queue group's
+// parent, D-9016) leaves the check's own
 // files (`GROWTH_MACHINERY`) untouched (`matchExemptions`).
 // `armedGrowth` is the armed rows' whole read and decision, and `growthVerdicts`
 // the pure decision inside it.
@@ -462,6 +463,25 @@ export function growthBase(env: Record<string, string | undefined>, git: (args: 
   return { base: git(['merge-base', 'origin/main', 'HEAD']).trim(), from: 'merge-base' };
 }
 
+/** The armed rows' base in `root`, or why they cannot measure (review F3 of wave 1d: the suite's armed rows and the
+ *  stacked-entry case call this one function, so the case that proves the queue-parent base runs what CI runs). They
+ *  measure in CI or under GROWTH_CHECK, with an `origin/main` and a base `growthBase` can resolve. */
+export function armedBase(env: Record<string, string | undefined>, root: string,
+  git: (args: readonly string[]) => string = (args) => gitRead(args, root)):
+  { base: string; from: 'queue-parent' | 'merge-base' } | { skip: string } {
+  if (!env['CI'] && !env['GROWTH_CHECK']) return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
+  try {
+    git(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+  } catch {
+    return { skip: 'no origin/main in this checkout' };
+  }
+  try {
+    return growthBase(env, git);
+  } catch {
+    return { skip: 'no merge-base between origin/main and HEAD' };
+  }
+}
+
 const isLine = (v: unknown): boolean => typeof v === 'string' && v.trim() !== '' && !/\n/.test(v);
 
 /** `text` as an exemption list. Any problem (not JSON, a wrong shape, a key
@@ -515,7 +535,7 @@ export function exemptionsOnMain(files: readonly string[], cwd: string, today: D
 
 /** The growth check's own files: this module and every module it imports, the
  *  rows that decide, the list, and the list's stamp and its test. When the diff
- *  the run measures (merge-base(origin/main, HEAD)..HEAD) touches any of them,
+ *  the run measures (base..HEAD, the base from `armedBase`, D-9016) touches any of them,
  *  no exemption applies, its own entry included, so a PR cannot reach the code
  *  that judges it and keep its exemption. */
 export const GROWTH_MACHINERY: readonly string[] = [

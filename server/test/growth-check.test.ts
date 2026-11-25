@@ -1,6 +1,6 @@
 // D-5848 (ARCH-01, #526; consolidation spec §5.2): the god-file growth check.
 // Net code-line growth of the listed files (`growthFiles`) against the merge-base with
-// `origin/main`, one stripper per language (`growthCheck.ts`). It reported only
+// `origin/main` (in a merge-queue group, against the group's parent: `armedBase`, D-9016), one stripper per language (`growthCheck.ts`). It reported only
 // (`console.warn` and the `GROWTH_OVER` list) until the operator armed it on
 // 2026-10-21 (OA-C2, D-6178); a listed file that grows by more than
 // GROWTH_LIMIT net code lines now fails its row. No per-file absolute constant
@@ -43,7 +43,7 @@ import {
   prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
   GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
   GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
-  definedDNumbers, growthBase, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  definedDNumbers, armedBase, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
   type Stage, type StageOf,
 } from './growthCheck.js';
 import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
@@ -1232,7 +1232,6 @@ describe('growthCheck: in a merge-queue group an entry is measured against its p
     const dir = mkdtempSync(path.join(tmpdir(), 'growth-queue-'));
     ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
-    const reader = (args: readonly string[]) => gitRead(args, dir);
     const grow = (from: number, to: number, m: string) => {
       mkdirSync(path.join(dir, 'server/src'), { recursive: true });
       writeFileSync(path.join(dir, FILE), Array.from({ length: to }, (_, i) => `export const a${i} = ${i};\n`).join(''));
@@ -1249,8 +1248,11 @@ describe('growthCheck: in a merge-queue group an entry is measured against its p
     git('update-ref', 'refs/remotes/origin/main', m);
     const a = grow(10, 40, 'A');
     const b = grow(40, 70, 'B');
+    // The function the armed rows call (review F3), with CI set as on a runner.
+    const resolve = (env: Record<string, string | undefined>) => armedBase({ CI: 'true', ...env }, dir);
     const measure = (env: Record<string, string | undefined>) => {
-      const r = growthBase(env, reader);
+      const r = resolve(env);
+      if ('skip' in r) throw new Error(`the armed rows would skip: ${r.skip}`);
       const head = git('rev-parse', 'HEAD');
       const armed = armedGrowth(growthFiles(r.base, head, dir), dir, r.base, head, {}, today);
       return { ...r, delta: armed.rows.find((row) => row.file === FILE)!.delta, over: armed.over.includes(FILE) };
@@ -1267,28 +1269,17 @@ describe('growthCheck: in a merge-queue group an entry is measured against its p
     const side = grow(10, 11, 'side');
     git('checkout', '-q', '-');
     for (const queueBase of [undefined, '', b.slice(0, 39), b.toUpperCase(), side]) {
-      expect(growthBase({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: queueBase }, reader), String(queueBase))
+      expect(resolve({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: queueBase }), String(queueBase))
         .toEqual({ base: m, from: 'merge-base' });
     }
+    // Outside CI and without GROWTH_CHECK the armed rows skip, as before.
+    expect(armedBase({ GITHUB_EVENT_NAME: 'merge_group', QUEUE_BASE: b }, dir)).toEqual({ skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' });
   });
 });
 
-/** The base, or why the growth rows cannot measure. */
+/** The base, or why the growth rows cannot measure: `armedBase`, which the stacked-entry case runs too (D-9016). */
 function resolveBase(): { base: string; from: 'queue-parent' | 'merge-base' } | { skip: string } {
-  if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
-    return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
-  }
-  try {
-    gitRead(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], ROOT);
-  } catch {
-    return { skip: 'no origin/main in this checkout' };
-  }
-  try {
-    // D-9016: a merge-queue group's parent when the workflow hands one over, else the merge-base.
-    return growthBase(process.env, (args) => gitRead(args, ROOT));
-  } catch {
-    return { skip: 'no merge-base between origin/main and HEAD' };
-  }
+  return armedBase(process.env, ROOT);
 }
 
 /** The names `node:module` exports that load no module (D-8563: ring.ts reads `builtinModules`). */

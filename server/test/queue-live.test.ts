@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 import { queueGroupFate, compareWord } from '../../.github/ci/queue-live.mjs';
 
 afterAll(removeTmpFixtures);
@@ -54,13 +55,17 @@ describe('queue-live: the script end to end, on a fixture remote and a stub gh',
   execFileSync('git', ['clone', '-q', '--bare', work, remote]);
   execFileSync('git', ['update-ref', liveRef, sha], { cwd: remote });
 
-  /** Runs the script with a stub `gh` first on PATH; the stub records that it ran and answers as told. */
-  function runLive(ref: string, gh: { status?: string; exit?: number }): { line: string; status: number | null; ghRan: boolean } {
+  /** The one compare request the script may make (review F1): this repository, the group's commit then `main`, in
+   *  that order, and the status field. Reversed, a landed commit reads `behind`, which is `superseded`. */
+  const COMPARE_ARGV = ['api', `repos/owner/repo/compare/${sha}...main`, '--jq', '.status'];
+
+  /** Runs the script with a stub `gh` first on PATH; the stub records its arguments, one per line, and answers as told. */
+  function runLive(ref: string, gh: { status?: string; exit?: number }): { line: string; status: number | null; ghRan: boolean; ghArgv: string[] } {
     const dir = mkTmp('ccrc-queue-live-run-');
     const bin = path.join(dir, 'bin');
     mkdirSync(bin);
     const marker = path.join(dir, 'gh-ran');
-    writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$@" > '${marker}'\n${gh.status === undefined ? '' : `echo '${gh.status}'\n`}exit ${gh.exit ?? 0}\n`);
+    writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${marker}'\n${gh.status === undefined ? '' : `echo '${gh.status}'\n`}exit ${gh.exit ?? 0}\n`);
     chmodSync(path.join(bin, 'gh'), 0o755);
     const r = spawnSync(process.execPath, [SCRIPT], {
       encoding: 'utf8',
@@ -69,7 +74,8 @@ describe('queue-live: the script end to end, on a fixture remote and a stub gh',
         GITHUB_SERVER_URL: pathToFileURL(server).href, GITHUB_REPOSITORY: 'owner/repo', GITHUB_REF: ref, GITHUB_SHA: sha,
       },
     });
-    return { line: r.stdout.split('\n')[0], status: r.status, ghRan: existsSync(marker) };
+    const ghRan = existsSync(marker);
+    return { line: r.stdout.split('\n')[0], status: r.status, ghRan, ghArgv: ghRan ? readFileSync(marker, 'utf8').split('\n').slice(0, -1) : [] };
   }
 
   it('live: the queue branch stands, the job runs and the compare is never asked', () => {
@@ -83,13 +89,14 @@ describe('queue-live: the script end to end, on a fixture remote and a stub gh',
     const r = runLive(goneRef, { status: 'ahead' });
     expect(r.line).toBe('queue-live: landed (branch absent, on main yes)');
     expect(r.status).toBe(0);
-    expect(r.ghRan).toBe(true);
+    expect(r.ghArgv, 'the compare request').toEqual(COMPARE_ARGV);
   });
 
   it('superseded: the branch is gone and the commit is off main, the job ends with exit 1', () => {
     const r = runLive(goneRef, { status: 'diverged' });
     expect(r.line).toBe('queue-live: superseded (branch absent, on main no)');
     expect(r.status).toBe(1);
+    expect(r.ghArgv, 'the compare request').toEqual(COMPARE_ARGV);
   });
 
   it('unmeasured: the compare call fails, the job runs', () => {
@@ -99,13 +106,17 @@ describe('queue-live: the script end to end, on a fixture remote and a stub gh',
   });
 
   it('unmeasured: the remote cannot be read, the job runs and the compare is never asked', () => {
+    // Contained (review F6): a poisoned gh is first on PATH and logs any call, so the real client is never reached.
+    const home = mkTmp('ccrc-queue-live-home-');
     const r = spawnSync(process.execPath, [SCRIPT], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '', HOME: base, GITHUB_SERVER_URL: pathToFileURL(path.join(base, 'nowhere')).href,
-        GITHUB_REPOSITORY: 'owner/repo', GITHUB_REF: liveRef, GITHUB_SHA: sha },
+      env: ghContainedEnv(home, { PATH: process.env.PATH ?? '', HOME: home,
+        GITHUB_SERVER_URL: pathToFileURL(path.join(base, 'nowhere')).href,
+        GITHUB_REPOSITORY: 'owner/repo', GITHUB_REF: liveRef, GITHUB_SHA: sha }),
     });
     expect(r.stdout.split('\n')[0]).toBe('queue-live: unmeasured (branch unmeasured, on main not read)');
     expect(r.status).toBe(0);
+    expect(existsSync(path.join(home, 'gh-poison')), 'a gh was asked').toBe(false);
   });
 });
 

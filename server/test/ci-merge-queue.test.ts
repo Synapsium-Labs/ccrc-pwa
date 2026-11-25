@@ -143,12 +143,18 @@ const QUEUE_AGENT_ASK_LINES = [
   '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
   '        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"',
 ];
+/** The step's script, exactly its two lines (review F4): the fetch from the default branch, then the run. */
+const QUEUE_LIVE_RUN = [
+  `gh api "repos/$GITHUB_REPOSITORY/contents/.github/ci/queue-live.mjs" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/queue-live.mjs" || { echo 'queue-live: unmeasured (the script could not be fetched)'; exit 0; }`,
+  'node "$RUNNER_TEMP/queue-live.mjs"',
+];
 /** The queue's liveness step (D-9015, landing-order wave 1d), first in each long job, whole: its `if:` is the one line
  *  that names the event, and its body can only END the job with exit 1, read by nothing because its group is gone, so
  *  it never skips a required step to success. `queue-live.test.ts` pins the step whole and its list of jobs. */
 const QUEUE_LIVE_STEP = new RegExp(String.raw`^ {6}# D-9015 \(landing-order wave 1d\)[^\n]*\n(?: {6}#[^\n]*\n)*`
   + String.raw` {6}- name: queue group still live\n {8}if: (?:env\.CCRC_LEG == 'run' && )?github\.event_name == 'merge_group'\n`
-  + String.raw` {8}env:\n {10}GH_TOKEN: \$\{\{ github\.token \}\}\n {8}run: \|\n(?: {10}[^\n]*\n){2}`, 'gm');
+  + String.raw` {8}env:\n {10}GH_TOKEN: \$\{\{ github\.token \}\}\n {8}run: \|\n`
+  + QUEUE_LIVE_RUN.map((l) => `          ${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`).join(''), 'gm');
 /** The queue's base handed to the server shards' test step (D-9016): an env value the growth check reads, gating nothing. */
 const QUEUE_BASE_ENV_LINE = '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}';
 

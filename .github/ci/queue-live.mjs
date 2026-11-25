@@ -12,9 +12,11 @@
 // on `main` (the queue deletes the branch after a merge while advisory legs may still start) and `superseded`
 // when it is not. Every other pair is `unmeasured`, and the job runs: fail open.
 //
-// The script prints one line, `queue-live: <fate> (branch <word>, on main <word>)`, and exits 1 only on
-// `superseded`. It cancels nothing and needs no permission beyond the job's own read-only token: a job already
-// running when its group is superseded runs to its end, which is the residual the plan names.
+// The script prints one line, `queue-live: <fate> (branch <word>, on main <word>)`, and on `superseded` a second, a
+// `::notice::` annotation that shows in the run's summary (a departure from the plan's "one line",
+// `queue-live-notice-line`). It exits 1 only on `superseded`. It cancels nothing and needs no permission beyond the
+// job's own read-only token: a job already running when its group is superseded runs to its end, which is the
+// residual the plan names.
 //
 // The workflow fetches this one file from the default branch before any checkout, never from the group's own
 // commit (a superseded group's commit may no longer be served), so it depends on Node's built-ins alone.
