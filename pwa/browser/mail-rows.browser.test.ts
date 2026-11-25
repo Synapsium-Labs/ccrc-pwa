@@ -384,6 +384,43 @@ function stretchWithHiddenQuestion(): object[] {
   return events;
 }
 
+/** Every part of the newest stretch row: its words, width, whether it is cut, and the line it is drawn on (0 the first,
+ *  by its top against the row's first line; fix round 1, F3: the old measure compared the question words with the title
+ *  and read no break). Run in the page. */
+const partsBody = (): { lines: number; parts: { part: string; text: string; width: number; cut: number; line: number }[] } => {
+  const rows = [...document.querySelectorAll<HTMLElement>('.tool-activity-row')];
+  const button = rows[rows.length - 1]!;
+  const named: [string, string][] = [['title', '.tool-activity-title'], ['calls', '.tool-activity-calls:not(.tool-activity-messages)'],
+    ['messages', '.tool-activity-messages'], ['asks', '.tool-activity-asks'], ['state', '.tool-activity-state'],
+    ['flags', '.tool-activity-attention-count'], ['latest', '.tool-activity-latest']];
+  const found = named.flatMap(([part, sel]) => {
+    const el = button.querySelector<HTMLElement>(sel);
+    return el === null ? [] : [{ part, el, r: el.getBoundingClientRect() }];
+  });
+  const tops: number[] = [];
+  for (const f of found) if (!tops.some((t) => Math.abs(t - f.r.top) < 6)) tops.push(f.r.top);
+  tops.sort((a, b) => a - b);
+  return {
+    lines: tops.length,
+    parts: found.map(({ part, el, r }) => ({
+      part, text: el.textContent ?? '', width: Math.round(r.width * 10) / 10, cut: el.scrollWidth - el.clientWidth,
+      line: tops.findIndex((t) => Math.abs(t - r.top) < 6),
+    })),
+  };
+};
+/** What main (1a0c40e691) drew of the label, the calls count and the running word on this row, px, measured in this file's
+ *  Chrome with main's stylesheet and row swapped in (fix round 1, F3): one nowrap line that crushed them. The coordinator's
+ *  ruling: each part is at least as wide as on main at the same width, or whole. The message count is held whole (on main
+ *  it shared a span with the question words); the summary gives way first, by design. */
+const ON_MAIN: Record<string, { title: number; calls: number; state: number }> = {
+  'refined 320': { title: 0, calls: 19.3, state: 19.3 }, 'refined 320 waiting': { title: 0, calls: 0, state: 0 },
+  'refined 360': { title: 0, calls: 27.1, state: 27.1 }, 'refined 360 waiting': { title: 0, calls: 5.2, state: 5.2 },
+  'refined 390': { title: 0, calls: 32.9, state: 32.9 }, 'refined 390 waiting': { title: 0, calls: 11, state: 11 },
+  'instrument 320': { title: 0, calls: 20.7, state: 20.7 }, 'instrument 320 waiting': { title: 0, calls: 0.4, state: 0.4 },
+  'instrument 360': { title: 0, calls: 28.5, state: 28.5 }, 'instrument 360 waiting': { title: 0, calls: 8.2, state: 8.2 },
+  'instrument 390': { title: 0, calls: 34.3, state: 34.3 }, 'instrument 390 waiting': { title: 0, calls: 14, state: 14 },
+};
+
 describe('the question words of a closed stretch are the last to shrink (desktop polish wave 179, B2)', () => {
   // Plain, and with the session also waiting on an approval (a third flag, "waiting on you": the fixed parts of the row
   // are then too wide to share one line with the question words at a phone's width).
@@ -414,11 +451,11 @@ describe('the question words of a closed stretch are the last to shrink (desktop
             rowPast: Math.round(b.right - s.right),
             rowOverflow: button.scrollWidth - button.clientWidth,
             scrollerSide: scroller.scrollWidth - scroller.clientWidth,
-            wrapped: r === undefined ? null : r.top > button.querySelector<HTMLElement>('.tool-activity-title')!.getBoundingClientRect().bottom,
             height: Math.round(b.height),
           };
         });
-        console.log(`B2 ${named(view)}${waiting ? ' waiting' : ''}: ${JSON.stringify(m)}`);
+        const parts = await page.evaluate(partsBody);
+        console.log(`B2 ${named(view)}${waiting ? ' waiting' : ''}: ${JSON.stringify(m)} ${JSON.stringify(parts)}`);
         expect(m.text, 'the row does not read as the fixture says').toContain('2 messages,');
         expect(m.text).toContain('running');
         expect(m.text).toContain('1 failed');
@@ -430,7 +467,21 @@ describe('the question words of a closed stretch are the last to shrink (desktop
         expect(m.rowPast, 'the row passes the column').toBeLessThanOrEqual(0);
         expect(m.rowOverflow, 'the row overflows its own box').toBeLessThanOrEqual(0);
         expect(m.height, 'the row is under the tap floor').toBeGreaterThanOrEqual(Math.floor(tapMin));
+        // The list prices the row at one line, the tap floor (fix round 1, F3): a wrapped row stays inside it.
+        expect(m.height, 'the row grew past the tap floor').toBeLessThanOrEqual(Math.ceil(tapMin) + 1);
         expect(m.scrollerSide, 'the transcript scrolls sideways').toBeLessThanOrEqual(0);
+        const main = ON_MAIN[`${view.skin} ${view.width}${waiting ? ' waiting' : ''}`];
+        expect(main, 'no measure of main for this view').toBeDefined();
+        for (const part of ['title', 'calls', 'state'] as const) {
+          const p = parts.parts.find((x) => x.part === part);
+          expect(p, `no ${part} on the row`).toBeDefined();
+          if (p!.cut > 0) expect(p!.width, `the ${part} ("${p!.text}") is cut narrower than main drew it`).toBeGreaterThanOrEqual(main![part] - 0.5);
+        }
+        const messages = parts.parts.find((x) => x.part === 'messages');
+        expect(messages?.cut, `the message count ("${messages?.text}") is cut`).toBeLessThanOrEqual(0);
+        // With "waiting on you" the row does not fit one line at any phone width: it breaks, and the break is read off the
+        // parts' own lines (fix round 1, F3).
+        if (waiting) expect(parts.lines, 'the row with a third flag did not break onto a second line').toBe(2);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -439,9 +490,10 @@ describe('the question words of a closed stretch are the last to shrink (desktop
   }
 });
 
-// The wrap fallback (B2): when the fixed parts of the row (the chevron, the separators, the flags and the question words)
-// do not fit one line, the row wraps to a second line before the question words are cut. No phone width needs it with these
-// words (the title, counts and summary give way first), so the case injects a style that narrows the stretch and widens the row's gaps.
+// The wrap fallback (B2): when the parts of the row do not fit one line, the row wraps before the question words are cut.
+// At a phone's width the row with "waiting on you" already takes two lines inside the tap floor (above); this second case
+// narrows the stretch and widens the row's gaps until the row needs more lines than the tap floor holds, and the question
+// words are still whole.
 const WRAP_W = 230;
 describe('a row that cannot fit its fixed parts wraps before the question words are cut (desktop polish wave 179, B2)', () => {
   for (const skin of [REFINED, INSTRUMENT]) {
