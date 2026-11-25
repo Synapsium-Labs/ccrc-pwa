@@ -20,7 +20,8 @@
 //   LoginScreen / BlockScreen kept in the branch ..... "still draws the sign-in screen and the block screen"
 //   `docsSoFar` in `App` (history, not width) ........ "narrowed below the desk width and widened again, it stays a Docs tab",
 //                                                      "a console widened while it shows a document … is the console throughout"
-//   the fold's fall in `App` ......................... "… and its link back moves in place" (the tab is the console after)
+//   the fold's fall in `App` ......................... "a narrow Docs tab that went Back to the console, then opened a
+//                                                      document in the app, is the console"
 //   `wasConsoleTab()` at the start (R4) .............. "a console reloaded on a Docs address is the console", and the release case
 //   `markConsoleTab()` for a console (R4) ............ the same cases
 //   `useFollowLink` in the reader's Back (F1) ........ "the reader's Back at the Docs index"
@@ -595,5 +596,21 @@ describe('the reader’s Back at the Docs index', () => {
     expect(open).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/fleet');
     expect(shell()).not.toHaveAttribute('data-tab');
+  });
+
+  // The fold's fall (`App`'s `setDocsSoFar(false)`, desktop polish wave 177): a tab that has left Docs is the console for
+  // good, so a document it opens in the app later is drawn inside the console, with no click that said otherwise.
+  it('a narrow Docs tab that went Back to the console, then opened a document in the app, is the console', async () => {
+    stubWidth(false);
+    await mount('/docs');
+    expect(shell()).toHaveAttribute('data-tab', 'docs');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Up one level' })); await new Promise((r) => setTimeout(r, 30)); });
+    expect(location.pathname).toBe('/fleet');
+    expect(shell()).not.toHaveAttribute('data-tab');
+    await act(async () => { navigate(DOC); await new Promise((r) => setTimeout(r, 30)); });
+    expect(location.pathname).toBe(DOC);
+    expect(shell(), 'still the console').not.toHaveAttribute('data-tab');
+    expect(shell().querySelector('.shell-phone-nav'), "the console's phone bar").not.toBeNull();
+    expect(screen.getByRole('main').querySelector('.docs-screen'), 'the document inside the console').not.toBeNull();
   });
 });

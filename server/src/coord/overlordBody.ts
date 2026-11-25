@@ -1,6 +1,7 @@
 // The Overlord's body over ccd (Overlord W1, designation A, plan Task 4; spec §3.1, §3.2 C4). Ring L3, context C5: the ADAPTER of
 // the `OverlordBody` port that `overlordRoutes.ts` declares. It is the one place that composes ccd for the Overlord: the
-// project add, the named create, the route writes (the Settings door's `class` among them), the pool probe, the keep-awake markers and the stop. It decides nothing about
+// project add, the named create, the route writes (the Settings door's `class` among them), the pool probe, the keep-awake markers, Restart's
+// `ensure` (designation B) and the stop. It decides nothing about
 // WHETHER to act (the decider and the doors do); it keeps every distinction ccd's answer gives it and says it in the port's words.
 //
 // FAILURE CONTRACT. No method throws: a runner that rejects, a reader that throws and a missing capability are each an answer.
@@ -45,6 +46,8 @@ export interface OverlordBodyDeps {
   readonly rowOf: (id: string) => Promise<Pick<SingleRead, 'kind'>>;
   /** `childReclaimGenerationRead`: the incarnation ccd minted for a made session. */
   readonly generationOf: (id: string) => Promise<GenerationRead>;
+  /** The ensure route's asked-wake record (`admitWake('asked', id)` for a hibernated row), run before Restart's `ensure`. */
+  readonly askedWake?: (id: string) => Promise<void>;
   /** `stopCreated` (below), built by the server from the stop route's own path. */
   readonly stop: (id: string) => Promise<StopAnswer>;
   /** The environment the runner's children inherit (the process's own); a test hands its own. */
@@ -182,11 +185,21 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
     return { ok: true, foreign: [...res.stdout.matchAll(/^kept-foreign (\S+)$/gm)].map((m) => m[1]!) };
   }
 
+  /** Restart's resume path (C23, designation B): `ccd ensure <id>`, as the ensure route composes it, with its asked wake recorded
+   *  first. A wake that could not be recorded does not stop the resume. */
+  async function ensure(id: string): Promise<BodyAnswer> {
+    if (!isRegistryId(id)) return refuse('the session id is not a registry id');
+    if (!ccdCan(state(), 'ensure')) return refuse('the deployed ccd cannot ensure a session');
+    try { await deps.askedWake?.(id); } catch (e) { console.warn(`ccrc-server: the asked wake of ${id} was not recorded: ${messageOf(e)}`); }
+    const res = await ran(CCD_ARGV.ensure(id));
+    return res.ok ? { ok: true } : refuse(detailOf('ensure', res));
+  }
+
   async function stop(id: string): Promise<StopAnswer> {
     try { return await deps.stop(id); } catch (e) { return { ok: false, detail: `the stop did not answer: ${messageOf(e)}` }; }
   }
 
-  return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, stop };
+  return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, ensure, stop };
 }
 
 // ── stopCreated ───────────────────────────────────────────────────────────────────────────────────────────────────────

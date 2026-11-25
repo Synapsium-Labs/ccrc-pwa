@@ -17,14 +17,18 @@ import { FAKE_T0 } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { goodLoads, startLoadsCases } from './sim/startLoadsSets.js';
-import { expectedSurfaceOf } from '../src/continuity/sandboxCheck.js';
-import { settleLoads, type SandboxSettlePort, type SettleOutcome } from '../src/continuity/routes.js';
-import { BUILD, FIXTURE_OWN_LISTS } from './sim/sandboxSets.js';
+import { expectedSurfaceOf, sandboxSettle, sandboxVerdict } from '../src/continuity/sandboxCheck.js';
+import { settleFactOf, settleLoads, type SandboxSettlePort, type SettleOutcome } from '../src/continuity/routes.js';
+import { BODY, BUILD, FIXTURE_OWN_LISTS, GEN as SIM_GEN, heldReport, pendingRead, startRow } from './sim/sandboxSets.js';
 import type { OverlordAuthorityJournal } from '../src/coord/overlordAuthorityJournal.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { KEEP_AWAKE_CAP, POOL_SET_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
+import { drainOwedStops, overlordLanePortOf, type OverlordBody } from '../src/coord/overlordRoutes.js';
+import { pendingDeadlineOf } from '../src/coord/overlordDesignation.js';
+import { runOverlordAttempt } from '../src/continuity/renewalActs.js';
+import type { AttemptAction } from '../../shared/overlord-designation.js';
 
 const ID = 'lane-a-project-a';
 const UUID = '11111111-2222-3333-4444-555555555555';
@@ -176,6 +180,8 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   let calls: string[][];
   let journalRefuses = false;
   let stopThrows = false;
+  /** When set, every keep-awake call waits on `gate` after calling `reached`: a drain held open inside the settle. */
+  let holdKeepAwake: { readonly reached: () => void; readonly gate: Promise<void> } | null = null;
   let waiting: ((o: SettleOutcome) => void)[] = [];
   const journal = { appendInTx: () => (journalRefuses ? { ok: false, error: 'authority-rolled-back', detail: 'refused for the test' }
     : { ok: true, kind: 'appended', record: { sequence: 1 } }) } as unknown as OverlordAuthorityJournal;
@@ -186,7 +192,11 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     calls = rec.calls;
     // keep-awake answers its `released <id>` line, so the drain clears the set and the profile digest before the stop.
     const run: typeof rec.run = async (cmd, args) => {
-      if (args[0] === 'keep-awake') { rec.calls.push([...args]); return { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' }; }
+      if (args[0] === 'keep-awake') {
+        rec.calls.push([...args]);
+        if (holdKeepAwake !== null) { holdKeepAwake.reached(); await holdKeepAwake.gate; }
+        return { ran: true, code: 0, stdout: `released ${args[2]}\n`, stderr: '' };
+      }
       if (args[0] === 'stop' && stopThrows) { rec.calls.push([...args]); throw new Error('the stop threw for the test'); }
       return rec.run(cmd, args);
     };
@@ -223,7 +233,7 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
   };
   const view = () => { const d = coord!.designationRead(); if (d.kind === 'unmeasured') throw new Error(d.why); return d; };
   const stops = () => calls.filter((c) => c[0] === 'stop');
-  beforeEach(() => { journalRefuses = false; stopThrows = false; waiting = []; });
+  beforeEach(() => { journalRefuses = false; stopThrows = false; holdKeepAwake = null; waiting = []; });
 
   it('go-live: a held first report binds the pending session, once', async () => {
     app = await openOv(); pend();
@@ -273,6 +283,60 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
     expect((await report(app, loads({ launchRc: 'on' }))).act).toBe('unread');
     expect(JSON.stringify(coord!.db.prepare('SELECT * FROM overlord_designation').all())).toBe(before);
     expect(calls).toStrictEqual([]);
+  });
+
+  // ── review 3366 F2: the composition root hands the drain the body nothing recorded, so its failed stop claims no debt ───
+  for (const how of ['refuses', 'throws'] as const) {
+    it(`a failure record that ${how} reaches the drain as unrecorded: a failed stop logs the residual, never a debt (review 3366 F2)`, async () => {
+      app = await openOv(); pend();
+      await startOv(app);
+      stopThrows = true;
+      const record = vi.spyOn(coord!, 'failPending').mockImplementation(() => {
+        if (how === 'throws') throw new Error('database is locked');
+        return { ok: false, reason: 'bad-outcome' };
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect((await report(app, loads({ launchRc: 'on' }))).act).toBe(how === 'refuses' ? 'fail-refused' : 'fail-threw');
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(stops(), JSON.stringify(calls)).toStrictEqual([STOP_OV]);
+        const lines = warn.mock.calls.map((c) => String(c[0]));
+        // What the drain was handed reads in its one line for a failed stop: the residual of an id no row owes.
+        expect(lines.filter((l) => l.includes(OV) && l.includes('could not be stopped')), JSON.stringify(lines))
+          .toStrictEqual([expect.stringContaining('no row owes it')]);
+        expect(lines.some((l) => l.includes('stays owed')), JSON.stringify(lines)).toBe(false);
+        const d = view();
+        expect(d.kind === 'not-designated' && d.row?.stopsOwed).toStrictEqual([]);
+        expect(d.kind === 'not-designated' && d.row?.pending?.sessionId).toBe(OV);
+      } finally { warn.mockRestore(); record.mockRestore(); }
+    });
+  }
+
+  // ── review 3366 F3: production hands the settle the coordination serialiser the Overlord's doors run on ──────────────
+  it('a settle holding the coordination serialiser keeps an Overlord door out until it ends (review 3366 F3)', async () => {
+    app = await openOv(); pend();
+    await startOv(app);
+    let reached!: () => void;
+    const inDrain = new Promise<void>((res) => { reached = res; });
+    let release!: () => void;
+    holdKeepAwake = { reached, gate: new Promise<void>((res) => { release = res; }) };
+    // The pause door's body runs on the serialiser and reads the ladder's rung first: that read is the sign it got in.
+    const rung = vi.spyOn(coord!, 'ladderRungRead');
+    const settled = report(app, loads({ launchRc: 'on' }));
+    await inDrain;
+    let answered = false;
+    const door = app.inject({ method: 'POST', url: '/api/overlord/pause', payload: {} }).then((r) => { answered = true; return r; });
+    // A read door off the serialiser answers meanwhile (whatever its gate says), so requests flow; the pause door is held out.
+    expect((await app.inject({ method: 'GET', url: '/api/overlord/designation' })).statusCode).toBeGreaterThanOrEqual(200);
+    await new Promise((res) => setTimeout(res, 100));
+    expect(rung).not.toHaveBeenCalled();
+    expect(answered).toBe(false);
+    release();
+    expect((await settled).act).toBe('fail-pending');
+    await door;
+    expect(answered).toBe(true);
+    expect(rung).toHaveBeenCalled();
+    rung.mockRestore();
   });
 
   const HELD_OR_FAILED = [['held', {}], ['failed', { launchRc: 'on' }]] as const;
@@ -533,6 +597,64 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       expect(coord!.startLoadsOfNewestStart(OV)).toMatchObject({ ok: true, newest: { report: { conflicted: true } } });
     });
 
+    // ── review 3366 F4 and F5: the designation half of the evidence check; a failed re-read is unread; each is logged ────
+    describe('evidence the settle cannot trust after the registry read decides nothing, and says so (review 3366 F4, F5)', () => {
+      let warn: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+      afterEach(() => { warn.mockRestore(); });
+      const idle = () => warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('decided nothing'));
+
+      it('a designation that changes during the registry read is stale: the old read never goes live (F4)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads());
+        const r = await rerun(OV, 1, portOf({ workspaceOf: async () => {
+          expect(coord!.failPending(OV, 'overlord-sandbox-unmet', FAKE_T0, false)).toMatchObject({ ok: true, changed: true });
+          return { kind: 'measured', project: 'overlord' };
+        } }));
+        expect(r).toMatchObject({ act: 'stale' });
+        expect(view()).toMatchObject({ kind: 'not-designated' });
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toStrictEqual([`ccrc-server: the sandbox settle for ${OV} (start 1) decided nothing: its evidence changed during the registry read`]);
+      });
+
+      it('a newest start that cannot be read again after the registry read is unread, not stale (F5)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads({ launchRc: 'on' }));
+        let reads = 0;
+        const flaky = { startLoadsOfNewestStart: (id: string) => (++reads === 1 ? coord!.startLoadsOfNewestStart(id) : { ok: false, detail: 'locked' }) } as unknown as CoordStore;
+        expect(await settleLoads(portOf(), flaky, OV, 1, () => FAKE_T0)).toMatchObject({ act: 'unread' });
+        expect(reads).toBe(2);
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toStrictEqual([`ccrc-server: the sandbox settle for ${OV} (start 1) decided nothing: the expected surface, the designation or the newest start could not be read`]);
+      });
+
+      it('a designation that reads unmeasured the second time is unread, not stale (F5)', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads({ launchRc: 'on' }));
+        let reads = 0;
+        const r = await rerun(OV, 1, portOf({ read: () => (++reads === 1 ? coord!.designationRead() : { kind: 'unmeasured', why: 'locked' }) }));
+        expect(r).toMatchObject({ act: 'unread' });
+        expect(reads).toBe(2);
+        expect(pendingId()).toBe(OV);
+        expect(drained).toStrictEqual([]);
+        expect(idle()).toHaveLength(1);
+        expect(idle()[0]).toContain('could not be read');
+      });
+
+      it('a settle that acts, or decides none on evidence it trusts, writes no such line', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads());
+        expect(await rerun()).toMatchObject({ act: 'go-live' });
+        expect(await rerun()).toMatchObject({ act: 'none' });
+        expect(idle()).toStrictEqual([]);
+      });
+    });
+
     // ── review 3346 F13: the settle runs on the serialiser it is handed ─────────────────────────────────────────────────
     it('the settle waits on its serialiser: a step already holding it runs first, and the settle reads nothing until it ends', async () => {
       app = await openLost(); pend();
@@ -551,6 +673,303 @@ describe('the settle step at the loads door (Task 9)', { timeout: 90_000 }, () =
       expect(await p).toMatchObject({ act: 'go-live' });
       expect(order[0]).toBe('holder');
       expect(order.slice(1).every((x) => x === 'settle-read')).toBe(true);
+    });
+
+    // ── designation B: a pending rebind settles as a designate does, its go-live drains the old body, and the deadline sweep's
+    // facts (`settleFactOf`) read what a settle would read. The sweep itself is pinned end to end below, through the lane port.
+    describe('designation B: the rebind arm, the go-live drain and the settle fact', () => {
+      const OLD = OV;
+      const NEW = 'lane-b-overlord';
+      const NEW_UUID = '33333333-4444-5555-6666-777777777777';
+      const GEN2 = '0189abcd-1234-5678-9abc-0123456789cd';
+      const NEW_OVER = { fromId: NEW, fromUuid: NEW_UUID };
+      /** The old body live, then a rebind pending for the new one with its generation bound. */
+      const pendRebind = (): void => {
+        pend();
+        expect(coord!.goLive(journal, OLD, GEN, FAKE_T0 - 800).ok).toBe(true);
+        expect(coord!.rebindPending({ sessionId: NEW, deadlineAt: FAKE_T0 + 600_000, actor: OPERATOR, at: FAKE_T0 - 700 }).ok).toBe(true);
+        expect(coord!.bindPendingGeneration(NEW, GEN2, FAKE_T0 - 600).ok).toBe(true);
+        seedRow(home, NEW, { uuid: NEW_UUID, project: 'overlord' });
+      };
+      const startNew = (a: FastifyInstance, reportId = 'r-nw1-abcd') => startAs(a, NEW, NEW_UUID, reportId, 'startup', GEN2);
+      const newLoads = (over: Record<string, unknown> = {}, reportId = 'r-nw1-abcd') => loads({ ...NEW_OVER, ...over }, reportId);
+      /** The production port's go-live shape: `previous` is the old body a rebind unbound. */
+      const livePort = (over: Partial<SandboxSettlePort> = {}): SandboxSettlePort => portOf({
+        goLive: (id, g, at) => { const r = coord!.goLive(journal, id, g, at); return r.ok ? { ok: true, previous: r.changed ? r.previous : null } : { ok: false, detail: r.detail }; },
+        ...over,
+      });
+      const rowSnapshot = (): string => JSON.stringify([
+        coord!.db.prepare('SELECT * FROM overlord_designation').all(), coord!.db.prepare('SELECT * FROM continuity_start_loads').all(),
+        coord!.db.prepare('SELECT * FROM continuity_starts').all()]);
+
+      it('sandboxSettle acts on a pending rebind: go-live for a held report, fail-pending for a failed one, as for a designate', () => {
+        const heldV = sandboxVerdict(e, heldReport(e), { kind: 'measured', project: 'overlord' });
+        const failedV = sandboxVerdict(e, heldReport(e, { launchRc: 'on' }), { kind: 'measured', project: 'overlord' });
+        expect(heldV.engaged).toBe(true);
+        expect(failedV.engaged).toBe(false);
+        for (const kind of ['rebind', 'designate'] as const) {
+          expect(sandboxSettle(pendingRead({ kind }), 7, startRow(), heldV), kind).toStrictEqual({ kind: 'go-live', sessionId: BODY, generation: SIM_GEN });
+          const f = sandboxSettle(pendingRead({ kind }), 7, startRow(), failedV);
+          expect(f, kind).toMatchObject({ kind: 'fail-pending', sessionId: BODY });
+          expect(f.kind === 'fail-pending' && f.properties.map((x) => x.property), kind).toStrictEqual(['remote-control']);
+        }
+        // the identity checks still hold for a rebind: another session, another generation, an older start, an unbound generation
+        expect(sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow({ sessionId: 'lane-a-project-a' }), heldV).kind).toBe('none');
+        expect(sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow({ rowIncarnation: 'other' }), heldV).kind).toBe('none');
+        expect(sandboxSettle(pendingRead({ kind: 'rebind' }), 7, startRow({ id: 9 }), heldV).kind).toBe('none');
+        expect(sandboxSettle(pendingRead({ kind: 'rebind', generation: null }), 7, startRow(), heldV).kind).toBe('none');
+      });
+
+      it('a held report of a pending rebind goes live through the real writer, binds the new body and drains the old one after it', async () => {
+        app = await openLost(); pendRebind();
+        await startNew(app);
+        await store(app, newLoads(), NEW);
+        expect(await rerun(NEW, 1, livePort())).toStrictEqual({ sessionId: NEW, startId: 1, act: 'go-live' });
+        expect(view()).toMatchObject({ kind: 'designated', sessionId: NEW });
+        expect(drained).toStrictEqual([[OLD, false]]);
+        const d = view();
+        expect(d.row?.stopsOwed).toStrictEqual([OLD]); // the drain here is a recorder: it never wrote stopDone
+        expect(d.row?.pastIds).toContain(OLD);
+        expect(await rerun(NEW, 1, livePort())).toMatchObject({ act: 'none' });
+        expect(drained).toStrictEqual([[OLD, false]]);
+      });
+
+      it('a failed report of a pending rebind fails the attempt and drains the new body: the old one stays bound', async () => {
+        app = await openLost(); pendRebind();
+        await startNew(app);
+        await store(app, newLoads({ launchRc: 'on' }), NEW);
+        expect(await rerun(NEW, 1, livePort())).toMatchObject({ act: 'fail-pending' });
+        const d = view();
+        expect(d).toMatchObject({ kind: 'designated', sessionId: OLD });
+        expect(d.row?.pending).toBeNull();
+        expect(d.row?.lastAttempt).toMatchObject({ sessionId: NEW, outcome: 'overlord-sandbox-unmet' });
+        expect(drained).toStrictEqual([[NEW, false]]);
+      });
+
+      it('a late held report from a rebind body whose attempt Restart already ended (deadline-passed) meets the settle\'s none: the old binding stands, nothing goes live', async () => {
+        app = await openOv(); pendRebind();
+        // As Restart does past the deadline (`restart-ends-an-overdue-attempt`): the attempt failed through its one writer.
+        expect(coord!.failPending(NEW, 'deadline-passed', FAKE_T0, true)).toStrictEqual({ ok: true, changed: true });
+        const before = view();
+        await startNew(app);
+        expect(await report(app, newLoads(), NEW)).toStrictEqual({ sessionId: NEW, startId: 1, act: 'none' });
+        expect(view()).toStrictEqual(before);
+        expect(view()).toMatchObject({ kind: 'designated', sessionId: OLD, row: { pending: null, lastAttempt: { sessionId: NEW, outcome: 'deadline-passed' } } });
+        expect(stops()).toStrictEqual([]);
+      });
+
+      it('a go-live answering a previous body drains it, after the go-live and with the id as recorded; a designate\'s go-live drains nothing', async () => {
+        app = await openLost(); pend();
+        await startOv(app);
+        await store(app, loads());
+        const order: string[] = [];
+        const r = await rerun(OV, 1, portOf({
+          goLive: () => { order.push('go-live'); return { ok: true, previous: 'lane-a-old-body' }; },
+          drain: async (id, unrecorded) => { order.push(`drain ${id} ${unrecorded}`); },
+        }));
+        expect(r.act).toBe('go-live');
+        expect(order).toStrictEqual(['go-live', 'drain lane-a-old-body false']);
+
+        // a designate's go-live: the real writer answers `previous: null`, and nothing is drained
+        drained = [];
+        const second = await (async () => { const live = await rerun(OV, 1, livePort()); return live; })();
+        expect(second.act).toBe('go-live');
+        expect(drained).toStrictEqual([]);
+      });
+
+      for (const [word, answer] of [['null', { ok: true, previous: null }], ['absent', { ok: true }]] as const) {
+        it(`a go-live whose previous is ${word} drains nothing`, async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads());
+          expect((await rerun(OV, 1, portOf({ goLive: () => answer }))).act).toBe('go-live');
+          expect(drained).toStrictEqual([]);
+        });
+      }
+
+      it('a refused go-live drains nothing, even when its answer names a previous body, and leaves the rebind pending', async () => {
+        app = await openLost(); pendRebind();
+        await startNew(app);
+        await store(app, newLoads(), NEW);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          expect(await rerun(NEW, 1, portOf({ goLive: () => ({ ok: false, detail: 'refused for the test', previous: OLD }) }))).toMatchObject({ act: 'refused' });
+          journalRefuses = true;
+          expect(await rerun(NEW, 1, livePort())).toMatchObject({ act: 'refused' });
+        } finally { warn.mockRestore(); }
+        expect(drained).toStrictEqual([]);
+        expect(view()).toMatchObject({ kind: 'designated', sessionId: OLD });
+        expect(view().row?.pending?.sessionId).toBe(NEW);
+      });
+
+      describe('settleFactOf (the deadline sweep\'s read of what a settle would read)', () => {
+        const fact = (id = OV, port: Pick<SandboxSettlePort, 'expected' | 'workspaceOf'> = portOf(), c: Pick<CoordStore, 'startLoadsOfNewestStart'> = coord!) => settleFactOf(port, c, id);
+
+        it('is unread when the expected surface is not listed, and when the newest start cannot be read', async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads());
+          expect(await fact(OV, portOf({ expected: () => null }))).toMatchObject({ kind: 'unread' });
+          const noRead = { startLoadsOfNewestStart: () => ({ ok: false, detail: 'locked' }) } as unknown as CoordStore;
+          expect(await fact(OV, portOf(), noRead)).toStrictEqual({ kind: 'unread', why: 'locked' });
+          expect(wsAsked).toBe(0);
+        });
+
+        it('is no-report for a session with no start, and for a start with no stored report', async () => {
+          app = await openLost(); pend();
+          expect(await fact()).toStrictEqual({ kind: 'no-report' });
+          await startOv(app);
+          expect(await fact()).toStrictEqual({ kind: 'no-report' });
+        });
+
+        it('reads a stored held report with the start\'s id, its generation and held: true; a failed one held: false', async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads());
+          expect(await fact()).toStrictEqual({ kind: 'reported', sessionId: OV, startId: 1, generation: GEN, held: true });
+          expect(wsAsked).toBe(1);
+        });
+
+        it('a failed report reads held: false, and the newest start\'s report is the one read', async () => {
+          app = await openLost(); pend();
+          await startOv(app, 'r-ov1-abcd');
+          await store(app, loads({ launchRc: 'on' }));
+          expect(await fact()).toStrictEqual({ kind: 'reported', sessionId: OV, startId: 1, generation: GEN, held: false });
+          await startOv(app, 'r-ov2-abcd', 'resume');
+          expect(await fact()).toStrictEqual({ kind: 'no-report' });
+          await store(app, loads({}, 'r-ov2-abcd'));
+          expect(await fact()).toStrictEqual({ kind: 'reported', sessionId: OV, startId: 2, generation: GEN, held: true });
+        });
+
+        it('an unmeasured workspace reads held: false; the rebind body\'s generation is the start\'s own', async () => {
+          app = await openLost(); pendRebind();
+          await startNew(app);
+          await store(app, newLoads(), NEW);
+          expect(await fact(NEW, portOf({ workspaceOf: async () => ({ kind: 'unmeasured', reason: 'registry' }) }))).toMatchObject({ kind: 'reported', held: false });
+          expect(await fact(NEW)).toStrictEqual({ kind: 'reported', sessionId: NEW, startId: 1, generation: GEN2, held: true });
+        });
+
+        it('writes nothing: the designation, the starts and the reports are the same after a read', async () => {
+          app = await openLost(); pendRebind();
+          await startNew(app);
+          await store(app, newLoads(), NEW);
+          const before = rowSnapshot();
+          await fact(NEW);
+          await fact(NEW, portOf({ expected: () => null }));
+          expect(rowSnapshot()).toBe(before);
+          expect(drained).toStrictEqual([]);
+          expect(calls).toStrictEqual([]);
+        });
+      });
+
+      // ── THE KEY PROOF: `settle-runs-after-the-answer` (sandbox B's note), built into the sweep. A report the door stored and
+      // answered 202, whose settle was lost, is re-run by one sweep step: the lane port's facts, the decider, the acting side
+      // and the real `settleLoads` over the loads door's own settle port shape (go-live with `previous`, the designation's one
+      // drain over a recording body). Real `CoordStore`, real writers; only the ccd body is a recorder.
+      describe('the deadline sweep re-runs a settle lost after the door\'s answer (settle-runs-after-the-answer)', () => {
+        let bodyLog: string[];
+        let lines: string[];
+        beforeEach(() => { bodyLog = []; lines = []; });
+        const body = {
+          keepAwake: async (id: string, state: string) => { bodyLog.push(`keep-awake ${id} ${state}`); return { ok: true, foreign: [] }; },
+          writeSet: async (id: string) => { bodyLog.push(`write-set ${id} cleared`); return { ok: true }; },
+          clearProfile: async (id: string) => { bodyLog.push(`clear-profile ${id}`); return { ok: true }; },
+          stop: async (id: string) => { bodyLog.push(`stop ${id}`); return { ok: true, absent: false }; },
+        } as unknown as OverlordBody;
+        /** The loads door's settle port shape, as `server.ts` builds it: the real writers, and the one drain over the body. */
+        const settlePort = (): SandboxSettlePort => livePort({
+          drain: async (id, unrecorded) => { await drainOwedStops({ body, coord: coord! }, [id], new Set(unrecorded ? [id] : [])); },
+        });
+        const lanePort = (at: () => number) => {
+          const sp = settlePort();
+          return overlordLanePortOf({
+            serial: (fn) => fn(), body, clock: { wall: at }, coord: coord!, facts: {} as never,
+            settle: { fact: (id) => settleFactOf(sp, coord!, id), again: (id, startId) => settleLoads(sp, coord!, id, startId, at) },
+          });
+        };
+        /** One step of the sweep, as the watcher runs it: the port's facts, the decider, the acting side. */
+        const sweep = async (port: ReturnType<typeof lanePort>, at: number): Promise<AttemptAction> => {
+          const f = await port.facts();
+          const a = pendingDeadlineOf(f.read, f.settle, at);
+          await runOverlordAttempt(port, a, (l) => lines.push(l));
+          return a;
+        };
+        const settledLines = () => lines.filter((l) => l.includes('settled') || l.includes('deadline'));
+
+        it('a designate: the stored held report is settled again, goes live, and the log names the retry; the next step does nothing', async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads());
+          expect(pendingId()).toBe(OV); // the settle never ran
+          let at = FAKE_T0;
+          const port = lanePort(() => at);
+          expect(await sweep(port, at)).toStrictEqual({ kind: 'resettle', sessionId: OV, startId: 1 });
+          expect(view()).toMatchObject({ kind: 'designated', sessionId: OV });
+          expect(settledLines()).toStrictEqual([`ccrc-server: overlord attempt: settled ${OV} again from start 1: go-live`]);
+          expect(bodyLog).toStrictEqual([]); // a designate's go-live drains nothing
+          at += 30_000;
+          expect(await sweep(port, at)).toStrictEqual({ kind: 'none' });
+          expect(lines).toHaveLength(1);
+        });
+
+        it('a journal that refuses the go-live leaves it pending and resettled each step; past the deadline it expires authority-unrecorded and the body is drained', async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads());
+          journalRefuses = true;
+          const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            const port = lanePort(() => FAKE_T0);
+            expect(await sweep(port, FAKE_T0)).toMatchObject({ kind: 'resettle', sessionId: OV });
+            expect(await sweep(port, FAKE_T0 + 60_000)).toMatchObject({ kind: 'resettle', sessionId: OV });
+            expect(settledLines()).toStrictEqual([
+              `ccrc-server: overlord attempt: settled ${OV} again from start 1: refused`,
+              `ccrc-server: overlord attempt: settled ${OV} again from start 1: refused`,
+            ]);
+            expect(pendingId()).toBe(OV);
+            expect(bodyLog).toStrictEqual([]);
+
+            const deadlineAt = FAKE_T0 + 600_000;
+            const late = lanePort(() => deadlineAt + 1);
+            expect(await sweep(late, deadlineAt + 1)).toStrictEqual({ kind: 'expire', sessionId: OV, outcome: 'authority-unrecorded' });
+            expect(settledLines().at(-1)).toBe(`ccrc-server: overlord attempt: ${OV} failed its deadline (authority-unrecorded)`);
+            const d = view();
+            expect(d.kind).toBe('not-designated');
+            expect(d.row?.pending).toBeNull();
+            expect(d.row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'authority-unrecorded' });
+            expect(d.row?.stopsOwed).toStrictEqual([]);
+            expect(bodyLog).toStrictEqual([`keep-awake ${OV} off`, `write-set ${OV} cleared`, `clear-profile ${OV}`, `stop ${OV}`]);
+            expect(await sweep(late, deadlineAt + 2)).toStrictEqual({ kind: 'none' });
+          } finally { warn.mockRestore(); }
+        });
+
+        it('a pending rebind goes live through the same path: the new body is bound and the old body is drained, once', async () => {
+          app = await openLost(); pendRebind();
+          await startNew(app);
+          await store(app, newLoads(), NEW);
+          let at = FAKE_T0;
+          const port = lanePort(() => at);
+          expect(await sweep(port, at)).toStrictEqual({ kind: 'resettle', sessionId: NEW, startId: 1 });
+          expect(view()).toMatchObject({ kind: 'designated', sessionId: NEW });
+          expect(settledLines()).toStrictEqual([`ccrc-server: overlord attempt: settled ${NEW} again from start 1: go-live`]);
+          expect(bodyLog).toStrictEqual([`keep-awake ${OLD} off`, `write-set ${OLD} cleared`, `clear-profile ${OLD}`, `stop ${OLD}`]);
+          expect(view().row?.stopsOwed).toStrictEqual([]);
+          at += 30_000;
+          expect(await sweep(port, at)).toStrictEqual({ kind: 'none' });
+          expect(bodyLog).toHaveLength(4);
+        });
+
+        it('a stored failed report is not resettled into a go-live: inside the deadline it is settled again to fail-pending, and the failed body is drained', async () => {
+          app = await openLost(); pend();
+          await startOv(app);
+          await store(app, loads({ launchRc: 'on' }));
+          const port = lanePort(() => FAKE_T0);
+          expect(await sweep(port, FAKE_T0)).toMatchObject({ kind: 'resettle', sessionId: OV });
+          expect(view().kind).toBe('not-designated');
+          expect(view().row?.lastAttempt).toMatchObject({ sessionId: OV, outcome: 'overlord-sandbox-unmet' });
+          expect(bodyLog).toStrictEqual([`keep-awake ${OV} off`, `write-set ${OV} cleared`, `clear-profile ${OV}`, `stop ${OV}`]);
+        });
+      });
     });
   });
 });

@@ -2,7 +2,7 @@
 // argv against the agent's whitelist, the capability gates, the `created` answers, the failed listing and the stop. FIXTURE-HOME
 // cases (`makeCcdHarness`, never the live HOME) run the real `cmd_route` and `cmd_keep_awake` on argv the adapter composed:
 // the clear, the session shell's refusal (`pool-set-operator-only`) and the runner's strip of `CLAUDECODE`.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -274,6 +274,56 @@ describe('keepAwake', () => {
   it('off waits for the released line', async () => {
     expect(await bodyOf(fake(() => ok(`released ${ID}\n`))).keepAwake(ID, 'off')).toEqual({ ok: true, foreign: [] });
     expect((await bodyOf(fake(() => ok(`awake ${ID}\n`))).keepAwake(ID, 'off')).ok).toBe(false);
+  });
+});
+
+describe('ensure (Restart\'s resume path, designation B)', () => {
+  it('refuses an id that is not a registry id and runs nothing, not even the asked wake', async () => {
+    const f = fake(() => ok());
+    const woke: string[] = [];
+    const body = bodyOf(f, { askedWake: async (id) => { woke.push(id); } });
+    for (const bad of ['--set', 'a b', '-x', '']) expect(await body.ensure(bad)).toMatchObject({ ok: false });
+    expect(f.calls).toEqual([]);
+    expect(woke).toEqual([]);
+  });
+
+  it('composes exactly CCD_ARGV.ensure(id), and that argv is on the agent whitelist', async () => {
+    const f = fake(() => ok());
+    expect(await bodyOf(f).ensure(ID)).toEqual({ ok: true });
+    expect(f.calls).toEqual([[...CCD_ARGV.ensure(ID)]]);
+    expect(allowed(f.calls[0]!)).toBe(true);
+  });
+
+  it('records the asked wake before the ccd call', async () => {
+    const order: string[] = [];
+    const f = fake((argv) => { order.push(`ccd:${argv[0]}`); return ok(); });
+    const body = bodyOf(f, { askedWake: async (id) => { order.push(`wake:${id}`); } });
+    expect(await body.ensure(ID)).toEqual({ ok: true });
+    expect(order).toEqual([`wake:${ID}`, 'ccd:ensure']);
+  });
+
+  it('a throwing asked wake does not stop the ensure, and is logged', async () => {
+    const f = fake(() => ok());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const body = bodyOf(f, { askedWake: async () => { throw new Error('journal busy'); } });
+      expect(await body.ensure(ID)).toEqual({ ok: true });
+      expect(f.calls).toEqual([[...CCD_ARGV.ensure(ID)]]);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('journal busy'))).toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('an absent askedWake dep is fine', async () => {
+    const f = fake(() => ok());
+    expect(await bodyOf(f, { askedWake: undefined }).ensure(ID)).toEqual({ ok: true });
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('a failed ccd call answers ok false with ensure\'s detail; a lost call says it did not run', async () => {
+    const failed = await bodyOf(fake(() => refused('ccd: no such session'))).ensure(ID);
+    expect(failed).toEqual({ ok: false, detail: 'ensure exited 1: ccd: no such session' });
+    const gone = await bodyOf(fake(() => lost('transport'))).ensure(ID);
+    expect(gone).toMatchObject({ ok: false, detail: expect.stringContaining('ensure did not run (transport)') });
   });
 });
 

@@ -99,7 +99,7 @@ import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
-import { registerContinuityRoutes } from './continuity/routes.js';
+import { registerContinuityRoutes, settleFactOf, settleLoads, type SandboxSettlePort } from './continuity/routes.js';
 import { expectedSurfaceOf } from './continuity/sandboxCheck.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
 import { witnessPorts } from './continuity/witnessPorts.js';
@@ -117,7 +117,7 @@ import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
-import { NO_OVERLORD_STORE, drainOwedStops, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { NO_OVERLORD_STORE, drainOwedStops, overlordLanePortOf, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
 import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
@@ -182,7 +182,8 @@ import {
   busyReadFailsClosed, decideArchive, decideStopClaims, frameRowVerdict, stopFlags, worktreeOf, type ArchiveMeasure,
   type ClaimsCoordPort, type TurnVerdict,
 } from './coord/archiveDoor.js';
-import { moveClaims } from './coord/reclaim.js';
+import { measureClaimant, moveClaims } from './coord/reclaim.js';
+import { overlordBodyOf } from './coord/overlordDesignation.js';
 import { admitArchive } from './coord/archiveAdmission.js';
 import { actArchive, replyArchiveRefused } from './archiveAct.js';
 import { liveRowFor, liveRowWithHookFor, liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
@@ -2295,8 +2296,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const designationStore = deps.coord !== undefined && deps.overlordAuthority !== undefined ? { coord: deps.coord, journal: deps.overlordAuthority } : undefined;
   const overlordStore = designationStore ?? NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  // D-5242: waking a hibernated row is an ASKED wake, recorded in the wake budget's window so the mail lane's automatic wakes do
+  // not land on top of it; read from the listing alone, an unlistable registry records nothing. The ensure route and Restart's.
+  const askedWake = async (id: string): Promise<void> => {
+    if (watcher?.admitWake === undefined) return;
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names !== null && names.includes(`${id}.hibernated`)) watcher.admitWake('asked', id);
+  };
   const overlordBody = ccdOverlordBody({
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id), askedWake,
     generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
     // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
     stop: stopCreatedOf({
@@ -2314,15 +2322,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(), readRunner,
   });
   registerOverlordHistoryRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, io: deps.io, links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]) });
-  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
-  registerContinuityRoutes(app, {
-    // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
-    settle: designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
+  // The Overlord's account reads, one object for the designation doors and the designation's lane port.
+  const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
+  // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
+  const settlePort: SandboxSettlePort | undefined = designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
       expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
-      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true } : { ok: false, detail: r.detail }; },
+      goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true, previous: r.changed ? r.previous : null } : { ok: false, detail: r.detail }; },
       failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
       drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
-      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } },
+      workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } };
+  // Designation B: the watcher's one port into the designation (the deadline sweep, the write-set before each renewal).
+  if (settlePort !== undefined && designationStore !== undefined) {
+    const sc = designationStore.coord;
+    watcher?.useOverlordLane?.(overlordLanePortOf({ serial: coordRoutes.serial, coord: sc, body: overlordBody, clock: { wall: () => deps.time.clock.wall() }, facts: overlordAccountReads,
+      settle: { fact: (id) => settleFactOf(settlePort, sc, id), again: (id, startId) => settleLoads(settlePort, sc, id, startId, () => deps.time.clock.wall()) } }));
+  }
+  // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
+  registerContinuityRoutes(app, {
+    settle: settlePort,
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
@@ -2438,8 +2455,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     body: overlordBody,
     facts: {
       ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
-      roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
+      ...overlordAccountReads,
       authority: deps.overlordAuthorityGuard === undefined ? undefined : () => deps.overlordAuthorityGuard!.state(),
+      // Designation B: Rebind's re-measurement is the reclaim door's own; Restart reads the watcher's last listing and fleet.
+      oldBody: async (id) => (deps.coord === undefined ? 'unmeasurable' : (await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.time.clock.wall())).state),
+      body: (id) => overlordBodyOf({ sessionId: id, listedIds: watcher?.currentRegistryIds() ?? null, session: watcher?.currentFleet()?.find((x) => x.id === id) ?? null }),
     },
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
@@ -2486,7 +2506,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
-  const drawerMarks = new DrawerInterruptThrottle();   // the drawer's input marks as a typed prompt does, once per session per 2 s
+  const drawerMarks = new DrawerInterruptThrottle(undefined, { earlierAdmits: true });   // the drawer's input marks as a typed prompt does, once per session per 2 s; a wall clock stepped back admits
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -2816,7 +2836,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11).
     const owned = compactRefusal(field, (lane) => deps.coord !== undefined && laneArmRowViewOf(lane, deps.coord.laneArmSetting(lane)).live);
     if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
-    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    const applied = await runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
+    // The pick was applied (a ccd failure has already sent its 502): marks as a typed prompt does.
+    if (!reply.sent && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
+    return applied;
   });
 
   /**
@@ -3015,6 +3038,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const res = await moveDialogTab(sendDeps, id, req.body ?? null);
     answeredFrame(id, 'dialog/tab', res);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // the pane moved: marks as a typed prompt does
     if (res.ok) return res;
     return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
@@ -3046,6 +3070,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
     recordInterrupt({ notice }, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
+    if (res.ok && deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));   // Escape was sent: marks as a typed prompt does
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -3405,13 +3430,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // literally and dies on an absent row, so this is no redirect today; the
     // check keeps a name ccd could read as a flag from ever reaching the argv.
     if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
-    // D-5242: waking a hibernated row is an ASKED wake — never refused for the fleet-wide wake budget (the operator
-    // asked), but recorded in its window so the mail lane's automatic wakes do not land on top of it. Read from the
-    // listing alone; an unlistable registry records nothing and the call goes ahead exactly as before.
-    if (watcher?.admitWake !== undefined) {
-      const names = await deps.io.readdir(deps.cfg.registryDir);
-      if (names !== null && names.includes(`${id}.hibernated`)) watcher.admitWake('asked', id);
-    }
+    // D-5242: an ASKED wake, never refused for the fleet-wide wake budget (the operator asked); `askedWake` above.
+    await askedWake(id);
     return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 

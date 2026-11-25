@@ -934,9 +934,7 @@ export function withCoordinatorWords(wc: WithCoordinator, project: string): { te
  * from one this build never measured, and folding the two to one value is
  * the overloaded-null this project's CLAUDE.md forbids.
  */
-export function ctxPressure(s: { ctxPct?: number | null }): number | null {
-  return tolerantCount(s.ctxPct);
-}
+export function ctxPressure(s: { ctxPct?: number | null }): number | null { return tolerantCount(s.ctxPct); }
 
 /** Tolerant read of `FleetSession.paneCols` off a cast live frame — the same
  *  ladder as `ctxPressure`: absent (an older server), null, or unusable all
@@ -10924,6 +10922,7 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_PROBE_CONFIG_DIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_PROBE_SOCKET: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_PROBES_PER_DAY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REGISTRY_KEEP: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },

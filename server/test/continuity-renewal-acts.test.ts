@@ -1,7 +1,7 @@
 // Overlord W1a, the renewal act (Task 4): the generations lane, armed live, renews a coordinator through the `SessionHost`
 // port and goes back, retries or degrades within each state's deadline; in shadow it records each step and sends nothing.
 // A real coord.db, the fake time ports, a fake registry and a fake port; nothing here reaches the fleet.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -10,13 +10,15 @@ import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
 import {
   generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
-import { runRenewalActs } from '../src/continuity/renewalActs.js';
+import { runOverlordAttempt, runRenewalActs, type OverlordAttemptPort, type RenewalActsDeps } from '../src/continuity/renewalActs.js';
+import { renewalActsOf } from '../src/continuity/renewalWiring.js';
 import { OVERLORD_HANDOVER_BODY, OVERLORD_SPOT_PROBE_BODY, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 import type { DrainRead } from '../src/continuity/renewalDrain.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
 import type { UsageRead } from '../src/usage.js';
 import type { CardFacts } from '../../shared/continuity-card.js';
+import type { AttemptAction } from '../../shared/overlord-designation.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { CARDED_NUDGE_AT_MS, HOLD_OFF_MS, LEAST_AGE_MS, RENEWAL_BUDGET_S, STATE_DEADLINE_S } from '../../shared/continuity.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
@@ -597,5 +599,181 @@ describe('the first line by role (Overlord W1 door process A2, Task 5: FIRST_PRO
     expect(r.delivered).toBe(4);
     expect(delivered).toEqual(['lane-a-overlord: overlord-first-prompt', 'lane-a-overlord: overlord-first-prompt',
       `${COORD}: renewal-first-prompt`, `${COORD}: renewal-first-prompt`]);
+  });
+});
+
+// ── Overlord W1 designation B (plan Tasks 7 and 10): the write-set before a renewal, and the deadline sweep's acting side ────
+describe('the write-set before a renewal (designation B, Task 10: RenewalActsDeps.beforeRenew)', () => {
+  const claimed = (f: Fx): number => (f.s.db.prepare('SELECT count(*) AS n FROM continuity_renew_calls').get() as { n: number }).n;
+  /** The renew a hard trigger owes, planned for a generation of the role asked (the lane plans the session's own role: the
+   *  target is rewritten here, since only the act reads it). */
+  async function owedRenew(f: Fx, role: 'overlord' | 'coordinator'): Promise<PlannedAct[]> {
+    await f.cycle(() => hardCap());
+    f.t.advance(PERIOD);
+    const r = f.pass(() => hardCap());
+    const renews = r.planned.filter((p) => p.act.kind === 'renew');
+    expect(renews.map((p) => p.act)).toEqual([{ kind: 'renew', try: 1 }]);
+    return renews.map((p) => ({ target: { ...p.target, role }, act: p.act }));
+  }
+  const run = (f: Fx, planned: readonly PlannedAct[], beforeRenew?: RenewalActsDeps['beforeRenew']) => runRenewalActs({
+    coord: f.s, host: f.host, now: () => f.t.ports.clock.wall(), log: (l) => f.logs.push(l), memo: new Set(),
+    mail: () => true, ...(beforeRenew === undefined ? {} : { beforeRenew }),
+  }, planned);
+
+  it('an overlord target is asked once, before the claim and before host.renew, and the renewal then goes ahead', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'overlord');
+    const seen: { sessionId: string; role: string; claims: number; renews: number }[] = [];
+    const r = await run(f, planned, async (t) => { seen.push({ sessionId: t.sessionId, role: t.role, claims: claimed(f), renews: f.host.renews.length }); return { ok: true }; });
+    expect(seen).toStrictEqual([{ sessionId: COORD, role: 'overlord', claims: 0, renews: 0 }]);
+    expect(r).toMatchObject({ renewed: 1, failed: 0 });
+    expect(f.host.renews).toEqual([`${COORD} n=1`]);
+    expect(claimed(f)).toBe(1);
+  });
+
+  it('{ ok: false } claims nothing, makes no renew call, counts the try failed and logs why; the next pass asks again', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'overlord');
+    const asked: number[] = [];
+    const r = await run(f, planned, async () => { asked.push(asked.length + 1); return { ok: false, detail: 'ccd route refused the set' }; });
+    expect(r).toMatchObject({ renewed: 0, failed: 1 });
+    expect(claimed(f)).toBe(0);
+    expect(f.host.renews).toEqual([]);
+    expect(f.logs.some((l) => l.includes('try 1 not made: the set was not written before it (ccd route refused the set)'))).toBe(true);
+    expect(f.gen()).toMatchObject({ state: 'clearing' });
+
+    // the next pass owes the same try and asks again; this time the write succeeds and the renewal is made
+    f.t.advance(PERIOD);
+    const again = f.pass(() => hardCap()).planned.filter((p) => p.act.kind === 'renew').map((p) => ({ target: { ...p.target, role: 'overlord' as const }, act: p.act }));
+    expect(again).toHaveLength(1);
+    const r2 = await run(f, again, async () => { asked.push(asked.length + 1); return { ok: true }; });
+    expect(asked).toEqual([1, 2]);
+    expect(r2).toMatchObject({ renewed: 1, failed: 0 });
+    expect(f.host.renews).toEqual([`${COORD} n=1`]);
+  });
+
+  it('is asked once per try: a second try asks again', async () => {
+    const f = await atRest();
+    f.host.answers = [{ kind: 'unreachable', detail: 'link down' }];
+    const planned = await owedRenew(f, 'overlord');
+    let asked = 0;
+    const ask = async () => { asked += 1; return { ok: true } as const; };
+    await run(f, planned, ask);
+    expect(asked).toBe(1);
+    f.t.advance(PERIOD);
+    const second = f.pass(() => hardCap()).planned.filter((p) => p.act.kind === 'renew');
+    expect(second.map((p) => p.act)).toEqual([{ kind: 'renew', try: 2 }]);
+    await run(f, second.map((p) => ({ target: { ...p.target, role: 'overlord' as const }, act: p.act })), ask);
+    expect(asked).toBe(2);
+    expect(f.host.renews).toHaveLength(2);
+  });
+
+  it('renewalActsOf hands its before-renew step on to the acts it runs: an overlord target is asked through the wiring (review 3740 F6)', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'overlord');
+    const asked: string[] = [];
+    const deps = {
+      io: {}, cfg: { registryDir: '/nonexistent' }, tmux: {}, queue: { run: async <T>(_id: string, fn: () => Promise<T>) => fn() },
+      time: { clock: { wall: () => f.t.ports.clock.wall() } }, fleetState: { ccdVerbs: [] },
+      runCcd: async () => { throw new Error('no ccd call is made: the refused write-set holds the try'); },
+    } as unknown as Parameters<typeof renewalActsOf>[0];
+    const wiring = renewalActsOf(deps, f.s as never, [], {} as never, async () => ({ ok: false }), null, new Set(),
+      async (t) => { asked.push(t.sessionId); return { ok: false, detail: 'held for the test' }; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try { await wiring.run(planned); } finally { warn.mockRestore(); }
+    expect(asked).toEqual([COORD]);
+    expect(claimed(f)).toBe(0);
+  });
+
+  it('a coordinator target never asks it, and the renewal goes ahead', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'coordinator');
+    const beforeRenew = vi.fn(async () => ({ ok: false, detail: 'must not be asked' }) as const);
+    const r = await run(f, planned, beforeRenew);
+    expect(beforeRenew).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ renewed: 1, failed: 0 });
+    expect(f.host.renews).toEqual([`${COORD} n=1`]);
+  });
+
+  it('with no beforeRenew, an overlord target renews as before', async () => {
+    const f = await atRest();
+    const planned = await owedRenew(f, 'overlord');
+    const r = await run(f, planned);
+    expect(r).toMatchObject({ renewed: 1, failed: 0 });
+    expect(f.host.renews).toEqual([`${COORD} n=1`]);
+    expect(f.logs.filter((l) => l.includes('set was not written'))).toEqual([]);
+  });
+});
+
+describe('runOverlordAttempt: the deadline sweep\'s acting side (designation B, Task 7)', () => {
+  const SESSION = 'overlord-quiet-otter';
+  const portOf = (over: Partial<OverlordAttemptPort> = {}) => {
+    const p = {
+      facts: vi.fn(async () => { throw new Error('the acting side never reads facts'); }),
+      resettle: vi.fn(async (_id: string, _startId: number) => ({ act: 'go-live' })),
+      expire: vi.fn(async (_id: string, _outcome: 'deadline-passed' | 'authority-unrecorded') => ({ changed: true })),
+      drain: vi.fn(async (ids: readonly string[]) => ({ stopped: [...ids], owed: [] as readonly string[] })),
+      ...over,
+    };
+    return p as unknown as OverlordAttemptPort & typeof p;
+  };
+  const go = async (port: OverlordAttemptPort, a: AttemptAction): Promise<string[]> => {
+    const lines: string[] = [];
+    await runOverlordAttempt(port, a, (l) => lines.push(l));
+    return lines;
+  };
+  const untouched = (p: ReturnType<typeof portOf>, except: 'resettle' | 'expire' | 'drain' | null): void => {
+    for (const k of ['resettle', 'expire', 'drain'] as const) if (k !== except) expect(p[k], k).not.toHaveBeenCalled();
+    expect(p.facts).not.toHaveBeenCalled();
+  };
+
+  it('resettle calls the port with the session and the start, and logs both and what the settle did', async () => {
+    const p = portOf();
+    const lines = await go(p, { kind: 'resettle', sessionId: SESSION, startId: 7 });
+    expect(p.resettle).toHaveBeenCalledWith(SESSION, 7);
+    expect(lines).toEqual([`ccrc-server: overlord attempt: settled ${SESSION} again from start 7: go-live`]);
+    untouched(p, 'resettle');
+  });
+
+  it('expire calls the port with the outcome and logs it, and says so when the attempt was no longer pending', async () => {
+    const p = portOf();
+    expect(await go(p, { kind: 'expire', sessionId: SESSION, outcome: 'authority-unrecorded' }))
+      .toEqual([`ccrc-server: overlord attempt: ${SESSION} failed its deadline (authority-unrecorded)`]);
+    expect(p.expire).toHaveBeenCalledWith(SESSION, 'authority-unrecorded');
+    untouched(p, 'expire');
+    const gone = portOf({ expire: vi.fn(async () => ({ changed: false })) });
+    expect(await go(gone, { kind: 'expire', sessionId: SESSION, outcome: 'deadline-passed' }))
+      .toEqual([`ccrc-server: overlord attempt: ${SESSION} was no longer pending at its deadline (deadline-passed)`]);
+  });
+
+  it('drain calls the port with the ids, logs only what stays owed, and is silent when nothing does', async () => {
+    const p = portOf();
+    expect(await go(p, { kind: 'drain', ids: ['a-old', 'b-old'] })).toEqual([]);
+    expect(p.drain).toHaveBeenCalledWith(['a-old', 'b-old']);
+    untouched(p, 'drain');
+    const owing = portOf({ drain: vi.fn(async () => ({ stopped: ['a-old'], owed: ['b-old', 'c-old'] })) });
+    expect(await go(owing, { kind: 'drain', ids: ['a-old', 'b-old', 'c-old'] }))
+      .toEqual(['ccrc-server: overlord attempt: b-old, c-old still owed a stop']);
+  });
+
+  it('none calls nothing and logs nothing', async () => {
+    const p = portOf();
+    expect(await go(p, { kind: 'none' })).toEqual([]);
+    untouched(p, null);
+  });
+
+  it('a port that throws is logged by the arm\'s name and never thrown', async () => {
+    const boom = (): never => { throw new Error('the database is locked'); };
+    const arms: [AttemptAction, Partial<OverlordAttemptPort>][] = [
+      [{ kind: 'resettle', sessionId: SESSION, startId: 3 }, { resettle: async () => boom() }],
+      [{ kind: 'expire', sessionId: SESSION, outcome: 'deadline-passed' }, { expire: async () => boom() }],
+      [{ kind: 'drain', ids: ['a-old'] }, { drain: async () => boom() }],
+    ];
+    for (const [a, over] of arms) {
+      expect(await go(portOf(over), a), a.kind).toEqual([`ccrc-server: overlord attempt: ${a.kind} failed: the database is locked`]);
+    }
+    const odd = portOf({ expire: async () => { throw 'a bare string'; } });
+    expect(await go(odd, { kind: 'expire', sessionId: SESSION, outcome: 'deadline-passed' }))
+      .toEqual(['ccrc-server: overlord attempt: expire failed: a bare string']);
   });
 });

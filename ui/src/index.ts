@@ -90,7 +90,8 @@ export {
 export { TypedLabel, TYPE_MS } from './components/typed-label';
 export { AttachButton, type AttachButtonProps } from './components/attach-button';
 export { AttachTray, type AttachTrayProps, type StagedImage } from './components/attach-tray';
-export { MailCard, runLabel } from './components/mail-card';
+export { MailCard, mailLineLabel, runLabel, type MailCardFold } from './components/mail-card';
+export { MailPromptLine, MailPromptText, type MailPromptLineProps } from './components/mail-prompt-line';
 export { TaskCard } from './components/task-card';
 export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
 export {

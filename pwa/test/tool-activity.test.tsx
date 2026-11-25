@@ -328,7 +328,7 @@ describe('foldToolActivity: one row per contiguous stretch of a turn\'s tool act
     t.call('Read', { file_path: '/repo/a.ts' });
     const one = activities(foldToolActivity(buildChatItems(t.events, [], false), { runs: 'none', wait: NONE, busy: false }))[0]!;
     expect(activityWords(one)).toEqual({
-      title: 'Tool activity', calls: '1 call', state: null, latest: 'Read a.ts', attention: [],
+      title: 'Tool activity', calls: '1 call', messages: null, state: null, latest: 'Read a.ts', attention: [],
     });
   });
 });
@@ -731,6 +731,8 @@ describe('a stretch ends at anything that is not a tool entry (review 3478 A2)',
     const ev = { kind: 'assistant', uuid: 'x', ts: TS, text: '' };
     const between = [
       { kind: 'divider', key: 'd', label: '10:00' },
+      // A card that is not a fetch's result (desktop polish wave 176: only a fetched card joins its stretch,
+      // `mail-rows.test.tsx`).
       { kind: 'mail', key: 'm', envelope: { artifacts: [], body: '' }, event: ev },
       { kind: 'task', key: 'k', notification: { fields: [] }, event: ev },
       { kind: 'message', key: 's', event: { kind: 'system', uuid: 's', ts: TS, text: 'note' }, streaming: false },

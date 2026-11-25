@@ -329,9 +329,19 @@ describe('a route change puts the detail pane back at the top (D-161)', () => {
 // screen in the detail pane and join the data-view chain, `/docsearch` does not (the pattern is `/docs` then a slash
 // or the end, never a bare prefix), and the screen is not keyed, so one mount spans a visit. The screen's default
 // loaders call `fetch`; it is stubbed offline here, so every load is the `unreachable` slot and nothing leaves the test.
+// These cases are the console's: a tab whose first page is a Docs address is a Docs tab, the reader alone (desktop polish
+// wave 174), so each enters the console first and then goes to the Docs address, as an operator does. They ran as the
+// console before only because an earlier case left the console's mark in the tab's store; the shared teardown clears it
+// since wave 177, so they now say so themselves (fix round 1, F1).
 describe('App /docs route (M4.R2)', () => {
   const offline = (): void => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  };
+  const fromConsole = (url: string): void => {
+    navigate('/fleet');
+    render(<App />);
+    act(() => { navigate(url); });
+    expect(document.querySelector('.app-shell'), 'reached from the console, the tab is the console').not.toHaveAttribute('data-tab');
   };
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -339,8 +349,7 @@ describe('App /docs route (M4.R2)', () => {
 
   it.each(['/docs', '/docs/demo/specs/x.md'])('%s renders the Docs screen in the detail pane and joins [data-view="session"]', async (url) => {
     offline();
-    navigate(url);
-    render(<App />);
+    fromConsole(url);
     expect(document.querySelector('.shell-detail .docs-screen')).not.toBeNull();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
     expect(await screen.findByText('The server could not be reached; Docs needs a connection.')).toBeInTheDocument();
@@ -357,11 +366,24 @@ describe('App /docs route (M4.R2)', () => {
 
   it('the Docs screen is not keyed: the same mount spans a page, ref and section change', () => {
     offline();
-    navigate('/docs/demo');
-    render(<App />);
+    fromConsole('/docs/demo');
     const first = document.querySelector('.docs-screen');
     expect(first).not.toBeNull();
     act(() => { navigate('/docs/demo/specs?ref=ws/a'); });
+    expect(document.querySelector('.docs-screen')).toBe(first);
+  });
+
+  // The twin in a Docs tab, whose tree in `App` is its own: a Docs address loaded first, then the same page, ref and
+  // section change, and the reader is still the one mount.
+  it('in a Docs tab too: the same mount spans a page, ref and section change', () => {
+    offline();
+    navigate('/docs/demo');
+    render(<App />);
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-tab', 'docs');
+    const first = document.querySelector('.docs-screen');
+    expect(first).not.toBeNull();
+    act(() => { navigate('/docs/demo/specs?ref=ws/a'); });
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-tab', 'docs');
     expect(document.querySelector('.docs-screen')).toBe(first);
   });
 });

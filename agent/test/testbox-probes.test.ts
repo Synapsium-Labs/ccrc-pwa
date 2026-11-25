@@ -369,7 +369,7 @@ describe('the daily budget, from config (D-8290)', () => {
 describe('the test service takes probe.submit through the desk (D-8290)', () => {
   const SETTINGS = (root: string): ServiceSettings => ({
     root, workers: 2, runTmpdir: '/tmp', toolsDir: path.join(root, 'tools'), envForward: [], runUserPrefix: 'ccrc-tb-',
-    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000,
+    reportMaxBytes: 1024, serviceUser: 'svc', runs: 2, sessionRuns: 1, logTail: 5, retentionMs: 3_600_000, registryKeepMs: 86_400_000,
   });
   const service = (root: string, probes?: ProbeDesk): TestboxService => new TestboxService({
     settings: SETTINGS(root), rows: [], sys: {} as SystemManager, probe: async () => ({ ok: true }), mirror: {} as MirrorOps,

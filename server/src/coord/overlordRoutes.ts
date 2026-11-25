@@ -1,6 +1,6 @@
 // The Overlord's designation doors (Overlord W1, designation A, plan Task 5, and designation C, Tasks 8 and 9; spec §3.1, §3.2
-// C2, §3.4 C45, C46, C56). Ring L4, context C5: five routes, `GET /api/overlord/designation`, `POST /api/overlord/designate`,
-// `DELETE /api/overlord/designate`, and the Settings doors `POST /api/overlord/model` and `POST /api/overlord/account-set`. Each is the operator's door, session-gated with NO box token (`OVERLORD_OPERATOR_DOORS`): it asks
+// C2, §3.4 C45, C46, C56). Ring L4, context C5: seven routes, `GET /api/overlord/designation`, `POST /api/overlord/designate`,
+// `DELETE /api/overlord/designate`, designation B's `POST /api/overlord/rebind` and `POST /api/overlord/restart`, and the Settings doors `POST /api/overlord/model` and `POST /api/overlord/account-set`. Each is the operator's door, session-gated with NO box token (`OVERLORD_OPERATOR_DOORS`): it asks
 // the account gate first (the two writes with a step-up), then runs its body on the coordination serialiser, reads its facts,
 // asks its decider (`overlordDesignation.ts`, L1) and acts. The door decides nothing: every refusal word is a decider's, and the
 // only tables here are the authority-error map and the order of the create's steps.
@@ -19,9 +19,10 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { BuildAgreement, RouteFields } from '../../../shared/api.js';
 import { STATE_DEADLINE_S } from '../../../shared/continuity.js';
 import {
-  OVERLORD_PROJECT, parseAccountSetBody, parseDesignateBody, parseModelBody,
-  type DesignateBody, type OverlordModelClass,
+  OVERLORD_PROJECT, parseAccountSetBody, parseDesignateBody, parseModelBody, parseRebindBody,
+  type DesignateBody, type OverlordModelClass, type SettleFact,
 } from '../../../shared/overlord-designation.js';
+import type { OverlordLanePort } from '../continuity/renewalActs.js';
 import type { Roster } from '../../../shared/roster.js';
 import { workspaceId } from '../../../shared/slug.js';
 import type { AccountGate } from '../accounts/gate.js';
@@ -40,8 +41,8 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import {
-  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, retireVerdict, routeOf,
-  type AccountFacts,
+  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindVerdict, restartVerdict,
+  renewalSetOf, retireVerdict, routeOf, type AccountFacts, type DesignateVerdict, type OldBodyState, type OverlordBodyState,
 } from './overlordDesignation.js';
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
@@ -83,6 +84,8 @@ export interface OverlordBody {
   poolAnswer(id: string): Promise<ReturnType<typeof parsePoolAnswer>>;
   /** `ccd keep-awake --session <id> --state on|off`. */
   keepAwake(id: string, state: 'on' | 'off'): Promise<KeepAwakeAnswer>;
+  /** `ccd ensure <id>`, the resume path (Restart, C23), with the ensure route's asked wake recorded first. */
+  ensure(id: string): Promise<BodyAnswer>;
   /** The stop route's own path (`stopCreated`); never throws. */
   stop(id: string): Promise<StopAnswer>;
 }
@@ -91,7 +94,7 @@ export interface OverlordBody {
 
 /** The coordination store's members the doors call (one `Pick`, so a test hands the real store over an in-memory database). */
 export type OverlordCoord = Pick<CoordStore,
-  'designationRead' | 'designatePending' | 'bindPendingGeneration' | 'failPending' | 'retire' | 'stopDone'
+  'designationRead' | 'designatePending' | 'rebindPending' | 'bindPendingGeneration' | 'failPending' | 'retire' | 'stopDone'
   | 'raiseItem' | 'accountPoolEdges'
   | 'setModelClass' | 'setAccountSet'>;
 
@@ -132,6 +135,10 @@ export interface OverlordRouteDeps {
     readonly shares: () => Promise<SharesRead>;
     /** The authority guard's state (review 2349 F9). `index.ts` wires the guard with the journal, so only a test server omits it. */
     readonly authority?: () => AuthorityState;
+    /** Rebind's re-measurement of the bound body (`reclaim.ts#measureClaimant`'s `state`). Absent: `unmeasurable`, which refuses. */
+    readonly oldBody?: (sessionId: string) => Promise<OldBodyState>;
+    /** Restart's reading of the bound body (`overlordBodyOf` over the watcher's last listing and fleet). Absent: unmeasured. */
+    readonly body?: (sessionId: string) => OverlordBodyState;
   };
 }
 
@@ -143,7 +150,7 @@ export const NO_OVERLORD_STORE: { readonly coord: OverlordCoord; readonly journa
   coord: {
     designationRead: () => ({ kind: 'unmeasured', why: 'this server has no coordination store or authority journal' }),
     accountPoolEdges: () => new Map(),
-    designatePending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
+    designatePending: unreachable, rebindPending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
     stopDone: unreachable, raiseItem: unreachable,
     setModelClass: unreachable, setAccountSet: unreachable,
   },
@@ -177,8 +184,9 @@ const RUNG_REFUSAL_DETAIL = {
 };
 const UNREADABLE = 'the designation row could not be read';
 
-/** What a row writer refuses with: the journal's refusal, a row it cannot narrow, or a row that already holds an attempt. */
-type Failure = AuthorityRefused | RowUnreadable | ActorRefused | { readonly ok: false; readonly reason: 'exists' | 'not-found' };
+/** What a row writer refuses with: the journal's refusal, a row it cannot narrow, a row that already holds an attempt (designate's
+ *  `exists`, rebind's `attempt-pending`), or no row to act on. */
+type Failure = AuthorityRefused | RowUnreadable | ActorRefused | { readonly ok: false; readonly reason: 'exists' | 'not-found' | 'attempt-pending' };
 
 // ── the drain ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -192,7 +200,7 @@ export interface DrainResult { readonly stopped: readonly string[]; readonly owe
  *  route clears are best effort: a stopped body's route record is inert, and an owed id is stopped again by the next drain.
  *  `unrecorded` (review 2366 N4) names ids no row owes: a failure on one is logged as the residual it is, never as owed. */
 export async function drainOwedStops(
-  deps: Pick<OverlordRouteDeps, 'body' | 'coord'>, ids: readonly string[], unrecorded: ReadonlySet<string> = new Set(),
+  deps: { readonly body: OverlordBody; readonly coord: Pick<OverlordCoord, 'stopDone'> }, ids: readonly string[], unrecorded: ReadonlySet<string> = new Set(),
 ): Promise<DrainResult> {
   const stopped: string[] = [];
   const owed: string[] = [];
@@ -215,6 +223,62 @@ export async function drainOwedStops(
   return { stopped, owed };
 }
 
+/** Everything `overlordAccounts` and the placement read, once per call. A read that throws is the caller's to answer, never an
+ *  empty list. */
+async function readAccountFacts(d: { facts: Pick<OverlordRouteDeps['facts'], 'roster' | 'limits' | 'shares'>;
+  coord: Pick<OverlordCoord, 'accountPoolEdges'>; clock: Pick<Clock, 'wall'> }): Promise<AccountFacts & { shares: SharesRead }> {
+  const roster = d.facts.roster();
+  const [limits, shares] = await Promise.all([d.facts.limits(), d.facts.shares()]);
+  const edges = d.coord.accountPoolEdges();
+  const lanes: Record<string, LaneFacts> = {};
+  for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits, shares);
+  return { roster, limits, edges, lanes, nowS: Math.floor(d.clock.wall() / 1000), shares };
+}
+
+// ── the lane port (designation B, plan Tasks 7 and 10) ───────────────────────────────────────────────────────────────
+
+/** What the lane port reaches: the doors' serialiser, store, body and account facts, and the settle step's two entries. */
+export interface OverlordLaneDeps extends Pick<OverlordRouteDeps, 'serial' | 'body' | 'clock'> {
+  readonly coord: Pick<OverlordCoord, 'designationRead' | 'failPending' | 'stopDone' | 'accountPoolEdges'>;
+  readonly facts: Pick<OverlordRouteDeps['facts'], 'roster' | 'limits' | 'shares'>;
+  /** `continuity/routes.ts#settleFactOf` and `#settleLoads` over the loads door's own settle port (one settle path). */
+  readonly settle: {
+    fact(sessionId: string): Promise<SettleFact>;
+    again(sessionId: string, startId: number): Promise<{ readonly act: string }>;
+  };
+}
+
+/** The watcher's port into the designation (designation B): the deadline sweep's facts and its three acts
+ *  (`renewalActs.ts#OverlordLanePort`), and the write-set step before each renewal of the Overlord (`beforeRenew`). Every
+ *  write runs on the coordination serialiser, so none interleaves with a door; `again` is the settle step, which takes the
+ *  serialiser itself. It decides nothing: `pendingDeadlineOf` and `renewalSetOf` do. */
+export function overlordLanePortOf(d: OverlordLaneDeps): OverlordLanePort {
+  const drainIds = (ids: readonly string[]) => drainOwedStops(d, ids);
+  return {
+    facts: async () => {
+      const read = d.coord.designationRead();
+      const pending = read.kind === 'unmeasured' ? null : read.row?.pending ?? null;
+      return { read, settle: pending === null ? { kind: 'no-report' } : await d.settle.fact(pending.sessionId) };
+    },
+    resettle: (id, startId) => d.settle.again(id, startId),
+    expire: (id, outcome) => d.serial(async () => {
+      const f = d.coord.failPending(id, outcome, d.clock.wall(), true);
+      if (!f.ok) throw new Error(`the expired attempt of ${id} could not be recorded (${'detail' in f ? f.detail : f.reason})`);
+      const standing = d.coord.designationRead();
+      await drainIds(standing.kind === 'unmeasured' || standing.row === null ? [id] : standing.row.stopsOwed);
+      return { changed: f.changed };
+    }),
+    drain: (ids) => d.serial(() => drainIds(ids)),
+    beforeRenew: (id) => d.serial(async () => {
+      const v = renewalSetOf(d.coord.designationRead(), id, await readAccountFacts(d));
+      if (!v.ok) return v;
+      const set = await d.body.writeSet(id, { poolset: v.poolset, acctorder: v.acctorder });
+      if (!set.ok) return set;
+      return d.body.writeClass(id, v.model);
+    }),
+  };
+}
+
 // ── the routes ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRouteDeps): void {
@@ -226,14 +290,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
 
   /** Everything `overlordAccounts` and the placement read, once per request. A read that throws is the caller's 503, never an
    *  empty list. */
-  async function accountFactsOf(): Promise<AccountFacts & { shares: SharesRead }> {
-    const roster = facts.roster();
-    const [limits, shares] = await Promise.all([facts.limits(), facts.shares()]);
-    const edges = coord.accountPoolEdges();
-    const lanes: Record<string, LaneFacts> = {};
-    for (const a of roster.accounts) lanes[a.id] = laneFactsOf(a, limits, shares);
-    return { roster, limits, edges, lanes, nowS: Math.floor(deps.clock.wall() / 1000), shares };
-  }
+  const accountFactsOf = (): Promise<AccountFacts & { shares: SharesRead }> => readAccountFacts(deps);
 
   const authorityRefusal = (reply: FastifyReply, f: { authority: AuthorityAppendError; detail: string }): FastifyReply =>
     refuseRoute(reply, AUTHORITY_REFUSAL[f.authority], { detail: f.detail });
@@ -242,6 +299,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   const writerRefusal = (reply: FastifyReply, r: Failure): FastifyReply => {
     if ('authority' in r) return authorityRefusal(reply, r);
     if (r.reason === 'exists') return refuseRoute(reply, 'overlord-exists', { detail: 'an Overlord is already designated or being started' });
+    if (r.reason === 'attempt-pending') return refuseRoute(reply, 'overlord-attempt-pending', { detail: 'an attempt is already pending on the designation' });
     if (r.reason === 'actor') return refuseRoute(reply, 'internal', { detail: 'the door handed the writer an actor the identity port did not mint' });
     if (r.reason === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord designation row' });
     return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
@@ -316,6 +374,19 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       sessionId: id, deadlineAt, model: parsed.model, accountPools: parsed.accountPools, actor, at, opKey: opKeyOf('designate'),
     });
     if (!pending.ok) return writerRefusal(reply, pending);
+    const made = await createBody(reply, { id, slug, verdict, model: parsed.model, dec });
+    if (!made.ok) return made.reply;
+    const f = await accountFactsOf().catch(() => null);
+    const warnings = f === null ? [] : parsed.accountPools.pools.filter((p) => !poolRostered(f.roster, p)).map((pool) => ({ warning: 'unknown-pool' as const, pool }));
+    return { ok: true, state: 'pending', sessionId: id, deadlineAt, warnings, awake: true, prompted: made.prompted };
+  }
+
+  /** The create's steps after the pending row (designate's, and a rebind's for its new body, plan Task 6): the project, the named
+   *  create, the generation bound, the set and the list, keep-awake on, then the first prompt (X4). Any failure from here ends the
+   *  attempt, owes and drains only what this create may have made, and answers 502 (`fail`, below). */
+  async function createBody(reply: FastifyReply, c: { id: string; slug: string; verdict: Extract<DesignateVerdict, { act: 'create' }>;
+    model: OverlordModelClass; dec: ActorFlags | null }): Promise<{ ok: true; prompted: boolean } | { ok: false; reply: FastifyReply }> {
+    const { id, slug, verdict, dec } = c;
 
     /** Any failure after the row is written ends the attempt: record it, owe the stop of what may exist, drain, answer 502. The
      *  id is stopped even when the row no longer names it (a retire that ran between the steps), so nothing runs with no row.
@@ -344,25 +415,140 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       }
       return refuseRoute(reply, 'fleetFailed', { detail, sessionId: id });
     };
+    const failed = async (detail: string, owes: 'yes' | 'no' | 'unknown') => ({ ok: false as const, reply: await fail(detail, owes) });
 
     const project = await body.ensureProject();
-    if (!project.ok) return fail(project.detail, 'no');
-    const route: RouteFields = { class: parsed.model, profile: 'overlord', profiledigest: launchDigestOf('overlord') };
+    if (!project.ok) return failed(project.detail, 'no');
+    const route: RouteFields = { class: c.model, profile: 'overlord', profiledigest: launchDigestOf('overlord') };
     const made = await body.create(slug, id, verdict.wrapper, route, dec);
-    if (!made.ok) return fail(made.detail, made.created);
+    if (!made.ok) return failed(made.detail, made.created);
     const bound = coord.bindPendingGeneration(id, made.generation, deps.clock.wall());
-    if (!bound.ok) return fail(bound.reason === 'unmeasured' ? bound.detail : `the attempt is no longer pending (${bound.reason})`, 'yes');
+    if (!bound.ok) return failed(bound.reason === 'unmeasured' ? bound.detail : `the attempt is no longer pending (${bound.reason})`, 'yes');
     const set = await body.writeSet(id, { poolset: verdict.poolset, acctorder: verdict.acctorder });
-    if (!set.ok) return fail(set.detail, 'yes');
+    if (!set.ok) return failed(set.detail, 'yes');
     const awake = await body.keepAwake(id, 'on');
-    if (!awake.ok) return fail(awake.detail, 'yes');
+    if (!awake.ok) return failed(awake.detail, 'yes');
     if (awake.foreign.length > 0) raiseForeignMarker(id, awake.foreign);
     const sent = await deps.host.deliver(id, 'overlord-first-prompt');
-
-    const f = await accountFactsOf().catch(() => null);
-    const warnings = f === null ? [] : parsed.accountPools.pools.filter((p) => !poolRostered(f.roster, p)).map((pool) => ({ warning: 'unknown-pool' as const, pool }));
-    return { ok: true, state: 'pending', sessionId: id, deadlineAt, warnings, awake: true, prompted: sent.kind === 'sent' };
+    return { ok: true, prompted: sent.kind === 'sent' };
   }
+
+  // POST: Rebind the Overlord (designation B, plan Task 6): a replacement for a lost body, pending beside the live binding.
+  app.post('/api/overlord/rebind', async (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null, stepUp: true });
+    if (!g.pass) return reply;
+    const parsed = parseRebindBody(req.body);
+    if (parsed === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
+    const actor = deps.identity.operator(g.actor);
+    const dec = deps.dec(req);
+    return deps.serial(() => rebind(reply, parsed.force, actor, dec));
+  });
+
+  async function rebind(reply: FastifyReply, force: boolean, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+    // A rebind's go-live is a widening the journal must record: refuse before any stop or create while it is not coherent.
+    const auth = facts.authority?.() ?? { kind: 'coherent' };
+    if (auth.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { detail: `the authority journal reads rolled-back: ${auth.cause}` });
+    if (auth.kind === 'unmeasured') return refuseRoute(reply, 'journal-unreadable', { detail: `the authority journal reads unmeasured: ${auth.why}` });
+    const read = coord.designationRead();
+    const oldId = read.kind === 'designated' ? read.sessionId : null;
+    const slug = shortId();
+    const id = workspaceId(OVERLORD_PROJECT, slug);
+    const probe = await body.poolAnswer(id);
+    let verdict: ReturnType<typeof rebindVerdict>;
+    try {
+      const old = oldId === null ? 'unmeasurable' : await (facts.oldBody?.(oldId) ?? Promise.resolve('unmeasurable' as const));
+      const f = await accountFactsOf();
+      const row = read.kind === 'designated' ? read.row : null;
+      verdict = rebindVerdict({
+        read, ccdWords: facts.ccdWords(), serverWords: facts.serverWords, builds: facts.builds(), probe, accounts: f, old, force,
+        home: row === null ? null : projectHome(f.roster, f.limits, { state: 'set', set: row.accountPools }, f.edges, row.model, f.shares, f.nowS),
+      });
+    } catch (err) {
+      return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+    }
+    if (verdict.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
+    if (verdict.act === 'refuse-input') return refuseRoute(reply, 'bad-request', { detail: 'accountPools' });
+    if (verdict.act === 'refuse') {
+      return refuseRoute(reply, verdict.word, {
+        detail: verdict.detail, ...('needs' in verdict && verdict.needs !== undefined ? { needs: verdict.needs } : {}),
+        ...('count' in verdict && verdict.count !== undefined ? { count: verdict.count } : {}),
+      });
+    }
+    // `create` means a live binding stood (`rebindVerdict` refused every other row), so `oldId` is that binding's.
+    const model = read.kind === 'designated' ? read.row.model : 'opus';
+    // Only after every verdict refusal (review F7): a forced rebind stops the old body first; a stop that fails refuses and
+    // creates nothing, so neither a verdict refusal nor a failed stop leaves the Overlord stopped. A forced rebind that fails
+    // after its stop (the pending write, the create, or the attempt later) leaves the binding naming the stopped body, with
+    // nothing owing it. Restart brings it back once the attempt has ended, and past the deadline it ends the attempt itself
+    // (`forced-rebind-may-leave-the-bound-body-stopped`, `restart-ends-an-overdue-attempt`).
+    if (force) {
+      const stopped = await body.stop(oldId!);
+      if (!stopped.ok) return refuseRoute(reply, 'overlord-body-alive', { detail: `the forced stop failed: ${stopped.detail}` });
+    }
+    const at = deps.clock.wall();
+    const deadlineAt = at + PENDING_DEADLINE_MS;
+    const pending = coord.rebindPending({ sessionId: id, deadlineAt, actor, at });
+    if (!pending.ok) return writerRefusal(reply, pending);
+    const made = await createBody(reply, { id, slug, verdict, model, dec });
+    if (!made.ok) return made.reply;
+    return { ok: true, state: 'pending', kind: 'rebind', sessionId: id, previous: oldId, forced: force, deadlineAt, awake: true, prompted: made.prompted };
+  }
+
+  // POST: Restart the Overlord (designation B, plan Task 7; §6.4 C23): the same session id again, by the resume path. A recovery
+  // that changes no authority, so no step-up (`restart-needs-no-step-up`).
+  app.post('/api/overlord/restart', async (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null, stepUp: false });
+    if (!g.pass) return reply;
+    // It acts on the Overlord's body, so the act is attributed through the identity port (gates B). It writes the row in two ways
+    // only, each through the existing writer: it ends an overdue attempt through `failPending`, whose line carries the attempt's
+    // actor as that writer records it, and its drain clears each stop it carries out through `stopDone`.
+    const actor = deps.identity.operator(g.actor);
+    return deps.serial(async () => {
+      const read = coord.designationRead();
+      if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
+      const p = read.kind === 'designated' ? read.row.pending : null;
+      const binding = read.kind === 'designated' ? { sessionId: read.sessionId, pending: p === null ? null : { sessionId: p.sessionId, deadlineAt: p.deadlineAt } } : null;
+      const state = binding === null ? null : facts.body?.(binding.sessionId) ?? null;
+      const now = deps.clock.wall();
+      const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' }, now);
+      if (!v.ok) {
+        if (v.error === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord is bound, so there is nothing to restart' });
+        if (v.error === 'overlord-attempt-pending') return refuseRoute(reply, 'overlord-attempt-pending', { detail: 'an attempt is pending on the designation' });
+        return refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
+      }
+      const id = binding!.sessionId;
+      if (v.endAttempt !== null) {
+        // An attempt past its deadline is over (`restart-ends-an-overdue-attempt`): failed through its one writer, in this hold,
+        // its body's stop owed. A writer that throws answers a refusal word, as the create path's calls do (review 3754 F4).
+        let ended: ReturnType<typeof coord.failPending>;
+        try { ended = coord.failPending(v.endAttempt, 'deadline-passed', now, true); } catch (err) {
+          return refuseRoute(reply, 'unavailable', { detail: `the overdue attempt of ${v.endAttempt} could not be ended: ${err instanceof Error ? err.message : String(err)}` });
+        }
+        if (!ended.ok) return refuseRoute(reply, 'unavailable', { detail: `the overdue attempt of ${v.endAttempt} could not be ended` });
+        console.warn(`ccrc-server: Restart the Overlord: the attempt of ${v.endAttempt} was past its deadline and is failed (deadline-passed)`);
+      }
+      // Restart never starts the bound body while a stop is owed on the slot (review 3754 F1): every owed stop is drained first,
+      // the ended attempt's included, and the result read. One still owed refuses as a failed forced stop does; the attempt stays
+      // ended and the id stays owed, so the next Restart drains it again (`restart-starts-nothing-while-a-stop-is-owed`).
+      const standing = coord.designationRead();
+      if (standing.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
+      const owedIds = standing.row?.stopsOwed ?? [];
+      if (owedIds.length > 0) {
+        const drained = await drainOwedStops({ body, coord }, owedIds);
+        if (drained.owed.length > 0) {
+          return refuseRoute(reply, 'overlord-body-alive', { detail: `a stop the Overlord owes failed: ${drained.owed.join(', ')}; nothing was started` });
+        }
+      }
+      console.warn(`ccrc-server: Restart the Overlord: ensuring ${id}, asked by ${actor.subject}`);
+      const ensured = await body.ensure(id);
+      if (!ensured.ok) return refuseRoute(reply, 'fleetFailed', { detail: ensured.detail, sessionId: id });
+      // The markers are guards, never the fact (C4): a failed keep-awake or first prompt is said in the answer, not refused.
+      const awake = await body.keepAwake(id, 'on');
+      if (awake.ok && awake.foreign.length > 0) raiseForeignMarker(id, awake.foreign);
+      const sent = await deps.host.deliver(id, 'overlord-first-prompt');
+      return { ok: true, sessionId: id, awake: awake.ok, prompted: sent.kind === 'sent' };
+    });
+  });
 
   /** A marker someone else wrote (`.no-hibernate`, `.no-roll` or both) stands on the new body: it keeps working, and ONE item names
    *  each foreign marker (review 2349 F8). */

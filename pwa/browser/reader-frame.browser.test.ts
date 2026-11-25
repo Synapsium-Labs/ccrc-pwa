@@ -1750,8 +1750,9 @@ describe('W8a reader frame in Chrome', () => {
       expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 
-    // A Docs tab (desktop polish wave 174, fix round 3): the reader alone, the window's width its pane's. At a desk its bar's
-    // link back is the first stop after the skip link, then the head; on a phone it has no bar, and the head is the top.
+    // A Docs tab (desktop polish wave 174, fix round 3): the reader alone, the window's width its pane's. At a desk its bar
+    // holds the link back above the head; on a phone it has no bar, and the head is the top. The cases below read the head's
+    // own stops; the link back's place in the keyboard order is docs-own-tab.browser.test.ts's case.
     it.each(DEEP_DIRS.flatMap((dirs) => [INSTRUMENT, REFINED].map((skin) => [skin, dirs] as const)))('a Docs tab, desk-born, %s, %i directories, 900 x 800: back keeps the focus a reader of the page gave it, the frame is not focused at insertion, and the next Tab stop is the first crumb, seen whole', async (skin, dirs) => {
       const s = await openSession({ width: 900, height: 800, skin, tab: 'docs' });
       const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);

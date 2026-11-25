@@ -42,6 +42,7 @@ import {
 } from '../src/testbox/tools.js';
 import { HANDOVER_DIR, HANDOVER_TOOLS_SYNC, statusOf, ToolSync, toolSyncOf, type ServedService } from '../src/testbox/toolsync.js';
 import { mkTmp } from './tmpHelpers.js';
+import { CAPTURE_CLOSED_DETAIL } from '../src/testbox/capture.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAIN_TS = path.join(HERE, '..', 'src', 'testbox', 'main.ts');
@@ -134,7 +135,7 @@ function fixture(): Fx {
   writeFileSync(path.join(repos, 'project-a.json'), `${JSON.stringify({ ...ROW, mirrorPath: path.join(dir, 'mirrors', 'project-a.git') })}\n`);
   const cfg: TestboxConfig = {
     runs: 1, sessionRuns: 1, workers: 1, runTmpdir: '/tmp', root: path.join(dir, 'box'), repos,
-    fetchEveryMs: 60_000, retentionMs: 3_600_000, reportMaxBytes: 1024, toolsDir: tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
+    fetchEveryMs: 60_000, retentionMs: 3_600_000, registryKeepMs: 86_400_000, reportMaxBytes: 1024, toolsDir: tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
     serviceUser: 'ccrc-tb-svc', listen: { host: '127.0.0.1', port: 0 }, tokenFile: path.join(dir, 'no-token'), unitMaxMs: 60_000,
     lines: LINES as unknown as TestboxConfig['lines'],
   };
@@ -203,9 +204,10 @@ function heldTools(fx: Fx, report: string = 'result\tnoop\n') {
 
 /** The entry point's start order (`main.ts#main`, pinned below): the drain's first pass, the service, the hand-over
  *  resumed, then the door. */
-async function boot(fx: Fx, sys: SystemManager, o: { exit?: (code: number) => void; inputs?: ServiceSeams['inputs'] } = {}) {
+async function boot(fx: Fx, sys: SystemManager, o: { exit?: (code: number) => void; inputs?: ServiceSeams['inputs']; capture?: ServiceSeams['capture'] } = {}) {
   const svc = serviceFor(fx.cfg, fx.release, o.exit ?? (() => undefined), {
     sys, box: { runtimeDir: fx.run, drainRequest: fx.request, now: () => fx.clock.now }, ...(o.inputs === undefined ? {} : { inputs: o.inputs }),
+    ...(o.capture === undefined ? {} : { capture: o.capture }),
   });
   const drain = drainerOf(svc)!;
   drain.poll();
@@ -1465,5 +1467,37 @@ describe('the box files\' text is stated once for the service and the updater (D
     expect(encodeDrainAnswer({ act: F.answerIdle.act, state: 'idle', queued: F.answerIdle.queued })).toBe(F.answerIdle.text);
     expect(encodeReady({ release: F.ready.release, pid: F.ready.pid })).toBe(F.ready.text);
     expect(parseMeasuredTools(F.toolsJson.text)).toEqual(F.toolsJson.read);
+  });
+});
+
+// Gate G2 on the entry point's own composition (capture runner PR 3b): the capture desk `serviceFor` builds reads the tool
+// sync's admissions, so while a drain stands (the same `admitting` a takeover closes) a capture is ended unrun.
+describe('the entry point\'s capture desk starts no capture while admissions are closed (gate G2)', () => {
+  it('a drain stands: a capture through the door is queued, then ended with no verdict and the word, never started', async () => {
+    const plain = fixture();
+    // The box's own settings file names its lines, which is what makes this node the test box (`probes.ts#probeRole`).
+    const lines = new Map([...LINES].map(([k, v]) => [k, { key: k, def: '', value: v.value, from: 'file' }]));
+    const fx: Fx = { ...plain, cfg: { ...plain.cfg, lines: lines as unknown as TestboxConfig['lines'] } };
+    const builds = path.join(fx.cfg.root, 'captures', 'builds');
+    mkdirSync(builds, { recursive: true });
+    writeFileSync(path.join(builds, '2.1.100'), 'bytes');
+    const started: string[] = [];
+    const b = await boot(fx, units(fx).sys, {
+      capture: { home: fx.dir, tmuxBase: '/tmp', seams: { launcher: { start: async (spec) => { started.push(spec.binary); throw new Error('not here'); } } } },
+    });
+    try {
+      ask(fx, 'act-1', START + 10 * MIN);
+      b.drain.poll();
+      const c = await door(b.srv.port);
+      c.send({ t: 'capture.submit', captureId: 'a'.repeat(32), build: '2.1.100' });
+      await expect.poll(() => c.frames.filter((f) => f.includes('"capture.state"') && /"(ended|refused)"/.test(f)).length).toBe(1);
+      const states = c.frames.map((f) => JSON.parse(f) as { t: string; state?: string; detail?: string | null }).filter((f) => f.t === 'capture.state');
+      expect(states.map((f) => f.state)).toEqual(['queued', 'ended']);
+      expect(states.at(-1)!.detail).toBe(CAPTURE_CLOSED_DETAIL);
+      expect(started).toEqual([]);
+      c.ws.close();
+    } finally {
+      await b.srv.close();
+    }
   });
 });

@@ -208,7 +208,7 @@ export function stepOf(status: TestboxAdminStatus | null, seen: TestboxStepSeen 
 
 export type BoxSettingFamily = 'runs' | 'storage' | 'network' | 'accounts' | 'probes';
 
-/** The folded families, in the order the form draws them. Every one of the 31 box keys is in exactly one (D-8290 adds the live
+/** The folded families, in the order the form draws them. Every one of the 32 box keys is in exactly one (D-8290 adds the live
  *  probes' family: the scratch account's config directory, its tmux socket and the day's budget, which the harness programme sets). */
 export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; readonly title: string; readonly keys: readonly string[] }[] = Object.freeze([
   {
@@ -219,7 +219,8 @@ export const BOX_SETTING_FAMILIES: readonly { readonly id: BoxSettingFamily; rea
   {
     id: 'storage', title: 'Storage',
     keys: Object.freeze(['CCRC_TESTBOX_ROOT', 'CCRC_TESTBOX_REPOS', 'CCRC_TESTBOX_TOOLS_DIR', 'CCRC_TESTBOX_FETCH_EVERY', 'CCRC_TESTBOX_RETENTION',
-      'CCRC_TESTBOX_PRISTINE_KEEP', 'CCRC_TESTBOX_PRISTINE_RETRY', 'CCRC_TESTBOX_REPORT_MAX', 'CCRC_TESTBOX_LOG_TAIL']),
+      'CCRC_TESTBOX_PRISTINE_KEEP', 'CCRC_TESTBOX_PRISTINE_RETRY', 'CCRC_TESTBOX_REPORT_MAX', 'CCRC_TESTBOX_LOG_TAIL',
+      'CCRC_TESTBOX_REGISTRY_KEEP']),
   },
   {
     id: 'network', title: 'Network',
@@ -290,6 +291,7 @@ export const BOX_SETTING_DEFAULTS: Readonly<Record<string, string>> = Object.fre
   CCRC_TESTBOX_TMPFS: 'off', CCRC_TESTBOX_LOG_TAIL: '40', CCRC_TESTBOX_SESSION_RUNS: '1', CCRC_TESTBOX_SERVICE_USER: 'ccrc-tb-svc',
   CCRC_TESTBOX_LISTEN: '', CCRC_TESTBOX_SERVICE_TOKEN_FILE: '~/.ccrc/testbox-service.token', CCRC_TESTBOX_UNIT_MAX: '1h',
   CCRC_TESTBOX_PROBE_CONFIG_DIR: '', CCRC_TESTBOX_PROBE_SOCKET: 'ccrc-probe', CCRC_TESTBOX_PROBES_PER_DAY: '10',
+  CCRC_TESTBOX_REGISTRY_KEEP: '30d',
 });
 
 /** The two paths the installer refuses with `~/` (root has no reader's home), and the absolute paths the form starts them from. */

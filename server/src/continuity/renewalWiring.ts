@@ -17,7 +17,7 @@ import { readUsageMeasured } from '../usage.js';
 import { ccdSessionHost } from './ccdSessionHost.js';
 import type { SessionHost } from './sessionHost.js';
 import type { PlannedAct } from './generationsLane.js';
-import { runRenewalActs, type ActsResult, type PrecompactWrite } from './renewalActs.js';
+import { runRenewalActs, type ActsResult, type PrecompactWrite, type RenewalActsDeps } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
 
 /** The actor the precompact route writes are journalled under on the box. */
@@ -54,7 +54,8 @@ export function renewalHostOf(
   });
 }
 
-/** The pass's renewal pieces. `serial` is the stop-and-done serialiser (null before the sleep lanes start), which the
+/** The pass's renewal pieces. `beforeRenew` is the Overlord's write-set step (designation B, Task 10), passed through untouched.
+ *  `serial` is the stop-and-done serialiser (null before the sleep lanes start), which the
  *  renewal's ccd call runs inside, around the per-session queue, as the automatic roll's act does; `memo` is the acts' memo
  *  (`RenewalActsDeps.memo`), kept by the watcher across passes. */
 export function renewalActsOf(
@@ -62,6 +63,7 @@ export function renewalActsOf(
   coord: WatcherCoordPort, records: readonly SessionRecord[], reads: TurnReadDeps,
   rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: FleetSession } | { ok: false }>,
   serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null, memo?: Set<string>,
+  beforeRenew?: RenewalActsDeps['beforeRenew'],
 ): RenewalWiring {
   const now = (): number => deps.time.clock.wall();
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
@@ -86,7 +88,7 @@ export function renewalActsOf(
     },
     run: (planned) => runRenewalActs({
       coord, host, now, log: (line) => console.warn(line), memo,
-      routePrecompact,
+      routePrecompact, beforeRenew,
       mail: (toId, subject, body) => queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body }).queued,
     }, planned),
     retract: async (ids) => {

@@ -166,6 +166,7 @@ import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, 
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
 import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import { markOperatorPrompt } from '../continuity/promptHandoffs.js';
 import {
   ADVISOR_CAP_MAX, ADVISOR_CAP_MIN, ADVISOR_CHOICES, ADVISOR_SCOPE_MAX_IDS, COORDINATOR_ADVISOR_DEFAULT, advisorScopeOf, isAdvisorCap,
   isAdvisorChoice, type CoordinatorAdvisorView,
@@ -4940,7 +4941,10 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request');
     }
-    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+    const answered = await questions.answer(answer, wiring.answerDeps);
+    // The answer went through (every form answers 200 only once its keys landed): marks as a typed prompt does.
+    if (answered.status === 200 && deps.coord !== undefined) markOperatorPrompt(deps.coord, qid.sessionId, deps.time.clock.wall(), (l) => console.warn(l));
+    return sendAnswer(reply, answered);
   });
 
   /**
