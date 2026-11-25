@@ -141,8 +141,9 @@ session run a build on the test box on demand. Instead:
   join.
 - **Where the count lives** (call 1159). The derivation is the agent's (`captureDelivery.ts#deliveryPartCount`, from the
   one timing object and the case list). The server's lane needs the count and cannot read the agent's timings, so
-  `shared/deliveryResult.ts#DELIVERY_PART_COUNT` writes it once, and a test holds it equal to the derivation. **Measured
-  red both ways:** the shared count set one more (4) and one fewer (2) each fails that test. **Searched:** nothing else in
+  `shared/deliveryResult.ts#DELIVERY_PART_COUNT` writes it once, and the capture deadline test (gate G1) holds it equal to
+  the derivation, in the same case as the build-trust pair. **Measured red both ways:** the shared count set one more (4)
+  and one fewer (2) each fails that file alone. **Searched:** nothing else in
   `shared`, `server/src`, `agent/src` or `pwa/src` spells the count or a part's size; every other use derives from
   `deliveryParts()`. The derivation checks trust with trust and a part with a part: a pair's time is a sum, so a mixed pair
   never exceeds the larger same-kind pair, and the test still asserts all four pairings.
@@ -171,7 +172,14 @@ session run a build on the test box on demand. Instead:
   makes the whole a fault. A part not yet measured, or one whose box fault left no verdict, leaves the whole without a
   verdict (its own word, never folded into intact or fault).
 - **The busy point** is the longest part. A trust capture for a build that appears while a part runs waits for it, at
-  worst 381.5 s (6 min 21.5 s) for a four-case part. A running capture is never cut.
+  worst 385.5 s (6 min 25.5 s) for a four-case part. A running capture is never cut.
+- **The timings** (the capture owner's condition 5 and call 1208). The recipe's bounds are fields of the one capture
+  timing contract (`CaptureTimings`): the driver's 25 s, its kill grace of 1 s, the settle's 15 s and the quiet 2 s. The
+  desk's late check, the runner's settle and quiet, and the compiled driver's bound and grace are all read from the object
+  the entry point composes. Per case the worst case counts the driver's bound, its grace and one drain, the settle and
+  the quiet, each with one poll's overrun. Today: build trust 399.5 s; a four-case part 385.5 s; two parts with the
+  margin 801 s of the 900 s wait; three parts. Gate G1 runs the composed delivery runner on a virtual clock with every
+  bound taken and holds its elapsed time to the worst case exactly (less the two allowances and the polls' overruns).
 - **To read it:** the test box builds read (`GET /api/testbox/builds`) shows each build's delivery word and, per case, the
   verdict, the counts and the first divergence.
 
@@ -184,8 +192,8 @@ session run a build on the test box on demand. Instead:
 | The capture contract (optional recipe, `delivery` field, the capture's terminal names) | `shared/claudeBuildCapture.ts`, `shared/testbox.ts`, `shared/agent-protocol.ts` | this PR (the Overlord's yes, call 1135) |
 | The driver | `server/src/inject/deliveryDrive.ts` | this PR |
 | The drive's steps, reply, window and worst case | `agent/src/testbox/captureDelivery.ts` | this PR |
-| The runner's delivery branch, the stand-in's reply rule, the launch geometry, the desk, the composition, the op | the capture files | packet 2, after the Overlord's follow-up PR lands |
-| The parts, the part index on the wire and the version over the split | the capture contract and the result file | a kernel packet, to the Overlord |
+| The runner's delivery branch, the stand-in's reply rule, the launch geometry, the desk, the composition, the op | the capture files | this PR (packet 2, the Overlord's yes, call 1208) |
+| The parts, the part index on the wire and the version over the split | the capture contract and the result file | this PR (the Overlord's yes, call 1159) |
 | The lane, the store and the read | the lane's files | the lane's packets, to the Overlord and to each file's holder |
 
 ## 9. What this cannot prove, and what stays unmeasured
@@ -202,6 +210,40 @@ session run a build on the test box on demand. Instead:
 - The recipe measures prompts that reach the model. A leading `!` is, by design, not one (section 6).
 - Only the newest trusted build is measured (section 7).
 - The pane: the delivery recipe uses the fleet's 220x50 and its `ccd/tmux.conf`; build trust keeps 200x50 and `/dev/null`.
+- The real-tmux launch case (and build trust's two real-tmux cases) skip where the temporary directory's path would make
+  the capture's socket path too long for tmux, as on a fleet session's own temporary root. They run on CI.
+
+## 9a. The driver child, stated and pinned (the capture owner's call 1208, condition 4)
+
+The driver is the one thing in the recipe that types keys. Each statement has a case that goes red without it.
+- **It addresses only the capture's own tmux server.** Every tmux call goes through the one socket lookup with the
+  capture's fixed name (`-L ccrc-capture`), with `TMUX_TMPDIR` the tmux directory it is handed, in an environment built
+  from empty (`PATH`, `TMUX_TMPDIR`, `LANG`), so no `TMUX` or fleet socket setting reaches it, and it runs nothing but
+  tmux. Case: `delivery-drive.test.ts`, "captureTmuxRunner: the capture's own server, never the fleet's". The child
+  itself starts with `PATH`, `TMPDIR` and `LANG` only (`testbox-capture-delivery-run.test.ts`, "the driver child").
+- **It refuses a tmux directory that is not its own.** The directory must be exactly
+  `<its own temporary directory>/ccrc-capture-<the capture's id>`, a real directory read by `lstat`, owned by its own
+  user, and writable by neither group nor other (call 1145). Cases: `delivery-drive.test.ts`, "readDriveInput: refused
+  before any tmux call" (a wrong parent, one level down, another capture's id, a link at either name, another owner, mode
+  0770 and 0707 on the real file system).
+- **The compiled driver is in the tree a test box installs, and loads there.** The release build copies the server's
+  whole compiled tree (`deploy/build-release.sh`), into which the server's build emits every source file and every shared
+  `.mjs`. The agent's compiled `main.js` names the driver at the place that tree puts it. Emitted by the server's own
+  compiler options into a tree with no `node_modules` above it, the driver loads and answers under the three-variable
+  environment. Case: `testbox-capture-driver-compiled.test.ts`, beside the recorder's compiled-file test. Measured: the
+  driver's imports reach the shared `.mjs` files, which the build emits only through its `../shared/**/*.mjs` include,
+  and the case pins that include.
+- **Its stop is bounded and counted.** At its bound the child's group gets TERM, KILL its grace later, then one drain; a
+  child that ignores TERM is held the whole grace (real time, in two cases: the driver's own and the production
+  wiring's), and the worst case counts the grace.
+- **No silent part** (condition 1). A delivery capture that reaches the desk or the runner with no part runs nothing and
+  answers no verdict with a detail; the runner's part has no default.
+- **One environment per capture** (condition 2). The capture's environment is built once; the build's pane and the
+  driver's search path get the same value, though a tool sync may move the tools directories between two reads.
+- **The launch on a real tmux** (condition 3). With the fleet's config and pane size, tmux reports the pane started from
+  exactly the two words (the fixed start program and the build's path), so no shell; the build's environment holds every
+  variable of the capture's and the fixed shell; and the same holds with lines added to the config naming a default
+  shell and a default command.
 
 ## 10. Departures
 
@@ -229,7 +271,7 @@ session run a build on the test box on demand. Instead:
 
 ## 11. Mutation record
 
-52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145) and 27 for the parts (rounds 3 to 5), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
+52 mutants over two rounds, three more for the tmux directory's owner rule (call 1145) 27 for the parts (rounds 3 to 5), 13 for packet 2's drafts (round 6), 8 for packet 2 (round 7) and 7 for call 1208 (round 8), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
@@ -247,4 +289,6 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 | result | recipe; build; version shape; case order; word; possible verdict; context bound; turn bound; divergence present or absent | each refusal case |
 | rule | duplicate; false confirmation; partial; tools offered; last message the user's; reminders; tool result even with text; CRLF; trim; divergence index; the four mode characters | the verdict, turn and composer cases |
 | parts (round 3) | submission part range and key; reader part range and echo; strict case order; at least one case; the turn and count bounds; the reply's part; the version over the split; currency's version, length and ids; the 16-turn cut; the even split; the part+part pair; the largest part | each refusal case, the split table and the derivation cases; the trust+part check survived as redundant and was removed |
+| packet 2 (round 7) | the shared count 4 and 2 (the deadline test alone); the desk on the default contract; the settle and quiet bounds from the default contract; the quiet period dropped from the worst case; a quiet period of 20 s; build trust reading a delivery bound | the deadline test's pair and equality case; the desk's delivery late case; the bounds pin; the worst-case formula; the pair bound; trust's worst case unchanged by the delivery bounds |
+| call 1208 (round 8) | the kill grace dropped from the worst case; the driver's grace at 0; the runner's no-part check; the desk's part defaulted to 0; the environment built twice; the server's tree dropped from the release; the wiring's grace a constant | the composed delivery run and the figures; the stubborn-child case; the no-part runner and desk cases; the one-environment case; the compiled-driver case; the wiring's grace case (the one survivor, now killed) |
 | parts (rounds 4 and 5) | the turn-length and side-request caps; each currency word; the shared count one more and one fewer | the over-long turn case; the three currency cases; the derivation's equality case |
