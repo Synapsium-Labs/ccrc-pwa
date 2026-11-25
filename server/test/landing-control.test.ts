@@ -646,3 +646,28 @@ describe('applyLandingControl: the measured health writes mainRedHold and never 
     expect(flagsOf().mainRedHold).toBe(true);
   });
 });
+
+// Landing order wave 5j-a (D-9047): the binding selects its head through `landingOrder`'s walk, so a dependant held behind a
+// withdrawn target is never a binding head, and nothing is cued to land it.
+describe('landingBindingOf never selects a dependant held behind a withdrawn target (wave 5j-a, D-9047)', () => {
+  it('the only pinned entry waits on a withdrawn one: held empty-or-blocked, no entry named', () => {
+    const facts = factsOf([entry(5, { state: 'withdrawn' }), entry(7, { afterIds: [105], fixesMain: true })]);
+    expect(landingBindingOf(facts, controlRead(), now)).toEqual({ mode: 'held', reason: 'empty-or-blocked', entryId: null });
+  });
+  it('beside an independent entry, the selected head is the independent one, never the held dependant', () => {
+    const facts = factsOf([entry(5, { state: 'withdrawn' }), entry(7, { afterIds: [105], fixesMain: true }), entry(8)]);
+    const b = landingBindingOf(facts, controlRead(), now);
+    expect(b).toMatchObject({ mode: 'held', entryId: 108 });
+    expect(b).not.toMatchObject({ entryId: 107 });
+  });
+  it('a stored withdrawn behind display unknown holds the same way', () => {
+    const facts = factsOf([entry(5, { state: 'unknown' }), entry(7, { afterIds: [105] })], {
+      stateWords: [{ id: 105, value: 'withdrawn' }, { id: 107, value: 'pinned' }],
+    });
+    expect(landingBindingOf(facts, controlRead(), now)).toMatchObject({ mode: 'held', entryId: null });
+  });
+  it('CONTROL: the same dependant behind a landed target is the ready head', () => {
+    const facts = factsOf([entry(5, { state: 'landed' }), entry(7, { afterIds: [105] })]);
+    expect(landingBindingOf(facts, controlRead(), now)).toMatchObject({ mode: 'ready', entryId: 107, pr: 7 });
+  });
+});

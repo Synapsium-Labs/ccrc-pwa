@@ -536,11 +536,21 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(reads().map((r) => r['pages'])).toEqual([3]);
   });
 
-  // A programme slug fits the run's hold reason (127 characters), so twenty runs make the long role line.
+  // A programme slug fits the run's hold reason (127 characters), so twenty runs make the long role line. Programme lifecycle
+  // W1 (R11): a coordinator owns one programme, so the twenty programmes' runs are each claimed by its own coordinator and
+  // served by this session (the role line names the programmes of the runs it claims OR serves).
   it('THE SIZE PIN at the door, ASCII: the anchor stays under ANCHOR_CARD_MAX_CHARS bytes, its canaries and instruction whole', async () => {
     app = await open();
     arm();
-    for (let i = 0; i < 20; i += 1) expect(openRunAs(`prog-${String(i).padStart(2, '0')}-${'a'.repeat(90)}`)).toBeGreaterThan(0);
+    const serveRunIn = (program: string, claimedBy: string): number => {
+      const id = (coord!.openRun({ program, title: 'PROG', project: 'project-a', wave: 1, waveOf: 2, claimedBy }) as { id?: number }).id ?? 0;
+      if (id > 0) coord!.setSession(id, ID);
+      return id;
+    };
+    for (let i = 0; i < 20; i += 1) {
+      const n = String(i).padStart(2, '0');
+      expect(serveRunIn(`prog-${n}-${'a'.repeat(90)}`, `coord-${n}`)).toBeGreaterThan(0);
+    }
     const a = (await anchor(app)).json() as { text: string };
     expect(Buffer.byteLength(a.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_CARD_MAX_CHARS);
     expect(Buffer.byteLength(a.text, 'utf8')).toBeLessThan(TOOL_RESULT_CUT_BYTES);

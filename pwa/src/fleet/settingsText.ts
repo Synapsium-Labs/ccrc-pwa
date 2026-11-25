@@ -461,6 +461,13 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.fleet, title: 'GitHub',
       purpose: 'How ccrc reaches GitHub.',
     },
+    // The Docs folders card (X2 P2.4, spec 4.1 "Settings"): the folders outside the projects that Docs may read. They are
+    // registered on the fleet box and apply to the whole console, so the scope is the box's. Its body is
+    // `DocsFoldersSection.tsx`'s.
+    docsFolders: {
+      scope: SETTINGS_SCOPE.box, title: 'Docs folders',
+      purpose: 'Folders outside your projects that Docs may read: only the six docs sections of each, read-only.',
+    },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 

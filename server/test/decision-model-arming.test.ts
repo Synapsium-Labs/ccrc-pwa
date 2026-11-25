@@ -11,7 +11,7 @@ import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
 import {
-  admitDecisionLine, currentDecisionLine, decisionHostRead, decisionLineById, decisionMeasures, decisionRowRead, decisionRowSideOf,
+  admitDecisionLine, currentDecisionLine, decisionArmingStore, decisionHostRead, decisionLineById, decisionMeasures, decisionRowRead, decisionRowSideOf,
   moveDecisionRowInTx, recordAnchorRun, recordCanary, recordDecision, setDecisionHostInTx, settleDecisionCalls, UNREADABLE_GATE_SIDE,
   type DecisionLineWrite, type DecisionRowMove,
 } from '../src/coord/decisionModelStore.js';
@@ -502,5 +502,36 @@ describe('decisionMeasures (M19)', () => {
   it('an unreadable row reads the word unreadable as its hold, never null', () => {
     f.db.exec("INSERT INTO decision_rows (row, mode, ceiling, heldCause, updatedAt, actor) VALUES ('relay.method', 'shadow', 600, 'bogus', 1, 'x')");
     expect(decisionMeasures(f.db, SINCE).find((r) => r.row === 'relay.method')!.held).toBe('unreadable');
+  });
+});
+
+// Sequence PR B1, piece 4 (review 3646 F4, call 1216): the decision-model writer honours the journal's post-append receipt through
+// `txWithAuthorityReceipt`, so a transaction that throws after a durable append fences the guard (`trailing`) as the designation's
+// writers do, instead of waiting for the next append's coherence check.
+describe('the post-append receipt (txWithAuthorityReceipt)', () => {
+  const MOVE = { row: 'relay.method' as const, expected: OFF, heldCause: null, actor: 'device-a', at: T0 };
+  it('a transaction that throws after the move\'s append fences the guard once, rolls the row back and keeps the record', () => {
+    const store = decisionArmingStore(f.db, f.journal);
+    expect(() => store.inTx((t) => {
+      expect(t.move({ ...MOVE, to: side({ mode: 'shadow' }), opKey: 'op-r1' })).toMatchObject({ ok: true, kind: 'appended' });
+      throw new Error('a later write in the same transaction failed');
+    })).toThrow('a later write in the same transaction failed');
+    expect(f.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(decisionRowSideOf(f.db, 'relay.method')).toEqual(DECISION_ROW_DEFAULT);
+    expect(f.lines()).toHaveLength(1);
+  });
+  it('the one-move door fences the same way when its row write throws after the append', () => {
+    f.db.exec("CREATE TEMP TRIGGER refuse_row BEFORE INSERT ON decision_rows BEGIN SELECT RAISE(ABORT, 'refused for the test'); END");
+    const store = decisionArmingStore(f.db, f.journal);
+    expect(() => store.move({ ...MOVE, to: side({ mode: 'shadow' }), opKey: 'op-r2' })).toThrow('refused for the test');
+    expect(f.guard.state()).toEqual({ kind: 'rolled-back', cause: 'trailing' });
+    expect(f.lines()).toHaveLength(1);
+  });
+  it('a refusal before any append, and a throw with no append, leave the guard coherent', () => {
+    const store = decisionArmingStore(f.db, f.journal);
+    expect(store.move({ ...MOVE, expected: side({ mode: 'armed' }), to: side({ mode: 'shadow' }), opKey: 'op-r3' })).toMatchObject({ ok: false, error: 'row-changed' });
+    expect(() => store.inTx(() => { throw new Error('nothing appended'); })).toThrow('nothing appended');
+    expect(f.guard.state()).toEqual({ kind: 'coherent' });
+    expect(f.lines()).toEqual([]);
   });
 });

@@ -92,9 +92,9 @@ const rig = async (o: Opts = {}) => {
     },
     ...(o.childMark === undefined ? {} : { childMark: o.childMark }),
   };
-  /** A working run of `program`, claimed by the crashed coordinator, dispatched into `worker`. */
-  const working = (program: string, worker: string): number => {
-    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 2, claimedBy: CRASHED });
+  /** A working run of `program`, claimed by `claimant` (the crashed coordinator by default), dispatched into `worker`. */
+  const working = (program: string, worker: string, claimant = CRASHED): number => {
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 2, claimedBy: claimant });
     if (!('id' in r)) throw new Error('openRun refused');
     coord.markDispatched(r.id, worker, worker, `ws/${worker}`, false);
     // The worker is still in the registry: a release of one it positively lists as absent is not sent (D-8664).
@@ -102,8 +102,19 @@ const rig = async (o: Opts = {}) => {
     for (const to of ['dispatched', 'working'] as const) expect(coord.advance(r.id, to, 'coordinator').ok).toBe(true);
     return r.id;
   };
+  /** Programme lifecycle W1 (R11): `openRun` no longer lets the crashed coordinator hold runs in a SECOND programme, but
+   *  the migration keeps that state where it found it (spec §13 step 3, `session-in-several`): it still holds the open
+   *  runs of both, and neither programme is bound. Built that way: the run is opened under a stand-in claimant, then its
+   *  `claimedBy` is rewritten to the crashed coordinator and every programme it now holds a run in is left unbound. */
+  const legacyWorking = (program: string, worker: string): number => {
+    const id = working(program, worker, `${CRASHED}-standin-${program}`);
+    coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(CRASHED, id);
+    coord.db.prepare('UPDATE programs SET coordinator = NULL, coordinatorUuid = NULL, coordinatorSince = NULL ' +
+      'WHERE slug IN (SELECT program FROM runs WHERE claimedBy = ?)').run(CRASHED);
+    return id;
+  };
   const stateOf = (id: number) => okRun(coord.run(id))!.state;
-  return { home, reg, coord, deps, calls, abandoned, working, stateOf };
+  return { home, reg, coord, deps, calls, abandoned, working, legacyWorking, stateOf };
 };
 
 describe('the one executor — shadow, the switch, and the store', () => {
@@ -111,7 +122,7 @@ describe('the one executor — shadow, the switch, and the store', () => {
     const r = await rig({ live: false });
     const a = r.working('alpha', 'demo-w1');
     const b = r.working('alpha', 'demo-w2');
-    const c = r.working('beta', 'demo-w3');
+    const c = r.legacyWorking('beta', 'demo-w3');
     expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toEqual({ kind: 'would-end',
       programmes: [{ slug: 'alpha', runIds: [a, b] }, { slug: 'beta', runIds: [c] }] });
     expect(r.abandoned).toEqual([]);
@@ -184,7 +195,7 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
   it('ends every run of every programme the claimant holds, failed, by the sweep', async () => {
     const r = await rig();
     const a = r.working('alpha', 'demo-w1');
-    const c = r.working('beta', 'demo-w3');
+    const c = r.legacyWorking('beta', 'demo-w3');
     expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toEqual({ kind: 'ended',
       programmes: [{ slug: 'alpha', runIds: [a] }, { slug: 'beta', runIds: [c] }], open: [], stuck: [], stoppedBy: null });
     expect([a, c].map(r.stateOf)).toEqual(['failed', 'failed']);
@@ -228,7 +239,7 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     // alpha: asked before its fleet act and after it (gone, gone). beta: asked before (gone), released, asked after: live.
     const r = await rig({ verdict: (n) => (n >= 4 ? { verdict: 'live' } : { verdict: 'gone' }) });
     const a = r.working('alpha', 'demo-w1');
-    const b = r.working('beta', 'demo-w2');
+    const b = r.legacyWorking('beta', 'demo-w2');
     const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
     expect(out).toMatchObject({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [a] }], open: [{ slug: 'beta', runIds: [b] }],
       released: [{ slug: 'beta', runIds: [b] }], stoppedBy: { kind: 'remeasured' } });
@@ -264,7 +275,7 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
   it('an act that THROWS part-way hands back what it had closed, with the failure — the executor never loses a closed run', async () => {
     const r = await rig();
     const a = r.working('alpha', 'demo-w1');
-    const b = r.working('beta', 'demo-w2');
+    const b = r.legacyWorking('beta', 'demo-w2');
     const real = r.deps.abandon;
     let n = 0;
     r.deps.abandon = (...args) => { n += 1; if (n === 2) throw new Error('database or disk is full'); return real(...args); };

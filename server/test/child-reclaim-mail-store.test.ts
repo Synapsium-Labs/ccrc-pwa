@@ -22,8 +22,8 @@ const NOW = 1_000_000_000_000;
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-child-reclaim-mail-store-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, wave: number): number => {
-  const r = s.openRun({ program, title: 't', project: 'demo', wave, waveOf: 3, claimedBy: 'demo-coordinator' });
+const open = (s: CoordStore, program: string, wave: number, claimedBy = 'demo-coordinator'): number => {
+  const r = s.openRun({ program, title: 't', project: 'demo', wave, waveOf: 3, claimedBy });
   if (!('id' in r)) throw new Error('openRun refused');
   return r.id;
 };
@@ -84,11 +84,11 @@ describe('cancelDeliveriesTo — the reclaimed child’s outstanding mail, parke
 });
 
 describe('programOpenRunCount(program, excludeRunId) — D-51’s predicate, one run set aside', () => {
-  it('answers "would closing THIS run retire the program" before the close, and D-51 still retires after it', () => {
+  it('answers "would closing THIS run leave the program with no open run" before the close; nothing retires it after (D-51 deleted)', () => {
     const s = store();
     const a = open(s, 'p', 1);
     const b = open(s, 'p', 2);
-    const c = open(s, 'q', 1);
+    const c = open(s, 'q', 1, 'demo-coordinator-q');   // one coordinator owns one programme (programme lifecycle W1, R11)
     expect(s.programOpenRunCount('p')).toBe(2);
     expect(s.programOpenRunCount('p', a)).toBe(1);
     expect(s.programOpenRunCount('p', c), 'another program’s run excludes nothing here').toBe(2);
@@ -100,7 +100,8 @@ describe('programOpenRunCount(program, excludeRunId) — D-51’s predicate, one
     expect(s.closeRun({ runId: a, finalState: 'failed', causedBy: 'test', handoffCommit: null, program: 'p',
       viaClosing: false }).ok).toBe(true);
     const state = (slug: string) => (s.db.prepare('SELECT state FROM programs WHERE slug = ?').get(slug) as { state: string }).state;
-    expect(state('p'), 'D-51 retired it from inside the close transaction, unexcluded').toBe('abandoned');
+    // Programme lifecycle W1 (D-8983): D-51 is deleted; the last close ends nothing and the programme stays live (Idle).
+    expect(state('p'), 'nothing retires it at its last close').toBe('active');
     expect(state('q')).toBe('active');
   });
 

@@ -1,4 +1,4 @@
-// Overlord W1, the renewal readings (plan `w1-renewal-readings.md`, PRs A, B and C): the L1 mappers' cases, written once in
+// Overlord W1, the renewal readings (plan `w1-renewal-readings.md`, PRs A, B, C and D): the L1 mappers' cases, written once in
 // `sim/renewalReadingSets.ts` and run here against the real module (the floors run them against each mutant), and the
 // readings' L0 vocabulary.
 import { describe, it, expect } from 'vitest';
@@ -7,6 +7,7 @@ import {
   backstopDueCases, backstopInstantCases, classChangedCases, designatedClassCases, fittedCeilingCases, notLocalAskCases, notLocalCases, probesFailedTwiceCases,
   termRaisedCases,
 } from './sim/renewalReadingSets.js';
+import { ACCOUNT_READING_CASES } from './sim/renewalAccountReadingSets.js';
 import { BACKSTOP_DEFAULT, BACKSTOP_HOURS, BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone } from '../../shared/renewal-readings.js';
 
 describe('fittedCeilingOf', () => {
@@ -43,6 +44,26 @@ describe('notLocalOf (PR B)', () => {
 
 describe('notLocalAskOf (PR B, fix round 1 F2)', () => {
   for (const [name, fn] of Object.entries(notLocalAskCases(readings))) it(name, fn);
+});
+
+describe('accountOutsideSetOf (PR D, fix round 1 F1, F5, F7)', () => {
+  for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.outsideSetCases(readings))) it(name, fn);
+});
+
+describe('classUnservableOf (PR D, F5)', () => {
+  for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.classUnservableCases(readings))) it(name, fn);
+});
+
+describe('accountLoadOf (PR D, F5)', () => {
+  for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.accountLoadCases(readings))) it(name, fn);
+});
+
+describe('accountLoadMoveOf (PR D, the idle half)', () => {
+  for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.loadMoveCases(readings))) it(name, fn);
+});
+
+describe('overlordCandidatesOf and unboundCandidates (PR D)', () => {
+  for (const [name, fn] of Object.entries(ACCOUNT_READING_CASES.candidatesCases(readings))) it(name, fn);
 });
 
 describe('the backstop vocabulary (shared/renewal-readings.ts)', () => {

@@ -20,8 +20,12 @@ const OLD = 1_700_000_000_000;
 const BORN = OLD + 5_000_000;
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-occupant-birth-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number): number => {
-  const id = (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, openedAt: number, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  const id = opened.id;
   s.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(openedAt, id);
   return id;
 };
@@ -52,7 +56,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
   it('the stamp writes the newest PLACEABLE birth, over a newer unplaceable one (the merge base\'s stamp)', () => {
     const s = store();
     const { minting } = reusedName(s);
-    const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
+    const wave = open(s, 'prog-new', 'coord-1', BORN + 10, 2);
     s.setSession(wave, 'demo-w');
     expect(stampOf(s, wave).sessionBornAt).toBe(OLD);
     // The worker reads by the id-string rule (its minting run cannot be placed): the wave is its open run either way.
@@ -72,7 +76,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     s.setSession(rebound, 'demo-w', BORN + 500);
     s.db.prepare("UPDATE runs SET sessionId = 'demo-other' WHERE id = ?").run(rebound);
     expect(series(s, 'demo-w').map((r) => r.id)).not.toContain(rebound);
-    const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
+    const wave = open(s, 'prog-new', 'coord-1', BORN + 10, 2);
     s.setSession(wave, 'demo-w');
     expect(stampOf(s, wave).sessionBornAt).toBe(BORN + 500);
     // The older build moves the run back: the worker is born at that birth again, and the wave bound in between is its.
@@ -86,7 +90,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     const s = store();
     const minting = open(s, 'prog-new', 'coord-1', BORN - 1000);
     s.setSession(minting, 'demo-w', BORN);
-    const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
+    const wave = open(s, 'prog-new', 'coord-1', BORN + 10, 2);
     s.setSession(wave, 'demo-w');
     // A stamp here (the withdrawn fallback) was carried onto another incarnation by an older build's rebind, or read
     // against a later same-id redraw, and made round-8 shapes worse than the merge base.
@@ -100,7 +104,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     const q = open(s, 'prog-q', 'coord-q', BORN + 900);
     s.setSession(q, 'demo-w', BORN + 1000);
     done(s, q);
-    const wave = open(s, 'prog-c', 'coord-1', BORN + 10);
+    const wave = open(s, 'prog-new', 'coord-1', BORN + 10, 2);
     s.setSession(wave, 'demo-w');
     expect(stampOf(s, wave).sessionBornAt).toBeNull();
     // The minting run's dispatch later moves onto its birth (a same-id redraw): the worker is born at BORN, and the
@@ -117,7 +121,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     const m = open(s, 'prog-m', 'coord-a', BORN - 100);
     s.markDispatchStarted(m, BORN);
     s.setSession(m, 'demo-w', BORN);
-    const l2 = open(s, 'prog-l2', 'coord-a', BORN + 50);
+    const l2 = open(s, 'prog-m', 'coord-a', BORN + 50, 2);
     s.setSession(l2, 'demo-w');
     expect(stampOf(s, l2).sessionBornAt).toBe(BORN);
     s.setSession(m, 'demo-x');                 // a retried open rebinds M away: its births are cleared
@@ -134,7 +138,7 @@ describe('the occupant\'s birth: the stamp, and an unplaceable reader that takes
     const s = store();
     const { minting } = reusedName(s);
     done(s, minting);
-    const c = open(s, 'prog-c', 'coord-1', BORN + 10);
+    const c = open(s, 'prog-new', 'coord-1', BORN + 10, 2);
     s.setSession(c, 'demo-w');
     const live = markedBy(s, minting);
     const binding = bindingOf(series(s, 'demo-w'), live);

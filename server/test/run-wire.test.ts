@@ -21,8 +21,13 @@ import { mkTmp } from './tmpHelpers.js';
 const BORN = 1_700_000_000_000;
 const NOW_S = 1784600000;
 const mkCoord = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-run-wire-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, claimedBy: string): number =>
-  (s.openRun({ program, title: program, project: 'p', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a claimant's later run is a later WAVE of its
+// own programme, never the first run of a second one. A refused open throws, naming the refusal.
+const open = (s: CoordStore, program: string, claimedBy: string, wave = 1): number => {
+  const opened = s.openRun({ program, title: program, project: 'p', wave, waveOf: null, claimedBy });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  return opened.id;
+};
 const finish = (s: CoordStore, id: number): void => {
   for (const to of ['dispatched', 'closing', 'done'] as const) s.advance(id, to, 'coordinator');
 };
@@ -55,7 +60,7 @@ describe('sessionRunRead: the two named queries over one incarnation', () => {
   it('the open-vs-newest pair: the newest run is closed while an older one is still open', () => {
     const s = mkCoord();
     const { fresh } = recycled(s);
-    const later = open(s, 'prog-later', 'coord-live');
+    const later = open(s, 'prog-new', 'coord-live', 2);
     s.setSession(later, 'demo-w');
     finish(s, later);
     expect(sessionRunRead(s, 'demo-w', inc)).toEqual({
@@ -106,9 +111,9 @@ describe('withChildIds: RunSummary.childIds is childrenOf the run\'s coordinator
   it('lists the open runs a coordinator has working for it, on every one of its runs, and none for a ghost', () => {
     const s = mkCoord();
     const { stale, fresh } = recycled(s);
-    const own = open(s, 'prog-own', 'coord-live');
+    const own = open(s, 'prog-new', 'coord-live', 2);
     s.setSession(own, 'demo-x', BORN + 1);
-    const done = open(s, 'prog-done', 'coord-live');
+    const done = open(s, 'prog-new', 'coord-live', 3);
     s.setSession(done, 'demo-y');
     finish(s, done);
     const sessions = [{ id: 'demo-w', child: { kind: 'child', runId: fresh } as const }, { id: 'demo-x', child: { kind: 'none' } as const }];

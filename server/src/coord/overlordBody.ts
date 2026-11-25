@@ -1,6 +1,7 @@
 // The Overlord's body over ccd (Overlord W1, designation A, plan Task 4; spec §3.1, §3.2 C4). Ring L3, context C5: the ADAPTER of
 // the `OverlordBody` port that `overlordRoutes.ts` declares. It is the one place that composes ccd for the Overlord: the
-// project add, the named create, the route writes (the Settings door's `class` among them), the pool probe, the keep-awake markers and the stop. It decides nothing about
+// project add, the named create, the route writes (the Settings door's `class` among them), the pool probe, the keep-awake markers, Restart's
+// `ensure` (designation B) and the stop. It decides nothing about
 // WHETHER to act (the decider and the doors do); it keeps every distinction ccd's answer gives it and says it in the port's words.
 //
 // FAILURE CONTRACT. No method throws: a runner that rejects, a reader that throws and a missing capability are each an answer.
@@ -18,7 +19,7 @@ import {
 } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import { cutShort } from '../lifecycle.js';
-import { parsePoolAnswer } from '../poolrule.js';
+import { parsePoolAnswer, type PoolAnswerRead } from '../poolrule.js';
 import { classifyProjectAddFailure } from '../projectAdd.js';
 import type { SessionRecord, SingleRead } from '../registry.js';
 import type { CcdResult, RunCcd } from './ports.js';
@@ -45,6 +46,8 @@ export interface OverlordBodyDeps {
   readonly rowOf: (id: string) => Promise<Pick<SingleRead, 'kind'>>;
   /** `childReclaimGenerationRead`: the incarnation ccd minted for a made session. */
   readonly generationOf: (id: string) => Promise<GenerationRead>;
+  /** The ensure route's asked-wake record (`admitWake('asked', id)` for a hibernated row), run before Restart's `ensure`. */
+  readonly askedWake?: (id: string) => Promise<void>;
   /** `stopCreated` (below), built by the server from the stop route's own path. */
   readonly stop: (id: string) => Promise<StopAnswer>;
   /** The environment the runner's children inherit (the process's own); a test hands its own. */
@@ -73,16 +76,9 @@ export function withoutClaudeCode(run: RunCcd, env: NodeJS.ProcessEnv = process.
 }
 
 export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
-  const run = withoutClaudeCode(deps.runCcd, deps.env);
   const state = () => deps.fleetState();
   const refuse = (detail: string): { ok: false; detail: string } => ({ ok: false, detail });
-
-  /** One ccd call that cannot throw: a rejecting runner is a call that did not run. */
-  async function ran(argv: CcdArgv): Promise<CcdResult> {
-    try { return await run(argv); } catch (e) {
-      return { ran: false, ok: false, stdout: '', stderr: '', killed: 'unmeasured', signal: 'unmeasured', reason: 'transport', detail: messageOf(e) };
-    }
-  }
+  const ran = bodyRunner(deps.runCcd, deps.env);
 
   async function ensureProject(): Promise<BodyAnswer> {
     if (!ccdCan(state(), 'projectAddEmpty')) return refuse('the deployed ccd has no project-add');
@@ -159,11 +155,7 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
    *  is what D-6790 refuses `fable` on, and this is the operator's door, never that one. */
   const writeClass = (id: string, cls: OverlordModelClass): Promise<BodyAnswer> => setRoute(id, { class: cls });
 
-  async function poolAnswer(id: string): ReturnType<OverlordBody['poolAnswer']> {
-    if (!ccdCan(state(), 'poolAnswer') || !isRegistryId(id)) return { kind: 'not-run' };
-    const res = await ran(CCD_ARGV.poolAnswer(id));
-    return parsePoolAnswer({ ran: res.ran, code: res.ran ? (res.exitCode ?? (res.ok ? 0 : 1)) : 1, stdout: res.stdout });
-  }
+  const poolAnswer = (id: string): ReturnType<OverlordBody['poolAnswer']> => ccdPoolAnswer(ran, state(), id);
 
   async function keepAwake(id: string, which: 'on' | 'off'): Promise<KeepAwakeAnswer> {
     if (!isRegistryId(id)) return refuse('the session id is not a registry id');
@@ -182,11 +174,45 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
     return { ok: true, foreign: [...res.stdout.matchAll(/^kept-foreign (\S+)$/gm)].map((m) => m[1]!) };
   }
 
+  /** Restart's resume path (C23, designation B): `ccd ensure <id>`, as the ensure route composes it, with its asked wake recorded
+   *  first. A wake that could not be recorded does not stop the resume. */
+  async function ensure(id: string): Promise<BodyAnswer> {
+    if (!isRegistryId(id)) return refuse('the session id is not a registry id');
+    if (!ccdCan(state(), 'ensure')) return refuse('the deployed ccd cannot ensure a session');
+    try { await deps.askedWake?.(id); } catch (e) { console.warn(`ccrc-server: the asked wake of ${id} was not recorded: ${messageOf(e)}`); }
+    const res = await ran(CCD_ARGV.ensure(id));
+    return res.ok ? { ok: true } : refuse(detailOf('ensure', res));
+  }
+
   async function stop(id: string): Promise<StopAnswer> {
     try { return await deps.stop(id); } catch (e) { return { ok: false, detail: `the stop did not answer: ${messageOf(e)}` }; }
   }
 
-  return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, stop };
+  return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, ensure, stop };
+}
+
+/** A ccd runner whose calls cannot throw (`bodyRunner`). */
+export type BodyRan = (argv: CcdArgv) => Promise<CcdResult>;
+
+/** The one `ccd pool-answer --session <id>` composer (pool set B1's read, `CCD_ARGV.poolAnswer`): the body's probe and the renewal
+ *  readings' wiring (`continuity/renewalReadingsWiring.ts`, W1 renewal readings PR D) each call it with their own runner. It asks
+ *  the capability first, never composes an id the registry refuses, and reads the runner's answer `ran` first through
+ *  `parsePoolAnswer`. `ran` must not throw (`bodyRunner`). */
+export async function ccdPoolAnswer(ran: BodyRan, state: Pick<FleetState, 'ccdVerbs'> | undefined, id: string): Promise<PoolAnswerRead> {
+  if (!ccdCan(state, 'poolAnswer') || !isRegistryId(id)) return { kind: 'not-run' };
+  const res = await ran(CCD_ARGV.poolAnswer(id));
+  return parsePoolAnswer({ ran: res.ran, code: res.ran ? (res.exitCode ?? (res.ok ? 0 : 1)) : 1, stdout: res.stdout });
+}
+
+/** The body's runner, and `ccdPoolAnswer`'s outside it: the server's runner with no `CLAUDECODE` (`withoutClaudeCode`), whose
+ *  calls cannot throw: a rejecting runner is a call that did not run. */
+export function bodyRunner(runCcd: RunCcd, env?: NodeJS.ProcessEnv): BodyRan {
+  const run = withoutClaudeCode(runCcd, env);
+  return async (argv) => {
+    try { return await run(argv); } catch (e) {
+      return { ran: false, ok: false, stdout: '', stderr: '', killed: 'unmeasured', signal: 'unmeasured', reason: 'transport', detail: messageOf(e) };
+    }
+  };
 }
 
 // ── stopCreated ───────────────────────────────────────────────────────────────────────────────────────────────────────

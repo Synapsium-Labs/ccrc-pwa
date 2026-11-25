@@ -67,9 +67,11 @@ const openApp = async (home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'
  *  is the `ambiguous-dispatch` wedge this whole route exists for. */
 const wedged = (
   coord: CoordStore, home: string, state: RunState, sessionId: string | null, program = 'build4',
+  // Programme lifecycle W1 (R11): one coordinator owns one live programme, so a run in a SECOND programme names its own.
+  claimedBy = CLAIMED_BY,
 ): number => {
   const opened = coord.openRun({
-    program, title: 'Fleet controls', project: PROJECT, wave: 1, waveOf: 3, claimedBy: CLAIMED_BY,
+    program, title: 'Fleet controls', project: PROJECT, wave: 1, waveOf: 3, claimedBy,
   });
   // `openRun` answers a UNION — it can refuse (a second coordinator) — so the
   // id is narrowed rather than destructured off the refusal shape, exactly as
@@ -260,7 +262,9 @@ describe('POST /api/runs/:id/abandon', () => {
     expect(okRun(w.coord.run(id))!.handoffCommit).toBeNull();
   });
 
-  it("cancels the run's own outstanding deliveries and retires the program when it was the last run", async () => {
+  // Programme lifecycle W1 (R4, spec §5's "run closes" row): D-51's auto-retire is gone, so abandoning the LAST run
+  // leaves the programme live (Idle), never `abandoned` by side effect; an end is a decision.
+  it("cancels the run's own outstanding deliveries and leaves the program live when it was the last run", async () => {
     const home = mkTmp('ccrc-abandon-');
     const { run } = makeRunner();
     const w = await openApp(home, run); app = w.app;
@@ -274,7 +278,7 @@ describe('POST /api/runs/:id/abandon', () => {
 
     await postAbandon(app, id);
     expect(w.coord.delivery(delivery.id)!.state).toBe('rejected');
-    expect(w.coord.programs().find((p) => p.slug === 'build4')!.state).toBe('abandoned');
+    expect(w.coord.programs().find((p) => p.slug === 'build4')!.state).toBe('active');
   });
 
   // — the negative pins (spec §6) —
@@ -606,7 +610,7 @@ describe('the abandon arm records the stuck reason', () => {
     };
     const w = await start(home, run);
     const first = wedged(w.coord, home, 'working', `${PROJECT}-first`, 'programme-a');
-    const second = wedged(w.coord, home, 'planned', null, 'programme-b');
+    const second = wedged(w.coord, home, 'planned', null, 'programme-b', `${CLAIMED_BY}-b`);
     w.watcher.runVerdicts.replace(new Map([[second, verdictFor('overtaken')]]), new Map());
     const a = postAbandon(app!, first);
     await vi.waitFor(() => expect(started.length).toBeGreaterThan(0));

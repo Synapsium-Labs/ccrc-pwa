@@ -98,7 +98,8 @@ response said. The refusals you will actually meet are
   with a run attached, a planned run included), or an Upkeep ticket. A key that is not in this
   programme's plan is refused the same way. Name another, or open with none unless
   `ticket-required` refuses that.
-- `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
+- `plan-closed`: the programme has ended (Done or Abandoned, a decision: `plan close`, or the operator's end). Nothing opens
+  under it until the operator or the Overlord reopens it.
 - `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
 
 Two verbs answer the inbound path: `plan triage`, the team's Linear owner's decision on an issue filed in a managed

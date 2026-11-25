@@ -192,6 +192,11 @@ const raiseSecret = (r: Rig, slot = 'api-key', program = 'prog-a'): number => r.
   program, runId: r.runA, raisedBy: 'lane-a', kind: 'secret', title: 'Give the service key', why: 'The wave calls the service.',
   how: ['Open the service console', 'Copy the key'], options: null, neededBy: 'blocking', soonLabel: null, secretSlot: slot,
 }, NOW0);
+/** The programme's run closes and its end is decided (programme lifecycle W2, D-8992: closing the last run alone leaves it Idle). */
+const endProgramme = (r: Rig): void => {
+  r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+  r.coord.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'ended in the fixture' }, Date.now());
+};
 const save = (r: Rig, id: number, value: unknown) => r.send({ method: 'PUT', url: `/api/items/${id}/secret`, payload: { value } });
 const body = (res: { body: string }): Record<string, unknown> => JSON.parse(res.body) as Record<string, unknown>;
 const secretDir = (r: Rig): string => path.join(r.ccrcDir, OPERATOR_SECRETS_DIR);
@@ -468,11 +473,12 @@ describe('PUT /api/items/:id/secret: the order of its refusals (plan PL6)', () =
     expect(body(await save(r, id, mark()))['error']).toBe('not-open');
   });
 
-  it('a programme with no open run: programme-ended, checked before the write, so nothing is stored', async () => {
+  // Programme lifecycle W2 (D-8992): an Idle programme's tick mails its coordinator, so only an ENDED one refuses it.
+  it('an ended programme: programme-ended, checked before the write, so nothing is stored', async () => {
     const r = await rig();
     await r.stepUp();
     const id = raiseSecret(r);
-    r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+    endProgramme(r);
     expect(body(await save(r, id, mark()))['error']).toBe(LEDGER_ROUTE_REFUSALS.programmeEnded);
     expect(existsSync(secretDir(r))).toBe(false);
   });
@@ -738,11 +744,11 @@ describe('after the value is stored, every failure says so in one word (review 1
     expect(t.hits()).toEqual([]);
   });
 
-  it('a tick refused between the write and the tick (the run closed meanwhile): stored-not-ticked, nothing leaks', async () => {
+  it('a tick refused between the write and the tick (the programme ended meanwhile): stored-not-ticked, nothing leaks', async () => {
     const t = await savedUnderScan((r) => {
       const ingest = r.masker.ingestSecret.bind(r.masker);
       vi.spyOn(r.masker, 'ingestSecret').mockImplementation((lane, v) => {
-        r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+        endProgramme(r);
         return ingest(lane, v);
       });
     });
@@ -759,7 +765,7 @@ describe('after the value is stored, every failure says so in one word (review 1
     const t = await savedUnderScan((r) => {
       const ingest = r.masker.ingestSecret.bind(r.masker);
       vi.spyOn(r.masker, 'ingestSecret').mockImplementation((lane, v) => {
-        r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+        endProgramme(r);
         return ingest(lane, v);
       });
     }, short);
@@ -1841,7 +1847,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it('two saves for programmes whose slugs differ only by case, at once: one is stored, the other secret-name-collides', async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const lower = raiseSecret(r, 'api-key', 'prog-a');
     const upper = raiseSecret(r, 'api-key', 'Prog-A');
     // The first save's programme directory waits for a gate: its case check is done, its directory not yet made.
@@ -1871,7 +1877,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it('two saves for programmes whose slugs differ only by case, of different slots, at once: one is stored, the other secret-name-collides', async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const lower = raiseSecret(r, 'slot-x', 'prog-a');
     const upper = raiseSecret(r, 'slot-y', 'Prog-A');
     let open!: () => void;
@@ -1927,7 +1933,7 @@ describe('a name that differs from a stored one only by case is refused (review 
   it("Remove deletes a programme directory it leaves empty, and the case collision with it clears", async () => {
     const r = await rig();
     await r.stepUp();
-    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a-upper' });   // its own coordinator (R11)
     const upper = raiseSecret(r, 'api-key', 'Prog-A');
     expect((await save(r, upper, mark())).statusCode).toBe(200);
     const lower = raiseSecret(r, 'api-key', 'prog-a');

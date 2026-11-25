@@ -2,15 +2,20 @@
 // blocking exec double the lane, fetch-lane and single-flight cases drive; Task 6 adds the scripted `CcdRunner`
 // over W2's real adapter and `docsApp()`; Task 10 adds `echoPty()` and `passThroughLane()`.
 import { createHash } from 'node:crypto';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { PtyProcess, PtySpawn } from '../../agent/src/pty.js';
+import { createAccountGate } from '../src/accounts/gate.js';
+import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
+import { SESSION_COOKIE } from '../src/auth/cookie.js';
 import { DOCS_CAP, type CcdArgv } from '../src/ccdargv.js';
 import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
+import { refuseRoute } from '../src/refuse.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
 import type { DocsLaneRun, DocsReadLane } from '../src/docs/lane.js';
-import type { DocsJob } from '../src/docs/policy.js';
+import type { DocsJob, DocsSignIn } from '../src/docs/policy.js';
 import {
-  composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute, type DocsComposition, type DocsNodeLanes,
+  composeDocs, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes, registerDocsRefreshRoute, type DocsComposition,
+  type DocsNodeLanes,
 } from '../src/docs/routes.js';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, type DocPin, type DocsEntry, type DocsIndexOk, type DocsTreeOk,
@@ -174,6 +179,9 @@ export async function docsApp(o: {
   nowMs?: () => number;
   readLane?: () => DocsReadLane;
   root?: (app: FastifyInstance) => void;
+  /** X2 P2.3: when given, the seven folder doors are registered too, over `folderRig`'s gate and sign-in. A case that does not
+   *  pass it gets exactly the routes it always got. */
+  folders?: FolderRig;
 }): Promise<{ app: FastifyInstance; state: { ccdVerbs: string[] | null }; docs: DocsComposition }> {
   const state = { ccdVerbs: o.verbs === undefined ? ['caps', DOCS_CAP] : o.verbs };
   const docs = composeDocs({ runCcd: o.run, fleetState: state }, { nowMs: o.nowMs, readLane: o.readLane });
@@ -185,8 +193,55 @@ export async function docsApp(o: {
     installDocsResponsePolicy(app);
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+    if (o.folders !== undefined) {
+      const rig = o.folders;
+      const signIn = (): DocsSignIn => rig.signIn;
+      registerDocsFolderReadRoutes(app, docs.folderReaders, docs.lanes, { signIn, hasSession: folderSession });
+      registerDocsFolderRegistryRoutes(app, docs.folderRegistries, docs.lanes, {
+        gate: createAccountGate({
+          enabled: rig.signIn === 'armed', origin: 'http://localhost:7788',
+          sessionAuth: (req) => folderSession(req) ? FOLDER_DECISION : NO_SESSION,
+          fleetState: () => state,
+          stepUp: { requireRecentAssertion: () => (req, reply) => {
+            if (req.headers[FOLDER_STEP_UP_HEADER] === '1') return false;
+            void refuseRoute(reply, 'step-up-required');
+            return true;
+          } },
+        }),
+        signIn,
+        hasSession: folderSession,
+      });
+    }
   });
   return { app, state, docs };
+}
+
+// ===== X2 P2.3: the folder doors' rig =====
+
+/** The mutable sign-in state a folder case flips: `dark` or `armed`, read per request. */
+export interface FolderRig { signIn: DocsSignIn }
+
+/** A cookie that makes a request carry a session (the rig's session test is the cookie's presence), and the header that makes
+ *  its step-up fresh. */
+export const FOLDER_COOKIE = `${SESSION_COOKIE}=fixture-session`;
+export const FOLDER_STEP_UP_HEADER = 'x-fixture-step-up';
+
+const FOLDER_DECISION: GateDecision = { allow: true, verdict: 'ok', reason: 'session', device: 'fixture-device' };
+
+function folderSession(req: Pick<FastifyRequest, 'headers'>): boolean {
+  return typeof req.headers.cookie === 'string' && req.headers.cookie.includes(FOLDER_COOKIE);
+}
+
+/** The folder path every fixture registers: it must appear in the `paths` door's answer and in no other answer. */
+export const FOLDER_FIXTURE_PATH = '/fixture/outside/notes-root';
+
+/** Headers of a request with the docs marker and a session; `stepUp` adds the fresh step-up. */
+export function folderHeaders(o: { session?: boolean; stepUp?: boolean } = {}): Record<string, string> {
+  return {
+    ...PWA_HEADERS,
+    ...(o.session === false ? {} : { cookie: FOLDER_COOKIE }),
+    ...(o.stepUp === true ? { [FOLDER_STEP_UP_HEADER]: '1' } : {}),
+  };
 }
 
 // ===== Task 10: the latency test's echo pty and its control lane (section 6.8; refinement (s)) =====

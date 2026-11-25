@@ -20,6 +20,7 @@ import type { RotateAnswer } from '../../../shared/box-token';
 import type { RosterFactsChange } from '../../../shared/rosterFacts';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
+import type { WitnessTuple } from '../../../shared/authorityWitness';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import type { Character as CharacterName } from '../../../shared/face';
@@ -36,7 +37,11 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
   type DocsHistoryLoader,
 } from '../docs/failures';
-import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../shared/docs';
+import type {
+  DocsFolderAddResponse, DocsFolderFileResponse, DocsFolderRemoveResponse, DocsFolderTreeResponse, DocsFoldersLabelsResponse,
+  DocsFoldersPathsResponse, DocsRangeFrameResponse, DocsRangePrepareResponse,
+} from '../../../shared/docs';
+import type { DocsFolderLoaders } from '../docs/folderPage';
 import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
@@ -1174,6 +1179,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       (await request(`/api/continuity/quiz-runs/${id}/withdraw`, {
         method: 'POST', headers: { accept: 'application/json' },
       })).json() as Promise<QuizRuleAnswer>,
+    /** `POST /api/overlord/witness` (Overlord W1 authority witness): sends what this device holds, answers `{ offer }` raw (`lib/witness.ts`
+     *  parses it). A refusal (`auth-off`, 401, 503) rejects with an `ApiError`. Session-gated when armed. */
+    overlordWitness: (held: WitnessTuple | null): Promise<unknown> => postJson('/api/overlord/witness', { held }),
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
@@ -1254,7 +1262,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader } => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
@@ -1270,7 +1278,47 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           return docsAnswerFromError(err);
         }
       };
+      // The account gate's refusals of the folder Add door (`{ok: false, error}`, no docs word: `step-up-required`,
+      // `auth-off`, `insecure-origin`, `unsupported`) are REJECTED with their `ApiError`, so the Settings section's step-up
+      // reads the word; every docs word and every client slot still resolves as the other docs reads do. A 404 `not-found`
+      // is `no-docs-route`, as everywhere.
+      const readWrite = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
+        try {
+          return await readDocsEnvelope<T>(await request(path, init, unlimited), fields);
+        } catch (err) {
+          // The one classifier first: a docs word, a 401, a pre-Docs 404 and a network failure are its slots. What it can only
+          // call an unexpected response, and whose body carries the gate's own `error` word, is the account gate's refusal.
+          const slot = docsAnswerFromError(err);
+          const body: unknown = err instanceof ApiError ? err.body : null;
+          if (slot.s === 'unexpected-response' && typeof body === 'object' && body !== null && 'error' in body) throw err;
+          return slot;
+        }
+      };
+      const folders: DocsFolderLoaders = {
+        labels: () => read<DocsFoldersLabelsResponse>(docsApi.folders(), ['folders'], { headers: marker }),
+        // The ONE caller of the paths URL: Settings' Docs folders section (`docs-ring.test.ts`).
+        paths: () => read<DocsFoldersPathsResponse>(docsApi.folderPaths(), ['folders'], { headers: marker }),
+        add: (label, path) => readWrite<DocsFolderAddResponse>(docsApi.folderAdd(), ['label'],
+          { method: 'POST', headers: { ...marker, 'content-type': 'application/json' }, body: JSON.stringify({ label, path }) }),
+        remove: (label) => readWrite<DocsFolderRemoveResponse>(docsApi.folderRemove(label), ['label'], { method: 'DELETE', headers: marker }),
+        tree: (label, signal) => read<DocsFolderTreeResponse>(docsApi.folderTree(label), ['tree'], { headers: marker, signal }),
+        file: (label, section, path, fp, signal) =>
+          read<DocsFolderFileResponse>(docsApi.folderFile(label, section, path, fp), ['contentClass', 'show'], { headers: marker, signal }),
+        range: {
+          prepare: async (label, section, path, range, signal) => {
+            const got = await read<DocsRangePrepareResponse>(
+              docsApi.folderRangePrepare(label, section, path, range), ['prepared'], { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.prepared } : got;
+          },
+          frame: async (label, section, path, range, snapshot, offset, length, signal) => {
+            const got = await read<DocsRangeFrameResponse>(
+              docsApi.folderRangeFrame(label, section, path, range, snapshot, offset, length), ['frame'], { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.frame } : got;
+          },
+        },
+      };
       return {
+        folders,
         projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
         tree: (project, ref) =>
           read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),

@@ -78,7 +78,7 @@ const ANSWER = {
 class FakeBody implements OverlordBody {
   readonly log: Call[] = [];
   readonly alive = new Set<string>();
-  ensure: BodyAnswer = { ok: true };
+  projectAnswer: BodyAnswer = { ok: true };
   createAnswer: (id: string) => CreateAnswer = () => ({ ok: true, generation: GEN });
   setAnswer: BodyAnswer = { ok: true };
   keepAwakeAnswer: (state: 'on' | 'off') => KeepAwakeAnswer = () => ({ ok: true, foreign: [] });
@@ -86,7 +86,7 @@ class FakeBody implements OverlordBody {
   probe: Awaited<ReturnType<OverlordBody['poolAnswer']>> = ANSWER;
   /** Held by a test to freeze `create` mid-flight. */
   gate: Promise<void> | null = null;
-  async ensureProject() { this.log.push({ op: 'ensureProject' }); return this.ensure; }
+  async ensureProject() { this.log.push({ op: 'ensureProject' }); return this.projectAnswer; }
   async create(slug: string, id: string, wrapper: string, route: Record<string, string | undefined>) {
     this.log.push({ op: 'create', id, extra: { slug, wrapper, route } });
     if (this.gate !== null) await this.gate;
@@ -99,6 +99,8 @@ class FakeBody implements OverlordBody {
   async writeClass(id: string, cls: string) { this.log.push({ op: 'writeClass', id, extra: cls }); return { ok: true } as const; }
   async poolAnswer(id: string) { this.log.push({ op: 'poolAnswer', id }); return this.probe; }
   async keepAwake(id: string, state: 'on' | 'off') { this.log.push({ op: `keepAwake-${state}`, id }); return this.keepAwakeAnswer(state); }
+  /** Restart's resume path (designation B); no designate or retire door calls it. */
+  async ensure(id: string) { this.log.push({ op: 'ensure', id }); return { ok: true } as const; }
   async stop(id: string) {
     this.log.push({ op: 'stop', id });
     const a = this.stopAnswer(id);
@@ -398,7 +400,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
 
   it('ensureProject failing: ccd made nothing, so no stop is owed and none runs', async () => {
     const r = await rig();
-    r.body.ensure = { ok: false, detail: 'the listing failed' };
+    r.body.projectAnswer = { ok: false, detail: 'the listing failed' };
     const { detail } = await failed(r);
     expect(detail).toBe('the listing failed');
     expect(r.body.ops()).toEqual(['poolAnswer', 'ensureProject']);

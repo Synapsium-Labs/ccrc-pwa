@@ -22,9 +22,11 @@ const RESTORE_SQL =
   'ORDER BY r.id DESC LIMIT 1) WHERE EXISTS (SELECT 1 FROM runs r WHERE r.program = programs.slug AND r.title IS NOT NULL)';
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-titles-'), '.ccrc', 'coord.db')));
-const open = (s: CoordStore, program: string, title: string, wave: number, programmeTitle?: string): number => {
+// Programme lifecycle W1 (R11, D-8993): one coordinator owns one programme, so a second programme's first run is another
+// claimant's.
+const open = (s: CoordStore, program: string, title: string, wave: number, programmeTitle?: string, claimedBy = 'coord-a'): number => {
   const r = s.openRun({
-    program, title, project: 'demo', wave, waveOf: null, claimedBy: 'coord-a',
+    program, title, project: 'demo', wave, waveOf: null, claimedBy,
     ...(programmeTitle !== undefined ? { programmeTitle } : {}),
   });
   if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
@@ -76,7 +78,7 @@ describe('opens leave the programme name alone', () => {
   it('programmeTitle is used only for a new programme row', () => {
     const s = store();
     open(s, 'programme-a', 'T1', 1, 'Programme A');
-    open(s, 'programme-b', 'T2', 1);
+    open(s, 'programme-b', 'T2', 1, undefined, 'coord-b');
     expect(programmeTitleOf(s, 'programme-a')).toBe('Programme A');
     expect(programmeTitleOf(s, 'programme-b')).toBe('Programme b');
   });

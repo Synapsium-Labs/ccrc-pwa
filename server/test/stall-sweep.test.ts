@@ -23,11 +23,12 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
-  BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
-  FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
+  BACKLOG_HORIZON_MS, DEAD_GRACE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
+  FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_RESTARTED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, COORD_BLOCKED_HELD_MS, COORD_BLOCKED_OLD_MS, COORD_BLOCKED_STRETCH_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
+import { FAILED_IDLE_MS, stallFailedSubject } from '../src/coord/stopFailure.js';
 import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession, type MailKind } from '../../shared/api.js';
@@ -214,7 +215,9 @@ const rig = async (over: Partial<Deps> = {}): Promise<{ h: Harness; coord: Coord
 };
 
 interface RunSeed {
-  program: string; worker?: string; dispatchedAt?: number;
+  /** `wave` (default 9): a second run of one programme takes another wave. Programme lifecycle W1 (R11): COORD owns at most
+   *  one live programme, so a test's second run is a run of the same programme, never of another. */
+  program: string; wave?: number; worker?: string; dispatchedAt?: number;
   workerMail?: { at: number; subject: string } | null; inbound?: { at: number } | null;
 }
 /** One dispatched work run. By default it carries S4's two mails: the worker's status at 21:17:43Z, and
@@ -223,7 +226,7 @@ const seedRun = (coord: CoordStore, o: RunSeed): number => {
   const worker = o.worker ?? WORKER;
   const dispatchedAt = o.dispatchedAt ?? DISPATCHED_AT;
   at(dispatchedAt);
-  const opened = coord.openRun({ program: o.program, title: o.program, project: 'demo', wave: 9, waveOf: 9, claimedBy: COORD });
+  const opened = coord.openRun({ program: o.program, title: o.program, project: 'demo', wave: o.wave ?? 9, waveOf: Math.max(9, o.wave ?? 9), claimedBy: COORD });
   if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
   coord.markDispatched(opened.id, worker, `${worker}-ws`, `ws/${worker}`, false, dispatchedAt);
   const adv = coord.advance(opened.id, 'dispatched', 'coordinator');
@@ -641,7 +644,7 @@ describe('sweepStalls: durability', () => {
     const { h, coord, w } = await rig();
     seedRegistry(h.home, OTHER_WORKER);
     seedRun(coord, { program: 'prog-a' });
-    seedRun(coord, { program: 'prog-b', worker: OTHER_WORKER });
+    seedRun(coord, { program: 'prog-a', wave: 10, worker: OTHER_WORKER });   // one programme per coordinator (R11)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const real = coord.currentAskFor.bind(coord);
     let thrown = false;
@@ -757,7 +760,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     const { coord, w } = await rig();
     // Run A (earlier) carries the worker's last mail; run B (later) carries the newest mail TO it.
     const runA = seedRun(coord, { program: 'prog-a', dispatchedAt: DISPATCHED_AT - 3_600_000, inbound: null });
-    const runB = seedRun(coord, { program: 'prog-b', workerMail: null });
+    const runB = seedRun(coord, { program: 'prog-a', wave: 10, workerMail: null });   // one programme per coordinator (R11)
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord).map((m) => m.runId)).toEqual([runB]);
@@ -968,7 +971,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
       const { coord, w } = await rig();
       const runId = seedRun(coord, { program: 'demo-program' });
       if (withPeer) {
-        const other = seedRun(coord, { program: 'prog-other', worker: OTHER_WORKER, workerMail: null, inbound: null });
+        const other = seedRun(coord, { program: 'demo-program', wave: 10, worker: OTHER_WORKER, workerMail: null, inbound: null });   // R11
         at(WORKER_MAIL_AT + 600_000);                 // newer than the worker's last run mail: it would move the key
         coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', body: 'b', artifacts: [] });
         coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: OTHER_WORKER, runId: other, kind: 'finding', subject: 'off-run', body: 'b', artifacts: [] });
@@ -1468,7 +1471,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
   });
 
   it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon (D-3752))', async () => {
-    // A prior failed: self-mail at S2 - 1 h, a server_error at S2. The repeat goes to the operator and never wakes the
+    // A prior failed: self-mail at S2 - 1 h, a max_output_tokens at S2 (a provider error is the provider-failure ladder's). The repeat goes to the operator and never wakes the
     // session. A day later the prior mail is out of the lane's read, and the arm must not re-read the standing failure
     // as a first one and type a retry nudge into the pane.
     const { h, coord, w, sent } = await rig();
@@ -1480,7 +1483,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     coord.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: COORD, runId: null, kind: 'status',
       subject: stallFailedSubject('overloaded', PRIOR_AT - 600_000), body: 'b', artifacts: [] });
     seedLiveState(h.home, { startedAt: STARTED_AT });
-    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error', at: S2, stopAt: S2 });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'max_output_tokens', at: S2, stopAt: S2 });
     const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
     const sessions = [fleetRow(WORKER), fleetRow(COORD)];
     const failedMail = (): MailRow[] => operatorMail(coord).filter((m) => m.toId === COORD && m.subject.startsWith(STALL_FAILED_PREFIX));
@@ -1691,7 +1694,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });
     seedLiveState(h.home, { startedAt: STARTED_AT });
-    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error' });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'max_output_tokens' });
     const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
     at(IDLE_AT + FAILED_IDLE_MS);
     await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], W2, both);
@@ -2067,7 +2070,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     // left working, and its worker has been silent on it since S4's mails.
     const a = dispatchAt(coord, 'prog-a', DISPATCHED_AT - 3_600_000);
     advanceAt(coord, a, DISPATCHED_AT - 1_800_000, 'working');
-    const b = seedRun(coord, { program: 'prog-b' });
+    const b = seedRun(coord, { program: 'prog-a' });   // one programme per coordinator (R11): wave 9 beside A's wave 2
     advanceAt(coord, a, DISPATCHED_AT + 3_600_000, 'awaiting-review');
     advanceAt(coord, a, R1_AT - 1_800_000, 'working');
     await sweepAt(w, R1_AT, LIVE);
@@ -2078,7 +2081,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     const { h, coord, w } = await rig();
     seedRegistry(h.home, OTHER_WORKER);
     seedRun(coord, { program: 'prog-a' });
-    seedRun(coord, { program: 'prog-b', worker: OTHER_WORKER });
+    seedRun(coord, { program: 'prog-a', wave: 10, worker: OTHER_WORKER });   // one programme per coordinator (R11)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(coord, 'runEvents').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
     at(R1_AT);
@@ -2595,7 +2598,7 @@ describe('sweepStalls: a worker\'s own timer holds the quiet arm (Overlord §3.3
   const STAMP = '00000001-0000-4000-8000-000000000000';
   const MIN = 60_000;
   const setTimer = (coord: CoordStore, dueAt: number): number => {
-    const r = coord.insertTimer({ setter: WORKER, setterIncarnation: STAMP, setById: WORKER, setByUuid: UUID, role: 'worker',
+    const r = coord.insertTimer({ setRestoreGeneration: null, setter: WORKER, setterIncarnation: STAMP, setById: WORKER, setByUuid: UUID, role: 'worker',
       note: 'check the checks', runId: null, programme: null, setAt: IDLE_AT, dueAt });
     if (!r.ok) throw new Error('timer not set');
     return r.id;

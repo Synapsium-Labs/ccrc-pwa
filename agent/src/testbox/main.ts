@@ -39,7 +39,7 @@ import { pristineSettings } from './pristine.js';
 import { ProbeDesk, type ProbeRunner } from './probeDesk.js';
 import { fileBudgetStore, fleetConfigDirs, realPathOf } from './probeFs.js';
 import { probeRole, probeSettings } from './probes.js';
-import { registrySettings, startRegistry } from './registry.js';
+import { registryCacheDir, registrySettings, startRegistry } from './registry.js';
 import { liveRunIds } from './runs.js';
 import { FRAME_HANDLERS, TestboxService, type Conn, type PristineDeps } from './service.js';
 import { systemctlManager, type SystemManager } from './systemd.js';
@@ -292,18 +292,19 @@ export function captureDeskFor(cfg: TestboxConfig, o: CaptureDeskOpts = {}): Cap
 }
 
 /** The composition itself, past the socket's fit (`wired`): the runner built from `CAPTURE_TIMINGS` and the desk around it
- *  on the same contract (gate G1 runs through this function, review 3687 F2), or no runner. */
+ *  handed that very object (gate G1 runs through this function, review 3687 F2 and review 3765 F2), or no runner. */
 export function captureDeskComposed(cfg: TestboxConfig, tmuxBase: string, wired: boolean, o: CaptureDeskOpts = {}): CaptureDesk {
-  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), CAPTURE_TIMINGS, o.seams) : null, tmuxBase, o);
+  const timings = CAPTURE_TIMINGS;
+  return captureDeskWith(cfg, wired ? captureRunnerFor(cfg.root, tmuxBase, o.toolsPath ?? (() => null), timings, o.seams) : null, timings, tmuxBase, o);
 }
 
-/** The desk around `runner`, as `captureDeskFor` composes it: the late check on the same `CAPTURE_TIMINGS` the runner was
- *  built from (gate G1), the box's admissions (G2), the builds store's prune. */
-export function captureDeskWith(cfg: TestboxConfig, runner: CaptureRunnerLike | null, tmuxBase: string, o: CaptureDeskOpts = {}): CaptureDesk {
+/** The desk around `runner`, as `captureDeskComposed` composes it: the late check on `timings`, the very contract the runner
+ *  was built from (gate G1), the box's admissions (G2), the builds store's prune. */
+export function captureDeskWith(cfg: TestboxConfig, runner: CaptureRunnerLike | null, timings: CaptureTimings, tmuxBase: string, o: CaptureDeskOpts = {}): CaptureDesk {
   const home = o.home ?? os.homedir();
   return new CaptureDesk({
     role: probeRole(cfg.lines), runner,
-    root: cfg.root, tmuxBase, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, buildFacts: buildFileFacts, timings: CAPTURE_TIMINGS,
+    root: cfg.root, tmuxBase, fleetDirs: () => fleetConfigDirs([home]), realPath: realPathOf, buildFacts: buildFileFacts, timings,
     ...(o.admitting === undefined ? {} : { admitting: o.admitting }), ...(o.seams?.now === undefined ? {} : { now: o.seams.now }),
     prune: (inUse) => { pruneBuilds(cfg.root, inUse); },
   });
@@ -386,7 +387,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
 export async function registryFor(cfg: TestboxConfig): Promise<{ close(): Promise<void> }> {
   const r = registrySettings(cfg.lines, hostPort);
   if (listenClass(r.host) !== 'loopback') throw new Error(`CCRC_TESTBOX_REGISTRY_PROXY: ${r.host} is not a loopback address`);
-  return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: path.join(cfg.root, 'registry'), timeoutMs: cfg.unitMaxMs });
+  return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: registryCacheDir(cfg.root), timeoutMs: cfg.unitMaxMs });
 }
 
 /** The timer's work (L5): the service's tick, after any tick in progress, and beside it, not awaited, the tool sync's

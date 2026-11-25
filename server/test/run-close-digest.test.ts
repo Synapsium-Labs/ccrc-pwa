@@ -9,9 +9,11 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 afterEach(removeTmpFixtures);
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-closedigest-'), '.ccrc', 'coord.db')));
+// Programme lifecycle W1 (R11): one coordinator owns at most one live programme, and a programme whose run closed stays
+// live, so each programme is opened by its own claimant.
 const closed = (s: CoordStore, program: string, wave: number, by: string, detail: string | null, at: number): void => {
-  const r = s.openRun({ program, title: 'T', project: 'demo', wave, waveOf: null, claimedBy: 'coord-a' });
-  if (!('id' in r)) throw new Error('fixture openRun refused');
+  const r = s.openRun({ program, title: 'T', project: 'demo', wave, waveOf: null, claimedBy: `coord-${program}` });
+  if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
   s.db.prepare("UPDATE runs SET state = 'failed', closedAt = ?, closedBy = ?, closeDetail = ? WHERE id = ?").run(at, by, detail, r.id);
 };
 

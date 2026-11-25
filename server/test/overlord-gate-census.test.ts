@@ -200,10 +200,11 @@ function mutate(text: string, from: RegExp, to: string): string {
 }
 
 describe('every overlord door asks the one gate, with its own row, before the store', () => {
-  it('the scan finds the six start-door registrations, the card one carrying two rows (a zero would make the rest vacuous)', () => {
+  it('the scan finds the six start-door registrations and the three timer doors, the card one carrying two rows (a zero would make the rest vacuous)', () => {
     expect([...rowsOfContinuity.keys()].sort()).toEqual([
-      'GET /api/sessions/:id/card', 'GET /api/sessions/:id/notes', 'GET /api/sessions/:id/probe',
-      'POST /api/sessions/:id/handover', 'POST /api/sessions/:id/notes', 'POST /api/sessions/:id/probe',
+      'GET /api/sessions/:id/card', 'GET /api/sessions/:id/notes', 'GET /api/sessions/:id/probe', 'GET /api/timers',
+      'POST /api/sessions/:id/handover', 'POST /api/sessions/:id/notes', 'POST /api/sessions/:id/probe', 'POST /api/timers',
+      'POST /api/timers/:id/cancel',
     ]);
     expect(rowsOfContinuity.get('GET /api/sessions/:id/card')).toEqual(['card', 'card-record']);
     const regs = registrationsIn(CONTINUITY_TEXT, CONTINUITY).map((r) => r.reg);

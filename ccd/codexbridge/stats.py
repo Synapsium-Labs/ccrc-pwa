@@ -20,7 +20,8 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
               "inputTransformations": {"<type>:<action>:<reason>": n}, "responsesWithTransformations",
               "replay": {"text-hit", "text-empty", "text-absent", "call-hit", "call-absent"},
               "firstOutputMs": {"<bucket>": n}, "reasoningMs": {"<bucket>": n}, "totalMs": {"<bucket>": n},
-              "markers": {"<marker>": n}, "fallbacks": {"<marker>": n}, "turnState": {"captured", "echoed"}}}}
+              "markers": {"<marker>": n}, "fallbacks": {"<marker>": n}, "turnState": {"captured", "echoed"},
+              "absorbed": {"<word>": n}}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
@@ -79,6 +80,9 @@ outcomes. A row counts:
   over `backend.MARKERS`.
 - `turnState` (D-8623): `captured`, each turn's first sticky-routing token kept, and `echoed`, each POST that sent one
   back. The token itself is never in this file (TOKEN_HEADERS).
+- `absorbed` (D-9078): one per upstream failure the bridge tried again instead of answering, by its word
+  (`absorb.WORDS`, zero-filled). No such failure is in `outcomes` or moves `routes.requests`; the one the client is
+  answered with, when every retry failed, is counted there as it always was and never here.
 A writer ignores a malformed argument (a level, a model or an outcome that is not a string, a count that is not a
 positive int, a usage that is not a mapping, a time that is not a finite number of at least 0, a key outside its
 shape); the load re-checks every bound and drops what fails it, never resetting.
@@ -132,7 +136,7 @@ import threading
 import time
 from typing import Dict, Mapping, Optional
 
-from . import backend, count, errors, known, reducer, store
+from . import absorb, backend, count, errors, known, reducer, store
 
 VERSION = 1
 FAMILIES = tuple(known.KNOWN)  # the eleven D3 families, in the plan's order; spelled once, in known.KNOWN
@@ -294,7 +298,8 @@ def _parity_row() -> dict:
            "firstOutputMs": {k: 0 for k in _buckets()}, "reasoningMs": {k: 0 for k in _buckets()},
            "totalMs": {k: 0 for k in _buckets()},
            "markers": {k: 0 for k in backend.MARKERS}, "fallbacks": {k: 0 for k in backend.MARKERS},
-           "turnState": {k: 0 for k in TURN_STATE_EVENTS}}  # type: dict
+           "turnState": {k: 0 for k in TURN_STATE_EVENTS},
+           "absorbed": {k: 0 for k in absorb.WORDS}}  # type: dict
     for _, field in PARITY_TOKENS:
         row[field] = 0
     return row
@@ -314,7 +319,8 @@ def _carried_row(old: dict) -> dict:
     for field in ("responses", "responsesWithTransformations") + tuple(f for _, f in PARITY_TOKENS):
         if _is_int(old.get(field)):
             row[field] = old[field]
-    for field in ("served", "replay", "firstOutputMs", "reasoningMs", "totalMs", "markers", "fallbacks", "turnState"):
+    for field in ("served", "replay", "firstOutputMs", "reasoningMs", "totalMs", "markers", "fallbacks", "turnState",
+                  "absorbed"):
         held = old.get(field)
         for k in row[field] if isinstance(held, dict) else ():
             if _is_int(held.get(k)):
@@ -631,6 +637,10 @@ class Stats:
     def parity_fallback(self, route: str, model: str, marker: str) -> None:
         """D-8622: one `marker` a 400's fallback dropped, one of `backend.MARKERS`."""
         self._parity_fixed(route, model, "fallbacks", marker)
+
+    def parity_absorbed(self, route: str, model: str, word: str) -> None:
+        """One upstream failure tried again instead of answered, by its word, one of `absorb.WORDS`."""
+        self._parity_fixed(route, model, "absorbed", word)
 
     def parity_turn_state(self, route: str, model: str, event: str) -> None:
         """D-8623: one turn-state token `captured` or `echoed` (TURN_STATE_EVENTS); never the token."""

@@ -89,7 +89,7 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
   // run's project (`seed`'s `u-<id>` uuid; the body sends it, `postOpen`).
   seed(home, OPEN_BODY.claimedBy);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject);
+  seedLegacyProgramme(coord.db, OPEN_BODY.program, OPEN_BODY.homeProject, OPEN_BODY.claimedBy);
   const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, ...over });
   return { app, coord };
 };

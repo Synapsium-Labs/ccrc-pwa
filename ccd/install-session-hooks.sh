@@ -186,7 +186,7 @@ _child_deny_json() {
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
   up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt roll claude; do
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps keep-awake ws-lease-mark delegation-adopt docs-folder roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   # The child-scope verbs (D-8978, `CHILD_SCOPE_DENY_CCD_VERBS` in shared/api.ts): no SAFETY verb, but no child's either.
@@ -306,7 +306,7 @@ _account_deny_json() {
            '~/.ccrc/coordination-restore.stage/*/operator-model.db*' '~/.ccrc/coordination-restore.foreign/*/operator-model.db*' '~/.cc-sessions/.door/**'; do
     rules+=("Read($p)")
   done
-  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**' '~/.cc-sessions/.door/**'; do rules+=("Edit($p)"); done
+  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**' '~/.cc-sessions/.door/**' '~/.ccrc/authority-witness.json'; do rules+=("Edit($p)"); done
   # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
   for p in '~/.ccrc/accounts.json' '~/.ccrc/accounts.sh'; do rules+=("Edit($p)"); done   # ACCOUNT_ROSTER_FILES
   for p in 'node deploy/account-op.mjs' 'node ./deploy/account-op.mjs' './deploy/account-op.mjs'; do rules+=("Bash($p:*)"); done   # ACCOUNT_OP_RUNS

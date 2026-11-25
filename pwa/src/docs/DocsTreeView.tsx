@@ -31,8 +31,21 @@ export function DocsPageLink(p: {
 }
 
 /** One `.docs-row` button (spec 4.4: one `<button>` per row); a tap navigates with a history entry. */
-function RowButton(p: { readonly href: string; readonly children: ReactNode }): ReactNode {
+export function RowButton(p: { readonly href: string; readonly children: ReactNode }): ReactNode {
   return <button type="button" className="docs-row" onClick={() => navigate(p.href)}>{p.children}</button>;
+}
+
+/** One directory's list item in a listing: its glyph, its name with a trailing slash, and how many entries lie under it. The
+ *  project pages' listing and an outside folder's (`FolderPages.tsx`) draw their directories through this one. */
+export function DirRow(p: { readonly href: string; readonly name: string; readonly count: number }): ReactNode {
+  return (
+    <li>
+      <RowButton href={p.href}>
+        <span className="docs-row-glyph" aria-hidden="true">{FOLDER_GLYPH}</span>
+        <span className="docs-row-name">{p.name}/</span> <span className="docs-row-count">{p.count}</span>
+      </RowButton>
+    </li>
+  );
 }
 
 function modeOf(page: DocsPageLocation): EntryMode {
@@ -124,12 +137,10 @@ function ListingPage(p: {
         : listing.folders.length + listing.files.length === 0 && <p className="docs-note">{DOCS_VIEW_TEXT.emptyListing}</p>}
       <ul className="docs-rows">
         {folders.map((f) => (
-          <li key={'d:' + f.name}>
-            <RowButton href={docsPageUrl(docsLocation(page, { kind: 'path', section, path: prefix + f.name, dirSlash: true }))}>
-              <span className="docs-row-glyph" aria-hidden="true">{FOLDER_GLYPH}</span>
-              <span className="docs-row-name">{f.name}/</span> <span className="docs-row-count">{f.count}</span>
-            </RowButton>
-          </li>
+          <DirRow
+            key={'d:' + f.name} name={f.name} count={f.count}
+            href={docsPageUrl(docsLocation(page, { kind: 'path', section, path: prefix + f.name, dirSlash: true }))}
+          />
         ))}
         {files.map(({ entry, view }) => {
           const href = docsPageUrl(docsLocation(page, { kind: 'path', section, path: entry.path, dirSlash: false }));

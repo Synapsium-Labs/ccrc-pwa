@@ -97,7 +97,7 @@ describe('ladder latch seam', () => {
     expect(effectiveRung(facts)).toMatchObject({ rung: 'advise', binding: [{ cause: 'shared-user', kind: 'condition', cap: 'advise', known: true }] });
   });
   it('Confirm stamps pending rows, preserves earlier records and adds the stricter side', () => {
-    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'advise', 'actor', 1, NULL, 'full', 1)");
     db.exec("INSERT INTO overlord_latches (cause,cap,detail,raisedAt,raisedBy,raiseSequence) VALUES ('latch-a','chat','a',1,'actor',NULL), ('latch-b','advise','b',1,'actor',3)");
     const events: string[] = [];
@@ -113,12 +113,12 @@ describe('ladder latch seam', () => {
       { cause: 'latch-a', cap: 'chat', raiseSequence: 9 }, { cause: 'latch-b', cap: 'advise', raiseSequence: 3 }, { cause: 'latch-c', cap: 'chat', raiseSequence: 9 },
     ]);
     const coord = new CoordStore(db);
-    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted' }, { heldFor: () => 'held' }, []);
+    const read = ladderRead(coord, { 'generation-degraded': () => 'lifted', 'off-model': () => 'lifted', 'rung-word-missing': () => 'lifted', 'shared-user': () => 'lifted', 'load-past-95': () => 'lifted', 'launch-profile-unengaged': () => 'lifted', 'no-witness-since-boot': () => 'lifted' }, { heldFor: () => 'held' }, []);
     expect(read).toMatchObject({ kind: 'measured', lastChange: { narrowing: { state: 'done' } } });
     db.close();
   });
   it('a refused Confirm append never restores, and a later restore error rolls back the transaction', () => {
-    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'chat', 'actor', 1, NULL, 'advise', 1)");
     db.exec('CREATE TABLE confirm_fixture (sequence INTEGER)');
     let restores = 0;
@@ -137,12 +137,12 @@ describe('ladder latch seam', () => {
     db.close();
   });
   it('Confirm writes off for the absent database side', () => {
-    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     tx(db, () => applyRestoreInTx(db, { operatorRung: 'off', latches: [] }, 9, 10));
     expect(db.prepare('SELECT operatorRung FROM overlord_ladder').get()).toMatchObject({ operatorRung: 'off' }); db.close();
   });
   it('restore detection remains through Confirm and clears only after coherence', () => {
-    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     const coord = new CoordStore(db); let coherent = false;
     const journal: AuthorityAppender = { appendInTx: (_db, entry) => coherent
       ? { ok: true, kind: 'appended', record: { sequence: 12 } } as any
@@ -160,7 +160,7 @@ describe('ladder latch seam', () => {
   });
   it('uses the fixture table cap and notice and keeps a standing latch', () => {
     const db = new DatabaseSync(':memory:');
-    db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_sequence ('))!);
     const coord = new CoordStore(db);
     const deps = { coord, causeTable: causes, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
       journal: { appendInTx: () => ({ ok: true as const, kind: 'row-only' as const, state: { kind: 'rolled-back' as const, cause: 'diverged' as const } }) } };

@@ -36,13 +36,13 @@ const LATER = '99999999-2222-3333-4444-555555555555';
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-timer-lane-'), '.ccrc', 'coord.db')));
 const set = (s: CoordStore, over: Partial<TimerInsert> = {}): number => {
-  const r = s.insertTimer({ setter: ID, setterIncarnation: STAMP, setById: ID, setByUuid: 'u', role: 'worker',
+  const r = s.insertTimer({ setRestoreGeneration: null, setter: ID, setterIncarnation: STAMP, setById: ID, setByUuid: 'u', role: 'worker',
     note: 'check the checks', runId: null, programme: null, setAt: NOW - 3 * H, dueAt: NOW - MIN, ...over });
   if (!r.ok) throw new Error('timer not set');
   return r.id;
 };
-const openRun = (s: CoordStore, program = 'prog-a'): number => {
-  const opened = s.openRun({ program, title: 'T', project: 'project-a', wave: 2, waveOf: 3, claimedBy: OTHER });
+const openRun = (s: CoordStore, program = 'prog-a', claimedBy = OTHER): number => {
+  const opened = s.openRun({ program, title: 'T', project: 'project-a', wave: 2, waveOf: 3, claimedBy });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
   return opened.id;
 };
@@ -297,11 +297,15 @@ describe('the cleanup arm: setter-gone from the stamp only, and every unmeasured
     expect(timersPass({ coord: s, now: NOW, log: () => {} }, LISTED, facts)).toMatchObject({ waited: 1, fired: [] });
   });
 
-  it('a programme with planEnd cancels its timer programme-ended; one whose state reads done with planEnd unset keeps it', async () => {
+  // Programme lifecycle W1 (W1 review, C1 and A1): a DECIDED end (state and its record together, `decideInTx`) cancels; a D-51
+  // `done` the migration kept for the operator (state `done`, `planEnd` unset: spec §13 step 4's `auto-retire-kept`) keeps
+  // its timer and fires it, as on `main`, because a cancel is never undone by the operator's later reopen. Red with the lane
+  // reading `programmeLive` (isEnded alone): prog-b's timer is then cancelled.
+  it('a programme whose end was decided cancels its timer programme-ended; a kept D-51 done with planEnd unset keeps it', async () => {
     const s = store();
     openRun(s, 'prog-a');
-    openRun(s, 'prog-b');
-    s.db.prepare("UPDATE programs SET planEnd = 'done' WHERE slug = 'prog-a'").run();
+    openRun(s, 'prog-b', 'project-a-third');   // one coordinator owns one programme (R11)
+    s.decideProgramme({ slug: 'prog-a', to: 'done', edge: 'ended', actor: { kind: 'operator', id: 'unmeasured' }, why: 'test' }, NOW);
     s.db.prepare("UPDATE programs SET state = 'done' WHERE slug = 'prog-b'").run();
     const ended = set(s, { programme: 'prog-a' });
     const between = set(s, { programme: 'prog-b' });
@@ -432,5 +436,174 @@ describe('timerListingOf: the tick\'s listing as the lane reads it (review 2053 
   });
   it('no listing leaves listedIds null and nothing unmeasured by it', () => {
     expect(timerListingOf([r(ID)], null, null, [])).toMatchObject({ listedIds: null, unmeasuredIds: new Set(), mailDisabled: false });
+  });
+});
+
+// ── Overlord W1, the Overlord's timers (plan w1-overlord-timers.md Task 4) ──────────────────────────────────────────────
+// The role `overlord` as a setter of the same lane: the pass reads the designation and the authority guard at its top, after
+// the gather's awaits; the role's timers wait while the guard is not coherent or the designation unmeasured, cancel `retired`
+// once it binds no session or another term, and their one mail keeps `overlord` on the row and is delivered to the bound body.
+describe("the Overlord's timers in the lane (Overlord W1)", () => {
+  const BODY = 'lane-o-project-a';
+  const NEW_BODY = 'lane-n-project-a';
+  const view = (bound: string | null, designatedTerm = 7) => ({
+    bound: bound === null ? null : { sessionId: bound, generation: STAMP }, pending: null, term: designatedTerm + 2, designatedTerm, model: 'opus' as const,
+    accountPools: { pools: [], untagged: true }, pastIds: [], actor: 'device-a', lastAttempt: null, stopsOwed: [],
+  });
+  type Designation = ReturnType<CoordStore['designationRead']>;
+  const designated = (sessionId: string, term = 7): Designation => ({ kind: 'designated', sessionId, term: term + 2, row: view(sessionId, term) });
+  const role = (s: CoordStore, over: Partial<TimerInsert> = {}): number =>
+    set(s, { setter: 'overlord', setterIncarnation: '7', setById: BODY, role: 'overlord', ...over });
+  /** One pass with the designation, the guard and the restore generation the case names. */
+  const rolePass = async (s: CoordStore, o: { designation?: Designation; authority?: 'coherent' | 'not-coherent'; restore?: number | 'unmeasured';
+    listing?: Partial<TimerListing>; duringGather?: () => void } = {}) => {
+    const spy = vi.spyOn(s, 'designationRead').mockReturnValue(o.designation ?? designated(BODY));
+    const facts = await gatherTimerFacts(s, async () => { o.duringGather?.(); return measured(STAMP); });
+    const restore = o.restore ?? 0;
+    const r = timersPass({ coord: s, now: NOW, log: () => undefined, authority: () => o.authority ?? 'coherent',
+      restoreGeneration: () => (restore === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'measured', n: restore }) }, { ...LISTED, ...o.listing }, facts);
+    spy.mockRestore();
+    return r;
+  };
+
+  it('a due role timer under its own term and a coherent guard fires one mail: the row says overlord, the delivery and the envelope the bound body', async () => {
+    const s = store();
+    const id = role(s);
+    const r = await rolePass(s);
+    expect(r.fired).toHaveLength(1);
+    const mails = timerMail(s);
+    expect(mails.map((m) => [m.toId, m.deliverTo, m.kind])).toStrictEqual([['overlord', BODY, 'status']]);
+    const envelope = (s.db.prepare('SELECT envelope FROM mail_deliveries WHERE mailId = ?').get(mails[0]!.id) as { envelope: string }).envelope;
+    expect(envelope).toContain(BODY);
+    expect(timer(s, id)).toMatchObject({ state: 'fired', mailId: mails[0]!.id });
+  });
+
+  it('the gather asks no incarnation for the role, and a session setter beside it keeps its own', async () => {
+    const s = store();
+    role(s); set(s);
+    const asked: string[] = [];
+    await gatherTimerFacts(s, async (id) => { asked.push(id); return measured(STAMP); });
+    expect(asked).toStrictEqual([ID]);
+  });
+
+  it('a rebind (the same term, another body) before the fire: the mail is delivered to the new body', async () => {
+    const s = store();
+    role(s);
+    await rolePass(s, { designation: designated(NEW_BODY) });
+    expect(timerMail(s).map((m) => [m.toId, m.deliverTo])).toStrictEqual([['overlord', NEW_BODY]]);
+  });
+
+  it('a rebind that goes live while the gather awaits a session setter: the fire delivers to the new body (F5)', async () => {
+    const s = store();
+    role(s); set(s);
+    let current = designated(BODY);
+    const spy = vi.spyOn(s, 'designationRead').mockImplementation(() => current);
+    const facts = await gatherTimerFacts(s, async () => { current = designated(NEW_BODY); return measured(STAMP); });
+    timersPass({ coord: s, now: NOW, log: () => undefined, authority: () => 'coherent', restoreGeneration: () => ({ kind: 'measured', n: 0 }) }, LISTED, facts);
+    spy.mockRestore();
+    expect(timerMail(s).filter((m) => m.toId === 'overlord').map((m) => m.deliverTo)).toStrictEqual([NEW_BODY]);
+  });
+
+  it('a retire, a row that binds no session and another term cancel the role\'s timers retired, never mailed', async () => {
+    for (const designation of [{ kind: 'not-designated', row: null }, { kind: 'not-designated', row: view(null) }, designated(BODY, 8)] as Designation[]) {
+      const s = store();
+      const id = role(s);
+      const r = await rolePass(s, { designation });
+      expect(r.cancelled, JSON.stringify(designation)).toStrictEqual([{ id, reason: 'retired' }]);
+      expect(timerMail(s)).toStrictEqual([]);
+    }
+  });
+
+  it("an unmeasured designation: the role's timers wait, and a session setter's due timer in the same pass fires", async () => {
+    const s = store();
+    const r1 = role(s); const own = set(s);
+    const r = await rolePass(s, { designation: { kind: 'unmeasured', why: 'the row is unreadable' } });
+    expect(r.cancelled).toStrictEqual([]);
+    expect(timer(s, r1)!.state).toBe('pending');
+    expect(timer(s, own)!.state).toBe('fired');
+  });
+
+  it('the restore (F1): while the guard is not coherent the role timer neither fires nor cancels, under any designation; once coherent, a timer set before restore 2 fires with the line', async () => {
+    const s = store();
+    const before = role(s, { setRestoreGeneration: 1, note: 'before' });
+    const after = role(s, { setRestoreGeneration: 2, note: 'after' });
+    const own = set(s);
+    for (const designation of [designated(BODY), designated(BODY, 8), { kind: 'not-designated', row: null } as Designation]) {
+      const r = await rolePass(s, { authority: 'not-coherent', designation, restore: 'unmeasured' });
+      expect(r.cancelled).toStrictEqual([]);
+      expect([timer(s, before)!.state, timer(s, after)!.state]).toStrictEqual(['pending', 'pending']);
+    }
+    expect(timer(s, own)!.state, "a session setter's timer is not held").toBe('fired');
+    await rolePass(s, { restore: 2 });
+    const mails = timerMail(s).filter((m) => m.toId === 'overlord');
+    expect(mails).toHaveLength(1);
+    const body = mails[0]!.body;
+    expect(body.split('Set before restore 2 of the coordination database').length - 1).toBe(1);
+    expect(body.indexOf('Set before restore 2')).toBeLessThan(body.indexOf(`Timer ${after}:`));
+    expect([timer(s, before)!.state, timer(s, after)!.state]).toStrictEqual(['fired', 'fired']);
+  });
+
+  it('a Confirm that binds no session: the next coherent pass cancels the role\'s pending timers retired', async () => {
+    const s = store();
+    const id = role(s);
+    await rolePass(s, { authority: 'not-coherent', designation: { kind: 'not-designated', row: null } });
+    expect(timer(s, id)!.state).toBe('pending');
+    const r = await rolePass(s, { designation: { kind: 'not-designated', row: null } });
+    expect(r.cancelled).toStrictEqual([{ id, reason: 'retired' }]);
+  });
+
+  it('mail-disabled holds the role\'s fire and still runs its cleanup', async () => {
+    const s = store();
+    const due = role(s);
+    const old = role(s, { setterIncarnation: '6' });
+    const r = await rolePass(s, { listing: { mailDisabled: true } });
+    expect(timer(s, due)!.state).toBe('pending');
+    expect(r.cancelled).toStrictEqual([{ id: old, reason: 'retired' }]);
+    expect(timerMail(s)).toStrictEqual([]);
+  });
+
+  it('the purge removes the refusal counts older than the keep, by UTC day', async () => {
+    const s = store();
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    s.recordTimerRefusal({ day: day(NOW - TIMER_KEEP_MS - DAY), door: 'set', word: 'timer-cap' });
+    s.recordTimerRefusal({ day: day(NOW - TIMER_KEEP_MS + DAY), door: 'set', word: 'timer-cap' });
+    await rolePass(s);
+    const left = s.timerRefusalCounts('2000-01-01');
+    expect(left.ok && left.rows.map((x) => x.day)).toStrictEqual([day(NOW - TIMER_KEEP_MS + DAY)]);
+  });
+
+  it('absent ports: the guard reads not coherent and the restore unmeasured, so the role waits and a session setter fires', async () => {
+    const s = store();
+    const id = role(s); const own = set(s);
+    const spy = vi.spyOn(s, 'designationRead').mockReturnValue(designated(BODY));
+    timersPass({ coord: s, now: NOW, log: () => undefined }, LISTED, await gatherTimerFacts(s, async () => measured(STAMP)));
+    spy.mockRestore();
+    expect([timer(s, id)!.state, timer(s, own)!.state]).toStrictEqual(['pending', 'fired']);
+  });
+
+  // Review 3841 F2: the watcher's own binding of the guard and the restore generation (`FleetWatcher.sweepTimers`), through a
+  // real watcher, so deleting or inverting either turns this red. Every other case passes the ports to the pass by hand.
+  it('a real watcher fires a planted role timer under a coherent guard, with the restore line its restore state names; not while the guard is not coherent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+    try {
+      let guard: 'coherent' | 'rolled-back' = 'rolled-back';
+      const deps = (h: string, s: CoordStore) => ({
+        ...testDeps(h), coord: s, time: fakeTime({ wallMs: NOW }).ports,
+        overlordAuthorityGuard: { state: () => ({ kind: guard }) } as never,
+        overlordRestore: { restoreGeneration: () => ({ kind: 'measured', n: 3 }) } as never,
+      });
+      const h = mkTmp('ccrc-timer-lane-w-role-'); mkdirSync(path.join(h, '.cc-sessions'), { recursive: true });
+      const s = store();
+      const id = role(s, { setRestoreGeneration: 1 });
+      vi.spyOn(s, 'designationRead').mockReturnValue(designated(BODY));
+      await quietAtTestEnd(new FleetWatcher(withFakeClock(deps(h, s)), new Bus(), 2000)).sweepTimers([], new Set([ID]), NOW - 1_000, []);
+      expect(timer(s, id)!.state).toBe('pending');
+      guard = 'coherent';
+      await quietAtTestEnd(new FleetWatcher(withFakeClock(deps(h, s)), new Bus(), 2000)).sweepTimers([], new Set([ID]), NOW - 1_000, []);
+      expect(timer(s, id)!.state).toBe('fired');
+      const mails = timerMail(s);
+      expect(mails.map((m) => [m.toId, m.deliverTo])).toStrictEqual([['overlord', BODY]]);
+      expect(mails[0]!.body).toContain('Set before restore 3 of the coordination database');
+    } finally { vi.useRealTimers(); }
   });
 });

@@ -10,7 +10,7 @@ import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
 import { PrivateStoreUnmigratable, defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
-import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
+import { openOperatorModelStore, OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
 import type { MessageActor, MessageEvent, MessageState, ReadLine } from '../../shared/operatorMessages.js';
 import { EVENT_ACTORS, TABLE_1 } from './sim/operatorModelSets.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -94,6 +94,19 @@ describe('operator-model.db: the shared opener at 0600', () => {
 });
 
 describe('recordMessage', () => {
+  it('issues above a witnessed id even when the two local copies agree on an older id', () => {
+    const dir = mkTmp('ccrc-opmodel-');
+    let witnessed: number | null = null;
+    const f = openOperatorModelStore(defaultOperatorModelDbPath(dir), dir, 1000,
+      { witnessHighestIds: () => ({ message: witnessed }) });
+    opened.push(f.db);
+    const input = { at: 1001, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: 'fixture', mark: false, composedKey: null };
+    expect(idOf(f.store.recordMessage(input))).toBe(1);
+    witnessed = 40;
+    expect(idOf(f.store.recordMessage({ ...input, at: 1002 }))).toBe(41);
+    witnessed = 2;
+    expect(idOf(f.store.recordMessage({ ...input, at: 1003 }))).toBe(42);
+  });
   it('records a row, recorded, with its hash and its actor, after one journal record', () => {
     const f = fixture();
     const r = record(f);
@@ -265,7 +278,7 @@ describe('moveMessage: the one writer, by Table 1', () => {
     const id = rowIn(f, 'settled');
     expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 60).ok).toBe(true);
     expect(rawRow(f, id)).toMatchObject({ state: 'recorded', settledAt: null, settledBy: null });
-    expect(f.store.moveMessage(id, 'settle', 'acknowledge', 70)).toEqual({ ok: true, value: { changed: true, state: 'settled' } });
+    expect(f.store.moveMessage(id, 'settle', 'acknowledge', 70)).toEqual({ ok: true, value: { changed: true, state: 'settled', from: 'recorded' } });
     expect(rawRow(f, id)).toMatchObject({ state: 'settled', settledAt: 70, settledBy: 'acknowledge' });
   });
 
@@ -274,16 +287,16 @@ describe('moveMessage: the one writer, by Table 1', () => {
     const id = idOf(record(f));
     f.store.moveMessage(id, 'deliver', 'mail-lane', 10);
     f.store.moveMessage(id, 'settle', 'acknowledge', 20);
-    expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 30)).toEqual({ ok: true, value: { changed: true, state: 'delivered' } });
+    expect(f.store.moveMessage(id, 'unsettle', 'boot-pass', 30)).toEqual({ ok: true, value: { changed: true, state: 'delivered', from: 'settled' } });
   });
 
   it('deliver on picked-up stamps deliveredAt and keeps the state', () => {
     const f = fixture();
     const id = idOf(record(f));
     f.store.moveMessage(id, 'pick-up', 'hook', 10);
-    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 20)).toEqual({ ok: true, value: { changed: true, state: 'picked-up' } });
+    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 20)).toEqual({ ok: true, value: { changed: true, state: 'picked-up', from: 'picked-up' } });
     expect(rawRow(f, id)).toMatchObject({ state: 'picked-up', pickedUpAt: 10, deliveredAt: 20 });
-    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 30)).toEqual({ ok: true, value: { changed: false, state: 'picked-up' } });
+    expect(f.store.moveMessage(id, 'deliver', 'mail-lane', 30)).toEqual({ ok: true, value: { changed: false, state: 'picked-up', from: 'picked-up' } });
     expect(rawRow(f, id)).toMatchObject({ deliveredAt: 20 });
   });
 

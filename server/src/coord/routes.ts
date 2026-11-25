@@ -68,6 +68,8 @@ import { capCountsWorkingArmed, capNow, sendBackCapCheck, workerReadings, type C
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
+import { programmesWithLifecycle } from './programmeLifecycleRoutes.js';
+import { coordinatorReadingOf } from './programmeCoordinatorReading.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { MAIL_DISABLED_MARKER } from './rundefs.js';
@@ -166,6 +168,7 @@ import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, 
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
 import { coordinatorAdvisorOf } from '../continuity/advisorPolicy.js';
+import { markOperatorPrompt } from '../continuity/promptHandoffs.js';
 import {
   ADVISOR_CAP_MAX, ADVISOR_CAP_MIN, ADVISOR_CHOICES, ADVISOR_SCOPE_MAX_IDS, COORDINATOR_ADVISOR_DEFAULT, advisorScopeOf, isAdvisorCap,
   isAdvisorChoice, type CoordinatorAdvisorView,
@@ -177,6 +180,7 @@ import {
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
 import { settleAckedOperatorNudge } from '../operatorModel/nudgeLane.js';
+import { OVERLORD_IDENTITY } from '../roleOf.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -1082,6 +1086,11 @@ export function registerCoordRoutes(
     //
     // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
     // follows the chair, a session id names a session.
+    // The Overlord's identity word is reserved (Overlord W1, the Overlord's timers, question 4): only the timer lane writes
+    // mail to it, so a session's mail to it is refused by rule, before the registry is asked, whatever row exists.
+    if (toId === OVERLORD_IDENTITY) {
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, "the Overlord's role takes no mail in W1");
+    }
     if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
@@ -1754,7 +1763,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed, ticket: open.ticket });
+      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -2024,6 +2033,9 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another programme; nothing was re-pointed.
+      case 'owns-another-programme':
+        return refuseRun(reply, 'owns-another-programme', { by: r.by });
       // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read and
       // the heir's launch profile could not rule that out (502). `error` words; nothing was re-pointed or measured.
       case 'overlord-not-a-coordinator': case 'unmeasured':
@@ -3571,7 +3583,9 @@ export function registerCoordRoutes(
       since = n;
     }
     try {
-      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+      // Programme lifecycle W2 (spec §15): the lifecycle fields, the bound sessions read once each.
+      return await programmesWithLifecycle(deps.coord, deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts()),
+        (s) => coordinatorReadingOf(deps.io, deps.cfg, s));
     } catch (err) {
       return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
     }
@@ -4522,14 +4536,25 @@ export function registerCoordRoutes(
   /**
    * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
    * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
-   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
-   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * enqueues. Since landing order wave 5j-a (D-9048) it takes a live session OR the box token, the `GET /api/feed`
+   * arrangement, checked before `501 not-configured`, and it opens on a dark box like every dual-credential read: the
+   * console reads it with a session and `ccrc-api landing show` cookieless. It has no attribution to check, and
+   * `?project=` is per-project and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
    * no `landing_projects` row answers both flags `false`. `binding` (wave 5i) is decided on this read from the current facts and the watcher's
    * latest control snapshot, never stored; the top-level `mainRedHold` is the hold as recomputed on this read from that snapshot, not the stored flag. The read is advisory in 5e (D-7626). The handler decides nothing: decide in L1, act here.
    */
   app.get('/api/landing', async (req, reply) => {
+    // EXEMPT-BUT-AUTHENTICATED (landing order wave 5j-a, D-9048), the `GET /api/feed` shape: authenticate before
+    // `not-configured`, preserving the global gate's information boundary on an armed box.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session'
+        && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/landing') !== 'ok') {
+        return refuseRoute(reply, 'unauthenticated', { verdict: session.verdict, detail: 'GET /api/landing takes a session cookie OR the box token ' +
+          `(${MAIL_TOKEN_HEADER}); ccrc-api reads it cookieless from the fleet host` });
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
     const query = parseLandingReadQuery(req.query);
     if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
     const { project, pr } = query;
@@ -4940,7 +4965,10 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request');
     }
-    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+    const answered = await questions.answer(answer, wiring.answerDeps);
+    // The answer went through (every form answers 200 only once its keys landed): marks as a typed prompt does.
+    if (answered.status === 200 && deps.coord !== undefined) markOperatorPrompt(deps.coord, qid.sessionId, deps.time.clock.wall(), (l) => console.warn(l));
+    return sendAnswer(reply, answered);
   });
 
   /**

@@ -414,12 +414,12 @@ Neither handler consults the box token, calls `requireAttribution` or names eith
 **Files:** Modify `server/src/coord/landingEntry.ts#decideLandingWrite`. Test: `server/test/landing-entry-store.test.ts` (and the pure decider's cases where they live).
 
 - [ ] **Step 1: Failing cases, and the inversion.**
-  - **Inverted:** `landing-entry-store.test.ts`'s `it.each(['landed','withdrawn'])` "a %s row is kept, and the run still advances" inserts a readable, unmarked `withdrawn` row and expects `kept`. After this task a verified pin re-pins it. The `withdrawn` row moves out of the `it.each`, which keeps `landed` alone, and becomes the store re-pin case below.
-  - Pure: a pin over a `withdrawn` row whose projection reads with no marker answers `{act:'repin', id}`; over a `withdrawn` row whose projection does not read, `kept` `withdrawn`.
-  - Store: a fixture row inserted as `withdrawn`, its run at `merging`. A retreat to `working` stays `kept`. Then a verified `advance → merging` for that PR re-pins it: state `pinned`, a new `pinnedAt`, `detail` null, a witness written, and the line's order contains it.
+  - **Kept, for the form it tests (corrected after review run 3781; section 12, C9):** `landing-entry-store.test.ts`'s `it.each(['landed','withdrawn'])` "a %s row is kept, and the run still advances" inserts a readable, unmarked `withdrawn` row **with no run** and expects `kept`. That stays true: a withdrawn entry with no run cannot re-enter (decision 7). The `withdrawn` row moves out of the `it.each`, which keeps `landed` alone, into a case of its own. That case also pins that the row keeps its null run, its pinned sha, its pin time and its detail, and that no witness is written.
+  - Pure: a pin over a run-bound `withdrawn` row whose projection reads with no marker answers `{act:'repin', id}`; over a run-bound `withdrawn` row whose projection does not read, `kept` `withdrawn`; over a `withdrawn` row with no run, `kept` `withdrawn`.
+  - Store, the new case: a fixture row inserted as `withdrawn`, its run at `merging`. A retreat to `working` stays `kept`. Then a verified `advance → merging` for that PR re-pins it: state `pinned`, a new `pinnedAt`, `detail` null, a witness written, and the line's order contains it. An unreadable run-bound `withdrawn` row is kept under its own word, and the run still advances.
 
   Run red.
-- [ ] **Step 2: Implement:** the `closed` branch's condition takes `withdrawn` too (`current.state === 'closed' || current.state === 'withdrawn'`), with a comment naming decision 7 and D-9047. Its else-arm's hard-coded `{kind:'kept', state:'closed'}` becomes `{kind:'kept', state: current.state}`, the row's own word, so an unreadable withdrawn row answers `kept` `withdrawn` (F7). Nothing else changes.
+- [ ] **Step 2: Implement:** the `closed` branch's condition takes `withdrawn` too (`current.state === 'closed' || current.state === 'withdrawn'`), with a comment naming decision 7 and D-9047. Its else-arm's hard-coded `{kind:'kept', state:'closed'}` becomes `{kind:'kept', state: current.state}`, the row's own word, so an unreadable withdrawn row answers `kept` `withdrawn` (F7). One more condition (section 12, C9): a `withdrawn` row re-pins only when its run association reads as a run, and a `withdrawn` row with no run answers `kept` `withdrawn`. A `closed` row keeps today's behaviour in both forms. Nothing else changes.
 - [ ] **Step 3: Run** the two files green; commit. `feat(landing): a withdrawn entry re-enters at its next verified pin (wave 5j-a, D-9047)`
 
 ### Task 4: an edge to a withdrawn entry holds
@@ -607,6 +607,7 @@ Each row is one change to the built code, measured red by the named test, then r
 | A22 | the parser's actor bound rises past 120 code units after `device:` | `landing-journal`'s actor-longer-than-the-owner case |
 | A23 | the parser accepts a `withdraw` with an extra key | `landing-journal`'s withdraw exact-keys case |
 | A24 | the withdraw statement matches on `id` alone (drops `project` and `pr`) | `landing-journal-store`'s other-(project, pr) case |
+| A25 | the pin arm re-pins a `withdrawn` row with no run (the run condition dropped; section 12, C9) | `landing-entry-store`'s no-run withdrawn case; the pure decider's no-run case |
 | B1 | the withdraw apply arm also writes another entry's `afterIds` (a door that reorders) | `landing-subtractive`'s withdraw table diff |
 | B2 | the withdraw answer adds `head: <next entry>` (a door that names a successor) | `landing-doors-route`'s no-head case; `landing-subtractive`'s answer check |
 | B3 | `applyLandingControlTx`, on a green transition, also sets `operatorPaused = 0` (a pause that clears on green) | `landing-control`'s writer-set pause-survives-green case |
@@ -855,9 +856,31 @@ Review run 3748 read the plan at `5c34de804e` against `origin/main` at `b4677c29
 - **C8, the armed-session rig (F8).** Named in Task 9 Step 2.
 - **Section 9.** Block 3 and README R5 now say that a coordinator is told where one is recorded and reads, that the feed records a release whoever makes it, and that a run-less entry cannot re-enter. The spec's two sentences this plan departs from (its section 4 coordinator row, "pause the line", against decision 2; and the "PWA doors" sentence on the successor, against D-9047) are amended on the same ledger pull request.
 
+## 12. Corrections after review run 3781
+
+Review run 3781 read wave 5j-a's branch at `e94b55a0c0` (pull request #3375): no critical or important finding, five minor ones, and its panel confirmed none. One of the five was this plan's own defect, corrected here. Where this section and a task disagree, this section wins.
+
+- **C9, a withdrawn entry with no run is kept at a pin (F1; the operator's Q3 ruling applied, not a new rule).**
+  - The fact on main: `decideLandingWrite` keeps every `withdrawn` row at a pin, and the store case that pins it inserts a row with no run.
+  - The defect: Task 3 moved the whole `withdrawn` arm out of the kept case and said nothing else changes. The built decider then let any run's verified pin of the same pull request take over a withdrawn row with no run: it wrote that run's id and brought the entry back. Decision 7, section 4.3, C3, block 3 and README R5 all say that cannot happen, and no case pinned either answer.
+  - The rule: a `withdrawn` row re-pins only when its run association reads as a run. A `withdrawn` row with no run answers `kept` under its own word, and the run still advances, as on main. A `closed` row keeps today's behaviour in both forms: `closed` is GitHub's word, and a reopened pull request comes back at a verified pin; `withdrawn` is the operator's.
+  - Why in 5j-a and not in 5j-b: 5j-a is the build a box falls back to once 5j-b has written withdrawals, so its reading of them must already be the final one.
+  - Where: Task 3 as corrected above, its pure case and its two store cases, and mutation row A25. Built in the wave's first fix round.
+- **C10, the lane census joins the 5j-a gate (D-9071).** `server/test/coord-token.test.ts` counts the call sites that name their lane, and Task 5's read block is one more. Task 5's file list and its gate did not name that file, so the pull request's first run was red on it.
+- **Section 9 is unchanged.** Its blocks already say that an entry with no run cannot re-enter, and with C9 the code agrees.
+
+Review run 3806 read the first fix round at `621932e57e`: no critical or important finding, seven minor ones. One asked for a ruling, given here (call 1199). Wave 5j-a merged as #3375 at `31d5d9ae26`.
+
+- **C11, a run-bound withdrawn entry re-pins at any run's verified pin (F4; the built rule, ruled, not a new one).**
+  - The fact: the built condition asks only that the withdrawn row has a run, not that it is the pinning run. A verified pin of the same pull request by another run re-pins the row, and the store writes the pinning run's id, exactly as for a `closed` row. A `pinned` row and an `ejected` row re-pin for any run too.
+  - The ruling: that is the rule. Decision 7, section 4.3 and D-9047 say "its run's next verified" pin; read them as any run's verified pin of that pull request, as a `closed` row's. The operator's door removes an entry from the line; it does not bind the entry to one run, and a second run of the same pull request is the same work coming back. C9 is unchanged: a withdrawn row with no run is kept.
+  - No case separated the two readings. Wave 5j-b carries one store case (a withdrawn row bound to run A, a verified pin by run B, and the row ends `pinned` under B with a witness), measured red by the mutant `current.runId === f.runId`, and it rewords the comment above `it.each(['landed'])` in `landing-entry-store.test.ts`, whose reason no longer held after C9. Both are in its brief.
+  - Section 9 is unchanged: its sentence that an entry re-enters at its run's next verified pin stays true; the wider rule adds a case it does not name, and section 9 waits for the operator's reading (item 665).
+- **The 5j-a notes are corrected** on the ledger pull request after #3380: the holder line came three commits after the file, not one (F1); a bad stored run id leaves the snapshot readable and the row displays `unknown`, so it never reaches the withdrawn branch (F3); and the fix round's R1 cites C9 (F6). F2, the stale test comment, is carried to 5j-b as above; F5 and F7 are facts the review recorded, and nothing changes for them.
+
 ## Deviations found
 
-Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which.
+Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and all eight are defined below. D-9052 is used only if Task 9 measures `routes.ts` over the growth limit; the 5j-b wave-done says which. Two more were issued the same day, for departures wave 5j-a's build and its first review found (D-9071 and D-9072); they are defined last.
 
 - **D-9045 (2026-11-25)** — `landing-journal-door-kinds`: the authority journal gains two record kinds, `pause` (project-level, no subject) and `withdraw` (a subject), under `v: 1`.
   - Each new record carries `setBy: 'operator'` and the actor text the existing device actor owner records (`flag-off` dark). The parser accepts that owner's untrimmed output grammar.
@@ -871,6 +894,7 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
   - Replay still writes no pin, landed state, association or witness, and still sends no notice.
 - **D-9047 (2026-11-25)** — `landing-withdrawn-holds-and-repins`: a withdrawal is neither a ban nor a release.
   - **Not a ban:** a run-bound `withdrawn` entry re-pins at its run's next verified `advance → merging` (after a retreat when it is still at `merging`) over a readable, unquarantined projection, exactly as a `closed` one does.
+    As built and ruled (section 12, C11): any run's verified pin of the same pull request re-pins it, as for a `closed` one.
   - **Not a release:** an edge to a withdrawn target stays outstanding, so its dependant waits, named in the read's `order.waits` (each target by entry id and PR), until an attributed session declares its order again without that target (a deliberate act with its feed note, not a door) or the target re-enters and lands. Today an edge to any terminal target is met; `landed` and `closed` keep that meaning.
   - **A release is always in the feed** (ruled after review run 3748; section 11, C1): a changed order that drops an edge to a withdrawn target owes the order arm's feed event whoever the setter is. Before, the feed owed nothing when the setter was the run's own claimant, which is who a held dependant's notice goes to.
   - Re-entry of a run-less entry is left out (follow-up `landing-runless-reentry`): it needs a journal claim over an existing identity, which the parser forbids.
@@ -886,3 +910,9 @@ Eight numbers were issued for this plan on 2026-11-25 (D-9045 to D-9052), and al
   - Sent in the write's transaction, never by replay. With nobody to tell, no mail is sent, and the answer and the feed event say so. Each feed event carries `sessionId: ''`, as every operator door's does.
 - **D-9051 (2026-11-25)** — `session-only-count-word`: `CLAUDE.md`'s box-token bullet said "The other eighteen" at the baseline, while `coord-pause-route.test.ts`'s `SESSION_ONLY` held nineteen and no test pinned the word. With the two doors it reads "twenty-one".
 - **D-9052 (2026-11-25)** — `landing-doors-routes-growth`: the growth waiver for `server/src/coord/routes.ts` in 5j-b, added only if the two handlers measure over 40 net code lines. The routes must sit in that file, so the two scanners that read it alone see them (spec §5.5, "PWA doors").
+- **D-9071 (2026-11-25)** — `landing-read-lane-census`: Task 5 adds a call site that names its lane, `'GET /api/landing'`. The lane-naming census in `server/test/coord-token.test.ts` counts those sites, so its count moves from 18 to 19.
+  - The plan named neither the file nor the count. The pull request's first run was red on it in one server shard, and the fix was one test edit and a second push. No source changed.
+  - The file joins the 5j-a gate (section 12, C10).
+- **D-9072 (2026-11-25)** — `landing-doors-holder-pin-order`: Task 2's commit on the branch does not pass the single-definition directory alone.
+  - `landingDoorsTx.ts` imports the database handle's type, so `core-vocab.test.ts`'s `HANDLE_HOLDERS` must name it. That test file was under another session's recently lapsed claim when Task 2 was committed, so its line came in a later commit of the same push.
+  - The plan asks each task's commit to pass its named files. The branch tip passes, and only that one commit in between does not. History is not rewritten, and the landing squashes the branch, so no commit on `main` carries it.

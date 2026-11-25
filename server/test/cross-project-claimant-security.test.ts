@@ -5,6 +5,14 @@
 // as permanent tests: every attack must stay refused (E1-E6), and E7 pins the
 // ruling's one widened door (an unclaimed programme is claimable from any
 // project), which D-5523 lists for the operator.
+//
+// Programme lifecycle W1 (R11, D-8985, D-8993; W1 review S1 and C7): the claimed-by-another guard now reads the
+// programme's BINDING (`CoordStore#openRunOwnership`), not the lowest claimed run, so each probe's programme names its
+// coordinator as the first run's own mint would have bound it (`seedLegacyProgramme`'s fourth argument), and the probes
+// pin the binding's refusals. E7's widened door is CLOSED: a run never takes a free programme (R11 rule 8), from any
+// project, its own included, so it now pins `not-your-programme`. Each probe was measured red with `openRunOwnership`'s
+// binding rungs deleted.
+
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -49,10 +57,10 @@ const noPrLine = (id: string): string =>
 const runner: Runner = async (_cmd, args) =>
   (args[0] === 'pr-state' ? { ran: true, code: 0, stdout: [CHILD, B_CHILD, WORKER_B].map(noPrLine).join('\n') + '\n', stderr: '' } : { ran: true, code: 0, stdout: '', stderr: '' });
 
-const openApp = async (home: string) => {
+const openApp = async (home: string, owners: Readonly<Record<string, string>> = {}) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  for (const [slug, h] of [['program-a', 'project-a'], ['program-z', 'project-z'], ['program-b', 'project-b'], ['program-w', 'project-c']] as const) seedLegacyProgramme(coord.db, slug, h);
+  for (const [slug, h] of [['program-a', 'project-a'], ['program-z', 'project-z'], ['program-b', 'project-b'], ['program-w', 'project-c']] as const) seedLegacyProgramme(coord.db, slug, h, owners[slug]);
   const base = testDeps(home, runner);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord });
   return { app, coord };
@@ -68,7 +76,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it('E1 hijack: a correctly attributed session of another project cannot open a work run on a programme another coordinator claims', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-a': PARENT }); app = w.app;
     expect((await post(app, { ...OPEN, ...att(PARENT) })).statusCode).toBe(200);
     for (const who of [FOREIGN, THIRD]) {
       const r = await post(app, { ...OPEN, wave: 2, ...att(who) });
@@ -79,7 +87,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it('E1b hijack of a cross-project coordinator: a session in the run project cannot take over FOREIGN\'s programme', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-a': FOREIGN }); app = w.app;
     expect((await post(app, { ...OPEN, ...att(FOREIGN) })).statusCode).toBe(200);
     const r = await post(app, { ...OPEN, wave: 2, ...att(PARENT) });
     expect([r.statusCode, r.json()]).toMatchObject([409, { ok: false, refused: 'claimed-by-another', by: FOREIGN }]);
@@ -87,7 +95,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it('E2 a foreign session cannot open a review run of a run another coordinator claims', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-a': PARENT }); app = w.app;
     const first = await post(app, { ...OPEN, ...att(PARENT) });
     const id = (first.json() as { id: number }).id;
     for (const to of ['dispatched', 'working', 'awaiting-review'] as const) w.coord.advance(id, to, 'test');
@@ -98,7 +106,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it("E3 a cross-project claimant cannot bind an existing child of ITS OWN project into a run of another project", async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-a': FOREIGN }); app = w.app;
     const r = await post(app, { ...OPEN, ...att(FOREIGN), sessionId: B_CHILD });
     expect(r.statusCode).toBe(409);
     expect(r.json()).toMatchObject({ refused: 'project-mismatch' });
@@ -107,7 +115,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it('E3b a third-project claimant cannot rebind an existing child of the run project held by another programme', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-a': PARENT, 'program-z': THIRD }); app = w.app;
     const s0 = await post(app, { ...OPEN, ...att(PARENT), sessionId: CHILD }); expect([s0.statusCode, s0.json()]).toMatchObject([200, { ok: true }]);
     const r = await post(app, { ...OPEN, program: 'program-z', homeProject: 'project-z', ...att(THIRD), sessionId: CHILD });
     expect([r.statusCode, r.json()]).toMatchObject([409, { refused: 'project-mismatch', by: 'project-c' }]);
@@ -116,7 +124,7 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
 
   it('E4 a live worker of another coordinator, in another project, still cannot coordinate a new programme anywhere', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
-    const w = await openApp(home); app = w.app;
+    const w = await openApp(home, { 'program-b': FOREIGN, 'program-w': WORKER_B }); app = w.app;
     // FOREIGN coordinates project-b work, WORKER_B is its worker.
     const op = await post(app, { ...OPEN, program: 'program-b', project: 'project-b', homeProject: 'project-b', ...att(FOREIGN), sessionId: WORKER_B });
     expect([op.statusCode, op.json()]).toMatchObject([200, { ok: true }]);
@@ -143,14 +151,22 @@ describe('cross-project claimant — exploit probes (D-5523)', () => {
     expect([r.statusCode, r.json()]).toMatchObject([409, { refused: 'project-mismatch' }]);
   });
 
-  it('E7 (behaviour probe) a reconstructed programme with no claimed run can be claimed by a session of ANY project', async () => {
+  // E7, re-expressed (R11 rule 8): a programme with no coordinator (a reconstructed one, or one whose claims were cleared)
+  // is never taken by a run, whatever the claimant's project, the run project's own included; and one whose binding names
+  // another is refused naming it, however its runs' `claimedBy` reads. The widened door D-5523 listed is closed.
+  it('E7 a programme with no coordinator is not taken by a run from ANY project; a binding is not overridden by the runs', async () => {
     const home = mkTmp('sec-'); seedFleet(home);
     const w = await openApp(home); app = w.app;
-    const op = w.coord.openRun({ program: 'program-a', title: 'Wave one', project: 'project-a', wave: 1, waveOf: 1,
-      claimedBy: PARENT, kind: 'work', reviews: null, homeProject: 'project-a' });
-    if (!('id' in op)) throw new Error('fixture');
+    for (const who of [THIRD, PARENT, FOREIGN]) {
+      const r = await post(app, { ...OPEN, wave: 2, ...att(who) });
+      expect([r.statusCode, r.json()], who).toMatchObject([409, { ok: false, refused: 'not-your-programme' }]);
+    }
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
+    // A binding naming PARENT holds even when every run's `claimedBy` was cleared (the lowest-claimed-run read is gone).
+    w.coord.db.prepare("UPDATE programs SET coordinator = ? WHERE slug = 'program-a'").run(PARENT);
+    expect((await post(app, { ...OPEN, ...att(PARENT) })).statusCode).toBe(200);
     w.coord.db.prepare('UPDATE runs SET claimedBy = NULL').run();
     const r = await post(app, { ...OPEN, wave: 2, ...att(THIRD) });
-    expect(r.statusCode).toBe(200);
+    expect([r.statusCode, r.json()]).toMatchObject([409, { ok: false, refused: 'claimed-by-another', by: PARENT }]);
   });
 });

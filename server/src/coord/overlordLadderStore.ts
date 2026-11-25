@@ -6,6 +6,12 @@
 // `applyRestoreInTx`; the readers are `ladderRows` (the composed read's rows, fail-closed) and `ladderRungRead` (the brakes' read,
 // the rung alone). Every reader narrows EVERY column and answers `unmeasured` on a value no writer writes; none throws.
 //
+// EACH STATE MOVE STAMPS ITS LINE (Overlord §10.4; sequence plan Task 5, slug `ladder-stamps-ride-pr-b`), through
+// `stampLadderLine`, inside the same transaction, after the row: `ladder-rung` (id `operator`, the new rung) when a writer writes
+// the rung row, and `ladder-latch` (id the cause, `raised` or `cleared`) when a latch row is inserted or cleared. A write that
+// changes only a cap or a sequence (the catch-up, Confirm's stamps and narrowed caps) moves no state word and stamps nothing. A
+// refused stamp throws, so the row rolls back with its line.
+//
 // THE WRITERS ARE `*InTx`: each runs INSIDE the caller's `tx()` and opens none (the store's delegates and the doors open it), so
 // the journal's own transaction check (`not-in-transaction`) is the proof that nothing writes outside one.
 //
@@ -29,6 +35,8 @@ import type { AuthorityAppend, AuthorityAppendError } from './overlordAuthorityJ
 import type { ActorRefused, AuthorityAppender } from './overlordDesignationStore.js';
 import type { ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
 import { consoleSubject, isAccountGateOperator, isRecordedActor } from '../auth/attributionIdentity.js';
+import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
+import type { ActorKind } from '../../../shared/overlord-identity.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
 import { LANE_RAISER_MAP, type CurrentRung, type LadderWriterRefusal } from './overlordLadder.js';
 import {
@@ -94,6 +102,28 @@ export function ladderActor(actor: unknown, direction: 'brake' | 'widen'): { ok:
   const subject = consoleSubject(actor);
   return subject === null ? { ok: false, reason: 'actor' } : { ok: true, subject };
 }
+/** The kind of a ladder writer's actor, taken from the actor the writer already accepted: a minted actor's own kind, the console's
+ *  signed-in actor's kind, `operator` for the console's dark and unmeasured answers (the console is the operator's), and `server`
+ *  for a lane. Plan question 6 takes a line's kind from the row being written; the ladder's rows have no kind column, so the kind
+ *  is the writer's input actor's and exists only on the line (a departure, slug `ladder-line-kind-from-the-writers-actor`; every
+ *  latch raise is the server's, `latch-lines-are-the-servers`, call 1220). */
+export function ladderActorKind(actor: BrakeActor): ActorKind {
+  if (isRecordedActor(actor)) return actor.kind;
+  if (isLaneRaiser(actor)) return 'server';
+  return actor.kind === 'signed-in' && isRecordedActor(actor.actor) ? actor.actor.kind : 'operator';
+}
+
+/** A ladder line that could not be stamped, thrown inside the writer's transaction so the row rolls back with it. */
+export class LadderStampRefused extends Error {}
+/** The ladder's one call of the sequence writer: the answer read, a refusal thrown. */
+function stampLadderLine(db: DatabaseSync, line: SequenceLineInput): void {
+  const s = stampSequenceInTx(db, line);
+  if (!s.ok) throw new LadderStampRefused(`ladder line refused: ${s.error}: ${s.detail}`);
+}
+const RUNG_LINE_ID = 'operator';
+/** Confirm the restore's actor, the same text its rows record. */
+const RESTORE_ACTOR = 'restore';
+
 export interface StricterLadder { operatorRung: Rung; latches: readonly { cause: string; cap: Rung }[] }
 
 export function rungActorBefore(move: RungMoveInput): { ok: true; subject: string } | ActorRefused {
@@ -263,6 +293,7 @@ export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: 
     ON CONFLICT(id) DO UPDATE SET operatorRung = excluded.operatorRung, actor = excluded.actor, updatedAt = excluded.updatedAt,
       recordSequence = excluded.recordSequence, recordFrom = excluded.recordFrom, narrowedAt = excluded.narrowedAt`)
     .run(move.to, actor.subject, move.at, sequence, recordFrom, narrowing ? move.at : null);
+  stampLadderLine(db, { kind: 'ladder-rung', id: RUNG_LINE_ID, state: move.to, actor: actor.subject, actorKind: ladderActorKind(move.actor), at: move.at });
   return { ok: true, changed: true, journalled: sequence !== null, recordSequence: sequence };
 }
 
@@ -286,6 +317,9 @@ export function raiseLatchInTx(db: DatabaseSync, journal: AuthorityAppender, lat
   const sequence = a.kind === 'appended' ? a.record.sequence : null;
   db.prepare(`INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy, raiseSequence) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(latch.cause, latch.cap, latch.detail, latch.at, actor.subject, sequence);
+  // The server's kind for every raise, whoever tripped it (call 1220, slug `latch-lines-are-the-servers`): a check raises a latch,
+  // never a session's ask, so the term check never reads one as a session's act. The row keeps its raiser; so does the line's text.
+  stampLadderLine(db, { kind: 'ladder-latch', id: latch.cause, state: 'raised', actor: actor.subject, actorKind: 'server', at: latch.at });
   const notice = Object.hasOwn(LADDER_CAUSE_MAP, latch.cause) ? LADDER_CAUSE_MAP[latch.cause as keyof typeof LADDER_CAUSE_MAP].notice : 'none';
   return { ok: true, changed: true, journalled: sequence !== null, recordSequence: sequence, notice };
 }
@@ -306,6 +340,7 @@ export function clearLatchInTx(db: DatabaseSync, journal: AuthorityAppender, cle
   if (a.kind !== 'appended') return { ok: false, error: 'authority-rolled-back' };
   db.prepare('UPDATE overlord_latches SET clearedAt = ?, clearedBy = ?, clearSequence = ? WHERE id = ? AND clearedAt IS NULL')
     .run(clear.at, actor.subject, a.record.sequence, standing.id);
+  stampLadderLine(db, { kind: 'ladder-latch', id: clear.cause, state: 'cleared', actor: actor.subject, actorKind: ladderActorKind(clear.actor), at: clear.at });
   return { ok: true, changed: true, journalled: true, recordSequence: a.record.sequence };
 }
 
@@ -329,6 +364,7 @@ export function applyRestoreInTx(db: DatabaseSync, stricter: StricterLadder, con
       ON CONFLICT(id) DO UPDATE SET operatorRung = excluded.operatorRung, actor = excluded.actor, updatedAt = excluded.updatedAt,
         recordSequence = excluded.recordSequence, recordFrom = NULL, narrowedAt = excluded.narrowedAt`)
       .run(selected, at, confirmSequence, down ? at : null);
+    stampLadderLine(db, { kind: 'ladder-rung', id: RUNG_LINE_ID, state: selected, actor: RESTORE_ACTOR, actorKind: 'server', at });
   } else if (held.recordSequence === null) {
     db.prepare("UPDATE overlord_ladder SET actor = 'restore', updatedAt = ?, recordSequence = ?, recordFrom = NULL WHERE id = 1 AND recordSequence IS NULL")
       .run(at, confirmSequence);
@@ -347,6 +383,7 @@ export function applyRestoreInTx(db: DatabaseSync, stricter: StricterLadder, con
     }
     db.prepare(`INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy, raiseSequence) VALUES (?, ?, ?, ?, 'restore', ?)`)
       .run(l.cause, l.cap, 'restored by Confirm the restore', at, confirmSequence);
+    stampLadderLine(db, { kind: 'ladder-latch', id: l.cause, state: 'raised', actor: RESTORE_ACTOR, actorKind: 'server', at });
   }
   db.prepare('UPDATE overlord_latches SET raiseSequence = ? WHERE clearedAt IS NULL AND raiseSequence IS NULL').run(confirmSequence);
 }

@@ -12,22 +12,20 @@ runs it — this session dispatches the review run and rules on the report it re
 below, clause 12); a lens that returned nothing is a review not yet done, never an approval. Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word.
 
 **Order is load-bearing here, and it is the opposite of what you might guess.**
-A program is `active` only while it has at least one open (non-`done`,
-non-`failed`) run; the instant its open-run count reaches zero the server
-marks it `done`/`abandoned`, and nothing ever reactivates it. `toId:'coordinator'`
-mail with no explicit `runId` resolves through `resolveCoordinator(null)`,
-which requires exactly one program in state `active`. Closing this wave's run
-before opening the next one, even for the few seconds between the two calls,
-drops this program's open-run count to zero — the program retires right then,
-and from that instant every such message is refused `unknown-recipient`,
-**permanently: nothing in the HTTP API reactivates a retired program, not
-even opening a fresh run under the same slug** (`openRun`'s own conflict arm
-only ever updates the program row's `title`, never its `state`). Recovery is
-an operator/DB act, not a client one — or address the mail with an explicit
-`runId` instead of relying on the `'coordinator'` role resolving to it, which
-`resolveCoordinator(runId)` answers off that run's own claim regardless of
-program state. **Open first** — the new run keeps the count above zero the
-whole time, which is the only prevention this ordering rule buys.
+A programme shows Active only while it has at least one open (non-`done`,
+non-`failed`) run and a run that was ever dispatched; at zero open runs it
+shows Idle. It is never ended by that: only the operator's or the Overlord's
+decision ends a programme. `toId:'coordinator'` mail with no explicit `runId`
+resolves through `resolveCoordinator(null)`, which requires exactly one
+programme that shows Active. Closing this wave's run before opening the next
+one, even for the few seconds between the two calls, drops this programme's
+open-run count to zero — it shows Idle right then, and every such message is
+refused `unknown-recipient` until a run of it is dispatched again. Address the
+mail with an explicit `runId` instead of relying on the `'coordinator'` role
+resolving to it, which `resolveCoordinator(runId)` answers off that run's own
+claim regardless of the programme's state. **Open first** — the new run keeps
+the count above zero the whole time, which is the only prevention this
+ordering rule buys.
 
 **Link the PR to its ticket, once, before it lands, by the repository's visibility.** When the wave's work is tied to
 a Linear ticket, read `ccrc-api linking show` (`mode`, `teamKey`). If `linking show` fails or

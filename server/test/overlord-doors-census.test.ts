@@ -118,7 +118,7 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear',
+      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'witness',
       // Confirm the restore (authority journal C): the guard's state, and the door.
       'restore-read', 'restore-confirm',
       'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
@@ -129,6 +129,8 @@ describe('the table itself', () => {
       'inbox', 'messages', 'acknowledge',
       // The Overlord's history door (W1, PR B1).
       'history',
+      // The timer doors (W1, the Overlord's timers): every other session keeps W1a's path.
+      'timer-set', 'timer-list', 'timer-cancel',
     ]);
   });
 });
@@ -203,7 +205,7 @@ describe('every operator door that writes records its actor through the identity
 
   it('there are admin operator rows to check (a zero would make the rest vacuous), and read rows are not among them', () => {
     expect(adminRows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'restore-confirm', 'portfolio-rank', 'goals-ratify',
+      'designate', 'retire', 'rebind', 'restart', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'restore-confirm', 'portfolio-rank', 'goals-ratify',
       'private-names-write',
     ]);
     for (const [k, r] of rows) if (r.group === 'operator' && r.verbClass === 'view') expect(adminRows.map(([x]) => x), k).not.toContain(k);

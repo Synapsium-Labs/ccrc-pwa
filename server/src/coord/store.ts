@@ -17,6 +17,9 @@ import * as advisor from './advisorStore.js';
 import type { CoordinatorAdvisorSetting } from '../../../shared/coordinatorAdvisor.js';
 import type { CallRow, NewCall } from './coordCalls.js';
 import * as planStore from './planStore.js';
+import * as lifecycle from './programmeLifecycleStore.js';
+import * as acts from './programmeLifecycleActs.js';
+import { endRecorded, isEnded, lifecycleOf } from '../../../shared/programmeLifecycle.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
@@ -27,6 +30,7 @@ import type { LandingBoundaryFailure, LandingEntryState, LandingInfrastructureFa
 import { LANDING_TERMINAL_STATES } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
 import { applyLandingControlTx, type LandingControlInput, type LandingControlPhase } from './landingControlTx.js';
+import { applyLandingDoorRecordTx } from './landingDoorsTx.js';
 import type { LandingControlApplyResult } from './landingNext.js';
 import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
@@ -54,6 +58,7 @@ import * as probes from '../continuity/continuityStore.js';
 import { modelSwitchesSinceStart, readerEventsSinceStart, type HookStoreRead, type ModelSwitchRow, type ReaderEvent } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
+import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
@@ -347,7 +352,9 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight' | 'cap-review-rounds' | 'owns-another-programme'; by: string }
+  // Programme lifecycle W1 (D-8983, D-8993): the programme's decision and its owner refuse the open.
+  | { refused: 'programme-paused' | 'programme-unknown' | 'programme-provisional' | 'not-your-programme'; by?: string }
   | { refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable'; by?: undefined }
   | HoldReasonRefusal;
 
@@ -363,7 +370,8 @@ class OpenRunHoldRefused extends Error {
 /** D-8181: thrown inside `openRun`'s transaction when the plan facts re-checked at the insert no longer hold, so the run
  *  insert rolls back with the programme row and the typed refusal is answered (the `OpenRunHoldRefused` idiom). */
 class OpenRunPlanRefused extends Error {
-  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable') { super(refused); }
+  constructor(readonly refused: 'plan-closed' | 'wave-epic-mismatch' | 'ticket-unavailable' | 'owns-another-programme',
+    readonly by?: string) { super(refused); }
 }
 
 export type AdvanceResult =
@@ -804,7 +812,23 @@ function busyOf(s: UpdateState): BusyUpdateState | null {
 export type ReclaimProgramResult =
   | { ok: true; program: string; runIds: number[]; from: string }
   | { ok: false; kind: 'unknown-run' }
-  | { ok: false; kind: 'no-claimant' };
+  | { ok: false; kind: 'no-claimant' }
+  /** Programme lifecycle W1 (R11 rule 4, D-8993): the heir owns another live real programme, or claims an open run in a
+   *  programme other than this one that it does not own. `by` names it. Nothing was written. */
+  | { ok: false; kind: 'owns-another-programme'; by: string };
+
+/** The move's attribution (programme lifecycle W1 review, S8): who moved the binding, recorded on its `coordinator` event,
+ *  and the heir's measured uuid, the incarnation the binding names (D-8985). Absent: `system`/`unmeasured`, a null uuid. */
+export interface ReclaimMoveOpts {
+  readonly toUuid?: string | null;
+  readonly actor?: lifecycle.ProgrammeActor;
+  readonly why?: string;
+  /** Programme lifecycle W2 review: runs inside the move's transaction after it, handed every session whose OPEN run the move
+   *  took (`holding`, the heir excluded), so a door's mail to them is queued with the move or not at all. */
+  readonly onMoved?: (moved: { readonly holding: readonly string[] }) => void;
+  /** Programme lifecycle W3 (spec §13): the hand-over door's, so a conflict's party may be given a programme whose runs it holds. */
+  readonly party?: boolean;
+}
 
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
  *  `setWorkItemState`'s `WHERE` is BUILT from this list and `settleItems`'
@@ -2080,30 +2104,16 @@ export class CoordStore {
     /** D-8181: the plan ticket this work run attaches to, in the same transaction that inserts it (`attachTicketInTx`
      *  re-checks the plan facts). Absent: a review run, or a programme with no plan that does not require one. */
     ticket?: planStore.OpenRunTicket | null;
+    /** The attributed claimant's uuid (D-5298), null or absent for an unattributed open: the incarnation the binding names. */
+    claimedByUuid?: string | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
-        // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
-        // the original query read the absolute first row regardless of whether
-        // it was ever claimed): `reconstruct` inserts every rebuilt run with
-        // `claimedBy` bound to NULL — it has no way to know who will resume the
-        // program — so without this clause the lowest-id row of a reconstructed
-        // program pinned the guard at NULL forever and a second coordinator was
-        // never refused. Skipping the unclaimed rows finds the first row a real
-        // `openRun` actually claimed, which is the one the refusal must read.
-        const existing = this.db.prepare(
-          'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
-        ).get(input.program) as { claimedBy: string | null } | undefined;
-        // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
-        // coordinator is refused AT OPEN TIME, in words, rather than silently
-        // allowed to interleave dispatches with the first one's. What this refusal
-        // no longer means is "forever": `reclaimProgram` below rewrites the column
-        // this reads, for a claimant measured dead. The refusal is still the only
-        // answer to two LIVE coordinators — nothing arbitrates between them — and
-        // that is the non-goal spec:291-292 actually names.
-        if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
-          return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
-        }
+        // Programme lifecycle W1 (D-8985, D-8993; spec §5's dispatch and first-run rows, R11 rule 8): the programme's
+        // decision and its one coordinator decide the open, read from the binding, never from the runs' `claimedBy`. A
+        // run never changes who owns a programme, except the first run of a programme that does not exist yet.
+        const ownership = lifecycle.openRunOwnershipOf(this.db, input.program, input.claimedBy, input.claimedByUuid ?? null);
+        if (ownership !== null) return ownership;
         // Idempotent retry (fix — review findings 19/32): a run already open,
         // `planned`, and claimed by the SAME coordinator for this exact
         // (program, wave, waveOf) is REUSED rather than duplicated. Without
@@ -2163,10 +2173,15 @@ export class CoordStore {
           }
         }
         const now = Date.now();
-        this.db.prepare(
-          'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(slug) DO NOTHING',
-        ).run(input.program, input.programmeTitle ?? programmeNameFromSlug(input.program), now, 'active', input.homeProject ?? null);
+        // The first run of a new programme (spec §5): minted through the one writer, its claimant bound, and the
+        // claimant's unfiled placeholder, if any, cleared first and filed into it, all in this transaction.
+        if (lifecycle.programmeRowOf(this.db, input.program) === null) {
+          const bound = lifecycle.startOwnedInTx(this.db, { slug: input.program,
+            title: input.programmeTitle ?? programmeNameFromSlug(input.program), homeProject: input.homeProject ?? null,
+            actor: { kind: 'coordinator', id: input.claimedBy }, why: 'first run opened',
+            session: input.claimedBy, uuid: input.claimedByUuid ?? null }, now);
+          if (!bound.ok) throw new OpenRunPlanRefused(bound.kind, bound.by);
+        }
         const insertRun = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2199,6 +2214,8 @@ export class CoordStore {
           const attached = planStore.attachTicketInTx(this.db, id, input.ticket, now);
           if (!attached.ok) throw new OpenRunPlanRefused(attached.refused);
         }
+        // Programme lifecycle W2 (spec §8): a run opened withdraws the programme's open end proposal, in this transaction.
+        acts.settleEndProposalInTx(this.db, input.program, `run ${id} opened`, now);
         return {
           id,
           program: input.program,
@@ -2208,7 +2225,9 @@ export class CoordStore {
       });
     } catch (err) {
       if (err instanceof OpenRunHoldRefused) return err.refusal;
-      if (err instanceof OpenRunPlanRefused) return { refused: err.refused };
+      if (err instanceof OpenRunPlanRefused) {
+        return err.refused === 'owns-another-programme' ? { refused: err.refused, by: err.by ?? '' } : { refused: err.refused };
+      }
       throw err;
     }
   }
@@ -2414,7 +2433,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string | null, at: number, coordProject: string | null, opts: ReclaimMoveOpts = {}): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -2423,6 +2442,47 @@ export class CoordStore {
       // unclaimed run names no handover to make, and rewriting its siblings off a
       // row that never had a claimant is a reassignment nobody asked for.
       if (run.claimedBy === null) return { ok: false as const, kind: 'no-claimant' as const };
+      return this.reclaimProgrammeInTx(run.program, run.claimedBy, to, at, coordProject, opts);
+    });
+  }
+
+  /**
+   * Programme lifecycle W1 (spec §3, D-8985; W1 review): the same move keyed on the programme, for the programme `from` is
+   * bound to when it claims no open run there (an Idle programme's coordinator archived or stopped with a claims choice):
+   * every claimed run of the programme, finished ones included, and the binding, or the binding alone when no run is
+   * claimed. `unknown-programme` when there is no such row; `no-claimant` when `from` is not its bound coordinator, so a
+   * stale caller never moves a programme somebody else now owns.
+   */
+  reclaimProgramme(slug: string, from: string | null, to: string | null, at: number, coordProject: string | null,
+    opts: ReclaimMoveOpts = {}): ReclaimProgramResult | { ok: false; kind: 'unknown-programme' } {
+    return tx(this.db, () => {
+      const row = lifecycle.programmeRowOf(this.db, slug);
+      if (row === null) return { ok: false as const, kind: 'unknown-programme' as const };
+      // W2: the hand-over door passes the binding it read (null for none), so a stale door never moves a programme it
+      // did not see; rung 2 is otherwise skipped there (spec §3's ladder table).
+      if (row.coordinator !== from) return { ok: false as const, kind: 'no-claimant' as const };
+      return this.reclaimProgrammeInTx(slug, from ?? '', to, at, coordProject, opts);
+    });
+  }
+
+  /** The move's body, inside the caller's transaction: `program`'s claims and binding go from `from` to `to` (null: released). */
+  private reclaimProgrammeInTx(
+    program: string, from: string, to: string | null, at: number, coordProject: string | null, opts: ReclaimMoveOpts,
+  ): ReclaimProgramResult {
+    const run = { program, claimedBy: from };
+    // Re-naming the programme's current coordinator never changes its incarnation (D-1136's identity path, W1 review S3): a
+    // new incarnation under a reused id that names itself the heir is handed nothing; the binding keeps its own uuid.
+    const current = lifecycle.programmeRowOf(this.db, program);
+    const toUuid = to !== null && current !== null && current.coordinator === to ? current.coordinatorUuid : opts.toUuid ?? null;
+    {
+      // Programme lifecycle W1 (R11 rule 4, D-8993): an heir that owns another live real programme, or claims an open run
+      // in a programme other than this one that it does not own, is refused before anything is written. Its unfiled
+      // placeholder does not count: it is withdrawn below, in this transaction. By the hand-over door (`party`), a
+      // conflict's party may be given a programme whose runs it holds, its claims in its other programmes standing (§13).
+      if (to !== null) {
+        const owned = lifecycle.heirOwnsAnotherOf(this.db, to, toUuid, run.program, opts.party === true);
+        if (owned !== null) return { ok: false as const, kind: 'owns-another-programme' as const, by: owned };
+      }
       // Read before the write, and excluding rows ALREADY naming `to`: the
       // attribution rows record a CHANGE, so re-running the same reclaim writes
       // none rather than a second identical trail. `ORDER BY id` so `runIds` is
@@ -2433,12 +2493,12 @@ export class CoordStore {
       // guard reads the lowest claimed id with no state predicate, so a terminal row left naming the released session
       // would refuse the coordinator that picks the programme up.
       const moved = (to === null
-        ? this.db.prepare('SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
+        ? this.db.prepare('SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id')
           .all(run.program)
         : this.db.prepare(
-          'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
+          'SELECT id, claimedBy, state FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
           'AND claimedBy != ? ORDER BY id',
-        ).all(run.program, to)) as { id: number; claimedBy: string }[];
+        ).all(run.program, to)) as { id: number; claimedBy: string; state: string }[];
       // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
       // They are two facts about the same coordinator — who holds the chair,
       // and which card that chair's workers render on — and rewriting only the
@@ -2483,6 +2543,9 @@ export class CoordStore {
       // reports on corpses the same rewrite just declared displaced. `to` is
       // never in this set: the `claimedBy != ?` selection above excludes it.
       const displaced = [...new Set(moved.map((m) => m.claimedBy))];
+      // Programme lifecycle W1 (D-8985): the binding moves with the claims, in this transaction, through its one writer.
+      // The actor is the caller's (W1 review, S8): the reclaim door, the archive or stop door, never assumed.
+      lifecycle.moveBindingInTx(this.db, { program: run.program, from: run.claimedBy, to, toUuid, actor: opts.actor, why: opts.why }, at);
       // A release cancels the displaced claimant's kickoffs too — the chair it was told to take is left — and repoints
       // no mail: there is no heir, so role-addressed reports stay on the displaced claimant's box (D-8199).
       if (displaced.length > 0) this.cancelKickoffsTo(displaced);
@@ -2497,11 +2560,15 @@ export class CoordStore {
         // would be handed two copies of one report.
         this.requeueAbandonedMail({ role: 'coordinator', program: run.program }, to, displaced);
       }
+      if (opts.onMoved !== undefined) {
+        const terminal: readonly string[] = TERMINAL_RUN_STATES;
+        opts.onMoved({ holding: [...new Set(moved.filter((m) => !terminal.includes(m.state)).map((m) => m.claimedBy))] });
+      }
       return {
         ok: true as const, program: run.program,
         runIds: moved.map((m) => m.id), from: run.claimedBy,
       };
-    });
+    }
   }
 
   /**
@@ -2611,6 +2678,13 @@ export class CoordStore {
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
       "WHERE (m.toId = 'coordinator' OR m.urgentAs = 'overlord') AND r.program = ?)",
       [...displaced, program]) };
+  }
+
+  /** Designation B (the designation plan, question 7): a rebind that goes live moves the outstanding deliveries of mail
+   *  addressed to the role `overlord` from the old body to the new one, inside `goLive`'s transaction. A parked delivery stays
+   *  on the old id, visible, and no envelope is re-rendered, as `repointCoordinatorMail` leaves a reclaim's (D-1142). */
+  private repointOverlordMail(to: string, from: string): DeliveryBulkWrite {
+    return { changed: this.writeDeliveries('toId = ?', [to], 'outstanding', "toId = ? AND mailId IN (SELECT id FROM mail WHERE toId = 'overlord')", [from]) };
   }
 
   /**
@@ -3421,12 +3495,8 @@ export class CoordStore {
       // D-8073 (spec §11.7): an operator or sweep close owes its claimant one word, written here so it cannot be lost to a
       // crash and deleted only by the transaction that queues the notice (`untoldPass`).
       if (input.causedBy === 'operator' || input.causedBy === 'sweep') this.writeUntold(input.runId, input.causedBy, input.detail ?? null);
-      // D-51's program-retirement check, run inside the SAME transaction:
-      // the run just closed already reads as terminal to this COUNT, because
-      // the write above is visible to a later read within one `tx()`.
-      if (this.programOpenRunCount(input.program) === 0) {
-        this.setProgramState(input.program, input.finalState === 'failed' ? 'abandoned' : 'done');
-      }
+      // Programme lifecycle W1 (D-8983): D-51's retirement at zero open runs is deleted. A finished last run leaves the
+      // programme stored `active`, which `lifecycleOf` shows as Idle; only a decision ends it (`decideInTx`).
       return finalAdv;
     });
   }
@@ -3765,25 +3835,33 @@ export class CoordStore {
   }
 
   /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
-   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim. */
+   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim.
+   *  The operator's door records (wave 5j, D-9045, D-9046): a `withdraw` is a mention and never touches `landing_authority`,
+   *  since a withdrawal writes no order; a `pause` names no subject. Their statements are `applyLandingDoorRecordTx`'s. */
   private applyLandingRecord(r: LandingJournalRecord): void {
-    const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
-      'observedSeq = excluded.observedSeq');
-    const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
-    [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
-      s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
-    this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
-      'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
-      .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+    if (r.kind !== 'pause') {
+      const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
+        'observedSeq = excluded.observedSeq');
+      const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
+      [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
+        s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
+      if (r.kind !== 'withdraw') {
+        this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
+          'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
+          .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+      }
+    }
+    if (r.kind === 'pause' || r.kind === 'withdraw') applyLandingDoorRecordTx(this.db, r);
     this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
   }
 
   /**
    * The ONLY in-process reopen of the landing fence (shared contract §6): needs a provably clean connection, validates the
    * WHOLE history, checks the cursor and any missing history, confirms the exact snapshot is durable (even at an equal
-   * cursor), then applies only the suffix and the cursor in ONE transaction. It never writes a projection or a witness,
-   * never notices. Any failure keeps the fence; there is no retry timer.
+   * cursor), then applies only the suffix and the cursor in ONE transaction. It writes one projection column word, the
+   * operator's `withdrawn` (with its `detail` and the cleared marker, `landingDoorsTx.ts`, D-9046), and no pin, landed
+   * state, association or witness, and it never notices. Any failure keeps the fence; there is no retry timer.
    */
   replayLandingJournal(): LandingJournalReplay {
     const log = this.landing.landingJournal;
@@ -5537,41 +5615,51 @@ export class CoordStore {
     };
   }
 
-  /**
-   * The writer `programs.state` had none of, outside `openRun`'s hardcoded
-   * `'active'` at first open (fix, found in a later Task 3 review — D-26):
-   * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
-   * `reconstruct`) both only ever touched `title` in their conflict arm (D-8071: now neither writes it), so a
-   * program could never be retired. That silently disarmed
-   * `soleActiveCoordinator()` the moment a SECOND program existed — its
-   * "single active program" guard reads `ambiguous` (`active.length !== 1`)
-   * forever once a prior program's runs finish and nothing ever moves it out
-   * of `active`, which is this build's ordinary steady state, not an edge
-   * case. Mirrors `setWorkItemState`'s shape.
-   *
-   * *Who* calls this and *when* a program should retire was deliberately left
-   * to "whichever task closes the last run of a program" — Task 9's close
-   * route now does (deviation D-51, found in Task 9 review: this writer had
-   * ZERO callers in the tree Task 9 actually shipped, and this very
-   * docstring still said "not yet written" about the task that had, by then,
-   * been written for two commits). It checks `programOpenRunCount` below
-   * immediately after its own final `advance()` succeeds, and calls this
-   * with `'done'` or `'abandoned'` depending on how the closing run itself
-   * ended — see the close route's own comment for the policy and its stated
-   * limitation.
-   */
-  setProgramState(slug: string, state: ProgramState): void {
-    this.db.prepare('UPDATE programs SET state = ? WHERE slug = ?').run(state, slug);
+  /** Can the programme still take a run: its row is present and its decision has not ended it (programme lifecycle W1,
+   *  D-8983: `isEnded(state)`, the one end predicate; D-8558 read `planEnd` because D-51 wrote `done` over a live
+   *  programme, and D-51 is gone). A programme with no row cannot. The refused-close lane asks it before offering "Hand
+   *  to a coordinator". */
+  programmeLive(slug: string): boolean {
+    const r = lifecycle.programmeRowOf(this.db, slug);
+    return r !== null && !isEnded(r.state);
   }
 
-  /** D-8558: can the programme still take a run: its row is present and its plan is not closed (`planEnd` null), the one fact
-   *  that stops a run attaching (`attachTicketInTx`'s `plan-closed`). NOT `programs.state`: the close retires it whenever the
-   *  open-run count reaches 0 (D-51) and `openRun` never sets it back, so a programme whose next wave is open can still read
-   *  `done`. A programme with no row cannot. The refused-close lane asks it before offering "Hand to a coordinator". */
-  programmeLive(slug: string): boolean {
-    const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
-    return r !== undefined && r.planEnd === null;
+  /** Has the programme's end been DECIDED (programme lifecycle W1 review, C1): no row, or an end `decideInTx` recorded
+   *  (`endRecorded`). A D-51 end the migration kept (spec §13 step 4, `planEnd` null) is not, until the operator decides,
+   *  so the timers lane, whose cancel no reopen undoes, cancels nothing for it, as on `main`. Every gate reads
+   *  `programmeLive`. */
+  programmeEndDecided(slug: string): boolean {
+    const r = lifecycle.programmeRowOf(this.db, slug);
+    return r === null || endRecorded(r.state, r.planEnd);
   }
+
+  /** The programme lifecycle's reads and the boot re-measure, delegates over `programmeLifecycleStore.ts`. */
+  programmeLifecycleRow(slug: string): lifecycle.ProgrammeLifecycleRow | null { return lifecycle.programmeRowOf(this.db, slug); }
+  programmeOf(session: string, uuid: string | null): { slug: string; placeholder: string | null } | null { return lifecycle.programmeOf(this.db, session, uuid); }
+  /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). */
+  /** One stored-decision edge through `decideInTx`, in its own transaction (a door that holds none). `onReleased` (W2) runs
+   *  inside it with the coordinator an end released, so its mail is queued with the end or not at all. */
+  decideProgramme(input: Parameters<typeof lifecycle.decideInTx>[1], now: number, onReleased?: (session: string) => void): lifecycle.DecideResult {
+    return tx(this.db, () => { const d = lifecycle.decideInTx(this.db, input, now); if (d.ok && d.released !== null) onReleased?.(d.released); return d; });
+  }
+  /** Programme lifecycle W2's acts and reads (`programmeLifecycleActs.ts`), each act in one transaction with its mail. */
+  startProgramme(input: Parameters<typeof acts.startNamedInTx>[1], now: number): ReturnType<typeof acts.startNamedInTx> { return tx(this.db, () => acts.startNamedInTx(this.db, input, now)); }
+  openEndProposalOf(slug: string): ItemRow | null { return lifecycle.openEndProposalOf(this.db, slug); }
+  proposeProgrammeEnd(input: Parameters<typeof acts.proposeEndInTx>[1], now: number): number { return tx(this.db, () => acts.proposeEndInTx(this.db, input, now)); }
+  confirmProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, now: number, mail: (r: Extract<acts.ConfirmEndResult, { ok: true }>) => void): acts.ConfirmEndResult {
+    return tx(this.db, () => { const r = acts.confirmEndInTx(this.db, itemId, actor, now); if (r.ok) mail(r); return r; });
+  }
+  declineProgrammeEnd(itemId: number, actor: lifecycle.ProgrammeActor, why: string, now: number, dark: Readonly<Record<string, unknown>>,
+    mail: (r: { slug: string; coordinator: string | null }) => void): ReturnType<typeof acts.declineEndInTx> {
+    return tx(this.db, () => { const r = acts.declineEndInTx(this.db, itemId, actor, why, now, dark); if (r.ok) mail(r); return r; });
+  }
+  withdrawProgrammeEnd(item: ItemRow, by: string, now: number): boolean { return tx(this.db, () => acts.withdrawEndInTx(this.db, item, by, now)); }
+  programmeHistory(slug: string): ReturnType<typeof acts.historyOf> { return acts.historyOf(this.db, slug); }
+  programmeOpenRunIds(slug: string): number[] { return acts.openRunIdsOf(this.db, slug); }
+  programmeLifecycleRows(): ReturnType<typeof acts.lifecycleRowsOf> { return acts.lifecycleRowsOf(this.db); }
+  coordinatorsWithoutProgramme(): ReturnType<typeof acts.coordinatorsWithoutProgrammeOf> { return acts.coordinatorsWithoutProgrammeOf(this.db); }
+  remeasureProgrammesAtBoot(now: number): lifecycle.RemeasureReport { return tx(this.db, () => lifecycle.remeasureAtBootInTx(this.db, now)); }
+
   // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
   collisionsSince(since: number): collisions.CollisionsRead { return collisions.collisionsSince(this.db, since); }
   applyPairMoves(moves: Parameters<typeof pairs.applyPairMoves>[1], now: number): number[] { return pairs.applyPairMoves(this.db, moves, now); }
@@ -5649,26 +5737,28 @@ export class CoordStore {
   designationRead(): DesignationRead { return designation.designationRead(this.db); }
   designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
   bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
-  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  rebindPending(i: designation.RebindInput): designation.RebindResult { return designation.rebindPending(this.db, i); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at, (to, from) => this.repointOverlordMail(to, from)); }
   failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
   retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
   setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
-  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`
+   *  through the journal's `txWithAuthorityReceipt`, so a throw after a durable append fences the guard (review 3646 F4). */
   ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
   ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
   setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
     const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.setRungInTx(this.db, held, move));
   }
   raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
     const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.raiseLatchInTx(this.db, held, latch));
   }
   clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
     const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
-    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+    return txWithAuthorityReceipt(this.db, j, (held) => ladder.clearLatchInTx(this.db, held, clear));
   }
   /** Overlord §10.4 (`overlordSequenceStore.ts`): the sequence's reads, prune, and the Inbox's post-commit exception. */
   sequenceAfter(after: number, limit: number): ReturnType<typeof sequence.sequenceAfter> { return sequence.sequenceAfter(this.db, after, limit); }
@@ -5714,6 +5804,10 @@ export class CoordStore {
   timerHoldFacts(setter: string, firedSince: number): timers.TimerHoldRead { return timers.timerHoldFacts(this.db, setter, firedSince); }
   setsSince(setter: string, since: number): number { return timers.setsSince(this.db, setter, since); }
   purgeTimers(before: number): { removed: number } { return timers.purgeTimers(this.db, before); }
+  firedTimersOf(setter: string, stamp: string, since: number): timers.TimersRead { return timers.firedTimersOf(this.db, setter, stamp, since); }
+  recordTimerRefusal(r: timers.TimerRefusalCount): { ok: boolean } { return timers.recordTimerRefusal(this.db, r); }
+  timerRefusalCounts(sinceDay: string): timers.TimerRefusalCountsRead { return timers.timerRefusalCounts(this.db, sinceDay); }
+  purgeTimerRefusals(beforeDay: string): { removed: number } { return timers.purgeTimerRefusals(this.db, beforeDay); }
   /** Overlord §3.3.2 C37 (the notes piece, `continuityStore.ts`): the note door's two writers, append-only, and the reads
    *  the door and the card's gatherer make. */
   appendNote(n: NoteInsert): { ok: true; id: number } | { ok: false; kind: 'superseded' | 'write-failed' } { return appendNote(this.db, n); }
@@ -7319,13 +7413,15 @@ export class CoordStore {
    * rule for the same fact.
    */
   soleActiveCoordinator(): string | null {
-    const active = this.db.prepare("SELECT slug FROM programs WHERE state = 'active'")
-      .all() as { slug: string }[];
-    if (active.length !== 1) return null;   // no single active program: ambiguous or absent
-    const row = this.db.prepare(
-      'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
-    ).get(active[0]!.slug) as { claimedBy: string | null } | undefined;
-    return row?.claimedBy ?? null;
+    // Programme lifecycle W1 (D-8985; spec §9 "Mail"): the bound coordinator of the one programme that SHOWS Active
+    // (`lifecycleOf`: stored `active`, an open run, a run ever dispatched), and null when zero or several do. Wave N+1's
+    // `planned` run, opened before wave N closes, keeps the programme Active, so run-less mail still resolves.
+    const stored = this.db.prepare(
+      "SELECT slug, state, placeholder, coordinator FROM programs WHERE state = 'active' AND slug != ?",
+    ).all(LINEAR_SYNC_PROGRAMME) as { slug: string; state: string; placeholder: string | null; coordinator: string | null }[];
+    const active = stored.filter((p) => lifecycleOf(p.state, p.placeholder, lifecycle.runFactsOf(this.db, p.slug)) === 'active');
+    if (active.length !== 1) return null;   // no single active programme: ambiguous or absent
+    return active[0]!.coordinator;
   }
 
   /** One delivery row by id, for the ack route: it must know who a delivery
@@ -7497,9 +7593,9 @@ export class CoordStore {
    *  (`coordinatorOfRun`, `soleActiveCoordinator()`) because only the caller knows whether it is about
    *  to push, and resolving here would hide the unresolvable case behind a
    *  value that looks like an id. */
-  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string; body: string } | null {
-    const row = this.db.prepare('SELECT fromId, runId, subject, body FROM mail WHERE id = ?')
-      .get(mailId) as { fromId: string; runId: number | null; subject: string; body: string } | undefined;
+  mailOrigin(mailId: number): { fromId: string; toId: string; runId: number | null; subject: string; body: string } | null {
+    const row = this.db.prepare('SELECT fromId, toId, runId, subject, body FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; toId: string; runId: number | null; subject: string; body: string } | undefined;
     return row ?? null;
   }
 
@@ -8578,11 +8674,10 @@ export class CoordStore {
   }): RunRow[] {
     return tx(this.db, () => {
       const now = Date.now();
-      this.db.prepare(
-        // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0).
-        'INSERT INTO programs (slug, title, createdAt, state, planRequired) VALUES (?, ?, ?, ?, 0) ' +
-        'ON CONFLICT(slug) DO NOTHING',
-      ).run(input.ledger.slug, input.ledger.title, now, 'active');
+      // D-8181: a rebuilt programme is a legacy one, so it opens runs with no plan (`planRequired` 0). Minted through the
+      // lifecycle's one writer with no coordinator (spec §3: `reconstruct` has no claimant to bind).
+      lifecycle.mintInTx(this.db, { slug: input.ledger.slug, title: input.ledger.title, state: 'active', planRequired: 0,
+        actor: { kind: 'system', id: 'reconstruct' }, why: 'rebuilt from the ledger' }, now);
 
       const doneWaves = input.ledger.waves.filter((w) => w.handoffCommit !== null);
       const lastDoneWave = doneWaves.length > 0 ? doneWaves[doneWaves.length - 1] : null;
@@ -11870,16 +11965,10 @@ export class CoordStore {
     return r?.claimedBy ?? null;
   }
 
-  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
-   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
-   *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
-   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
-   *  a coordinator with a row this box cannot represent is never told "not your programme". */
-  claimsProgramme(sessionId: string, program: string): boolean {
-    const open = this.bindingsOf(sessionId).claimant();
-    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
-    return open.siblings.some((r) => r.program === program);
-  }
+  /** True iff `sessionId` is the programme's bound coordinator (`programs.coordinator`, programme lifecycle W1): the
+   *  coordinator's right to write the programme's items, pin and modifications (spec §3.4). An Idle programme keeps its
+   *  coordinator; an ended or unbound one has none, so this answers false for every session. */
+  claimsProgramme(sessionId: string, program: string, uuid: string | null): boolean { return lifecycle.coordinatesProgramme(this.db, sessionId, program, uuid); }
 }
 
 // ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────

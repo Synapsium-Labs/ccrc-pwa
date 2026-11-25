@@ -12,6 +12,8 @@ import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } fr
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import type { PendingSend } from '../stores/session';
 import { isLocalDivider } from './localDivider';
+import { isMailPrompt } from './mailRows';
+import { uniqueKeys } from './rowKeys';
 import type { MessageEvent } from './MessageBubble';
 import { timeOf } from '../lib/format';
 
@@ -35,7 +37,21 @@ export type ChatItem =
    *  own `GET /api/mail/:id`). Which door a card came through is a real
    *  question about it, so the item carries the answer rather than discarding
    *  it. */
-  | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent }
+  | {
+    kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent;
+    /** Drawn open until the reader closes it (desktop polish wave 176): false as built, and set by `foldMailRows`
+     *  (`mailRows.ts#opensByDefault`) on the newest card that asks something of the session shown. */
+    opens: boolean;
+    /** Whether it asks something of the session shown (`mailRows.ts#asksOf`): false as built, set by `foldMailRows`. */
+    asks: boolean;
+  }
+  /** The mail lane's own prompt (desktop polish wave 176): a user turn that begins with the mail prompt's fixed head
+   *  (`mailRows.ts#isMailPrompt`), drawn as one quiet line, never as a bubble from the person. Derived at render time
+   *  from the user event already in the store, exactly as `mail` is. */
+  | { kind: 'mail-prompt'; key: string; event: MessageEvent }
+  /** Two or more mail prompts with nothing a person would read between them (`mailRows.ts#SAYS_NOTHING`), folded by
+   *  `foldMailRows` into one line with a count; `members` are the prompts and the dividers between them, in order. */
+  | { kind: 'mail-prompts'; key: string; members: Extract<ChatItem, { kind: 'mail-prompt' | 'divider' }>[] }
   /** The harness's report of a finished background task. DERIVED at render
    *  time from a `system` event already in the store, exactly as `mail` is —
    *  nothing is minted into `s.events`, so the revival discipline needs no new
@@ -48,6 +64,11 @@ export type ChatItem =
   | { kind: 'task'; key: string; notification: TaskNotification; event: MessageEvent }
   | { kind: 'pending'; key: string; send: PendingSend }
   | { kind: 'working'; key: 'working' };
+
+/** The rows built here from no transcript file: a pending send and the working pulse, which trail the rows (see the end of
+ *  `buildChatItems`). They outlive a change of file, so a row in common found on them alone says nothing about where the
+ *  file's rows went (desktop polish wave 179, fix round 1, F1: the list's first index moved by 2 on a new list). */
+export const fromNoFile = (item: { readonly kind: string }): boolean => item.kind === 'pending' || item.kind === 'working';
 
 /** 'today · 14:02' (or '20 Jul · 14:02' across days) for a ts divider. */
 function dividerLabel(ts: string): string | null {
@@ -115,7 +136,7 @@ export function buildChatItems(
           // the reconciliation problem spec §2.2 refused a second frame over —
           // and would break the derived-from-one-event property that lets the
           // revival discipline stay unchanged.
-          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e });
+          items.push({ kind: 'mail', key: `mail-${e.toolId}`, envelope: fetched.envelope, event: e, opens: false, asks: false });
         }
       }
       continue;
@@ -178,7 +199,13 @@ export function buildChatItems(
         // shapes: a typed envelope is never a JSON response.
         const parsed = parseMailEnvelope(e.text);
         if (parsed.ok) {
-          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e });
+          items.push({ kind: 'mail', key: e.uuid, envelope: parsed.envelope, event: e, opens: false, asks: false });
+          continue;
+        }
+        // The mail lane's own prompt (desktop polish wave 176): the one shared head, at the start of the turn, and
+        // nothing looser (`isMailPrompt`). It still starts a turn (`toolActivity.ts#isPrompt`).
+        if (isMailPrompt(e)) {
+          items.push({ kind: 'mail-prompt', key: e.uuid, event: e });
           continue;
         }
       }
@@ -194,13 +221,15 @@ export function buildChatItems(
     }
   }
 
+  // Each row's key once (desktop polish wave 175, `rowKeys.ts`): two message events of one record share its uuid.
+  const rows = uniqueKeys(items);
   for (const p of pending) {
-    items.push({ kind: 'pending', key: `pending-${p.key}`, send: p });
+    rows.push({ kind: 'pending', key: `pending-${p.key}`, send: p });
   }
   // Explicit "Claude is working this turn" indicator. The block caret above only
   // rides the last assistant message, so it's invisible when the last item is a
   // user message, a tool still crunching, or Claude is thinking with no text yet.
   // This trailing pulse makes the working state legible whatever the tail is.
-  if (busy) items.push({ kind: 'working', key: 'working' });
-  return items;
+  if (busy) rows.push({ kind: 'working', key: 'working' });
+  return rows;
 }

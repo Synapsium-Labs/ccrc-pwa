@@ -25,6 +25,16 @@ const RANGE_SHAPES: readonly (readonly string[])[] = [
     { snapshot: 'e'.repeat(32), offset: 0, length: 1 }),
 ];
 
+/** The four argv shapes `docsFolderRead` writes (X2 P2.2), `ccd docs-folder-read`'s own token order: the label first,
+ *  then `--op` and the op's own flags. The grant's one prefix, `['docs-folder-read','--label']`, must admit every one. */
+const FOLDER_READ_SHAPES: readonly (readonly string[])[] = [
+  CCD_ARGV.docsFolderRead('notes', { op: 'tree' }),
+  CCD_ARGV.docsFolderRead('notes', { op: 'show', section: 'specs', path: 'a.md', fingerprint: 'c'.repeat(64), maxBytes: 2097152 }),
+  CCD_ARGV.docsFolderRead('notes', { op: 'prepare', section: 'plans', path: 'b.md', pin: 'stat:5:1700000000000000000' }),
+  CCD_ARGV.docsFolderRead('notes', { op: 'range', section: 'plans', path: 'b.md', pin: `fp:${'c'.repeat(64)}`,
+    snapshot: 'e'.repeat(32), offset: 524288, length: 524288 }),
+];
+
 /**
  * NO EXEMPTION SET (review finding 1, and the reason this note replaces one).
  *
@@ -448,6 +458,28 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     for (const argv of RANGE_SHAPES) expect(isExecAllowed('ccd', [...argv]), argv.join(' ')).toBe(true);
   });
 
+  // X2 P2.1 and P2.2 (spec 2026-11-18 section 7). `docs-folder-read` is a single-flag read, enrolled on `--label`: one
+  // grant, and a bare verb matches none. `docs-folder` is a multi-flag verb (`ws-audit`, `pr-state` and `ws-archive`'s
+  // shape), deliberately NOT enrolled: three grants each name their flag as a second token, so a bare `docs-folder` and
+  // an unknown flag match no grant, and each builder reaches its own.
+  it('docs-folder-read is grantable only with --label, and docs-folder only with --list, --add or --remove', () => {
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'docs-folder-read'), 'exactly one docs-folder-read grant, on --label')
+      .toEqual([['docs-folder-read', '--label']]);
+    expect(isExecAllowed('ccd', ['docs-folder-read'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-folder-read', 'notes'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-folder-read', '--op', 'tree'])).toBe(false);
+    for (const argv of FOLDER_READ_SHAPES) expect(isExecAllowed('ccd', [...argv]), argv.join(' ')).toBe(true);
+
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'docs-folder'), 'three docs-folder grants, one per flag')
+      .toEqual([['docs-folder', '--list'], ['docs-folder', '--add'], ['docs-folder', '--remove']]);
+    expect(isExecAllowed('ccd', ['docs-folder'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-folder', 'notes'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-folder', '--label', 'notes'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFolderList()])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFolderAdd('notes', '/srv/notes')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFolderRemove('notes')])).toBe(true);
+  });
+
   // The other half of the same decision, and the half a `not.toContain(
   // 'set-option')` check cannot carry: `tmux set-option` is NOT granted and
   // must never be — prefix matching leaves every later token unconstrained, so
@@ -702,6 +734,12 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // X2 P1.2: the committed prepare, 11 tokens after the verb; the other three shapes are pinned below.
     docsShowRange: ['docs-show-range', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs', '--path', 'a.md',
                     '--pin', `blob:${'d'.repeat(40)}`, '--prepare'],
+    // X2 P2.1: the registry verb's three builders, flag first as the grants name them.
+    docsFolderList: ['docs-folder', '--list'],
+    docsFolderAdd: ['docs-folder', '--add', 'notes', '--path', '/srv/notes'],
+    docsFolderRemove: ['docs-folder', '--remove', 'notes'],
+    // X2 P2.2: the tree, 5 tokens after the verb; the other three shapes are pinned below.
+    docsFolderRead: ['docs-folder-read', '--label', 'notes', '--op', 'tree'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
@@ -738,6 +776,20 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     expect(draftFrame).toEqual(['docs-show-range', '--project', 'demo', '--draft-branch', 'ws/a', '--head', 'b'.repeat(40),
       '--section', 'plans', '--path', 'b.md', '--pin', `fp:${'c'.repeat(64)}`, '--snapshot', 'e'.repeat(32), '--offset', '0',
       '--length', '1']);
+  });
+
+  // X2 P2.2. The row above sees only the tree; this pins the other three shapes token for token, in ccd's own order:
+  // the label, `--op`, then the op's flags (section, path, then the fingerprint and byte cap, the pin, or the pin and
+  // the frame's snapshot, offset and length).
+  it('docsFolderRead writes its four argv shapes in ccd\'s token order', () => {
+    const [tree, show, prepare, range] = FOLDER_READ_SHAPES;
+    expect(tree).toEqual(['docs-folder-read', '--label', 'notes', '--op', 'tree']);
+    expect(show).toEqual(['docs-folder-read', '--label', 'notes', '--op', 'show', '--section', 'specs', '--path', 'a.md',
+      '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152']);
+    expect(prepare).toEqual(['docs-folder-read', '--label', 'notes', '--op', 'prepare', '--section', 'plans', '--path', 'b.md',
+      '--pin', 'stat:5:1700000000000000000']);
+    expect(range).toEqual(['docs-folder-read', '--label', 'notes', '--op', 'range', '--section', 'plans', '--path', 'b.md',
+      '--pin', `fp:${'c'.repeat(64)}`, '--snapshot', 'e'.repeat(32), '--offset', '524288', '--length', '524288']);
   });
 
   // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no

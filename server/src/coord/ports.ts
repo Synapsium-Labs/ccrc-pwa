@@ -59,7 +59,7 @@ export interface FleetWatcherView {
  *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
-  | 'absorbParkEscalation' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
+  | 'absorbParkEscalation' | 'accountPoolEdges' | 'activeClaims' | 'admissionWaiters' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet'
   | 'advanceObserved' | 'advisorDayCounts' | 'advisorReadState' | 'answerRenewCall' | 'applyLandingControl' | 'applyPairMoves' | 'approvalById' | 'approvalPark' | 'approvalPushSources'
   | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'approvalsUnfetchedLive' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'blockClaimants' | 'blocksToWake' | 'bumpReplayCount'
@@ -84,8 +84,8 @@ export type WatcherCoordMember =
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markTimersFired' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'meetApprovalParkRuling' | 'mergingRuns' | 'mintGeneration' | 'modelSwitchesOf' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
   | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openProbeRound' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'operatorMarks' | 'outstandingMailFor' | 'parkApprovalRow' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
-  | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
-  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'pruneSequenceThrough' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
+  | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeEndDecided' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
+  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneApprovalParks' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'pruneSequenceThrough' | 'purgeTimerRefusals' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
   | 'raiseItem' | 'raiseItemWithMail' | 'raiseLatch' | 'raiseLedgerFloor' | 'readLanding' | 'readerEventsOf' | 'recentProvenance' | 'recordAdvisorRead' | 'recordApprovalParkRuling' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
   | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'

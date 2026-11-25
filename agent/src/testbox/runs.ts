@@ -8,6 +8,10 @@
 // D-7407 (TB5): `installStep` decides each package's install step in the prepare: a clone of the key's pristine
 // install when it is present, otherwise `npm ci --prefer-offline` in the run's copy (the caller queues the key).
 //
+// D-9004, D-9006, D-9007 (plan docs/superpowers/plans/2026-11-24-testbox-retention.md): retention's inputs are the
+// service's to measure; a ref-only run's time is its first sight on disk, and `live` holds every run still needing its
+// refs, a run handed over to disk included. `registryPlan` is the registry proxy's cache, by its last-served time.
+//
 // D-7501: the prepare unit says why it failed on its last stderr line, in `TESTBOX_FALLBACK`'s words; that output
 // file is written by the system manager outside the run directory (spec §2.2), so the service reads it there.
 import { TESTBOX_FALLBACK, type TestboxFallbackId, type TestboxPrepareFailed, type TestboxPrepareFailure } from '../../../shared/testbox.js';
@@ -221,7 +225,8 @@ export function prepareFailedFrom(exit: number, lastStderr: string | null): Test
 
 export interface KeptRun {
   readonly runId: string;
-  /** When the run ended, or when the service first saw its refs (ms since the epoch, given by the caller). */
+  /** When the run ended, or when the service first saw its refs (ms since the epoch, given by the caller; D-9004: the
+   *  first sight is kept on disk, so a restart does not start it again). */
   readonly at: number;
   readonly results: boolean;
   readonly logs: boolean;
@@ -235,7 +240,8 @@ export interface RetentionPlan {
 }
 
 /** What to delete now. Results and logs go once older than the retention time; refs only then AND once the run's
- *  directory is gone, so a shared checkout never loses an object it names. */
+ *  directory is gone, so a shared checkout never loses an object it names. `live` is every run whose refs a checkout
+ *  still needs or will need: its directory exists, it is queued or running, or it waits on disk (D-9006). */
 export function retentionPlan(kept: readonly KeptRun[], live: ReadonlySet<string>, now: number, retentionMs: number): RetentionPlan {
   const old = kept.filter((r) => now - r.at >= retentionMs);
   return {
@@ -243,4 +249,17 @@ export function retentionPlan(kept: readonly KeptRun[], live: ReadonlySet<string
     logs: old.filter((r) => r.logs).map((r) => r.runId),
     refs: old.filter((r) => r.refs && !live.has(r.runId)).map((r) => r.runId),
   };
+}
+
+/** A file of the registry proxy's cache and when it was last served (ms since the epoch). */
+export interface CachedEntry {
+  readonly file: string;
+  readonly at: number;
+}
+
+/** D-9007: the registry proxy's cached files to delete now: each one not served for `CCRC_TESTBOX_REGISTRY_KEEP`. The
+ *  cache is only a cache (a packument is asked of the upstream on every request, and a tarball is immutable and
+ *  checked against its packument when fetched again), so a file in use is one served within the keep time. */
+export function registryPlan(files: readonly CachedEntry[], now: number, keepMs: number): string[] {
+  return files.filter((f) => now - f.at >= keepMs).map((f) => f.file);
 }

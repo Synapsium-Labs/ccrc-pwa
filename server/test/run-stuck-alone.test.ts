@@ -18,16 +18,20 @@ const T = 1_800_000_000_000;
 const H = 3_600_000;
 const D = 24 * H;
 const COORD = 'demo-quiet-mesa';
+/** R11: one coordinator owns one live programme, so a second programme has a coordinator of its own. */
+const COORD_B = 'demo-quiet-dune';
 
 const setup = () => {
   const home = mkTmp('ccrc-stuck-alone-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields: Record<string, string> = {
-    wrapper: 'claude', project: 'demo', workdir: `/w/${COORD}`, uuid: `u-${COORD}`, started: '1', workspace: COORD,
-    branch: `ws/${COORD}`, base: 'origin/main',
-  };
-  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${COORD}.${k}`), v);
+  for (const id of [COORD, COORD_B]) {
+    const fields: Record<string, string> = {
+      wrapper: 'claude', project: 'demo', workdir: `/w/${id}`, uuid: `u-${id}`, started: '1', workspace: id,
+      branch: `ws/${id}`, base: 'origin/main',
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  }
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const verdicts = createRunVerdicts();
   const live: SessionVerdict = { verdict: 'live' };
@@ -73,7 +77,7 @@ describe('never-started counts only open runs that are not themselves stuck (R1)
   it('a lone planned run still reads never-started, and a young one does not', async () => {
     const s = setup();
     const old = s.open('programme-a', 1, 9 * D);
-    const young = s.open('programme-b', 1, 2 * D);
+    const young = s.open('programme-b', 1, 2 * D, { claimedBy: COORD_B });
     await s.pass();
     expect(s.verdicts.of(old)!.stuck).toMatchObject({ reason: 'never-started' });
     expect(s.verdicts.of(young)!.stuck).toBeNull();

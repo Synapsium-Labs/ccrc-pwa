@@ -216,7 +216,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -477,6 +477,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the decision anchors lane failed',
     derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'drift is counted in days against a UTC-day maintenance cap, so the lane looks once a day, as the quiz lane does' },
   },
+  // The authority witness lane (Overlord W1 authority journal, plan Task 6, question 8): once a minute, one exchange with the agent
+  // at a time (the exchange coalesces its own callers; the lane only nudges it). `staleAfterMs` is twice the witness op's 15 s
+  // deadline, so a flight that outlived two deadlines is abandoned. The exchange never rejects; a thrown nudge is caught here.
+  { name: 'authorityWitness', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 30_000, warnKey: 'ccrc-server: authority witness lane failed' },
 ];
 
 export function laneRow(name: string): LaneRow {

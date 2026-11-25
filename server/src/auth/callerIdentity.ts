@@ -58,4 +58,7 @@ export interface CallerIdentity {
   /** A console door that may run dark: the device's actor, `device-unmeasured`, or `dark`, each a frozen answer only the
    *  adapter makes (slug console-results-are-minted); `consoleSubject` is the one mapping of it to a row's text. */
   console(armed: boolean, device: string | null): ConsoleCaller;
+  /** The server's own lane as an actor (kind `server`, issuer `server`, strength `attributed`): never a caller. A brake
+   *  takes it; a widening refuses it, since only the account gate's operator widens. */
+  server(lane: string): RecordedActor;
 }

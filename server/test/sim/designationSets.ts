@@ -21,6 +21,7 @@ import { mkTmp } from '../tmpHelpers.js';
 import { gateActorOf } from '../../src/accounts/audit.js';
 import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
 import { designationFenceCases } from '../overlordDesignationFenceCases.js';
+import { authorityReceiptCases } from '../authorityReceiptCases.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
@@ -481,7 +482,7 @@ const DESIGNATE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutant
     { id: 'D8 unspellable passes', old: "if (spelled.kind === 'unspellable') return { act: 'refuse-input', why: 'unspellable' };", new: '' },
     { id: 'D9 an unreadable row is not its own answer', old: "if (f.read.kind === 'unmeasured') {", new: 'if (false) {' },
     { id: 'D10 a pending attempt is not an existing one', old: ' || (row !== null && row.pending !== null)) {', new: ') {' },
-    { id: 'D11 acctorder is the counted list', old: "list.join(',')", new: "counted.join(',')" },
+    { id: 'D11 acctorder is the counted list', old: "wrapper, acctorder: list.join(',')", new: "wrapper, acctorder: counted.join(',')" },
     { id: 'D12 server words unchecked', old: 'for (const w of DESIGNATE_SERVER_WORDS) if (!f.serverWords.includes(w)) needs.push(w);', new: '' },
     { id: 'D13 an unparsed probe passes', old: "return p.kind === 'answer' || (", new: "return p.kind !== 'not-run' && p.kind !== 'refused' || (" },
   ], suite: designateVerdictCases };
@@ -592,7 +593,7 @@ const DESIGNATION_FACT_SET: MutantSet<RoleOfDesignationModule> = { modulePath: R
 const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
     { id: 'I1 a rebind pending body keyed overlord', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'd.pending === sessionId' },
     { id: 'I2 a designate pending body keyed by its id', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'false' },
-    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return 'overlord';", new: '' },
+    { id: 'I3 the live id keyed by its id', old: "if (d.live === sessionId) return OVERLORD_IDENTITY;", new: '' },
     { id: 'I4 every id keyed overlord under a row', old: "  return sessionId;\n}\n\n/** The one narrowing", new: "  return 'overlord';\n}\n\n/** The one narrowing" },
   ], suite: identityOfCases };
 
@@ -600,6 +601,8 @@ const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_M
 
 export type DesignationStoreModule = typeof import('../../src/coord/overlordDesignationStore.js');
 const STORE_MODULE = path.join(ROOT, 'server/src/coord/overlordDesignationStore.ts');
+const JOURNAL_MODULE = path.join(ROOT, 'server/src/coord/overlordAuthorityJournal.ts');
+type JournalModule = typeof import('../../src/coord/overlordAuthorityJournal.js');
 const APPENDED = { ok: true, kind: 'appended', record: {} } as unknown as AuthorityAppend;
 
 /** A live designation over a minted generation, then a retire, over a coord db opened through the real migrations and an
@@ -684,27 +687,245 @@ const FAIL_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODU
     { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId, at);', new: '' },
   ], suite: failPendingEndsGenerationCases };
 
+// ------------------------------------------------------------------------- designation B: rebind, Restart, the deadline sweep
+
+type RebindFacts = Parameters<DesignationModule['rebindVerdict']>[0];
+const PEND = (over: Record<string, unknown> = {}) => ({
+  sessionId: 'overlord-new-owl', kind: 'rebind' as const, deadlineAt: 100, since: 1, actor: 'op', generation: 'g2' as string | null, ...over,
+});
+/** A live binding (`overlord-x`), with the row's own class and set and whatever else is asked of it. */
+export const boundRead = (over: Partial<DesignationView> = {}): DesignationRead =>
+  ({ kind: 'designated', sessionId: 'overlord-x', term: 2, row: view({ bound: { sessionId: 'overlord-x', generation: 'g1' }, ...over }) });
+/** Rebind's facts: a live binding, its old body dead, no force; the class and the set are the ROW's, so they are not facts. */
+export const rfacts = (over: Partial<RebindFacts> = {}): RebindFacts => {
+  const { model: _m, accountPools: _p, ...rest } = dfacts();
+  void _m; void _p;
+  return { ...rest, read: boundRead(), old: 'dead', force: false, ...over };
+};
+
+export function rebindVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
+  const verdict = (over: Partial<RebindFacts> = {}) => m.rebindVerdict(rfacts(over));
+  const word = (v: ReturnType<DesignationModule['rebindVerdict']>) => (v.act === 'refuse' ? v.word : v.act);
+  return {
+    'a healthy fleet, a dead old body: creates under the row\'s own set, in its order': () => {
+      expect(verdict()).toEqual({ act: 'create', wrapper: 'lane-a', acctorder: 'lane-b,lane-a,lane-c', poolset: 'pool-a,pool-b' });
+    },
+    'step 1: an unreadable row is unmeasured, whatever else is wrong': () => {
+      expect(verdict({ read: UNMEASURED, old: 'alive', ccdWords: null })).toMatchObject({ act: 'unmeasured' });
+    },
+    'step 2: no live binding is not-found (none, a row with no body, a pending-only row), whatever else is wrong': () => {
+      for (const read of [NONE, ROW_NO_BODY, PENDING_ONLY]) {
+        expect(word(verdict({ read, old: 'alive', ccdWords: null, builds: 'skewed' }))).toBe('not-found');
+      }
+    },
+    'step 3: a pending attempt refuses overlord-attempt-pending, before the old body is measured': () => {
+      const read = boundRead({ pending: PEND() });
+      expect(word(verdict({ read, old: 'alive', ccdWords: null }))).toBe('overlord-attempt-pending');
+      expect(word(verdict({ read, old: 'unmeasurable', force: true }))).toBe('overlord-attempt-pending');
+    },
+    'step 4: an alive body, and one that cannot be measured, refuse overlord-body-alive; dead passes': () => {
+      expect(verdict({ old: 'alive' })).toMatchObject({ act: 'refuse', word: 'overlord-body-alive' });
+      expect(verdict({ old: 'unmeasurable' })).toMatchObject({ act: 'refuse', word: 'overlord-body-alive' });
+      expect(word(verdict({ old: 'dead' }))).toBe('create');
+    },
+    'force lifts only the alive step': () => {
+      expect(word(verdict({ old: 'alive', force: true }))).toBe('create');
+      expect(word(verdict({ old: 'unmeasurable', force: true }))).toBe('create');
+      expect(word(verdict({ old: 'alive', force: true, ccdWords: null }))).toBe('capability-missing');
+      expect(word(verdict({ old: 'alive', force: true, builds: 'skewed' }))).toBe('launch-profile-unmet');
+      expect(word(verdict({ old: 'alive', force: true, read: boundRead({ pending: PEND() }) }))).toBe('overlord-attempt-pending');
+      expect(word(verdict({ old: 'alive', force: true, read: NONE }))).toBe('not-found');
+    },
+    'designate\'s steps follow, in order: capability, launch profile, unspellable set, one account': () => {
+      const all = { ccdWords: null, serverWords: [], builds: 'skewed', probe: { kind: 'not-run' } } as Partial<RebindFacts>;
+      const bad = boundRead({ accountPools: { pools: ['bad name'], untagged: false } });
+      expect(word(verdict({ ...all, read: bad }))).toBe('capability-missing');
+      expect(word(verdict({ ...all, read: bad, ccdWords: ALL_CCD, serverWords: SERVER_WORDS, probe: ANSWER }))).toBe('launch-profile-unmet');
+      expect(word(verdict({ read: bad }))).toBe('refuse-input');
+      expect(word(verdict({ read: boundRead({ accountPools: { pools: ['pool-b'], untagged: false } }) }))).toBe('overlord-single-account');
+    },
+    'the class is the row\'s: a fable row with no fable share facts counts no account': () => {
+      expect(verdict({ read: boundRead({ model: 'fable' }) })).toMatchObject({ act: 'refuse', word: 'overlord-single-account' });
+      expect(word(verdict({ read: boundRead({ model: 'opus' }) }))).toBe('create');
+    },
+    'the set is the row\'s: a one-pool row counts that pool only, and its order rides the create': () => {
+      expect(verdict({ read: boundRead({ accountPools: SET_A }) })).toEqual({ act: 'create', wrapper: 'lane-a', acctorder: 'lane-a,lane-c', poolset: 'pool-a' });
+      expect(verdict({ read: boundRead({ accountPools: { pools: ['pool-a', 'pool-b'], untagged: false } }) }))
+        .toMatchObject({ act: 'create', acctorder: 'lane-a,lane-c,lane-b' });
+    },
+    'the pick stays inside the counted list': () => {
+      expect(verdict({ home: { wrapper: 'lane-off', score: 1 } })).toMatchObject({ act: 'create', wrapper: 'lane-b' });
+    },
+  };
+}
+
+type PendingTime = Parameters<DesignationModule['pendingDeadlineOf']>;
+export function pendingDeadlineCases(m: DesignationModule): Record<string, SuiteCase> {
+  const OWN = { kind: 'reported', sessionId: 'overlord-new-owl', startId: 7, generation: 'g2', held: true } as const;
+  const none = { kind: 'no-report' } as const;
+  const pend = (over: Record<string, unknown> = {}, row: Partial<DesignationView> = {}): DesignationRead =>
+    boundRead({ pending: PEND(over), ...row });
+  const run = (...a: PendingTime) => m.pendingDeadlineOf(...a);
+  return {
+    'an unreadable row, and no row at all, act on nothing': () => {
+      expect(run(UNMEASURED, OWN, 1_000)).toEqual({ kind: 'none' });
+      expect(run(NONE, OWN, 1_000)).toEqual({ kind: 'none' });
+    },
+    'pending one tick before its deadline with no report: nothing': () => { expect(run(pend(), none, 99)).toEqual({ kind: 'none' }); },
+    'pending at exactly its deadline: expire deadline-passed': () => {
+      expect(run(pend(), none, 100)).toEqual({ kind: 'expire', sessionId: 'overlord-new-owl', outcome: 'deadline-passed' });
+    },
+    'past the deadline with its own held report: authority-unrecorded': () => {
+      expect(run(pend(), OWN, 101)).toEqual({ kind: 'expire', sessionId: 'overlord-new-owl', outcome: 'authority-unrecorded' });
+      expect(run(pend(), OWN, 100)).toMatchObject({ kind: 'expire', outcome: 'authority-unrecorded' });
+    },
+    'past the deadline with a failed report: deadline-passed': () => {
+      expect(run(pend(), { ...OWN, held: false }, 101)).toEqual({ kind: 'expire', sessionId: 'overlord-new-owl', outcome: 'deadline-passed' });
+    },
+    'past the deadline with a held report of another generation or another session: deadline-passed': () => {
+      expect(run(pend(), { ...OWN, generation: 'g9' }, 101)).toMatchObject({ kind: 'expire', outcome: 'deadline-passed' });
+      expect(run(pend(), { ...OWN, sessionId: 'overlord-other-owl' }, 101)).toMatchObject({ kind: 'expire', outcome: 'deadline-passed' });
+      expect(run(pend(), { ...OWN, generation: null }, 101)).toMatchObject({ kind: 'expire', outcome: 'deadline-passed' });
+    },
+    'an unread or absent report never makes a held one': () => {
+      expect(run(pend(), { kind: 'unread', why: 'x' }, 101)).toMatchObject({ kind: 'expire', outcome: 'deadline-passed' });
+    },
+    'inside the deadline with its own report: resettle that start, held or not': () => {
+      expect(run(pend(), OWN, 50)).toEqual({ kind: 'resettle', sessionId: 'overlord-new-owl', startId: 7 });
+      expect(run(pend(), { ...OWN, held: false, startId: 9 }, 99)).toEqual({ kind: 'resettle', sessionId: 'overlord-new-owl', startId: 9 });
+    },
+    'inside the deadline with another generation\'s or session\'s report: no resettle; owed stops drain, else nothing': () => {
+      expect(run(pend(), { ...OWN, generation: 'g9' }, 50)).toEqual({ kind: 'none' });
+      expect(run(pend(), { ...OWN, sessionId: 'overlord-other-owl' }, 50)).toEqual({ kind: 'none' });
+      expect(run(pend({}, { stopsOwed: ['o-1', 'o-2'] }), { ...OWN, generation: 'g9' }, 50)).toEqual({ kind: 'drain', ids: ['o-1', 'o-2'] });
+    },
+    'a pending generation not yet answered is never resettled, even by a report that names none': () => {
+      expect(run(pend({ generation: null }), OWN, 50)).toEqual({ kind: 'none' });
+      expect(run(pend({ generation: null }), { ...OWN, generation: null }, 50)).toEqual({ kind: 'none' });
+    },
+    'no pending attempt: owed stops drain with those ids, else nothing': () => {
+      expect(run(boundRead({ stopsOwed: ['o-1'] }), none, 1_000)).toEqual({ kind: 'drain', ids: ['o-1'] });
+      expect(run(boundRead(), none, 1_000)).toEqual({ kind: 'none' });
+      expect(run(ROW_NO_BODY, OWN, 1_000)).toEqual({ kind: 'none' });
+    },
+    'a pending attempt past its deadline expires before any drain': () => {
+      expect(run(pend({}, { stopsOwed: ['o-1'] }), none, 100)).toMatchObject({ kind: 'expire' });
+    },
+  };
+}
+
+type OverlordBodyLike = Parameters<DesignationModule['restartVerdict']>[1];
+type RestartBinding = Parameters<DesignationModule['restartVerdict']>[0];
+export function restartVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
+  const NOW = 1_000;
+  const bound: RestartBinding = { sessionId: 'overlord-x', pending: null };
+  const pendingAt = (deadlineAt: number): RestartBinding => ({ sessionId: 'overlord-x', pending: { sessionId: 'overlord-new-owl', deadlineAt } });
+  const ref = (b: RestartBinding, body: OverlordBodyLike, now = NOW) => m.restartVerdict(b, body, now);
+  const alive = { ok: false, error: 'overlord-body-alive' } as const;
+  return {
+    'no live binding is not-found, whatever the body reads': () => {
+      for (const body of [{ kind: 'up' }, { kind: 'asleep' }, { kind: 'gone', cause: 'absent' }] as OverlordBodyLike[]) {
+        expect(ref(null, body)).toEqual({ ok: false, error: 'not-found' });
+      }
+    },
+    'an up body refuses overlord-body-alive (alive)': () => { expect(ref(bound, { kind: 'up' })).toEqual({ ...alive, detail: 'alive' }); },
+    'a down body refuses overlord-body-alive (restarting): the supervisor has it': () => {
+      expect(ref(bound, { kind: 'down', since: 5 })).toEqual({ ...alive, detail: 'restarting' });
+      expect(ref(bound, { kind: 'down', since: null })).toEqual({ ...alive, detail: 'restarting' });
+    },
+    'an unmeasured body refuses overlord-body-alive (unmeasured)': () => {
+      expect(ref(bound, { kind: 'unmeasured', why: 'x' })).toEqual({ ...alive, detail: 'unmeasured' });
+    },
+    'an asleep body and a gone one may be restarted, with no attempt to end': () => {
+      expect(ref(bound, { kind: 'asleep' })).toEqual({ ok: true, endAttempt: null });
+      for (const cause of ['absent', 'stopped', 'orphan', 'never-started'] as const) expect(ref(bound, { kind: 'gone', cause })).toEqual({ ok: true, endAttempt: null });
+    },
+    'an attempt pending inside its deadline refuses overlord-attempt-pending, whatever the body reads': () => {
+      for (const body of [{ kind: 'asleep' }, { kind: 'gone', cause: 'stopped' }, { kind: 'gone', cause: 'absent' }, { kind: 'up' },
+        { kind: 'unmeasured', why: 'x' }] as OverlordBodyLike[]) {
+        expect(ref(pendingAt(NOW + 1), body)).toEqual({ ok: false, error: 'overlord-attempt-pending' });
+      }
+    },
+    'at or past its deadline the attempt is over: an asleep or gone body is accepted and the attempt named to end': () => {
+      for (const deadlineAt of [NOW, NOW - 1, 0]) {
+        expect(ref(pendingAt(deadlineAt), { kind: 'gone', cause: 'stopped' })).toEqual({ ok: true, endAttempt: 'overlord-new-owl' });
+        expect(ref(pendingAt(deadlineAt), { kind: 'asleep' })).toEqual({ ok: true, endAttempt: 'overlord-new-owl' });
+      }
+    },
+    'past its deadline the body steps still hold, and nothing is named to end on a refusal': () => {
+      expect(ref(pendingAt(NOW - 1), { kind: 'up' })).toEqual({ ...alive, detail: 'alive' });
+      expect(ref(pendingAt(NOW - 1), { kind: 'unmeasured', why: 'x' })).toEqual({ ...alive, detail: 'unmeasured' });
+    },
+  };
+}
+
+const REBIND_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'R1 the unreadable row is not its own answer', old: "if (f.read.kind === 'unmeasured') return { act: 'unmeasured', why: `the designation could not be read: ${f.read.why}` };\n  if (f.read.kind !== 'designated')",
+      new: "if (f.read.kind !== 'designated')" },
+    { id: 'R2 no binding is not not-found', old: "if (f.read.kind !== 'designated') return { act: 'refuse', word: 'not-found'", new: "if (false) return { act: 'refuse', word: 'not-found'" },
+    { id: 'R3 rebind drops the pending step', old: "if (row.pending !== null) return { act: 'refuse', word: 'overlord-attempt-pending'", new: "if (false) return { act: 'refuse', word: 'overlord-attempt-pending'" },
+    { id: 'R4 rebind drops the alive step', old: "if (f.old !== 'dead' && !f.force) {", new: 'if (false) {' },
+    { id: 'R5 an unmeasurable body is dead', old: "if (f.old !== 'dead' && !f.force) {", new: "if (f.old === 'alive' && !f.force) {" },
+    { id: 'R6 force is ignored', old: "if (f.old !== 'dead' && !f.force) {", new: "if (f.old !== 'dead') {" },
+    { id: 'R7 the pending step after the alive one', old: "if (row.pending !== null) return { act: 'refuse', word: 'overlord-attempt-pending', detail: 'an attempt is already pending on the designation' };\n  if (f.old !== 'dead' && !f.force) {",
+      new: "if (f.old !== 'dead' && !f.force) {" },
+    { id: 'R8 the class is not the row\'s', old: 'model: row.model, accountPools: row.accountPools', new: "model: 'opus', accountPools: row.accountPools" },
+    { id: 'R9 the set is not the row\'s', old: 'model: row.model, accountPools: row.accountPools', new: "model: row.model, accountPools: { pools: ['pool-a', 'pool-b'], untagged: false }" },
+    { id: 'R10 the capability step is skipped under force', old: 'return createSteps({ ...f,', new: 'if (f.force) return { act: \'create\', wrapper: \'lane-a\', acctorder: \'\', poolset: \'\' };\n  return createSteps({ ...f,' },
+  ], suite: rebindVerdictCases };
+const RESTART_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'S1 an up body may be restarted', old: "case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };", new: "case 'up': return { ok: true, endAttempt: null };" },
+    { id: 'S2 a restarting body may be restarted', old: "case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };", new: "case 'down': return { ok: true, endAttempt: null };" },
+    { id: 'S3 an unmeasured body may be restarted', old: "case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };", new: "case 'unmeasured': return { ok: true, endAttempt: null };" },
+    { id: 'S4 no binding is restartable', old: "if (binding === null) return { ok: false, error: 'not-found' };", new: '' },
+    { id: 'S5 an asleep body is not restartable', old: "case 'asleep': case 'gone': return { ok: true,", new: "case 'asleep': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };\n    case 'gone': return { ok: true," },
+    { id: 'S6 restart ignores a pending attempt', old: "if (p !== null && now < p.deadlineAt) return { ok: false, error: 'overlord-attempt-pending' };", new: '' },
+    { id: 'S7 the pending step after the body steps', old: 'if (p !== null && now < p.deadlineAt)', new: "if (p !== null && now < p.deadlineAt && (body.kind === 'asleep' || body.kind === 'gone'))" },
+    { id: 'S8 the deadline is ignored', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null)' },
+    { id: 'S9 the deadline ends one tick late', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null && now <= p.deadlineAt)' },
+    { id: 'S10 the overdue attempt is not named', old: 'endAttempt: p === null ? null : p.sessionId', new: 'endAttempt: null' },
+  ], suite: restartVerdictCases };
+const DEADLINE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'T1 expires one tick early', old: 'if (now >= p.deadlineAt)', new: 'if (now >= p.deadlineAt - 1)' },
+    { id: 'T2 expires one tick late', old: 'if (now >= p.deadlineAt)', new: 'if (now > p.deadlineAt)' },
+    { id: 'T3 a held attempt expires deadline-passed', old: "own?.held === true ? 'authority-unrecorded' : 'deadline-passed'", new: "'deadline-passed'" },
+    { id: 'T4 a failed report expires authority-unrecorded', old: "own?.held === true ? 'authority-unrecorded' : 'deadline-passed'", new: "own !== null ? 'authority-unrecorded' : 'deadline-passed'" },
+    { id: 'T5 another session\'s report is its own', old: 'settle.sessionId === p.sessionId && ', new: '' },
+    { id: 'T6 another generation\'s report is its own', old: ' && settle.generation === p.generation', new: '' },
+    { id: 'T7 an unanswered generation is resettled', old: 'p.generation !== null && ', new: '' },
+    { id: 'T8 an own report is never resettled', old: 'if (own !== null) return { kind: \'resettle\'', new: 'if (false) return { kind: \'resettle\'' },
+    { id: 'T9 the resettle names no start', old: 'startId: own.startId };', new: 'startId: 0 };' },
+    { id: 'T10 owed stops are never drained', old: 'return read.row.stopsOwed.length > 0 ? {', new: 'return read.row.stopsOwed.length < 0 ? {' },
+    { id: 'T11 the drain names no ids', old: "{ kind: 'drain', ids: read.row.stopsOwed }", new: "{ kind: 'drain', ids: [] }" },
+    { id: 'T12 an unreadable row is read', old: "if (read.kind === 'unmeasured' || read.row === null) return { kind: 'none' };", new: "if (read.row === null) return { kind: 'none' };" },
+  ], suite: pendingDeadlineCases };
 // Keep the same transaction and append, but take away a writer's immediate rollback fence.
 const withoutFence = (arm: string) => ({
   id: `${arm} runs without the rollback fence`,
   old: `return txWithAuthorityStamp(db, journal, (add): ${arm} => {`,
   new: `return tx(db, (): ${arm} => {\n    const add = (entry: OverlordAuthorityMove) => append(db, journal, entry);`,
 });
-const FENCE_DECLARATION = '  let postAppendFailed: (() => void) | undefined;';
-const FENCE_FUNCTION = 'function txWithAuthorityStamp<T>(db: DatabaseSync, journal: AuthorityAppender, write: (add: (entry: OverlordAuthorityMove) => Appended) => T): T {';
 const FENCE_CALL = 'try { postAppendFailed?.(); } catch { /* preserve the first error */ }';
+// F1, F2, F4 and F5 moved with the receipt to the journal's `txWithAuthorityReceipt` (sequence PR B1, piece 4): RECEIPT_SET below
+// holds them as R1 to R4, over the receipt's own cases, because a mutant of the journal module is invisible to the store's cases.
 const FENCE_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
     ...['DesignateResult', 'GoLiveResult', 'RetireResult'].map(withoutFence),
-    { id: 'F1 drops the receipt call', old: FENCE_CALL, new: '' },
-    // Replay a real receipt even in a transaction that appended nothing: pending-only retire must not fence.
-    { id: 'F2 fences on a throw with no append', old: `${FENCE_FUNCTION}\n${FENCE_DECLARATION}`,
-      new: `${FENCE_DECLARATION.trim()}\n${FENCE_FUNCTION}` },
-    { id: 'F4 only fences on stamp refusals', old: FENCE_CALL, new: `if (error instanceof SequenceStampRefused) { ${FENCE_CALL} }` },
-    { id: 'F5 lets a throwing receipt replace the original error', old: FENCE_CALL, new: 'postAppendFailed?.();' },
     { id: 'F6 a row-only live retire skips its sequence lines',
       old: 'stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };',
       new: 'if (a.journalled) stampLines(db, lines);\n    return { ok: true, changed: true, term, owed };' },
   ], suite: designationFenceCases };
+const RECEIPT_HEAD = "export function txWithAuthorityReceipt<T>(db: DatabaseSync, journal: Pick<OverlordAuthorityJournal, 'appendInTx'>,\n"
+  + "  write: (journal: Pick<OverlordAuthorityJournal, 'appendInTx'>) => T): T {";
+const RECEIPT_DECLARATION = '  let postAppendFailed: (() => void) | undefined;';
+const RECEIPT_SET: MutantSet<JournalModule> = { modulePath: JOURNAL_MODULE, mutants: [
+    { id: 'R1 drops the receipt call', old: FENCE_CALL, new: '' },
+    { id: 'R2 fences on a throw with no append', old: `${RECEIPT_HEAD}\n${RECEIPT_DECLARATION}`, new: `${RECEIPT_DECLARATION.trim()}\n${RECEIPT_HEAD}` },
+    { id: 'R3 only fences on one kind of error', old: FENCE_CALL, new: `if (error instanceof TypeError) { ${FENCE_CALL} }` },
+    { id: 'R4 lets a throwing receipt replace the original error', old: FENCE_CALL, new: 'postAppendFailed?.();' },
+    { id: 'R5 the write gets the bare journal', old: 'return tx(db, () => write(held));', new: 'return tx(db, () => write(journal));' },
+    { id: 'R6 fences inside the transaction too', old: 'return tx(db, () => write(held));',
+      new: 'return tx(db, () => { try { return write(held); } catch (e) { postAppendFailed?.(); throw e; } });' },
+  ], suite: authorityReceiptCases };
 
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
@@ -717,5 +938,9 @@ export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#identityOf': IDENTITY_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#retire': RETIRE_END_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#failPending': FAIL_END_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#rebindVerdict': REBIND_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#restartVerdict': RESTART_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#pendingDeadlineOf': DEADLINE_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#txWithAuthorityStamp': FENCE_SET as MutantSet<never>,
+  'server/src/coord/overlordAuthorityJournal.ts#txWithAuthorityReceipt': RECEIPT_SET as MutantSet<never>,
 };

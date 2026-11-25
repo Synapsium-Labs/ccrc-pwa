@@ -122,10 +122,10 @@ describe('stepOf (D-8166, spec §2.2)', () => {
 });
 
 describe('the box settings the form starts from (D-8166)', () => {
-  it('the five families hold each of the 31 box keys exactly once (D-8290 adds the live probes\' three)', () => {
+  it('the five families hold each of the 32 box keys exactly once (D-8290 adds the live probes\' three, D-9007 the registry keep time)', () => {
     const keys = BOX_SETTING_FAMILIES.flatMap((f) => [...f.keys]);
-    expect(keys).toHaveLength(31);
-    expect(new Set(keys).size).toBe(31);
+    expect(keys).toHaveLength(32);
+    expect(new Set(keys).size).toBe(32);
     expect([...keys].sort()).toEqual([...TESTBOX_BOX_KEYS].sort());
   });
 
@@ -137,7 +137,7 @@ describe('the box settings the form starts from (D-8166)', () => {
       const raw = m[2]!;
       found[m[1]!] = /^(['"]).*\1$/.test(raw) ? raw.slice(1, -1) : raw;
     }
-    expect(Object.keys(found)).toHaveLength(31);
+    expect(Object.keys(found)).toHaveLength(32);
     expect(BOX_SETTING_DEFAULTS).toEqual(found);
   });
 
@@ -147,7 +147,7 @@ describe('the box settings the form starts from (D-8166)', () => {
       if (d !== '') expect(fitsTestboxShape(key, d), `${key}=${d}`).toBe(true);
     }
     const start = boxSettingStart();
-    expect(Object.keys(start)).toHaveLength(31);
+    expect(Object.keys(start)).toHaveLength(32);
     for (const [key, v] of Object.entries(start)) if (v !== '') expect(fitsTestboxShape(key, v), `${key}=${v}`).toBe(true);
   });
 

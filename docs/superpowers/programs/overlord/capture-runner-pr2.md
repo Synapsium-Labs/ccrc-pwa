@@ -136,13 +136,16 @@ copy is now one box call, and its program holds them:
   anything under the box root is made.
 - **P4, no link and no wrong kind.** A link or anything not a directory at `captures` or `captures/builds`, and a link or
   anything not a regular file where the build is placed, refuses with a word of its own, `build-store-refused` (a new code,
-  mapped to `copy-failed` by the copy port's adapter), and changes nothing on the box.
+  mapped to `copy-failed` by the copy port's adapter), and changes nothing on the box. (Since capture runner PR 3b, a link at
+  exactly the build's name is replaced by the build in the one rename that places it, its target never opened, and no
+  longer refused; only a wrong kind there refuses. Review 3765 F10.)
 - **P5, unchanged.** The answers, the existing codes, the verb's lock, the size bound and the host-side verify are as they
   were; the store's result is the build at its version name, mode 0555, owned by the service user. The host no longer
   removes a stage by a second call: the box removes its own.
 
 The box programs sit in a marked box-side region of `ccd/testbox-build-copy`, which the macOS scan now cuts and pins (exactly
-the two programs, and one GNU line, the hash), as it does the admin verb's own region.
+the two programs, and, at this pull request's merge, one GNU line, the hash; since capture runner PR 3b two, the hash and the
+rename's option that never treats the name as a directory), as it does the admin verb's own region.
 
 **Tests, measured by mutation.** The box programs run for real against fixture roots, with shims on the search path standing
 in for the privilege drop, recording which acts ran dropped, and tampering at the two moments that matter. Each guard was
@@ -196,14 +199,17 @@ installer made no `captures`, so fix round 1's copy refused on every installed b
   root; and `captures`, when present, to be a real directory owned by exactly that user and group. Anything else refuses
   `build-store-refused` and changes nothing. No name has to travel to the box.
 - **The root step's refusals come before the stream:** the box root, `captures`, the identity, and the stage's parent. The
-  writer's four store refusals (a link or a wrong kind at `captures/builds` or where the build goes) need no bytes either,
+  writer's store refusals (here four: a link or a wrong kind at `captures/builds` or where the build goes; since capture
+  runner PR 3b a link where the build goes is replaced, not refused, and the writer also refuses a link or a wrong kind at
+  `captures` when it meets one itself) need no bytes either,
   but in this pull request they ran after the whole stream was read and hashed, so a store fault that stood streamed the
   whole build on every attempt (review 3641). They stay in the writer, because that tree is the service user's; capture
   runner PR 3b asks them first, in a mode that changes nothing, under the same privilege drop and with no stdin.
 - **Each refusal says one word** on the box's output (`box-root-kind`, `box-root-owner`, `results-absent`, `results-link`,
   `results-kind`, `results-owner`, `captures-link`, `captures-kind`, `captures-owner`, `stage-parent`, `stage-under-root`,
   `hash`, and the writer's `builds-link`,
-  `builds-kind`, `target-link`, `target-kind`). The fleet host's admin log keeps it beside the verb's code, and a word off
+  `builds-kind`, `target-link`, `target-kind`; since capture runner PR 3b the writer no longer says `target-link`, which its
+  heal retired, and says `captures-link` or `captures-kind` where it meets one itself). The fleet host's admin log keeps it beside the verb's code, and a word off
   its grammar is logged as `unsaid`.
 - **The stage's parent** (root's temporary folder) must be a real directory, owned by root or sticky. It must not be under
   the box root, compared after dropping a trailing slash from both.
@@ -221,7 +227,8 @@ installer made no `captures`, so fix round 1's copy refused on every installed b
   the way its installer makes them (a box root that is not root's, or a `results` or `captures` that is a link, a file or
   another user's), and Repair on the box's card fixes that. (Corrected after review 3641: Repair re-runs the installer,
   which re-makes a missing directory with its mode and owner. It cannot cure a link or a file standing where a directory
-  belongs, and the writer's four refusals, at `captures/builds` and where the build goes, are not the installer's to fix.)
+  belongs, and the writer's refusals, at `captures/builds` and a wrong kind where the build goes, are not the installer's to
+  fix.)
 
 **How an installed box gets `captures`:** the backfill, at the first copy; the installer's run-root step, at any install,
 reapply or repair; and the box's own updater (`deploy/testbox/bin/box-update`, whose render step runs the same step) once
@@ -231,7 +238,7 @@ the managed-node design's driver runs it.
 
 | | |
 |---|---|
-| Guarantees | no write under the box root as root but the backfill of an absent `captures`; a box root that is not a real root-owned directory, a `results` that is not a real directory of a non-root owner and group, and a `captures` that is not a real directory of exactly that owner and group, are refused before any byte is read; the stage is a fresh 0700 directory in a parent that is root's or sticky and not under the box root; the hashed bytes are the handed-over bytes; no link or wrong kind in the store is followed or replaced |
+| Guarantees | no write under the box root as root but the backfill of an absent `captures`; a box root that is not a real root-owned directory, a `results` that is not a real directory of a non-root owner and group, and a `captures` that is not a real directory of exactly that owner and group, are refused before any byte is read; the stage is a fresh 0700 directory in a parent that is root's or sticky and not under the box root; the hashed bytes are the handed-over bytes; no link or wrong kind in the store is followed, and none is replaced but a link at exactly the build's name, which since capture runner PR 3b the build replaces in its one rename, the link's target never opened |
 | Assumes | the box root's ancestors are not writable by the service user (the installer's path policy); the box root's own mode keeps everyone but root from changing the entries directly inside it (assumed in this pull request; proved from capture runner PR 3b, which refuses a box root writable by group or other, as the box's updater does for its own tree); root's temporary folder on the box is root's or sticky (refused otherwise); the box's `ls` prints owner and group as numbers with `-n`; util-linux's privilege drop takes the flags used; nothing but a kill ends the shell untrapped |
 
 **Tests, measured by mutation (review F8, F9).** Every guard of the copy's box programs, the host's words, the adapter's

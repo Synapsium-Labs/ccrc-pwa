@@ -134,7 +134,7 @@ describe('leaseCoordinatorOf', () => {
     store.db.exec('PRAGMA synchronous = OFF');
     let n = 0;
     const open = (claimedBy: string) => {
-      const r = store.openRun({ program: `program-${n++}`, title: 'run-a', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
+      const r = store.openRun({ program: `program-${claimedBy}`, title: 'run-a', project: 'project-a', wave: ++n, waveOf: null, claimedBy });   // one programme per coordinator (R11)
       if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
       return r.id;
     };
@@ -172,7 +172,7 @@ describe('1564 F1: the claimant read is unbounded over the parent\'s own series'
     store.db.exec('PRAGMA synchronous = OFF');
     let n = 0;
     const open = (claimedBy: string): number => {
-      const r = store.openRun({ program: `program-${n++}`, title: 'run-a', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
+      const r = store.openRun({ program: `program-${claimedBy}`, title: 'run-a', project: 'project-a', wave: ++n, waveOf: null, claimedBy });   // one programme per coordinator (R11)
       if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
       return r.id;
     };

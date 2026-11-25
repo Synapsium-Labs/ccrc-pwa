@@ -53,14 +53,27 @@ least recent dropped first, and is cleared when the credential reading's account
 owner change). The value reaches no stats, status or log line (stats.TOKEN_HEADERS refuses it in the stats file; a
 recording made under the operator's `record-streams` marker keeps every response header, as it always has).
 
+AN ABSORBED FAILURE (D-9078). The launcher gives Claude Code two retries, so a backend that is overloaded
+for a few seconds used to end the turn. While nothing is committed to the client, a short failure of the upstream (the
+`overloaded` and `unavailable` rows, and a POST that got no answer) is tried again by the bridge itself (`_absorb`);
+`absorb` decides which failure, how long to wait and when to stop, and says why. When it stops, the failure is answered
+exactly as it always was. Only Claude Code's own request (`inbound.from_claude_code`) is held like this: any other caller
+of the lane (the models canary, say) has its own deadline and gets the failure at once. The wait ends at once when the
+drain cuts the stream or the client closes (`client_closed`), and nothing is posted for either. An absorbed failure is counted in the parity row's `absorbed` and has its
+own row in the request record (`reqrecord.ABSORBED`); it is no outcome, `stats.request` does not count the retry again,
+and it is not recorded in the status file, so a failure that passed never reads as the lane's last error; the failure
+that ended the attempts is recorded, whether the bounds ran out or the client left. What is counted per POST or per upstream
+answer still is, once for each attempt: `parity_effort` and the markers each POST carried, the header names, a page's
+log line and a recording (never a parity response: an attempt whose terminal arrived is not tried again).
+
 THE REQUEST RECORD (D-8619). Each upstream POST is observed once, in a `reqrecord.Answer` the request's path fills
 (`_begin` at the POST, `_post` its effort and markers, `_one_response` its status, `_reduce` its terminal and times
 through `_observe`): the parity counts above are read from that object, and so is the row `settle` hands to the lane's
 `reqrecord.RequestRecord` once the bridge has decided what it did with the answer (its outcome word, the one the stats
 file counts for it). A row is written only while the lane directory holds the operator's `reqrecord.REQUESTS_MARKER`;
-every POST that got an HTTP answer has one (the 401 before its retry, the fallback's 400, an error answered to the
-client, a stream that broke), and so does one that got none (`status` null). The record never raises into a request
-and never changes the client's answer or the wire.
+every POST that got an HTTP answer has one (the 401 before its retry, the fallback's 400, an absorbed failure, an error
+answered to the client, a stream that broke), and so does one that got none (`status` null). The record never raises
+into a request and never changes the client's answer or the wire.
 
 THE IDLE FLUSH (D-8624). Each answer's handler flushes the stats file, which writes at most every `stats.FLUSH_S`; then
 it re-arms one timer (`_IdleFlush`) that flushes again once the bridge has been idle for FLUSH_S, so a run's figures
@@ -119,15 +132,17 @@ import importlib.util
 import json
 import math
 import os
+import random
 import re
 import signal
+import socket
 import sys
 import threading
 import time
 import uuid
 from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
-from . import backend, count, errors, inbound, record, reducer, reqrecord, sse, stats, store, stream
+from . import absorb, backend, count, errors, inbound, record, reducer, reqrecord, sse, stats, store, stream
 
 PING_S = 15.0
 HOLD_S = 15.0
@@ -586,6 +601,20 @@ class _Feed:
             return out, self.end
 
 
+def client_closed(connection: socket.socket) -> bool:
+    """Whether the client has closed `connection`, by a peek of one byte that neither consumes nor blocks: `b""` is its
+    FIN, any error but "nothing to read" a reset. The rule is the shim's (`Handler._client_gone`, D-4933), its limits
+    included: a half-closed client reads as gone, and a pipelining one, which Claude Code is not, as still there. The
+    bridge has its own copy because the two files are placed apart: the shim by the installer, this package read from
+    the tree. A hook would be absent for a release whenever they differ, and these retries silently off."""
+    try:
+        return connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 # ── the in-flight registry (the drain) ───────────────────────────────────────────────────────────────────────────
 class _Flight:
     def __init__(self) -> None:
@@ -774,6 +803,10 @@ class _Request:
         self.fell_back = False
         self.marks = frozenset()  # type: frozenset
         self.carried = ()  # type: Tuple[str, ...]
+        # whether a failure of this message may be absorbed, its first POST's start and the retries made so far
+        self.absorbs = False
+        self.first_post = None  # type: Optional[float]
+        self.absorbed = 0
         # D-8619: the POST whose row is not yet written, this message's number (taken at its first POST) and POST
         # count, and what every row of the message carries: the bounded session, the subagent flag, the replay tally
         self.pending = None  # type: Optional[reqrecord.Answer]
@@ -892,6 +925,7 @@ class _Request:
         self.replay = replay  # D-8619: the same tally, on the message's first row
         self.session = req.session_id
         self.subagent = inbound._header(self.h.headers, inbound.AGENT_HEADER) is not None
+        self.absorbs = inbound.from_claude_code(self.h.headers)
         self.history = data.get("messages")
         self.cache_key = req.cache_key
         out.model = req.model
@@ -965,6 +999,8 @@ class _Request:
         if self.message is None:
             self.message = self.state.record.next_message()
         ans = reqrecord.Answer(self.message, self.posts, turn.model, time.monotonic(), reqrecord.now_ms())
+        if self.first_post is None:
+            self.first_post = ans.posted
         self.posts += 1
         self.pending = ans
         return ans
@@ -987,7 +1023,8 @@ class _Request:
         return self._turn[0]
 
     def _post(self, turn: inbound.NeutralRequest, reading: object, ans: reqrecord.Answer, *,
-              counted: bool = True) -> backend.Upstream:
+              counted: bool = True) -> object:
+        """One POST: the upstream's answer, or the BridgeError of one that got none, for the caller to record."""
         st = self.state
         # D-8622: the markers read now, none once the fallback dropped them for this message
         marks = frozenset() if self.fell_back else backend.markers(st.cfg.lane_dir)
@@ -1016,12 +1053,10 @@ class _Request:
         try:
             return backend.post(st.cfg.upstream_base, backend.encode_body(body), headers)
         except backend.UpstreamTimeout as e:
-            err = errors.unavailable("the upstream did not answer within the idle bound",
-                                     code="connect-timeout" if e.phase == "connect" else "idle-timeout")
+            return errors.unavailable("the upstream did not answer within the idle bound",
+                                      code="connect-timeout" if e.phase == "connect" else "idle-timeout")
         except (OSError, http.client.HTTPException):
-            err = errors.unavailable("the upstream could not be reached", code="transport")
-        self.record(err, None)
-        raise err
+            return errors.unavailable("the upstream could not be reached", code="transport")
 
     def _waiting(self, out: stream.AnthropicStream, fn: Callable, *args: object, **kwargs: object) -> object:
         """`fn(*args, **kwargs)`; once the stream is committed and streaming (a continued message), on a helper thread
@@ -1029,9 +1064,9 @@ class _Request:
         responses is not silence. Its exception is raised here; the wait ends when `fn` returns, which its own
         bounds limit (CONNECT_TIMEOUT_S, IDLE_TIMEOUT_S, the library's), or when the stream is closed (the client went
         away, or the drain cut it): then `the bridge stopped` is raised at once, and the helper drops its answer when
-        it comes. An upstream connection it gets is closed there explicitly; under CPython the reference count would
-        close it too once the helper returns, so the close is stated rather than guarded (no case can tell the two
-        apart)."""
+        it comes, recording a POST's failure first (nobody else will). An upstream connection it gets is closed there
+        explicitly; under CPython the reference count would close it too once the helper returns, so the close is
+        stated rather than guarded (no case can tell the two apart)."""
         if not out.committed or out.buffered:
             return fn(*args, **kwargs)
         box = {}  # type: Dict[str, object]
@@ -1048,6 +1083,8 @@ class _Request:
                 if "abandoned" not in box:
                     box["value"] = value
                     return
+            if isinstance(value, errors.BridgeError):  # `_post`'s: recorded, as an awaited one is
+                self.record(value, None)
             if isinstance(value, backend.Upstream):  # nobody reads it: drop the connection
                 try:
                     value.close()
@@ -1075,7 +1112,8 @@ class _Request:
 
     def _one_response(self, turn: inbound.NeutralRequest, reading: object,
                       out: stream.AnthropicStream) -> object:
-        """One upstream response: (reducer, terminal, reading) for a reply, or the BridgeError to answer."""
+        """One upstream response: (reducer, terminal, reading) for a reply, or the BridgeError to answer, recorded. The
+        one place a failed attempt is tried again, refreshed for, sent without its markers, or recorded."""
         st = self.state
         lib = self.lib
         counted = True
@@ -1084,41 +1122,80 @@ class _Request:
                 return errors.unavailable("the bridge stopped")
             ans = self._begin(turn)  # D-8618, D-8619: the POST's start, which the parity section times from
             up = self._waiting(out, self._post, turn, reading, ans, counted=counted)
-            ans.status = up.status
             counted = True
-            st.stats.header_names(up.headers)
-            media = _media_type(up.headers)
-            st.stats.name("responseHeader", media)
-            if is_upstream_page(up.status, media):
-                log_upstream_page(up.status, up.headers, compact=turn.compaction)
-            st.stats.usage_headers(up.headers)
-            rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
-            if 200 <= up.status < 300:
-                self._capture(turn, up.headers, reading, ans)
-                return self._reduce(turn, self._recorded(up), out, rid, reading, ans)
-            e = backend.error_of(up, now=time.time())
-            ans.ended()  # D-8619: the error body is read
-            if self._falls_back(up.status, e, out):
-                self.fell_back = True  # D-8622: none of the markers for the rest of this message
-                for marker in self.carried:
-                    st.stats.parity_fallback(ROUTE, turn.model, marker)
-                ans.fallback = True
-                self.settle(reqrecord.FALLBACK)
-                counted = False
-                continue
-            if up.status == 401 and not self.retried_401:
-                self.retried_401 = True
-                if _fresh(lib, getattr(reading, "access_token", None), time.time()):
-                    st.stats.outcome("refresh-skipped-fresh-token")
-                    self.record(e, rid)
-                    return e
-                self.settle("refresh-after-401")  # D-8619: the answer this refresh is for
-                cfg = st.cfg
-                reading = self._waiting(out, self._auth_call, lib.refresh_rejected, cfg.auth_dir, reading.access_token,
-                                        outcome="refresh-after-401", lane=cfg.lane)
+            if isinstance(up, errors.BridgeError):  # the POST got no answer
+                e, rid, retry_after = up, None, None
+            else:
+                ans.status = up.status
+                st.stats.header_names(up.headers)
+                media = _media_type(up.headers)
+                st.stats.name("responseHeader", media)
+                if is_upstream_page(up.status, media):
+                    log_upstream_page(up.status, up.headers, compact=turn.compaction)
+                st.stats.usage_headers(up.headers)
+                rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
+                retry_after = errors.retry_after_of(up.headers)
+                if 200 <= up.status < 300:
+                    self._capture(turn, up.headers, reading, ans)
+                    e = self._reduce(turn, self._recorded(up), out, rid, reading, ans)
+                    if not isinstance(e, errors.BridgeError):
+                        return e
+                else:
+                    e = backend.error_of(up, now=time.time())
+                    ans.ended()  # D-8619: the error body is read
+                    if self._falls_back(up.status, e, out):
+                        self.fell_back = True  # D-8622: none of the markers for the rest of this message
+                        for marker in self.carried:
+                            st.stats.parity_fallback(ROUTE, turn.model, marker)
+                        ans.fallback = True
+                        self.settle(reqrecord.FALLBACK)
+                        counted = False
+                        continue
+                    if up.status == 401 and not self.retried_401:
+                        self.retried_401 = True
+                        if _fresh(lib, getattr(reading, "access_token", None), time.time()):
+                            st.stats.outcome("refresh-skipped-fresh-token")
+                            self.record(e, rid)
+                            return e
+                        self.settle("refresh-after-401")  # D-8619: the answer this refresh is for
+                        cfg = st.cfg
+                        reading = self._waiting(out, self._auth_call, lib.refresh_rejected, cfg.auth_dir,
+                                                reading.access_token, outcome="refresh-after-401", lane=cfg.lane)
+                        continue
+            if self._absorb(turn, e, ans, retry_after, out):
+                counted = False  # the retry is the same request, not a second one
                 continue
             self.record(e, rid)
             return e
+
+    def _absorb(self, turn: inbound.NeutralRequest, e: errors.BridgeError, ans: reqrecord.Answer,
+                retry_after: Optional[str], out: stream.AnthropicStream) -> bool:
+        """Whether this failed attempt is tried again (the module docstring): waited out here, and counted once the
+        wait is over and somebody is still there to answer. False answers the failure now."""
+        word = absorb.word(e.kind, ans.status, ans.measured)
+        if word is None or not self.absorbs or out.committed:
+            return False
+        ans.ended()
+        now = time.monotonic()
+        wait = absorb.delay(self.absorbed, took_s=now - ans.posted, spent_s=now - self.first_post,
+                            retry_after_s=None if retry_after is None else float(retry_after), rand=random.random)
+        if wait is None:
+            return False
+        until = now + wait
+        while True:
+            if out.closed:  # cut by the drain
+                return False
+            if client_closed(self.h.connection):
+                out.left()
+                return False
+            left = until - time.monotonic()
+            if left <= 0:
+                break
+            time.sleep(min(WAIT_TICK_S, left))
+        self.absorbed += 1
+        self.state.stats.parity_absorbed(ROUTE, turn.model, word)
+        self.settle(reqrecord.ABSORBED)
+        return True
 
     def _falls_back(self, status: int, e: errors.BridgeError, out: stream.AnthropicStream) -> bool:
         """D-8622: whether a non-2xx answer is the one the fallback retries: a 400 of the plain refusal row (never an
@@ -1171,6 +1248,8 @@ class _Request:
 
     def _reduce(self, turn: inbound.NeutralRequest, up: backend.Upstream, out: stream.AnthropicStream,
                 rid: Optional[str], reading: object, ans: reqrecord.Answer) -> object:
+        """One 2xx answer read to its end: (reducer, terminal, reading), or the upstream's failure for the caller to
+        record. Raises `the bridge stopped` for a stream that is closed, which is not the upstream's."""
         st = self.state
         red = reducer.Reducer(name_map=turn.name_map, names=st.stats, tools_required=turn.tools_required)
         feed = _Feed(up)
@@ -1208,7 +1287,7 @@ class _Request:
                 if released:
                     out.blocks(released)
                 if out.closed:  # cut by the drain, or the client went away
-                    return errors.unavailable("the bridge stopped")
+                    raise errors.unavailable("the bridge stopped")
                 if red.terminal is not None or end is not None:
                     # the socket's own idle bound (no bytes at all) is the idle bound too, never a truncation
                     timed_out = red.terminal is None and end == "timeout"
@@ -1226,14 +1305,11 @@ class _Request:
         if released:
             out.blocks(released)
         if timed_out:
-            err = errors.unavailable("the upstream was silent past the idle bound", code="idle-timeout", rid=rid)
-            self.record(err, rid)
-            return err
+            return errors.unavailable("the upstream was silent past the idle bound", code="idle-timeout", rid=rid)
         if term.error is not None:
             err = term.error
             if err.request_id is None:
                 err.request_id = rid
-            self.record(err, rid)
             return err
         if not out.committed:
             out.commit()

@@ -25,7 +25,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 // Each set is exhaustive by type: a key missing or extra is a compile error here.
 const PAGE_FAILURES: Record<DocsPageParseFailure, true> = {
-  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true, 'bad-view': true,
+  'not-docs': true, 'bad-project': true, 'bad-label': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true, 'bad-view': true,
   'bad-frame': true, 'bad-escape': true, 'encoded-slash': true, 'commit-in-page': true, 'unknown-param': true,
   'repeated-param': true, 'reserved-node': true,
 };

@@ -19,7 +19,7 @@ const UNREADABLE: OpenSiblingsResult = { ok: false, kind: 'run-unreadable', deta
 const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
   blocked?: Record<number, Extract<CloseOutcome, { ok: false }>>;
   refuse?: Record<number, Extract<CloseOutcome, { ok: false }>>;
-  throws?: { worker?: boolean; claimed?: boolean; blocked?: number; abandon?: number } } = {}) => {
+  throws?: { worker?: boolean; claimed?: boolean; blocked?: number; abandon?: number }; bound?: string | null } = {}) => {
   const seen: string[] = [];
   const p: ArchiveCoordPort = {
     bindingsOf: (id) => ({
@@ -45,6 +45,9 @@ const port = (o: { worker?: OpenSiblingsResult; claimed?: OpenSiblingsResult;
       return o.refuse?.[runId]
         ?? { ok: true, id: runId, state: 'failed', released: true, childReclaim: 'not-queued' } as CloseOutcome;
     },
+    // Programme lifecycle W1 (W1 review A2): the programme end the door decides after its abandons, recorded in order.
+    boundProgramme: (sid) => { seen.push(`bound:${sid}`); return o.bound ?? null; },
+    endProgramme: (slug) => { seen.push(`end:${slug}`); },
     // D-8199's claims step is not exercised by these rows; reaching it is a test bug.
     moveClaims: async () => { throw new Error('moveClaims is not part of this fake'); },
   };
@@ -163,7 +166,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(1)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, { ...IDLE_WS, worktree: 'unmeasured' }))
       .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(1)], moved: null });
-    expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:1', 'abandon:1']);
+    expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:1', 'abandon:1', 'bound:demo-c', `end:${run(1).program}`]);
   });
 
   it('refuses `run-open` naming the runs, or with EMPTY runs when they could not be read — and `force` skips it', async () => {
@@ -213,7 +216,20 @@ describe('decideArchive — every check that can refuse runs before any act', ()
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(7), run(8, 2)] } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS))
       .toEqual({ ok: true, stop: false, wsArchive: true, ended: [run(7), run(8, 2)], moved: null });
-    expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:7', 'can:8', 'abandon:7', 'abandon:8']);
+    expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'can:7', 'can:8', 'abandon:7', 'abandon:8', 'bound:demo-c',
+      ...[...new Set([run(7).program, run(8, 2).program])].map((p) => `end:${p}`)]);
+  });
+
+  // Programme lifecycle W1 (W1 review A2): the programme end comes LAST, after every abandon, and covers the programme the
+  // session is bound to with no open run (Idle) too; a refused abandon ends nothing.
+  it('`programme:"end"` ends the programmes after every abandon, the bound Idle one included; a refused abandon ends none', async () => {
+    const { p, seen } = port({ claimed: { ok: true, siblings: [] }, bound: 'quiet' });
+    expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS)).toMatchObject({ ok: true });
+    expect(seen).toEqual(['worker:demo-c', 'claimant:demo-c', 'bound:demo-c', 'end:quiet']);
+    const refused = port({ claimed: { ok: true, siblings: [run(7)] }, bound: 'quiet',
+      refuse: { 7: { ok: false, kind: 'refused', code: 'x' } as unknown as Extract<CloseOutcome, { ok: false }> } });
+    expect(await decideArchive(refused.p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS)).toMatchObject({ ok: false });
+    expect(refused.seen.filter((x) => x.startsWith('end:'))).toEqual([]);
   });
 
   it('a run the abandon arm cannot move from its row alone is found BEFORE any run is ended — whatever its id order', async () => {

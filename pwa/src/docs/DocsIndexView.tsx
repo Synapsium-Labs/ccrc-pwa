@@ -6,9 +6,10 @@ import { docsPageUrl, type DocsIndexRow, type DocsProjectsResponse } from '../..
 import { formatAge } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import { docsLocation } from './docsLinks';
-import { DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
+import { DOCS_FOLDER_TEXT, DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
 import { presentSectionCounts, sectionCountsText } from './docsTree';
-import { DocsPageLink } from './DocsTreeView';
+import type { FolderIndexSlot } from './folderPage';
+import { DocsPageLink, RowButton } from './DocsTreeView';
 
 /** A non-ready state in words (spec 4.4). `linked-worktree` and `shared-repo` are "part of <owner>" instead. */
 const INDEX_STATE_TEXT: Readonly<Record<Exclude<DocsIndexRow['state'], 'ready' | 'linked-worktree' | 'shared-repo'>, string>> = {
@@ -72,17 +73,51 @@ function IndexRow(p: { readonly row: DocsIndexRow; readonly sameAs: readonly str
   } else {
     state = INDEX_STATE_TEXT[row.state];
   }
+  return <OffRow name={row.project} state={row.state} note={dup}>{state}</OffRow>;
+}
+
+/** A row that opens nothing, with its name and the words that say why: a project in a state Docs cannot open, and an outside
+ *  folder whose registry entry is unreadable. `state` is the row's `data-state`; `children` is the words, and any note after
+ *  them. */
+function OffRow(p: {
+  readonly name: string; readonly state: string; readonly children: ReactNode; readonly note?: ReactNode;
+}): ReactNode {
   return (
-    <div className="docs-row docs-row-off" data-state={row.state}>
-      <span className="docs-row-name">{row.project}</span> <span className="docs-row-state">{state}</span>
-      {dup !== null && <> {dup}</>}
+    <div className="docs-row docs-row-off" data-state={p.state}>
+      <span className="docs-row-name">{p.name}</span> <span className="docs-row-state">{p.children}</span>
+      {p.note != null && <> {p.note}</>}
     </div>
+  );
+}
+
+/** The outside folders' group (X2 P2.4), after the projects: one row per label, its link `/docs/~<label>`; an `unreadable` label
+ *  is a row in words with no link. A label read that did not answer draws one quiet line, and an empty registry nothing.
+ *  Labels only: no path is on this page. */
+function FoldersGroup(p: { readonly slot: FolderIndexSlot | null; readonly needle: string }): ReactNode {
+  const { slot } = p;
+  if (slot === null) return null;
+  if (slot.s === 'quiet') return <p className="docs-note docs-folders-quiet">{slot.text}</p>;
+  const rows = slot.rows.filter((r) => p.needle === '' || r.label.includes(p.needle));
+  if (rows.length === 0) return null;
+  return (
+    <section className="docs-folders" aria-label={DOCS_FOLDER_TEXT.indexGroup}>
+      <h2 className="docs-folders-head">{DOCS_FOLDER_TEXT.indexGroup}</h2>
+      <ul className="docs-rows">
+        {rows.map((r) => (
+          <li key={r.label}>
+            {r.state === 'ok'
+              ? <RowButton href={docsPageUrl({ kind: 'folder', label: r.label })}><span className="docs-row-name">~{r.label}</span></RowButton>
+              : <OffRow name={'~' + r.label} state="unreadable">{DOCS_FOLDER_TEXT.unreadableState}</OffRow>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 /** The index page (spec 4.4): the header sentence, a filter, the rows, the no-docs disclosure and the footers
  *  (refinement (r): `unwalked` has its own footer, `duplicates` say "same repository as", `cacheAgeMs` is not shown). */
-export function DocsIndexView(p: { readonly answer: DocsProjectsResponse }): ReactNode {
+export function DocsIndexView(p: { readonly answer: DocsProjectsResponse; readonly folders?: FolderIndexSlot | null }): ReactNode {
   const index = p.answer.index;
   const [filter, setFilter] = useState('');
   const needle = filter.toLowerCase();
@@ -110,6 +145,7 @@ export function DocsIndexView(p: { readonly answer: DocsProjectsResponse }): Rea
           <ul className="docs-rows">{none.map(item)}</ul>
         </details>
       )}
+      <FoldersGroup slot={p.folders ?? null} needle={needle} />
       {index.unlisted > 0 && (
         <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.indexUnlisted, { n: index.unlisted, s: pluralS(index.unlisted) })}</p>
       )}

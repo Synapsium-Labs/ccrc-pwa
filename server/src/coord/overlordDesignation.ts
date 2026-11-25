@@ -1,12 +1,13 @@
 // The Overlord's designation deciders (Overlord W1, designation A, plan Task 2; spec §3.1, §3.4 C46 and C56). Ring L1,
-// context C5: pure decisions over facts the door gathers. It imports L0 and `poolrule.ts` (L1) only, makes no I/O and
+// context C5: pure decisions over facts the door gathers. It imports L0, `poolrule.ts` and `sessionReading.ts` (L1) only, makes no I/O and
 // reads no clock (`nowS` rides in the facts). `designateVerdict` (Start the Overlord's refusals, in order, and the one
 // create it allows), `overlordAccounts` (C56's ordered account list and the count that gates it), `retireVerdict` (what a
 // retire does to the row it reads), and the Settings doors' (designation C): `modelClassVerdict`, `setWidens` and
-// `accountSetVerdict`, with the step-up each door asks.
-import type { BuildAgreement } from '../../../shared/api.js';
+// `accountSetVerdict`, with the step-up each door asks; and designation B's `rebindVerdict`, `overlordBodyOf`, `restartVerdict` and
+// `pendingDeadlineOf` (Rebind, Restart, and the deadline sweep's one action per pass), and `renewalSetOf` (the write-set step).
+import { DEAD_CAUSES, type BuildAgreement, type DeadCause, type FleetSession } from '../../../shared/api.js';
 import { DESIGNATE_CCD_WORDS, DESIGNATE_SERVER_WORDS } from '../../../shared/overlord-designation.js';
-import type { DesignationRead, DesignationView, OverlordModelClass } from '../../../shared/overlord-designation.js';
+import type { AttemptAction, DesignationRead, DesignationView, OverlordModelClass, SettleFact } from '../../../shared/overlord-designation.js';
 import { orgSpread, type OrgSpread } from '../../../shared/accountOrg.js';
 import type { ProjectedHome } from '../../../shared/api.js';
 import { poolSetSpelling } from '../../../shared/poolset.js';
@@ -17,6 +18,7 @@ import { serviceability } from '../../../shared/serviceability.js';
 import type { LaneFacts } from '../../../shared/serviceability.js';
 import type { AccountLimits } from '../limits.js';
 import { parsePoolAnswer, poolRostered, resolvedAccountPool } from '../poolrule.js';
+import { rowStanding } from '../sessionReading.js';
 
 /** The ccd words the create itself needs, past `DESIGNATE_CCD_WORDS`' first five, are in that list already (the eight). */
 export interface AccountFacts {
@@ -48,7 +50,9 @@ export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pendin
   // the body adapter's ccd verbs and the `ws-add` refusal words it reads (`overlordBody.ts`, `workspaceCreate.ts#classifyAddFailure`)
   'project-add', 'ws-add', 'keep-awake', 'account-refused', 'slug-taken', 'bad-slug',
   // the Settings doors (designation C): the gate's own refusal word the set decider re-asks, and the set door's op-key stem
-  'step-up-required', 'account-set'] as const;
+  'step-up-required', 'account-set',
+  // designation B: the deadline sweep's attempt outcomes and settle fact, and `rebindPending`'s refusal
+  'deadline-passed', 'authority-unrecorded', 'no-report', 'attempt-pending'] as const;
 export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
 
 export type DesignateVerdict =
@@ -118,6 +122,12 @@ export function designateVerdict(f: DesignateFacts): DesignateVerdict {
   if (f.read.kind === 'designated' || (row !== null && row.pending !== null)) {
     return { act: 'refuse', word: 'overlord-exists', detail: 'an Overlord is already designated or being started' };
   }
+  return createSteps(f);
+}
+
+/** Designate's steps 2 to 6, which rebind shares (plan Task 6: "designate's steps 2 to 5, then create"), over the class and the
+ *  set it is handed (a rebind's are the row's, `rebind-keeps-the-class-and-set`). */
+function createSteps(f: Omit<DesignateFacts, 'read'>): DesignateVerdict {
   // 2. every missing word, ccd's, then the server's, then the probe's.
   const needs: string[] = [];
   for (const w of DESIGNATE_CCD_WORDS) if (!present(f.ccdWords, w)) needs.push(w);
@@ -152,6 +162,126 @@ export function designateVerdict(f: DesignateFacts): DesignateVerdict {
   // `empty` cannot reach here: it counts zero above.
   const poolset = spelled.kind === 'spelled' ? spelled.spelling : '';
   return { act: 'create', wrapper, acctorder: list.join(','), poolset };
+}
+
+// ── designation B: rebind, Restart and the pending deadline (plan Tasks 6 and 7; spec §3.1, §3.2 C2, §6.4 C23) ───────────
+
+/** The old body as the reclaim door's re-measurement reads it (`reclaim.ts#measureClaimant`'s `state`). */
+export type OldBodyState = 'dead' | 'alive' | 'unmeasurable';
+
+export interface RebindFacts extends Omit<DesignateFacts, 'model' | 'accountPools'> {
+  readonly old: OldBodyState;
+  readonly force: boolean;
+}
+
+export type RebindVerdict =
+  | DesignateVerdict
+  | { readonly act: 'refuse'; readonly word: 'not-found' | 'overlord-attempt-pending' | 'overlord-body-alive'; readonly detail: string };
+
+/** Rebind's order, first refusal wins (plan Task 6, review F6): no live binding; an attempt pending on the one slot; an old body
+ *  that does not measure dead or absent (an unmeasurable registry refuses too, and `force` lifts this step only); then
+ *  designate's capability words, builds, set spelling and count, under the row's class and set; then the create. */
+export function rebindVerdict(f: RebindFacts): RebindVerdict {
+  if (f.read.kind === 'unmeasured') return { act: 'unmeasured', why: `the designation could not be read: ${f.read.why}` };
+  if (f.read.kind !== 'designated') return { act: 'refuse', word: 'not-found', detail: 'no Overlord is bound, so there is nothing to rebind' };
+  const row = f.read.row;
+  if (row.pending !== null) return { act: 'refuse', word: 'overlord-attempt-pending', detail: 'an attempt is already pending on the designation' };
+  if (f.old !== 'dead' && !f.force) {
+    return { act: 'refuse', word: 'overlord-body-alive',
+      detail: f.old === 'alive' ? 'the bound body is alive' : 'the bound body could not be measured dead or absent' };
+  }
+  return createSteps({ ...f, model: row.model, accountPools: row.accountPools });
+}
+
+/** The Overlord's body, from the tick's listing and its assembled session (plan Task 7, shared with readiness). */
+export type OverlordBodyState =
+  | { readonly kind: 'up' } | { readonly kind: 'down'; readonly since: number | null } | { readonly kind: 'asleep' }
+  | { readonly kind: 'gone'; readonly cause: DeadCause } | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** A present row is read through `sessionReading.ts#rowStanding`; a listed id with no assembled session is `unmeasured`; only an
+ *  id absent from the listing is `gone` (`absent`), and a listing that failed is `unmeasured`. `down` is `rowStanding`'s
+ *  `doubt` with presence `alive`, lifecycle `restarting` and no unmeasured identity field: the supervisor is restarting it.
+ *  Its `since` is null here: the decider has no clock, and the readiness lane keeps its own first sighting
+ *  (`body-down-since-is-the-lane's`). Any other `doubt` is `unmeasured`. A `gone` row names its lifecycle when that is a dead
+ *  cause, and `orphan` otherwise (its pane is gone and nothing says it was stopped). */
+export function overlordBodyOf(f: { readonly sessionId: string; readonly listedIds: ReadonlySet<string> | null;
+  readonly session: FleetSession | null }): OverlordBodyState {
+  if (f.listedIds === null) return { kind: 'unmeasured', why: 'the registry listing could not be read' };
+  if (!f.listedIds.has(f.sessionId)) return { kind: 'gone', cause: 'absent' };
+  const s = f.session;
+  if (s === null) return { kind: 'unmeasured', why: 'the registry lists the body, but its session was not assembled' };
+  switch (rowStanding(s)) {
+    case 'here': return { kind: 'up' };
+    case 'asleep': return { kind: 'asleep' };
+    case 'gone': {
+      const lc = s.lifecycle ?? null;
+      return { kind: 'gone', cause: lc !== null && (DEAD_CAUSES as readonly string[]).includes(lc) ? (lc as DeadCause) : 'orphan' };
+    }
+    case 'doubt':
+      return s.presence === 'alive' && s.lifecycle === 'restarting' && (s.unmeasured ?? []).length === 0
+        ? { kind: 'down', since: null } : { kind: 'unmeasured', why: 'the body\'s reading is in doubt' };
+  }
+}
+
+export type RestartVerdict =
+  | { readonly ok: true; readonly endAttempt: string | null } | { readonly ok: false; readonly error: 'not-found' }
+  | { readonly ok: false; readonly error: 'overlord-attempt-pending' }
+  | { readonly ok: false; readonly error: 'overlord-body-alive'; readonly detail: 'alive' | 'restarting' | 'unmeasured' };
+
+/** Restart the Overlord (C23): the resume path for a body that is asleep or gone. An `up` body has nothing to restart, a `down`
+ *  one is being restarted by its supervisor (an `ensure` would only race it), and an `unmeasured` one is never acted on. No live
+ *  binding is `not-found` (question 8). While an attempt is pending on the slot INSIDE its deadline it refuses
+ *  `overlord-attempt-pending`, whatever the bound body reads (`restart-refuses-while-an-attempt-is-pending`): two Overlord bodies
+ *  are never started side by side, and a forced rebind's stop is not undone by one tap. At or past the deadline the attempt is
+ *  over: an accepted Restart names it in `endAttempt`, and the door ends it as failed before its ordinary steps
+ *  (`restart-ends-an-overdue-attempt`), so the operator is never locked out while the deadline sweep is not Live. The door and
+ *  readiness's `restartable` both ask this one decider. */
+export function restartVerdict(binding: { readonly sessionId: string; readonly pending: { readonly sessionId: string; readonly deadlineAt: number } | null } | null,
+  body: OverlordBodyState, now: number): RestartVerdict {
+  if (binding === null) return { ok: false, error: 'not-found' };
+  const p = binding.pending;
+  if (p !== null && now < p.deadlineAt) return { ok: false, error: 'overlord-attempt-pending' };
+  switch (body.kind) {
+    case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };
+    case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };
+    case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };
+    case 'asleep': case 'gone': return { ok: true, endAttempt: p === null ? null : p.sessionId };
+  }
+}
+
+/** The pending deadline and the settle retry, by the wall clock (the server's own deadline, set once, never extended, §11.5).
+ *  A pending attempt past its deadline expires: `authority-unrecorded` when the stored report of its own body and generation
+ *  holds the check (the go-live record never landed), `deadline-passed` otherwise. Inside it, a stored report of its own body
+ *  and generation is settled again through the one settle path (`settle-runs-after-the-answer`: a settle lost after the door's
+ *  answer, a stale one, or a go-live the journal refused). Otherwise owed stops are drained. An unreadable row acts on nothing. */
+export function pendingDeadlineOf(read: DesignationRead, settle: SettleFact, now: number): AttemptAction {
+  if (read.kind === 'unmeasured' || read.row === null) return { kind: 'none' };
+  const p = read.row.pending;
+  if (p !== null) {
+    const own = settle.kind === 'reported' && settle.sessionId === p.sessionId && p.generation !== null && settle.generation === p.generation
+      ? settle : null;
+    if (now >= p.deadlineAt) return { kind: 'expire', sessionId: p.sessionId, outcome: own?.held === true ? 'authority-unrecorded' : 'deadline-passed' };
+    if (own !== null) return { kind: 'resettle', sessionId: p.sessionId, startId: own.startId };
+  }
+  return read.row.stopsOwed.length > 0 ? { kind: 'drain', ids: read.row.stopsOwed } : { kind: 'none' };
+}
+
+/** The write-set step before each renewal of the Overlord (plan Task 10; the renewal readings' question 9, F9): what the route
+ *  record takes again from the row, for the session being renewed. Only a `designated` read naming that session writes; the set
+ *  must spell and the ordered list (C56, in the set's order) must name an account. The class rides with them, so a Settings
+ *  write that failed is healed at the next renewal (designation C's carried note). Anything else answers why, and nothing is
+ *  written. */
+export function renewalSetOf(read: DesignationRead, sessionId: string, f: AccountFacts):
+  | { readonly ok: true; readonly poolset: string; readonly acctorder: string; readonly model: OverlordModelClass }
+  | { readonly ok: false; readonly detail: string } {
+  if (read.kind === 'unmeasured') return { ok: false, detail: `the designation could not be read: ${read.why}` };
+  if (read.kind !== 'designated') return { ok: false, detail: 'no Overlord is bound' };
+  if (read.sessionId !== sessionId) return { ok: false, detail: `the bound Overlord is ${read.sessionId}, not ${sessionId}` };
+  const spelled = poolSetSpelling(read.row.accountPools);
+  if (spelled.kind !== 'spelled') return { ok: false, detail: `the account set is ${spelled.kind}` };
+  const { list } = overlordAccounts(read.row.accountPools, read.row.model, f);
+  if (list.length === 0) return { ok: false, detail: 'the ordered account list is empty' };
+  return { ok: true, poolset: spelled.spelling, acctorder: list.join(','), model: read.row.model };
 }
 
 /** What a retire does to the row it reads (plan question 8). */

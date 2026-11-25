@@ -11,8 +11,11 @@ import { SEQUENCE_KINDS, type SequenceKind } from '../../shared/overlord-sequenc
 const CS = 'server/src/continuity/continuityStore.ts';
 const DS = 'server/src/coord/overlordDesignationStore.ts';
 const OM = 'server/src/operatorModel/store.ts';
+const LS = 'server/src/coord/overlordLadderStore.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
 const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
+const STAMP_MESSAGE = 'server/src/coord/overlordSequenceStore.ts#stampMessageLine';
+const ML = 'server/src/operatorModel/messageLine.ts';
 const RECORD_ACK = 'server/src/coord/store.ts#CoordStore.recordInboxAcknowledgement';
 const WRITER = 'stampSequenceInTx';
 
@@ -35,12 +38,13 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
       [`${CS}#setGenerationDue`]: 'the due fields only',
       [`${CS}#advanceObserved`]: 'the accumulator only',
       [`${CS}#setHoldOff`]: 'the hold-off only',
-      [`${CS}#restampOverlordGeneration`]: 'the identity and term, not the state (designation B\'s rebind moves it to the stampers)',
+      [`${CS}#restampOverlordGeneration`]: 'the identity and term, not the state: designation B\'s rebind ends the old body\'s generation through `endOverlordGeneration`, which stamps (slug restamp-stays-identity-only)',
     },
   },
   designation: {
     table: 'overlord_designation',
-    stampers: [`${DS}#designatePending`, `${DS}#goLive`, `${DS}#failPending`, `${DS}#retire`, `${DS}#applyDesignationRestoreInTx`],
+    stampers: [`${DS}#designatePending`, `${DS}#rebindPending`, `${DS}#goLive`, `${DS}#goLiveRebind`, `${DS}#failPending`, `${DS}#retire`,
+      `${DS}#applyDesignationRestoreInTx`],
     nothing: {
       [`${DS}#bindPendingGeneration`]: 'it fills the pending attempt\'s generation once; the state stays pending',
       [`${DS}#stopDone`]: 'the owed-stop list only',
@@ -53,23 +57,62 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
     table: 'operator_messages',
     stampers: [],
     nothing: {
-      [`${OM}#OperatorModelStore.recordMessage`]: 'creation stays in the private store; PR B owns the settlement-mark and queue stamps (message-stamps-ride-pr-b)',
-      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db; PR A stamps the Inbox acknowledgement after commit, PR B owns the queue, delivery and settle stamps and the mover-caller census (message-stamps-ride-pr-b)',
+      [`${OM}#OperatorModelStore.recordMessage`]: 'creation as recorded stamps no line; a marked message, created settled, gets its settled line from the route right after the record commits (call 1218)',
+      [`${OM}#OperatorModelStore.moveMessage`]: 'no transaction spans the private store and coord.db: every move\'s line is stamped after its commit, by the movers listed in MESSAGE_MOVERS (call 1218)',
     },
     afterCommit: { route: INBOX, delegate: RECORD_ACK, stamp: STAMP_ACK },
   },
+  'ladder-rung': {
+    table: 'overlord_ladder',
+    stampers: [`${LS}#setRungInTx`, `${LS}#applyRestoreInTx`],
+    nothing: {
+      [`${LS}#journalPendingInTx`]: 'the catch-up stamps a pending record\'s sequence only; the rung it records was stamped when it moved',
+    },
+  },
+  'ladder-latch': {
+    table: 'overlord_latches',
+    stampers: [`${LS}#raiseLatchInTx`, `${LS}#clearLatchInTx`, `${LS}#applyRestoreInTx`],
+    nothing: {
+      [`${LS}#journalPendingInTx`]: 'the catch-up stamps a pending record\'s sequence only; the latch it records was stamped when it was raised',
+    },
+  },
 };
 
+/** The operator message's after-commit path (call 1218, slug `message-lines-stamp-after-the-move`; review 3646 F8): the one helper
+ *  that calls the writer for the kind, the functions that call it, and EVERY call of the private store's move in server/src, each
+ *  with how its line is written. Each list counts the calls in each symbol (review 3852 F1), so a new call of the move goes red
+ *  here until it takes a side, in a new function or beside a listed call in one already here (a W2 citing door written in the
+ *  inbox routes' registrar, say). The scanner names a call by its rightmost identifier: an alias of the function, a bracket access
+ *  (`store['moveMessage']`) or a `.call`/`.apply` spelling is not read as the call. */
+const MESSAGE_STAMP_CALLERS: Readonly<Record<string, number>> = { [STAMP_ACK]: 1, [`${ML}#stampOperatorMessageLine`]: 1 };
+const MESSAGE_LINE_CALLERS: Readonly<Record<string, number>> = {
+  [`${ML}#moveOperatorMessage`]: 1, 'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1,
+};
+export const MESSAGE_MOVERS: Readonly<Record<string, { readonly calls: number; readonly how: string }>> = {
+  [`${ML}#moveOperatorMessage`]: { calls: 1, how: 'the one combinator: the move, then its line when the state word changed, in one synchronous segment' },
+  'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': { calls: 1, how: 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)' },
+};
+/** Every call of the combinator, in server/src, counted per symbol (`server.ts#buildServer` composes the hook's pick-up port; the
+ *  boot pass's three are its unsettle, queue and deliver arms). */
+const COMBINATOR_CALLERS: Readonly<Record<string, number>> = {
+  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 3, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
+  'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1, 'server/src/server.ts#buildServer': 1,
+};
+/** A count record as the list `callersOf` answers: each `file#symbol` once per call. */
+const times = (counted: Readonly<Record<string, number>>): string[] =>
+  Object.entries(counted).flatMap(([ref, n]) => Array.from({ length: n }, () => ref)).sort();
+
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
-const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`] as const;
+const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`] as const;
 const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
-const STAMP_HELPERS = [...TX_STAMP_HELPERS, ...AFTER_COMMIT.map((row) => row.stamp)];
+const STAMP_HELPERS = [...TX_STAMP_HELPERS, STAMP_MESSAGE];
 
 const split = (ref: string): [string, string] => { const i = ref.indexOf('#'); return [ref.slice(0, i), ref.slice(i + 1)]; };
 const callsOf = (ref: string): string[] => { const [f, n] = split(ref); return callsIn(symbolOf(f, n)).map((c) => c.name ?? c.callee); };
 const SERVER_SRC = ALL.filter((f) => rel(f).startsWith('server/src/'));
 
-/** The innermost symbol of `file` around each call named `name`: `file#symbol`. */
+/** The innermost symbol of `file` around each call named `name`: `file#symbol`, once per call (a second call in the same symbol is a
+ *  second entry, review 3852 F1). */
 function callersOf(name: string): string[] {
   const out: string[] = [];
   for (const abs of SERVER_SRC) {
@@ -79,7 +122,7 @@ function callersOf(name: string): string[] {
       out.push(`${rel(abs)}#${around?.name ?? '(module)'}`);
     }
   }
-  return [...new Set(out)].sort();
+  return out.sort();
 }
 
 describe('the sequence stamp census (Overlord §10.4)', () => {
@@ -133,5 +176,15 @@ describe('the sequence stamp census (Overlord §10.4)', () => {
       expect(callersOf(split(stamp)[1])).toEqual([delegate]);
       expect(callersOf(split(delegate)[1].split('.').at(-1)!)).toEqual([route]);
     }
+  });
+
+  it('the message kind\'s one helper is called only by the acknowledgement and the line stamp, and those only by their listed callers', () => {
+    expect(callersOf(split(STAMP_MESSAGE)[1])).toEqual(times(MESSAGE_STAMP_CALLERS));
+    expect(callersOf('stampOperatorMessageLine')).toEqual(times(MESSAGE_LINE_CALLERS));
+    expect(callersOf('moveOperatorMessage')).toEqual(times(COMBINATOR_CALLERS));
+  });
+
+  it('every caller of the private store\'s move in server/src is listed with how its line is written (review 3646 F8)', () => {
+    expect(callersOf('moveMessage')).toEqual(times(Object.fromEntries(Object.entries(MESSAGE_MOVERS).map(([ref, m]) => [ref, m.calls]))));
   });
 });
