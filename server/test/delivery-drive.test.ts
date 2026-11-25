@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CAPTURE_SOCKET, captureTmuxDirName } from '../../shared/claudeBuildCapture.js';
 import { deliveryCaseText, deliveryExpected } from '../../shared/deliveryCapture.js';
 import { DELIVERY_CASE_IDS } from '../../shared/deliveryResult.js';
-import { ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveCase, readDriveInput } from '../src/inject/deliveryDrive.js';
+import { ROUTE_PLAIN_PROMPT_OPTIONS, captureTmuxRunner, driveCase, privateTo, readDriveInput } from '../src/inject/deliveryDrive.js';
 import type { Runner } from '../src/exec.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -26,7 +26,7 @@ const allDirs = (): boolean => true;
 describe('readDriveInput: refused before any tmux call', () => {
   const ok = { capture: CAPTURE, tmux: TMUX, case: 'c0' };
   it('takes a capture\'s scratch directory, that capture\'s own tmux directory and a case id', () => {
-    expect(readDriveInput(ok, allDirs, BASE)).toEqual({ ok: true, input: ok });
+    expect(readDriveInput(ok, allDirs, BASE, allDirs)).toEqual({ ok: true, input: ok });
   });
   it.each<[string, unknown, string]>([
     ['not an object', 'x', 'bad-input'],
@@ -55,7 +55,21 @@ describe('readDriveInput: refused before any tmux call', () => {
     ['a scratch directory that is not a real directory', (p) => p !== CAPTURE, 'capture-dir'],
     ['a tmux directory that is not a real directory', (p) => p !== TMUX, 'tmux-dir'],
   ])('refuses %s', (_why, isDir, refusal) => {
-    expect(readDriveInput({ capture: CAPTURE, tmux: TMUX, case: 'c0' }, isDir, BASE)).toMatchObject({ ok: false, refusal });
+    expect(readDriveInput({ capture: CAPTURE, tmux: TMUX, case: 'c0' }, isDir, BASE, allDirs)).toMatchObject({ ok: false, refusal });
+  });
+  it('refuses a tmux directory that is not this user\'s own and private, after every other check passed', () => {
+    expect(readDriveInput({ capture: CAPTURE, tmux: TMUX, case: 'c0' }, allDirs, BASE, (p) => p !== TMUX)).toMatchObject({ ok: false, refusal: 'tmux-dir' });
+  });
+  it.each([
+    ['owned by this user, 0700', { uid: 1000, mode: 0o40700 }, true],
+    ['owned by this user, 0755 (only read and search for others)', { uid: 1000, mode: 0o40755 }, true],
+    ['owned by another user', { uid: 1001, mode: 0o40700 }, false],
+    ['owned by root', { uid: 0, mode: 0o40700 }, false],
+    ['writable by group', { uid: 1000, mode: 0o40720 }, false],
+    ['writable by other', { uid: 1000, mode: 0o40702 }, false],
+    ['the sticky world-writable temporary directory\'s mode', { uid: 1000, mode: 0o41777 }, false],
+  ])('privateTo: %s', (_why, st, want) => {
+    expect(privateTo(st, 1000)).toBe(want);
   });
   it('reads the real file system by default: a link at the scratch directory\'s name is refused', () => {
     const base = mkTmp('ccrc-delivery-drive-');
@@ -79,11 +93,23 @@ describe('readDriveInput: refused before any tmux call', () => {
     // The same layout with a real directory there is taken.
     const base2 = mkTmp('ccrc-delivery-drive-');
     mkdirSync(path.join(base2, 'captures', ID), { recursive: true });
-    mkdirSync(path.join(base2, captureTmuxDirName(ID)));
+    mkdirSync(path.join(base2, captureTmuxDirName(ID)), { mode: 0o700 });
     expect(readDriveInput({ capture: path.join(base2, 'captures', ID), tmux: path.join(base2, captureTmuxDirName(ID)), case: 'c0' }, undefined, base2)).toMatchObject({ ok: true });
   });
+  it('reads the real file system by default: a tmux directory group or other can write is refused, as the runner\'s 0700 is taken', () => {
+    const base = mkTmp('ccrc-delivery-drive-');
+    mkdirSync(path.join(base, 'captures', ID), { recursive: true });
+    const tmux = path.join(base, captureTmuxDirName(ID));
+    mkdirSync(tmux, { mode: 0o700 });
+    const input = { capture: path.join(base, 'captures', ID), tmux, case: 'c0' };
+    expect(readDriveInput(input, undefined, base)).toMatchObject({ ok: true });
+    chmodSync(tmux, 0o770);
+    expect(readDriveInput(input, undefined, base)).toMatchObject({ ok: false, refusal: 'tmux-dir' });
+    chmodSync(tmux, 0o707);
+    expect(readDriveInput(input, undefined, base)).toMatchObject({ ok: false, refusal: 'tmux-dir' });
+  });
   it('by default the parent is this process\'s own temporary directory', () => {
-    const r = readDriveInput({ capture: CAPTURE, tmux: path.join(os.tmpdir(), captureTmuxDirName(ID)), case: 'c0' }, allDirs);
+    const r = readDriveInput({ capture: CAPTURE, tmux: path.join(os.tmpdir(), captureTmuxDirName(ID)), case: 'c0' }, allDirs, undefined, allDirs);
     expect(r).toMatchObject({ ok: true });
   });
 });

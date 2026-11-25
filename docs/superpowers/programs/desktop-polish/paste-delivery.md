@@ -18,9 +18,10 @@ ruled its place and its conditions. Claims are labelled **measured**, **read** (
   queues a delivery capture for the newest build that passed trust. Nobody starts it by hand, and there is no door
   (section 7).
 - **The result is information only.** It decides no build's trust, no roll and no lane verdict.
-- **A finding, put to the operator (item 667):** a console message that starts with `!` is typed into Claude Code's box as
-  written, where it is a shell line. Nothing in the send path guards a leading `/`, `!`, `#` or `@` (section 6). Nothing
-  was run.
+- **A leading `!` is a shell line, by design (the operator, 2026-11-25, item 667).** A console message that starts with `!`
+  is typed into Claude Code's box as written and runs as a shell line in that session, as it does in the terminal. The
+  operator keeps that on purpose, to run shell commands from the console. No send code changes, and no case starts with
+  `/`, `!`, `#` or `@` (section 6). Nothing was run.
 
 ## 2. The send path, and where the recipe joins it (read)
 
@@ -114,24 +115,48 @@ command, `!` a shell line, `#` a memory note in some versions, and `@` a file me
 neutralises a leading one of the four.
 - `/` passes on purpose. The composer has slash completion, the dispatch types `/clear` through the same send, and the
   send's loops treat the slash palette as a menu.
-- `!` is **unguarded**. A console message that starts with `!` is typed into the box and, on the send's Enter, would run
-  as a shell command in that session's pane. The trim gives no protection: ` !x` arrives as `!x`.
+- `!` passes **on purpose**: the operator confirmed it on 2026-11-25 (item 667). A console message that starts with `!` is
+  typed into the box and, on the send's Enter, runs as a shell line in that session's pane, as it does in the terminal.
+  The trim makes ` !x` arrive as `!x`, so it is the same choice.
 - `#` is unguarded. Whether the current build reads it as a memory note is unmeasured.
 - `@` opens the file-mention picker. `submitEnter` already presses a second Enter when an overlay swallows the first.
 
-The coordinator put the product choice to the operator (item 667). Until it is answered, no send code changes and no case
-starts with any of the four. If the operator chooses a guard, it comes as its own wave in the send path.
+The coordinator put the choice to the operator (item 667), who ruled to keep it: no send-path change, now or later, and no
+guard wave. The recipe's fixed cases stay clear of all four first characters, and `deliveryCapture`'s mode-character pin
+holds that, so no case can become a shell line in the capture's pane.
 
 ## 7. How the real measurement starts and is read (the ruling; built in the follow-up packets)
 
 There is no door (the capture owner's call 1131): every session holds the box token, so a box-token start would let any
 session run a build on the test box on demand. Instead:
-- The capture lane queues one delivery capture for the newest build whose trust capture ended with a pass, when no
-  delivery result exists for that build at the current recipe version. So the first measurement happens by itself once a
-  release carrying the recipe reaches the box, and again only when the recipe changes or a new build passes trust.
-- The lane sends it only to a box that has said it knows the recipe. A delivery capture's queue kind sorts after trust:
-  it never delays a queued trust capture and never cuts a running one.
-- Its result rides the read that returns capture state today, written by the lane alone.
+- The capture lane measures only the single newest build whose trust capture ended with a pass, and only while the capture
+  lane itself is live (nothing in shadow, no switch of its own). There is no back-fill: an older passed build is not
+  measured, and a build superseded before its delivery capture runs is never measured. So the record is "the newest
+  trusted build", not "every build" (the capture owner's call 1145).
+- **Parts** (the capture owner's call 1148). The eleven cases run as parts, each a capture of its own, with a fresh scratch
+  directory and a fresh start of the build. The part count is derived, not chosen: it is the smallest count whose largest
+  part fits the pair bound (the second of two queued captures ends inside the fleet agent's 15 min wait) in every pairing
+  with a trust capture or another part. The cases are spread evenly in their order. Today that is 4, 4 and 3. A change to
+  a timing or to the case list re-derives the split, and the recipe version covers it, so rows from two partitions never
+  join.
+- Each pass sends at most one capture, trust first. The lane names the first part, in order, of the newest trusted build
+  that has no row at the current recipe version. A box fault spaces the next try by the lane's hour and never counts
+  toward a build's trust fails.
+- **The box's capability is its own reader** (call 1148). There is no recipe list on the status answer: on main, that
+  reader refuses a whole answer for a key it does not name, so a list would break every capture and test run on an older
+  agent. An older box, or a box without the driver wired, refuses the delivery submission at its frame reader, before
+  anything runs, and closes that capture's own connection. The agent answers not-taken, and the lane records not-sent,
+  with no attempt counted and a log line naming the cause. Not-taken never becomes a fault or a verdict.
+- **Version skew.** The result carries the recipe version and the ids of the cases it ran. The server stores it as current
+  only when both match its own recipe for that part; anything else is asked again at the lane's hour, and is never stored
+  as intact or as a build fault.
+- The result rides the read that returns capture state today, written by the lane alone, into a table of its own; the
+  trust table is untouched. A lost database heals by itself: with no row, the lane measures again.
+- **The join.** A build's delivery word is intact only when every part at the current version is intact. One faulted part
+  makes the whole a fault. A part not yet measured, or one whose box fault left no verdict, leaves the whole without a
+  verdict (its own word, never folded into intact or fault).
+- **The busy point** is the longest part. A trust capture for a build that appears while a part runs waits for it, at
+  worst 381.5 s (6 min 21.5 s) for a four-case part. A running capture is never cut.
 - **To read it:** the test box builds read (`GET /api/testbox/builds`) shows each build's delivery word and, per case, the
   verdict, the counts and the first divergence.
 
@@ -145,7 +170,8 @@ session run a build on the test box on demand. Instead:
 | The driver | `server/src/inject/deliveryDrive.ts` | this PR |
 | The drive's steps, reply, window and worst case | `agent/src/testbox/captureDelivery.ts` | this PR |
 | The runner's delivery branch, the stand-in's reply rule, the launch geometry, the desk, the composition, the op | the capture files | packet 2, after the Overlord's follow-up PR lands |
-| The lane, the store and the read, and the box's recipe capability | the lane's files | the lane packet, to the Overlord |
+| The parts, the part index on the wire and the version over the split | the capture contract and the result file | a kernel packet, to the Overlord |
+| The lane, the store and the read | the lane's files | the lane's packets, to the Overlord and to each file's holder |
 
 ## 9. What this cannot prove, and what stays unmeasured
 
@@ -158,6 +184,8 @@ session run a build on the test box on demand. Instead:
 - A split whose second part arrives after the quiet period falls into the next case's window. It still reads as a fault,
   but on the wrong case.
 - The transcript file, which would be a third witness, is not read.
+- The recipe measures prompts that reach the model. A leading `!` is, by design, not one (section 6).
+- Only the newest trusted build is measured (section 7).
 - The pane: the delivery recipe uses the fleet's 220x50 and its `ccd/tmux.conf`; build trust keeps 200x50 and `/dev/null`.
 
 ## 10. Departures
@@ -165,7 +193,9 @@ session run a build on the test box on demand. Instead:
 - **tmux-dir-bound-by-id** (the coordinator's acceptance). The driver accepts the capture's tmux directory only as exactly
   `<its own temporary directory>/ccrc-capture-<the scratch directory's capture id>`. It is not nested under the scratch
   root, because the runner keeps it outside for the socket path limit (review 3226 F8). The runner starts the driver with
-  that base as its `TMPDIR`.
+  that base as its `TMPDIR`. The directory must also be owned by the driver's own user and writable by neither group nor
+  other (the capture owner's call 1145); the runner makes it 0700. Whatever directory it is given, the driver's fixed
+  server name means it can never address the fleet's own tmux server.
 - **driver-runs-server-code-on-the-box** (legitimately different: another process, on another host). The recipe must run
   the product's send, not a copy. The driver is a server file, run compiled from the release tree, and imported by nothing.
 - **driver-own-keyed-queue.** The driver constructs its own `KeyedQueue` (`core-vocab.test.ts` names it beside
@@ -182,7 +212,7 @@ session run a build on the test box on demand. Instead:
 
 ## 11. Mutation record
 
-52 mutants over two rounds, each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
+52 mutants over two rounds, and three more for the tmux directory's owner rule (call 1145), each run through `ccrc test` in a scratch worktree with the file restored afterwards. Every
 remaining guard is killed by a named case. Round 1's eight survivors were three redundant guards, now removed, and five
 weak tests, now sharpened: each of those mutations also broke the word, so the word check refused it first, or the case
 had no text beside its tool result. Round 2's one survivor was redundant and was removed.
@@ -193,6 +223,7 @@ had no text beside its tool result. Round 2's one survivor was redundant and was
 | driver | case id; capture id shape; the `captures/` parent; normal form | an unknown case; not named by a capture id; outside `captures/`; relative or not normal |
 | driver | tmux directory equal to `<tmp>/ccrc-capture-<id>` (basename only instead) | a right-looking name under the wrong parent; one level down |
 | driver | real directory, read by `lstat` (`stat` instead) | a link at either directory's name, on the real file system |
+| driver | the tmux directory is this user's own and private; the owner; the group and other write bits | a directory that is not; owned by another user or root; mode 0770 and 0707 on the real file system |
 | driver | tmux only; environment from empty; the capture's socket name; the route's options | runs nothing but tmux; `-L ccrc-capture` with only `PATH`, `TMUX_TMPDIR`, `LANG`; refuse a draft, no attachments |
 | op reply | a build-trust request refuses a reply naming `delivery`; no trust verdict on delivery; delivery only when answered | the three cases of each direction |
 | frames | the recipe word; no trust verdict, no detail and no running result on a delivery capture; the result's reader | each refusal case |

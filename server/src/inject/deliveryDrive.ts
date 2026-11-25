@@ -49,14 +49,25 @@ export const realDir = (p: string): boolean => {
   try { return lstatSync(p).isDirectory(); } catch { return false; }
 };
 
+/** Whether a directory's owner and mode keep it to `uid`: owned by it, and writable by neither group nor other. */
+export const privateTo = (st: { readonly uid: number; readonly mode: number }, uid: number): boolean => st.uid === uid && (st.mode & 0o022) === 0;
+
+/** Whether `p` is a real directory (read as {@link realDir} reads it) that this process's own user owns and that neither
+ *  group nor other can write: the capture's tmux directory, which the runner makes 0700, must be. `false` when it cannot
+ *  be read. */
+export const ownPrivateDir = (p: string): boolean => {
+  try { const st = lstatSync(p); return st.isDirectory() && privateTo(st, process.getuid?.() ?? -1); } catch { return false; }
+};
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** An absolute path written in its one normal form (no `.`, `..`, doubled or trailing separator). */
 const normalAbsolute = (p: string): boolean => path.isAbsolute(p) && path.normalize(p) === p && (p === '/' || !p.endsWith('/'));
 
 /** THE input rule: `{capture, tmux, case}` and nothing else, each checked, or the refusal and why. `tmpBase` is this
- *  process's temporary directory, the parent the capture's tmux directory must have. */
-export function readDriveInput(raw: unknown, isDir: (p: string) => boolean = realDir, tmpBase: string = os.tmpdir()):
+ *  process's temporary directory, the parent the capture's tmux directory must have; `isOwn` reads that the tmux directory
+ *  is this user's and private (the capture owner's call 1145). */
+export function readDriveInput(raw: unknown, isDir: (p: string) => boolean = realDir, tmpBase: string = os.tmpdir(), isOwn: (p: string) => boolean = ownPrivateDir):
   { readonly ok: true; readonly input: DriveInput } | { readonly ok: false; readonly refusal: DriveRefusal; readonly detail: string } {
   const no = (refusal: DriveRefusal, detail: string) => ({ ok: false as const, refusal, detail });
   if (!isObj(raw) || Object.keys(raw).sort().join() !== 'capture,case,tmux') return no('bad-input', 'the input is not exactly {capture, tmux, case}');
@@ -72,6 +83,7 @@ export function readDriveInput(raw: unknown, isDir: (p: string) => boolean = rea
     return no('tmux-dir', 'not this capture\'s own tmux directory (its capture id\'s, under this process\'s temporary directory)');
   }
   if (!isDir(tmux)) return no('tmux-dir', 'the capture\'s tmux directory is not a real directory (absent, a file or a link)');
+  if (!isOwn(tmux)) return no('tmux-dir', 'the capture\'s tmux directory is not this user\'s own, or group or other can write it');
   return { ok: true, input: { capture, tmux, case: raw['case'] } };
 }
 
