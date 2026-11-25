@@ -6,8 +6,9 @@ Run 3739, plan `docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.
   `QUEUE_BASE` of 40 lower-case hex that `git merge-base --is-ancestor <QUEUE_BASE> HEAD` accepts is the base
   (`queue-parent`); everything else, and any failed read in that arm, is `git merge-base origin/main HEAD`
   (`merge-base`), as before.
-- **One reader.** The armed rows found their base in one place, `resolveBase()` in `growth-check.test.ts`; it now
-  returns `growthBase`'s answer, and every reader of that base (the armed rows, the waiver rows, the method counts, the
+- **One reader.** The armed rows found their base in one place, `resolveBase()` in `growth-check.test.ts`. Since fix
+  round 1 that is one call of `armedBase(env, root, git)` in `growthCheck.ts`, which asks `growthBase` and which the
+  stacked case calls too (wave1d-fix-round-1.md); every reader of that base (the armed rows, the waiver rows, the method counts, the
   summary) takes it from there. No second `merge-base` read remains for them. The job summary and the printed line say
   "against the queue group's parent" when the base is one.
 - **Exemptions and waivers are read as before.** `armedGrowth` still reads the exemption list from `origin/main` and

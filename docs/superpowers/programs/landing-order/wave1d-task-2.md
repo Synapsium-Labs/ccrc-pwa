@@ -7,7 +7,8 @@ Run 3739, plan `docs/superpowers/plans/2026-11-25-landing-order-wave1d-queue-ci.
 - `.github/ci/queue-live.mjs`: `queueGroupFate` and `compareWord`, pure, to the plan's interface; and the script's
   main, which reads the queue branch with `git ls-remote --exit-code` and, only when the branch is absent, asks one
   compare call through `gh`. Each child process has a 30-second deadline. It prints
-  `queue-live: <fate> (branch <word>, on main <word>)` (`not read` when the branch was not absent) and exits 1 only on
+  `queue-live: <fate> (branch <word>, on main <word>)` (`not read` when the branch was not absent), and on
+  `superseded` a second line, a `::notice::` annotation (`queue-live-notice-line`, fix round 1); it exits 1 only on
   `superseded`. It imports `node:child_process` and `node:process` only; the entry check uses the global `URL`.
 - `server/test/queue-live.test.ts`: the plan's table and compare cases; five end-to-end cases on a fixture bare
   repository served as a `file://` URL, with a stub `gh` first on `PATH` that records that it ran (`live`, where the

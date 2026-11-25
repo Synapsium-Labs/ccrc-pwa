@@ -8590,17 +8590,17 @@ infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockf
 `tsconfig*.json`, `.gitattributes` or `.npmrc`) makes it the full run. A **merge-queue** run (`merge_group`) runs the
 full Linux suite — every server shard, the agent, pwa and browser tests and the node floor; `test (pwa)` refuses a red
 browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
-Nothing reaches `main` through the queue without it. A server shard's deadline there is 45 minutes, not 30: a
-full queue shard measured from 15m47 to 29m24 by runner, and a green one was cancelled at 30m00 and its entry removed
-(D-9014). Each long job of a queue run first asks `.github/ci/queue-live.mjs`, fetched from the default branch, whether
-its group still stands, and ends with exit 1 only when the queue branch is gone and the group's commit is not on `main`;
-an unmeasured read lets the job run, and a job already running when its group is superseded runs to its end (D-9015).
-The growth check measures a queue entry against the group's parent commit (`merge_group.base_sha`, when it is an
-ancestor of HEAD), not the merge base with `origin/main`, so a stack is judged entry by entry at the same per-PR limit
-(D-9016). The one way around it is a bypass actor's direct merge
+Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
-would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
+would catch what it skipped. In a queue run, a server shard's deadline is 45 minutes, not 30: a full queue shard
+measured from 15m47 to 29m53 by runner, and a green one was cancelled at 30m00 and its entry removed (D-9014). The long
+jobs of a queue run first ask `.github/ci/queue-live.mjs`, fetched from the default branch, whether their group still
+stands (a job whose leg skips, such as a docs-only group's node floor, skips this step too), and end with exit 1 only
+when the queue branch is gone and the group's commit is not on `main`; an unmeasured read lets the job run, and a job
+already running when its group is superseded runs to its end (D-9015). The growth check measures a queue entry against
+the group's parent commit (`merge_group.base_sha`, when it is an ancestor of HEAD), not the merge base with
+`origin/main`, so a stack is judged entry by entry at the same per-PR limit (D-9016). The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
 refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
